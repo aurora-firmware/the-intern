@@ -5,6 +5,25 @@
 **Runtime:** Native Python process — no container in v0.1
 **Status:** Architecture draft
 
+## Table of Contents
+
+- [Purpose](#purpose)
+- [Design principles](#design-principles)
+- [Language boundary](#language-boundary)
+- [Architecture layers](#architecture-layers)
+  - [1. Interface layer](#1-interface-layer)
+  - [2. Security layer](#2-security-layer)
+  - [3. Orchestration layer](#3-orchestration-layer)
+  - [4. AI model router](#4-ai-model-router)
+  - [5. Connectors](#5-connectors)
+- [Project layout](#project-layout)
+- [Features](#features)
+- [Roadmap](#roadmap)
+- [OS setup checklist](#os-setup-checklist)
+- [Security oversight summary](#security-oversight-summary)
+- [Migration paths and future architecture](#migration-paths-and-future-architecture)
+- [Future development roadmap](#future-development-roadmap)
+
 -----
 
 ## Purpose
@@ -392,6 +411,39 @@ intern/
     ├── index.db
     └── audit.db
 ```
+
+-----
+
+## Features
+
+List of desired features:
+
+- Have different channels for communication with the bot:
+  - iMessage, Telegram or Wahtsapp.
+  - email
+- The bot receives income email and acts on it.
+  - The user can filter what email is received by the bot.
+  - The user can configure how to deal with the emails depending on the sender.
+- The bot finds information and relevant documents in Dropbox or local filesystem.
+- The user can configure the paths and the location of the files.
+- The user can switch between AI agent models.
+- The user can use API access agents and local agents alike.
+- The user can receive requests that are directly piped to the AI agent provider API without previous preprocessing.
+
+- Web UI?
+- Asvisor role?
+- Social media account manager?
+- Translation?
+
+-----
+
+## Roadmap
+
+1. Initial version and Minimum Viable Product (MVP):
+  - Communication via instant messages with the bot.
+  - Local account user with system level restrictions.
+  - User email account receive and send access, limited at system configuration to the user whitelisted email list.
+  - Agent level customization (skills, sould.md, agents).
 
 -----
 
