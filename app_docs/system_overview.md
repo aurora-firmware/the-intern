@@ -39,10 +39,10 @@ The Intern is a suite of configurations, account settings, permission constraint
 - **Native OS process first.** v0.1 runs directly on macOS or Linux with no container layer. This simplifies development, debugging, and access to OS-native APIs (Keychain, EventKit, Messages). Container isolation is a planned v0.2 upgrade.
   > *MVP compromise:* The Intern runs inside the OpenClaw gateway process rather than as a standalone Python process. Direct OS-native API access (Keychain, EventKit) is deferred — secrets are managed via environment variables and an `email.env` file for now.
 - **Policy-driven execution.** Outbound actions are governed entirely by Sys Admin configuration. There is no runtime human approval step — what is permitted is defined in config before the system runs.
-  > *MVP:* Enforced at three deterministic levels in `openclaw.json`: (1) **channel access** — `allowFrom` and `dmPolicy` control who can reach each agent; (2) **tool restrictions** — `tools.allow`/`tools.deny` per agent lock down what each agent can execute (the Researcher is restricted to `web_search` and `web_fetch` only; the PA cannot run `exec`, `write`, or `browser` tools); (3) **skill restrictions** — `agents.list[].skills` limits which workspace skills each agent can invoke (the PA is restricted to `business-email` only). Autonomous outbound email send/reply is still gated by an in-conversation confirmation prompt — a structured `action_policy` block replacing this is a planned upgrade.
+  > *MVP:* Enforced at three deterministic levels in `openclaw.json`: (1) **channel access** — `allowFrom` and `dmPolicy` control who can reach each agent; (2) **tool restrictions** — `tools.allow`/`tools.deny` per agent lock down what each agent can execute (the Researcher is restricted to `web_search` and `web_fetch` only; the PA cannot run `exec`, `write`, or `browser` tools); (3) **skill restrictions** — `agents.list[].skills` limits which workspace skills each agent can invoke (the PA is restricted to `business-email` only).
 - **Swappable models.** AI model selection is driven by config. Changing provider or model requires no code changes.
 - **Process isolation as the v0.1 security boundary.** The security boundary is the OS user account. The Intern runs as a dedicated low-privilege user (`intern-svc`) with only the filesystem permissions it explicitly needs.
-- **Designed for migration.** Every architectural boundary is drawn to make future migrations — from OpenClaw to Pi SDK direct, from native to containerised — low-cost changes at the integration layer only.
+- **Modular design for reusability.** Components are kept decoupled so that individual pieces can be replaced or reused without rewriting unrelated parts.
   > *MVP note:* The email SKILL pattern (business logic in `email-cli.py`, framework registration in `SKILL.md`) keeps the Python script decoupled from the OpenClaw API. Changing the orchestration framework requires only rewriting `SKILL.md`, not the script.
 
 -----
@@ -56,7 +56,7 @@ Entry points into the Intern. All user-facing channels are provided natively by 
 |Channel  |Technology                     |Notes                                                                                                                                        |
 |---------|-------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
 |Telegram |OpenClaw native channel        |Primary interactive channel. Access restricted to `allowFrom` user IDs in `openclaw.json`. `dmPolicy: allowlist`.                           |
-|Email    |IMAP (read/poll) / SMTP (send) |Not a built-in OpenClaw channel. Implemented as a workspace SKILL: `email-cli.py` script + `SKILL.md` instruction file. Inbound email is polled on demand or by a cron/IMAP IDLE watcher. Sender allowlist enforced at `email.env` config level.|
+|Email    |IMAP (read/poll) / SMTP (send) |Not a built-in OpenClaw channel. Implemented as a workspace SKILL: `email-cli.py` script + `SKILL.md` instruction file. Inbound email notification method is to be determined. Sender allowlist enforced at `email.env` config level.|
 
 -----
 
@@ -192,8 +192,6 @@ OpenClaw's built-in logging hooks provide three layers of activity logging with 
 |Command audit log   |`~/.openclaw/logs/commands.log`                       |`/new`, `/reset`, `/stop` — timestamp, session, channel, sender|
 |Session summaries   |`~intern-svc/the-intern/memory/YYYY-MM-DD-slug.md`    |LLM-generated summary written at `/new` or `/reset`        |
 
-> *Future upgrade:* Supplement with a custom SQLite audit log (`audit.db`, WAL mode, INSERT-only) for structured querying and Admin UI integration.
-
 -----
 
 ### 3. Orchestration layer
@@ -226,7 +224,7 @@ Result returned to Personal Assistant → reply sent on Telegram
 
 #### Message flow — inbound email
 
-Email is pull-only in the MVP. The agent reads email when asked via Telegram. A polling cron job or IMAP IDLE watcher can be added later to trigger proactive notifications.
+How and when inbound email is surfaced to the agent is to be determined.
 
 ```
 User asks "any new emails?" via Telegram
@@ -243,13 +241,13 @@ Summarises unread messages → replies on Telegram
 
 Tool and skill restrictions are the **primary** deterministic guard: the PA cannot execute arbitrary code, open a browser, or invoke skills other than `business-email`, regardless of what the model decides to do. The Researcher cannot write or send anything at all.
 
-For the one remaining outbound action — email send/reply — the PA's system description instructs it to confirm the recipient and subject with the user before proceeding unless explicitly told to go ahead. This in-conversation confirmation is a secondary, user-experience-level guard while a formal `action_policy` config block is pending.
+The PA should act on clear instructions without asking for confirmation. Confirmation is only appropriate when information is genuinely missing or ambiguous — for example, no recipient specified for an outbound email. The goal is a capable, low-friction assistant; unnecessary back-and-forth defeats the purpose.
 
 #### Context and memory
 
-Session summaries are written to `~intern-svc/the-intern/memory/` at the end of each session by the `session-memory` hook. These can be loaded into agent context on the next session start via `BOOTSTRAP.md`.
+Session summaries are written to `~intern-svc/the-intern/memory/` at the end of each session by the `session-memory` hook. These are loaded into agent context on the next session start alongside `AGENTS.md`, `SOUL.md`, and `USER.md`.
 
-Each agent is given a **focused context** (cases, key client events, relevant documents) and deliberately excluded from data irrelevant to its task — acting as blinders so the agent is not distracted by noise. Retrieval is powered by **semantic (vector) indexing**: documents are embedded at ingestion time and retrieved via similarity search, enabling RAG (retrieval-augmented generation) over the local document store.
+Each agent is given a **focused context** (cases, key client events, relevant documents) and deliberately excluded from data irrelevant to its task — acting as blinders so the agent is not distracted by noise.
 
 -----
 
@@ -283,7 +281,9 @@ Ollama runs natively on Apple Silicon (Metal) and Linux (CPU or CUDA), installed
 │   └── .env                 # API key env vars  [chmod 600, not committed]
 │
 └── the-intern/              # OpenClaw workspace
-    ├── BOOTSTRAP.md         # Loaded at session start
+    ├── AGENTS.md            # Agent operating instructions — loaded every session
+    ├── SOUL.md              # Agent persona and tone — loaded every session
+    ├── USER.md              # User identity and preferences — loaded every session
     ├── skills/
     │   └── email/
     │       ├── SKILL.md     # Agent reads this on demand
@@ -345,7 +345,7 @@ Ollama runs natively on Apple Silicon (Metal) and Linux (CPU or CUDA), installed
 |Unwanted email senders reaching the agent          |`EMAIL_ALLOW_FROM` allowlist in `email.env`; script discards messages from unlisted senders      |
 |Agent executes arbitrary code or writes files      |Per-agent `tools.deny` in `openclaw.json` — PA and Researcher both deny exec/write/edit/apply_patch|
 |Researcher invokes email or local skills           |`agents.list[].skills: []` — Researcher has no skill access; PA limited to `business-email` only |
-|Agent sends email without user knowledge           |PA instructed to confirm recipient and subject before sending unless explicitly told to proceed   |
+|Agent sends email without user knowledge           |PA acts on clear instructions; confirmation only when information is genuinely missing or ambiguous (e.g. no recipient specified)|
 |Researcher receives sensitive local data           |PA handles all email/document operations locally; only the research question is passed to Claude |
 |API keys in config file                            |Keys referenced via `${VAR_NAME}` — resolved from `~/.openclaw/.env` (`chmod 600`, not committed)|
 |Email credentials exposed                          |Stored in `email.env` (`chmod 600`, not committed); app-specific password only                  |
@@ -355,36 +355,16 @@ Ollama runs natively on Apple Silicon (Metal) and Linux (CPU or CUDA), installed
 
 -----
 
-## Migration paths and future architecture
+## Post-MVP harness evaluation
 
-### OpenClaw → Pi SDK direct
+After the MVP is validated, evaluate whether OpenClaw continues to meet requirements or whether a different orchestration harness is better suited. Do not commit to a migration path before that evaluation.
 
-**When:** When custom action policy enforcement, a full data classifier, or a structured audit log are needed and cannot be cleanly hooked into OpenClaw's plugin lifecycle.
+Key criteria to assess:
+- Does the harness support the required action policy enforcement?
+- Does it provide adequate audit hooks?
+- Does it support the required level of process or container isolation?
 
-**What changes:**
-
-|Component         |v0.1 (OpenClaw)                  |v0.2 (Pi SDK direct)               |
-|------------------|---------------------------------|-----------------------------------|
-|Interface layer   |OpenClaw gateway + channel config|Pi extensions (`registerTool`)     |
-|Orchestration     |OpenClaw route resolver          |Python spawns Pi directly via RPC  |
-|Action policy     |In-conversation confirmation     |`action_policy.py` + config block  |
-|Security layer    |OS user + `openclaw.json`        |OS user + `config.yaml` (Python)   |
-|Email SKILL       |`email-cli.py` + `SKILL.md`      |`email-cli.py` unchanged (reuse)   |
-|AI router         |Per-agent in `openclaw.json`     |`routing.yaml` + Python gateway    |
-
-**What survives unchanged:** OS user isolation, `email-cli.py` business logic, session memory markdown files.
-
-**Key discipline to maintain in v0.1:** `email-cli.py` must never import from OpenClaw APIs. The script is pure Python stdlib. Only `SKILL.md` touches the framework. This makes migration a rewrite of `SKILL.md` only.
-
------
-
-### Native process → Pi in a container (sandbox isolation)
-
-**When:** When the risk profile of the agent process having read/write access to the host filesystem is unacceptable, or when a stricter audit boundary is required.
-
-In this model the Python security process remains on the host unchanged. The only change is how the orchestrator is spawned — from a direct process to a Docker container with `--network none`, `--read-only`, and `--cap-drop ALL`. All LLM API calls and connector calls travel back through the pipe to the Python host.
-
-**Design discipline to maintain in v0.1:** the gateway must never pass config values, file paths, or secrets into agent prompts or tool results. Keep the boundary clean from the start.
+**Design discipline to maintain throughout:** keep connector code (`email-cli.py`, skills) decoupled from the harness. Changing the harness should require rewriting only the framework registration files, not the business logic.
 
 -----
 
@@ -406,17 +386,13 @@ In this model the Python security process remains on the host unchanged. The onl
 
 **Document ingestion pipeline.** A folder watcher (`watchdog`) that monitors a designated documents directory, extracts text, generates AI summaries and embeddings, and registers each document in an index with the correct sensitivity tag.
 
-**OpenClaw → Pi SDK migration.** Replace the OpenClaw gateway with direct Pi SDK usage (`createAgentSession`). Rewrite agent bindings and channel routing. `email-cli.py` and workspace skills survive unchanged.
-
-**Structured audit log.** Add a SQLite audit log (`audit.db`, WAL mode, INSERT-only) as a supplement to OpenClaw's JSONL transcripts, enabling structured queries and Admin UI integration.
-
 **Secrets migration to Keychain.** Move API keys and the email password from `.env` files to macOS Keychain / Linux SecretService via `keyring`.
 
 -----
 
 ### Longer term (v1.0+)
 
-**Cross-session memory.** Persistent memory across sessions using a vector store (ChromaDB or Qdrant, local). Fed into agent context on session start via `BOOTSTRAP.md`.
+**Cross-session memory.** Persistent memory across sessions using a vector store (ChromaDB or Qdrant, local).
 
 **Multi-user support.** Per-user context isolation — separate agent sessions, separate document index partitions, per-user action policy. Requires the containerised orchestrator model.
 
