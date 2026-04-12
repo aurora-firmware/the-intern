@@ -42,7 +42,7 @@ The Intern is a suite of configurations, account settings, permission constraint
   > *MVP:* Enforced at three deterministic levels in `openclaw.json`: (1) **channel access** — `allowFrom` and `dmPolicy` control who can reach each agent; (2) **tool restrictions** — `tools.allow`/`tools.deny` per agent lock down what each agent can execute (the Researcher is restricted to `web_search` and `web_fetch` only; the PA cannot run `exec`, `write`, or `browser` tools); (3) **skill restrictions** — `agents.list[].skills` limits which workspace skills each agent can invoke (the PA is restricted to `business-email` only). Autonomous outbound email send/reply is still gated by an in-conversation confirmation prompt — a structured `action_policy` block replacing this is a planned upgrade.
 - **Swappable models.** AI model selection is driven by config. Changing provider or model requires no code changes.
 - **Process isolation as the v0.1 security boundary.** The security boundary is the OS user account. The Intern runs as a dedicated low-privilege user (`intern-svc`) with only the filesystem permissions it explicitly needs.
-- **Designed for migration.** Every architectural boundary is drawn to make future migrations — from OpenClaw to Pi SDK direct, from native to containerised — low-cost changes at the integration layer only.
+- **Modular design for reusability.** Components are kept decoupled so that individual pieces can be replaced or reused without rewriting unrelated parts.
   > *MVP note:* The email SKILL pattern (business logic in `email-cli.py`, framework registration in `SKILL.md`) keeps the Python script decoupled from the OpenClaw API. Changing the orchestration framework requires only rewriting `SKILL.md`, not the script.
 
 -----
@@ -56,7 +56,7 @@ Entry points into the Intern. All user-facing channels are provided natively by 
 |Channel  |Technology                     |Notes                                                                                                                                        |
 |---------|-------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
 |Telegram |OpenClaw native channel        |Primary interactive channel. Access restricted to `allowFrom` user IDs in `openclaw.json`. `dmPolicy: allowlist`.                           |
-|Email    |IMAP (read/poll) / SMTP (send) |Not a built-in OpenClaw channel. Implemented as a workspace SKILL: `email-cli.py` script + `SKILL.md` instruction file. Inbound email is polled on demand or by a cron/IMAP IDLE watcher. Sender allowlist enforced at `email.env` config level.|
+|Email    |IMAP (read/poll) / SMTP (send) |Not a built-in OpenClaw channel. Implemented as a workspace SKILL: `email-cli.py` script + `SKILL.md` instruction file. Inbound email notification method is to be determined. Sender allowlist enforced at `email.env` config level.|
 
 -----
 
@@ -226,7 +226,7 @@ Result returned to Personal Assistant → reply sent on Telegram
 
 #### Message flow — inbound email
 
-Email is pull-only in the MVP. The agent reads email when asked via Telegram. A polling cron job or IMAP IDLE watcher can be added later to trigger proactive notifications.
+How and when inbound email is surfaced to the agent is to be determined.
 
 ```
 User asks "any new emails?" via Telegram
@@ -249,7 +249,7 @@ For the one remaining outbound action — email send/reply — the PA's system d
 
 Session summaries are written to `~intern-svc/the-intern/memory/` at the end of each session by the `session-memory` hook. These can be loaded into agent context on the next session start via `BOOTSTRAP.md`.
 
-Each agent is given a **focused context** (cases, key client events, relevant documents) and deliberately excluded from data irrelevant to its task — acting as blinders so the agent is not distracted by noise. Retrieval is powered by **semantic (vector) indexing**: documents are embedded at ingestion time and retrieved via similarity search, enabling RAG (retrieval-augmented generation) over the local document store.
+Each agent is given a **focused context** (cases, key client events, relevant documents) and deliberately excluded from data irrelevant to its task — acting as blinders so the agent is not distracted by noise.
 
 -----
 
