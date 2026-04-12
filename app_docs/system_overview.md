@@ -2,20 +2,18 @@
 
 **Version:** 0.2 (architecture + roadmap)
 **Platform:** macOS (Apple Silicon) / Linux
-**Runtime:** Native Python process — no container in v0.1
+**Runtime:** OpenClaw gateway process
 **Status:** Architecture draft
 
 ## Table of Contents
 
 - [Purpose](#purpose)
 - [Design principles](#design-principles)
-- [Language boundary](#language-boundary)
 - [Architecture layers](#architecture-layers)
   - [1. Interface layer](#1-interface-layer)
   - [2. Security layer](#2-security-layer)
   - [3. Orchestration layer](#3-orchestration-layer)
   - [4. AI model router](#4-ai-model-router)
-  - [5. Connectors](#5-connectors)
 - [Project layout](#project-layout)
 - [Features](#features)
 - [Roadmap](#roadmap)
@@ -28,37 +26,24 @@
 
 ## Purpose
 
-The Intern is a locally-hosted AI agent that interacts with an office environment on behalf of a user — reading and sending email, managing calendar events, and handling messaging channels. It operates with strict access controls, full auditability, and a security posture where sensitive data never leaves the local machine.
+The Intern is a suite of configurations, account settings, permission constraints, and AI agents for completing office tasks. It is a locally-hosted AI agent that interacts with an office environment on behalf of a user — reading and sending email, managing calendar events, handling messaging channels, searching documents, and managing social media accounts. It operates with strict access controls, full auditability, and a security posture where sensitive data never leaves the local machine.
 
 -----
 
 ## Design principles
 
 - **Security is deterministic, not AI-driven.** Access control, data classification, and routing policy are enforced by static rules configured by a Sys Admin, never decided by an AI model.
+  > *MVP compromise:* Runtime action policy (what the agent may do autonomously) is not yet encoded in a config file. Outbound actions requiring confirmation (email send, reply) are gated by an in-conversation confirmation prompt to the user rather than a policy rule in `openclaw.json`. A structured `action_policy` block is a planned upgrade.
 - **Local by default.** All secrets, documents, logs, and models run on-device. Cloud API calls are opt-in per task and blocked entirely for sensitive data.
+  > *MVP note:* The Researcher agent sends query data to the Anthropic API. This is opt-in, scoped to research tasks only, and never receives email content or local documents directly.
 - **Native OS process first.** v0.1 runs directly on macOS or Linux with no container layer. This simplifies development, debugging, and access to OS-native APIs (Keychain, EventKit, Messages). Container isolation is a planned v0.2 upgrade.
-- **Policy-driven execution.** Outbound actions are governed entirely by Sys Admin configuration and the Python security layer. There is no runtime human approval step — what is permitted is defined in `config.yaml` before the system runs.
-- **Swappable models.** AI model selection is driven by a YAML routing config. Changing provider or model requires no code changes.
+  > *MVP compromise:* The Intern runs inside the OpenClaw gateway process rather than as a standalone Python process. Direct OS-native API access (Keychain, EventKit) is deferred — secrets are managed via environment variables and an `email.env` file for now.
+- **Policy-driven execution.** Outbound actions are governed entirely by Sys Admin configuration. There is no runtime human approval step — what is permitted is defined in config before the system runs.
+  > *MVP:* Enforced at three deterministic levels in `openclaw.json`: (1) **channel access** — `allowFrom` and `dmPolicy` control who can reach each agent; (2) **tool restrictions** — `tools.allow`/`tools.deny` per agent lock down what each agent can execute (the Researcher is restricted to `web_search` and `web_fetch` only; the PA cannot run `exec`, `write`, or `browser` tools); (3) **skill restrictions** — `agents.list[].skills` limits which workspace skills each agent can invoke (the PA is restricted to `business-email` only). Autonomous outbound email send/reply is still gated by an in-conversation confirmation prompt — a structured `action_policy` block replacing this is a planned upgrade.
+- **Swappable models.** AI model selection is driven by config. Changing provider or model requires no code changes.
 - **Process isolation as the v0.1 security boundary.** The security boundary is the OS user account. The Intern runs as a dedicated low-privilege user (`intern-svc`) with only the filesystem permissions it explicitly needs.
-- **Designed for migration.** Every architectural boundary in v0.1 is drawn to make future migrations — from OpenClaw to Pi SDK, from native to containerised — low-cost changes at the integration layer only.
-
------
-
-## Language boundary
-
-The stack is split between Python and Node/TypeScript. The split is deliberate and stable across all planned versions:
-
-|Layer                                     |Language                             |Reason                                         |
-|------------------------------------------|-------------------------------------|-----------------------------------------------|
-|Interface (messaging channels)            |Node / TypeScript                    |OpenClaw and Pi extensions are TypeScript-only |
-|Security (ACL, classifier, audit, secrets)|Python                               |No framework dependency — pure business logic  |
-|Orchestration (agent loop)                |Node / TypeScript                    |Pi SDK (`createAgentSession`) is TypeScript    |
-|AI router                                 |Node (Pi) or Python (LiteLLM sidecar)|Flexible — see router section                  |
-|Connectors (email, calendar, doc index)   |Python                               |stdlib, `pyobjc`, `keyring` — all Python-native|
-
-The only cross-language seam is the **RPC boundary**: Pi runs with `--mode rpc` and communicates with the Python security layer over a JSONL protocol on stdin/stdout. Pi’s official docs include a Python client example for exactly this integration pattern.
-
-The Python security process is always the gatekeeper. It classifies and authorises every request before passing a prompt to Pi over the pipe. Pi never reads `config.yaml`, never touches the Keychain, and never calls a connector directly.
+- **Designed for migration.** Every architectural boundary is drawn to make future migrations — from OpenClaw to Pi SDK direct, from native to containerised — low-cost changes at the integration layer only.
+  > *MVP note:* The email SKILL pattern (business logic in `email-cli.py`, framework registration in `SKILL.md`) keeps the Python script decoupled from the OpenClaw API. Changing the orchestration framework requires only rewriting `SKILL.md`, not the script.
 
 -----
 
@@ -66,491 +51,340 @@ The Python security process is always the gatekeeper. It classifies and authoris
 
 ### 1. Interface layer
 
-Entry points into the Intern. All channels funnel into the same internal pipeline — security and orchestration logic is written once.
+Entry points into the Intern. All user-facing channels are provided natively by OpenClaw; the Intern adds only the workspace configuration to route them to the correct agent.
 
-|Channel |Technology                      |Notes                                                                            |
-|--------|--------------------------------|---------------------------------------------------------------------------------|
-|iMessage|AppleScript / `imessage-cli`    |macOS only — direct native access                                                |
-|WhatsApp|WhatsApp Business API (official)|Sends data to Meta — sensitive threads blocked at classifier                     |
-|Email   |IMAP (read) / SMTP (send)       |Credentials stored in macOS Keychain or Linux Secret Service                     |
-|Admin UI|FastAPI + minimal HTML          |Bound to `127.0.0.1` only — config management, audit log viewer, activity monitor|
-
-In v0.1 the messaging connectors (iMessage, WhatsApp) are implemented as OpenClaw plugins or Pi extensions in TypeScript. The connector *business logic* (message parsing, send/receive) is kept in plain TypeScript classes with no framework imports, wrapped in a thin plugin registration file. This discipline is required for the OpenClaw → Pi migration path.
+|Channel  |Technology                     |Notes                                                                                                                                        |
+|---------|-------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
+|Telegram |OpenClaw native channel        |Primary interactive channel. Access restricted to `allowFrom` user IDs in `openclaw.json`. `dmPolicy: allowlist`.                           |
+|Email    |IMAP (read/poll) / SMTP (send) |Not a built-in OpenClaw channel. Implemented as a workspace SKILL: `email-cli.py` script + `SKILL.md` instruction file. Inbound email is polled on demand or by a cron/IMAP IDLE watcher. Sender allowlist enforced at `email.env` config level.|
 
 -----
 
 ### 2. Security layer
 
-Enforced before any AI model call. All components are deterministic rule engines — no ML involvement. This layer is pure Python and has no dependency on the Node side of the stack.
+Enforced through a combination of OS-level isolation, Sys Admin configuration, and OpenClaw's built-in channel access controls. All controls are deterministic — no ML involvement.
 
 #### 2a. OS user isolation
 
-The Intern runs as a dedicated OS user (`intern-svc`) with minimal permissions:
+The Intern (OpenClaw gateway process) runs as a dedicated OS user (`intern-svc`) with minimal permissions:
 
 - Read access to the documents folder only
-- Read/write access only to `~intern-svc/data/`
+- Read/write access only to `~intern-svc/data/` and `~intern-svc/.openclaw/`
 - No sudo or admin privileges
-- macOS: only the specific entitlements required (Mail, Calendar, Messages) granted via System Preferences, scoped to the specific Python binary
+- macOS: only the specific entitlements required granted via System Preferences, scoped to the OpenClaw binary
 
-#### 2b. Sys Admin config (`config.yaml`)
+#### 2b. Sys Admin config (`~/.openclaw/openclaw.json`)
 
-A single YAML file, version-controlled, `chmod 600`, owned by `intern-svc`. **This file is read exclusively by the Python security layer.** The Node/Pi side of the stack never reads it. Any configuration the Node side needs (e.g. channel allowlists) is derived from this file by a startup script and written to the appropriate framework config format.
+A single JSON5 file, version-controlled, `chmod 600`, owned by `intern-svc`. This is the primary Sys Admin configuration surface. It controls channel access, deterministic agent routing via bindings, per-agent tool and skill restrictions, model assignments, and logging hooks.
 
-The file has four sections, each consumed by a different Python component:
-
-```yaml
-# consumed by: ACL checker
-users:
-  alice:
-    scopes: [read:email, calendar:read]
-  admin:
-    scopes: ["*"]
-
-api_keys:
-  "key-abc123":
-    identity: alice
-  "key-xyz789":
-    identity: admin
-
-# consumed by: data classifier
-sensitivity_rules:
-  - pattern: "\\bIBAN\\b"
-    tag: restricted
-  - pattern: "\\bpassword\\b"
-    tag: restricted
-    match_field: body
-  - pattern: "\\b[A-Z][a-z]+ [A-Z][a-z]+\\b"
-    tag: confidential
-
-# consumed by: RPC gateway (routing decision before Pi call)
-routing_policy:
-  restricted: local_only
-  confidential: local_only
-
-# consumed by: action policy enforcer (what the agent is permitted to do autonomously)
-action_policy:
-  allow: [send_email, send_whatsapp, create_event, delete_event]
-  # Remove an action from allow to block it entirely.
-  # Add constraints per action:
-  send_email:
-    max_recipients: 3
-    allowed_domains: ["example.com"]   # empty = unrestricted
-  send_whatsapp:
-    allowed_contacts_only: true        # only contacts in the allow_from list
-
-# derived by startup script → written to OpenClaw/Pi channel config
-channels:
-  whatsapp:
-    allow_from: ["+34600000000"]
-    block_sensitivity: [restricted, confidential]
-  imessage:
-    allow_from: ["alice@example.com"]
+```json
+{
+  "channels": {
+    "telegram": {
+      "token": "${TELEGRAM_BOT_TOKEN}",
+      "dmPolicy": "allowlist",
+      "allowFrom": [123456789]
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "ollama/gemma3",
+      "workspace": "~intern-svc/the-intern"
+    },
+    "list": [
+      {
+        "id": "personal-assistant",
+        "model": "ollama/gemma3",
+        "skills": ["business-email"],
+        "tools": {
+          "deny": ["exec", "write", "edit", "apply_patch", "browser"]
+        }
+      },
+      {
+        "id": "researcher",
+        "model": "anthropic/claude-sonnet-4-6",
+        "skills": [],
+        "tools": {
+          "allow": ["web_search", "web_fetch"],
+          "deny": ["exec", "write", "edit", "apply_patch"]
+        }
+      }
+    ]
+  },
+  "bindings": [
+    {
+      "agentId": "personal-assistant",
+      "match": { "channel": "telegram", "accountId": "*" }
+    }
+  ],
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "command-logger": { "enabled": true },
+        "session-memory":  { "enabled": true }
+      }
+    }
+  }
+}
 ```
 
-Config is loaded at startup and hot-reloaded on file change via `watchdog`. On every reload, the file’s modification timestamp and owning OS user are checked — an unexpected write is logged as a security event and surfaced in the Admin UI.
+Config is owned by `intern-svc`. OpenClaw hot-reloads on file change. Monitor the modification timestamp — an unexpected write should be treated as a security event.
 
 #### 2c. Secrets management
 
-**macOS:** Secrets (email passwords, API keys, WhatsApp tokens) are stored in the macOS Keychain and accessed at runtime via the `keyring` Python library. Read into memory on demand — never written to disk or environment variables.
+API keys and tokens are referenced in `openclaw.json` using `${VAR_NAME}` syntax. OpenClaw resolves these from the process environment, a `.env` file in the working directory, or `~/.openclaw/.env`. They are never written into the config file itself.
 
-**Linux:** The `SecretService` API (GNOME Keyring / KWallet) via `keyring` with the same interface. On headless servers, `keyrings.alt` with an encrypted file backend is the fallback.
+Email credentials are stored in `email.env` alongside the email SKILL script, never committed to version control:
 
-```python
-import keyring
-password = keyring.get_password("intern", "email_account")
-api_key  = keyring.get_password("intern", "anthropic_api_key")
+```bash
+EMAIL_IMAP_HOST=mail.yourcompany.com
+EMAIL_IMAP_PORT=993
+EMAIL_SMTP_HOST=mail.yourcompany.com
+EMAIL_SMTP_PORT=587
+EMAIL_USER=you@yourcompany.com
+EMAIL_PASS=your-app-password
+EMAIL_FROM=Your Name <you@yourcompany.com>
+EMAIL_ALLOW_FROM=boss@example.com,client@example.com
 ```
 
-No `.env` files. No environment variables for secrets. No plaintext credentials anywhere in `config.yaml`.
+> *Future upgrade:* Migrate API keys and the email password to macOS Keychain / Linux SecretService via `keyring`, replacing the `email.env` file and environment variables.
 
-> **Security note:** On macOS, Keychain access is granted per binary path. If the Python binary path changes (e.g. after a virtual environment update), macOS will re-prompt. Treat an unexpected re-prompt as a canary for binary path tampering.
+#### 2d. Channel access control
 
-#### 2d. ACL check
+**Telegram:** `dmPolicy: allowlist` + `allowFrom: [user_id]` in `openclaw.json`. Only the listed numeric user IDs can reach the agent. All other messages are silently dropped by OpenClaw before the agent sees them.
 
-Every request is validated against the caller’s declared scope before its payload is read. A caller with `read:email` scope attempting `send:email` receives a 403 immediately. Static lookup — not AI logic.
+**Email:** Inbound email is filtered at the `email-cli.py` level. The `EMAIL_ALLOW_FROM` variable in `email.env` defines an allowlist of sender addresses. The script discards messages from unlisted senders before returning results to the agent.
 
-#### 2e. Data classifier
+**Agent routing:** The `bindings` array in `openclaw.json` deterministically maps channels and accounts to specific agents. Bindings are matched by specificity then config order — no runtime decision is involved. See §2e for the complementary tool and skill restrictions that govern what each agent can do once routed.
 
-The request payload is scanned against `sensitivity_rules` from `config.yaml`. Matches are tagged in memory. The original payload is not modified. Runs locally, always, before any model call or RPC send.
+#### 2e. Agent tool and skill restrictions
+
+OpenClaw enforces tool and skill availability per agent through config — no custom code required. Restrictions are additive: later layers can only narrow further, never re-enable something denied earlier.
+
+**Tool restrictions** (`tools.allow` / `tools.deny` per agent):
+
+|Agent               |Allowed tools              |Denied tools                                   |
+|--------------------|---------------------------|-----------------------------------------------|
+|Personal Assistant  |read, shell (email script) |`exec`, `write`, `edit`, `apply_patch`, `browser`|
+|Researcher          |`web_search`, `web_fetch`  |`exec`, `write`, `edit`, `apply_patch`         |
+
+The Researcher can fetch web content but cannot write files, edit code, or execute arbitrary commands. The PA cannot open a browser or make arbitrary file edits — its only outbound action path is via `email-cli.py` invoked through the SKILL mechanism.
+
+**Skill restrictions** (`agents.list[].skills`):
+
+When `skills` is set on an agent, that becomes its complete and final skill set — it cannot invoke any skill not listed.
+
+|Agent               |Skills                |
+|--------------------|----------------------|
+|Personal Assistant  |`["business-email"]`  |
+|Researcher          |`[]` (none)           |
+
+The Researcher has no skill access at all; it works exclusively through its web tools. The PA can only invoke the email SKILL — it cannot pick up skills added to the workspace for other agents.
 
 #### 2f. Audit log
 
-Every request — including rejected ones — is appended to `~intern-svc/data/audit.db` (SQLite, WAL mode). The application layer permits `INSERT` only — no `UPDATE` or `DELETE` on the audit table.
+OpenClaw's built-in logging hooks provide three layers of activity logging with no custom code:
 
-|Field             |Content                                 |
-|------------------|----------------------------------------|
-|`timestamp`       |ISO 8601                                |
-|`caller_id`       |Identity from API key                   |
-|`action`          |Requested operation                     |
-|`sensitivity_tags`|Tags found by classifier                |
-|`model_used`      |Which model handled the request         |
-|`policy_check`    |Which `action_policy` rule was evaluated|
-|`outcome`         |`allowed`, `rejected`                   |
+|Layer               |Location                                              |What is captured                                           |
+|--------------------|------------------------------------------------------|-----------------------------------------------------------|
+|Session transcripts |`~/.openclaw/agents/<id>/sessions/*.jsonl`            |Full conversation: every message, tool call, tool result   |
+|Command audit log   |`~/.openclaw/logs/commands.log`                       |`/new`, `/reset`, `/stop` — timestamp, session, channel, sender|
+|Session summaries   |`~intern-svc/the-intern/memory/YYYY-MM-DD-slug.md`    |LLM-generated summary written at `/new` or `/reset`        |
 
-
-> **Security note:** Error responses must never include payload data or classifier output. A `400` that echoes a matched sensitivity pattern leaks classification to the caller.
+> *Future upgrade:* Supplement with a custom SQLite audit log (`audit.db`, WAL mode, INSERT-only) for structured querying and Admin UI integration.
 
 -----
 
 ### 3. Orchestration layer
 
-The agent loop runs inside the Node/TypeScript side of the stack, using the Pi SDK (`@mariozechner/pi-coding-agent`). The Python security layer feeds it prompts over the RPC pipe after classification and ACL checks pass.
+OpenClaw's gateway process handles channel routing and agent lifecycle. No custom Python gateway or RPC bridge is required. Channel bindings in `openclaw.json` route each incoming message to the correct agent.
 
-Each capability (email read, email send, calendar lookup, doc search) is a Pi `AgentTool` defined in TypeScript. Tool *execution* calls back to Python connectors via subprocess — the TypeScript tool wrapper is kept as thin as possible.
+Two agents are defined. Routing to them is **deterministic**: the `bindings` array in `openclaw.json` matches incoming messages by channel and account specificity. The Researcher has no binding and is only reachable as a subagent — no channel message can reach it directly.
 
-#### Message flow sequence
+- **Personal Assistant** — handles all Telegram conversations and email tasks. Runs on Gemma3 (Ollama, local). Tools restricted: no exec, write, edit, browser, or apply_patch. Skills restricted to `business-email` only. Spawns the Researcher as a subagent for research tasks.
+- **Researcher** — web search and document lookup specialist. Runs on Claude (Anthropic API). Tools restricted to `web_search` and `web_fetch` — cannot write files, execute code, or use any workspace skill. No channel binding; never receives raw user messages.
 
-The diagram below shows the full lifecycle of an inbound message from a channel (e.g. WhatsApp) through to a completed outbound action (e.g. sending an email reply). The RPC pipe is the boundary between the Python host and the Pi/Node process. Pi extensions operate entirely inside the Pi process.
+#### Message flow — Telegram
 
-```mermaid
-sequenceDiagram
-    participant CH  as Channel<br/>(WhatsApp / iMessage)
-    participant PY  as Python gateway<br/>(host process)
-    participant SEC as Python security<br/>(ACL · classifier · policy)
-    participant RPC as RPC pipe<br/>(JSONL stdin/stdout)
-    participant PI  as Pi agent<br/>(Node process)
-    participant EXT as Pi extension<br/>(TypeScript tool)
-    participant CON as Python connector<br/>(subprocess)
-    participant LLM as LLM API<br/>(Anthropic / Ollama)
-
-    CH->>PY:  inbound message
-    PY->>SEC: check caller scope (ACL)
-    SEC-->>PY: scope ok / rejected
-
-    alt rejected
-        PY-->>CH: error response (no payload data)
-        PY->>SEC: write audit log — outcome: rejected
-    end
-
-    PY->>SEC: classify payload
-    SEC-->>PY: sensitivity tags
-
-    alt restricted or confidential
-        PY->>RPC: prompt + routing hint (local_only)
-    else clean
-        PY->>RPC: prompt + routing hint (per routing.yaml)
-    end
-
-    RPC->>PI:  {"type":"prompt","message":"..."}
-    PI->>LLM:  agent turn (with registered tools in context)
-    LLM-->>PI: tool_call — e.g. send_email({to, subject, body})
-
-    PI->>EXT:  tool_call event fires (action_policy hook)
-    EXT->>CON: python security/action_policy.py check
-    CON-->>EXT: allowed / rejected + reason
-
-    alt policy rejected
-        EXT-->>PI: block: true, reason: "..."
-        PI->>LLM:  tool result — action not permitted
-        LLM-->>PI: revised response (inform user)
-    end
-
-    EXT-->>PI:  proceed
-    PI->>EXT:   execute send_email tool
-    EXT->>CON:  python connectors/email.py send '{...}'
-    CON-->>EXT: result (success / error)
-    EXT-->>PI:  tool result
-    PI->>LLM:   tool result fed back
-    LLM-->>PI:  final assistant message
-
-    PI->>RPC:   {"type":"agent_end","text":"Done — email sent"}
-    RPC->>PY:   response received
-    PY->>SEC:   write audit log — outcome: allowed
-    PY->>CH:    deliver response to channel
+```
+Telegram message
+  │
+  ▼
+OpenClaw Gateway (allowFrom check → binding match)
+  │  dmPolicy=allowlist, match: {channel=telegram, accountId=*} → agentId=personal-assistant
+  ▼
+Personal Assistant (Ollama / Gemma3)
+  │  if email task    → reads business-email SKILL → runs email-cli.py
+  │  if research task → spawns Researcher subagent
+  ▼
+Researcher (Claude API)  ← only for research tasks
+  │  web_search + web_fetch tools
+  ▼
+Result returned to Personal Assistant → reply sent on Telegram
 ```
 
-**Key points illustrated by the diagram:**
+#### Message flow — inbound email
 
-- The Python gateway and security layer handle steps 1–4 entirely before Pi is involved. Pi never sees a rejected or unclassified request.
-- The RPC pipe is crossed exactly twice per task: once inbound (prompt in) and once outbound (response out). Everything in between — LLM turns, tool calls, connector execution — happens inside Pi’s agent loop.
-- Pi extensions operate inside Pi. The action policy hook (`tool_call` event) fires inside Pi’s loop and calls back to Python via subprocess. The TypeScript extension is thin — the policy logic lives in Python.
-- Python connectors are always called as subprocesses from TypeScript extensions. They never receive data directly from the channel — only what Pi explicitly passes as tool parameters after the LLM has decided to act.
-- The audit log is written by the Python gateway at the end of every request, whether it was rejected at the ACL stage, rejected by the action policy inside Pi, or completed successfully.
+Email is pull-only in the MVP. The agent reads email when asked via Telegram. A polling cron job or IMAP IDLE watcher can be added later to trigger proactive notifications.
 
-#### Action policy enforcement
+```
+User asks "any new emails?" via Telegram
+  │
+  ▼
+PA reads business-email SKILL → runs:
+  email-cli.py list --limit 10  (filtered to EMAIL_ALLOW_FROM senders)
+  │
+  ▼
+Summarises unread messages → replies on Telegram
+```
 
-Before any outbound tool call executes, the Python gateway checks the `action_policy` block in `config.yaml`. The check is deterministic: if the action is not in the `allow` list, it is rejected and logged. If it is allowed, any constraints (recipient limits, domain restrictions, contact allowlists) are evaluated against the tool call parameters. The agent never sees a rejection as an error — it receives a structured refusal response and can react accordingly (e.g. inform the user that the action is not permitted).
+#### Action confirmation
 
-This replaces runtime human approval entirely. The Sys Admin defines what the agent may do before the system runs. Changing permissions means editing `config.yaml` and reloading — no code changes required.
+Tool and skill restrictions are the **primary** deterministic guard: the PA cannot execute arbitrary code, open a browser, or invoke skills other than `business-email`, regardless of what the model decides to do. The Researcher cannot write or send anything at all.
+
+For the one remaining outbound action — email send/reply — the PA's system description instructs it to confirm the recipient and subject with the user before proceeding unless explicitly told to go ahead. This in-conversation confirmation is a secondary, user-experience-level guard while a formal `action_policy` config block is pending.
 
 #### Context and memory
 
-The orchestrator has access to the document index for retrieving relevant files. No cross-session memory is persisted in v0.1. Conversation context is held in the Pi session file for the duration of a task only.
+Session summaries are written to `~intern-svc/the-intern/memory/` at the end of each session by the `session-memory` hook. These can be loaded into agent context on the next session start via `BOOTSTRAP.md`.
+
+Each agent is given a **focused context** (cases, key client events, relevant documents) and deliberately excluded from data irrelevant to its task — acting as blinders so the agent is not distracted by noise. Retrieval is powered by **semantic (vector) indexing**: documents are embedded at ingestion time and retrieved via similarity search, enabling RAG (retrieval-augmented generation) over the local document store.
 
 -----
 
 ### 4. AI model router
 
-In v0.1, Pi’s built-in `getModel()` from `pi-ai` handles provider routing in Node. Alternatively, LiteLLM can run as a local HTTP proxy (OpenAI-compatible) on `localhost:4000`, and Pi is pointed at it via a custom model definition — this keeps routing logic in Python if preferred.
+Model assignment is per-agent in `openclaw.json`. No separate routing config file or LiteLLM proxy is required for the MVP.
 
-#### Routing config (`routing.yaml`)
+|Agent               |Provider  |Model                  |Reason                                                              |
+|--------------------|----------|-----------------------|--------------------------------------------------------------------|
+|Personal Assistant  |Ollama    |`gemma3`               |Local, private, fast, zero API cost; sufficient for email summaries and conversation|
+|Researcher          |Anthropic |`claude-sonnet-4-6`    |Stronger reasoning and tool use required for web research           |
 
-```yaml
-routes:
-  classify:     ollama/mistral
-  summarise:    claude-sonnet-4-20250514
-  embed:        ollama/nomic-embed-text
-  draft_email:  claude-sonnet-4-20250514
-  quick_reply:  ollama/phi3
-  sensitive:    ollama/mistral   # always local — overrides all above if data is tagged
-```
-
-#### Routing policy
-
-1. If any sensitivity tag is present on the request → route to `sensitive` (local model), regardless of task type. This decision is made by the Python security layer *before* the RPC call.
-1. Otherwise → look up task type in `routing.yaml` and dispatch.
-1. Pi or LiteLLM handles retries and provider fallbacks.
+Sensitive data (email content, local documents) never reaches the Researcher or the Anthropic API — the PA handles all email operations locally and passes only the research question to the subagent.
 
 #### Local model runtime
 
 Ollama runs natively on Apple Silicon (Metal) and Linux (CPU or CUDA), installed independently.
 
-|Model             |Use                                             |
-|------------------|------------------------------------------------|
-|`mistral`         |Classification, sensitive tasks, quick reasoning|
-|`phi3`            |Fast short replies, low-latency tasks           |
-|`nomic-embed-text`|Document embedding for index search             |
-
------
-
-### 5. Connectors
-
-Pure Python. Thin, stateless adapters. Each connector only reads or writes what the orchestration layer explicitly requests. Connectors are called by TypeScript Pi tools via Python subprocess — they never receive data that has not passed the security gate.
-
-#### Email
-
-- Read: `imaplib` (Python stdlib)
-- Send: `smtplib` (Python stdlib)
-- Credentials fetched from Keychain at call time via `keyring`
-- Attachments written to `~intern-svc/tmp/`, classifier-scanned, then immediately deleted
-
-#### WhatsApp
-
-- WhatsApp Business API (official) — not Baileys
-- Outbound messages permitted only if `send_whatsapp` is in `action_policy.allow` and the recipient is in `channels.whatsapp.allow_from`
-- Threads tagged `restricted` or `confidential` are read-only; sending blocked at ACL layer
-
-> **Security note:** WhatsApp content is sent to Meta’s servers. The ACL layer — not the connector — is the enforcement point. The connector must never be trusted as a safety check.
-
-#### Document index
-
-- SQLite with FTS5 full-text search
-- Stores metadata and file pointers only — never file contents
-- Located at `~intern-svc/data/index.db`
-
-```sql
-CREATE TABLE documents (
-  id           TEXT PRIMARY KEY,
-  file_path    TEXT NOT NULL,
-  title        TEXT,
-  doc_type     TEXT,      -- email | contract | invoice | note
-  author       TEXT,
-  date         DATE,
-  tags         TEXT,      -- JSON array
-  sensitivity  TEXT DEFAULT 'normal',  -- normal | confidential | restricted
-  summary      TEXT,      -- 2-3 sentence AI-generated summary
-  fts_content  TEXT,      -- full text for FTS5
-  embedding    BLOB       -- optional vector for semantic search
-);
-```
-
-The `sensitivity` column is checked before any file path is passed to a model call. File paths are never forwarded to cloud models if `sensitivity != 'normal'`.
-
-#### Calendar
-
-- **macOS:** EventKit via `pyobjc` — direct native access
-- **Linux:** CalDAV via `caldav` Python library
-- Write operations permitted only if `create_event` / `delete_event` are in `action_policy.allow`
-
-#### iMessage (macOS only)
-
-- Send: AppleScript / `imessage-cli`
-- Receive: polling `~/Library/Messages/chat.db` (read-only)
-
-> **Security note:** Reading `chat.db` requires Full Disk Access in macOS System Preferences. Grant to the specific Python binary only; revoke if iMessage is not actively used.
+|Model    |Use                                                           |
+|---------|--------------------------------------------------------------|
+|`gemma3` |Personal Assistant — email summaries, reminders, conversation |
 
 -----
 
 ## Project layout
 
 ```
-intern/
-├── config.yaml              # Sys Admin ACL, rules, routing  [chmod 600]
-├── routing.yaml             # Model routing config
-├── requirements.txt         # Python deps
-├── package.json             # Node deps (Pi SDK, OpenClaw)
+~intern-svc/
+├── .openclaw/
+│   ├── openclaw.json        # Sys Admin config  [chmod 600]
+│   └── .env                 # API key env vars  [chmod 600, not committed]
 │
-├── security/                # Python — no Node dependency
-│   ├── acl.py               # Scope enforcement
-│   ├── classifier.py        # Sensitivity tagging
-│   ├── audit.py             # Append-only SQLite log
-│   └── config_loader.py     # YAML loader + file watcher
-│
-├── gateway/                 # Python — RPC bridge to Pi
-│   ├── rpc_client.py        # stdin/stdout JSONL to Pi subprocess
-│   └── action_policy.py     # Evaluates action_policy rules before tool execution
-│
-├── extensions/              # Node / TypeScript — Pi tools
-│   ├── email_tool.ts        # Calls email.py via subprocess
-│   ├── whatsapp_tool.ts     # Calls whatsapp.py via subprocess
-│   ├── calendar_tool.ts     # Calls calendar connector via subprocess
-│   └── doc_index_tool.ts    # Calls doc_index.py via subprocess
-│
-├── connectors/              # Python — pure business logic
-│   ├── email.py             # IMAP / SMTP
-│   ├── whatsapp.py          # WhatsApp Business API
-│   ├── imessage.py          # AppleScript / chat.db (macOS only)
-│   ├── calendar_mac.py      # EventKit via pyobjc
-│   ├── calendar_caldav.py   # CalDAV (Linux)
-│   └── doc_index.py         # SQLite FTS5
-│
-├── api/
-│   └── admin_ui.py          # FastAPI — 127.0.0.1:8080
-│
-└── data/                    # Runtime data — not in version control
-    ├── index.db
-    └── audit.db
+└── the-intern/              # OpenClaw workspace
+    ├── BOOTSTRAP.md         # Loaded at session start
+    ├── skills/
+    │   └── email/
+    │       ├── SKILL.md     # Agent reads this on demand
+    │       └── bin/
+    │           ├── email-cli.py   # IMAP/SMTP wrapper (Python stdlib only)
+    │           └── email.env      # Email credentials  [chmod 600, not committed]
+    └── memory/              # session-memory hook output
 ```
 
 -----
 
 ## Features
 
-List of desired features:
-
-- Have different channels for communication with the bot:
-  - iMessage, Telegram or Wahtsapp.
-  - email
-- The bot receives income email and acts on it.
-  - The user can filter what email is received by the bot.
-  - The user can configure how to deal with the emails depending on the sender.
-- The bot finds information and relevant documents in Dropbox or local filesystem.
-- The user can configure the paths and the location of the files.
-- The user can switch between AI agent models.
-- The user can use API access agents and local agents alike.
+- **Email:** Read, summarise, draft replies, and suggest responses to incoming messages. Sender allowlist enforced at config level.
+- **Search:** Find information across a heterogeneous document base — local files, Dropbox, web, and remote databases.
+- **Consultant:** Provide personalised advice based on trained domain expertise (legal, business, client context).
+- **Account manager:** Manage social media profiles — respond to messages, draft and publish posts.
+- **Translation:** Translate documents in legal and business contexts across Spanish, English, and Czech.
+- **Communication channels:** Telegram and email (MVP); additional channels in future iterations.
+- The bot finds information and relevant documents in Dropbox or local filesystem; paths and locations are user-configurable.
+- The user can switch between AI agent models and choose between cloud API agents and local models alike.
 - The user can receive requests that are directly piped to the AI agent provider API without previous preprocessing.
-
-- Web UI?
-- Asvisor role?
-- Social media account manager?
-- Translation?
 
 -----
 
 ## Roadmap
 
 1. Initial version and Minimum Viable Product (MVP):
-  - Communication via instant messages with the bot.
-  - Local account user with system level restrictions.
-  - User email account receive and send access, limited at system configuration to the user whitelisted email list.
-  - Agent level customization (skills, sould.md, agents).
+  - Communication via Telegram with the Personal Assistant agent.
+  - Local OS account (`intern-svc`) with system-level restrictions.
+  - Email: read, search, send, and reply via IMAP/SMTP SKILL; sender allowlist at config level.
+  - Research delegation to a Researcher subagent (Claude API, web search).
+  - Session logging via OpenClaw built-in hooks.
 
 -----
 
 ## OS setup checklist
 
 1. Create dedicated OS user: `sudo useradd -m intern-svc`
-1. Set filesystem permissions: `intern-svc` read-only on documents folder, read/write only on `~intern-svc/data/`
-1. Store all secrets: `python -c "import keyring; keyring.set_password('intern', 'email_account', '...')"`
-1. Secure config: `chmod 600 config.yaml && chown intern-svc config.yaml`
-1. macOS only: grant Mail, Calendar, Messages entitlements to the specific Python binary in System Preferences → Privacy
-1. Start Ollama: `ollama serve` and pull required models
-1. Start the Intern: `python gateway/rpc_client.py`; Admin UI (audit log, activity monitor, config reload) at `http://127.0.0.1:8080`
+1. Set filesystem permissions: `intern-svc` read-only on documents folder, read/write only on `~intern-svc/data/` and `~intern-svc/.openclaw/`
+1. Install Ollama and pull the model: `ollama pull gemma3 && ollama serve`
+1. Create a Telegram bot via `@BotFather`; note the bot token
+1. Find your Telegram user ID via `@userinfobot`; note the numeric ID
+1. Create `~intern-svc/.openclaw/.env` with `TELEGRAM_BOT_TOKEN` and `ANTHROPIC_API_KEY`; `chmod 600`
+1. Create `~intern-svc/.openclaw/openclaw.json` with the config above; `chmod 600 && chown intern-svc`
+1. Create the workspace structure and install `email-cli.py` and `SKILL.md`
+1. Create `email.env` with IMAP/SMTP credentials and `EMAIL_ALLOW_FROM` allowlist; `chmod 600`
+1. Start the gateway as `intern-svc`: `openclaw gateway run`
+1. Send a test message via Telegram; verify the PA replies
 
 -----
 
 ## Security oversight summary
 
-|Risk                                            |Mitigation                                                                              |
-|------------------------------------------------|----------------------------------------------------------------------------------------|
-|Intern process has broad OS permissions         |Run as dedicated `intern-svc` user with minimal filesystem grants                       |
-|macOS Full Disk Access for iMessage             |Grant to specific Python binary only; revoke if iMessage not in use                     |
-|WhatsApp sends data to Meta                     |Block sensitive/confidential threads at ACL layer before connector is called            |
-|Secrets in `.env` files or environment variables|Prohibited — all secrets via `keyring` + OS Keychain / SecretService                    |
-|`config.yaml` readable by other users           |`chmod 600`, owned by `intern-svc`                                                      |
-|`config.yaml` modified unexpectedly             |File watcher logs modification timestamp and OS user; alerts Admin UI                   |
-|API key with overly broad scope                 |Admin UI enforces minimal-scope key creation; wildcard scopes require explicit override |
-|Audit log tampered with                         |SQLite WAL mode; `INSERT` only enforced at application layer                            |
-|Error messages leaking classified content       |`400`/`403` responses never include payload data or classifier output                   |
-|Rate limiting absent                            |Per-key rate limits enforced at ACL layer                                               |
-|Admin UI exposed on network                     |Bound to `127.0.0.1:8080` only                                                          |
-|Webhook endpoints unauthenticated               |All inbound webhooks require HMAC signature validation                                  |
-|macOS Keychain re-prompt after binary change    |Treat as canary — log and alert                                                         |
-|Config leaking into Pi prompts                  |Python gateway must never pass config values, file paths, or secrets into the RPC prompt|
+|Risk                                               |Mitigation                                                                                       |
+|---------------------------------------------------|-------------------------------------------------------------------------------------------------|
+|Intern process has broad OS permissions            |Run as dedicated `intern-svc` user with minimal filesystem grants                               |
+|Unauthorised Telegram access                       |`dmPolicy: allowlist` + `allowFrom` in `openclaw.json` — only listed user IDs can reach agents  |
+|Unwanted email senders reaching the agent          |`EMAIL_ALLOW_FROM` allowlist in `email.env`; script discards messages from unlisted senders      |
+|Agent executes arbitrary code or writes files      |Per-agent `tools.deny` in `openclaw.json` — PA and Researcher both deny exec/write/edit/apply_patch|
+|Researcher invokes email or local skills           |`agents.list[].skills: []` — Researcher has no skill access; PA limited to `business-email` only |
+|Agent sends email without user knowledge           |PA instructed to confirm recipient and subject before sending unless explicitly told to proceed   |
+|Researcher receives sensitive local data           |PA handles all email/document operations locally; only the research question is passed to Claude |
+|API keys in config file                            |Keys referenced via `${VAR_NAME}` — resolved from `~/.openclaw/.env` (`chmod 600`, not committed)|
+|Email credentials exposed                          |Stored in `email.env` (`chmod 600`, not committed); app-specific password only                  |
+|`openclaw.json` readable by other users            |`chmod 600`, owned by `intern-svc`                                                               |
+|`openclaw.json` modified unexpectedly              |Monitor modification timestamp; treat unexpected writes as a security event                      |
+|Session transcripts contain sensitive data         |Stored in `~intern-svc/.openclaw/`; protected by `intern-svc` OS user permissions               |
 
 -----
 
 ## Migration paths and future architecture
 
-This section documents planned migrations and the design decisions in v0.1 that make them low-cost.
-
 ### OpenClaw → Pi SDK direct
 
-**When:** When the OpenClaw trust model and personal-assistant assumptions create friction with the Sys Admin ACL and action policy requirements, or when custom action policy enforcement is difficult to hook cleanly into OpenClaw’s plugin lifecycle.
+**When:** When custom action policy enforcement, a full data classifier, or a structured audit log are needed and cannot be cleanly hooked into OpenClaw's plugin lifecycle.
 
 **What changes:**
 
-|Component         |v0.1 (OpenClaw)             |v0.2 (Pi SDK direct)             |
-|------------------|----------------------------|---------------------------------|
-|Interface layer   |OpenClaw gateway + plugins  |Pi extensions (`registerTool`)   |
-|Channel connectors|`OpenClawPluginApi` wrappers|Pi `AgentTool` wrappers          |
-|Orchestration     |OpenClaw embeds Pi SDK      |Python spawns Pi directly via RPC|
-|Action policy     |Python `action_policy.py`   |Unchanged                        |
-|Security layer    |Unchanged                   |Unchanged                        |
-|Connectors        |Unchanged                   |Unchanged                        |
-|AI router         |Unchanged                   |Unchanged                        |
+|Component         |v0.1 (OpenClaw)                  |v0.2 (Pi SDK direct)               |
+|------------------|---------------------------------|-----------------------------------|
+|Interface layer   |OpenClaw gateway + channel config|Pi extensions (`registerTool`)     |
+|Orchestration     |OpenClaw route resolver          |Python spawns Pi directly via RPC  |
+|Action policy     |In-conversation confirmation     |`action_policy.py` + config block  |
+|Security layer    |OS user + `openclaw.json`        |OS user + `config.yaml` (Python)   |
+|Email SKILL       |`email-cli.py` + `SKILL.md`      |`email-cli.py` unchanged (reuse)   |
+|AI router         |Per-agent in `openclaw.json`     |`routing.yaml` + Python gateway    |
 
-**What survives unchanged:** layers 2 and 5 entirely — the Python security layer, config loader, classifier, audit log, secrets management, and all connector business logic. The RPC protocol between Python and Pi is already in use in v0.1, so the Python gateway code also survives.
+**What survives unchanged:** OS user isolation, `email-cli.py` business logic, session memory markdown files.
 
-**What must be rewritten:** the TypeScript channel connector wrappers (one file per channel, ~50–100 lines each). The *logic* inside those connectors (WhatsApp message parsing, iMessage polling) is preserved — only the plugin registration changes from `OpenClawPluginApi` to `pi.registerTool()`.
-
-**Key discipline to maintain in v0.1:** connector business logic must never import from `OpenClawPluginApi` or `openclaw/*`. Only the thin wrapper file at the top of each extension touches the framework. This makes the migration a find-and-replace on wrapper files, not a refactor of logic.
-
-**WhatsApp credential note:** OpenClaw’s WhatsApp uses the Baileys library with QR-code pairing, storing credentials in `~/.openclaw/credentials/`. The official WhatsApp Business API (used in Pi direct) has a different auth flow. Re-authentication is required when migrating — plan for a brief service interruption on that channel.
+**Key discipline to maintain in v0.1:** `email-cli.py` must never import from OpenClaw APIs. The script is pure Python stdlib. Only `SKILL.md` touches the framework. This makes migration a rewrite of `SKILL.md` only.
 
 -----
 
 ### Native process → Pi in a container (sandbox isolation)
 
-**When:** When the risk profile of Pi having read/write access to the host filesystem is unacceptable, or when a stricter audit boundary is required.
+**When:** When the risk profile of the agent process having read/write access to the host filesystem is unacceptable, or when a stricter audit boundary is required.
 
-**What changes:**
+In this model the Python security process remains on the host unchanged. The only change is how the orchestrator is spawned — from a direct process to a Docker container with `--network none`, `--read-only`, and `--cap-drop ALL`. All LLM API calls and connector calls travel back through the pipe to the Python host.
 
-The Python security process remains on the host unchanged. The only change is how it spawns the Pi subprocess:
-
-```python
-# v0.1 — Pi runs on the host
-proc = subprocess.Popen(
-    ["pi", "--mode", "rpc", "--no-session"],
-    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-)
-
-# v0.2 — Pi runs in a container
-proc = subprocess.Popen(
-    ["docker", "run", "--rm", "-i",
-     "--network", "none",      # no outbound network
-     "--read-only",            # no filesystem writes
-     "--tmpfs", "/tmp",        # only writable mount
-     "--cap-drop", "ALL",
-     "intern-pi:latest",
-     "pi", "--mode", "rpc", "--no-session"],
-    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-)
-```
-
-Pi’s container image contains only the Pi runtime and Node. No config files, no credentials, no document access, no network. All LLM API calls and connector calls travel back through the pipe to the Python host, which decides whether to execute them.
-
-**What the container cannot see:**
-
-- `config.yaml` and `routing.yaml`
-- The Keychain / secrets store
-- `index.db` and `audit.db`
-- The documents folder
-- Any connector or network endpoint
-
-**Additional work required for containerisation:** in v0.1, Pi calls LLM APIs directly. In the containerised model (`--network none`), Pi cannot reach external APIs. Every model call must return via a tool call through the pipe, which the Python host intercepts and forwards to the appropriate API. This requires a proxy tool definition in Pi and a corresponding Python handler on the host. Plan this work before containerising.
-
-**Design discipline to maintain in v0.1 for a smooth migration:** the Python gateway must never pass config values, file paths, or secrets into the RPC prompt or tool results. If Pi receives file paths via the prompt today, it will try to read them in the container tomorrow and fail. Keep the boundary clean from the start.
+**Design discipline to maintain in v0.1:** the gateway must never pass config values, file paths, or secrets into agent prompts or tool results. Keep the boundary clean from the start.
 
 -----
 
@@ -558,39 +392,35 @@ Pi’s container image contains only the Pi runtime and Node. No config files, n
 
 ### Near term (v0.2 / v0.3)
 
-**Document ingestion pipeline.** A folder watcher (`watchdog`) that monitors a designated documents directory, extracts text, generates AI summaries and embeddings, and registers each document in `index.db` with the correct `sensitivity` tag. Includes a manual tagging UI in the Admin panel and a re-index command.
+**Email push notifications.** Add an IMAP IDLE watcher (persistent connection) or polling cron job that proactively alerts the PA of new email from allowlisted senders. The PA sends a summary via Telegram.
 
-**Pi sandbox (containerised orchestrator).** As described above — move the Pi process into a Docker container with `--network none`. Prerequisite: LLM API proxy tool on the host side.
+**Calendar integration.** New SKILL following the same pattern as email: a CalDAV CLI script + `SKILL.md`. Read and write calendar events without adding framework dependencies.
 
-**`launchd` / `systemd` service.** Run the Intern as a background daemon that starts on boot as `intern-svc`. Includes a log rotation cron and a health-check endpoint on the Admin UI.
+**`launchd` / `systemd` service.** Run the Intern as a background daemon that starts on boot as `intern-svc`. Includes log rotation and a health-check endpoint.
 
-**Rate limiting.** Per-key request rate limits enforced at the ACL layer. Configurable in `config.yaml` per user scope.
+**Formal action policy.** Add an `action_policy` config block (in `openclaw.json` or a companion file) that encodes what the agent may do autonomously, replacing the in-conversation confirmation prompt.
 
 -----
 
 ### Medium term (v0.4 / v0.5)
 
-**OpenClaw → Pi SDK migration.** Replace the OpenClaw gateway with direct Pi SDK usage (`createAgentSession`). Rewrite channel connector wrappers from `OpenClawPluginApi` to `pi.registerTool()`. Migrate WhatsApp from Baileys to the official Business API. The Python security and connector layers are unchanged.
+**Document ingestion pipeline.** A folder watcher (`watchdog`) that monitors a designated documents directory, extracts text, generates AI summaries and embeddings, and registers each document in an index with the correct sensitivity tag.
 
-**Telegram connector.** Add Telegram as a messaging channel via the official Bot API. Low effort once the OpenClaw → Pi migration is complete, as Telegram is a first-class Pi/OpenClaw channel.
+**OpenClaw → Pi SDK migration.** Replace the OpenClaw gateway with direct Pi SDK usage (`createAgentSession`). Rewrite agent bindings and channel routing. `email-cli.py` and workspace skills survive unchanged.
 
-**Voice interface (STT/TTS).** Add speech-to-text input (Whisper, local via `whisper.cpp`) and text-to-speech output (System TTS on macOS or a local model). Expose as an additional interface channel alongside iMessage and WhatsApp.
+**Structured audit log.** Add a SQLite audit log (`audit.db`, WAL mode, INSERT-only) as a supplement to OpenClaw's JSONL transcripts, enabling structured queries and Admin UI integration.
 
-**Multi-account email.** Support multiple IMAP/SMTP accounts (personal + work) with per-account sensitivity rules and routing policies in `config.yaml`.
+**Secrets migration to Keychain.** Move API keys and the email password from `.env` files to macOS Keychain / Linux SecretService via `keyring`.
 
 -----
 
 ### Longer term (v1.0+)
 
-**Cross-session memory.** Persistent memory across sessions using a vector store (ChromaDB or Qdrant, local). Stores contact preferences, recurring task patterns, and writing style. Fed into Pi’s context on session start via the extension `before_agent_start` hook.
+**Cross-session memory.** Persistent memory across sessions using a vector store (ChromaDB or Qdrant, local). Fed into agent context on session start via `BOOTSTRAP.md`.
 
-**LoRA fine-tuning for writing style.** Train a small LoRA adapter on outgoing emails to capture writing style. Used for email drafts and message composition. Requires a fine-tuning pipeline (dataset extraction from sent mail, training script, adapter management in `routing.yaml`).
+**Multi-user support.** Per-user context isolation — separate agent sessions, separate document index partitions, per-user action policy. Requires the containerised orchestrator model.
 
-**Multi-user support.** Per-user context isolation — separate Pi sessions, separate document index partitions, separate audit log rows keyed by user identity. Requires the containerised Pi model (one container per session) and a session manager in the Python gateway.
-
-**Linux headless secrets.** Evaluate `keyrings.alt` with an encrypted file backend for Linux servers without a desktop session. Document the key derivation strategy and backup procedure.
-
-**Proactive agent behaviour.** Allow the Intern to initiate actions on a schedule (daily briefing, meeting preparation) rather than only responding to inbound messages. Requires a cron-like scheduler in the Python gateway and a dedicated `proactive_actions` section in `config.yaml` listing which scheduled actions are permitted.
+**Proactive agent behaviour.** Allow the Intern to initiate actions on a schedule (daily briefing, meeting preparation) rather than only responding to inbound messages.
 
 -----
 
