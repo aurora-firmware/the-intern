@@ -28,7 +28,7 @@
 
 ## Purpose
 
-The Intern is a locally-hosted AI agent that interacts with an office environment on behalf of a user — reading and sending email, managing calendar events, and handling messaging channels. It operates with strict access controls, full auditability, and a security posture where sensitive data never leaves the local machine.
+The Intern is a suite of configurations, account settings, permission constraints, and AI agents for completing office tasks. It is a locally-hosted AI agent that interacts with an office environment on behalf of a user — reading and sending email, managing calendar events, handling messaging channels, searching documents, and managing social media accounts. It operates with strict access controls, full auditability, and a security posture where sensitive data never leaves the local machine.
 
 -----
 
@@ -277,6 +277,8 @@ This replaces runtime human approval entirely. The Sys Admin defines what the ag
 
 The orchestrator has access to the document index for retrieving relevant files. No cross-session memory is persisted in v0.1. Conversation context is held in the Pi session file for the duration of a task only.
 
+Each agent is given a **focused context** (cases, key client events, relevant documents) and deliberately excluded from data irrelevant to its task — acting as blinders so the agent is not distracted by noise. Retrieval is powered by **semantic (vector) indexing**: documents are embedded at ingestion time and retrieved via similarity search, enabling RAG (retrieval-augmented generation) over the local document store.
+
 -----
 
 ### 4. AI model router
@@ -416,24 +418,16 @@ intern/
 
 ## Features
 
-List of desired features:
-
-- Have different channels for communication with the bot:
-  - iMessage, Telegram or Wahtsapp.
-  - email
-- The bot receives income email and acts on it.
-  - The user can filter what email is received by the bot.
-  - The user can configure how to deal with the emails depending on the sender.
-- The bot finds information and relevant documents in Dropbox or local filesystem.
-- The user can configure the paths and the location of the files.
-- The user can switch between AI agent models.
-- The user can use API access agents and local agents alike.
+- **Email:** Read, summarise, draft replies, and suggest responses to incoming messages. User-configurable filters by sender and routing rules per sender.
+- **Search:** Find information across a heterogeneous document base — local files, Dropbox, web, and remote databases.
+- **Consultant:** Provide personalised advice based on trained domain expertise (legal, business, client context).
+- **Account manager:** Manage social media profiles — respond to messages, draft and publish posts.
+- **Translation:** Translate documents in legal and business contexts across Spanish, English, and Czech.
+- **Communication channels:** iMessage, Telegram, WhatsApp, and email.
+- The bot finds information and relevant documents in Dropbox or local filesystem; paths and locations are user-configurable.
+- The user can switch between AI agent models and choose between cloud API agents and local models alike.
 - The user can receive requests that are directly piped to the AI agent provider API without previous preprocessing.
-
-- Web UI?
-- Asvisor role?
-- Social media account manager?
-- Translation?
+- Admin UI for configuration, audit log review, and activity monitoring.
 
 -----
 
