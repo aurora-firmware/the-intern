@@ -247,7 +247,7 @@ For the one remaining outbound action — email send/reply — the PA's system d
 
 #### Context and memory
 
-Session summaries are written to `~intern-svc/the-intern/memory/` at the end of each session by the `session-memory` hook. These can be loaded into agent context on the next session start via `BOOTSTRAP.md`.
+Session summaries are written to `~intern-svc/the-intern/memory/` at the end of each session by the `session-memory` hook. These are loaded into agent context on the next session start alongside `AGENTS.md`, `SOUL.md`, and `USER.md`.
 
 Each agent is given a **focused context** (cases, key client events, relevant documents) and deliberately excluded from data irrelevant to its task — acting as blinders so the agent is not distracted by noise.
 
@@ -283,7 +283,9 @@ Ollama runs natively on Apple Silicon (Metal) and Linux (CPU or CUDA), installed
 │   └── .env                 # API key env vars  [chmod 600, not committed]
 │
 └── the-intern/              # OpenClaw workspace
-    ├── BOOTSTRAP.md         # Loaded at session start
+    ├── AGENTS.md            # Agent operating instructions — loaded every session
+    ├── SOUL.md              # Agent persona and tone — loaded every session
+    ├── USER.md              # User identity and preferences — loaded every session
     ├── skills/
     │   └── email/
     │       ├── SKILL.md     # Agent reads this on demand
