@@ -39,7 +39,7 @@ The Intern is a suite of configurations, account settings, permission constraint
 - **Native OS process first.** v0.1 runs directly on macOS or Linux with no container layer. This simplifies development, debugging, and access to OS-native APIs (Keychain, EventKit, Messages). Container isolation is a planned v0.2 upgrade.
   > *MVP compromise:* The Intern runs inside the OpenClaw gateway process rather than as a standalone Python process. Direct OS-native API access (Keychain, EventKit) is deferred — secrets are managed via environment variables and an `email.env` file for now.
 - **Policy-driven execution.** Outbound actions are governed entirely by Sys Admin configuration. There is no runtime human approval step — what is permitted is defined in config before the system runs.
-  > *MVP compromise:* Enforced partially. Channel access is controlled by `openclaw.json` (Telegram `allowFrom`, email sender allowlist). Full action policy config is not yet implemented — see the note on the first principle above.
+  > *MVP:* Enforced at three deterministic levels in `openclaw.json`: (1) **channel access** — `allowFrom` and `dmPolicy` control who can reach each agent; (2) **tool restrictions** — `tools.allow`/`tools.deny` per agent lock down what each agent can execute (the Researcher is restricted to `web_search` and `web_fetch` only; the PA cannot run `exec`, `write`, or `browser` tools); (3) **skill restrictions** — `agents.list[].skills` limits which workspace skills each agent can invoke (the PA is restricted to `business-email` only). Autonomous outbound email send/reply is still gated by an in-conversation confirmation prompt — a structured `action_policy` block replacing this is a planned upgrade.
 - **Swappable models.** AI model selection is driven by config. Changing provider or model requires no code changes.
 - **Process isolation as the v0.1 security boundary.** The security boundary is the OS user account. The Intern runs as a dedicated low-privilege user (`intern-svc`) with only the filesystem permissions it explicitly needs.
 - **Designed for migration.** Every architectural boundary is drawn to make future migrations — from OpenClaw to Pi SDK direct, from native to containerised — low-cost changes at the integration layer only.
@@ -75,7 +75,7 @@ The Intern (OpenClaw gateway process) runs as a dedicated OS user (`intern-svc`)
 
 #### 2b. Sys Admin config (`~/.openclaw/openclaw.json`)
 
-A single JSON5 file, version-controlled, `chmod 600`, owned by `intern-svc`. This is the primary Sys Admin configuration surface. It controls channel access (who can interact with the Intern), agent definitions, model assignments, and logging hooks.
+A single JSON5 file, version-controlled, `chmod 600`, owned by `intern-svc`. This is the primary Sys Admin configuration surface. It controls channel access, deterministic agent routing via bindings, per-agent tool and skill restrictions, model assignments, and logging hooks.
 
 ```json
 {
@@ -95,14 +95,28 @@ A single JSON5 file, version-controlled, `chmod 600`, owned by `intern-svc`. Thi
       {
         "id": "personal-assistant",
         "model": "ollama/gemma3",
-        "bindings": [{ "channel": "telegram", "account": "main" }]
+        "skills": ["business-email"],
+        "tools": {
+          "deny": ["exec", "write", "edit", "apply_patch", "browser"]
+        }
       },
       {
         "id": "researcher",
-        "model": "anthropic/claude-sonnet-4-6"
+        "model": "anthropic/claude-sonnet-4-6",
+        "skills": [],
+        "tools": {
+          "allow": ["web_search", "web_fetch"],
+          "deny": ["exec", "write", "edit", "apply_patch"]
+        }
       }
     ]
   },
+  "bindings": [
+    {
+      "agentId": "personal-assistant",
+      "match": { "channel": "telegram", "accountId": "*" }
+    }
+  ],
   "hooks": {
     "internal": {
       "enabled": true,
@@ -142,7 +156,33 @@ EMAIL_ALLOW_FROM=boss@example.com,client@example.com
 
 **Email:** Inbound email is filtered at the `email-cli.py` level. The `EMAIL_ALLOW_FROM` variable in `email.env` defines an allowlist of sender addresses. The script discards messages from unlisted senders before returning results to the agent.
 
-#### 2e. Audit log
+**Agent routing:** The `bindings` array in `openclaw.json` deterministically maps channels and accounts to specific agents. Bindings are matched by specificity then config order — no runtime decision is involved. See §2e for the complementary tool and skill restrictions that govern what each agent can do once routed.
+
+#### 2e. Agent tool and skill restrictions
+
+OpenClaw enforces tool and skill availability per agent through config — no custom code required. Restrictions are additive: later layers can only narrow further, never re-enable something denied earlier.
+
+**Tool restrictions** (`tools.allow` / `tools.deny` per agent):
+
+|Agent               |Allowed tools              |Denied tools                                   |
+|--------------------|---------------------------|-----------------------------------------------|
+|Personal Assistant  |read, shell (email script) |`exec`, `write`, `edit`, `apply_patch`, `browser`|
+|Researcher          |`web_search`, `web_fetch`  |`exec`, `write`, `edit`, `apply_patch`         |
+
+The Researcher can fetch web content but cannot write files, edit code, or execute arbitrary commands. The PA cannot open a browser or make arbitrary file edits — its only outbound action path is via `email-cli.py` invoked through the SKILL mechanism.
+
+**Skill restrictions** (`agents.list[].skills`):
+
+When `skills` is set on an agent, that becomes its complete and final skill set — it cannot invoke any skill not listed.
+
+|Agent               |Skills                |
+|--------------------|----------------------|
+|Personal Assistant  |`["business-email"]`  |
+|Researcher          |`[]` (none)           |
+
+The Researcher has no skill access at all; it works exclusively through its web tools. The PA can only invoke the email SKILL — it cannot pick up skills added to the workspace for other agents.
+
+#### 2f. Audit log
 
 OpenClaw's built-in logging hooks provide three layers of activity logging with no custom code:
 
@@ -160,10 +200,10 @@ OpenClaw's built-in logging hooks provide three layers of activity logging with 
 
 OpenClaw's gateway process handles channel routing and agent lifecycle. No custom Python gateway or RPC bridge is required. Channel bindings in `openclaw.json` route each incoming message to the correct agent.
 
-Two agents are defined:
+Two agents are defined. Routing to them is **deterministic**: the `bindings` array in `openclaw.json` matches incoming messages by channel and account specificity. The Researcher has no binding and is only reachable as a subagent — no channel message can reach it directly.
 
-- **Personal Assistant** — handles all Telegram conversations and email tasks. Runs on a local model (Gemma3 via Ollama). Spawns the Researcher as a subagent when a research task is identified.
-- **Researcher** — web search and document lookup specialist. Runs on Claude (Anthropic API). Never bound to a channel directly — only invoked as a subagent by the PA.
+- **Personal Assistant** — handles all Telegram conversations and email tasks. Runs on Gemma3 (Ollama, local). Tools restricted: no exec, write, edit, browser, or apply_patch. Skills restricted to `business-email` only. Spawns the Researcher as a subagent for research tasks.
+- **Researcher** — web search and document lookup specialist. Runs on Claude (Anthropic API). Tools restricted to `web_search` and `web_fetch` — cannot write files, execute code, or use any workspace skill. No channel binding; never receives raw user messages.
 
 #### Message flow — Telegram
 
@@ -171,8 +211,8 @@ Two agents are defined:
 Telegram message
   │
   ▼
-OpenClaw Gateway (allowFrom check → route resolver)
-  │  channel=telegram, dmPolicy=allowlist → agent=personal-assistant
+OpenClaw Gateway (allowFrom check → binding match)
+  │  dmPolicy=allowlist, match: {channel=telegram, accountId=*} → agentId=personal-assistant
   ▼
 Personal Assistant (Ollama / Gemma3)
   │  if email task    → reads business-email SKILL → runs email-cli.py
@@ -201,7 +241,9 @@ Summarises unread messages → replies on Telegram
 
 #### Action confirmation
 
-Before sending or replying to email, the PA is instructed in its system description to confirm the recipient and subject with the user unless explicitly told to proceed. This is the MVP substitute for a formal `action_policy` config block.
+Tool and skill restrictions are the **primary** deterministic guard: the PA cannot execute arbitrary code, open a browser, or invoke skills other than `business-email`, regardless of what the model decides to do. The Researcher cannot write or send anything at all.
+
+For the one remaining outbound action — email send/reply — the PA's system description instructs it to confirm the recipient and subject with the user before proceeding unless explicitly told to go ahead. This in-conversation confirmation is a secondary, user-experience-level guard while a formal `action_policy` config block is pending.
 
 #### Context and memory
 
@@ -301,6 +343,8 @@ Ollama runs natively on Apple Silicon (Metal) and Linux (CPU or CUDA), installed
 |Intern process has broad OS permissions            |Run as dedicated `intern-svc` user with minimal filesystem grants                               |
 |Unauthorised Telegram access                       |`dmPolicy: allowlist` + `allowFrom` in `openclaw.json` — only listed user IDs can reach agents  |
 |Unwanted email senders reaching the agent          |`EMAIL_ALLOW_FROM` allowlist in `email.env`; script discards messages from unlisted senders      |
+|Agent executes arbitrary code or writes files      |Per-agent `tools.deny` in `openclaw.json` — PA and Researcher both deny exec/write/edit/apply_patch|
+|Researcher invokes email or local skills           |`agents.list[].skills: []` — Researcher has no skill access; PA limited to `business-email` only |
 |Agent sends email without user knowledge           |PA instructed to confirm recipient and subject before sending unless explicitly told to proceed   |
 |Researcher receives sensitive local data           |PA handles all email/document operations locally; only the research question is passed to Claude |
 |API keys in config file                            |Keys referenced via `${VAR_NAME}` — resolved from `~/.openclaw/.env` (`chmod 600`, not committed)|
