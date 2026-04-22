@@ -1,345 +1,398 @@
-# The Intern — MVP Design Document
+# The Intern — OpenClaw Implementation Plan
 
-| | |
-|---|---|
-| **Date** | 2026-04-12 |
-| **Status** | Draft |
-| **Scope** | MVP — single user, minimal security, core features only |
+## Table of Contents
 
----
+- [Purpose](#purpose)
+- [Target OpenClaw architecture](#target-openclaw-architecture)
+- [Logical component mapping](#logical-component-mapping)
+- [Capability inventory](#capability-inventory)
+  - [Built into OpenClaw](#built-into-openclaw)
+  - [Available through OpenClaw plugins or tools](#available-through-openclaw-plugins-or-tools)
+  - [Custom work required](#custom-work-required)
+- [Agents](#agents)
+  - [Personal Assistant](#personal-assistant)
+  - [Researcher](#researcher)
+- [Core flows](#core-flows)
+  - [Inbound Telegram message](#inbound-telegram-message)
+  - [Checking email](#checking-email)
+  - [Research delegation](#research-delegation)
+- [Email integration](#email-integration)
+- [OpenClaw configuration](#openclaw-configuration)
+- [Logging and memory](#logging-and-memory)
+- [Implementation sequence](#implementation-sequence)
+- [Decisions and trade-offs](#decisions-and-trade-offs)
+- [Open questions](#open-questions)
 
-## 1. Overview
+-----
 
-The Intern is a personal AI assistant built on OpenClaw. It connects to the user through Telegram and business email, runs two specialised agents, and uses Claude Sonnet for both. Email is integrated through the built-in Himalaya plugin.
+## Purpose
 
-### Goals for MVP
+This document maps the logical components in `app_docs/system_overview.md` to a concrete OpenClaw implementation.
 
-- Receive and respond to messages via Telegram
-- Read, search, send, and reply to business email (IMAP/SMTP)
-- Delegate research tasks (web search, document lookup) to a specialised agent
-- Keep all personal data within the Anthropic API; no third-party model providers
-- Log all agent activity with zero custom code using built-in hooks
-- Calendar and reminders integration
+Unlike the system overview, this file should mention specific OpenClaw features, existing plugins, built-in tools, and missing pieces that require custom work. The purpose is to keep the implementation honest: use OpenClaw where it already provides the required component, and write custom code only where the logical architecture has no built-in OpenClaw equivalent.
 
-### Out of scope for MVP
+-----
 
-- Web UI chat interface
-- Multi-user support
-- Advanced security (allowlist is the only guard)
-- Approval flows for sensitive actions
+## Target OpenClaw architecture
 
----
+```text
++----------------+      +------------------+      +----------------------+
+| Telegram user  |----->| OpenClaw gateway |----->| Channel binding      |
+| External input |      | Channel adapter  |      | telegram -> PA       |
++-------^--------+      +------------------+      +----------+-----------+
+        |                                                   |
+        | reply                                             v
++-------+--------+                               +----------+-----------+
+| Telegram reply |<------------------------------| Personal Assistant   |
+| Response path  |                               | Primary agent        |
++----------------+                               +----+------------+----+
+                                                    |            |
+                                      email tools   |            | subagent task
+                                                    v            v
+                                           +--------+--+    +----+---------+
+                                           | Himalaya  |    | Researcher   |
+                                           | IMAP/SMTP |    | Subagent     |
+                                           +-----+-----+    +----+---------+
+                                                 |               |
+                                                 v               v
+                                           +-----+-----+    +----+---------+
+                                           | Mailbox   |    | Web tools    |
+                                           | Email     |    | search/fetch |
+                                           +-----------+    +--------------+
 
-## 2. Architecture
-
-```mermaid
-graph TD
-    User -->|messages| TG[Telegram]
-    User -->|asks about email| TG
-    TG --> GW[OpenClaw Gateway]
-    GW -->|all messages| PA[Personal Assistant\nClaude Sonnet]
-    PA -->|email tasks| HI[Himalaya plugin\nnative IMAP/SMTP]
-    PA -->|research tasks| RE[Researcher\nClaude Sonnet]
-    HI <-->|IMAP / SMTP| MB[(Mailbox)]
-    RE -->|web_search\nweb_fetch| WEB[Web]
-    RE -->|findings| PA
-    PA -->|reply| TG
+                +------------------+     +------------------+
+                | command-logger   |     | session-memory   |
+                | Audit hook       |     | Memory hook      |
+                +------------------+     +------------------+
 ```
 
-### Data flow — inbound Telegram message
+-----
 
-```mermaid
-flowchart LR
-    A([Telegram message]) --> B[Gateway\nroute resolver]
-    B --> C[Personal Assistant]
-    C -->|email task| D[Himalaya plugin]
-    C -->|research task| E[Researcher subagent]
-    D --> C
-    E --> C
-    C --> F([Reply to user])
-```
+## Logical component mapping
 
-### Data flow — checking email
+| System overview component | OpenClaw mapping | Status |
+|---------------------------|------------------|--------|
+| External channel | Telegram channel | Built in |
+| Interface adapter | OpenClaw gateway and channel adapter | Built in |
+| Policy engine | Telegram allowlist, channel bindings, agent tool restrictions, agent plugin restrictions | Partly built in |
+| Orchestrator | Gateway routing, agent lifecycle, subagent delegation | Built in |
+| Context manager | Workspace bootstrap instructions, session context, `session-memory` hook | Built in / configured |
+| Model router | Per-agent model and provider configuration | Built in |
+| Primary agent | `personal-assistant` agent | Built in / configured |
+| Specialist agent | `researcher` subagent | Built in / configured |
+| Action executor | Himalaya email plugin, web tools, future custom skills/plugins | Plugin/tool based |
+| Response writer | Telegram reply path through gateway | Built in |
+| Audit trail | Session transcripts, `command-logger`, `session-memory` | Built in / hook based |
 
-```mermaid
-flowchart LR
-    A([User: any new emails?]) --> B[Personal Assistant]
-    B --> C[Himalaya: list inbox]
-    C --> D[Summarise unread]
-    D --> E([Reply on Telegram])
-```
+-----
 
-> **Note:** Email is **pull-only** in the MVP. The agent reads email when asked; it does not push Telegram notifications on new arrivals. Push can be added later via a polling cron job or an IMAP IDLE watcher hook.
+## Capability inventory
 
----
+### Built into OpenClaw
 
-## 3. Components
+| Capability | OpenClaw feature | Notes |
+|------------|------------------|-------|
+| Telegram channel | Native channel | Primary input/output path. Use sender allowlist for access control. |
+| Gateway routing | Channel bindings | Route all Telegram traffic to `personal-assistant`. |
+| Agents | Agent definitions | Define `personal-assistant` and `researcher` as separate roles. |
+| Subagents | Agent delegation | PA can call Researcher for bounded research tasks. |
+| Model selection | Per-agent model config | Assign model/provider per role. |
+| Web research | `web_search`, `web_fetch` tools | Expose only to Researcher. |
+| Session transcripts | Built-in session logs | Full conversation and tool-call trace. |
+| Command audit | `command-logger` hook | Records commands and lifecycle events. |
+| Session summaries | `session-memory` hook | Writes summaries for later context. |
 
-| Component | Role | Built-in? |
-|-----------|------|-----------|
-| Telegram channel | Primary input/output | Native |
-| Personal Assistant agent | Main agent, email + reminders | Native (config only) |
-| Researcher agent | Web + document research | Native (config only) |
-| Claude API | Model for both agents | Native plugin |
-| Himalaya plugin | IMAP/SMTP email access | Native plugin |
-| `command-logger` hook | Command audit log | Native, needs enabling |
-| `session-memory` hook | Session summaries | Native, needs enabling |
-| Session transcripts | Full conversation JSONL | Native, always on |
+### Available through OpenClaw plugins or tools
 
----
+| Capability | Tool or plugin | Notes |
+|------------|----------------|-------|
+| Email read/search/send/reply | Himalaya plugin | Existing OpenClaw email plugin using IMAP/SMTP. |
+| Email credentials | Himalaya plugin config | Store as env-var references, not literal secrets in config. |
+| Mailbox state changes | Himalaya tools | Sending, replying, marking read/unread are side-effecting actions. |
+| Calendar support | CalDAV-style plugin or custom skill | Not part of the current baseline plan unless a suitable plugin exists. |
+| Internal document search | OpenClaw tool/plugin or custom index | Needs confirmation against available OpenClaw plugins before implementation. |
 
-## 4. Agents
+### Custom work required
 
-### 4.1 Personal Assistant
+| Need | Why OpenClaw is not enough by itself | Likely implementation |
+|------|--------------------------------------|-----------------------|
+| Strong action confirmation policy | Prompt instructions are not a hard security boundary. | A `before_tool_call` hook or policy plugin for sensitive tools such as email send/reply. |
+| Email push notifications | Himalaya handles mailbox access, but push behavior needs a trigger. | IMAP IDLE watcher, polling job, or OpenClaw hook that sends a channel notification. |
+| Email sender allowlist beyond channel access | Telegram allowlist does not constrain mailbox senders. | Filter in a wrapper tool, plugin policy, or pre-processing layer before returning messages to the agent. |
+| Structured data classification | OpenClaw config can restrict tools, but document/email sensitivity needs domain policy. | Metadata tags plus policy checks before context is forwarded to agents. |
+| Retention policy for audit logs | OpenClaw can log, but retention and rotation are operational concerns. | Log rotation, archival, redaction, and deletion policy. |
+| Token/cost accounting | Not covered by the baseline logging plan. | Hook on model output/tool events into a daily JSONL or metrics store. |
+| Local document ingestion | Search needs indexing and sensitivity metadata. | Folder watcher, text extraction, embeddings/index, and access policy. |
+
+-----
+
+## Agents
+
+### Personal Assistant
 
 | Property | Value |
 |----------|-------|
 | Agent ID | `personal-assistant` |
-| Model | Claude Sonnet (claude-sonnet-4-6) via Anthropic API |
-| Channel binding | `telegram:main` (all messages) |
-| Auto reply | Yes |
-| Plugins | `himalaya` |
+| Role | Primary user-facing agent |
+| Channel binding | Telegram channel |
+| Model | Configured OpenClaw model, initially Claude Sonnet if using Anthropic |
+| Plugins/tools | Himalaya email plugin; no web tools by default |
+| Response path | Replies through the originating Telegram session |
 
-**Responsibilities:**
-- Handle all Telegram conversations
-- Read, search, send, and reply to business email via the Himalaya plugin
-- Manage reminders (in-context, no external calendar for MVP)
-- Delegate research requests to the Researcher subagent
+Responsibilities:
 
-**Behavioural rules:**
-- Always confirm recipient and subject before sending or replying, unless the user explicitly says to proceed
-- For any research task, spawn the Researcher instead of attempting it locally
-- Prefer bullet points over paragraphs in summaries
+- Handle direct user conversation.
+- Read, search, summarize, send, and reply to email through Himalaya.
+- Decide when a request should be delegated to Researcher.
+- Keep user-visible responses concise and action-oriented.
+- Avoid sending email or performing other side effects when required details are missing.
 
-### 4.2 Researcher
+Restrictions:
+
+- Should not receive unrestricted shell, filesystem write, browser, or code-editing tools.
+- Should not perform web research directly if that is assigned to Researcher.
+- Should not forward sensitive email or document contents to Researcher unless policy explicitly allows it.
+
+### Researcher
 
 | Property | Value |
 |----------|-------|
 | Agent ID | `researcher` |
-| Model | Claude (claude-sonnet-4-6) via Anthropic API |
-| Channel binding | None (spawned as subagent only) |
-| Auto reply | No |
+| Role | Specialist subagent |
+| Channel binding | None |
+| Model | Configured OpenClaw model, initially Claude Sonnet if using Anthropic |
 | Tools | `web_search`, `web_fetch` |
+| Response path | Returns findings to Personal Assistant |
 
-**Responsibilities:**
-- Web search and page retrieval
-- Internal document lookup (later iteration)
-- Return structured summaries: findings, sources, confidence level
+Responsibilities:
 
-**Output format (always):**
-- Key findings — bullet points
-- Sources — URLs
-- Confidence — high / medium / low
+- Perform web search and page retrieval.
+- Return structured findings with sources.
+- Indicate confidence when source quality is weak or incomplete.
 
----
+Restrictions:
 
-## 5. Models
+- No direct Telegram binding.
+- No email plugin.
+- No write/edit/shell tools.
+- No user-visible response path except through the PA.
 
-| Agent | Provider | Model | Reason |
-|-------|----------|-------|--------|
-| Personal Assistant | Anthropic | claude-sonnet-4-6 | Conversational, email, reminders |
-| Researcher | Anthropic | claude-sonnet-4-6 | Stronger reasoning, better tool use |
+-----
 
-**Why split if both use the same model?**
-- Different tool sets: PA gets Himalaya; Researcher gets `web_search` and `web_fetch`
-- Different channel bindings: PA is tied to Telegram; Researcher has none
-- Different behavioural rules: PA confirms before sending; Researcher returns structured reports
-- Keeps concerns cleanly separated and makes each agent independently replaceable
+## Core flows
 
----
+### Inbound Telegram message
 
-## 6. Email Integration
-
-Email is handled by the **Himalaya plugin**, which ships with OpenClaw. It connects directly to the mailbox over IMAP/SMTP and exposes email tools to the agent — no custom script needed.
-
-### 6.1 How Himalaya works in OpenClaw
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant PA as Personal Assistant
-    participant HI as Himalaya plugin
-    participant MB as Mailbox
-
-    U->>PA: "any new emails?"
-    PA->>HI: list_inbox(limit=10)
-    HI->>MB: IMAP SEARCH UNSEEN
-    MB-->>HI: message list
-    HI-->>PA: structured results
-    PA-->>U: summary in natural language
+```text
+Telegram message
+  |
+  v
+OpenClaw gateway
+  |
+  | sender allowlist + channel binding
+  v
+Personal Assistant
+  |
+  | direct answer, email tool call, or specialist delegation
+  v
+Telegram reply
 ```
 
-**Key properties:**
-- **Native** — no Python script or custom files to maintain
-- **Tool-based** — Himalaya registers email tools directly with the agent (list, read, send, reply, flag)
-- **Credential isolation** — IMAP/SMTP credentials are set in `.openclaw.yml` under the plugin config, not in the agent context
-- **Confirmation policy** — the PA's system description instructs it to confirm recipients before sending; Himalaya enforces nothing itself
+### Checking email
 
-### 6.2 Workspace structure
-
-```
-~/the-intern/
-├── BOOTSTRAP.md          ← runs at session start
-└── memory/               ← session-memory hook outputs
-```
-
-With Himalaya as a native plugin there are no extra skill files or wrapper scripts to manage.
-
-### 6.3 Himalaya plugin configuration
-
-Credentials go in the `plugins` section of `.openclaw.yml`:
-
-| Field | Purpose |
-|-------|---------|
-| `imap_host` / `imap_port` | IMAP server (default port 993, SSL) |
-| `smtp_host` / `smtp_port` | SMTP server (default port 587, STARTTLS) |
-| `username` | Login username |
-| `password` | Reference to an env var holding the app password or OAuth token |
-| `from` | Display name + address for outbound mail |
-
-> Use an app-specific password or OAuth token — never your main account password. Reference it via an environment variable, not a literal string in the config.
-
-### 6.4 Available email tools
-
-Himalaya exposes these tools to the agent:
-
-| Tool | What it does |
-|------|-------------|
-| `list_inbox` | Fetches N most recent messages with read/unread flag |
-| `read_message` | Fetches a single message by ID; marks it as read |
-| `search_messages` | Searches with filters: sender, recipient, subject, date range, free text |
-| `send_message` | Sends a new message via SMTP |
-| `reply_message` | Replies with correct threading headers (`In-Reply-To`, `References`) |
-| `flag_message` | Marks a message as read or unread |
-
----
-
-## 7. OpenClaw Configuration
-
-The `.openclaw.yml` file wires everything together. Required sections:
-
-| Section | What to set |
-|---------|------------|
-| **Profiles** | Anthropic API key from env var |
-| **Models** | Default model: `claude-sonnet-4-6` |
-| **Channels** | Telegram bot token from env var; allowlist = owner's Telegram user ID only |
-| **Workspace** | Directory: `~/the-intern` |
-| **Plugins** | Himalaya: IMAP/SMTP credentials (passwords via env vars) |
-| **Hooks** | `command-logger: enabled`; `session-memory: enabled` (message window: 20) |
-| **Agents** | `personal-assistant` — claude-sonnet-4-6/anthropic, telegram binding, auto-reply on, himalaya plugin enabled |
-| | `researcher` — claude-sonnet-4-6/anthropic, no binding, web tools on |
-
----
-
-## 8. Logging
-
-Three layers are active once hooks are enabled:
-
-```mermaid
-graph LR
-    A[Agent activity] --> B[Session transcripts\n~/.openclaw/agents/id/sessions/\nAlways on]
-    A --> C[Command audit log\n~/.openclaw/logs/commands.log\nEnable command-logger hook]
-    A --> D[Session summaries\n~/the-intern/memory/\nEnable session-memory hook]
+```text
+User asks about email
+  |
+  v
+Personal Assistant
+  |
+  v
+Himalaya plugin
+  |
+  | IMAP list/read/search
+  v
+Mailbox
+  |
+  v
+Personal Assistant summarizes results
+  |
+  v
+Telegram reply
 ```
 
-| Layer | Captures | Format | Enabled by |
-|-------|----------|--------|-----------|
-| Session transcripts | Every message, tool call, tool result | JSONL per session | Always on |
-| Command audit log | `/new`, `/reset`, `/stop` with timestamp, session, sender | JSONL append | `command-logger: true` |
-| Session summaries | LLM-generated session summary at `/new` or `/reset` | Markdown file | `session-memory: true` |
+Himalaya provides the email tool surface. Custom policy may still be needed for sender allowlists, sensitivity filters, and hard confirmation before send/reply actions.
 
----
+### Research delegation
 
-## 9. Setup Sequence
-
-```mermaid
-gantt
-    title Setup phases
-    dateFormat  D
-    axisFormat  Day %d
-
-    section Day 1
-    Phase 1 — Telegram + PA                :p1, 1, 1d
-    Phase 2 — Email via Himalaya           :p2, after p1, 1d
-
-    section Day 2
-    Phase 3 — Researcher subagent          :p3, 3, 4h
-    Phase 4 — Logging hooks                :p4, after p3, 1h
+```text
+User asks research question
+  |
+  v
+Personal Assistant
+  |
+  | bounded subtask
+  v
+Researcher
+  |
+  | web_search / web_fetch
+  v
+Web sources
+  |
+  v
+Researcher findings
+  |
+  v
+Personal Assistant final answer
 ```
 
-### Phase 1 — Telegram + PA (~30 minutes)
+The Researcher should receive the question and relevant non-sensitive context, not the full user session or mailbox contents.
 
-1. Add `ANTHROPIC_API_KEY` to your shell environment (e.g. `~/.profile`)
-2. Create a Telegram bot via `@BotFather` — note the bot token
-3. Find your Telegram user ID via `@userinfobot` — note the numeric ID
-4. Create `.openclaw.yml` with the Anthropic profile, Telegram channel, and personal-assistant agent
-5. Start the OpenClaw gateway
-6. Send a message to your bot — verify the PA replies
+-----
 
-### Phase 2 — Email via Himalaya (~15 minutes)
+## Email integration
 
-1. Obtain an app-specific password or OAuth token for your mail account
-2. Add the Himalaya plugin block to `.openclaw.yml` with IMAP/SMTP settings (password from env var)
-3. Enable the himalaya plugin for the `personal-assistant` agent
-4. Reload the gateway
-5. Ask the PA: "do I have any new emails?" — verify it lists the inbox
+Email should use the Himalaya plugin if it is available in the target OpenClaw installation.
 
-### Phase 3 — Researcher subagent (~15 minutes)
+Expected Himalaya capabilities:
 
-1. Add the `researcher` agent block to `.openclaw.yml` (reuses the same Anthropic profile)
-2. Reload the gateway
-3. Test: ask the PA to research something online
+| Tool capability | Purpose |
+|-----------------|---------|
+| List inbox | Fetch recent messages and read/unread state. |
+| Read message | Retrieve a specific message body. |
+| Search messages | Search by sender, recipient, subject, date, or free text. |
+| Send message | Send a new outbound email. |
+| Reply message | Reply while preserving thread headers. |
+| Flag message | Mark messages read/unread or otherwise update mailbox state. |
 
-### Phase 4 — Logging hooks (~5 minutes)
+Configuration requirements:
 
-1. Add the `hooks` block (command-logger + session-memory) to `.openclaw.yml`
-2. Reload the gateway
-3. Issue a `/new` command to trigger the first session-memory write
-4. Verify the summary appears in `~/the-intern/memory/`
+- IMAP host and port.
+- SMTP host and port.
+- Username.
+- Password or OAuth token, referenced through an environment variable.
+- From address.
 
----
+Implementation boundary:
 
-## 10. Decisions and Trade-offs
+- Himalaya is the action executor for email.
+- The PA is the only agent that should receive the email tool surface.
+- Confirmation and sender filtering should not rely only on the PA prompt if they are security requirements.
 
-### Why two agents instead of one?
+-----
 
-- Different tool sets: giving one agent all tools increases the risk of misuse (e.g. web-searching when it should just reply)
-- Different behavioural rules: PA is conversational and confirms before acting; Researcher is analytical and returns structured reports
-- Easier to tune and replace independently
-- Subagent delegation is the natural OpenClaw idiom for task specialisation
+## OpenClaw configuration
 
-### Why Himalaya instead of a custom email script?
+The OpenClaw config should wire the logical components explicitly:
 
-| Approach | Effort | Maintenance |
-|----------|--------|-------------|
-| Custom Python CLI (`email-cli.py`) | Medium — write, test, maintain a script | Owner — any IMAP edge case is your problem |
-| Himalaya plugin (built-in) | Zero — configure credentials only | OpenClaw team — updates come with the platform |
+| Section | Required content |
+|---------|------------------|
+| Profiles/providers | API keys or local provider configuration via environment variables. |
+| Models | Named models available for agent assignment. |
+| Channels | Telegram channel token and sender allowlist. |
+| Bindings | Route Telegram messages to `personal-assistant`. |
+| Agents | `personal-assistant` and `researcher` role definitions. |
+| Plugins | Himalaya plugin configured only for PA. |
+| Tools | Researcher gets `web_search` and `web_fetch`; PA gets email tools only. |
+| Hooks | Enable `command-logger` and `session-memory`. |
+| Workspace | Bootstrap/context files and memory directory. |
 
-Himalaya is already integrated with OpenClaw's tool system, so the agent gets typed email tools with no glue code.
+Minimum intended shape:
 
-### Why pull-only email for MVP?
+```text
+profiles/providers
+models
+channels
+  telegram
+bindings
+  telegram -> personal-assistant
+agents
+  personal-assistant
+    model
+    telegram binding
+    himalaya plugin
+    restricted tools
+  researcher
+    model
+    no channel binding
+    web_search/web_fetch only
+plugins
+  himalaya
+hooks
+  command-logger
+  session-memory
+workspace
+  bootstrap/context
+  memory
+```
 
-- Push requires IMAP IDLE (persistent connection) or a polling cron job
-- Both add infrastructure complexity with no functional gain for MVP
-- Can be added later as a standalone cron hook — no refactoring needed
+-----
 
-### Why Claude Sonnet for both agents?
+## Logging and memory
 
-- Single API provider simplifies credentials and billing
-- Sonnet has the reasoning quality needed for both email summarisation and web research
-- Consistent behaviour and capability across agents makes the system easier to reason about
-- Can be downgraded to Haiku on the PA later if cost becomes a concern
+| Layer | OpenClaw feature | Captures |
+|-------|------------------|----------|
+| Session transcripts | Built-in session logs | Messages, tool calls, tool results. |
+| Command audit | `command-logger` hook | User commands and lifecycle events. |
+| Session memory | `session-memory` hook | Summaries written for future context. |
 
----
+The logging plan covers traceability, but it does not automatically solve retention, redaction, or access-control policy for logs. Those are operational/custom requirements.
 
-## 11. Future Iterations
+-----
 
-| Feature | Approach |
-|---------|---------|
-| Email push notifications | IMAP IDLE watcher as a cron hook or standalone daemon |
-| Calendar integration | CalDAV plugin (same pattern as Himalaya) |
-| Internal document search | Researcher agent + local vector DB (LanceDB, built-in) |
-| Web UI chat | Matrix channel (has web client) or custom channel plugin |
-| Token/cost tracking | Plugin with `llm_output` hook → daily JSONL log |
-| Second user | Add to Telegram allowlist; assign a separate agent binding |
-| Approval flows | `before_tool_call` plugin hook for send/reply confirmation |
+## Implementation sequence
+
+1. Configure the Telegram channel and sender allowlist.
+2. Define `personal-assistant` and bind Telegram traffic to it.
+3. Configure the model provider and assign a model to PA.
+4. Enable session transcripts, `command-logger`, and `session-memory`.
+5. Configure Himalaya and expose email tools only to PA.
+6. Test email read/search before enabling send/reply.
+7. Add hard confirmation policy for send/reply if required.
+8. Define `researcher` with no channel binding.
+9. Expose only `web_search` and `web_fetch` to Researcher.
+10. Test PA-to-Researcher delegation and verify Researcher cannot access email tools.
+11. Review audit logs for each flow: Telegram request, email tool call, research delegation, and response.
+12. Add custom pieces only where the capability inventory marks OpenClaw as insufficient.
+
+-----
+
+## Decisions and trade-offs
+
+### Why two agents?
+
+- The PA needs direct channel access and email tools.
+- The Researcher needs web tools but should not see email tools or direct user channels.
+- Separate agents make tool restrictions easier to reason about.
+- A specialist role can be replaced or tuned without changing the user-facing PA.
+
+### Why Himalaya for email?
+
+| Approach | Benefit | Cost |
+|----------|---------|------|
+| Himalaya plugin | Uses existing OpenClaw email integration and typed tools. | Limited by plugin behavior and available policy hooks. |
+| Custom email wrapper | Full control over sender filtering, confirmations, and logging shape. | More code, more edge cases, more maintenance. |
+
+Use Himalaya first for mailbox operations. Add a custom wrapper or policy hook only when a security or workflow requirement cannot be enforced through OpenClaw configuration.
+
+### Where prompts are not enough
+
+Prompts can describe behavior, but they should not be treated as hard enforcement for:
+
+- Sender allowlists.
+- Sensitive data forwarding.
+- Email send/reply confirmation.
+- Tool access boundaries.
+- Log retention and redaction.
+
+Those belong in OpenClaw config, tool restrictions, hooks, plugins, or external policy code.
+
+-----
+
+## Open questions
+
+- Does the target OpenClaw version include the Himalaya plugin and the exact email tools listed here?
+- Which OpenClaw hook should enforce hard confirmation before email send/reply?
+- Can sender filtering for inbound email be implemented inside Himalaya config, or does it require a wrapper?
+- Which provider/model should be assigned to PA and Researcher for the first working setup?
+- What is the minimum audit retention period?
+- Should email push notifications be in scope, or should email remain pull-only until the core flows work?
