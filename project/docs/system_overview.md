@@ -13,6 +13,8 @@
     - [Agent Harness (Orchestrator)](#agent-harness-orchestrator)
     - [Actions](#actions)
     - [Monitoring](#monitoring)
+- [Channels](#channels)
+- [Action Tools](#action-tools)
 
 -----
 
@@ -164,3 +166,23 @@ Performs the side effects an agent requests, limited to operations the Policy Co
 Records enough information to reconstruct what happened during a session or task. Every component writes to it; it is a structural requirement, not an optional add-on.
 
 Monitoring captures the incoming request, the routing decision, the action or tool invocation, the result or failure, and any policy decision that constrained the action.
+
+## Channels
+
+The list here is a set of the desired 
+
+- email
+- instant messages
+- OS notifications
+- OS schedule
+- interactive chat (agent harness)
+
+## Action Tools
+
+Since the intern is aimed to assist on common office tasks, (archiving documents, prepare emails, analyze documetns, find information...) the list of actions here is supposed to cover the basics but it is not limited to.
+
+- Librarian: Interact with the file system accurately, know where to find information, archive received documents.
+- Task management: Keep track of the work to be done.
+- Calendars: Interact with third party calendars.
+- Emails: Send, receive and prepare emails.
+- System Administator: Monitor running services, backups and other housekeeping tasks.
