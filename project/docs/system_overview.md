@@ -4,34 +4,28 @@
 
 - [Purpose](#purpose)
 - [Design principles](#design-principles)
-- [Architecture layers](#architecture-layers)
+- [Architecture](#architecture)
   - [Layered view](#layered-view)
-  - [Component interaction view](#component-interaction-view)
-  - [Interface layer](#interface-layer)
-  - [Security layer](#security-layer)
-    - [Identity and access](#identity-and-access)
-    - [Data boundaries](#data-boundaries)
-    - [Action permissions](#action-permissions)
-    - [Audit trail](#audit-trail)
-  - [Orchestration layer](#orchestration-layer)
-    - [Message flow](#message-flow)
-    - [Agent roles](#agent-roles)
-    - [Action confirmation](#action-confirmation)
-    - [Context and memory](#context-and-memory)
-  - [Model routing](#model-routing)
+  - [Component interaction](#component-interaction)
+  - [Components](#components)
+    - [Requests Handler](#requests-handler)
+    - [Policy Control](#policy-control)
+    - [Agent Harness (Orchestrator)](#agent-harness-orchestrator)
+    - [Actions](#actions)
+    - [Monitoring](#monitoring)
 
 -----
 
 ## Purpose
 
-The system is a logically defined architecture for coordinating user interactions, policy enforcement, agent orchestration, memory, and model selection. It is intended to describe the structural responsibilities of the system without binding those responsibilities to a particular implementation framework.
+The system is a logically defined architecture for coordinating user interactions, policy enforcement, agent orchestration, memory, and model selection. It describes the structural responsibilities of the system without binding them to a particular implementation framework.
 
 -----
 
 ## Design principles
 
 - **Deterministic policy first.** Authorization, routing, and action limits are enforced by explicit rules rather than by model judgment.
-- **Local-first privacy.** Sensitive information should remain within controlled boundaries unless a component is explicitly permitted to process it externally.
+- **Local-first privacy.** Sensitive information stays within controlled boundaries unless a component is explicitly permitted to process it externally.
 - **Least privilege.** Each agent, channel, and tool receives only the permissions required for its role.
 - **Modularity.** Interface handling, policy enforcement, orchestration, memory, and model selection remain separable.
 - **Replaceability.** Concrete components may change over time without changing the underlying architectural contract.
@@ -39,220 +33,134 @@ The system is a logically defined architecture for coordinating user interaction
 
 -----
 
-## Architecture layers
+## Architecture
 
 ### Layered view
 
 ```text
 +------------------------------------------------------------+
-| External channels                                           |
-| User messages, notifications, queued tasks                  |
+| External channels                                          |
+| User messages, notifications, queued tasks                 |
 +------------------------------+-----------------------------+
                                |
                                v
 +------------------------------------------------------------+
-| Interface layer                                             |
-| Normalizes requests and attaches sender/channel context     |
+| Requests Handler                                           |
+| Normalizes requests and attaches sender/channel context    |
 +------------------------------+-----------------------------+
                                |
                                v
 +------------------------------------------------------------+
-| Security layer                                              |
-| Enforces identity, data boundaries, permissions, audit       |
+| Monitoring and Policy control                              |
+| Enforces identity, data boundaries, permissions, audit     |
 +------------------------------+-----------------------------+
                                |
                                v
 +------------------------------------------------------------+
-| Orchestration layer                                         |
-| Assigns roles, manages context, delegates bounded subtasks   |
+| Agent Harness (Orchestrator)                               |
+| Assigns roles, manages context, delegates bounded subtasks |
+| Selects permitted models according to role and task needs  |
 +------------------------------+-----------------------------+
                                |
                                v
 +------------------------------------------------------------+
-| Model routing                                               |
-| Selects permitted models according to role and task needs   |
-+------------------------------+-----------------------------+
+| Monitoring and Policy control                              |
+| Log everything that comes out from the agent               |
++------------------------------------------------------------+
                                |
                                v
 +------------------------------------------------------------+
-| Agent execution                                             |
-| Produces responses or requests authorized actions           |
+| Actions                                                    |
+| Interactions with external tools                           |
 +------------------------------------------------------------+
 ```
 
-### Component interaction view
+The layers form a request path: each layer hands a more constrained, better-contextualized request to the next. **Monitoring** sits alongside this path rather than within it — every component writes to it. **Actions** is reached from the Agent Harness for permitted side effects.
 
-```text
-                                 +--------------------------+
-                                 |      Audit trail         |
-                                 | Requests, policy, tools, |
-                                 | results, failures        |
-                                 +------------+-------------+
-                                              ^
-                                              |
-+------------------+     +--------------------+--------------------+
-| External channel |---->| Interface adapter                       |
-| User or event    |     | Normalize request, attach channel state |
-+--------+---------+     +--------------------+--------------------+
-         ^                                    |
-         | response                           v
-         |                   +----------------+----------------+
-         |                   | Policy engine                   |
-         |                   | Identity, data, action checks   |
-         |                   +----------------+----------------+
-         |                                    |
-         | authorized request                 v
-+--------+---------+     +--------------------+--------------------+
-| Response writer  |<----| Orchestrator                            |
-| Channel output   |     | Route, assign role, manage lifecycle    |
-+------------------+     +----------+----------------+-------------+
-                                    |                |
-                                    | context        | model request
-                                    v                v
-                         +----------+--------+   +---+--------------+
-                         | Context manager   |   | Model router     |
-                         | Working/session/  |   | Role-aware model |
-                         | durable memory    |   | selection        |
-                         +----------+--------+   +---+--------------+
-                                    |                |
-                                    | scoped context | selected model
-                                    v                v
-                         +----------+----------------+-------------+
-                         | Primary agent                           |
-                         | User interaction, task planning, reply  |
-                         +----------+----------------+-------------+
-                                    |
-                 bounded delegation | authorized action
-                         +----------+--------------------------+
-                         |                                     |
-                         v                                     v
-              +----------+----------+              +-----------+----------+
-              | Specialist agent    |              | Action executor      |
-              | Narrow task scope   |              | Permitted side       |
-              | and limited context |              | effects only         |
-              +---------------------+              +----------------------+
+### Component interaction
+
+The diagram below shows the components grouped by layer and the paths between them. Solid arrows are the request and response path; dashed arrows are the records every component sends to Monitoring.
+
+```mermaid
+flowchart TD
+    EC([External channels])
+
+    subgraph interface [Interface layer]
+        CA[Channel Adapters]
+        RH[Requests Handler]
+    end
+
+    subgraph security [Security layer]
+        MON[Monitoring]
+        PC[Policy Control]
+    end
+
+    subgraph orchestration [Orchestration layer]
+        AH["Agent Harness (Orchestrator)"]
+        AHOOK["Harness Hooks"]
+        MCP["MCPs or SKILLs"]
+    end
+
+    ACTIONS(["Actions (CLI tools)"])
+
+    EC -->|raw input| CA
+
+    RH -->|normalized request| PC
+    PC -->|authorized request| AH
+    AHOOK --> |action or delegation request| PC
+    PC -->|authorized action| AHOOK
+    MCP -->|exec| ACTIONS
+    ACTIONS -->|result| MCP
+    AH -->|response| RH
+    CA -->|channel output| EC
 ```
 
-### Interface layer
+Two paths pass through **Policy Control**: it checks each request on the way in, and it checks again when the Agent Harness asks to run an action or delegate a subtask. This keeps authorization deterministic at every state-changing step rather than only at the entry point.
 
-The interface layer receives inputs from one or more external channels and normalizes them into a common internal request format. A channel may be synchronous, such as interactive chat, or asynchronous, such as email or queued notifications.
+### Components
 
-Its responsibilities are:
+Each component has a single, clearly bounded responsibility. Components are logical roles, not implementation choices.
+
+#### Requests Handler
+
+Receives inputs from one or more external channels and normalizes them into a common internal request format. A channel may be synchronous, such as interactive chat, or asynchronous, such as email or a queued notification.
+
+Responsibilities:
 
 - Accept inbound user messages and requests.
 - Normalize channel-specific payloads into a shared internal representation.
 - Associate each request with a sender, a channel, and a conversational or transactional context.
-- Forward the normalized request to the orchestration layer.
 
-### Security layer
+#### Policy Control
 
-The security layer defines which actors may interact with which resources and under what conditions. It is deterministic and independent of model output.
+Defines which actors may interact with which resources and under what conditions. It is deterministic and independent of model output, and it is consulted both when a request enters the system and when an agent later requests an action or a delegation.
 
-#### Identity and access
+Responsibilities:
 
-Every incoming request is evaluated against identity and access rules. The system distinguishes between:
+- **Identity and access.** Evaluate every request against explicit identity and access rules, distinguishing the sender, the channel, and the agent or role permitted to receive it.
+- **Data boundaries.** Classify data by sensitivity and intended scope, and decide which component may access which data.
+- **Action permissions.** Constrain outbound actions by role, separating read-only operations, state-changing operations, external side effects, and privileged operations.
 
-- The user or sender initiating the request.
-- The channel used to deliver the request.
-- The agent or role that is allowed to receive it.
+Access decisions are based on explicit policy, not on inference. An action may be blocked here even if an agent can technically describe it.
 
-Access decisions are based on explicit policy, not on inference.
+#### Agent Harness (Orchestrator)
 
-#### Data boundaries
+Coordinates request handling, role assignment, delegation, and lifecycle state.
 
-Data is classified by sensitivity and by intended scope of use. A component may only access data that falls within its permitted boundary.
+Responsibilities:
 
-Typical boundaries include:
+- Assign each request to the appropriate agent role.
+- Delegate bounded subtasks from the primary agent to specialist agents.
+- Select a permitted model for each role or task, from the models the Policy Control allows for that task's sensitivity.
+- Track the lifecycle state of in-progress requests, including those that span asynchronous channels.
 
-- User-visible conversational data.
-- Task-specific working data.
-- Persistent memory.
-- External or delegated data sources.
 
-The purpose of these boundaries is to prevent unnecessary exposure of sensitive information.
+#### Actions
 
-#### Action permissions
+Performs the side effects an agent requests, limited to operations the Policy Control has authorized for that agent's role. It is the only component that produces external effects.
 
-Outbound actions are constrained by role-specific permissions. The architecture separates:
+#### Monitoring
 
-- Read-only operations.
-- State-changing operations.
-- External side effects.
-- Privileged operations that require stricter authorization.
+Records enough information to reconstruct what happened during a session or task. Every component writes to it; it is a structural requirement, not an optional add-on.
 
-An action may be blocked at the policy layer even if an agent can technically describe it.
-
-#### Audit trail
-
-The system records enough information to reconstruct what happened during a session or task.
-
-The audit trail should capture:
-
-- The incoming request.
-- The routing decision.
-- The action or tool invocation.
-- The result or failure.
-- Any policy decision that constrained the action.
-
-The audit trail is a structural requirement, not an optional add-on.
-
-### Orchestration layer
-
-The orchestration layer coordinates request handling, role assignment, handoffs, and lifecycle state.
-
-#### Message flow
-
-A typical flow is:
-
-1. A request enters through the interface layer.
-2. The security layer validates access and scope.
-3. The orchestration layer assigns the request to the appropriate agent role.
-4. The agent may request additional context or delegate a bounded subtask.
-5. The resulting action or response is returned through the originating channel.
-
-This flow applies to both conversational interactions and task-oriented requests.
-
-#### Agent roles
-
-The architecture distinguishes between a primary agent and one or more specialist agents.
-
-- The primary agent handles direct user interaction and maintains conversational continuity.
-- Specialist agents handle narrow tasks such as research, extraction, summarization, or domain-specific reasoning.
-- Delegation is bounded: the primary agent may hand off a task, but the specialist agent remains limited to its assigned scope.
-
-#### Action confirmation
-
-Some actions require explicit confirmation or stronger policy conditions before execution. Confirmation is used when:
-
-- The requested action changes state externally.
-- The request is incomplete or ambiguous.
-- The policy demands additional verification.
-
-The confirmation rule is part of the architecture, not a property of any specific model.
-
-#### Context and memory
-
-The orchestration layer manages what context is available to each agent and when.
-
-It separates:
-
-- Short-lived working context.
-- Session context.
-- Durable memory.
-- Context intentionally withheld from a role.
-
-This separation keeps agents focused and reduces accidental information leakage.
-
-### Model routing
-
-The model routing layer selects which model is appropriate for a given role or task. The routing decision may consider:
-
-- Capability requirements.
-- Latency.
-- Privacy constraints.
-- Cost.
-- Task sensitivity.
-
-The router chooses from permitted models; it does not determine policy.
-
-The architectural contract is that model selection is replaceable and role-aware, while the rest of the system remains stable.
+Monitoring captures the incoming request, the routing decision, the action or tool invocation, the result or failure, and any policy decision that constrained the action.
