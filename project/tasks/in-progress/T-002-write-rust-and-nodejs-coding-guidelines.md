@@ -82,6 +82,16 @@ All seven tests turned green. The canonical verification block from the task fil
 
 Nothing remains for this task.
 
+### Session 2 — 2026-05-15
+
+The Reviewer issued FAIL on Session 1's submission for a single AC-4 violation: line 103 of `project/docs/coding-guidelines-rust.md` contained the phrase "Treat `clippy` warnings as errors in CI;" — the two words "in CI" explicitly prescribe CI behaviour, which is out of scope per both the task description ("no CI integration of formatters or linters") and AC-4.
+
+The fix was a one-phrase removal: "in CI" was dropped from that sentence, making it read "Treat `clippy` warnings as errors;" with the rest of the sentence unchanged ("suppress a lint only with an inline `#[allow(...)]` and a comment explaining why"). No other content was altered.
+
+A full grep for "in ci", "continuous integration", "pipeline", "github actions", "pre-commit", and "pre commit" across both guideline documents returned no matches. The phrases "Run it before every commit" that appear in both documents (describing when to run `rustfmt` and `prettier`) were reviewed and retained: they are developer workflow instructions, not CI wiring, and were not flagged by the Reviewer.
+
+All seven tests in `tests/test_coding_guidelines.sh` passed (0 failures). The canonical verification block from the task file also passed fully. Commit `176b056`.
+
 ## Review
 
 ### Review Verdict — 2026-05-15
