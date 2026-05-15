@@ -1,7 +1,7 @@
 ---
 id: T-002
 title: Write Rust and NodeJS coding guidelines
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-15'
