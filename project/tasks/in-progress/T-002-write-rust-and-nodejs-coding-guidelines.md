@@ -83,3 +83,25 @@ All seven tests turned green. The canonical verification block from the task fil
 Nothing remains for this task.
 
 ## Review
+
+### Review Verdict — 2026-05-15
+
+FAIL
+
+**Stage 1 — AC-4 violation**
+
+- **File:** `project/docs/coding-guidelines-rust.md`, line 103
+- **What is wrong:** The sentence "Treat `clippy` warnings as errors in CI;" is explicit CI wiring of the linter. The task description states under "Out of scope (explicit)": "no CI integration of formatters or linters." AC-4 states: "The system shall NOT include guidance on … CI wiring of linters." This sentence directly prescribes how CI must be configured, which violates the acceptance criterion.
+- **What should change:** Remove the CI-specific clause from the `clippy` rationale. The sentence can end after the statement of what `clippy` catches and enforces, without prescribing CI behaviour. For example: "Treat `clippy` warnings as errors; suppress a lint only with an inline `#[allow(...)]` and a comment explaining why." This preserves the intent (clippy warnings must not be ignored) without naming CI as the enforcement mechanism.
+
+**Stage 1 — All other AC checks**
+
+- AC-1: PASS — both `coding-guidelines-rust.md` and `coding-guidelines-node.md` exist.
+- AC-2: PASS — both documents cover all six required sections (source layout, naming, error handling, logging, testing, formatter).
+- AC-3: PASS — no tool config files (`rustfmt.toml`, `clippy.toml`, `.eslintrc*`, `biome.json`, `.prettierrc*`, `.editorconfig`) were added.
+- AC-4: FAIL (see above). No other AC-4 violations were found (no architecture layering guidance, no module-boundary rules, no dependency licensing or security advisory content).
+- AC-5: PASS — testing sections in both documents are framework-agnostic; no `cargo nextest`, `jest`, `vitest`, `mocha`, or similar names appear.
+
+**Stage 2 — Skipped** (per procedure: Stage 2 is skipped when Stage 1 fails)
+
+**Out-of-scope file note (non-blocking):** `tests/test_coding_guidelines.sh` is not listed in "Files to Touch" but is justified in the Work Log as TDD scaffolding. This is acceptable; the justification is present.
