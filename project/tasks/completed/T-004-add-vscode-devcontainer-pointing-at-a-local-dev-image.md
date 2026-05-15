@@ -1,7 +1,7 @@
 ---
 id: T-004
 title: Add VSCode devcontainer pointing at a local dev image
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-15'
