@@ -1,7 +1,7 @@
 ---
 id: T-005
 title: Write phase-based project roadmap
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-15'
