@@ -67,7 +67,7 @@ What this specification explicitly does NOT cover:
 +-------------------------------------------------------------+
 | Rust service (single OS-agnostic binary)                    |
 |                                                             |
-|  Channel adapters -> Requests Handler -> Policy Control      |
+|  Channel adapters -> Requests Handler -> Policy Control     |
 |                              |              ^               |
 |                       Monitoring            | verdict       |
 +----------+-------------------+---------------+---------------+
