@@ -94,4 +94,16 @@ git diff --name-only dev-agent...HEAD -- \
 
 ## Work Log
 
+### Session 1 — 2026-05-15
+
+Verified task prerequisites first by checking that T-001 through T-005 are present in `project/tasks/completed/`; all were complete, so work proceeded. I then ran the task verification checks as a red step and confirmed failures in both `README.md` and `CLAUDE.md` for missing references to the new foundations artifacts.
+
+Implemented green by updating only `README.md` and `CLAUDE.md` (no new files) to reference: `the-intern/` layout, `.devcontainer/devcontainer.json`, CI workflows in `.github/workflows`, coding guidelines, roadmap, and system overview. I kept authoritative repository-structure and CI trigger facts in `CLAUDE.md` and linked from `README.md` to avoid duplicating canonical facts across docs.
+
+During refactor, I cleaned stale wording in `CLAUDE.md` and fixed the folder-tree formatting while preserving the same documented intent. Re-ran the full verification command set; all checks passed, including forbidden-path and forbidden-file checks.
+
+Tried and rejected: duplicating full CI trigger details in both documents. Kept one authoritative description in `CLAUDE.md` and cross-linked from `README.md` to satisfy AC-5.
+
+Remaining work: none in this task branch; ready for loop handoff/review.
+
 ## Review
