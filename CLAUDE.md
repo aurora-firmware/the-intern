@@ -10,59 +10,39 @@ Two things live here, and they must not be confused:
    office-assistant agent. Its design lives in `project/docs/system_overview.md`. The repo is
    currently in the *design phase* (branch `pi-agent-design`) — there is no application source
    code or test suite yet.
-2. **The AI-team framework that governs how work gets done.** A structured multi-agent software
-   development process defined entirely in `.claude/` (agents, skills) and `.ai-team.toml`. All
-   work on the product flows through this process.
 
 There are no build/lint/test commands — there is no code. "Commands" in this repo are the
 slash-skills below, backed by the `ai-team` CLI.
 
+## Folder structure
+
+```
+.
+├── CLAUDE.md                    # This file (AGENTS.md is a symlink to it)
+├── README.md
+├── .ai-team.toml                # Framework config (project.dir, version)
+├── ai-process-cli-reported-issues.md  # Running log of ai-team CLI / skill bugs
+├── .claude/
+│   ├── agents/                  # Role definitions: planner, architect, developer, reviewer, integrator
+│   └── skills/                  # Slash-skills backing the workflow (brainstorm, spec-breakdown,
+│                                #   spec-breakdown-review, dev-loop, bug-loop, tdd, code-review,
+│                                #   integrate, debug, escalation-review, git-conventions,
+│                                #   merge-conflicts, new-{task,bug,spec,adr}, status-report)
+├── .codex/
+│   └── agents/                  # Mirror role definitions for the codex toolchain (*.toml)
+└── project/                     # Source of truth for product lifecycle state
+    ├── docs/                    # Product design (system_overview.md, the-intern-architecture.md)
+    ├── specs/                   # Approved specifications (input to spec-breakdown)
+    ├── decisions/               # ADRs
+    ├── tasks/{pending,in-progress,completed,blocked}/
+    └── bugs/{open,in-progress,resolved}/
+```
+
+Directory *is* the status for tasks and bugs — moving a file is how state transitions.
+
 ## The `ai-team` CLI
 
-Skills shell out to an `ai-team` CLI for lifecycle artifacts (verify it is on PATH):
-- `ai-team task new "<title>" --priority <p> [--assigned-role <r>] --json`
-- Analogous subcommands back the `new-bug`, `new-spec`, `new-adr` skills.
-
-Project config is `.ai-team.toml` (`project.dir = "project"`, framework version 0.1.0).
-
-## Roles (subagents)
-
-Five role agents in `.claude/agents/`, each with a fixed model and skill set:
-
-| Role | Model | Owns |
-|---|---|---|
-| `planner` | opus | Brainstorm → approved spec → decompose into atomic tasks |
-| `architect` | opus | Gate-2 preflight, escalation consultation, ADRs |
-| `developer` | sonnet | Implements exactly one task/bug via TDD on its own branch |
-| `reviewer` | sonnet | Two-stage code review after Developer handoff |
-| `integrator` | sonnet | Manual merges + semantic conflict resolution |
-
-Mirror definitions for the `codex` toolchain exist in `.codex/agents/*.toml`.
-
-## Workflow
-
-Feature request → `brainstorm` → approved **spec** (`project/specs/`) → `spec-breakdown` into
-**tasks** → Architect **Gate-2 preflight** (`spec-breakdown-review`) → `dev-loop` runs each task
-through Developer ⇄ Reviewer cycles → `integrate` merges to `dev-agent`. Bugs follow the parallel
-`bug-loop` path. Blocked work escalates: role → Architect (`escalation-review`) → human.
-
-`dev-loop` and `bug-loop` are autonomous orchestrators (`disable-model-invocation: true` — human
-triggers only). They read/write lifecycle state directly from the filesystem and stop only at hard
-gates: empty queue, blocked task, escalation, or integration failure.
-
-## Lifecycle state lives in the filesystem
-
-`project/` is the source of truth. Task and bug files **move between status directories** as their
-state changes — the directory *is* the status:
-
-```
-project/tasks/{pending,in-progress,completed,blocked}/
-project/bugs/{open,in-progress,resolved}/
-project/specs/      project/decisions/ (ADRs)      project/docs/
-```
-
-Task/bug files are **canonical on `dev-agent`**. Implementation branches may carry copies for
-context, but lifecycle state is always read from and committed to `dev-agent`.
+IMPORTANT: The skills used in this project, together with the ai-team CLI are under development. Please write down there every bug or problem you notice with any of them in ai-process-cli-reported-issues.md
 
 ## Git model (authoritative: `git-conventions` skill)
 
