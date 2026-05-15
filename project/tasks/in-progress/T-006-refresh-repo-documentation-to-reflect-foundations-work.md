@@ -107,3 +107,20 @@ Tried and rejected: duplicating full CI trigger details in both documents. Kept 
 Remaining work: none in this task branch; ready for loop handoff/review.
 
 ## Review
+
+### Review Verdict — 2026-05-15
+
+PASS
+
+Stage 1 (acceptance criteria):
+- AC-1 met: verified `T-001` through `T-005` are present under `project/tasks/completed/` on `dev-agent`.
+- AC-2 met: `README.md` and `CLAUDE.md` both reference `the-intern/` layout, devcontainer, CI workflows/triggers, coding guidelines, and roadmap.
+- AC-3 met: no new files created in the source branch diff.
+- AC-4 met: no changes under forbidden paths/files; only `README.md` and `CLAUDE.md` were modified.
+- AC-5 met: authoritative structure/CI trigger details are kept in `CLAUDE.md`, with `README.md` remaining link-oriented and pointing to authoritative details.
+
+Stage 2 (quality):
+- Correctness/readability/scope are appropriate for documentation-only changes.
+- Security and performance concerns are not introduced by these edits.
+
+Next owner: Development Loop.
