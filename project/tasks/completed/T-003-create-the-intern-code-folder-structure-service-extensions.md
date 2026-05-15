@@ -1,7 +1,7 @@
 ---
 id: T-003
 title: Create the-intern code folder structure (service + extensions)
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-15'
