@@ -100,5 +100,5 @@ logic. Run it before every commit.
 
 **`clippy`** — static analysis for idiomatic Rust. It catches common pitfalls
 (unnecessary clones, panicking paths, unidiomatic patterns) and enforces a
-higher bar than the compiler alone. Treat `clippy` warnings as errors in CI;
+higher bar than the compiler alone. Treat `clippy` warnings as errors;
 suppress a lint only with an inline `#[allow(...)]` and a comment explaining why.
