@@ -78,4 +78,20 @@ grep -qi "not vendored\|not included\|installed in" the-intern/extensions/README
 
 ## Work Log
 
+### Session 1 — 2026-05-15
+
+Implemented T-003 with a strict red→green flow. I first added a new shell test suite (`tests/test_the_intern_structure.sh`) that encodes AC-1 through AC-5, including README line-count bounds, required spec reference, forbidden file patterns, and the extensions README dev-container/not-vendored statement. Initial execution failed as expected because `the-intern/` did not exist. I adjusted one test path in AC-5 to avoid premature exit when the root directory is missing, then reran to confirm clean failing output. I then created exactly `the-intern/`, `the-intern/service/`, and `the-intern/extensions/` with 3–6 line README stubs and no manifests or source files. After implementation, the new test suite passed, task verification commands passed, and existing repository tests still passed. I considered adding placeholder manifests or code stubs but rejected that because it violates explicit out-of-scope constraints. No remaining implementation work is left for this task on the branch.
+
+Evidence:
+- Red test run (before implementation): `tests/test_the_intern_structure.sh` → 4 failures, 1 pass.
+- Green test run (after implementation): `tests/test_the_intern_structure.sh` → 5 passed, 0 failed.
+- Task verification commands from the task file all passed (including forbidden-file and README grep checks).
+- Regression checks passed:
+  - `tests/test_workflows.sh` → 13 passed, 0 failed.
+  - `tests/test_coding_guidelines.sh` → 7 passed, 0 failed.
+
+Obstacles Encountered:
+- `project/docs/coding_guidelines.md` referenced by role instructions does not exist in this repo; used existing project guideline docs and task-specific constraints instead.
+- First draft of AC-5 test exited early when `the-intern/` was absent; patched test to report a normal failure state during red phase.
+
 ## Review
