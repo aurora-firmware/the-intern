@@ -1,7 +1,7 @@
 ---
 id: T-006
 title: Refresh repo documentation to reflect foundations work
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-15'
