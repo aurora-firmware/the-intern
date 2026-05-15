@@ -63,4 +63,12 @@ done
 
 ## Work Log
 
+### Session 1 — 2026-05-15
+
+Implemented `project/docs/roadmap.md` as a phase-based narrative roadmap with Phase 0 Foundations followed by Phases 1 through 7 in the architecture spec’s implementation order. Each phase now has a short prose paragraph that states the delivered outcome, why it appears at that point in the sequence, and a direct reference to `project/specs/the-intern-agent-service-architecture.md`. The document intentionally avoids task IDs, effort estimates, ownership/assignee language, and exit-criteria wording.
+
+For TDD, I first added `tests/test_roadmap.sh` and ran it before implementation to establish a failing baseline (all AC checks failed with no roadmap file present). After drafting the roadmap, tests exposed a parser flaw in the new test script: I initially used `\b` word-boundary patterns in `awk`, which produced false negatives for section extraction. I rejected that approach and refactored extraction to use explicit `([^0-9]|$)` phase-boundary regexes, then re-ran the suite to green.
+
+What remains: no implementation work remains on this task branch. The next step is for the loop to append this session entry to the canonical task file on `dev-agent` and continue handoff/review flow.
+
 ## Review
