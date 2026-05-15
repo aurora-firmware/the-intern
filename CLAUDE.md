@@ -7,12 +7,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Two things live here, and they must not be confused:
 
 1. **The product being designed — "the Intern".** A logical architecture for an intelligent
-   office-assistant agent. Its design lives in `project/docs/system_overview.md`. The repo is
-   currently in the *design phase* (branch `pi-agent-design`) — there is no application source
-   code or test suite yet.
+   office-assistant agent, with architecture in `project/docs/system_overview.md`, implementation
+   roadmap in `project/docs/roadmap.md`, and early code layout in `the-intern/`.
 
-There are no build/lint/test commands — there is no code. "Commands" in this repo are the
-slash-skills below, backed by the `ai-team` CLI.
+Repository orchestration commands are provided by the slash-skills below, backed by the
+`ai-team` CLI.
 
 ## Folder structure
 
@@ -21,6 +20,13 @@ slash-skills below, backed by the `ai-team` CLI.
 ├── CLAUDE.md                    # This file (AGENTS.md is a symlink to it)
 ├── README.md
 ├── .ai-team.toml                # Framework config (project.dir, version)
+├── .devcontainer/
+│   └── devcontainer.json        # Local dev container definition
+├── .github/
+│   └── workflows/
+│       ├── build.yml            # Build workflow (pull requests)
+│       ├── test.yml             # Test workflow (pull requests)
+│       └── deploy.yml           # Deploy workflow (v* tags)
 ├── ai-process-cli-reported-issues.md  # Running log of ai-team CLI / skill bugs
 ├── .claude/
 │   ├── agents/                  # Role definitions: planner, architect, developer, reviewer, integrator
@@ -30,8 +36,12 @@ slash-skills below, backed by the `ai-team` CLI.
 │                                #   merge-conflicts, new-{task,bug,spec,adr}, status-report)
 ├── .codex/
 │   └── agents/                  # Mirror role definitions for the codex toolchain (*.toml)
+├── the-intern/
+│   ├── extensions/              # Extension/plugin code area
+│   └── service/                 # Core service code area
 └── project/                     # Source of truth for product lifecycle state
     ├── docs/                    # Product design (system_overview.md, the-intern-architecture.md)
+    │                            # Coding guidance and roadmap live here too
     ├── specs/                   # Approved specifications (input to spec-breakdown)
     ├── decisions/               # ADRs
     ├── tasks/{pending,in-progress,completed,blocked}/
@@ -43,6 +53,14 @@ Directory *is* the status for tasks and bugs — moving a file is how state tran
 ## The `ai-team` CLI
 
 IMPORTANT: The skills used in this project, together with the ai-team CLI are under development. Please write down there every bug or problem you notice with any of them in ai-process-cli-reported-issues.md
+
+CI workflows run build and test on pull requests, and deploy on tags matching `v*`.
+
+## Pointers
+
+- Coding guidelines: `project/docs/coding-guidelines-node.md`,
+  `project/docs/coding-guidelines-rust.md`
+- Roadmap: `project/docs/roadmap.md`
 
 ## Git model (authoritative: `git-conventions` skill)
 
