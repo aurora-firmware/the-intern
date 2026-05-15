@@ -68,4 +68,18 @@ done
 
 ## Work Log
 
+### Session 1 — 2026-05-15
+
+Started with an empty Work Log (first session). Read the task file, the architecture spec (S-001), and the system overview to understand the technology context (Rust service + Node.js JS extension inside pi-agent).
+
+Adapted TDD to documentation: wrote `tests/test_coding_guidelines.sh` first, covering AC-1 (file existence), AC-2 (six required section headings via grep), AC-3 (no tool config files), and AC-5 (no specific test framework names). The script started red — four failures because neither document existed yet.
+
+Wrote `coding-guidelines-rust.md` covering source layout (`snake_case` modules, Cargo workspace structure), naming (`UpperCamelCase`/`snake_case`/`SCREAMING_SNAKE_CASE`), error handling (`Result`+`thiserror` at boundaries, `anyhow` at application layer, no silent swallowing), logging (`tracing` with structured fields, level guidance, what never to log), testing (co-located `#[cfg(test)]` modules, naming convention, no shared state, no network/filesystem unless that is the subject), and formatter/linter (`rustfmt` + `clippy`, one-line rationale each). Framework names (cargo nextest etc.) were deliberately omitted.
+
+Wrote `coding-guidelines-node.md` on the same six sections for the JS extension: `kebab-case` files, `camelCase`/`PascalCase` identifiers, typed `Error` subclasses with `cause` propagation, structured JSON logging, the same good-test checklist, and `prettier` + `eslint` with rationale.
+
+All seven tests turned green. The canonical verification block from the task file also passed without modification. Committed everything in one cycle (`af23e9b`). Nothing was tried and rejected; both documents came out within the one-page scope on the first pass.
+
+Nothing remains for this task.
+
 ## Review
