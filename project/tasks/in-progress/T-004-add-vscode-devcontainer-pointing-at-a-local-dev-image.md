@@ -73,4 +73,28 @@ grep -qE 'localhost/(rust_dev|aurorafw_dev)' .devcontainer/devcontainer.json
 
 ## Work Log
 
+### Session 1 — 2026-05-15
+
+Implemented T-004 in one red→green→refactor cycle without touching the lifecycle file.  
+Red phase: ran the task verification checks before implementation; they failed because `.devcontainer/devcontainer.json` did not exist.  
+Green phase: added `.devcontainer/devcontainer.json` using `image` (no `build`, no `dockerComposeFile`), explicit default workspace mount/folder (`/workspaces/${localWorkspaceFolderBasename}`), no Codespaces keys, and no setup/bootstrap scripts.  
+Chosen image recorded here: `localhost/rust_dev:latest`.  
+Tried and rejected: using hyphenated local image names (`localhost/rust-dev` / `localhost/aurorafw-dev`) discovered on host, because task acceptance explicitly constrains allowed references to underscore variants (`localhost/rust_dev` or `localhost/aurorafw_dev`).  
+Post-change verification passed, and existing regression test suites passed. No remaining implementation work on this task branch.
+
+Evidence:
+- Red check (pre-change): task verification script failed on missing `.devcontainer/devcontainer.json` and dependent checks.
+- Green check (post-change): all task verification commands passed, including JSON parse and forbidden-key checks.
+- Regression checks passed:
+  - `./tests/test_workflows.sh` → 13 passed, 0 failed
+  - `./tests/test_coding_guidelines.sh` → 7 passed, 0 failed
+  - `./tests/test_the_intern_structure.sh` → 5 passed, 0 failed
+- Image discovery:
+  - `docker image ls` (escalated) showed local `localhost/rust-dev:latest` and `localhost/aurorafw-dev:latest`.
+
+Obstacles Encountered:
+- `project/docs/coding_guidelines.md` (referenced by role instructions) does not exist in this repo.
+- Local container runtime listing from sandbox failed initially due podman runtime filesystem restrictions; resolved by running image listing with escalation.
+- Local images are hyphenated, while task acceptance requires underscore image references.
+
 ## Review
