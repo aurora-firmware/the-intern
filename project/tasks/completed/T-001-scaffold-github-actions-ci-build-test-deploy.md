@@ -1,7 +1,7 @@
 ---
 id: T-001
 title: 'Scaffold GitHub Actions CI: build, test, deploy'
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-15'
