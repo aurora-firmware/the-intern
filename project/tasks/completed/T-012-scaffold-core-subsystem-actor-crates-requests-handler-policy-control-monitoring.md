@@ -1,7 +1,7 @@
 ---
 id: T-012
 title: Scaffold core subsystem actor crates requests-handler policy-control monitoring
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
