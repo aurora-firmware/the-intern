@@ -67,12 +67,22 @@ impl BobConfig {
 
         let mut figment = Figment::from(Serialized::defaults(defaults));
         if config_path.exists() {
-            figment = figment.merge(Toml::file(config_path));
+            figment = figment.merge(Toml::file(&config_path));
         }
-        figment = merge_key_value_overrides(figment, env_overrides(&sources.env));
+        let env_overrides = env_overrides(&sources.env);
+        let cli_override_count = sources.cli_overrides.len();
+
+        figment = merge_key_value_overrides(figment, env_overrides.clone());
         figment = merge_key_value_overrides(figment, sources.cli_overrides.clone());
 
         let raw: RawBobConfig = figment.extract().map_err(to_configuration_error)?;
+
+        tracing::debug!(
+            has_config_file = config_path.exists(),
+            env_override_count = env_overrides.len(),
+            cli_override_count,
+            "loaded bob configuration from layered sources"
+        );
 
         let cfg = BobConfig {
             admin_sock_path: raw.admin_sock_path,
@@ -425,9 +435,14 @@ pub fn load() -> ServiceResult<BobConfig> {
 #[cfg(test)]
 mod tests {
     use std::{
+        io::{self, Write},
+        sync::{Arc, Mutex},
         fs,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    use tracing::subscriber::with_default;
+    use tracing_subscriber::fmt::MakeWriter;
 
     use super::*;
 
@@ -537,6 +552,38 @@ admin_allowed_uids = [1000]
         );
     }
 
+    #[test]
+    fn loader_tracing_does_not_emit_secret_bearing_values() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+        env.insert("BOB_TRACING_LEVEL".to_string(), "super-secret-level".to_string());
+
+        let writer = SharedBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .without_time()
+            .with_writer(writer.clone())
+            .finish();
+
+        let load_result = with_default(subscriber, || {
+            BobConfig::load_with_sources(ConfigSources {
+                env,
+                config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+                cli_overrides: BTreeMap::new(),
+                uid: 4242,
+            })
+        });
+
+        load_result.expect("config should load");
+        let logs = writer.contents();
+        assert!(logs.contains("loaded bob configuration from layered sources"));
+        assert!(!logs.contains("super-secret-level"));
+    }
+
     fn write_temp_config(contents: &str) -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -545,5 +592,35 @@ admin_allowed_uids = [1000]
         let path = env::temp_dir().join(format!("bob-config-{unique}.toml"));
         fs::write(&path, contents).expect("temp config write should succeed");
         path
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedBuffer {
+        fn contents(&self) -> String {
+            String::from_utf8(self.0.lock().expect("lock").clone()).expect("valid utf8 logs")
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for SharedBuffer {
+        type Writer = SharedBufferWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedBufferWriter(self.0.clone())
+        }
+    }
+
+    struct SharedBufferWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedBufferWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().expect("lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 }
