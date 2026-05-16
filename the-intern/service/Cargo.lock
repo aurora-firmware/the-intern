@@ -78,6 +78,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "extension-ipc"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bob-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
