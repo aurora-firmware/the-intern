@@ -4,10 +4,15 @@
 Phase 0 establishes the delivery baseline with CI scaffolding, the local development container, coding guidelines, and the `the-intern/service` plus `the-intern/extensions` layout so later architecture work lands in a stable environment. This preparatory phase aligns with the execution sequence described in `project/specs/the-intern-agent-service-architecture.md`, which defines the ordered implementation roadmap that starts at service fundamentals.
 
 ## Phase 1 — Rust service skeleton
-Phase 1 delivers the initial Rust service core with the internal event queue, Requests Handler, and persistence surfaces that become the deterministic backbone for all later runtime behavior. This implements Implementation Order Phase 1 and Component 1 in `project/specs/the-intern-agent-service-architecture.md` and is positioned first because all later runtime features depend on this shared service base.
+Phase 1 delivers the deterministic backbone for all later runtime behavior, in two steps defined by `project/specs/the-intern-agent-service-architecture.md` (S-001) and `project/specs/bob-service-shell-architecture.md` (S-002):
+
+- **Phase 1a — Service shell (S-002).** The `bob` binary, single Tokio runtime, the two Unix-domain sockets (`admin.sock` for JSON-RPC 2.0 control + future GUI/API; `extension.sock` for the JS-extension channel from S-001), subsystem actor scaffolds with port traits in the runtime-agnostic `bob-core` library crate, graceful shutdown, and the non-`serve` `bob` subcommands implemented as thin admin-RPC clients.
+- **Phase 1b — Working core subsystems (S-001 Implementation Order Phase 1).** Fill the scaffolds with the internal event queue, the Requests Handler, and persistence — landing them into the seats the shell already reserved.
+
+Phase 1a is positioned first because every later runtime feature lands into the shell; Phase 1b is positioned immediately after because S-001 Phases 2-7 depend on the working queue/handler/persistence rather than on the bare scaffolds.
 
 ## Phase 2 — pi-agent process supervision
-Phase 2 adds per-session pi-agent lifecycle control, including spawn orchestration, warm-pool management, idle reaping, and prompt delivery over `runRpcMode()` so the service can run isolated long-lived sessions. This implements Implementation Order Phase 2 from `project/specs/the-intern-agent-service-architecture.md`, and it follows Phase 1 because supervision and prompt routing require the service skeleton to exist first.
+Phase 2 adds per-session pi-agent lifecycle control, including spawn orchestration, warm-pool management, idle reaping, and prompt delivery over `runRpcMode()` so the service can run isolated long-lived sessions. This implements Implementation Order Phase 2 from `project/specs/the-intern-agent-service-architecture.md`, and it follows Phase 1b because supervision and prompt routing require the working queue/handler/persistence — not just the shell scaffolds from Phase 1a.
 
 ## Phase 3 — JS extension
 Phase 3 delivers the in-agent JS extension surface for event subscription and forwarding so runtime activity can be exported from each session process into the service boundary. This implements Implementation Order Phase 3 and Component 3 in `project/specs/the-intern-agent-service-architecture.md`, and it builds on Phase 2 because the extension behavior is meaningful only once supervised pi-agent sessions are running.

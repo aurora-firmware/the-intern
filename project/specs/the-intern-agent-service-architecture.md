@@ -1,7 +1,7 @@
 ---
 title: the-intern Agent Service Architecture
 version: '0.1'
-status: review  # draft | review | approved | superseded
+status: approved  # draft | review | approved | superseded
 created: '2026-05-14'
 author: planner
 id: S-001
@@ -58,8 +58,11 @@ What this specification explicitly does NOT cover:
   is a forwarder with no policy logic.
 - **Event-driven uniformity.** Every channel — synchronous or asynchronous —
   normalizes into the same internal event and follows the same path.
-- **OS-agnostic technology.** The long-lived service and all components must run
-  on any major OS.
+- **Unix-likes (Linux and macOS).** The long-lived service and all components
+  run on Linux and macOS. Windows support is explicitly out of scope; see
+  S-002 (Bob Service Shell Architecture), which fixes the shell on Unix-only
+  primitives (UDS, POSIX peer-credentials, POSIX file permissions). A future
+  Windows port would be a separately-justified amendment.
 
 ### System Diagram
 
@@ -87,7 +90,7 @@ What this specification explicitly does NOT cover:
 
 | Component | Responsibility | Notes |
 |---|---|---|
-| Rust service | Hosts the deterministic components; owns the inbound queue, identity, persistence, and supervision of pi-agent processes | Single long-lived OS-agnostic binary |
+| Rust service | Hosts the deterministic components; owns the inbound queue, identity, persistence, and supervision of pi-agent processes | Single long-lived binary on Linux + macOS; shell defined in S-002 |
 | Channel adapters | Accept inbound traffic from chat, email, webhooks, scheduler; normalize each into a common internal event | Part of the Rust service |
 | Requests Handler | Consume the inbound queue, attach user/channel identity, run pre-flight identity/access checks | Part of the Rust service |
 | Policy Control | Decide per-user authorization for actions raised mid-run by the agent | Part of the Rust service; never inside the agent |
@@ -109,13 +112,18 @@ supervises the pi-agent process pool.
   scheduled triggers), each normalized onto an internal event queue.
 - *To pi-agent processes:* delivers prompts over pi-agent's `runRpcMode()`
   JSON-RPC channel; spawns, supervises, and reaps the processes.
-- *Authorization interface (Unix socket):* accepts authorization requests
-  carrying `(session id, tool, arguments, user identity)` and returns an
-  allow/block verdict with an optional reason.
-- *Event interface (Unix socket):* accepts forwarded agent events for Monitoring.
+- *Extension channel (single Unix socket):* one socket shared by every
+  pi-agent JS extension instance, carrying two message families on the same
+  framed connection — *authorization requests* (`(session id, tool, arguments,
+  user identity)` → allow/block verdict with optional reason) and *forwarded
+  agent events* destined for Monitoring. Both families are tagged with a
+  session identifier so the Rust service can multiplex them.
 - *Monitoring report interface:* an inbound endpoint, reachable by external CLI
-  tools, accepting action records. OS-agnostic transport (local HTTP endpoint or
-  a small reporting CLI) — exact form is `[TODO]`.
+  tools, accepting action records. Transport is `[TODO]`; given the Unix-likes
+  scope adopted via S-002, the surviving candidates are extending `admin.sock`
+  with a `report.*` JSON-RPC method family or introducing a dedicated
+  `report.sock` UDS. The decision is tracked in S-002 and must land before
+  Phase 5 (Monitoring) begins.
 
 ### Component 2: pi-agent process
 
@@ -205,12 +213,13 @@ configurable:
 
 | Phase | What | Depends On |
 |---|---|---|
-| 1 | Rust service skeleton: internal event queue, Requests Handler, persistence | Nothing |
-| 2 | pi-agent process supervision: spawn, warm pool, idle reaping, prompt delivery over `runRpcMode()` | Phase 1 |
+| 1a | Service shell per S-002: `bob` binary, single Tokio runtime, `admin.sock` (JSON-RPC 2.0) and `extension.sock` listeners, subsystem actor scaffolds with port traits in `bob-core`, graceful shutdown, `bob` client subcommands against `admin.sock` | Nothing |
+| 1b | Working internal event queue, Requests Handler, and persistence — landing into the scaffolds created in Phase 1a | Phase 1a |
+| 2 | pi-agent process supervision: spawn, warm pool, idle reaping, prompt delivery over `runRpcMode()` | Phase 1b |
 | 3 | JS extension: event subscription and forwarding to Monitoring | Phase 2 |
 | 4 | Policy Control: pre-flight checks and the blocking `tool_call` authorization path over the Unix socket | Phase 2, Phase 3 |
-| 5 | Monitoring: append-only audit log and the inbound report interface for external tools | Phase 1, Phase 3 |
-| 6 | Channel adapters: chat, email, webhooks, scheduler | Phase 1 |
+| 5 | Monitoring: append-only audit log and the inbound report interface for external tools (transport decision from S-002 must land before this phase starts) | Phase 1b, Phase 3 |
+| 6 | Channel adapters: chat (interactive chat consumes `admin.sock` chat subscriptions per S-002), email, webhooks, scheduler | Phase 1b |
 | 7 | Actions: skill definitions and the CLI invocation/reporting contract | Phase 4, Phase 5 |
 
 ## Open Questions
@@ -227,8 +236,6 @@ configurable:
 
 ## Amendment Log
 
-<!-- Optional. Use when an approved spec is amended after tasks are in flight.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| YYYY-MM-DD | Description of change | Reason for amendment | T-XXX, T-YYY |
--->
+| 2026-05-16 | OS scope narrowed from "OS-agnostic" to "Unix-likes (Linux + macOS)" in Design Principles and Component 1; extension-side Unix socket bullets merged into a single "Extension channel (single Unix socket)" description; Monitoring report interface transport candidates narrowed to UDS-only (extend `admin.sock` or dedicated `report.sock`); Implementation Order Phase 1 split into 1a (shell per S-002) and 1b (queue/handler/persistence), with downstream Depends-On cells updated accordingly; chat channel adapter clarified as consuming `admin.sock` chat subscriptions. | S-002 (Bob Service Shell Architecture) approved 2026-05-16; the shell decision fixes Unix-only primitives (UDS, peer-credentials, POSIX perms) and reshapes how Phase 1 is delivered. | None (no tasks in flight against S-001 yet). |
