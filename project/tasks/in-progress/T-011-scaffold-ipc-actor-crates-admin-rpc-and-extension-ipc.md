@@ -60,4 +60,8 @@ grep -q 'forbid(unsafe_code)' the-intern/service/crates/extension-ipc/src/lib.rs
 
 ## Work Log
 
+### Session 1 — 2026-05-17
+
+Implemented task T-011 using two explicit TDD cycles on the task branch. Cycle 1 (`admin-rpc`): wrote failing tests first for public `start`, clonable `Handle`, and `Handle::ping` returning `Err(ServiceError::NotImplemented)`; then implemented minimal `Config`, typed command enum + channel-backed `Handle`, `Actor`, and `start(cfg) -> (Handle, JoinHandle<()>)` to pass. Cycle 2 (`extension-ipc`): repeated the same approach with failing tests first for `start`, clonable `Handle`, and `Handle::send_message(...)` returning `Err(ServiceError::NotImplemented)`; then implemented minimal actor scaffold and startup function. Tried and rejected: leaving command variants unused after first green pass (produced dead-code warning); refactored methods to enqueue typed commands before returning `NotImplemented`, preserving acceptance behavior while exercising the command type path. Verified full workspace build and task checks all pass. What remains: only lifecycle-side follow-up (append this Work Log entry to canonical task file on `dev-agent`, then review/integrate flow).
+
 ## Review
