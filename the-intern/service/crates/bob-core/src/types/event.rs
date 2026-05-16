@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::{ChannelId, UserId};
 
 /// Normalized event from any inbound channel, ready for internal routing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum InternalEvent {
     /// A chat message received from a messaging channel.
@@ -35,48 +35,48 @@ mod tests {
 
     #[test]
     fn internal_event_chat_message_serde_json_round_trip() {
-        let event = InternalEvent::ChatMessage {
+        let original = InternalEvent::ChatMessage {
             content: "hello world".to_owned(),
         };
-        let json = serde_json::to_string(&event).expect("serialization must succeed");
+        let json = serde_json::to_string(&original).expect("serialization must succeed");
         let restored: InternalEvent =
             serde_json::from_str(&json).expect("deserialization must succeed");
-        assert!(matches!(restored, InternalEvent::ChatMessage { .. }));
+        assert_eq!(original, restored);
     }
 
     #[test]
     fn internal_event_email_received_serde_json_round_trip() {
-        let event = InternalEvent::EmailReceived {
+        let original = InternalEvent::EmailReceived {
             subject: "test subject".to_owned(),
             body: "test body".to_owned(),
         };
-        let json = serde_json::to_string(&event).expect("serialization must succeed");
+        let json = serde_json::to_string(&original).expect("serialization must succeed");
         let restored: InternalEvent =
             serde_json::from_str(&json).expect("deserialization must succeed");
-        assert!(matches!(restored, InternalEvent::EmailReceived { .. }));
+        assert_eq!(original, restored);
     }
 
     #[test]
     fn internal_event_webhook_serde_json_round_trip() {
-        let event = InternalEvent::Webhook {
+        let original = InternalEvent::Webhook {
             source: "github".to_owned(),
             payload: r#"{"action":"push"}"#.to_owned(),
         };
-        let json = serde_json::to_string(&event).expect("serialization must succeed");
+        let json = serde_json::to_string(&original).expect("serialization must succeed");
         let restored: InternalEvent =
             serde_json::from_str(&json).expect("deserialization must succeed");
-        assert!(matches!(restored, InternalEvent::Webhook { .. }));
+        assert_eq!(original, restored);
     }
 
     #[test]
     fn internal_event_scheduled_serde_json_round_trip() {
-        let event = InternalEvent::Scheduled {
+        let original = InternalEvent::Scheduled {
             cron: "0 9 * * 1".to_owned(),
         };
-        let json = serde_json::to_string(&event).expect("serialization must succeed");
+        let json = serde_json::to_string(&original).expect("serialization must succeed");
         let restored: InternalEvent =
             serde_json::from_str(&json).expect("deserialization must succeed");
-        assert!(matches!(restored, InternalEvent::Scheduled { .. }));
+        assert_eq!(original, restored);
     }
 
     #[test]
