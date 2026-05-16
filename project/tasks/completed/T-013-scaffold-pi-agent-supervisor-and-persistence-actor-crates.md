@@ -1,7 +1,7 @@
 ---
 id: T-013
 title: Scaffold pi-agent-supervisor and persistence actor crates
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
