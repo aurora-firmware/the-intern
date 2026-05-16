@@ -77,3 +77,31 @@ Nothing for this task.
 **Artifacts**
 
 - Branch `task/T-009-add-bob-core-error-taxonomy`, commit `43b5f43`: `feat(bob-core): add ServiceError enum and ServiceResult type alias`.
+
+### Review Verdict — 2026-05-17
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1: `ServiceError` is a public enum with all nine variants and exact field shapes as specified. Verified by reading `error.rs` at commit `43b5f43`. All variant names, field names, and field types (`&'static str` for `Timeout.operation`, `String` for all others) match the criterion exactly.
+- AC-2: `#[derive(Debug, Error)]` is present. `thiserror::Error` derives `Display` (via `#[error(...)]` attributes) and `std::error::Error`; `Debug` is derived directly. All three trait implementations are confirmed.
+- AC-3: `Timeout { operation: &'static str }` is structurally safe — only compile-time string literals can be passed, precluding runtime user data. `String`-carrying variants (`PolicyDenied`, `InvalidRequest`, `Persistence`, `ChildProcess`, `Configuration`) carry high-level cause descriptions enforced by variant doc-comments and the module-level doc stating the constraint explicitly. The Display format strings (e.g. `"policy denied: {reason}"`, `"persistence error: {detail}"`) reference the fields by their cause-descriptor names, not as raw-payload slots. AC-3 is satisfied.
+- AC-4: `pub type ServiceResult<T> = Result<T, ServiceError>` is present and exported from `bob_core::error`. Confirmed.
+
+No unspecified behavior or features were added. Only `error.rs` was modified (confirmed by `git show 43b5f43 --stat`: 1 file changed).
+
+**Stage 2 — Code Quality**
+
+- Correctness: Logic is correct. No off-by-one errors or unhandled states; the enum is exhaustive. No `#[from]`/`#[source]` wrappers added deliberately, keeping the taxonomy explicit as documented.
+- Tests: 26 tests in `#[cfg(test)] mod tests` within `error.rs`, all under the `error::tests::` path. Cover every variant construction (9 tests), every Display call (9 tests), `ServiceResult<T>` alias (2 tests), `Error::source` returning `None` (4 tests), and `Debug` formatting for all variants (1 omnibus test). Tests are independent, construct their own fixtures, and have no shared mutable state.
+- Security: No hardcoded credentials or secrets. `&'static str` on `Timeout.operation` is a structural enforcement of the security constraint. Input validation is not applicable here (this is a pure type definition).
+- Readability: Module-level and variant-level doc comments clearly articulate the intended use of each field and the security constraint. Format strings are concise and follow a consistent `"<category>: {field}"` pattern. No dead code, no commented-out blocks, no debugging artifacts.
+- Performance: Not applicable — this is a pure type definition with no I/O or loops.
+- Guidelines §5 compliance: `thiserror` used at the crate boundary; typed variants callers can inspect; no raw user content in error messages; `# Errors` sections documented at the enum level. Fully compliant.
+
+**Verification Evidence**
+
+- `cargo test -p bob-core --lib` on branch `task/T-009-add-bob-core-error-taxonomy`: 60 tests passed, 0 failed. Error module contributes 26 tests, all under `error::tests::` prefix.
+- `cargo check -p bob-core`: completed with no errors or warnings.
+- Note: the task's first verification command (`cargo test -p bob-core --lib error`) uses `error` as a `--lib` flag argument rather than a test filter. Invoking it correctly as a filter (`-- error`) matches only `from_str_returns_error_for_invalid_uuid` from the identifiers module, not the error module tests (whose paths begin `error::tests::`). This is an issue in the task's verification command text, not in the implementation. Running the full `--lib` suite confirms all 26 error tests pass.
