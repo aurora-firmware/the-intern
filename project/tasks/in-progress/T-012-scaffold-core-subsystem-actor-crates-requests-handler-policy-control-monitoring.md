@@ -57,4 +57,8 @@ done
 
 ## Work Log
 
+### Session 1 — 2026-05-17
+
+Implemented T-012 on branch `task/T-012-scaffold-core-subsystem-actor-crates-requests-handler-policy-control-monitoring` using three explicit TDD cycles, one per new crate (`requests-handler`, `policy-control`, `monitoring`). For each cycle, I first added a failing unit test expecting `Err(ServiceError::NotImplemented)` from that crate's `Handle` command method, verified failure (`cargo test -p <crate>`), then made the minimal implementation change to return `ServiceError::NotImplemented` and re-ran tests to green. Each crate was scaffolded to match the existing actor pattern from earlier subsystem crates: `Config`, mpsc-backed clonable `Handle`, `Actor` event loop with tracing, and `start(cfg) -> (Handle, JoinHandle<()>)`. All three `lib.rs` files include `#![forbid(unsafe_code)]`. I validated the task verification commands (`cargo check --workspace` and manifest-path variant), verified required files exist, verified forbid lines, and verified no direct dependencies between the three new crates in their `Cargo.toml` files. I briefly tried to run formatter as part of refactor hygiene, but `cargo fmt` is unavailable in this environment; no source-formatting changes were required to satisfy checks. No remaining implementation work is pending for this task on this branch.
+
 ## Review
