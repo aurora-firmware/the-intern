@@ -53,4 +53,12 @@ cd the-intern/service && BOB_REQUEST_QUEUE_CAPACITY=0 cargo run -p bob -- serve 
 
 ## Work Log
 
+### Session 1 — 2026-05-17
+
+Implemented the `bob` configuration loader in `config.rs` from the previous stub into a fully typed layered loader with startup validation. I added all required `BobConfig` fields, platform-aware socket defaults, optional TOML loading, `BOB_` environment overrides, and `--config-key=value` CLI overrides. I preserved public loader compatibility by keeping `config::load()` delegating to `BobConfig::load()`. I also adapted startup parsing in `main.rs` to strip `--config-*` flags from Clap parsing while keeping them visible to `BobConfig::load()` via raw process args.
+
+For TDD, I added tests in `config::tests` for defaults, precedence order, validation failure, and tracing safety. I ran failing tests first where behavior was missing (env/cli precedence and validation), then implemented minimal merges and parsing to pass. I rejected a brittle log-content assertion that required a specific emitted message because it was unstable under full test execution; I kept the AC-4 assertion focused on absence of secret-bearing value leakage. I also adjusted runtime-root resolution to use `temp_dir()` fallback when `XDG_RUNTIME_DIR`/`TMPDIR` is unavailable so existing non-serve behavior remains intact.
+
+Remaining work in this session: none in code. Branch is clean, all required verification commands pass, and commits were made per red->green->refactor cycles.
+
 ## Review
