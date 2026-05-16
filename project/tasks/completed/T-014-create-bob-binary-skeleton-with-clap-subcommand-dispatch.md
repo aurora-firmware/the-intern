@@ -1,7 +1,7 @@
 ---
 id: T-014
 title: Create bob binary skeleton with clap subcommand dispatch
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
