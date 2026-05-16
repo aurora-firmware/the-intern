@@ -94,3 +94,40 @@ Nothing. All five acceptance criteria are met, all 35 tests pass, `cargo check` 
 - Branch `task/T-008-add-bob-core-domain-types`, three commits: `28b4483`, `40ea502`, `bf8e4ea`.
 
 ## Review
+
+### Review Verdict — 2026-05-16
+
+FAIL
+
+**Stage 1 — Acceptance Criteria**
+
+AC-1: PASS. All five identifier newtypes (`SessionId`, `RequestId`, `SubscriptionId`, `ChannelId`, `UserId`) are defined in `identifiers.rs` as newtype wrappers over `uuid::Uuid` with the required derives and trait impls, and are re-exported from `bob_core::types`.
+
+AC-2: PASS. `InternalEvent` is defined as a public enum with the four required variants (`ChatMessage`, `EmailReceived`, `Webhook`, `Scheduled`) using `#[serde(tag = "type")]` internal tagging, and is re-exported from `bob_core::types`.
+
+AC-3: PASS. `RequestContext`, `PolicyVerdict`, `AuditRecord`, and `MonitoringReport` are all defined and re-exported from `bob_core::types`. `PolicyVerdict { allow: bool, reason: Option<String> }` matches the spec exactly. `AuditRecord` uses `String` RFC 3339 timestamp with a stable unit-variant `AuditKind` enum. `MonitoringReport` shape matches the description.
+
+AC-4: FAIL. The round-trip tests for all four `InternalEvent` variants use `assert!(matches!(restored, InternalEvent::SomeVariant { .. }))`, which only confirms the variant discriminant survived deserialization — it does not verify that field values are equal to the originals. AC-4 requires "a value equal to the original." The wildcard `..` in each `matches!` call would allow field corruption (e.g., empty string where a non-empty string was serialized) to pass undetected. Since all `InternalEvent` variant fields are `String`, `PartialEq` is trivially derivable and `assert_eq!` on the full value is possible.
+
+AC-5: PASS. Verified by grep: no `tokio` entry in `bob-core/Cargo.toml`. All three verification shell commands pass.
+
+**Stage 2 — Code Quality**
+
+All Stage 2 checks pass except those related to the AC-4 issue above:
+
+- Identifier derives are correct: `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `Hash`, `Serialize`, `Deserialize`, plus `Display` and `FromStr` via the `impl_id!` macro. `Default` is also provided (generates a new random id). All five identifiers are defined and exported.
+- `#[serde(tag = "type")]` tagging for `InternalEvent` is reasonable and fully round-trippable with `serde_json`.
+- `RequestContext` fields match the spec: `sender: UserId`, `source: ChannelId`, `context_id: Option<String>`. Its round-trip tests assert field-by-field equality using `assert_eq!` — those are adequate.
+- `PolicyVerdict`, `AuditRecord`, and `MonitoringReport` round-trip tests assert field equality and the exhaustive `AuditKind` variant array covers all seven variants.
+- `#![forbid(unsafe_code)]` is present in `lib.rs` and unaffected by this change.
+- No Tokio dependency added.
+- `types/mod.rs` re-exports every public type including `AuditKind`.
+- No dead code, debug artifacts, hardcoded secrets, or out-of-scope file modifications.
+- Test independence is maintained (no shared mutable state).
+
+**Required fix**
+
+- **File:** `the-intern/service/crates/bob-core/src/types/event.rs`
+- **Location:** `tests` module — all four `internal_event_*_serde_json_round_trip` functions.
+- **What is wrong:** Each test uses `assert!(matches!(restored, InternalEvent::SomeVariant { .. }))`, which ignores field values. AC-4 requires the restored value to equal the original, not merely share its discriminant.
+- **What should change:** Add `PartialEq` (and `Eq`) to the derives on `InternalEvent` (all fields are `String`, so this is straightforward), then replace each `matches!` assertion with `assert_eq!(original_event_variable, restored)`. The four tests require both a derive change on the enum and an `assert_eq!` in each test body. No other changes are needed.
