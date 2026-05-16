@@ -51,3 +51,29 @@ cd the-intern/service && cargo check -p bob-core
 ## Work Log
 
 ## Review
+
+### Session 1 — 2026-05-17
+
+**What was done**
+
+Replaced the `// scaffold` one-liner in `the-intern/service/crates/bob-core/src/error.rs` with the full `ServiceError` enum (nine variants per AC-1) and `ServiceResult<T>` alias. Used `thiserror::Error` (already a workspace dependency) to derive `Debug`, `Display`, and `std::error::Error` in a single derive macro.
+
+The `Timeout { operation: &'static str }` variant is structurally safe: only compile-time literals can flow into it. The `String` fields on `PolicyDenied`/`InvalidRequest`/`Persistence`/`ChildProcess`/`Configuration` carry high-level cause descriptions (variant doc-comments + the Rust coding guidelines §5 enforce this convention); they are not for raw payloads.
+
+26 tests cover: every variant constructs, every Display call does not panic, `ServiceResult<T>` alias resolves correctly, `Error::source` returns `None` for leaf variants, and `Debug` formatting works.
+
+**What was tried and rejected**
+
+No source-wrapping (`#[from]`/`#[source]`) was added because none of the variants wrap another error type — keeps the taxonomy intentionally explicit.
+
+**What remains**
+
+Nothing for this task.
+
+**Obstacles Encountered**
+
+- None. `thiserror` was already a workspace dependency from T-007.
+
+**Artifacts**
+
+- Branch `task/T-009-add-bob-core-error-taxonomy`, commit `43b5f43`: `feat(bob-core): add ServiceError enum and ServiceResult type alias`.
