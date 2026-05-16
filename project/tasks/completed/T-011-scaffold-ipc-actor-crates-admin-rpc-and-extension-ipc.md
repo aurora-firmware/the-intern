@@ -1,7 +1,7 @@
 ---
 id: T-011
 title: Scaffold IPC actor crates admin-rpc and extension-ipc
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
