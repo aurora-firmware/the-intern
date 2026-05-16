@@ -104,3 +104,48 @@ Nothing for this task. All five ACs pass and the commit is on the correct branch
 - Branch `task/T-007-establish-cargo-workspace-and-bob-core-crate-skeleton`, commit `c183661` — `feat(bob-core): scaffold cargo workspace and bob-core crate skeleton`.
 
 ## Review
+
+### Review Verdict — 2026-05-16
+
+PASS
+
+**Stage 1 — Acceptance criteria**
+
+All five ACs verified against commit `c183661`:
+
+- AC-1: `the-intern/service/Cargo.toml` exists with `members = ["crates/*"]`. Confirmed by `grep -q '^members = \["crates/\*"\]'` returning exit 0.
+- AC-2: `the-intern/service/crates/bob-core/Cargo.toml` declares all five required dependencies (`serde`, `serde_json`, `uuid`, `thiserror`, `async-trait`) via workspace inheritance. No Tokio dependency appears in the crate manifest or anywhere in `Cargo.lock`. No `[dev-dependencies]` Tokio either.
+- AC-3: `src/lib.rs` opens with `#![forbid(unsafe_code)]` followed by `pub mod error;`, `pub mod ports;`, `pub mod types;`. All three placeholder files exist (`error.rs`, `ports.rs`, `types/mod.rs`). Each contains a single `// scaffold` comment — minimal and non-prejudging.
+- AC-4: `cargo check --workspace --manifest-path the-intern/service/Cargo.toml` exits 0. Verified by running the command live on the task branch.
+- AC-5: `the-intern/service/rust-toolchain.toml` exists, pinning channel `stable` with `rustfmt` and `clippy` components.
+
+All four verification shell commands from the task's Verification block also pass.
+
+Files outside the task's "Files to Touch" list: `.gitignore` and `Cargo.lock` were added and are justified. `.gitignore` (excluding `target/`) is necessary repository hygiene; `Cargo.lock` is explicitly mandated by coding guidelines §9 ("Commit `Cargo.lock` for the service workspace"). No unexplained out-of-scope changes.
+
+**Stage 2 — Code quality**
+
+*Correctness:* Workspace uses `resolver = "2"` (Cargo edition 2021 best practice). Dependencies use idiomatic workspace inheritance in `bob-core/Cargo.toml` with `[lints] workspace = true` ensuring lint rules propagate without repetition. The `types` module correctly uses the subdirectory form (`types/mod.rs`) so later tasks can add sibling files without restructuring; `error` and `ports` use flat files, which is equally valid for placeholders.
+
+*Workspace glob and file-conflict trap:* `members = ["crates/*"]` is correct. Any future crate added under `the-intern/service/crates/` is automatically included without touching `Cargo.toml`. This eliminates the serialization trap described in the task description.
+
+*Runtime-agnostic principle (S-002):* No Tokio in `bob-core/Cargo.toml` and no Tokio anywhere in `Cargo.lock`. The crate compiles cleanly without an async runtime. Confirmed.
+
+*`#![forbid(unsafe_code)]` in `src/lib.rs`:* Present. The workspace also sets `[workspace.lints.rust] unsafe_code = "forbid"`, which covers all workspace members including any future crates that inherit lints. The crate-level attribute in `lib.rs` and the workspace lint are redundant but not harmful — belt and suspenders.
+
+*Workspace lints — `clippy::all = "deny"`:* The implementation uses the table form `all = { level = "deny", priority = -1 }` and `pedantic = { level = "warn", priority = -1 }`. The `priority = -1` is the correct Cargo idiom for lint groups (required so that individual lint overrides at higher priority can suppress specific findings). This satisfies coding guidelines §11 ("treat warnings as errors"). The choice of `clippy::all` rather than a raw `warnings` key is correct (as the Work Log notes, `warnings` is a rustc lint group, not a Clippy one).
+
+*`stable` channel in `rust-toolchain.toml`:* Acceptable. The task says "pins the toolchain channel" without mandating a concrete version. The Work Log provides a clear rationale: pinning to a specific semver (e.g., `1.85.0`) would break environments where rustup has a different stable installed. Using `stable` satisfies the AC and avoids unnecessary friction. A future task could tighten this to a precise version if CI reproducibility requires it — that decision belongs in a later task or ADR, not here.
+
+*Placeholder modules:* `types/mod.rs`, `error.rs`, `ports.rs` each contain only `// scaffold`. They are minimal and do not pre-judge T-008 (`types`), T-009 (`error`), or T-010 (`ports`). No types, structs, or logic have been added.
+
+*Security:* No hardcoded credentials. No external input. No unsafe code. Dependency set is narrow and justified by the spec.
+
+*Readability:* No dead code or debug artifacts. The `Cargo.toml` files are clear and idiomatic.
+
+*Tests:* No test code is expected or appropriate for a pure scaffold task with empty placeholder modules. The structural correctness is verified by `cargo check`. The Work Log records the live test evidence.
+
+**Minor observations (non-blocking)**
+
+- `thiserror` is declared at version `"2"` in the workspace; `thiserror` 2.x introduced a breaking API change from 1.x. This is a valid choice as of Rust 1.85.0, but downstream tasks implementing `src/error.rs` should be aware they are targeting `thiserror` 2.x `derive` syntax.
+- `rust-toolchain.toml` pins `stable` rather than a precise semver. This is acceptable for now but means CI can silently pick up new stable releases. Consider locking to a specific version once a CI workflow is introduced (that decision is out of scope for T-007).
