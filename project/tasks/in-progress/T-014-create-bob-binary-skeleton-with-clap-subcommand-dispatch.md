@@ -62,4 +62,8 @@ cd the-intern/service && cargo run -p bob -- status 2>&1 | grep -q 'not implemen
 
 ## Work Log
 
+### Session 1 — 2026-05-17
+
+Implemented `T-014` by creating the new `bob` crate and driving it through two TDD cycles. In cycle 1, I added a failing CLI help test for global `--json` and full subcommand coverage, then implemented clap derive command structures for `serve`, `status`, `sessions list`, `sessions kill <id>`, `audit tail`, `policy reload`, and `chat --session <id>`, plus stub module files and base crate wiring. In cycle 2, I added failing tests for serve bootstrap/dispatch order and non-serve binary behavior, then introduced a testable dispatch structure (`DispatchRuntime` + `run_cli_with_runtime`) and production runtime wiring so execution order is `config::load()` -> `telemetry::init(&cfg)` -> dispatch, with `serve` calling `serve::run(cfg).await`. Non-serve paths now return `ServiceError::NotImplemented`, and `main` maps errors to stderr + exit code 1. I tried running formatter commands, but `cargo fmt`/`rustfmt` are unavailable in this environment, so formatting was kept consistent manually. No remaining implementation work for this task's acceptance criteria.
+
 ## Review
