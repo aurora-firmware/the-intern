@@ -131,3 +131,30 @@ All Stage 2 checks pass except those related to the AC-4 issue above:
 - **Location:** `tests` module — all four `internal_event_*_serde_json_round_trip` functions.
 - **What is wrong:** Each test uses `assert!(matches!(restored, InternalEvent::SomeVariant { .. }))`, which ignores field values. AC-4 requires the restored value to equal the original, not merely share its discriminant.
 - **What should change:** Add `PartialEq` (and `Eq`) to the derives on `InternalEvent` (all fields are `String`, so this is straightforward), then replace each `matches!` assertion with `assert_eq!(original_event_variable, restored)`. The four tests require both a derive change on the enum and an `assert_eq!` in each test body. No other changes are needed.
+
+### Session 2 — 2026-05-17
+
+**What was done**
+
+Addressed the sole AC-4 failure from the Session 1 review. Two targeted changes were made to `the-intern/service/crates/bob-core/src/types/event.rs`:
+
+1. Added `PartialEq, Eq` to the `#[derive(...)]` on `InternalEvent`. All four variant fields are `String`, which already derives `PartialEq + Eq`, so this compiled cleanly with no further changes.
+2. In each of the four `internal_event_*_serde_json_round_trip` tests, renamed `event` to `original` and replaced `assert!(matches!(restored, InternalEvent::SomeVariant { .. }))` with `assert_eq!(original, restored)`. The `original` binding is moved into the assertion, so the borrow checker is satisfied without cloning.
+
+All 35 tests pass (`cargo test -p bob-core --lib`), `cargo check -p bob-core` is clean, and the `! grep -E '^tokio\b'` check still holds.
+
+**What was tried and rejected**
+
+No alternative approaches were needed.
+
+**What remains**
+
+Nothing. All five acceptance criteria are now fully satisfied.
+
+**Obstacles Encountered**
+
+- None.
+
+**Artifacts**
+
+- Branch `task/T-008-add-bob-core-domain-types`, commit `5c73921`: `test(bob-core): tighten InternalEvent round-trip tests to assert_eq`.
