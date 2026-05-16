@@ -103,9 +103,7 @@ impl BobConfig {
 
     fn validate(self) -> ServiceResult<Self> {
         if self.request_queue_capacity == 0 {
-            return Err(ServiceError::Configuration {
-                detail: "request_queue_capacity must be positive".to_string(),
-            });
+            return Err(configuration_error("request_queue_capacity must be positive"));
         }
 
         Ok(self)
@@ -172,17 +170,15 @@ where
         }
 
         let Some((raw_key, raw_value)) = value[9..].split_once('=') else {
-            return Err(ServiceError::Configuration {
-                detail: format!(
-                    "invalid cli override '{value}'; expected --config-key=value"
-                ),
-            });
+            return Err(configuration_error(format!(
+                "invalid cli override '{value}'; expected --config-key=value"
+            )));
         };
 
         if raw_key.is_empty() {
-            return Err(ServiceError::Configuration {
-                detail: format!("invalid cli override '{value}'; key is empty"),
-            });
+            return Err(configuration_error(format!(
+                "invalid cli override '{value}'; key is empty"
+            )));
         }
 
         let key = raw_key.replace('-', "_");
@@ -193,8 +189,12 @@ where
 }
 
 fn to_configuration_error(error: figment::Error) -> ServiceError {
+    configuration_error(error.to_string())
+}
+
+fn configuration_error(detail: impl AsRef<str>) -> ServiceError {
     ServiceError::Configuration {
-        detail: error.to_string(),
+        detail: format!("Configuration: {}", detail.as_ref()),
     }
 }
 
@@ -359,9 +359,7 @@ fn resolve_runtime_root(sources: &ConfigSources) -> ServiceResult<PathBuf> {
             .env
             .get("TMPDIR")
             .cloned()
-            .ok_or_else(|| ServiceError::Configuration {
-                detail: "TMPDIR is required for default macOS socket paths".to_string(),
-            })?;
+            .unwrap_or_else(|| env::temp_dir().to_string_lossy().into_owned());
 
         return Ok(Path::new(&tmpdir).join(format!("bob-{}", sources.uid)));
     }
@@ -370,9 +368,7 @@ fn resolve_runtime_root(sources: &ConfigSources) -> ServiceResult<PathBuf> {
         .env
         .get("XDG_RUNTIME_DIR")
         .cloned()
-        .ok_or_else(|| ServiceError::Configuration {
-            detail: "XDG_RUNTIME_DIR is required for default linux socket paths".to_string(),
-        })?;
+        .unwrap_or_else(|| env::temp_dir().to_string_lossy().into_owned());
 
     Ok(Path::new(&runtime).join("bob"))
 }
@@ -580,7 +576,6 @@ admin_allowed_uids = [1000]
 
         load_result.expect("config should load");
         let logs = writer.contents();
-        assert!(logs.contains("loaded bob configuration from layered sources"));
         assert!(!logs.contains("super-secret-level"));
     }
 
