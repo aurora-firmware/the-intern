@@ -1,7 +1,7 @@
 ---
 id: T-009
 title: Add bob-core error taxonomy
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
