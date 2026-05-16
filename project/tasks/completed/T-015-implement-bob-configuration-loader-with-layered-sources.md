@@ -1,7 +1,7 @@
 ---
 id: T-015
 title: Implement bob configuration loader with layered sources
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
