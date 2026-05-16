@@ -1,7 +1,7 @@
 ---
 id: T-008
 title: Add bob-core domain types
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
