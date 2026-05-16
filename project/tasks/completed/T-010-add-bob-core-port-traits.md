@@ -1,7 +1,7 @@
 ---
 id: T-010
 title: Add bob-core port traits
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
