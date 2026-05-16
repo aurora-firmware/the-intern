@@ -158,3 +158,33 @@ Nothing. All five acceptance criteria are now fully satisfied.
 **Artifacts**
 
 - Branch `task/T-008-add-bob-core-domain-types`, commit `5c73921`: `test(bob-core): tighten InternalEvent round-trip tests to assert_eq`.
+
+### Review Verdict — 2026-05-17
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+AC-1: PASS. Unchanged from prior cycle — all five identifier newtypes remain correctly defined and re-exported.
+
+AC-2: PASS. `InternalEvent` now derives `PartialEq, Eq` in addition to the previously confirmed derives. The enum definition and re-export are unchanged.
+
+AC-3: PASS. Unchanged from prior cycle.
+
+AC-4: PASS. All four `internal_event_*_serde_json_round_trip` tests now use `assert_eq!(original, restored)`. The `original` binding holds the fully constructed value; `restored` is the deserialized output of `serde_json::to_string` applied to `original`. Because `PartialEq` and `Eq` are now derived on `InternalEvent` (all fields are `String`, which already implements both), `assert_eq!` performs a deep field-value equality check — satisfying the "value equal to the original" requirement of AC-4.
+
+AC-5: PASS. No Tokio dependency. Confirmed by grep against `bob-core/Cargo.toml`.
+
+**Stage 2 — Code Quality**
+
+All Stage 2 checks pass. The fix is minimal and precisely scoped:
+
+- Only `the-intern/service/crates/bob-core/src/types/event.rs` was modified (one file, one commit `5c73921`).
+- Adding `PartialEq, Eq` to `InternalEvent` is strictly additive and correct — all four variant fields are `String`, which trivially satisfies both traits.
+- The four renamed `original` bindings and `assert_eq!` assertions are clear, idiomatic Rust.
+- No dead code, debugging artifacts, hardcoded secrets, or out-of-scope file modifications were introduced.
+- All 35 library tests pass (`cargo test -p bob-core --lib`). `cargo check -p bob-core` is clean. No Tokio entry present in `Cargo.toml`.
+
+**Minor observations (non-blocking)**
+
+`RequestContext` does not yet derive `PartialEq`/`Eq`. Its round-trip tests assert field-by-field equality using the `PartialEq` on the identifier newtypes, which is sufficient for the current tests. This is within scope of the task as written and requires no action.
