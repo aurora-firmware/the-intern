@@ -53,4 +53,8 @@ cd the-intern/service && cargo test -p pi-agent-supervisor --lib list_sessions
 
 ## Work Log
 
+### Session 1 — 2026-05-17
+
+Implemented T-013 by scaffolding two new service workspace crates: `pi-agent-supervisor` and `persistence`, following the existing actor pattern from prior subsystem scaffolds. I started with tests first for each crate. For `pi-agent-supervisor`, I intentionally returned `NotImplemented` from `list_sessions()` to force a red test, then changed it to `Ok(Vec::new())` for green; `kill_session()` remains `Err(ServiceError::NotImplemented)` and is covered by a focused test. For `persistence`, I intentionally returned `Ok(())` from `enqueue_event()` to force a red test, then changed it to `Err(ServiceError::NotImplemented)` for green. Both crates expose public clonable `Handle`, public `Actor`, `start(cfg) -> (Handle, JoinHandle<()>)`, and `#![forbid(unsafe_code)]` in `lib.rs`. I ran focused crate tests and both required workspace check commands; all passed. I considered adding extra persistence command methods, but kept the scaffold minimal and aligned with prior crate patterns to satisfy the acceptance criteria without introducing unneeded surface area. Nothing remains for this task branch.
+
 ## Review
