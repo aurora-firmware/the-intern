@@ -57,4 +57,8 @@ cd the-intern/service && cargo check -p bob-core
 
 ## Work Log
 
+### Session 1 — 2026-05-17
+
+Continued from existing in-progress TDD work already present in `bob-core` (`ports.rs` tests plus `futures` dev-dependency). Verified red first by running `cargo test -p bob-core`, which failed on unresolved trait/type imports in `bob_core::ports` as expected. Implemented minimal production code in `ports.rs`: public async traits `RequestsHandler`, `PolicyEngine`, `AuditSink`, `EventBus`, `SessionPool`, and `PersistenceStore`, plus supporting `SessionState` and `VerdictRequest`. Kept signatures runtime-agnostic with no Tokio types and `ServiceResult<T>` returns across trait methods; retained a channel-agnostic `Receiver` trait for `EventBus::subscribe` and updated its `recv` to return `ServiceResult<Option<InternalEvent>>` to keep error handling consistent. Re-ran unit tests and task verification commands to confirm green and no Tokio references. Tried to run formatting, but `cargo fmt` is unavailable in this environment. No lifecycle files were edited on the task branch.
+
 ## Review
