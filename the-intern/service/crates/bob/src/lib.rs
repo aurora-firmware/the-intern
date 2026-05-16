@@ -120,7 +120,7 @@ mod tests {
     impl DispatchRuntime for FakeRuntime {
         fn load_config(&self) -> ServiceResult<BobConfig> {
             self.calls.lock().expect("lock").push("load");
-            Ok(BobConfig)
+            Ok(BobConfig::default())
         }
 
         fn init_telemetry(&self, _cfg: &BobConfig) -> ServiceResult<()> {
