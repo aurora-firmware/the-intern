@@ -69,6 +69,8 @@ impl BobConfig {
         if config_path.exists() {
             figment = figment.merge(Toml::file(config_path));
         }
+        figment = merge_key_value_overrides(figment, env_overrides(&sources.env));
+        figment = merge_key_value_overrides(figment, sources.cli_overrides.clone());
 
         let raw: RawBobConfig = figment.extract().map_err(to_configuration_error)?;
 
@@ -130,8 +132,9 @@ struct RawBobConfig {
     extension_sock_path: PathBuf,
     #[serde(default, deserialize_with = "deserialize_u32_vec")]
     admin_allowed_uids: Vec<u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_u32")]
     admin_allowed_gid: Option<u32>,
+    #[serde(deserialize_with = "deserialize_usize")]
     request_queue_capacity: usize,
     #[serde(deserialize_with = "deserialize_duration")]
     request_submit_timeout: Duration,
@@ -185,6 +188,26 @@ fn to_configuration_error(error: figment::Error) -> ServiceError {
     }
 }
 
+fn env_overrides(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    env.iter()
+        .filter_map(|(key, value)| {
+            key.strip_prefix("BOB_")
+                .map(|raw| (raw.to_ascii_lowercase(), value.clone()))
+        })
+        .collect()
+}
+
+fn merge_key_value_overrides(
+    mut figment: Figment,
+    overrides: BTreeMap<String, String>,
+) -> Figment {
+    for (key, value) in overrides {
+        figment = figment.merge((key, value));
+    }
+
+    figment
+}
+
 fn deserialize_duration<'de, D>(deserializer: D) -> Result<Duration, D::Error>
 where
     D: Deserializer<'de>,
@@ -201,6 +224,48 @@ where
         DurationValue::Number(seconds) => Ok(Duration::from_secs(seconds)),
         DurationValue::String(value) => parse_duration(&value).map_err(D::Error::custom),
         DurationValue::Structured(duration) => Ok(duration),
+    }
+}
+
+fn deserialize_usize<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum UsizeValue {
+        Number(usize),
+        String(String),
+    }
+
+    match UsizeValue::deserialize(deserializer)? {
+        UsizeValue::Number(value) => Ok(value),
+        UsizeValue::String(value) => value
+            .trim()
+            .parse::<usize>()
+            .map_err(|err| D::Error::custom(format!("invalid usize '{value}': {err}"))),
+    }
+}
+
+fn deserialize_optional_u32<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum U32Value {
+        Number(u32),
+        String(String),
+    }
+
+    match Option::<U32Value>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(U32Value::Number(value)) => Ok(Some(value)),
+        Some(U32Value::String(value)) => value
+            .trim()
+            .parse::<u32>()
+            .map(Some)
+            .map_err(|err| D::Error::custom(format!("invalid u32 '{value}': {err}"))),
     }
 }
 
@@ -359,6 +424,11 @@ pub fn load() -> ServiceResult<BobConfig> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use super::*;
 
     #[test]
@@ -403,5 +473,77 @@ mod tests {
                     .join("extension.sock")
             );
         }
+    }
+
+    #[test]
+    fn applies_layered_precedence_defaults_then_file_then_env_then_cli() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+        env.insert("BOB_REQUEST_QUEUE_CAPACITY".to_string(), "32".to_string());
+        env.insert("BOB_TRACING_LEVEL".to_string(), "debug".to_string());
+        env.insert("BOB_ADMIN_ALLOWED_UIDS".to_string(), "2000,2001".to_string());
+
+        let config_file = write_temp_config(
+            r#"
+request_queue_capacity = 16
+tracing_level = "warn"
+admin_allowed_uids = [1000]
+"#,
+        );
+
+        let mut cli_overrides = BTreeMap::new();
+        cli_overrides.insert("request_queue_capacity".to_string(), "64".to_string());
+        cli_overrides.insert("tracing_level".to_string(), "error".to_string());
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides,
+            uid: 4242,
+        })
+        .expect("layered sources should parse");
+
+        assert_eq!(config.request_queue_capacity, 64);
+        assert_eq!(config.tracing_level, "error");
+        assert_eq!(config.admin_allowed_uids, vec![2000, 2001]);
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    #[test]
+    fn returns_configuration_error_for_non_positive_queue_capacity() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+        env.insert("BOB_REQUEST_QUEUE_CAPACITY".to_string(), "0".to_string());
+
+        let result = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        });
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { .. })),
+            "expected configuration error, got {result:?}"
+        );
+    }
+
+    fn write_temp_config(contents: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let path = env::temp_dir().join(format!("bob-config-{unique}.toml"));
+        fs::write(&path, contents).expect("temp config write should succeed");
+        path
     }
 }
