@@ -87,3 +87,34 @@ Wrote `Dispatcher` with `Option<pi_agent_supervisor::Handle>` and `Option<policy
 **Nothing remains** for this task's scope. T-020 will wire `audit.tail.*` and `chat.*`.
 
 ## Review
+
+### Review Verdict — 2026-05-17
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Spec compliance**
+
+- AC-1: `service.status` dispatches to `handle_service_status` and returns `{ ok: true, version, uptime_seconds }` in a JSON-RPC 2.0 response. Confirmed by `dispatch_service_status_returns_ok_with_status_object` and the end-to-end `run_connection_service_status_returns_ok_response` test. PASS.
+- AC-2: `sessions.list` calls `pi_agent_supervisor::Handle::list_sessions()` (not stubbed in dispatch.rs — the call delegates to the supervisor handle). `dispatch_sessions_list_returns_empty_list_when_no_sessions` starts a real supervisor and verifies the round-trip. PASS.
+- AC-3: `run_connection` sends `ErrorResponse::parse_error` (code -32700) then returns (closes) on `FrameRead::ParseError`. `run_connection_parse_error_sends_minus_32700_and_closes` verifies the -32700 code is sent and reads back EOF immediately after. PASS.
+- AC-4: `map_service_error` is exhaustive over all `ServiceError` variants. Struct variants with user-supplied fields (`InvalidRequest { detail }`, `PolicyDenied { reason }`, `Persistence { detail }`, `ChildProcess { detail }`, `Configuration { detail }`) are all matched with `..` — none of those fields appear in the `data` JSON. `Timeout { operation }` includes only the `&'static str` operation name, which is compile-time only. `map_service_error_data_field_is_never_none` confirms `data` is always present for all variants. PASS.
+- AC-5: `id` is `serde_json::Value` throughout; `run_connection_sequential_requests_get_matching_ids` sends three requests with ids 1, 2, 3 on the same connection and asserts each response `id` matches. Dispatcher unit tests also cover string ids. PASS.
+- Files in scope: `protocol.rs` (new), `dispatch.rs` (new), `lib.rs` (modified), `Cargo.toml` (modified), `Cargo.lock` (committed alongside Cargo.toml — T-018's omission is not repeated). No unexpected files modified. PASS.
+
+**Stage 2 — Code quality**
+
+- Correctness: Logic is correct. Frame codec handles EOF, I/O errors, version mismatch, and malformed JSON distinctly. `DispatchOutcome` enum cleanly separates success from error paths without `unwrap`.
+- Tests: 42 tests total; protocol and dispatch modules each have their own `#[cfg(test)]` block; lib.rs has end-to-end UnixStream pair tests covering AC-1, AC-3, and AC-5 at the connection level. Both success and failure paths are covered.
+- Security: No hardcoded credentials. User-supplied error detail fields are stripped via `..` patterns in `map_service_error`. `Timeout::operation` is `&'static str` — cannot carry runtime user content.
+- Readability: `FrameRead` enum variants are self-documenting. Functions are single-purpose. Comments reference the AC they implement (e.g. `// AC-3:`). No dead code or commented-out blocks.
+- Performance: No unnecessary loops. Each frame is read and dispatched independently. Spawned tasks per connection via `tokio::spawn`. No resource leaks identified.
+- rustfmt: clean (`cargo fmt -p admin-rpc -- --check` exited 0).
+- clippy: clean (`cargo clippy -p admin-rpc -- -D warnings` exited 0).
+- `cargo build -p bob`: clean — `Config` drops `#[derive(Debug)]` and no downstream call site formats it with `{:?}`.
+
+**Non-blocking observations**
+
+- `policy.reload` and `sessions.kill` return `-32601` (method not found) rather than a distinct "not yet implemented" code. This matches the spec's code table (`NotImplemented → -32601`) and is correct per the approved mapping.
+- `Dispatcher::_policy` is prefixed with `_` to suppress the unused-field warning; this is idiomatic while the field is reserved for Phase 2.
