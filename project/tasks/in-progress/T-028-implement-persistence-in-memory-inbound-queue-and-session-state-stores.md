@@ -55,4 +55,32 @@ cd the-intern/service && cargo test -p persistence session_state
 
 ## Work Log
 
+### Session 1 — 2026-05-17
+
+Implemented the in-memory inbound queue and session state stores for the persistence crate, replacing the `NotImplemented` scaffold from T-013.
+
+**What was done**
+
+Three files were touched, all within the `Files to Touch` boundary:
+
+- `the-intern/service/crates/persistence/src/inbound.rs` — new file containing `InboundQueue`, a `VecDeque`-backed fixed-capacity ring buffer. `enqueue` appends to the back and returns `Err(ServiceError::Persistence { detail: "inbound queue at capacity" })` when full, without evicting existing entries. `dequeue_next` pops from the front (FIFO). Unit tests cover AC-1, AC-2, and AC-3 at the struct level.
+
+- `the-intern/service/crates/persistence/src/session_state.rs` — new file containing `SessionStateStore`, a `HashMap<SessionId, SessionState>`. `put` overwrites; `get` returns a clone or `None`. Unit tests cover AC-4 at the struct level.
+
+- `the-intern/service/crates/persistence/src/lib.rs` — rewritten to wire both internal stores to the actor. The original scaffold's `Command::EnqueueEvent(String)` and the stub `enqueue_event` method were replaced. The new `Command` enum uses four variants, each carrying a `oneshot::Sender` reply channel so the `Handle`'s `PersistenceStore` methods can return a `ServiceResult` directly. `async_trait` was already a workspace dependency. Integration-level tests covering all five ACs live in the `tests` module here.
+
+**What was tried and rejected**
+
+An alternative of holding `Mutex<InboundQueue>` directly inside `Handle` (removing the actor entirely) was considered. It would have been simpler, but the task specifies the actor architecture and the existing scaffold was actor-based. Keeping the actor also makes it straightforward to add write-ahead-log flushing or other side effects later without changing the public API.
+
+The `#[cfg(test)] pub(crate) fn len()` helper on `InboundQueue` was added only to support the internal unit tests; it is gated behind `#[cfg(test)]` so it produces no code in release builds.
+
+**Pre-existing failure noted**
+
+`cargo test -p bob --test non_serve` (`status_exits_non_zero_and_writes_not_implemented`) was already failing on `main` before this branch was created. It is an environment-dependent integration test that expects a specific socket path; it is not related to this task.
+
+**What remains**
+
+Nothing within T-028's scope. All five acceptance criteria have tests and implementations. The verification commands pass. The workspace builds and passes clippy with `-D warnings`.
+
 ## Review
