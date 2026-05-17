@@ -91,3 +91,36 @@ Extended `admin_rpc::Config` with `admin_sock_path`, `admin_allowed_uids`, and `
 - The `_admin_listener: UnixListener` field in `bob/src/serve.rs` is now redundant — `admin_rpc::start` can manage the socket when configured with a path. Cleanup of `serve.rs` is out of this task's scope; a follow-up task or T-019 should coordinate.
 
 ## Review
+
+### Review Verdict — 2026-05-17
+
+FAIL
+
+**Stage 1 — All acceptance criteria pass.**
+
+- AC-1: `Listener::bind(cfg)` accepts `cfg.admin_sock_path` (no hardcoded path). Parent directory created with `create_dir_all` + `set_permissions(0o700)`; socket file chmoded to 0660 via `set_permissions(0o660)`. Both confirmed by code and by two dedicated tests (`bind_creates_parent_directory_with_mode_0700`, `bind_sets_socket_file_mode_to_0660`). PASS.
+- AC-2: `accept()` returns `Ok(Some(stream))` when `is_allowed` is true; exercised by `accept_returns_stream_for_allowed_peer_uid`. `gate_peer` unit tests confirm policy for both service-uid and allowed-uids list. PASS.
+- AC-3: Rejection path logs `tracing::warn!(rejected_uid = cred.uid, ...)` — the field `rejected_uid` carries the uid directly. Stream is dropped before any application frame. Policy tested via `gate_peer_rejects_uid_not_in_allowed_set` and `peer_cred` unit tests. PASS.
+- AC-4: `bind()` calls `std::fs::remove_file(sock_path)` when the file exists before binding; tested by `bind_removes_stale_file_before_binding`. PASS.
+- Files touched: `Cargo.toml`, `src/lib.rs`, `src/listener.rs`, `src/peer_cred.rs` — all within stated scope. PASS.
+- `admin_allowed_gid` omitted — not required by any AC. Non-blocking.
+- `bob/src/serve.rs` redundant field noted in Work Log; T-018 did not touch `serve.rs`, so this is not a Stage 1 violation.
+
+**Stage 2 — Code quality: one failure.**
+
+**FAIL — rustfmt not run before commit.**
+
+- **Files:** `src/listener.rs`, `src/peer_cred.rs`, `src/lib.rs`
+- **What is wrong:** `cargo fmt -p admin-rpc -- --check` exits non-zero with multiple formatting diffs across all three source files. Coding guidelines §11 require `rustfmt` to be run before every commit and treat format non-compliance as equivalent to a linter warning treated as error.
+  - `src/listener.rs` line ~12: multi-line `use std::{…}` should collapse to one line.
+  - `src/listener.rs` line ~102: `is_allowed(…)` call should be split across multiple lines to fit the line width.
+  - `src/listener.rs` lines ~166, ~185, ~213: several `assert!` / `assert_eq!` calls need multi-line formatting.
+  - `src/peer_cred.rs` lines ~29, ~45: `getsockopt(…).map_err(…)` chain needs reformatting.
+  - `src/lib.rs` line ~206: `assert!(…)` in test needs multi-line formatting.
+- **What should change:** Run `cargo fmt -p admin-rpc` before re-committing. No logic changes are required — this is purely a formatting pass.
+
+**Minor observations (non-blocking):**
+
+- The `e as i32` cast in `peer_cred_from_fd` to convert `nix::Errno` to `io::Error` works correctly (nix 0.29 exposes `Errno` as an i32-based type), but `std::io::Error::from(e)` via the `From<nix::Errno> for io::Error` impl would be more idiomatic. Not required to fix.
+- `run_listener` in `lib.rs` is a detached `tokio::spawn`; its handle is not tracked, so it cannot be cancelled on shutdown. This is an intentional stub documented for T-019. Acceptable for now.
+- 17/17 tests pass on `linux` (the current CI platform) with `cargo clippy -p admin-rpc -- -D warnings` clean.
