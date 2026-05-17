@@ -124,3 +124,11 @@ FAIL
 - The `e as i32` cast in `peer_cred_from_fd` to convert `nix::Errno` to `io::Error` works correctly (nix 0.29 exposes `Errno` as an i32-based type), but `std::io::Error::from(e)` via the `From<nix::Errno> for io::Error` impl would be more idiomatic. Not required to fix.
 - `run_listener` in `lib.rs` is a detached `tokio::spawn`; its handle is not tracked, so it cannot be cancelled on shutdown. This is an intentional stub documented for T-019. Acceptable for now.
 - 17/17 tests pass on `linux` (the current CI platform) with `cargo clippy -p admin-rpc -- -D warnings` clean.
+
+### Session 2 — 2026-05-17
+
+The Reviewer returned FAIL on a single Stage 2 issue: `rustfmt` had not been run before the session-1 commits. No acceptance criteria or implementation changes were needed.
+
+Applied `cargo fmt -p admin-rpc` which reformatted three files (`lib.rs`, `listener.rs`, `peer_cred.rs`). Confirmed `cargo fmt -p admin-rpc -- --check` exits 0 with no output. Re-ran the full test suite: 17/17 pass, no regressions. Committed as `style(admin-rpc): apply rustfmt` (`bc004c3`) as a new commit — prior commits were not amended per instructions.
+
+`Cargo.lock` was already dirty when the branch was checked out (pre-existing workspace drift unrelated to admin-rpc); it was deliberately excluded from the commit.
