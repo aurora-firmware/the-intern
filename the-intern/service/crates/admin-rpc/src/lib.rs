@@ -2,6 +2,7 @@
 
 pub mod listener;
 pub mod peer_cred;
+pub mod protocol;
 
 use std::path::PathBuf;
 
