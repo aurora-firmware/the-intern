@@ -51,4 +51,30 @@ cd the-intern/service && cargo test -p requests-handler queue
 
 ## Work Log
 
+### Session 1 — 2026-05-17
+
+Implemented all four acceptance criteria for T-026 in a single TDD session. The implementation lives entirely in the new `queue.rs` file; `lib.rs` is now a thin re-export shim.
+
+**What was done:**
+
+Wrote six tests covering all four ACs before any production code: AC-1 (happy-path `submit` returns `Ok(())`), AC-1 again via the trait object surface, AC-2 (full queue times out), AC-3 (drain on cancellation), AC-3 again (new submits rejected after drain), and AC-4 (compile-time trait bound check). Then implemented `Config`, `Handle`, `Actor`, and `start_with` in that order.
+
+`Handle::submit_event` wraps `mpsc::Sender::send` in `tokio::time::timeout`. On expiry it returns `ServiceError::Timeout { operation: "requests-handler.submit" }`. When the channel closes it returns `ServiceError::Shutdown`. A watch channel (`shutdown_rx`) lets `Handle` fast-reject submits after the actor finishes draining.
+
+`Actor::run` uses a biased `tokio::select!` that monitors `cancel_rx.changed()` with priority over `rx.recv()`. When cancellation fires it breaks the processing loop, calls `rx.close()` to prevent new sends, and drains whatever is buffered before sending `true` on `shutdown_tx`.
+
+**What was tried and rejected:**
+
+Initially `start_with` accepted both `cancel_tx` and `cancel_rx`. The function dropped `cancel_tx` internally with `let _ = cancel_tx`, which is incorrect — the caller needs the sender. Redesigned to accept only `cancel_rx`; callers keep their own `cancel_tx` (the pair is created by the caller with `watch::channel(false)`).
+
+The AC-2 test first used `tokio::time::sleep(60s)` in the downstream to block processing. On a `current_thread` runtime the single `.await` in the first `submit` yields to the actor, which consumes the event and enters the sleep — freeing the queue slot before the second submit. Replaced the sleep with a `tokio::sync::Notify` gate that the test controls, plus an explicit `yield_now()` to ensure the actor enters the gate-wait before the test re-fills the slot.
+
+**`serve.rs` update (out-of-scope but necessary):**
+
+The `bob` crate's `serve.rs` referenced the old `requests_handler::start()` / `Config { command_buffer }` scaffold API. Removing the scaffold broke workspace compilation. Updated `serve.rs` to create a `watch::channel` pair, pass `cancel_rx` to `start_with`, store `cancel_tx` in `Runtime`, and send `true` on it early in `run_shutdown_protocol`. A placeholder `|_event| async {}` closure is used until T-027 supplies the real downstream.
+
+**What remains:**
+
+T-027 supplies the downstream closure that replaces the placeholder in `serve.rs`. No further work on `queue.rs` or `lib.rs` is expected for this task.
+
 ## Review
