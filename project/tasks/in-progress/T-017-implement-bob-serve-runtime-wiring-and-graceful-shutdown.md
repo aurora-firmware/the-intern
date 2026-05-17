@@ -96,3 +96,42 @@ Considered exposing `pub` fields on `Runtime` for more granular test assertions 
 None for this task. The manual verification (run `cargo run -p bob -- serve` + SIGTERM, exit code 0) is satisfied by design: the signal handler resolves on SIGTERM, the protocol exits cleanly, and `run` returns `Ok(())` which the `main` function maps to exit code 0.
 
 ## Review
+
+### Review Verdict — 2026-05-17
+
+FAIL
+
+**Stage 1 — Acceptance Criteria**
+
+**AC-1 — FAIL**
+
+File: `the-intern/service/crates/bob/src/serve.rs`, function `try_start_subsystems`.
+
+What is wrong: AC-1 requires `serve::run` to "bind `admin.sock` and `extension.sock` at the configured paths." No socket binding occurs. `admin_sock_path` and `extension_sock_path` are read from `cfg` and stored in the `Runtime` struct solely for removal at shutdown. There is no `tokio::net::UnixListener::bind` call (or any equivalent) for either path in the entire file. The doc comment on `start_subsystems` says "binds the two Unix domain socket paths" but the code does not bind them. The test `shutdown_protocol_removes_socket_files_when_they_exist` simulates the file presence by writing empty regular files — it does not actually bind Unix domain sockets at those paths.
+
+What should change: `try_start_subsystems` (or `run` before returning) must call `tokio::net::UnixListener::bind(&cfg.admin_sock_path)` and `tokio::net::UnixListener::bind(&cfg.extension_sock_path)`, store or accept the resulting listeners, and in the shutdown protocol close/remove them. The listeners can be kept alive without being used (the actual accept loops are Phase 4 and Phase 5) — a bound-but-not-yet-polled `UnixListener` satisfies "binds at the configured paths" and establishes the socket file on disk. The `shutdown_protocol_removes_socket_files_when_they_exist` test should bind actual Unix sockets rather than writing regular files.
+
+**AC-2 — PASS**
+
+Signal handling correctly awaits SIGTERM or SIGINT. Shutdown protocol drops handles (stopping intake), drains joins within `shutdown_drain_deadline`, and removes socket files. `run` returns `Ok(())` which maps to exit code 0.
+
+**AC-3 — PARTIAL PASS with a doc/code mismatch**
+
+The structural error path exists: `start_subsystems` checks `try_start_subsystems`'s result, emits `tracing::error!`, calls `remove_socket_files_best_effort`, and propagates the error. However, the doc comment states the function "returns `Err(ServiceError::ServiceDown)`" while the code propagates whatever error `try_start_subsystems` returns — it does not convert to `ServiceDown`. AC-3 explicitly requires `Err(ServiceError::ServiceDown)`. Since the scaffold actors never fail, this mismatch is not observable today, but the AC requires the specific variant. The Developer should either (a) convert the propagated error to `ServiceError::ServiceDown` in `start_subsystems`, or (b) update the doc comment if the intended behaviour is to propagate the original variant and revise AC-3's wording with the Architect. This issue is secondary to the AC-1 fail; fixing AC-1 is required before a re-review.
+
+**AC-4 — PASS**
+
+Each actor start is bracketed by `info!("starting X actor")` and `info!("X actor started")` in `serve.rs`. The scaffold actors themselves emit `tracing::info!("X actor started")` and `tracing::info!("X actor stopped")` internally, satisfying per-actor start and stop lifecycle events.
+
+**Stage 2 — not evaluated in full because Stage 1 fails on AC-1. The following is noted:**
+
+- Correctness: Drop order of `Runtime` fields is correct for channel-based cancellation.
+- Tests: 6 tests pass; the socket-file test uses regular files rather than bound Unix sockets, so it does not exercise the actual binding path.
+- No dead code, no hardcoded secrets, no unnecessary loops.
+- The `_`-prefixed handle fields correctly suppress dead-code warnings while keeping channels open.
+
+**Action required:**
+
+1. Add `tokio::net::UnixListener::bind` calls for both socket paths in `try_start_subsystems` (or in `run` before entering the signal-wait loop). Propagate binding failures through the AC-3 error path.
+2. Resolve the AC-3 error-type mismatch: either map the error to `ServiceError::ServiceDown` or clarify with the Architect if propagating the original variant is acceptable.
+3. Update `shutdown_protocol_removes_socket_files_when_they_exist` to bind actual Unix domain sockets instead of writing empty regular files.
