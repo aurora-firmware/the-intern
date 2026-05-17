@@ -13,6 +13,28 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+/// A JSON-RPC 2.0 notification sent from the server to the client.
+///
+/// Notifications have no `id` field — they are fire-and-forget messages that
+/// the server pushes without waiting for a response.
+#[derive(Debug, Clone, Serialize)]
+pub struct Notification {
+    pub jsonrpc: String,
+    pub method: String,
+    pub params: Value,
+}
+
+impl Notification {
+    /// Build a JSON-RPC 2.0 notification.
+    pub fn new(method: impl Into<String>, params: Value) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            method: method.into(),
+            params,
+        }
+    }
+}
+
 /// A JSON-RPC 2.0 request received from the client.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Request {
@@ -253,6 +275,31 @@ mod tests {
         assert_eq!(resp.error.code, CODE_PARSE_ERROR);
         assert_eq!(resp.id, Value::Null);
         assert_eq!(resp.jsonrpc, "2.0");
+    }
+
+    // Notification: serializes with method, params, and jsonrpc fields but no id.
+    #[test]
+    fn notification_serializes_without_id_field() {
+        use serde_json::json;
+        let n = Notification::new("audit.event", json!({ "subscription": "abc", "data": {} }));
+        let v = serde_json::to_value(&n).expect("serialize");
+        assert_eq!(v["jsonrpc"], "2.0");
+        assert_eq!(v["method"], "audit.event");
+        assert_eq!(v["params"]["subscription"], "abc");
+        assert!(
+            v.get("id").is_none(),
+            "notification must not have an id field"
+        );
+    }
+
+    // Notification: new() stores method and params correctly.
+    #[test]
+    fn notification_new_stores_method_and_params() {
+        use serde_json::json;
+        let n = Notification::new("chat.message", json!({ "text": "hello" }));
+        assert_eq!(n.method, "chat.message");
+        assert_eq!(n.params["text"], "hello");
+        assert_eq!(n.jsonrpc, "2.0");
     }
 
     // ErrorResponse serializes correctly.
