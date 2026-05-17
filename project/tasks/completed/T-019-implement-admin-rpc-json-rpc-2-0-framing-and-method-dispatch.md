@@ -1,7 +1,7 @@
 ---
 id: T-019
 title: Implement admin-rpc JSON-RPC 2.0 framing and method dispatch
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
