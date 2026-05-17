@@ -1,7 +1,7 @@
 ---
 id: T-024
 title: Implement bob client subcommands status sessions audit chat policy
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
