@@ -69,6 +69,24 @@ Evidence:
 Obstacles Encountered:
 - Tokio feature mismatch (`io-util`/`time` not enabled in `extension-ipc`), which broke the first connection I/O implementation and timeout-based tests; worked around by using socket readiness plus `try_read`/`try_write` with yield-based polling helpers.
 
+### Session 2 — 2026-05-17
+
+Addressed Review Cycle 1 FAIL for AC-3 by adding a regression test that sends an invalid UTF-8 newline-terminated frame (`b"\xff\n"`) to `run_connection` and asserts the socket closes without echoing payload bytes. I first ran the new test to confirm red; it failed because the UTF-8 error path only `break`ed the inner frame loop, allowing the outer connection loop to continue.
+
+Applied the minimal fix in `run_connection`: on `String::from_utf8` failure, keep the `tracing::warn!` and terminate the connection immediately via `return` instead of `break`. Re-ran the new regression plus framing/multiplex and connection-focused tests; all passed.
+
+I also synced the branch with current `dev-agent` so `git diff --name-status dev-agent..HEAD` no longer includes `project/tasks/...` lifecycle files. Remaining implementation work for this review finding: none.
+
+Evidence:
+- `cd the-intern/service && cargo test -p extension-ipc connection_invalid_utf8_closes_socket_without_echo` failed before the fix and passed afterward.
+- `cd the-intern/service && cargo test -p extension-ipc framing` passed.
+- `cd the-intern/service && cargo test -p extension-ipc multiplex` passed.
+- `cd the-intern/service && cargo test -p extension-ipc connection_` passed.
+
+Obstacles Encountered:
+- Initial `git checkout` hit sandbox restriction (`.git/index.lock: Read-only file system`); resolved by running checkout with escalation approval.
+- No code-level blockers after that.
+
 ## Review
 
 ### Review Verdict — 2026-05-17
