@@ -70,3 +70,14 @@ Obstacles Encountered:
 - One mistyped `cargo test` invocation used two filters at once; reran with separate filters.
 
 ## Review
+
+### Review Verdict — 2026-05-17
+FAIL
+
+- **File and location**: `the-intern/service/crates/admin-rpc/src/lib.rs:288`, `the-intern/service/crates/admin-rpc/src/lib.rs:344`
+  **What is wrong**: `audit_forwarder` sends `NotifMsg::Dropped` whenever `rx.recv()` returns `None`, and `write_loop` closes the connection for every `Dropped`. `rx.recv()==None` also happens on normal `audit.tail.unsubscribe` (`bus.remove`) and connection teardown, so the implementation closes the connection and logs a slow-subscriber warning even when AC-4’s slow-queue condition did not occur.
+  **What should change**: Differentiate "evicted for slow queue past deadline" from ordinary unsubscribe/cleanup. Only trigger connection close + AC-4 warning for the slow-eviction path; normal unsubscribe must not force connection closure.
+
+- **File and location**: `task/T-020-implement-admin-rpc-subscription-notification-plumbing` branch diff vs `dev-agent` (`project/tasks/in-progress/T-020-implement-admin-rpc-subscription-notification-plumbing.md`)
+  **What is wrong**: The task branch currently carries a lifecycle-file delta relative to `dev-agent`. Task branches should contain source/test implementation changes only; lifecycle state must stay canonical on `dev-agent`.
+  **What should change**: Rebase/cherry-pick the implementation so the task branch diff excludes lifecycle files, then resubmit for review.
