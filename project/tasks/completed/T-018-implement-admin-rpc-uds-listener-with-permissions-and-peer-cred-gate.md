@@ -1,7 +1,7 @@
 ---
 id: T-018
 title: Implement admin-rpc UDS listener with permissions and peer-cred gate
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
