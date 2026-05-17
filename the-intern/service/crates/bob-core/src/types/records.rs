@@ -29,6 +29,8 @@ pub enum AuditKind {
     SessionStarted,
     /// A user session ended normally or timed out.
     SessionEnded,
+    /// A request was denied by the pre-flight identity and access check.
+    PreflightDenied,
 }
 
 /// An append-only audit log entry capturing a significant service event.

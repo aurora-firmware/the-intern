@@ -181,7 +181,7 @@ mod tests {
     use bob_core::types::InternalEvent;
     use tokio::sync::watch;
 
-    use super::{Config, start_with};
+    use super::{start_with, Config};
     use bob_core::error::ServiceError;
 
     fn test_config(capacity: usize, timeout: Duration) -> Config {
@@ -267,7 +267,10 @@ mod tests {
 
         // Now send another event to fill the queue slot again.
         let r_fill = handle.submit(chat_event("fills-queue")).await;
-        assert!(r_fill.is_ok(), "second submit should succeed (queue empty): {r_fill:?}");
+        assert!(
+            r_fill.is_ok(),
+            "second submit should succeed (queue empty): {r_fill:?}"
+        );
 
         // Third submit should time out: the queue holds one event and the actor
         // is blocked on the gate, so no capacity is available.
@@ -343,7 +346,10 @@ mod tests {
 
         // A new submit should fail (either Shutdown or Timeout as channel is closed).
         let result = handle.submit(chat_event("too-late")).await;
-        assert!(result.is_err(), "expected error after shutdown, got {result:?}");
+        assert!(
+            result.is_err(),
+            "expected error after shutdown, got {result:?}"
+        );
     }
 
     // AC-4: Handle implements bob_core::ports::RequestsHandler (compile-time check)
