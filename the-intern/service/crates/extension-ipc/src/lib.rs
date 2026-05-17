@@ -1,11 +1,40 @@
 #![forbid(unsafe_code)]
 
+pub mod listener;
+pub mod peer_cred;
+
+use std::path::PathBuf;
+
 use bob_core::error::{ServiceError, ServiceResult};
 use tokio::{sync::mpsc, task::JoinHandle};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub command_buffer: usize,
+    pub extension_sock_path: PathBuf,
+    pub extension_allowed_uids: Vec<u32>,
+    pub service_uid: u32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            command_buffer: 0,
+            extension_sock_path: PathBuf::new(),
+            extension_allowed_uids: Vec::new(),
+            service_uid: current_uid(),
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn current_uid() -> u32 {
+    nix::unistd::Uid::current().as_raw()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn current_uid() -> u32 {
+    0
 }
 
 #[derive(Debug)]
