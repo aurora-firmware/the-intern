@@ -155,7 +155,7 @@ async fn wait_for_shutdown_signal() {
 
     #[cfg(not(unix))]
     {
-        signal::ctrl_c()
+        tokio::signal::ctrl_c()
             .await
             .expect("ctrl-c handler must succeed; tokio runtime is active");
         info!(signal = "ctrl-c", "shutdown signal received");
