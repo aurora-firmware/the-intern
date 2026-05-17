@@ -1,7 +1,7 @@
 ---
 id: T-023
 title: Implement bob admin-rpc client primitive
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
