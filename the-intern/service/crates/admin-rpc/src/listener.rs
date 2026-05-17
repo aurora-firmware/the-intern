@@ -8,10 +8,7 @@
 //! - Accepts connections and gates each one with a peer-credential check
 //!   (AC-2/AC-3).
 
-use std::{
-    os::unix::fs::PermissionsExt,
-    path::PathBuf,
-};
+use std::{os::unix::fs::PermissionsExt, path::PathBuf};
 
 use tokio::net::{UnixListener, UnixStream};
 
@@ -102,7 +99,11 @@ impl Listener {
         let (stream, _addr) = self.inner.accept().await?;
         match peer_cred_from_fd(&stream) {
             Ok(cred) => {
-                if is_allowed(cred.uid, &self.config.admin_allowed_uids, self.config.service_uid) {
+                if is_allowed(
+                    cred.uid,
+                    &self.config.admin_allowed_uids,
+                    self.config.service_uid,
+                ) {
                     Ok(Some(stream))
                 } else {
                     tracing::warn!(
@@ -166,7 +167,10 @@ mod tests {
 
         let _listener = Listener::bind(cfg.clone()).expect("bind");
 
-        assert!(cfg.admin_sock_path.exists(), "socket file should exist after bind");
+        assert!(
+            cfg.admin_sock_path.exists(),
+            "socket file should exist after bind"
+        );
     }
 
     // AC-1: parent directory is created with mode 0700
@@ -185,7 +189,10 @@ mod tests {
         let parent = sock_path.parent().expect("has parent");
         let meta = std::fs::metadata(parent).expect("metadata");
         let mode = meta.permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700, "parent directory mode should be 0700, got {mode:o}");
+        assert_eq!(
+            mode, 0o700,
+            "parent directory mode should be 0700, got {mode:o}"
+        );
     }
 
     // AC-1: socket file has mode 0660
@@ -213,8 +220,14 @@ mod tests {
 
         // Bind should succeed despite the pre-existing file.
         let result = Listener::bind(cfg.clone());
-        assert!(result.is_ok(), "bind should succeed when stale file is present: {result:?}");
-        assert!(cfg.admin_sock_path.exists(), "socket file should exist after bind");
+        assert!(
+            result.is_ok(),
+            "bind should succeed when stale file is present: {result:?}"
+        );
+        assert!(
+            cfg.admin_sock_path.exists(),
+            "socket file should exist after bind"
+        );
     }
 
     // AC-2: accept returns Some(stream) for allowed peer uid (service uid)

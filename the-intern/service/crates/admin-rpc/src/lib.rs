@@ -206,7 +206,10 @@ mod tests {
         // Give the spawn a moment to execute on the current-thread executor.
         tokio::task::yield_now().await;
 
-        assert!(sock_path.exists(), "socket file should exist after start with sock path");
+        assert!(
+            sock_path.exists(),
+            "socket file should exist after start with sock path"
+        );
         task.abort();
     }
 

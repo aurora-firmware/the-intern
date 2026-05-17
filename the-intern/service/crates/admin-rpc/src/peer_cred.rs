@@ -29,11 +29,9 @@ pub fn is_allowed(peer_uid: u32, allowed_uids: &[u32], service_uid: u32) -> bool
 #[cfg(target_os = "linux")]
 pub fn peer_cred_from_fd<F: AsFd>(fd: &F) -> std::io::Result<PeerCred> {
     use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
-    let raw = getsockopt(fd, PeerCredentials)
-        .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
-    Ok(PeerCred {
-        uid: raw.uid(),
-    })
+    let raw =
+        getsockopt(fd, PeerCredentials).map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
+    Ok(PeerCred { uid: raw.uid() })
 }
 
 /// Reads peer credentials from a connected Unix domain socket file descriptor.
@@ -45,11 +43,9 @@ pub fn peer_cred_from_fd<F: AsFd>(fd: &F) -> std::io::Result<PeerCred> {
 #[cfg(target_os = "macos")]
 pub fn peer_cred_from_fd<F: AsFd>(fd: &F) -> std::io::Result<PeerCred> {
     use nix::sys::socket::{getsockopt, sockopt::LocalPeerCred};
-    let raw = getsockopt(fd, LocalPeerCred)
-        .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
-    Ok(PeerCred {
-        uid: raw.uid(),
-    })
+    let raw =
+        getsockopt(fd, LocalPeerCred).map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
+    Ok(PeerCred { uid: raw.uid() })
 }
 
 /// Fallback for platforms other than Linux and macOS.
