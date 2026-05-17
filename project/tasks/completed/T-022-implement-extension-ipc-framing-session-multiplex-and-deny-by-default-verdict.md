@@ -1,7 +1,7 @@
 ---
 id: T-022
 title: Implement extension-ipc framing session multiplex and deny-by-default verdict
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
