@@ -177,14 +177,14 @@ async fn run_connection(stream: UnixStream, dispatcher: Dispatcher, bus: Subscri
     // Notification channel: forwarder tasks → write task.
     let (notif_tx, notif_rx) = mpsc::channel::<NotifMsg>(64);
 
-    let registry = ConnectionRegistry::new(bus);
+    let registry = ConnectionRegistry::new(bus.clone());
 
     // Spawn the write task first so it is ready to receive messages.
     let write_task = tokio::spawn(write_loop(write_half, out_rx, notif_rx));
 
     // Run the read loop in the current task. `registry` drops at the end of
     // this scope, which calls Drop and removes all subscriptions (AC-5).
-    read_loop(reader, dispatcher, registry, out_tx, notif_tx).await;
+    read_loop(reader, dispatcher, registry, bus, out_tx, notif_tx).await;
 
     // Wait for the write task to flush and exit.
     write_task.await.ok();
@@ -195,6 +195,7 @@ async fn read_loop(
     mut reader: BufReader<tokio::net::unix::OwnedReadHalf>,
     dispatcher: Dispatcher,
     mut registry: ConnectionRegistry,
+    bus: SubscriptionBus,
     out_tx: mpsc::Sender<OutboundMsg>,
     notif_tx: mpsc::Sender<NotifMsg>,
 ) {
@@ -223,7 +224,8 @@ async fn read_loop(
                         // Spawn a forwarder task that delivers audit records to the
                         // write task via the notification channel.
                         let ntx = notif_tx.clone();
-                        tokio::spawn(audit_forwarder(id, rx, ntx));
+                        let bus_for_forwarder = bus.clone();
+                        tokio::spawn(audit_forwarder(id, rx, bus_for_forwarder, ntx));
                         true
                     }
                     DispatchOutcome::Unsubscribed { response, id: _ } => {
@@ -267,6 +269,7 @@ async fn read_loop(
 async fn audit_forwarder(
     id: SubscriptionId,
     mut rx: mpsc::Receiver<AuditRecord>,
+    bus: SubscriptionBus,
     notif_tx: mpsc::Sender<NotifMsg>,
 ) {
     loop {
@@ -286,12 +289,11 @@ async fn audit_forwarder(
                 }
             }
             None => {
-                // AC-4: the bus dropped this sender.
-                tracing::warn!(
-                    subscription_id = %id,
-                    "audit subscription dropped by bus: slow subscriber"
-                );
-                let _ = notif_tx.send(NotifMsg::Dropped { id }).await;
+                // Differentiate AC-4 slow eviction from normal unsubscribe
+                // or connection cleanup, which also close the receiver.
+                if bus.take_slow_evicted(id) {
+                    let _ = notif_tx.send(NotifMsg::Dropped { id }).await;
+                }
                 return;
             }
         }
@@ -733,6 +735,77 @@ mod tests {
             payload: json!({ "event": "should.not.arrive" }),
         });
         assert_eq!(bus_clone.subscriber_count(), 0);
+    }
+
+    // Unsubscribing must not be treated as AC-4 slow-subscriber eviction:
+    // the connection must remain open for subsequent requests.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_connection_audit_unsubscribe_keeps_connection_open() {
+        let (client, server) = UnixStream::pair().expect("UnixStream::pair");
+        let dispatcher = make_dispatcher();
+        let bus = make_bus();
+
+        tokio::spawn(run_connection(server, dispatcher, bus));
+
+        let (read_half, mut write_half) = tokio::io::split(client);
+        let mut reader = BufReader::new(read_half);
+
+        // Subscribe to obtain a valid id.
+        write_half
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"audit.tail.subscribe\",\"id\":210}\n")
+            .await
+            .expect("write subscribe");
+        let mut sub_line = String::new();
+        reader
+            .read_line(&mut sub_line)
+            .await
+            .expect("read subscribe resp");
+        let sub_resp: serde_json::Value = serde_json::from_str(sub_line.trim()).expect("json");
+        let sub_id = sub_resp["result"]["id"]
+            .as_str()
+            .expect("subscription id")
+            .to_string();
+
+        // Unsubscribe and consume its success response.
+        let unsub = format!(
+            "{{\"jsonrpc\":\"2.0\",\"method\":\"audit.tail.unsubscribe\",\"params\":{{\"id\":\"{sub_id}\"}},\"id\":211}}\n"
+        );
+        write_half
+            .write_all(unsub.as_bytes())
+            .await
+            .expect("write unsubscribe");
+        let mut unsub_line = String::new();
+        reader
+            .read_line(&mut unsub_line)
+            .await
+            .expect("read unsubscribe resp");
+        let unsub_resp: serde_json::Value =
+            serde_json::from_str(unsub_line.trim()).expect("json unsubscribe response");
+        assert_eq!(unsub_resp["result"]["ok"], true);
+
+        // Give the forwarder/write task a moment; a false AC-4 path would have
+        // closed the connection by now.
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        // Connection must still answer a normal request.
+        write_half
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"service.status\",\"id\":212}\n")
+            .await
+            .expect("write service.status");
+
+        let mut status_line = String::new();
+        tokio::time::timeout(
+            Duration::from_millis(250),
+            reader.read_line(&mut status_line),
+        )
+        .await
+        .expect("timed out waiting for service.status response")
+        .expect("read service.status response");
+
+        let status_resp: serde_json::Value =
+            serde_json::from_str(status_line.trim()).expect("json status response");
+        assert_eq!(status_resp["id"], 212);
+        assert_eq!(status_resp["result"]["ok"], true);
     }
 
     // AC-5: when the connection is closed all subscriptions are cleaned up.

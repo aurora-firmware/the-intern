@@ -25,7 +25,7 @@
 //! id, preventing leaks.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -72,6 +72,7 @@ const SUBSCRIBER_CAPACITY: usize = 64;
 struct BusState {
     subscribers: HashMap<SubscriptionId, mpsc::Sender<AuditRecord>>,
     slow_since: HashMap<SubscriptionId, Instant>,
+    slow_evicted: HashSet<SubscriptionId>,
     next_id: AtomicU64,
 }
 
@@ -95,6 +96,7 @@ impl SubscriptionBus {
             state: Arc::new(Mutex::new(BusState {
                 subscribers: HashMap::new(),
                 slow_since: HashMap::new(),
+                slow_evicted: HashSet::new(),
                 next_id: AtomicU64::new(1),
             })),
             slow_subscriber_deadline,
@@ -118,7 +120,21 @@ impl SubscriptionBus {
     pub fn remove(&self, id: SubscriptionId) -> bool {
         let mut state = self.state.lock().expect("bus state lock poisoned");
         state.slow_since.remove(&id);
+        state.slow_evicted.remove(&id);
         state.subscribers.remove(&id).is_some()
+    }
+
+    /// Returns whether `id` was evicted for exceeding the slow-subscriber
+    /// deadline since the last call.
+    ///
+    /// The marker is consumed when read so ordinary receiver shutdown
+    /// (unsubscribe/cleanup) does not look like AC-4 eviction.
+    pub fn take_slow_evicted(&self, id: SubscriptionId) -> bool {
+        self.state
+            .lock()
+            .expect("bus state lock poisoned")
+            .slow_evicted
+            .remove(&id)
     }
 
     /// Publish `record` to every subscriber.
@@ -153,10 +169,7 @@ impl SubscriptionBus {
                 Err(mpsc::error::TrySendError::Full(_)) => {
                     let slow_since = state.slow_since.entry(id).or_insert(now);
                     if now.duration_since(*slow_since) >= self.slow_subscriber_deadline {
-                        tracing::warn!(
-                            subscription_id = %id,
-                            "audit subscription dropped: outbound queue stayed full past deadline"
-                        );
+                        state.slow_evicted.insert(id);
                         to_remove.push(id);
                     }
                 }
