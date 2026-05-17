@@ -1,7 +1,7 @@
 ---
 id: T-028
 title: Implement persistence in-memory inbound queue and session state stores
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
