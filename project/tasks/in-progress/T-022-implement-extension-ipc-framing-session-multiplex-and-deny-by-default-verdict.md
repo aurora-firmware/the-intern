@@ -70,3 +70,14 @@ Obstacles Encountered:
 - Tokio feature mismatch (`io-util`/`time` not enabled in `extension-ipc`), which broke the first connection I/O implementation and timeout-based tests; worked around by using socket readiness plus `try_read`/`try_write` with yield-based polling helpers.
 
 ## Review
+
+### Review Verdict — 2026-05-17
+FAIL
+
+Stage 1 failed on AC-3.
+
+- **File and location**: `the-intern/service/crates/extension-ipc/src/lib.rs` (`run_connection`, UTF-8 decode error branch inside the frame loop).
+- **What is wrong**: On invalid UTF-8 frame bytes, the code logs `"closing connection"` but executes `break`, which only exits the inner newline-frame loop. The outer connection loop keeps running, so the socket is not guaranteed to close after a parse failure.
+- **What should change**: Replace the inner-loop `break` on UTF-8 decode failure with connection termination (`return` or equivalent) so malformed frames always close the connection with `tracing::warn!` and no echoed payload bytes, matching AC-3.
+
+Branch-scope verification (`git diff --name-status dev-agent..task/T-022-implement-extension-ipc-framing-session-multiplex-and-deny-by-default-verdict`) confirmed no `project/tasks/...` lifecycle files were modified on the task branch.
