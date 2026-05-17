@@ -56,4 +56,17 @@ cd the-intern/service && cargo test -p admin-rpc subscriptions
 
 ## Work Log
 
+### Session 1 — 2026-05-17
+
+Resumed T-020 from existing in-branch edits in `admin-rpc` and reviewed all pre-existing changes before modifying anything. Ran the scoped verification first, then identified an AC-4 gap: `SubscriptionBus::new` accepted `slow_subscriber_deadline` but `publish` dropped full subscribers immediately. Wrote a new failing test (`publish_drops_subscriber_when_queue_stays_full_past_deadline`) to enforce deadline-based eviction, confirmed it failed, then implemented minimal deadline tracking in `SubscriptionBus` via a `slow_since` map keyed by subscription id. Kept the synchronous bus API by using `try_send` plus elapsed-time checks, clearing slow state on recovery, and removing stale slow markers on unsubscribe/removal. Re-ran targeted tests (`subscriptions`, `run_connection_audit*`, `dispatch_audit_tail*`) to confirm behavior. Rejected converting `publish` to async/`send_timeout` in this cycle to avoid broader API churn and because elapsed-full-time tracking satisfies AC-4 with smaller surface-area change. Remaining: lifecycle/work-log append on canonical `dev-agent` branch by the loop owner.
+
+Evidence:
+- Red test (expected failure): `cd the-intern/service && cargo test -p admin-rpc publish_drops_subscriber_when_queue_stays_full_past_deadline` failed before implementation with the subscriber dropped before the deadline elapsed.
+- Green tests after implementation: `cd the-intern/service && cargo test -p admin-rpc publish_drops_subscriber_when_queue_stays_full_past_deadline`, `cd the-intern/service && cargo test -p admin-rpc subscriptions`, `cd the-intern/service && cargo test -p admin-rpc run_connection_audit`, and `cd the-intern/service && cargo test -p admin-rpc dispatch_audit_tail`.
+- Broader suite note: `cd the-intern/service && cargo test -p admin-rpc` still has environment-permission failures in listener/peer-cred socket-binding tests (`Operation not permitted`), unrelated to T-020 logic and reproducible in this sandbox.
+
+Obstacles Encountered:
+- Running the full `admin-rpc` suite in this sandbox hits pre-existing Unix socket bind permission failures for listener/peer-cred tests.
+- One mistyped `cargo test` invocation used two filters at once; reran with separate filters.
+
 ## Review
