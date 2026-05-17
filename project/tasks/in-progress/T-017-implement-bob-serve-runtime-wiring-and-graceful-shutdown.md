@@ -173,3 +173,43 @@ Considered making `try_start_subsystems` return `ServiceResult<Runtime>` and map
 **What remains**
 
 None. All three reviewer actions are addressed, all 8 serve tests pass, the full workspace (114 tests) passes, and `cargo build -p bob` succeeds.
+
+### Review Verdict — 2026-05-17 (cycle 2)
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+**AC-1 — PASS**
+
+`try_start_subsystems` now calls `tokio::net::UnixListener::bind(&cfg.admin_sock_path)` and `tokio::net::UnixListener::bind(&cfg.extension_sock_path)`. The resulting listeners are stored in `Runtime._admin_listener` and `Runtime._extension_listener`, keeping the socket files on disk for the full process lifetime. New test `start_subsystems_creates_socket_files_on_disk` asserts the files exist after `start_subsystems` returns. Test `shutdown_protocol_removes_socket_files_when_they_exist` now uses real `UnixListener` binds (not empty regular files). All three original binding-related deficiencies from cycle 1 are resolved.
+
+**AC-2 — PASS**
+
+Signal handling unchanged from cycle 1 (correct). Shutdown protocol now also explicitly drops `_admin_listener` and `_extension_listener` before calling `remove_socket_files`, ensuring the file descriptor is released before `fs::remove_file` runs. Socket-file removal after shutdown is verified by the updated test.
+
+**AC-3 — PASS**
+
+`start_subsystems` now matches on `Err(e)` from `try_start_subsystems` and returns `Err(ServiceError::ServiceDown)` in all failure branches. New test `start_subsystems_returns_service_down_when_second_bind_fails_and_cleans_up` exercises this path by pre-binding the extension socket path, forces a real bind failure, and asserts `Err(ServiceError::ServiceDown)` and cleanup of the admin socket file. The doc/code mismatch from cycle 1 is resolved.
+
+**AC-4 — PASS**
+
+Unchanged from cycle 1; each actor start and stop emits `tracing::info!` events.
+
+**Stage 2 — Code Quality**
+
+*Correctness*: Drop order in `run_shutdown_protocol` is correct — actor handles drop first (closing channels), listeners drop second, then socket files are removed on disk. The two-layer design (`Box<dyn Error>` in `try_start_subsystems`, `ServiceError::ServiceDown` in `start_subsystems`) cleanly separates inner I/O errors from the public API error type. The explicit `fs::remove_file` in the second-bind error closure provides a tighter cleanup guarantee than relying solely on `remove_socket_files_best_effort`. No off-by-one or null-reference issues observed.
+
+*Tests*: 8 serve tests, all passing. Tests cover: successful start (2 tests), socket files present on disk (1 test), bind-failure returning `ServiceDown` with cleanup (1 test), scaffold-always-succeeds path (1 test), actor drop/stop lifecycle (1 test), shutdown removes socket files (1 test), shutdown tolerates absent socket files (1 test). Success and failure paths are both covered.
+
+*Parallel-execution safety*: Every test that binds sockets uses a `tempfile::tempdir()` instance. Each test therefore operates on a unique directory path, so no two concurrently running tests can conflict over the same socket path. Verified by running the suite with `--test-threads=4` — all 8 tests pass.
+
+*Security*: No hardcoded credentials, no external input reaching the file system without a validated `PathBuf` from `BobConfig`, no new permissions added.
+
+*Readability*: Names are descriptive, functions have single responsibilities, comments explain the why (drop order, two-layer error design, race-window rationale). No dead code or debugging artifacts. The `_`-prefixed fields correctly suppress dead-code warnings while keeping channels and listeners alive.
+
+*Performance*: No unnecessary loops or blocking calls in hot paths. `drain_joins` iterates once over join handles. `remove_socket_files` iterates over exactly two paths.
+
+*Files modified*: `the-intern/service/crates/bob/src/serve.rs`, `the-intern/service/crates/bob/Cargo.toml`, `the-intern/service/Cargo.lock` (auto-generated). All within the task's stated scope.
+
+Both stages pass. No observations requiring follow-up.
