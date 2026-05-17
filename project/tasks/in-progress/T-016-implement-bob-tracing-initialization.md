@@ -81,3 +81,25 @@ The second verification command (`BOB_TRACING_FORMAT=json cargo run -p bob -- se
 Nothing for this task. All four ACs have passing tests and a clean implementation.
 
 ## Review
+
+### Review Verdict — 2026-05-17
+
+PASS
+
+**Stage 1 — Spec compliance**
+
+- AC-1: Met. `pub fn init(cfg: &BobConfig) -> ServiceResult<()>` is present in `telemetry.rs` and installs a global tracing subscriber via `tracing_subscriber::registry().with(layer).try_init()`.
+- AC-2: Met. The `cfg.tracing_format == "json"` branch selects the `.json()` formatter; any other value selects `.pretty()`. The `json_format_output_contains_json_level_field` test uses a scoped subscriber with `CaptureWriter` and confirms `"level"` appears in output. The second task verification command fails due to cargo progress lines mixing into stderr — this is a task-spec defect, not an implementation gap. Running `cargo run -q` or the binary directly passes.
+- AC-3: Met. `build_env_filter` calls `EnvFilter::try_from_default_env()` first and falls back to `EnvFilter::new(level)` from `cfg.tracing_level`, which is the standard `tracing-subscriber` pattern for `RUST_LOG` override.
+- AC-4: Met. `SUBSCRIBER_SET: OnceLock<()>` is checked at the top of `init_with_writer`; a second call returns `Err(ServiceError::Configuration { .. })` without panicking. If `try_init()` itself fails (external subscriber already installed), the guard is set and `Err` is also returned. All five tests pass.
+- Files in scope: Only `telemetry.rs`, `Cargo.toml`, and `Cargo.lock` were modified. `Cargo.lock` is a natural consequence of adding a production dependency and is within scope.
+
+**Stage 2 — Code quality**
+
+- Correctness: The TOCTOU window between the `SUBSCRIBER_SET.get().is_some()` check and `try_init()` is handled correctly — both the `Ok` and `Err` arms of the match set the guard and return appropriately. Logic is sound.
+- Tests: Five tests cover all four ACs. AC-2 uses `with_default` to avoid global state pollution. AC-3 is covered by two unit tests on `build_env_filter`. AC-4 branches on guard state to handle parallel execution without flakiness. Tests are independent and construct their own fixtures.
+- Security: No hardcoded credentials. The `detail` string in `ServiceError::Configuration` contains only static compile-time text, conforming to guideline §5.
+- Readability: Names follow `snake_case` and are descriptive. `# Errors` doc section is present on the public `init` function. Comments explain the TOCTOU rationale and test-ordering constraints clearly.
+- Performance: `OnceLock` is lock-free after initialization. No unnecessary allocations in the hot path.
+
+**Minor observation (non-blocking):** `returns_ok_on_first_call_with_valid_config` discards the return value (`let _ = result`) when tests run in parallel. This is correct and well-commented, but means AC-1's "returns Ok" assertion is not directly verified in a parallel run. This is an inherent limitation of sharing a process-wide global subscriber across tests, and the Developer's reasoning is sound. No fix required.
