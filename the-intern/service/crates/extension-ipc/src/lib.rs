@@ -134,7 +134,7 @@ async fn run_connection(stream: UnixStream, monitoring_handle: Arc<dyn Monitorin
                 Ok(line) => line,
                 Err(e) => {
                     tracing::warn!(error = %e, "extension-ipc: frame is not utf-8; closing connection");
-                    break;
+                    return;
                 }
             };
             let frame = match framing::parse_inbound_frame(&line) {
@@ -449,6 +449,24 @@ mod tests {
         assert!(
             wait_for_eof(&client, 500).await,
             "malformed json should close connection"
+        );
+
+        conn.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn connection_invalid_utf8_closes_socket_without_echo() {
+        let (client, server) = UnixStream::pair().expect("socket pair");
+        let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
+        let conn = tokio::spawn(run_connection(server, monitoring));
+
+        write_all_nonblocking(&client, b"\xff\n")
+            .await
+            .expect("write invalid utf-8 frame");
+
+        assert!(
+            wait_for_eof(&client, 500).await,
+            "invalid utf-8 frame should close connection without echo"
         );
 
         conn.abort();
