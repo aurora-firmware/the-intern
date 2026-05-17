@@ -66,3 +66,17 @@ Obstacles Encountered:
 - Initial generated Unix socket paths exceeded `SUN_LEN`; fixed by shortening/stabilizing test socket path generation.
 
 ## Review
+
+### Review Verdict — 2026-05-17
+PASS
+
+Stage 1 (acceptance criteria and scope): pass.
+- AC-1 met: `AdminClient::connect(cfg: &BobConfig)` connects via `cfg.admin_sock_path` and returns `ServiceDown` on connect failure (`the-intern/service/crates/bob/src/client/admin_rpc.rs`).
+- AC-2 met: `call()` emits newline-delimited JSON-RPC 2.0 request frames and returns typed `result` or `ServiceError` mapping (`ServiceDown` on I/O failure, `InvalidRequest` on protocol/error frames).
+- AC-3 met: `subscribe()` returns `Subscription`; `recv()` deserializes notifications and validates subscription id; `close()` sends derived unsubscribe/close method and validates close response.
+- AC-4 met: absent/refused socket path is mapped to `Err(ServiceError::ServiceDown)` without panics.
+- Branch-scope verification passed: `git diff --name-status dev-agent..task/T-023-implement-bob-admin-rpc-client-primitive` only includes service crate files, no `project/tasks/...` lifecycle files.
+
+Stage 2 (code quality): pass.
+- Correctness/readability/security/performance checks found no blocking issues in task scope.
+- Verification executed: `cd the-intern/service && cargo test -p bob client::admin_rpc` (7 tests passed).
