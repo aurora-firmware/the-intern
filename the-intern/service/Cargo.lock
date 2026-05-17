@@ -9,6 +9,8 @@ dependencies = [
  "async-trait",
  "bob-core",
  "nix",
+ "pi-agent-supervisor",
+ "policy-control",
  "serde",
  "serde_json",
  "tempfile",

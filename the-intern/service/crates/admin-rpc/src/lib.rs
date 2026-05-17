@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod dispatch;
 pub mod listener;
 pub mod peer_cred;
 pub mod protocol;
@@ -7,9 +8,13 @@ pub mod protocol;
 use std::path::PathBuf;
 
 use bob_core::error::{ServiceError, ServiceResult};
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::{io::BufReader, net::UnixStream, sync::mpsc, task::JoinHandle};
 
-use crate::listener::{Listener, ListenerConfig};
+use crate::{
+    dispatch::{DispatchOutcome, Dispatcher},
+    listener::{Listener, ListenerConfig},
+    protocol::{read_frame, write_frame, ErrorResponse, FrameRead},
+};
 
 /// Configuration for the admin-rpc actor.
 ///
@@ -18,7 +23,7 @@ use crate::listener::{Listener, ListenerConfig};
 /// When it is empty (the default), no socket is bound — this preserves
 /// backward compatibility with callers that manage socket binding themselves
 /// (e.g. `bob::serve`).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     /// Size of the internal command channel buffer.
     pub command_buffer: usize,
@@ -31,6 +36,12 @@ pub struct Config {
     /// UID of the running service process.  Defaults to the current process
     /// UID.
     pub service_uid: u32,
+    /// Optional handle to the pi-agent supervisor.  When `None`, the
+    /// `sessions.list` method returns `NotImplemented`.
+    pub supervisor: Option<pi_agent_supervisor::Handle>,
+    /// Optional handle to the policy-control actor.  When `None`, the
+    /// `policy.reload` method returns `NotImplemented`.
+    pub policy: Option<policy_control::Handle>,
 }
 
 impl Default for Config {
@@ -40,6 +51,8 @@ impl Default for Config {
             admin_sock_path: PathBuf::new(),
             admin_allowed_uids: Vec::new(),
             service_uid: current_uid(),
+            supervisor: None,
+            policy: None,
         }
     }
 }
@@ -94,16 +107,56 @@ impl Actor {
     }
 }
 
-/// Runs the listener accept loop, dropping each accepted stream after the
-/// peer-credential gate.  The per-connection handler body is filled in by
-/// T-019; this stub closes accepted-but-allowed streams immediately.
-async fn run_listener(listener: Listener) {
+/// Handle one accepted connection: read JSON-RPC 2.0 frames, dispatch each
+/// to the method registry, and write responses back.
+///
+/// AC-3: if any frame fails to parse, an error response (-32700) is written
+/// and the connection is closed.
+/// AC-5: each response carries the same `id` as the corresponding request.
+async fn run_connection(stream: UnixStream, dispatcher: Dispatcher) {
+    let (read_half, mut write_half) = tokio::io::split(stream);
+    let mut reader = BufReader::new(read_half);
+
+    loop {
+        match read_frame(&mut reader).await {
+            FrameRead::Ok(req) => {
+                let outcome = dispatcher.dispatch(req).await;
+                let write_result = match outcome {
+                    DispatchOutcome::Ok(resp) => write_frame(&mut write_half, &resp).await,
+                    DispatchOutcome::Err(err) => write_frame(&mut write_half, &err).await,
+                };
+                if let Err(e) = write_result {
+                    tracing::debug!(error = %e, "admin-rpc: write error; closing connection");
+                    return;
+                }
+            }
+            FrameRead::ParseError => {
+                // AC-3: respond with -32700 and close the connection.
+                let err = ErrorResponse::parse_error(None);
+                let _ = write_frame(&mut write_half, &err).await;
+                tracing::debug!("admin-rpc: parse error; closing connection");
+                return;
+            }
+            FrameRead::Eof => {
+                tracing::debug!("admin-rpc: connection closed by peer");
+                return;
+            }
+            FrameRead::IoError(e) => {
+                tracing::debug!(error = %e, "admin-rpc: I/O error; closing connection");
+                return;
+            }
+        }
+    }
+}
+
+/// Runs the listener accept loop and dispatches each accepted connection to
+/// [`run_connection`] in a spawned task.
+async fn run_listener(listener: Listener, dispatcher: Dispatcher) {
     loop {
         match listener.accept().await {
-            Ok(Some(_stream)) => {
-                // T-019 will replace this stub with real per-connection work.
-                // For now, drop the stream to close the connection cleanly.
-                tracing::debug!("admin-rpc: accepted connection (stub: closing immediately)");
+            Ok(Some(stream)) => {
+                let d = dispatcher.clone();
+                tokio::spawn(run_connection(stream, d));
             }
             Ok(None) => {
                 // Peer was rejected — already logged in `Listener::accept`.
@@ -127,6 +180,13 @@ async fn run_listener(listener: Listener) {
 pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
     let buffer = cfg.command_buffer.max(1);
     let (tx, rx) = mpsc::channel(buffer);
+
+    // Build the dispatcher from the optional handles in the config.
+    let dispatcher = Dispatcher::new(
+        cfg.supervisor.clone(),
+        cfg.policy.clone(),
+        env!("CARGO_PKG_VERSION"),
+    );
 
     // Optionally bind the listener.  If the path is empty we skip binding to
     // stay compatible with `bob::serve` which does its own socket management.
@@ -158,7 +218,7 @@ pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
     };
 
     if let Some(listener) = maybe_listener {
-        tokio::spawn(run_listener(listener));
+        tokio::spawn(run_listener(listener, dispatcher));
     }
 
     let actor = Actor { cfg, rx };
@@ -171,6 +231,9 @@ pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use tokio::io::AsyncBufReadExt as _;
+    use tokio::io::AsyncWriteExt as _;
 
     #[tokio::test(flavor = "current_thread")]
     async fn handle_ping_returns_not_implemented() {
@@ -220,5 +283,102 @@ mod tests {
         let (_, task) = start(Config::default());
         // No assertion on filesystem — just verify it doesn't panic.
         task.abort();
+    }
+
+    // Helper: build a dispatcher with no optional handles.
+    fn make_dispatcher() -> Dispatcher {
+        Dispatcher::new(None, None, "0.1.0-test")
+    }
+
+    // AC-1: a service.status request over a connected UnixStream pair yields a
+    // valid JSON-RPC 2.0 response with an `ok: true` result.
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_connection_service_status_returns_ok_response() {
+        let (client, server) = UnixStream::pair().expect("UnixStream::pair");
+        let dispatcher = make_dispatcher();
+
+        tokio::spawn(run_connection(server, dispatcher));
+
+        let (read_half, mut write_half) = tokio::io::split(client);
+        let mut reader = BufReader::new(read_half);
+
+        // Send a service.status request.
+        let req = r#"{"jsonrpc":"2.0","method":"service.status","id":1}"#;
+        write_half.write_all(req.as_bytes()).await.expect("write");
+        write_half.write_all(b"\n").await.expect("newline");
+
+        // Read back the response.
+        let mut line = String::new();
+        reader.read_line(&mut line).await.expect("read response");
+        let resp: serde_json::Value =
+            serde_json::from_str(line.trim()).expect("valid JSON response");
+
+        assert_eq!(resp["jsonrpc"], "2.0");
+        assert_eq!(resp["id"], 1);
+        assert_eq!(resp["result"]["ok"], true);
+    }
+
+    // AC-3: a malformed frame causes a -32700 error response and connection close.
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_connection_parse_error_sends_minus_32700_and_closes() {
+        let (client, server) = UnixStream::pair().expect("UnixStream::pair");
+        let dispatcher = make_dispatcher();
+
+        tokio::spawn(run_connection(server, dispatcher));
+
+        let (read_half, mut write_half) = tokio::io::split(client);
+        let mut reader = BufReader::new(read_half);
+
+        // Send malformed JSON.
+        write_half
+            .write_all(b"this is not json\n")
+            .await
+            .expect("write");
+
+        // Read the error response.
+        let mut line = String::new();
+        reader.read_line(&mut line).await.expect("read response");
+        let resp: serde_json::Value =
+            serde_json::from_str(line.trim()).expect("valid JSON error response");
+
+        assert_eq!(resp["error"]["code"], -32700);
+        assert_eq!(resp["id"], serde_json::Value::Null);
+
+        // The connection should now be closed — next read returns EOF.
+        let mut extra = String::new();
+        let n = reader.read_line(&mut extra).await.expect("read eof");
+        assert_eq!(n, 0, "connection should be closed after parse error");
+    }
+
+    // AC-5: multiple sequential requests over the same connection each get a
+    // response with the matching id.
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_connection_sequential_requests_get_matching_ids() {
+        let (client, server) = UnixStream::pair().expect("UnixStream::pair");
+        let dispatcher = make_dispatcher();
+
+        tokio::spawn(run_connection(server, dispatcher));
+
+        let (read_half, mut write_half) = tokio::io::split(client);
+        let mut reader = BufReader::new(read_half);
+
+        for i in 1u64..=3 {
+            let req = format!(r#"{{"jsonrpc":"2.0","method":"service.status","id":{i}}}"#);
+            write_half
+                .write_all(req.as_bytes())
+                .await
+                .expect("write request");
+            write_half.write_all(b"\n").await.expect("newline");
+
+            let mut line = String::new();
+            reader.read_line(&mut line).await.expect("read response");
+            let resp: serde_json::Value = serde_json::from_str(line.trim()).expect("valid JSON");
+
+            assert_eq!(
+                resp["id"],
+                json!(i),
+                "response id must match request id for i={i}"
+            );
+        }
     }
 }
