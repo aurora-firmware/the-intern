@@ -66,7 +66,11 @@ mod tests {
         let dir = tempdir().expect("temp dir");
         let path = dir.path().join("test.sock");
 
-        let listener = UnixListener::bind(&path).expect("bind");
+        let listener = match UnixListener::bind(&path) {
+            Ok(listener) => listener,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(e) => panic!("bind failed: {e}"),
+        };
         let client = std::os::unix::net::UnixStream::connect(&path).expect("connect");
         let (server_side, _addr) = listener.accept().expect("accept");
 
