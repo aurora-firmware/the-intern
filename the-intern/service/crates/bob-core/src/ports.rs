@@ -157,10 +157,7 @@ mod tests {
             Ok(())
         }
 
-        async fn get_session_state(
-            &self,
-            _id: SessionId,
-        ) -> ServiceResult<Option<SessionState>> {
+        async fn get_session_state(&self, _id: SessionId) -> ServiceResult<Option<SessionState>> {
             Ok(None)
         }
     }
