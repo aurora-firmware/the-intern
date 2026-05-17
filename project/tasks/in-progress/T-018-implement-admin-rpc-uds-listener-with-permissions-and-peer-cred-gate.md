@@ -54,4 +54,40 @@ cd the-intern/service && cargo test -p admin-rpc peer_cred
 
 ## Work Log
 
+### Session 1 — 2026-05-17
+
+**What was done**
+
+Implemented all four acceptance criteria for T-018 across three TDD cycles, each committed as a discrete red→green→refactor commit.
+
+**Cycle 1 — `peer_cred` module**
+Added `nix = { version = "0.29", features = ["socket", "user"] }` and `tempfile` to `admin-rpc/Cargo.toml`. Created `src/peer_cred.rs` with:
+- `PeerCred { uid: u32 }` data type.
+- `is_allowed(peer_uid, allowed_uids, service_uid) -> bool` — the policy gate (AC-2/AC-3 unit-testable without elevated privileges).
+- `peer_cred_from_fd<F: AsFd>(fd: &F) -> io::Result<PeerCred>` behind `#[cfg(target_os = "linux")]` / `#[cfg(target_os = "macos")]` / fallback `Unsupported` error.
+- A real-socket integration test that connects a `UnixStream` to a `UnixListener` in the same process and asserts the returned uid equals `nix::unistd::Uid::current()`.
+
+One compile fix was required: `nix::getsockopt` takes `AsFd` not `AsRawFd`; corrected the bound before running green.
+
+**Cycle 2 — `listener` module**
+Created `src/listener.rs` with:
+- `ListenerConfig { admin_sock_path, admin_allowed_uids, service_uid }`.
+- `Listener::bind(cfg)` that creates the parent directory (`create_dir_all` + `chmod 0700`), unlinks any stale file, calls `UnixListener::bind`, then `chmod 0660` on the socket file — satisfying AC-1 and AC-4.
+- `Listener::accept()` async method that calls `peer_cred_from_fd` on each accepted `UnixStream` and either returns `Some(stream)` (allowed) or logs `tracing::warn!` and drops the stream (rejected) — satisfying AC-2 and AC-3.
+- `gate_peer(uid, cfg) -> bool` helper for policy-only unit tests (no real socket needed).
+- Eight tests covering: socket file creation, parent directory mode 0700, socket mode 0660, stale-file removal before bind, accept returning `Some` for own UID, and three `gate_peer` policy cases.
+
+**Cycle 3 — `lib.rs` wiring**
+Extended `admin_rpc::Config` with `admin_sock_path`, `admin_allowed_uids`, and `service_uid` (defaulting to empty path / empty list / current UID). The `start` function now optionally calls `Listener::bind` when the path is non-empty and spawns a `run_listener` accept loop task (stub: drops every accepted-but-allowed stream immediately; T-019 will replace this). When the path is empty (i.e. `Config::default()`), no binding occurs — backward-compatible with `bob::serve`, which calls `admin_rpc::start(admin_rpc::Config::default())` and does its own socket management. Two new wiring tests were added: one verifying socket file creation, one verifying no panic when no path is provided.
+
+**What was tried and rejected**
+
+- Making `start` return `Result<(Handle, JoinHandle<()>), io::Error>` — rejected because `bob/src/serve.rs` (out of scope) calls `start` without expecting a `Result`. Moved binding errors to a `tracing::error!` log + graceful degradation (actor starts without listener) to preserve the existing call site.
+- Using `AsRawFd` for `peer_cred_from_fd` — `nix 0.29` switched to `AsFd`; fixed on first compile.
+
+**What remains**
+
+- T-019: per-connection handler body (the `run_listener` stub drops each accepted stream).
+- The `_admin_listener: UnixListener` field in `bob/src/serve.rs` is now redundant — `admin_rpc::start` can manage the socket when configured with a path. Cleanup of `serve.rs` is out of this task's scope; a follow-up task or T-019 should coordinate.
+
 ## Review
