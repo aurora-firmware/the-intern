@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use bob_core::error::ServiceResult;
 
 pub mod cli;
+pub mod client;
 pub mod config;
 pub mod serve;
 pub mod telemetry;
