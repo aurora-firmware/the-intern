@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use bob_core::error::{ServiceError, ServiceResult};
-use tokio::{net::UnixListener, task::JoinHandle, time};
+use tokio::{net::UnixListener, sync::watch, task::JoinHandle, time};
 use tracing::info;
 
 use crate::config::BobConfig;
@@ -24,6 +24,9 @@ struct Runtime {
     _persistence: persistence::Handle,
     _policy_control: policy_control::Handle,
     _pi_agent_supervisor: pi_agent_supervisor::Handle,
+
+    // Cancellation sender for the requests-handler actor.
+    requests_handler_cancel_tx: watch::Sender<bool>,
 
     // Bound-but-not-yet-polled listeners.  Dropping them removes the socket
     // file descriptor; the shutdown protocol removes the on-disk path explicitly.
@@ -91,10 +94,17 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     info!("pi-agent-supervisor actor started");
 
     info!("starting requests-handler actor");
+    let (rh_cancel_tx, rh_cancel_rx) = watch::channel(false);
     let (requests_handler_handle, requests_handler_join) =
-        requests_handler::start(requests_handler::Config {
-            command_buffer: cfg.request_queue_capacity,
-        });
+        requests_handler::start_with(
+            requests_handler::Config {
+                request_queue_capacity: cfg.request_queue_capacity,
+                request_submit_timeout: cfg.request_submit_timeout,
+            },
+            // Downstream handler closure — T-027 will replace this placeholder.
+            |_event| async {},
+            rh_cancel_rx,
+        );
     info!("requests-handler actor started");
 
     info!("starting extension-ipc actor");
@@ -144,6 +154,7 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         _persistence: persistence_handle,
         _policy_control: policy_control_handle,
         _pi_agent_supervisor: pi_agent_supervisor_handle,
+        requests_handler_cancel_tx: rh_cancel_tx,
         _admin_listener: admin_listener,
         _extension_listener: extension_listener,
         joins,
@@ -210,6 +221,7 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
         _persistence,
         _policy_control,
         _pi_agent_supervisor,
+        requests_handler_cancel_tx,
         _admin_listener,
         _extension_listener,
         joins,
@@ -218,6 +230,8 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
     } = runtime;
 
     // Phase 1: Stop accepting new connections by dropping handles (channels close).
+    // Signal the requests-handler actor to drain and stop.
+    let _ = requests_handler_cancel_tx.send(true);
     drop(_admin_rpc);
     drop(_extension_ipc);
     drop(_requests_handler);
