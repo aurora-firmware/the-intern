@@ -68,6 +68,11 @@ where
             // we ignore it because the subscriber was still installed by one of
             // them.
             let _ = SUBSCRIBER_SET.set(());
+            tracing::info!(
+                tracing_format = cfg.tracing_format.as_str(),
+                tracing_level = cfg.tracing_level.as_str(),
+                "tracing subscriber initialized"
+            );
             Ok(())
         }
         Err(_) => {
