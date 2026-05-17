@@ -53,4 +53,20 @@ cd the-intern/service && cargo test -p extension-ipc multiplex
 
 ## Work Log
 
+### Session 1 — 2026-05-17
+
+Implemented T-022 in three TDD cycles on `task/T-022-implement-extension-ipc-framing-session-multiplex-and-deny-by-default-verdict` while keeping lifecycle files untouched on the task branch. First cycle added `framing.rs` with newline-delimited JSON parsing/encoding and tests for session-tagged authz parsing, required-session enforcement, and verdict frame encoding. Second cycle added `multiplex.rs` with a per-session route map and tests for deny-by-default authz replies, no-wire-reply event forwarding, and session-isolated reply routing to prevent cross-delivery. Third cycle wired `lib.rs` connection handling to parse framed input, dispatch through multiplexer, emit deny verdict replies on the same connection/session, forward events to the configured monitoring handle, and close connections on malformed/missing-session frames with warning logs.
+
+I initially tried Tokio `AsyncBufReadExt`/`AsyncWriteExt` + timeout-based tests, but rejected that approach because this crate's enabled Tokio features do not include `io-util`/`time`. I replaced it with readiness-based `try_read`/`try_write` socket handling and spin/yield test helpers, which stayed within existing crate features and preserved behavior requirements.
+
+Remaining work on implementation branch: none for this task's acceptance scope. Remaining process work is loop/reviewer lifecycle handling on `dev-agent`.
+
+Evidence:
+- `cd the-intern/service && cargo test -p extension-ipc framing` passed.
+- `cd the-intern/service && cargo test -p extension-ipc multiplex` passed.
+- `cd the-intern/service && cargo test -p extension-ipc connection_` passed for authz reply, event no-reply, and malformed/missing-session close behavior.
+
+Obstacles Encountered:
+- Tokio feature mismatch (`io-util`/`time` not enabled in `extension-ipc`), which broke the first connection I/O implementation and timeout-based tests; worked around by using socket readiness plus `try_read`/`try_write` with yield-based polling helpers.
+
 ## Review
