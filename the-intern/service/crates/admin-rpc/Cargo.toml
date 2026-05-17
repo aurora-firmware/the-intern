@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1", features = ["rt", "sync", "net", "signal", "macros"] }
+tokio = { version = "1", features = ["rt", "sync", "net", "signal", "macros", "io-util"] }
 bob-core = { path = "../bob-core" }
+pi-agent-supervisor = { path = "../pi-agent-supervisor" }
+policy-control = { path = "../policy-control" }
 tracing = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
