@@ -60,4 +60,17 @@ cd the-intern/service && cargo test -p bob cli::commands
 
 ## Work Log
 
+### Session 1 — 2026-05-17
+
+Implemented all T-024 command handlers by replacing `NotImplemented` placeholders with real subcommand modules that use `AdminClient` for RPC calls and subscriptions. `status` now calls `service.status`; `sessions list` calls `sessions.list`; `sessions kill <id>` calls `sessions.kill`; `policy reload` calls `policy.reload`; `audit tail` subscribes to `audit.tail.subscribe`, prints notifications, and closes/unsubscribes on stop; `chat [--session <id>]` opens via `chat.open`, streams incoming chat notifications, forwards stdin lines through `chat.send`, and closes the chat subscription on exit. Global `--json` behavior is implemented as one JSON document per response/notification across all commands. Missing-admin-socket behavior is mapped to a single-line error detail naming the configured socket path for non-serve commands, producing exit code 1 through existing main error handling.
+
+What was tried and rejected: I first wrote socket-level tests using local Unix listeners, but this environment rejects Unix socket bind with `Operation not permitted`, so those tests were replaced with deterministic closure/stream-double tests that still validate RPC method names, params, output shape, and subscription close behavior. I also tried `tokio::io::stdin()` for async chat input, but this build lacks `tokio` `io-std` support; switched to a blocking stdin reader thread feeding an async channel consumed by the chat loop.
+
+What remains: manual smoke against a real `bob serve` instance was not practical in this environment; expected manual checks are `bob status`, `bob sessions list --json`, `bob audit tail --json`, and `bob chat --session <id>` to confirm live server integration and interactive UX.
+
+Obstacles Encountered:
+- Unix socket binds in this environment fail with `PermissionDenied (Operation not permitted)`, so integration-style socket tests were not usable.
+- `tokio::io::stdin()` unavailable due missing `io-std` feature; chat input path adapted to blocking stdin reader thread plus channel.
+- `cargo fmt` initially touched unrelated files; reverted accidental out-of-scope changes and kept edits limited to task files.
+
 ## Review
