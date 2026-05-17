@@ -99,3 +99,15 @@ Stage 1 failed on AC-3.
 - **What should change**: Replace the inner-loop `break` on UTF-8 decode failure with connection termination (`return` or equivalent) so malformed frames always close the connection with `tracing::warn!` and no echoed payload bytes, matching AC-3.
 
 Branch-scope verification (`git diff --name-status dev-agent..task/T-022-implement-extension-ipc-framing-session-multiplex-and-deny-by-default-verdict`) confirmed no `project/tasks/...` lifecycle files were modified on the task branch.
+
+### Review Verdict — 2026-05-17
+PASS
+
+Stage 1 and Stage 2 checks passed.
+
+- AC-1 met: authz frames return deny-by-default `authz_verdict` on the same connection with the same `session` tag (`multiplex.rs`, `lib.rs`, `connection_authz_frame_returns_deny_verdict_with_same_session`).
+- AC-2 met: event frames are forwarded to `MonitoringHandle` with no wire reply (`multiplex.rs`, `lib.rs`, `connection_event_frame_forwards_to_monitoring_without_reply`).
+- AC-3 met: parse failure, missing-session parse failure, malformed JSON, and invalid UTF-8 all close the connection with warning logs and no payload echo; prior finding is resolved by terminating on UTF-8 decode error (`run_connection` now `return`s in that branch; `connection_invalid_utf8_closes_socket_without_echo` passes).
+- AC-4 met: session routing preserves isolation in multiplex tests; distinct sessions are not cross-delivered (`distinct_sessions_do_not_cross_deliver_replies`).
+
+Branch-scope verification at review start confirmed `git diff --name-status dev-agent..task/T-022-implement-extension-ipc-framing-session-multiplex-and-deny-by-default-verdict` excludes `project/tasks/...` lifecycle files.
