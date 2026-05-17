@@ -69,6 +69,19 @@ Obstacles Encountered:
 - Running the full `admin-rpc` suite in this sandbox hits pre-existing Unix socket bind permission failures for listener/peer-cred tests.
 - One mistyped `cargo test` invocation used two filters at once; reran with separate filters.
 
+### Session 2 — 2026-05-17
+
+Continued from Review Cycle 1 FAIL and reproduced the defect with a new red integration test (`run_connection_audit_unsubscribe_keeps_connection_open`) showing that after `audit.tail.unsubscribe`, the next `service.status` request hit EOF because the connection was being closed via the generic `rx.recv()==None` path. Implemented a minimal fix by adding explicit slow-eviction tracking in `SubscriptionBus` (`slow_evicted` + `take_slow_evicted`) and wiring `audit_forwarder` to emit `NotifMsg::Dropped` only when that marker is present. Normal unsubscribe/connection cleanup now closes the receiver without forcing AC-4 close/warn behavior. Rejected a broader async redesign (`send_timeout`/API shape changes) to keep scope minimal and aligned with reviewer feedback. Re-ran required verification and focused unsubscribe/slow-eviction/connection tests; all passed. Remaining: reviewer re-check and loop-owned lifecycle update on canonical `dev-agent` task file.
+
+Evidence:
+- Red (expected fail before fix): `cd the-intern/service && cargo test -p admin-rpc run_connection_audit_unsubscribe_keeps_connection_open` failed with EOF parsing status response after unsubscribe.
+- Green after fix: `cd the-intern/service && cargo test -p admin-rpc run_connection_audit_unsubscribe_keeps_connection_open`, `cd the-intern/service && cargo test -p admin-rpc subscriptions`, `cd the-intern/service && cargo test -p admin-rpc run_connection_audit_unsubscribe`, `cd the-intern/service && cargo test -p admin-rpc publish_drops_subscriber_when_queue_stays_full_past_deadline`, and `cd the-intern/service && cargo test -p admin-rpc run_connection_close_removes_all_subscriptions`.
+- Lifecycle-file check: `git diff --name-only dev-agent...HEAD` excluded `project/tasks/...` lifecycle files.
+
+Obstacles Encountered:
+- One intermediate compile error (`use of moved value: bus`) after threading `SubscriptionBus` through `read_loop`; resolved with `bus.clone()` when constructing `ConnectionRegistry`.
+- Temporary cargo build-dir lock wait while running parallel test commands.
+
 ## Review
 
 ### Review Verdict — 2026-05-17
