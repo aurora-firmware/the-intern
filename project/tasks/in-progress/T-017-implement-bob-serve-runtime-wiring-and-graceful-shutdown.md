@@ -135,3 +135,41 @@ Each actor start is bracketed by `info!("starting X actor")` and `info!("X actor
 1. Add `tokio::net::UnixListener::bind` calls for both socket paths in `try_start_subsystems` (or in `run` before entering the signal-wait loop). Propagate binding failures through the AC-3 error path.
 2. Resolve the AC-3 error-type mismatch: either map the error to `ServiceError::ServiceDown` or clarify with the Architect if propagating the original variant is acceptable.
 3. Update `shutdown_protocol_removes_socket_files_when_they_exist` to bind actual Unix domain sockets instead of writing empty regular files.
+
+### Session 2 — 2026-05-17
+
+**What changed this session**
+
+Three reviewer-required fixes were applied to `the-intern/service/crates/bob/src/serve.rs` in a single commit (`7b7b459`).
+
+**Fix 1 — AC-1: actually bind both sockets (reviewer action 1)**
+
+`try_start_subsystems` now calls `tokio::net::UnixListener::bind(&cfg.admin_sock_path)` and `tokio::net::UnixListener::bind(&cfg.extension_sock_path)`. The resulting listeners are stored in two new `Runtime` fields (`_admin_listener`, `_extension_listener`) so the socket files persist on disk for the lifetime of the process. The listeners are dropped explicitly in `run_shutdown_protocol` before `remove_socket_files` is called (phase 6).
+
+On second-bind failure the error closure explicitly removes the first socket file before propagating — this ensures cleanup even before `remove_socket_files_best_effort` runs in `start_subsystems`.
+
+`try_start_subsystems`'s return type changed from `ServiceResult<Runtime>` to `Result<Runtime, Box<dyn std::error::Error>>` so that `io::Error` from `bind` can propagate naturally without requiring a conversion to `ServiceError` inside the inner function (the mapping happens one layer up).
+
+**Fix 2 — AC-3: map to `ServiceError::ServiceDown` (reviewer action 2)**
+
+`start_subsystems` now matches on the `Err` arm from `try_start_subsystems` and always returns `Err(ServiceError::ServiceDown)` rather than propagating the inner error type. The `tracing::error!` and `remove_socket_files_best_effort` calls are preserved in the same `Err` match arm.
+
+**Fix 3 — test fix (reviewer action 3)**
+
+`shutdown_protocol_removes_socket_files_when_they_exist` was rewritten: it now binds then drops two `UnixListener`s to verify that bind-then-drop leaves socket files on disk (they do on Linux), removes those files, then calls `start_subsystems` to re-bind them. This ensures the test exercises the real binding path rather than writing empty regular files.
+
+Two new tests were added:
+- `start_subsystems_creates_socket_files_on_disk` — asserts that socket files appear on disk after `start_subsystems` returns `Ok`.
+- `start_subsystems_returns_service_down_when_second_bind_fails_and_cleans_up` — pre-binds the extension socket path in the test process before calling `start_subsystems`; asserts `Err(ServiceError::ServiceDown)` and that the admin socket file is cleaned up.
+
+`shutdown_protocol_tolerates_missing_socket_files` was adjusted to call `remove_socket_files_best_effort` directly (the function under test for missing-file tolerance), since `try_start_subsystems` now requires real bindable paths and would fail on the empty paths the test was using.
+
+**What was tried and rejected**
+
+Initially used `{:?}` in the `assert!` message for the `ServiceDown` test, which caused a compile error because `Runtime` does not implement `Debug`. Changed the message to a plain string.
+
+Considered making `try_start_subsystems` return `ServiceResult<Runtime>` and mapping `io::Error` to `ServiceError::ServiceDown` directly — but that would have required adding a dependency on `io::Error` in error-handling logic that already exists cleanly in `start_subsystems`. Keeping the two-layer design (`Box<dyn Error>` inner, `ServiceError::ServiceDown` outer) is cleaner and matches the reviewer's intended separation.
+
+**What remains**
+
+None. All three reviewer actions are addressed, all 8 serve tests pass, the full workspace (114 tests) passes, and `cargo build -p bob` succeeds.
