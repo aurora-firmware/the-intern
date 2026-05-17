@@ -94,3 +94,13 @@ FAIL
 - **File and location**: `task/T-020-implement-admin-rpc-subscription-notification-plumbing` branch diff vs `dev-agent` (`project/tasks/in-progress/T-020-implement-admin-rpc-subscription-notification-plumbing.md`)
   **What is wrong**: The task branch currently carries a lifecycle-file delta relative to `dev-agent`. Task branches should contain source/test implementation changes only; lifecycle state must stay canonical on `dev-agent`.
   **What should change**: Rebase/cherry-pick the implementation so the task branch diff excludes lifecycle files, then resubmit for review.
+
+### Review Verdict — 2026-05-17
+PASS
+
+Stage 1 (acceptance/task criteria) and Stage 2 (code quality) both pass for Review Cycle 2.
+
+- AC-1/AC-2/AC-3: `audit.tail.subscribe` and `audit.tail.unsubscribe` behavior is implemented and verified via dispatcher/connection tests; notifications emit `method: "audit.event"` with matching `params.subscription`.
+- AC-4: slow-subscriber close/warn path is now gated to true slow eviction only (`slow_evicted` marker + `take_slow_evicted`), and normal unsubscribe/cleanup no longer triggers false close/warn behavior.
+- AC-5: connection teardown removes all per-connection subscriptions via `ConnectionRegistry::drop`, with coverage in connection cleanup tests.
+- Prior finding #2 is resolved: `git diff --name-only dev-agent...task/T-020-implement-admin-rpc-subscription-notification-plumbing` contains only service crate files (no lifecycle/task files).
