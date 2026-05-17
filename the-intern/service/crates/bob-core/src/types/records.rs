@@ -111,6 +111,7 @@ mod tests {
             AuditKind::ActionFailed,
             AuditKind::SessionStarted,
             AuditKind::SessionEnded,
+            AuditKind::PreflightDenied,
         ];
         for kind in variants {
             let json = serde_json::to_string(&kind).expect("serialization must succeed");
