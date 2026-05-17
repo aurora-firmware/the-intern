@@ -116,3 +116,42 @@ Next Owner:
 
 Next Action:
 - Update task branch to remove lifecycle-file diff against `dev-agent` (while keeping implementation commits intact), then resubmit for review.
+
+### Review Verdict — 2026-05-17
+
+FAIL
+
+Result: FAIL
+
+Summary:
+- Reviewed Review Cycle 2 for `T-021` on branch `task/T-021-implement-extension-ipc-uds-listener-with-permissions-and-peer-cred-gate` (including sync commit `e5c9d05`).
+- AC-1 through AC-4 remain satisfied and required tests pass, but Stage 1 still fails because the implementation branch diff against `dev-agent` includes the lifecycle task file.
+
+Artifacts:
+- Canonical task file updated: `project/tasks/in-progress/T-021-implement-extension-ipc-uds-listener-with-permissions-and-peer-cred-gate.md`.
+- Diff reviewed: `dev-agent..task/T-021-implement-extension-ipc-uds-listener-with-permissions-and-peer-cred-gate`.
+- Primary files inspected: `the-intern/service/crates/extension-ipc/src/lib.rs`, `the-intern/service/crates/extension-ipc/src/listener.rs`, `the-intern/service/crates/extension-ipc/src/peer_cred.rs`, `the-intern/service/crates/extension-ipc/Cargo.toml`, `the-intern/service/Cargo.lock`.
+
+Evidence:
+- Scope check (requested explicit verification):
+  - `git diff --name-status dev-agent..task/T-021-implement-extension-ipc-uds-listener-with-permissions-and-peer-cred-gate` includes `project/tasks/in-progress/T-021-implement-extension-ipc-uds-listener-with-permissions-and-peer-cred-gate.md` as modified.
+  - The task file differs because `dev-agent` contains a newer lifecycle update (`c625f50`) not present on the task branch; this keeps lifecycle content in implementation scope.
+- Stage 1 acceptance checks:
+  - AC-1 PASS: `Listener::bind(cfg)` exists and applies parent mode `0700`, stale unlink, bind, and socket mode `0660`.
+  - AC-2 PASS: same-uid and allow-listed peers are accepted and handed to per-connection task (`tokio::spawn(run_connection(stream))`).
+  - AC-3 PASS: unauthorized peers are closed before handoff and log `tracing::warn!` with `rejected_uid`.
+  - AC-4 PASS: stale socket file is removed before bind.
+- Required verification commands run on task branch:
+  - `cd the-intern/service && cargo test -p extension-ipc listener` -> PASS (7 passed, 0 failed).
+  - `cd the-intern/service && cargo test -p extension-ipc peer_cred` -> PASS (5 passed, 0 failed).
+- Stage 2 review protocol note:
+  - Per code-review skill, Stage 2 is non-blocking once Stage 1 fails; no additional blocking quality defects were identified in changed source files.
+
+Obstacles Encountered:
+- none
+
+Next Owner:
+- Development Loop
+
+Next Action:
+- Re-sync the task branch with current `dev-agent` so lifecycle files are identical at branch tip (or otherwise remove lifecycle-file divergence), then resubmit for review.
