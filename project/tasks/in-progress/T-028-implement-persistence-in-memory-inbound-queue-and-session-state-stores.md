@@ -84,3 +84,29 @@ The `#[cfg(test)] pub(crate) fn len()` helper on `InboundQueue` was added only t
 Nothing within T-028's scope. All five acceptance criteria have tests and implementations. The verification commands pass. The workspace builds and passes clippy with `-D warnings`.
 
 ## Review
+
+### Review Verdict — 2026-05-17
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Spec compliance**
+
+- AC-1 (enqueue with capacity returns Ok): met. `InboundQueue::enqueue` checks `len >= capacity` and appends only when space is available; `Handle::enqueue` forwards via actor reply channel. Integration test `enqueue_returns_ok_when_queue_has_capacity` confirms.
+- AC-2 (dequeue_next returns oldest event in FIFO order): met. `VecDeque::push_back` / `pop_front` enforces FIFO. Both struct-level and actor-level integration tests confirm ordering with multiple events.
+- AC-3 (enqueue at capacity returns Err without dropping existing entries): met. The guard returns `Err(ServiceError::Persistence { detail: "inbound queue at capacity" })` before any push. Tests `enqueue_at_capacity_returns_persistence_error` and `enqueue_at_capacity_does_not_drop_existing_entries` confirm at both levels.
+- AC-4 (put_session_state then get_session_state returns equal value): met. `SessionStateStore::put` inserts/overwrites; `get` returns a clone or `None`. Integration test `get_session_state_returns_stored_value` confirms round-trip equality.
+- AC-5 (Handle implements PersistenceStore): met. `#[async_trait] impl PersistenceStore for Handle` in `lib.rs`; compile-time check via `accepts_store::<S: PersistenceStore>` test confirms.
+- Files modified are exactly the three listed in "Files to Touch" — no scope creep.
+
+**Stage 2 — Code quality**
+
+- Correctness: logic is sound; capacity check uses strict `>=`; reply-channel errors are mapped to typed `ServiceError::Persistence`; `dequeue_next` returns `Ok(None)` not an error on empty queue, matching the trait signature.
+- Tests: 21 tests total, all passing. Unit tests in each sub-module cover success and failure paths independently. Integration tests in `lib.rs` exercise the full actor round-trip for all five ACs. Tests are independent (each constructs its own handle and aborts its own task).
+- Security: no hardcoded secrets; `#![forbid(unsafe_code)]` present in all three files; no external input bypasses type validation.
+- Readability: names are descriptive and follow project `snake_case` / `UpperCamelCase` conventions; functions are focused; doc comments explain `# Errors` and `# Panics` where appropriate; no dead code or debug artifacts.
+- Performance: `VecDeque` with pre-allocated capacity avoids reallocations; no unnecessary cloning in the hot path; `#[cfg(test)]` gate on `len()` produces no release-build code.
+- Clippy passes with `-D warnings`; workspace builds cleanly.
+
+Minor observation (non-blocking): the `cfg` field on `Actor` is retained after construction solely to supply the tracing `INFO` log in `run`. This is fine — it gives operators visibility into configured limits on startup.
