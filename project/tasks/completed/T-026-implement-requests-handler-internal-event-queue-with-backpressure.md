@@ -1,7 +1,7 @@
 ---
 id: T-026
 title: Implement requests-handler internal event queue with backpressure
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
