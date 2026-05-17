@@ -1,7 +1,7 @@
 ---
 id: T-017
 title: Implement bob serve runtime wiring and graceful shutdown
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
