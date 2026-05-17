@@ -1,7 +1,7 @@
 ---
 id: T-020
 title: Implement admin-rpc subscription notification plumbing
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
