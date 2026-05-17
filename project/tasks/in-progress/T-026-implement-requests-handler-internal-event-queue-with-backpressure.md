@@ -78,3 +78,35 @@ The `bob` crate's `serve.rs` referenced the old `requests_handler::start()` / `C
 T-027 supplies the downstream closure that replaces the placeholder in `serve.rs`. No further work on `queue.rs` or `lib.rs` is expected for this task.
 
 ## Review
+
+### Review Verdict — 2026-05-17
+
+PASS
+
+Both review stages pass.
+
+**Stage 1 — Spec compliance**
+
+AC-1: `Handle::submit_event` sends to the bounded `mpsc::Sender` and returns `Ok(())` on success. Verified by tests `submit_with_capacity_enqueues_and_returns_ok` and `requests_handler_trait_submit_with_capacity_returns_ok`. PASS.
+
+AC-2: `submit_event` wraps the send in `tokio::time::timeout(self.submit_timeout, …)`. On `Err(_elapsed)` it returns `ServiceError::Timeout { operation: "requests-handler.submit" }` exactly as specified. Test `submit_when_queue_full_beyond_timeout_returns_timeout_error` exercises this path using a `Notify`-gated downstream. PASS.
+
+AC-3: `Actor::run` uses a biased `tokio::select!` that checks `cancel_rx.changed()` first. On cancellation it breaks the loop, calls `rx.close()`, and drains remaining events before sending `true` on `shutdown_tx`. Tests `on_cancellation_drains_remaining_queued_events` and `after_cancellation_new_submissions_are_rejected` cover both facets. PASS.
+
+AC-4: `Handle` carries `#[async_trait] impl RequestsHandler for Handle` delegating to `submit_event`. Compile-time check in `handle_implements_requests_handler_trait`. PASS.
+
+File-scope note: `the-intern/service/crates/bob/src/serve.rs` is outside the stated "Files to Touch". Its modification is justified in the Work Log: removing the old scaffold API broke workspace compilation, making this change necessary to keep the workspace buildable. The work log explanation is clear and the change is minimal and scoped to wiring the new `start_with` API into `serve.rs`. ACCEPTED.
+
+**Stage 2 — Code quality**
+
+Correctness: Logic is correct. `Handle::submit_event` checks `shutdown_rx` for fast-rejection before attempting to send; both the timeout path and the channel-closed path map to appropriate `ServiceError` variants. The biased `select!` in `Actor::run` correctly prioritises the cancellation signal over new events, preventing livelock on a continuously-arriving stream. `rx.close()` prevents new sends while still allowing buffered events to be drained. `capacity.max(1)` in `start_with` prevents a zero-capacity channel, which would deadlock. No off-by-one or unhandled state issues observed.
+
+Tests: Six unit tests; each maps directly to an AC. Tests cover the happy path (AC-1), trait delegation (AC-1), full-queue timeout (AC-2), drain-on-cancellation (AC-3), post-drain rejection (AC-3), and the compile-time trait bound (AC-4). Tests are independent (each creates its own channel pair). All 6 passed locally (`cargo test -p requests-handler queue`).
+
+Security: No hardcoded credentials or secrets. External input (`InternalEvent`) is passed through without inspection, consistent with the requests-handler's role as a queue. No parameterized queries (N/A). No new permissions.
+
+Readability: Names are descriptive and follow `snake_case`/`UpperCamelCase` project conventions. Functions have focused responsibilities. Doc-comments explain the `# Errors` contract on `submit_event` and the caller's responsibility for the `cancel_rx` watch channel. No dead code or commented-out blocks. `lib.rs` correctly serves as a thin re-export shim.
+
+Performance: The biased `select!` avoids polling overhead. `rx.close()` is called once on the drain path. No unnecessary allocations or loops over large data sets. No blocking operations in async hot paths.
+
+Minor observation (non-blocking): `Cargo.toml` includes the `net` and `signal` Tokio features, which are not used by `queue.rs` itself. These are presumably pulled in for the broader workspace or future tasks and do not affect correctness.
