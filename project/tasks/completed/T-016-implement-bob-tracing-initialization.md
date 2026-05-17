@@ -1,7 +1,7 @@
 ---
 id: T-016
 title: Implement bob tracing initialization
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-16'
