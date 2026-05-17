@@ -1,7 +1,7 @@
 ---
 id: T-027
 title: Implement requests-handler identity attachment and pre-flight check
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
