@@ -180,11 +180,9 @@ mod tests {
 
     fn unique_socket_path(name: &str) -> PathBuf {
         let id = NEXT_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("test-sockets");
+        let dir = PathBuf::from("/tmp/bob-client-tests");
         std::fs::create_dir_all(&dir).expect("create test-sockets dir");
-        dir.join(format!("{name}-{}-{id}.sock", std::process::id()))
+        dir.join(format!("{name}-{id}.sock"))
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -260,6 +258,72 @@ mod tests {
             .expect("call succeeds");
 
         assert_eq!(result["ok"], true);
+        timeout(Duration::from_secs(1), server)
+            .await
+            .expect("server completed")
+            .expect("server join");
+        let _ = std::fs::remove_file(&cfg.admin_sock_path);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn call_returns_invalid_request_for_malformed_server_output() {
+        let sock_path = unique_socket_path("call-malformed");
+        let listener = UnixListener::bind(&sock_path).expect("bind listener");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let (_read_half, mut write_half) = tokio::io::split(stream);
+            write_half
+                .write_all(b"not-json-rpc\n")
+                .await
+                .expect("write malformed frame");
+        });
+
+        let cfg = BobConfig {
+            admin_sock_path: sock_path,
+            ..BobConfig::default()
+        };
+
+        let mut client = AdminClient::connect(&cfg).await.expect("connect");
+        let result: Result<Value, ServiceError> = client.call("service.status", json!({})).await;
+
+        assert!(
+            matches!(result, Err(ServiceError::InvalidRequest { .. })),
+            "expected InvalidRequest, got: {result:?}"
+        );
+        timeout(Duration::from_secs(1), server)
+            .await
+            .expect("server completed")
+            .expect("server join");
+        let _ = std::fs::remove_file(&cfg.admin_sock_path);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn call_returns_invalid_request_for_mismatched_response_id() {
+        let sock_path = unique_socket_path("call-id-mismatch");
+        let listener = UnixListener::bind(&sock_path).expect("bind listener");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let (_read_half, mut write_half) = tokio::io::split(stream);
+            write_half
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"result\":{\"ok\":true},\"id\":99}\n")
+                .await
+                .expect("write response");
+        });
+
+        let cfg = BobConfig {
+            admin_sock_path: sock_path,
+            ..BobConfig::default()
+        };
+
+        let mut client = AdminClient::connect(&cfg).await.expect("connect");
+        let result: Result<Value, ServiceError> = client.call("service.status", json!({})).await;
+
+        assert!(
+            matches!(result, Err(ServiceError::InvalidRequest { .. })),
+            "expected InvalidRequest, got: {result:?}"
+        );
         timeout(Duration::from_secs(1), server)
             .await
             .expect("server completed")
