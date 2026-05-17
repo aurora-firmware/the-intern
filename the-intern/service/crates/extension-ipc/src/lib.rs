@@ -1,9 +1,12 @@
 #![forbid(unsafe_code)]
 
+pub mod framing;
 pub mod listener;
+pub mod multiplex;
 pub mod peer_cred;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use bob_core::error::{ServiceError, ServiceResult};
 use tokio::{
@@ -13,13 +16,27 @@ use tokio::{
 };
 
 use crate::listener::{Listener, ListenerConfig};
+use crate::multiplex::{MonitoringHandle, NoopMonitoringHandle, SessionMultiplexer};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub command_buffer: usize,
     pub extension_sock_path: PathBuf,
     pub extension_allowed_uids: Vec<u32>,
     pub service_uid: u32,
+    pub monitoring_handle: Arc<dyn MonitoringHandle>,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("command_buffer", &self.command_buffer)
+            .field("extension_sock_path", &self.extension_sock_path)
+            .field("extension_allowed_uids", &self.extension_allowed_uids)
+            .field("service_uid", &self.service_uid)
+            .field("monitoring_handle", &"<dyn MonitoringHandle>")
+            .finish()
+    }
 }
 
 impl Default for Config {
@@ -29,6 +46,7 @@ impl Default for Config {
             extension_sock_path: PathBuf::new(),
             extension_allowed_uids: Vec::new(),
             service_uid: current_uid(),
+            monitoring_handle: Arc::new(NoopMonitoringHandle),
         }
     }
 }
@@ -83,16 +101,97 @@ impl Actor {
     }
 }
 
-async fn run_connection(stream: UnixStream) {
-    // Placeholder for T-022: frame handling and dispatch.
-    drop(stream);
+async fn run_connection(stream: UnixStream, monitoring_handle: Arc<dyn MonitoringHandle>) {
+    let stream = stream;
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel();
+    let mut multiplexer = SessionMultiplexer::new(monitoring_handle, out_tx.clone());
+    let mut inbound = Vec::new();
+    let mut read_buf = [0_u8; 4096];
+
+    loop {
+        match stream.readable().await {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "extension-ipc: failed waiting for readable socket");
+                break;
+            }
+        }
+
+        let n = match stream.try_read(&mut read_buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(e) => {
+                tracing::warn!(error = %e, "extension-ipc: failed to read frame; closing connection");
+                break;
+            }
+        };
+        inbound.extend_from_slice(&read_buf[..n]);
+
+        while let Some(pos) = inbound.iter().position(|b| *b == b'\n') {
+            let frame_bytes: Vec<u8> = inbound.drain(..=pos).collect();
+            let line = match String::from_utf8(frame_bytes) {
+                Ok(line) => line,
+                Err(e) => {
+                    tracing::warn!(error = %e, "extension-ipc: frame is not utf-8; closing connection");
+                    return;
+                }
+            };
+            let frame = match framing::parse_inbound_frame(&line) {
+                Ok(frame) => frame,
+                Err(e) => {
+                    tracing::warn!(error = %e, "extension-ipc: malformed frame; closing connection");
+                    return;
+                }
+            };
+
+            if let Err(e) = multiplexer.handle_frame(frame).await {
+                tracing::warn!(error = %e, "extension-ipc: failed to route frame; closing connection");
+                return;
+            }
+
+            while let Ok(outbound) = out_rx.try_recv() {
+                let wire = match framing::encode_outbound_frame(&outbound) {
+                    Ok(wire) => wire,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "extension-ipc: failed to encode outbound frame");
+                        return;
+                    }
+                };
+
+                if let Err(e) = write_all_nonblocking(&stream, wire.as_bytes()).await {
+                    tracing::warn!(error = %e, "extension-ipc: failed to write outbound frame");
+                    return;
+                }
+            }
+        }
+    }
 }
 
-async fn run_listener(listener: Listener) {
+async fn write_all_nonblocking(stream: &UnixStream, mut payload: &[u8]) -> std::io::Result<()> {
+    while !payload.is_empty() {
+        stream.writable().await?;
+        match stream.try_write(payload) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "socket closed while writing frame",
+                ));
+            }
+            Ok(n) => payload = &payload[n..],
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+async fn run_listener(listener: Listener, monitoring_handle: Arc<dyn MonitoringHandle>) {
     loop {
         match listener.accept().await {
             Ok(Some(stream)) => {
-                tokio::spawn(run_connection(stream));
+                let monitoring = Arc::clone(&monitoring_handle);
+                tokio::spawn(run_connection(stream, monitoring));
             }
             Ok(None) => {
                 // Rejected peer already logged in `Listener::accept`.
@@ -107,6 +206,7 @@ async fn run_listener(listener: Listener) {
 pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
     let buffer = cfg.command_buffer.max(1);
     let (tx, rx) = mpsc::channel(buffer);
+    let monitoring_handle = Arc::clone(&cfg.monitoring_handle);
 
     let maybe_listener = if cfg.extension_sock_path.as_os_str().is_empty() {
         None
@@ -136,7 +236,7 @@ pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
     };
 
     if let Some(listener) = maybe_listener {
-        tokio::spawn(run_listener(listener));
+        tokio::spawn(run_listener(listener, monitoring_handle));
     }
 
     let actor = Actor { cfg, rx };
@@ -149,7 +249,65 @@ pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use async_trait::async_trait;
+    use std::{path::PathBuf, sync::Mutex};
+
+    use crate::multiplex::MonitoringEvent;
+
+    #[derive(Default)]
+    struct CapturingMonitoringHandle {
+        events: Mutex<Vec<MonitoringEvent>>,
+    }
+
+    #[async_trait]
+    impl MonitoringHandle for CapturingMonitoringHandle {
+        async fn record_event(&self, event: MonitoringEvent) {
+            self.events.lock().expect("events lock").push(event);
+        }
+    }
+
+    async fn write_frame(stream: &UnixStream, payload: &str) {
+        write_all_nonblocking(stream, payload.as_bytes())
+            .await
+            .expect("write frame");
+    }
+
+    async fn wait_for_line(stream: &UnixStream, max_spins: usize) -> Option<String> {
+        let mut pending = Vec::new();
+        let mut buf = [0_u8; 1024];
+        for _ in 0..max_spins {
+            match stream.try_read(&mut buf) {
+                Ok(0) => return None,
+                Ok(n) => {
+                    pending.extend_from_slice(&buf[..n]);
+                    if let Some(pos) = pending.iter().position(|b| *b == b'\n') {
+                        let line = String::from_utf8(pending.drain(..=pos).collect()).ok()?;
+                        return Some(line);
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    tokio::task::yield_now().await;
+                }
+                Err(e) => panic!("read error: {e}"),
+            }
+        }
+        None
+    }
+
+    async fn wait_for_eof(stream: &UnixStream, max_spins: usize) -> bool {
+        let mut buf = [0_u8; 8];
+        for _ in 0..max_spins {
+            match stream.try_read(&mut buf) {
+                Ok(0) => return true,
+                Ok(_) => return false,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    tokio::task::yield_now().await;
+                }
+                Err(e) => panic!("read error: {e}"),
+            }
+        }
+        false
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn handle_send_message_returns_not_implemented() {
@@ -210,5 +368,107 @@ mod tests {
         };
         let (_, task) = start(cfg);
         task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn connection_authz_frame_returns_deny_verdict_with_same_session() {
+        let (client, server) = UnixStream::pair().expect("socket pair");
+        let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
+        let conn = tokio::spawn(run_connection(server, monitoring));
+
+        let session = bob_core::types::SessionId::new();
+        let authz = format!(
+            "{{\"kind\":\"authz\",\"session\":\"{session}\",\"tool\":\"bash\",\"arguments\":{{\"cmd\":\"ls\"}},\"user\":\"alice\"}}\n"
+        );
+
+        write_frame(&client, &authz).await;
+        let line = wait_for_line(&client, 500).await.expect("reply frame");
+
+        let reply: serde_json::Value =
+            serde_json::from_str(line.trim_end_matches('\n')).expect("valid json");
+        assert_eq!(reply["kind"], "authz_verdict");
+        assert_eq!(reply["session"], session.to_string());
+        assert_eq!(reply["verdict"]["allow"], false);
+        assert!(reply["verdict"]["reason"].is_string());
+
+        drop(client);
+        conn.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn connection_event_frame_forwards_to_monitoring_without_reply() {
+        let (client, server) = UnixStream::pair().expect("socket pair");
+        let monitoring = Arc::new(CapturingMonitoringHandle::default());
+        let sink: Arc<dyn MonitoringHandle> = monitoring.clone();
+        let conn = tokio::spawn(run_connection(server, sink));
+        let session = bob_core::types::SessionId::new();
+
+        let event = format!(
+            "{{\"kind\":\"event\",\"session\":\"{session}\",\"payload\":{{\"event\":\"session.started\"}}}}\n"
+        );
+
+        write_frame(&client, &event).await;
+
+        let line = wait_for_line(&client, 100).await;
+        assert!(line.is_none(), "event frame should not produce wire reply");
+
+        let events = monitoring.events.lock().expect("events lock");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].session, session);
+        assert_eq!(events[0].payload["event"], "session.started");
+        drop(events);
+
+        drop(client);
+        conn.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn connection_parse_failures_close_socket_without_echo() {
+        let (client, server) = UnixStream::pair().expect("socket pair");
+        let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
+        let conn = tokio::spawn(run_connection(server, monitoring));
+
+        write_frame(&client, "{\"kind\":\"event\",\"payload\":{\"bad\":true}}\n").await;
+
+        assert!(
+            wait_for_eof(&client, 500).await,
+            "connection should close and echo no payload"
+        );
+
+        conn.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn connection_malformed_json_closes_socket_without_echo() {
+        let (client, server) = UnixStream::pair().expect("socket pair");
+        let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
+        let conn = tokio::spawn(run_connection(server, monitoring));
+
+        write_frame(&client, "{\"kind\":\"authz\" this is invalid\n").await;
+
+        assert!(
+            wait_for_eof(&client, 500).await,
+            "malformed json should close connection"
+        );
+
+        conn.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn connection_invalid_utf8_closes_socket_without_echo() {
+        let (client, server) = UnixStream::pair().expect("socket pair");
+        let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
+        let conn = tokio::spawn(run_connection(server, monitoring));
+
+        write_all_nonblocking(&client, b"\xff\n")
+            .await
+            .expect("write invalid utf-8 frame");
+
+        assert!(
+            wait_for_eof(&client, 500).await,
+            "invalid utf-8 frame should close connection without echo"
+        );
+
+        conn.abort();
     }
 }
