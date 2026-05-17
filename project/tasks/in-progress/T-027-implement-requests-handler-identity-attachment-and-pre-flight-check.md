@@ -158,3 +158,37 @@ Left unchanged. Switching the placeholder `|_event| async {}` to `start_with_pre
 **What remains**
 
 Nothing within this task's scope. The wiring is complete; `start_with_preflight` is the production entry point for the requests-handler subsystem and will remain correct as a deny-all placeholder until channel adapters supply `RequestContext`.
+
+### Review Verdict — 2026-05-17 (Cycle 2)
+
+PASS
+
+**Stage 1 — Spec Compliance**
+
+AC-1 (allow path → `PersistenceStore::enqueue`): PASS. `run_preflight` calls `store.enqueue(event)` on the allow branch. Covered by `allowed_user_id_causes_event_to_be_enqueued_in_persistence_store` and `event_is_enqueued_when_user_id_matches_one_of_multiple_allowed_ids`.
+
+AC-2 (deny path → drop + warn + `PreflightDenied` audit record): PASS. The deny branch emits `tracing::warn!` and publishes `AuditRecord { kind: AuditKind::PreflightDenied }`. Covered by `user_id_not_in_allowed_list_drops_event_and_emits_preflight_denied_audit_record` and `empty_allowed_list_denies_all_events`.
+
+AC-3 (missing context → treated as denied): PASS. `context.map(...).unwrap_or(false)` maps `None` to denied. Covered by `missing_request_context_is_treated_as_denied_with_preflight_denied_audit_record`.
+
+AC-4 (no raw payload in warn): PASS. The `tracing::warn!` call passes only the static `reason` string. Covered by `audit_record_description_does_not_contain_raw_event_payload` and `missing_context_audit_record_description_does_not_contain_event_payload`.
+
+**Cycle 1 fail item — actor-loop wiring:** RESOLVED. `start_with_preflight` is present in `lib.rs` with the correct signature `(Config, PreflightConfig, Arc<dyn PersistenceStore>, Arc<dyn AuditSink>, watch::Receiver<bool>) -> (Handle, JoinHandle<()>)`. It delegates to `queue::start_with` with a downstream closure that calls `run_preflight(event, None, &preflight_cfg, store.as_ref(), audit.as_ref()).await`. The `None` context is the correct placeholder (triggers AC-3 deny-all) until channel adapters supply real `RequestContext`.
+
+**Cycle 1 minor observation — `PreflightDenied` serde round-trip gap:** RESOLVED. `AuditKind::PreflightDenied` is now included in the `audit_kind_all_variants_serde_json_round_trip` test in `bob-core/src/types/records.rs`. All 72 `bob-core` tests pass.
+
+**Three new end-to-end integration tests:** All three (`start_with_preflight_wired_path_denies_events_and_emits_audit_record_when_context_is_none`, `start_with_preflight_wired_path_deny_all_with_empty_allowed_ids`, `start_with_preflight_multiple_events_all_denied_with_context_none`) submit events via `Handle::submit_event`, cancel the actor, and verify that the wired path produces `PreflightDenied` audit records and zero persistence enqueues. The tests are independent and exercise the full `submit → queue → actor → run_preflight → audit` chain.
+
+**Test run evidence:** `cargo test -p requests-handler handler` — 12 tests, all passed. `cargo test -p bob-core` — 72 tests, all passed.
+
+**Stage 2 — Code Quality**
+
+Correctness: Logic is correct for all four AC cases, including edge cases (empty allowed list, multiple allowed IDs, missing context). Errors from `enqueue` and `audit.append` are logged at `WARN` but do not propagate — consistent with the actor's always-continue contract.
+
+Tests: 12 `requests-handler handler` tests covering all four ACs. Tests use fresh `RecordingStore` and `RecordingAudit` doubles per test (no shared mutable state). Three integration tests exercise the full wired path.
+
+Security: No hardcoded credentials. `tracing::warn!` carries only the static `reason` string, never the event payload (AC-4).
+
+Readability: `run_preflight` has a single responsibility; `start_with_preflight` is a thin orchestration wrapper. Names follow project `snake_case` conventions. Doc comments explain "why" (the `None`-context placeholder rationale). No dead code.
+
+Performance: `Vec::contains` for `allowed_user_ids` is appropriate for Phase 1b; no performance requirement is stated in the task.
