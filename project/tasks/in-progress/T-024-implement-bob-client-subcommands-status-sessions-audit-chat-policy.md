@@ -74,3 +74,25 @@ Obstacles Encountered:
 - `cargo fmt` initially touched unrelated files; reverted accidental out-of-scope changes and kept edits limited to task files.
 
 ## Review
+
+### Review Verdict — 2026-05-17
+
+PASS
+
+Stage 1 (acceptance): all criteria verified against branch
+`task/T-024-implement-bob-client-subcommands-status-sessions-audit-chat-policy`.
+`status`, `sessions list/kill`, `policy reload`, `audit tail`, and `chat` all dispatch to
+the expected Admin RPC methods; human/json rendering paths are implemented for status and
+sessions; streaming commands emit notification lines and call subscription close on exit,
+which maps to `audit.tail.unsubscribe` and `chat.close`; missing-socket handling maps
+`ServiceDown` to a path-specific invalid-request message used by existing stderr+exit(1)
+main handling.
+
+Stage 2 (quality): command logic is cohesive and scoped, new unit tests cover key
+success paths plus JSON output and close-on-exit behavior, and required verification
+passed:
+
+`cd the-intern/service && cargo test -p bob cli::commands`
+
+Residual risk (non-blocking): manual smoke against a live `bob serve` instance was not
+run in this environment, so real Unix-socket/TTY interaction remains to be validated.
