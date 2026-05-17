@@ -53,4 +53,16 @@ cd the-intern/service && cargo test -p bob client::admin_rpc
 
 ## Work Log
 
+### Session 1 — 2026-05-17
+
+Implemented the new `bob::client` module and the `AdminClient` primitive in `client/admin_rpc.rs` using TDD cycles. First cycle covered connect and call basics: connecting via `BobConfig.admin_sock_path`, emitting newline-delimited JSON-RPC 2.0 requests, and decoding typed results. Second cycle added protocol-failure coverage and handling for malformed server frames and response-id mismatches, ensuring these map to `ServiceError::InvalidRequest` without panics. Third cycle implemented subscriptions: `subscribe` sends a JSON-RPC request, captures server `result.id`, returns a `Subscription`, `recv()` decodes pushed notification payloads, and `close()` sends the derived unsubscribe method (`*.subscribe -> *.unsubscribe`, `*.open -> *.close`) and validates its response.
+
+During testing, I initially used long socket paths and saw `SUN_LEN` path-length failures; I shortened and stabilized socket path generation. I also tried running tests inside sandbox first, but Unix socket bind/connect was blocked there, so verification was rerun unsandboxed.
+
+Nothing remains for T-023 acceptance in this branch; all required client behaviors and target tests are implemented and passing.
+
+Obstacles Encountered:
+- Sandbox execution blocked Unix domain socket bind/connect for these tests; verification required unsandboxed test runs.
+- Initial generated Unix socket paths exceeded `SUN_LEN`; fixed by shortening/stabilizing test socket path generation.
+
 ## Review
