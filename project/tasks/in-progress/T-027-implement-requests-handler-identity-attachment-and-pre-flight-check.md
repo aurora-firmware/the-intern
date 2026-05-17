@@ -130,3 +130,31 @@ Readability: `run_preflight` is focused on a single responsibility. Names follow
 Performance: Linear scan over `allowed_user_ids` with `Vec::contains` is appropriate for Phase 1b; a `HashSet` would improve scaling but the task makes no performance requirement here.
 
 Minor observation (non-blocking): The `audit_kind_all_variants_serde_json_round_trip` test in `bob-core/src/types/records.rs` does not yet include `PreflightDenied` in its variant array. This is an existing test gap introduced by the new variant but does not affect the correctness of `handler.rs`. The Developer should add it when resubmitting.
+
+### Session 2 — 2026-05-17
+
+**What was done**
+
+Fixed the two issues the Reviewer flagged.
+
+**Issue 1 — Wiring `run_preflight` into the actor's per-event loop**
+
+Added `start_with_preflight` as a public function in `the-intern/service/crates/requests-handler/src/lib.rs`. The function accepts `Config`, `PreflightConfig`, `Arc<dyn PersistenceStore>`, `Arc<dyn AuditSink>`, and `cancel_rx`, returning `(Handle, JoinHandle<()>)` — the same shape as `start_with`. It delegates to `queue::start_with` with a downstream closure that calls `run_preflight(event, None, &preflight_cfg, store.as_ref(), audit.as_ref())`. The `None` context is the correct placeholder: it hits the AC-3 deny-all path until channel adapters populate real `RequestContext`.
+
+Three end-to-end integration tests were added in `handler_integration_tests` (named with the `handler` prefix so they match the task's verification filter `cargo test -p requests-handler handler`):
+
+- `start_with_preflight_wired_path_denies_events_and_emits_audit_record_when_context_is_none` — submits one event, verifies persistence store stays empty and one `PreflightDenied` audit record appears.
+- `start_with_preflight_wired_path_deny_all_with_empty_allowed_ids` — same shape with empty `allowed_user_ids`.
+- `start_with_preflight_multiple_events_all_denied_with_context_none` — submits three events, verifies three audit records and zero enqueued events.
+
+**Issue 2 — `audit_kind_all_variants_serde_json_round_trip` gap**
+
+Added `AuditKind::PreflightDenied` to the variants array in the test in `the-intern/service/crates/bob-core/src/types/records.rs`.
+
+**`bob/src/serve.rs`**
+
+Left unchanged. Switching the placeholder `|_event| async {}` to `start_with_preflight` would require passing `Arc<dyn PersistenceStore>` and `Arc<dyn AuditSink>` — neither of which has a real implementation wired in `serve.rs` (that belongs to T-029).
+
+**What remains**
+
+Nothing within this task's scope. The wiring is complete; `start_with_preflight` is the production entry point for the requests-handler subsystem and will remain correct as a deny-all placeholder until channel adapters supply `RequestContext`.
