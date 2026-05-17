@@ -8,6 +8,7 @@ clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 bob-core = { path = "../bob-core" }
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 async-trait = { workspace = true }
 serde = { workspace = true }
 figment = { version = "0.10", features = ["toml", "env"] }
@@ -17,4 +18,3 @@ nix = { version = "0.29", default-features = false, features = ["user"] }
 workspace = true
 
 [dev-dependencies]
-tracing-subscriber = { version = "0.3", features = ["fmt"] }
