@@ -155,3 +155,44 @@ Next Owner:
 
 Next Action:
 - Re-sync the task branch with current `dev-agent` so lifecycle files are identical at branch tip (or otherwise remove lifecycle-file divergence), then resubmit for review.
+
+### Review Verdict — 2026-05-17
+
+PASS
+
+Result: PASS
+
+Summary:
+- Reviewed Review Cycle 3 for `T-021` against all acceptance criteria, branch-scope requirements, and required verification commands.
+- Stage 1 and Stage 2 checks passed.
+
+Artifacts:
+- Canonical task file updated: `project/tasks/in-progress/T-021-implement-extension-ipc-uds-listener-with-permissions-and-peer-cred-gate.md`.
+- Diff reviewed: `dev-agent..task/T-021-implement-extension-ipc-uds-listener-with-permissions-and-peer-cred-gate`.
+- Primary files inspected: `the-intern/service/crates/extension-ipc/src/lib.rs`, `the-intern/service/crates/extension-ipc/src/listener.rs`, `the-intern/service/crates/extension-ipc/src/peer_cred.rs`, `the-intern/service/crates/extension-ipc/Cargo.toml`, `the-intern/service/Cargo.lock`.
+
+Evidence:
+- Branch-scope check at review start: `git diff --name-status dev-agent..task/T-021-implement-extension-ipc-uds-listener-with-permissions-and-peer-cred-gate` returned only implementation files and excluded `project/tasks/...` lifecycle files.
+- Stage 1 acceptance checks:
+  - AC-1 PASS: `extension_ipc::listener::Listener::bind(cfg)` binds `cfg.extension_sock_path`, creates parent directory with mode `0700`, unlinks stale socket file, and sets socket mode `0660`.
+  - AC-2 PASS: same-uid peers (and allow-listed peers) are accepted via `Listener::accept` and handed to per-connection task in `start` (`tokio::spawn(run_connection(stream))`).
+  - AC-3 PASS: disallowed peers are dropped before handoff, with `tracing::warn!` emitted (`rejected_uid` and peer-cred read failure branches).
+  - AC-4 PASS: stale socket file removal occurs before bind (`std::fs::remove_file` when path exists).
+- Stage 2 code-quality checks:
+  - Correctness PASS: credential gating and listener bind flow match task behavior.
+  - Tests PASS: listener and peer-cred unit tests cover bind permissions, stale unlink, allow/reject logic, and peer-credential retrieval.
+  - Security PASS: deny-by-default gating, no frame exchange before authorization, no secrets introduced.
+  - Readability PASS: listener and peer-cred concerns are separated with focused functions.
+  - Performance PASS: async accept loop with per-connection task spawn; no blocking loops added beyond expected listener behavior.
+- Required verification commands run on task branch:
+  - `cd the-intern/service && cargo test -p extension-ipc listener` -> PASS (7 passed, 0 failed).
+  - `cd the-intern/service && cargo test -p extension-ipc peer_cred` -> PASS (5 passed, 0 failed).
+
+Obstacles Encountered:
+- none
+
+Next Owner:
+- Development Loop
+
+Next Action:
+- none
