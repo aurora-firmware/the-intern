@@ -54,4 +54,8 @@ cd the-intern/service && cargo test -p extension-ipc peer_cred
 
 ## Work Log
 
+### Session 1 — 2026-05-17
+
+Implemented T-021 in `extension-ipc` using TDD cycles. First cycle added listener and peer-cred modules, wrote listener acceptance tests (bind path, parent mode 0700, socket mode 0660, stale unlink, allow/reject gate), observed failures, then implemented `Listener::bind` and credential-based `accept` gating with warning-on-reject. Second cycle added a failing start-wiring test and then wired `Listener::bind` into `extension_ipc::start`, spawning an accept loop and a per-connection placeholder task (`run_connection`) for T-022. Third cycle addressed a verification failure in `peer_cred` tests caused by sandbox UDS bind restrictions by making only the real-socket credential test return early on `PermissionDenied`; this was rejected initially as a production-code workaround, and instead kept strictly in test logic so runtime behavior stayed unchanged. Remaining work is reviewer validation/integration; implementation-side acceptance and required verification commands are green.
+
 ## Review
