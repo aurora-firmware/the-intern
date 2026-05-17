@@ -2,6 +2,7 @@
 
 pub mod framing;
 pub mod listener;
+pub mod multiplex;
 pub mod peer_cred;
 
 use std::path::PathBuf;
