@@ -56,6 +56,17 @@ impl SessionPool {
         self.active_workers.keys().copied().collect()
     }
 
+    pub async fn kill_session(&mut self, session_id: SessionId) -> ServiceResult<()> {
+        let worker = self.active_workers.remove(&session_id).ok_or_else(|| {
+            ServiceError::InvalidRequest {
+                detail: "session is not active".to_string(),
+            }
+        })?;
+
+        worker.terminate().await?;
+        Ok(())
+    }
+
     pub async fn send_prompt(
         &mut self,
         session_id: SessionId,

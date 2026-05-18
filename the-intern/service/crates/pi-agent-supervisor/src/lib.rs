@@ -158,7 +158,7 @@ impl Actor {
                         session_id = %session_id,
                         "pi-agent-supervisor kill session command received"
                     );
-                    let _ = response_tx.send(Err(ServiceError::NotImplemented));
+                    let _ = response_tx.send(self.pool.kill_session(session_id).await);
                 }
                 Command::SendPrompt {
                     session_id,
@@ -239,13 +239,37 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn kill_session_returns_not_implemented() {
+    async fn kill_session_terminates_active_session_and_removes_it_from_list() {
+        let (handle, task) =
+            start(test_config("sh", &["-c", "exit 0"], 1, 2)).expect("startup should succeed");
+        let session_id = SessionId::new();
+
+        handle
+            .acquire_session(session_id)
+            .await
+            .expect("session should be acquired");
+        let result = handle.kill_session(session_id).await;
+        let sessions = handle
+            .list_sessions()
+            .await
+            .expect("listing sessions should succeed");
+
+        assert!(result.is_ok());
+        assert!(sessions.is_empty(), "killed session should be removed");
+        task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn kill_session_returns_invalid_request_for_unknown_session() {
         let (handle, task) =
             start(test_config("sh", &["-c", "exit 0"], 1, 2)).expect("startup should succeed");
 
         let result = handle.kill_session(SessionId::new()).await;
 
-        assert!(matches!(result, Err(ServiceError::NotImplemented)));
+        assert!(
+            matches!(result, Err(ServiceError::InvalidRequest { .. })),
+            "expected invalid request for unknown session, got {result:?}"
+        );
         task.abort();
     }
 
