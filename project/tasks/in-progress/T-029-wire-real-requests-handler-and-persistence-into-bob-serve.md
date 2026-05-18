@@ -62,3 +62,38 @@ What I tried and rejected: I considered calling `requests_handler::start_with_pr
 What remains: no code changes remain in this task scope. Canonical task lifecycle updates (Work Log append on `dev-agent`) are still needed by the loop role.
 
 ## Review
+
+### Review Verdict — 2026-05-18
+PASS
+
+Result: PASS
+
+Summary:
+- Reviewed `task/T-029-wire-real-requests-handler-and-persistence-into-bob-serve` commit `771d08d` against AC-1 through AC-3 using the two-stage `code-review` workflow; acceptance and code-quality checks passed.
+
+Artifacts:
+- Canonical task file updated: `project/tasks/in-progress/T-029-wire-real-requests-handler-and-persistence-into-bob-serve.md` (this verdict entry).
+- Diff reviewed: `771d08d` (`the-intern/service/crates/bob/src/serve.rs` only).
+- Primary files inspected for wiring semantics and trait compatibility:
+  `the-intern/service/crates/bob/src/serve.rs`,
+  `the-intern/service/crates/requests-handler/src/lib.rs`,
+  `the-intern/service/crates/requests-handler/src/handler.rs`,
+  `the-intern/service/crates/persistence/src/lib.rs`.
+
+Evidence:
+- Stage 1 (acceptance): verified placeholder downstream closure in `serve.rs` was replaced with real preflight->persistence wiring, AC-2 persistence path is explicitly exercised by the new serve test, and no new disallowed subsystem dependency was introduced by this task diff.
+- Stage 2 (quality): checked correctness of actor wiring, audit sink adapter, and persistence trait-object handoff; no blocking correctness/security/readability/performance defects found in task scope.
+- Commands run:
+  - `git show --stat --name-only --oneline 771d08d`
+  - `git show --no-color 771d08d -- the-intern/service/crates/bob/src/serve.rs`
+  - `cargo build -p bob` on an archive snapshot of `771d08d` (pass)
+  - `cargo test -p bob serve::tests` on the same snapshot (environment-blocked; see obstacles)
+
+Obstacles Encountered:
+- Sandbox environment denied Unix domain socket bind operations used by `serve::tests` (`Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }`), so runtime socket-path tests could not be validated end-to-end in this container.
+
+Next Owner:
+- Development Loop
+
+Next Action:
+- Proceed with lifecycle flow; rerun `cd the-intern/service && cargo test -p bob serve::tests` in a non-restricted environment before integration if strict test execution evidence is required.
