@@ -26,6 +26,11 @@ pub struct BobConfig {
     pub request_submit_timeout: Duration,
     pub shutdown_drain_deadline: Duration,
     pub shutdown_reap_deadline: Duration,
+    pub pi_agent_command: String,
+    pub pi_agent_args: Vec<String>,
+    pub pi_agent_warm_pool_size: usize,
+    pub pi_agent_max_processes: usize,
+    pub pi_agent_idle_reap_timeout: Duration,
     pub tracing_level: String,
     pub tracing_format: String,
     pub allowed_user_ids: Vec<UserId>,
@@ -42,6 +47,11 @@ impl Default for BobConfig {
             request_submit_timeout: Duration::from_secs(5),
             shutdown_drain_deadline: Duration::from_secs(30),
             shutdown_reap_deadline: Duration::from_secs(10),
+            pi_agent_command: "pi".to_string(),
+            pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+            pi_agent_warm_pool_size: 1,
+            pi_agent_max_processes: 8,
+            pi_agent_idle_reap_timeout: Duration::from_secs(300),
             tracing_level: "info".to_string(),
             tracing_format: "pretty".to_string(),
             allowed_user_ids: Vec::new(),
@@ -93,6 +103,11 @@ impl BobConfig {
             request_submit_timeout: raw.request_submit_timeout,
             shutdown_drain_deadline: raw.shutdown_drain_deadline,
             shutdown_reap_deadline: raw.shutdown_reap_deadline,
+            pi_agent_command: raw.pi_agent_command,
+            pi_agent_args: raw.pi_agent_args,
+            pi_agent_warm_pool_size: raw.pi_agent_warm_pool_size,
+            pi_agent_max_processes: raw.pi_agent_max_processes,
+            pi_agent_idle_reap_timeout: raw.pi_agent_idle_reap_timeout,
             tracing_level: raw.tracing_level,
             tracing_format: raw.tracing_format,
             allowed_user_ids: raw.allowed_user_ids,
@@ -152,6 +167,15 @@ struct RawBobConfig {
     shutdown_drain_deadline: Duration,
     #[serde(deserialize_with = "deserialize_duration")]
     shutdown_reap_deadline: Duration,
+    pi_agent_command: String,
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    pi_agent_args: Vec<String>,
+    #[serde(deserialize_with = "deserialize_usize")]
+    pi_agent_warm_pool_size: usize,
+    #[serde(deserialize_with = "deserialize_usize")]
+    pi_agent_max_processes: usize,
+    #[serde(deserialize_with = "deserialize_duration")]
+    pi_agent_idle_reap_timeout: Duration,
     tracing_level: String,
     tracing_format: String,
     #[serde(default, deserialize_with = "deserialize_user_id_vec")]
@@ -323,6 +347,23 @@ where
     }
 }
 
+fn deserialize_string_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringVec {
+        Many(Vec<String>),
+        Csv(String),
+    }
+
+    match StringVec::deserialize(deserializer)? {
+        StringVec::Many(values) => Ok(values),
+        StringVec::Csv(value) => Ok(parse_csv(&value)),
+    }
+}
+
 fn deserialize_user_id_vec<'de, D>(deserializer: D) -> Result<Vec<UserId>, D::Error>
 where
     D: Deserializer<'de>,
@@ -382,6 +423,11 @@ fn defaults_with_runtime_root(runtime_root: PathBuf, uid: u32) -> RawBobConfig {
         request_submit_timeout: Duration::from_secs(5),
         shutdown_drain_deadline: Duration::from_secs(30),
         shutdown_reap_deadline: Duration::from_secs(10),
+        pi_agent_command: "pi".to_string(),
+        pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+        pi_agent_warm_pool_size: 1,
+        pi_agent_max_processes: 8,
+        pi_agent_idle_reap_timeout: Duration::from_secs(300),
         tracing_level: "info".to_string(),
         tracing_format: "pretty".to_string(),
         allowed_user_ids: Vec::new(),
@@ -496,6 +542,63 @@ mod tests {
                     .join("extension.sock")
             );
         }
+    }
+
+    #[test]
+    fn default_sets_pi_agent_rpc_worker_and_positive_pool_limits() {
+        let config = BobConfig::default();
+
+        assert_eq!(config.pi_agent_command, "pi");
+        assert_eq!(
+            config.pi_agent_args,
+            vec!["--mode".to_string(), "rpc".to_string()]
+        );
+        assert!(config.pi_agent_warm_pool_size > 0);
+        assert!(config.pi_agent_max_processes > 0);
+        assert!(config.pi_agent_idle_reap_timeout > Duration::from_secs(0));
+    }
+
+    #[test]
+    fn loads_pi_agent_supervisor_settings_from_config_file() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let config_file = write_temp_config(
+            r#"
+pi_agent_command = "pi-custom"
+pi_agent_args = ["--mode", "rpc", "--trace"]
+pi_agent_warm_pool_size = 2
+pi_agent_max_processes = 6
+pi_agent_idle_reap_timeout = "45s"
+"#,
+        );
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("phase 2 settings should parse");
+
+        assert_eq!(config.pi_agent_command, "pi-custom");
+        assert_eq!(
+            config.pi_agent_args,
+            vec![
+                "--mode".to_string(),
+                "rpc".to_string(),
+                "--trace".to_string()
+            ]
+        );
+        assert_eq!(config.pi_agent_warm_pool_size, 2);
+        assert_eq!(config.pi_agent_max_processes, 6);
+        assert_eq!(config.pi_agent_idle_reap_timeout, Duration::from_secs(45));
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
     }
 
     #[test]
