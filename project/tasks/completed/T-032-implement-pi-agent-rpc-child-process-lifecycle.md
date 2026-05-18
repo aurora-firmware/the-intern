@@ -1,7 +1,7 @@
 ---
 id: T-032
 title: Implement pi-agent RPC child process lifecycle
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-18'
