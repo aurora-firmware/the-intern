@@ -2,7 +2,7 @@
 id: B-001
 title: bob serve does not answer status/sessions over admin socket
 severity: high
-status: in-progress
+status: resolved
 created: '2026-05-18'
 task: T-025
 ---
