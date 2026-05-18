@@ -1,4 +1,4 @@
-name: Build
+name: CI
 
 on:
   pull_request:
@@ -7,9 +7,94 @@ on:
       - dev-agent
       - main
 
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  SERVICE_DIR: the-intern/service
+
 jobs:
-  build:
+  format:
+    name: Format
     runs-on: self-hosted
     steps:
-      - name: Placeholder build step
-        run: echo "build placeholder"
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check Rust formatting
+        working-directory: ${{ env.SERVICE_DIR }}
+        run: cargo fmt --all -- --check
+
+  build:
+    name: Build
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build bob
+        working-directory: ${{ env.SERVICE_DIR }}
+        run: cargo build -p bob
+
+  documentation:
+    name: Documentation
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate Rust documentation
+        working-directory: ${{ env.SERVICE_DIR }}
+        run: cargo doc --workspace --no-deps
+
+      - name: Remove rendered source from documentation artifact
+        run: rm -rf "${{ env.SERVICE_DIR }}/target/doc/src"
+
+      - name: Upload generated documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-docs
+          path: ${{ env.SERVICE_DIR }}/target/doc
+          if-no-files-found: error
+
+  tests:
+    name: Tests
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Rust tests
+        id: cargo-test
+        working-directory: ${{ env.SERVICE_DIR }}
+        shell: bash
+        run: |
+          set +e
+          cargo test --workspace > "$RUNNER_TEMP/cargo-test.raw.log" 2>&1
+          test_status=$?
+
+          sed \
+            -e "s#${HOME}#\$HOME#g" \
+            -e 's/[A-Za-z0-9_]*\(TOKEN\|SECRET\|PASSWORD\|PASSWD\|API_KEY\|PRIVATE_KEY\)[A-Za-z0-9_]*=[^[:space:]]*/REDACTED_SECRET_ENV/gI' \
+            "$RUNNER_TEMP/cargo-test.raw.log" > "$RUNNER_TEMP/cargo-test.log"
+
+          cat "$RUNNER_TEMP/cargo-test.log"
+
+          {
+            echo "## Rust test report"
+            echo
+            echo '```text'
+            tail -n 80 "$RUNNER_TEMP/cargo-test.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$test_status"
+
+      - name: Upload Rust test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-test-report
+          path: ${{ runner.temp }}/cargo-test.log
+          if-no-files-found: error

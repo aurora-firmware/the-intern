@@ -5,9 +5,23 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: self-hosted
     steps:
-      - name: Placeholder deploy step
-        run: echo "deploy placeholder"
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build release binary
+        working-directory: the-intern/service
+        run: cargo build --release -p bob
+
+      - name: Upload release binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: bob-${{ github.ref_name }}
+          path: the-intern/service/target/release/bob
+          if-no-files-found: error
