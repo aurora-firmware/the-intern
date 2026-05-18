@@ -2,6 +2,7 @@
 
 pub mod pool;
 pub mod process;
+pub mod rpc;
 
 use bob_core::{
     error::{ServiceError, ServiceResult},
