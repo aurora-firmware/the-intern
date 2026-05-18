@@ -29,12 +29,31 @@ impl SessionPool {
         })
     }
 
-    pub fn acquire_session(&mut self, _session_id: SessionId) -> ServiceResult<()> {
-        Err(ServiceError::NotImplemented)
+    pub fn acquire_session(&mut self, session_id: SessionId) -> ServiceResult<()> {
+        if self.active_workers.contains_key(&session_id) {
+            return Ok(());
+        }
+
+        let worker = if let Some(worker) = self.warm_workers.pop() {
+            worker
+        } else if self.total_process_count() < self.cfg.max_processes {
+            let process_cfg = Self::worker_process_config(&self.cfg);
+            crate::process::RpcWorkerProcess::spawn(&process_cfg)?
+        } else {
+            return Err(ServiceError::ChildProcess {
+                detail: format!(
+                    "cannot acquire session because active + warm workers reached max_processes ({})",
+                    self.cfg.max_processes
+                ),
+            });
+        };
+
+        self.active_workers.insert(session_id, worker);
+        Ok(())
     }
 
     pub fn list_sessions(&self) -> Vec<SessionId> {
-        Vec::new()
+        self.active_workers.keys().copied().collect()
     }
 
     pub fn warm_worker_count(&self) -> usize {
@@ -47,6 +66,10 @@ impl SessionPool {
             args: cfg.worker_args.clone(),
             child_termination_deadline: cfg.child_termination_deadline,
         }
+    }
+
+    fn total_process_count(&self) -> usize {
+        self.warm_workers.len() + self.active_workers.len()
     }
 }
 
@@ -95,5 +118,57 @@ mod tests {
             matches!(error, ServiceError::ChildProcess { .. }),
             "expected ServiceError::ChildProcess, got: {error:?}"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn acquire_session_binds_idle_warm_worker_when_available() {
+        let cfg = test_config("sh", &["-c", "exit 0"], 1, 2);
+        let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
+        let session_id = SessionId::new();
+
+        pool.acquire_session(session_id)
+            .expect("acquiring first session should succeed");
+
+        let sessions = pool.list_sessions();
+        assert_eq!(
+            pool.warm_worker_count(),
+            0,
+            "warm worker should be consumed"
+        );
+        assert_eq!(sessions.len(), 1, "one session should be active");
+        assert_eq!(sessions[0], session_id, "session id should be bound");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn acquire_session_spawns_new_worker_when_no_warm_worker_exists() {
+        let cfg = test_config("sh", &["-c", "exit 0"], 1, 2);
+        let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
+        let session_a = SessionId::new();
+        let session_b = SessionId::new();
+
+        pool.acquire_session(session_a)
+            .expect("first session should consume warm worker");
+        pool.acquire_session(session_b)
+            .expect("second session should spawn new worker");
+
+        let sessions = pool.list_sessions();
+        assert_eq!(pool.warm_worker_count(), 0);
+        assert_eq!(sessions.len(), 2);
+        assert!(sessions.contains(&session_a));
+        assert!(sessions.contains(&session_b));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn acquire_session_returns_child_process_when_max_processes_would_be_exceeded() {
+        let cfg = test_config("sh", &["-c", "exit 0"], 1, 1);
+        let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
+
+        pool.acquire_session(SessionId::new())
+            .expect("first session should succeed");
+        let error = pool
+            .acquire_session(SessionId::new())
+            .expect_err("second session should fail at max capacity");
+
+        assert!(matches!(error, ServiceError::ChildProcess { .. }));
     }
 }
