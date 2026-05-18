@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod pool;
 pub mod process;
 
 use bob_core::{
@@ -7,7 +8,10 @@ use bob_core::{
     types::SessionId,
 };
 use std::time::Duration;
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::JoinHandle,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
@@ -36,8 +40,17 @@ impl Default for Config {
 
 #[derive(Debug)]
 enum Command {
-    ListSessions,
-    KillSession(SessionId),
+    AcquireSession {
+        session_id: SessionId,
+        response_tx: oneshot::Sender<ServiceResult<()>>,
+    },
+    ListSessions {
+        response_tx: oneshot::Sender<ServiceResult<Vec<SessionId>>>,
+    },
+    KillSession {
+        session_id: SessionId,
+        response_tx: oneshot::Sender<ServiceResult<()>>,
+    },
 }
 
 #[derive(Clone)]
@@ -47,18 +60,45 @@ pub struct Handle {
 
 pub struct Actor {
     cfg: Config,
+    pool: pool::SessionPool,
     rx: mpsc::Receiver<Command>,
 }
 
 impl Handle {
+    pub async fn acquire_session(&self, session_id: SessionId) -> ServiceResult<()> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.tx
+            .send(Command::AcquireSession {
+                session_id,
+                response_tx,
+            })
+            .await
+            .map_err(|_| ServiceError::Shutdown)?;
+
+        response_rx.await.map_err(|_| ServiceError::Shutdown)?
+    }
+
     pub async fn list_sessions(&self) -> ServiceResult<Vec<SessionId>> {
-        let _ = self.tx.send(Command::ListSessions).await;
-        Ok(Vec::new())
+        let (response_tx, response_rx) = oneshot::channel();
+        self.tx
+            .send(Command::ListSessions { response_tx })
+            .await
+            .map_err(|_| ServiceError::Shutdown)?;
+
+        response_rx.await.map_err(|_| ServiceError::Shutdown)?
     }
 
     pub async fn kill_session(&self, session_id: SessionId) -> ServiceResult<()> {
-        let _ = self.tx.send(Command::KillSession(session_id)).await;
-        Err(ServiceError::NotImplemented)
+        let (response_tx, response_rx) = oneshot::channel();
+        self.tx
+            .send(Command::KillSession {
+                session_id,
+                response_tx,
+            })
+            .await
+            .map_err(|_| ServiceError::Shutdown)?;
+
+        response_rx.await.map_err(|_| ServiceError::Shutdown)?
     }
 }
 
@@ -76,14 +116,29 @@ impl Actor {
         );
         while let Some(command) = self.rx.recv().await {
             match command {
-                Command::ListSessions => {
-                    tracing::debug!("pi-agent-supervisor list sessions command received");
+                Command::AcquireSession {
+                    session_id,
+                    response_tx,
+                } => {
+                    tracing::debug!(
+                        session_id = %session_id,
+                        "pi-agent-supervisor acquire session command received"
+                    );
+                    let _ = response_tx.send(self.pool.acquire_session(session_id));
                 }
-                Command::KillSession(session_id) => {
+                Command::ListSessions { response_tx } => {
+                    tracing::debug!("pi-agent-supervisor list sessions command received");
+                    let _ = response_tx.send(Ok(self.pool.list_sessions()));
+                }
+                Command::KillSession {
+                    session_id,
+                    response_tx,
+                } => {
                     tracing::debug!(
                         session_id = %session_id,
                         "pi-agent-supervisor kill session command received"
                     );
+                    let _ = response_tx.send(Err(ServiceError::NotImplemented));
                 }
             }
         }
@@ -91,14 +146,15 @@ impl Actor {
     }
 }
 
-pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
+pub fn start(cfg: Config) -> ServiceResult<(Handle, JoinHandle<()>)> {
+    let pool = pool::SessionPool::new(&cfg)?;
     let buffer = cfg.command_buffer.max(1);
     let (tx, rx) = mpsc::channel(buffer);
-    let actor = Actor { cfg, rx };
+    let actor = Actor { cfg, pool, rx };
     let join = tokio::spawn(async move {
         actor.run().await;
     });
-    (Handle { tx }, join)
+    Ok((Handle { tx }, join))
 }
 
 #[cfg(test)]
@@ -106,6 +162,23 @@ mod tests {
     use super::*;
     use bob_core::error::ServiceError;
     use std::time::Duration;
+
+    fn test_config(
+        command: &str,
+        args: &[&str],
+        warm_pool_size: usize,
+        max_processes: usize,
+    ) -> Config {
+        Config {
+            worker_command: command.to_string(),
+            worker_args: args.iter().map(|arg| arg.to_string()).collect(),
+            warm_pool_size,
+            max_processes,
+            idle_reap_timeout: Duration::from_secs(60),
+            command_buffer: 16,
+            child_termination_deadline: Duration::from_millis(50),
+        }
+    }
 
     #[test]
     fn default_config_sets_pi_rpc_and_positive_pool_settings() {
@@ -124,7 +197,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn list_sessions_returns_empty_when_no_sessions() {
-        let (handle, task) = start(Config::default());
+        let (handle, task) =
+            start(test_config("sh", &["-c", "exit 0"], 1, 2)).expect("startup should succeed");
 
         let result = handle.list_sessions().await;
 
@@ -134,7 +208,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn kill_session_returns_not_implemented() {
-        let (handle, task) = start(Config::default());
+        let (handle, task) =
+            start(test_config("sh", &["-c", "exit 0"], 1, 2)).expect("startup should succeed");
 
         let result = handle.kill_session(SessionId::new()).await;
 
@@ -144,10 +219,63 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn handle_is_clonable() {
-        let (handle, task) = start(Config::default());
+        let (handle, task) =
+            start(test_config("sh", &["-c", "exit 0"], 1, 2)).expect("startup should succeed");
 
         let _clone = handle.clone();
 
         task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn list_sessions_returns_bound_session_ids() {
+        let (handle, task) =
+            start(test_config("sh", &["-c", "exit 0"], 1, 2)).expect("startup should succeed");
+        let session_id = SessionId::new();
+
+        handle
+            .acquire_session(session_id)
+            .await
+            .expect("session acquire should succeed");
+        let sessions = handle
+            .list_sessions()
+            .await
+            .expect("list sessions should succeed");
+
+        assert_eq!(sessions, vec![session_id]);
+        task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn acquire_session_returns_child_process_error_when_max_processes_reached() {
+        let (handle, task) =
+            start(test_config("sh", &["-c", "exit 0"], 1, 1)).expect("startup should succeed");
+
+        handle
+            .acquire_session(SessionId::new())
+            .await
+            .expect("first session acquire should succeed");
+        let error = handle
+            .acquire_session(SessionId::new())
+            .await
+            .expect_err("second session should fail at max capacity");
+
+        assert!(matches!(error, ServiceError::ChildProcess { .. }));
+        task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_returns_child_process_error_when_warm_pool_cannot_spawn() {
+        let error = match start(test_config(
+            "__definitely_missing_pi_binary__",
+            &["--mode", "rpc"],
+            1,
+            2,
+        )) {
+            Ok(_) => panic!("startup should fail when warm pool cannot spawn"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, ServiceError::ChildProcess { .. }));
     }
 }
