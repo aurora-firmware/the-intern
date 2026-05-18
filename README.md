@@ -1,60 +1,140 @@
 # the-intern
 
-The Intern is an AI office-assistant project with architecture, delivery state,
-and early implementation tracked in this repository. The Rust service shell
-(`bob`) now has a working Phase 1 foundation: Unix-socket admin and extension
-IPC scaffolding, admin JSON-RPC client subcommands, request queue/pre-flight
-wiring, in-memory persistence, graceful shutdown, and integration coverage for
-the shell plus Phase 1b queue/session-state behavior.
+The Intern is an AI office-assistant project. This repository contains the
+product design, the lifecycle workflow that drives the work, and the Rust
+service (`bob`) that implements it.
 
-## Start Here
+The service currently runs through Phase 2: a `bob serve` binary with a Unix
+admin socket, a Unix extension socket, an in-process request queue, in-memory
+persistence, graceful shutdown, and a pi-agent supervisor that owns the
+lifecycle of `pi` child processes (spawn, warm pool, prompt routing, idle
+reaping, kill). Phase 3 (JS extension) and Phase 4 (policy authorization,
+`chat.send` wiring) are not yet implemented.
 
-- Product overview: [project/docs/system_overview.md](project/docs/system_overview.md)
-- Delivery plan: [project/docs/roadmap.md](project/docs/roadmap.md)
-- Approved specifications: [project/specs/the-intern-agent-service-architecture.md](project/specs/the-intern-agent-service-architecture.md), [project/specs/bob-service-shell-architecture.md](project/specs/bob-service-shell-architecture.md)
-- Application layout: [`the-intern/service`](the-intern/service), [`the-intern/extensions`](the-intern/extensions)
-- Rust service build/test instructions: [`the-intern/service/README.md`](the-intern/service/README.md)
-- GitHub workflows: [`.github/workflows/`](.github/workflows/) currently contain placeholder build/test/deploy jobs; use the local commands below for real verification.
-- Coding guidelines: [Node.js](project/docs/coding-guidelines-node.md), [Rust](project/docs/coding-guidelines-rust.md)
+## Repository structure
 
-## Current State
+```
+.
+├── README.md, CLAUDE.md          # This file and the framework instructions
+├── .ai-team.toml                 # ai-team CLI config
+├── .github/workflows/            # Placeholder CI (echo-only today)
+├── .claude/                      # Role agents and slash-skills (dev-loop,
+│   ├── agents/                   #   bug-loop, tdd, code-review, integrate,
+│   └── skills/                   #   spec-breakdown, etc.)
+├── .codex/agents/                # Mirror role definitions for codex
+├── the-intern/
+│   ├── service/                  # Rust workspace — the `bob` binary lives here
+│   └── extensions/               # Future JS extension area (empty)
+└── project/                      # Source of truth for product lifecycle
+    ├── docs/                     # Architecture, roadmap, coding guidelines
+    ├── specs/                    # Approved specifications
+    ├── decisions/                # ADRs
+    ├── tasks/{pending,in-progress,completed,blocked}/
+    └── bugs/{open,in-progress,resolved}/
+```
 
-- Task queue: drained through `T-030`; open/in-progress bug queue is empty.
-- Completed service phase: Phase 1a shell and Phase 1b queue/handler/persistence.
-- Main service workspace: `the-intern/service`.
-- JS extension area: `the-intern/extensions`; implementation is still future work.
-- Process/lifecycle state lives under `project/tasks/` and `project/bugs/`; directory location is status.
+Directory *is* status for tasks and bugs — moving a file is how state changes.
 
-## Runtime Prerequisites
+## Prerequisites
 
-- The pi-agent binary must be available as `pi` on `PATH`. This is a hard
-  project precondition for Phase 2 and later work.
-- If `pi` is not available at any point, stop the current work and escalate;
-  do not implement substitutes, mocks, or alternate process runners as a way
-  around the missing prerequisite.
+- **Rust** — toolchain is pinned to stable via `the-intern/service/rust-toolchain.toml`
+  (`rustup` will install the right channel automatically the first time you build).
+- **`pi` on `PATH`** — the pi-agent binary must be available as `pi`. This is a
+  hard precondition for the supervisor (Phase 2 and later). Verify with
+  `which pi`. If it is missing, do not substitute a mock — stop and escalate.
+- A normal local shell. Some tests bind Unix domain sockets and use peer
+  credentials, which can fail under restrictive sandboxes with
+  `Operation not permitted`.
 
-## Local Verification
+## Build
 
 From the Rust workspace:
 
 ```bash
 cd the-intern/service
-cargo fmt --all -- --check
 cargo build -p bob
-cargo test --workspace
 ```
 
-Some tests bind Unix domain sockets. In restricted sandboxes they may fail with
-`Operation not permitted`; run them in a normal local development shell.
+This produces the `bob` binary at `the-intern/service/target/debug/bob`.
 
-Useful focused checks:
+## Test
+
+The full workspace suite:
 
 ```bash
 cd the-intern/service
-cargo test --test shell_e2e -- --nocapture
-cargo test --test queue_load
-cargo test --test session_state_roundtrip
+cargo test --workspace
 ```
 
-`cargo clippy --workspace -- -D warnings` is not yet a passing project gate;
-there is existing lint/documentation debt in the `bob` crate.
+Focused subsets that exercise specific subsystems:
+
+```bash
+# Service shell + shutdown protocol (Phase 1a, Phase 2 shutdown phase 4)
+cargo test -p bob serve::tests
+
+# Admin JSON-RPC dispatch including sessions.list / sessions.kill
+cargo test -p admin-rpc
+
+# End-to-end: spawns bob serve, waits for sockets, runs CLI subcommands,
+# SIGTERMs, asserts socket cleanup
+cargo test -p bob --test shell_e2e -- --nocapture
+
+# Request queue and session-state roundtrip
+cargo test -p bob --test queue_load
+cargo test -p bob --test session_state_roundtrip
+```
+
+Formatting check:
+
+```bash
+cargo fmt --all -- --check
+```
+
+`cargo clippy --workspace -- -D warnings` is useful for auditing but is not
+yet a clean gate — the `bob` crate carries existing lint/doc debt.
+
+## Run and use
+
+`bob serve` listens on two Unix sockets in `$BOB_TEST_RUNTIME_DIR`
+(or the default runtime dir). Override the paths to keep a session isolated.
+
+**Terminal A — start the service:**
+
+```bash
+export BOB_TEST_RUNTIME_DIR="$(mktemp -d)"
+echo "$BOB_TEST_RUNTIME_DIR"
+BOB_ADMIN_SOCK_PATH="$BOB_TEST_RUNTIME_DIR/admin.sock" \
+BOB_EXTENSION_SOCK_PATH="$BOB_TEST_RUNTIME_DIR/extension.sock" \
+cargo run -p bob -- serve
+```
+
+**Terminal B — drive it with the admin CLI:**
+
+```bash
+export BOB_TEST_RUNTIME_DIR="<paste path from terminal A>"
+export BOB_ADMIN_SOCK_PATH="$BOB_TEST_RUNTIME_DIR/admin.sock"
+
+cargo run -p bob -- status
+cargo run -p bob -- sessions list --json
+cargo run -p bob -- sessions kill <session-id>
+```
+
+Available subcommands: `serve`, `status`, `sessions`, `audit`, `policy`, `chat`.
+Add `--help` to any of them for the full surface. Not every subcommand is
+fully wired — `chat.send` in particular is not yet routed through the
+channel-adapter / requests-handler path and is out of scope until Phase 4.
+
+Stop the service with Ctrl-C (SIGTERM); the supervisor reaps pi-agent
+children during shutdown phase 4 and the sockets are removed on exit.
+
+## Where to read more
+
+- Product overview — [project/docs/system_overview.md](project/docs/system_overview.md)
+- Delivery plan — [project/docs/roadmap.md](project/docs/roadmap.md)
+- Approved specifications — [project/specs/the-intern-agent-service-architecture.md](project/specs/the-intern-agent-service-architecture.md), [project/specs/bob-service-shell-architecture.md](project/specs/bob-service-shell-architecture.md)
+- Service-level build/test details — [the-intern/service/README.md](the-intern/service/README.md)
+- Coding guidelines — [Rust](project/docs/coding-guidelines-rust.md), [Node.js](project/docs/coding-guidelines-node.md)
+- Framework and slash-skill instructions — [CLAUDE.md](CLAUDE.md)
+
+GitHub workflows in `.github/workflows/` are placeholders today (echo-only);
+use the local commands above for real verification until they are wired up.
