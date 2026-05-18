@@ -1,7 +1,7 @@
 ---
 id: T-029
 title: Wire real requests-handler and persistence into bob serve
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-16'
