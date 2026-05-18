@@ -420,9 +420,8 @@ mod tests {
     }
 
     fn make_dispatcher_with_supervisor() -> (Dispatcher, tokio::task::JoinHandle<()>) {
-        let (handle, join) =
-            pi_agent_supervisor::start(pi_agent_supervisor::Config::default())
-                .expect("supervisor start must succeed in tests");
+        let (handle, join) = pi_agent_supervisor::start(pi_agent_supervisor::Config::default())
+            .expect("supervisor start must succeed in tests");
         let dispatcher = Dispatcher::new(Some(handle), None, "0.1.0-test");
         (dispatcher, join)
     }
@@ -852,7 +851,8 @@ mod tests {
         sup_task.abort();
         match outcome {
             DispatchOutcome::Ok(resp) => {
-                let ids: Vec<String> = resp.result
+                let ids: Vec<String> = resp
+                    .result
                     .as_array()
                     .expect("result must be an array")
                     .iter()

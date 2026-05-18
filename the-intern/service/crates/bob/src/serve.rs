@@ -556,12 +556,9 @@ pub mod tests {
         // from `joins`. If we got here, the structural check is implicit.
         // Run shutdown and assert it completes within a generous outer deadline —
         // a no-op phase 4 would also complete, but the supervisor task must be joined.
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            run_shutdown_protocol(runtime, &cfg),
-        )
-        .await
-        .expect("shutdown protocol must complete within deadline");
+        tokio::time::timeout(Duration::from_secs(5), run_shutdown_protocol(runtime, &cfg))
+            .await
+            .expect("shutdown protocol must complete within deadline");
         // Reaching here proves run_shutdown_protocol did not hang and the supervisor
         // actor finished (shutdown_all ran and all workers were terminated).
     }
