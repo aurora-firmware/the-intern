@@ -3,6 +3,27 @@
 Running log of bugs and friction observed while using the `ai-team` CLI and the
 slash-skills that wrap it. New entries at the top.
 
+## 2026-05-18 — `new-bug` skill uses unsupported CLI flags
+
+**Symptom.** The `new-bug` skill prescribes
+`ai-team bug new --json --title "<title>" --description "<description>" ...`.
+The current CLI rejects `--title` (title is positional) and has no
+`--description` option.
+
+**Reproduction.**
+```
+ai-team bug new --json --title "x" --description "y" --severity high
+# → Error: No such option: --title
+ai-team bug new --help
+# shows: ai-team bug new [OPTIONS] TITLE
+```
+
+**Impact.** First-call bug creation fails whenever the skill is followed
+literally. Callers must inspect help output and manually adapt.
+
+**Suggested fix.** Update `.claude/skills/new-bug/SKILL.md` to use positional
+`TITLE` and remove `--description` from the command construction step.
+
 ## 2026-05-16 — `ai-team spec new` assigns duplicate IDs
 
 **Symptom.** Running `ai-team spec new ...` produced a new spec with `id: S-001`
