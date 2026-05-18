@@ -102,3 +102,10 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-18
+PASS
+
+- Stage 1 (acceptance criteria): AC-1 through AC-4 are satisfied in the implementation branch. `BobConfig` exposes all required Phase 2 fields with defaults, validates invalid pool-size combinations, `pi_agent_supervisor::Config` includes the required process/pool fields, and `bob serve` maps command, args, pool limits, idle timeout, command buffer, and `shutdown_reap_deadline` to `child_termination_deadline`.
+- Stage 2 (quality): No correctness, security, readability, or performance defects found in scope. Changed code is limited to expected files plus task log updates.
+- Verification evidence: `cargo test -p pi-agent-supervisor --lib` passed. The two bob verification commands fail in this sandbox due to Unix socket bind permission (`Operation not permitted`), not due to task logic.
