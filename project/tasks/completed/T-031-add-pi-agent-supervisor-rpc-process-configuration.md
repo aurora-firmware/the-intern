@@ -1,7 +1,7 @@
 ---
 id: T-031
 title: Add pi-agent supervisor RPC process configuration
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-18'
