@@ -761,7 +761,9 @@ admin_allowed_uids = [1000]
         path
     }
 
-    fn load_with_env_overrides<const N: usize>(overrides: [(&str, &str); N]) -> ServiceResult<BobConfig> {
+    fn load_with_env_overrides<const N: usize>(
+        overrides: [(&str, &str); N],
+    ) -> ServiceResult<BobConfig> {
         let mut env = BTreeMap::new();
         if cfg!(target_os = "macos") {
             env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
