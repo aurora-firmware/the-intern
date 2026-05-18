@@ -26,7 +26,10 @@ impl InboundQueue {
     /// Panics if `capacity` is zero. A zero-capacity queue cannot store any
     /// events and is a configuration error.
     pub(crate) fn new(capacity: usize) -> Self {
-        assert!(capacity > 0, "inbound queue capacity must be greater than zero");
+        assert!(
+            capacity > 0,
+            "inbound queue capacity must be greater than zero"
+        );
         Self {
             capacity,
             queue: VecDeque::with_capacity(capacity),

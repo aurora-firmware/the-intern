@@ -2,9 +2,9 @@ use std::sync::OnceLock;
 
 use bob_core::error::{ServiceError, ServiceResult};
 use tracing_subscriber::{
-    EnvFilter,
     fmt::{self, MakeWriter},
     prelude::*,
+    EnvFilter,
 };
 
 use crate::config::BobConfig;

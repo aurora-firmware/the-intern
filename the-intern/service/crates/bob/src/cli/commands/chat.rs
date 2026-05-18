@@ -10,7 +10,9 @@ use tokio::sync::mpsc;
 
 use crate::{client::Subscription, config::BobConfig};
 
-use super::{call_admin, connect_admin, invalid_request_error, load_config, run_async, write_json_line};
+use super::{
+    call_admin, connect_admin, invalid_request_error, load_config, run_async, write_json_line,
+};
 
 trait ChatSubscription: Sized {
     fn recv<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = ServiceResult<Value>> + 'a>>;
@@ -59,9 +61,7 @@ impl StdinLines {
             let _ = sender.send(Ok(None));
         });
 
-        Self {
-            receiver,
-        }
+        Self { receiver }
     }
 }
 
@@ -69,12 +69,7 @@ impl ChatInputLines for StdinLines {
     fn next_line<'a>(
         &'a mut self,
     ) -> Pin<Box<dyn Future<Output = ServiceResult<Option<String>>> + 'a>> {
-        Box::pin(async move {
-            self.receiver
-                .recv()
-                .await
-                .unwrap_or_else(|| Ok(None))
-        })
+        Box::pin(async move { self.receiver.recv().await.unwrap_or_else(|| Ok(None)) })
     }
 }
 
@@ -209,7 +204,11 @@ fn build_chat_send_params(session: Option<&str>, line: &str) -> Value {
     }
 }
 
-fn write_chat_notification(out: &mut impl Write, json_output: bool, notification: &Value) -> ServiceResult<()> {
+fn write_chat_notification(
+    out: &mut impl Write,
+    json_output: bool,
+    notification: &Value,
+) -> ServiceResult<()> {
     if json_output {
         return write_json_line(out, notification);
     }
@@ -343,7 +342,10 @@ mod tests {
         .await
         .expect("chat succeeds");
 
-        assert!(closed.load(Ordering::SeqCst), "chat should close subscription");
+        assert!(
+            closed.load(Ordering::SeqCst),
+            "chat should close subscription"
+        );
         let sent = sent_params.lock().await.clone();
         assert_eq!(
             sent,
@@ -402,7 +404,10 @@ mod tests {
 
         runner.await.expect("chat succeeds");
 
-        assert!(closed.load(Ordering::SeqCst), "chat should close subscription");
+        assert!(
+            closed.load(Ordering::SeqCst),
+            "chat should close subscription"
+        );
         assert_eq!(
             String::from_utf8(out).expect("utf8"),
             "{\"text\":\"first\"}\n{\"text\":\"second\"}\n"

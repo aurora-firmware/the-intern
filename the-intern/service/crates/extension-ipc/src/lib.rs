@@ -9,11 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use bob_core::error::{ServiceError, ServiceResult};
-use tokio::{
-    net::UnixStream,
-    sync::mpsc,
-    task::JoinHandle,
-};
+use tokio::{net::UnixStream, sync::mpsc, task::JoinHandle};
 
 use crate::listener::{Listener, ListenerConfig};
 use crate::multiplex::{MonitoringHandle, NoopMonitoringHandle, SessionMultiplexer};
@@ -92,7 +88,8 @@ impl Actor {
         while let Some(command) = self.rx.recv().await {
             match command {
                 Command::SendMessage(message) => {
-                    let payload = serde_json::json!({ "command": "send_message", "size": message.len() });
+                    let payload =
+                        serde_json::json!({ "command": "send_message", "size": message.len() });
                     tracing::debug!(?payload, "extension-ipc command received");
                 }
             }

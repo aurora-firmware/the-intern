@@ -52,7 +52,11 @@ impl AdminClient {
         parse_call_response(response, id)
     }
 
-    pub async fn subscribe<P, N>(&mut self, method: &str, params: P) -> ServiceResult<Subscription<N>>
+    pub async fn subscribe<P, N>(
+        &mut self,
+        method: &str,
+        params: P,
+    ) -> ServiceResult<Subscription<N>>
     where
         P: Serialize,
         N: serde::de::DeserializeOwned,
@@ -83,7 +87,6 @@ impl AdminClient {
         self.next_id = self.next_id.saturating_add(1);
         id
     }
-
 }
 
 #[derive(Debug)]

@@ -103,7 +103,9 @@ impl BobConfig {
 
     fn validate(self) -> ServiceResult<Self> {
         if self.request_queue_capacity == 0 {
-            return Err(configuration_error("request_queue_capacity must be positive"));
+            return Err(configuration_error(
+                "request_queue_capacity must be positive",
+            ));
         }
 
         Ok(self)
@@ -207,10 +209,7 @@ fn env_overrides(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
         .collect()
 }
 
-fn merge_key_value_overrides(
-    mut figment: Figment,
-    overrides: BTreeMap<String, String>,
-) -> Figment {
+fn merge_key_value_overrides(mut figment: Figment, overrides: BTreeMap<String, String>) -> Figment {
     for (key, value) in overrides {
         figment = figment.merge((key, value));
     }
@@ -391,7 +390,11 @@ fn defaults_with_runtime_root(runtime_root: PathBuf, uid: u32) -> RawBobConfig {
 
 fn default_config_path(sources: &ConfigSources) -> PathBuf {
     if cfg!(target_os = "macos") {
-        let home = sources.env.get("HOME").cloned().unwrap_or_else(|| "~".into());
+        let home = sources
+            .env
+            .get("HOME")
+            .cloned()
+            .unwrap_or_else(|| "~".into());
         return Path::new(&home)
             .join("Library")
             .join("Application Support")
@@ -403,7 +406,12 @@ fn default_config_path(sources: &ConfigSources) -> PathBuf {
         .env
         .get("XDG_CONFIG_HOME")
         .cloned()
-        .or_else(|| sources.env.get("HOME").map(|home| format!("{home}/.config")))
+        .or_else(|| {
+            sources
+                .env
+                .get("HOME")
+                .map(|home| format!("{home}/.config"))
+        })
         .unwrap_or_else(|| ".config".to_string());
 
     Path::new(&root).join("bob").join("config.toml")
@@ -431,9 +439,9 @@ pub fn load() -> ServiceResult<BobConfig> {
 #[cfg(test)]
 mod tests {
     use std::{
+        fs,
         io::{self, Write},
         sync::{Arc, Mutex},
-        fs,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -464,7 +472,9 @@ mod tests {
         if cfg!(target_os = "macos") {
             assert_eq!(
                 config.admin_sock_path,
-                PathBuf::from("/tmp/bob-tests").join("bob-4242").join("admin.sock")
+                PathBuf::from("/tmp/bob-tests")
+                    .join("bob-4242")
+                    .join("admin.sock")
             );
             assert_eq!(
                 config.extension_sock_path,
@@ -475,7 +485,9 @@ mod tests {
         } else {
             assert_eq!(
                 config.admin_sock_path,
-                PathBuf::from("/run/user/4242").join("bob").join("admin.sock")
+                PathBuf::from("/run/user/4242")
+                    .join("bob")
+                    .join("admin.sock")
             );
             assert_eq!(
                 config.extension_sock_path,
@@ -496,7 +508,10 @@ mod tests {
         }
         env.insert("BOB_REQUEST_QUEUE_CAPACITY".to_string(), "32".to_string());
         env.insert("BOB_TRACING_LEVEL".to_string(), "debug".to_string());
-        env.insert("BOB_ADMIN_ALLOWED_UIDS".to_string(), "2000,2001".to_string());
+        env.insert(
+            "BOB_ADMIN_ALLOWED_UIDS".to_string(),
+            "2000,2001".to_string(),
+        );
 
         let config_file = write_temp_config(
             r#"
@@ -556,7 +571,10 @@ admin_allowed_uids = [1000]
         } else {
             env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
         }
-        env.insert("BOB_TRACING_LEVEL".to_string(), "super-secret-level".to_string());
+        env.insert(
+            "BOB_TRACING_LEVEL".to_string(),
+            "super-secret-level".to_string(),
+        );
 
         let writer = SharedBuffer::default();
         let subscriber = tracing_subscriber::fmt()

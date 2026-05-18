@@ -217,7 +217,13 @@ mod tests {
         expect_denied(got_a, session_a);
         expect_denied(got_b, session_b);
 
-        assert!(rx_a.try_recv().is_err(), "session a should not receive b reply");
-        assert!(rx_b.try_recv().is_err(), "session b should not receive a reply");
+        assert!(
+            rx_a.try_recv().is_err(),
+            "session a should not receive b reply"
+        );
+        assert!(
+            rx_b.try_recv().is_err(),
+            "session b should not receive a reply"
+        );
     }
 }

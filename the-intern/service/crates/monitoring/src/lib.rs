@@ -39,10 +39,7 @@ impl Actor {
         while let Some(command) = self.rx.recv().await {
             match command {
                 Command::Record(event) => {
-                    tracing::debug!(
-                        event_len = event.len(),
-                        "monitoring command received"
-                    );
+                    tracing::debug!(event_len = event.len(), "monitoring command received");
                 }
             }
         }

@@ -106,7 +106,11 @@ where
     subscription.close().await
 }
 
-fn write_notification(out: &mut impl Write, json_output: bool, notification: &Value) -> ServiceResult<()> {
+fn write_notification(
+    out: &mut impl Write,
+    json_output: bool,
+    notification: &Value,
+) -> ServiceResult<()> {
     if json_output {
         return write_json_line(out, notification);
     }
@@ -203,7 +207,10 @@ mod tests {
         task.await.expect("tail succeeds");
         stop_sender.await.expect("stop sender join");
 
-        assert!(closed.load(Ordering::SeqCst), "tail should close subscription");
+        assert!(
+            closed.load(Ordering::SeqCst),
+            "tail should close subscription"
+        );
         assert_eq!(
             String::from_utf8(out).expect("utf8"),
             "{\"event\":\"one\"}\n{\"event\":\"two\"}\n"

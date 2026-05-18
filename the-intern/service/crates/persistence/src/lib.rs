@@ -70,10 +70,7 @@ impl Handle {
     /// Sends a command to the actor and awaits the reply.
     ///
     /// Returns `ServiceError::Persistence` if the actor is no longer running.
-    async fn send<T>(
-        &self,
-        make_cmd: impl FnOnce(Reply<T>) -> Command,
-    ) -> ServiceResult<T> {
+    async fn send<T>(&self, make_cmd: impl FnOnce(Reply<T>) -> Command) -> ServiceResult<T> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let cmd = make_cmd(reply_tx);
         self.tx

@@ -126,7 +126,8 @@ mod handler_integration_tests {
     // This test verifies that the wired path correctly denies (None context → deny) and emits
     // a PreflightDenied audit record.
     #[tokio::test(flavor = "current_thread")]
-    async fn start_with_preflight_wired_path_denies_events_and_emits_audit_record_when_context_is_none() {
+    async fn start_with_preflight_wired_path_denies_events_and_emits_audit_record_when_context_is_none(
+    ) {
         let store_inner = Arc::new(RecordingStore::default());
         let audit_inner = Arc::new(RecordingAudit::default());
         let store: Arc<dyn PersistenceStore> = Arc::clone(&store_inner) as _;
@@ -143,8 +144,7 @@ mod handler_integration_tests {
             allowed_user_ids: vec![user_id],
         };
 
-        let (handle, task) =
-            start_with_preflight(cfg, preflight_cfg, store, audit, cancel_rx);
+        let (handle, task) = start_with_preflight(cfg, preflight_cfg, store, audit, cancel_rx);
 
         handle
             .submit_event(chat_event("test message"))
@@ -188,8 +188,7 @@ mod handler_integration_tests {
             allowed_user_ids: vec![],
         };
 
-        let (handle, task) =
-            start_with_preflight(cfg, preflight_cfg, store, audit, cancel_rx);
+        let (handle, task) = start_with_preflight(cfg, preflight_cfg, store, audit, cancel_rx);
 
         handle
             .submit_event(chat_event("another message"))
@@ -229,8 +228,7 @@ mod handler_integration_tests {
             allowed_user_ids: vec![UserId::new()],
         };
 
-        let (handle, task) =
-            start_with_preflight(cfg, preflight_cfg, store, audit, cancel_rx);
+        let (handle, task) = start_with_preflight(cfg, preflight_cfg, store, audit, cancel_rx);
 
         handle.submit_event(chat_event("msg1")).await.unwrap();
         handle.submit_event(chat_event("msg2")).await.unwrap();
@@ -248,7 +246,11 @@ mod handler_integration_tests {
         );
 
         let records = audit_inner.records.lock().unwrap();
-        assert_eq!(records.len(), 3, "three audit records expected, one per denied event");
+        assert_eq!(
+            records.len(),
+            3,
+            "three audit records expected, one per denied event"
+        );
         for record in records.iter() {
             assert!(
                 matches!(record.kind, AuditKind::PreflightDenied),
