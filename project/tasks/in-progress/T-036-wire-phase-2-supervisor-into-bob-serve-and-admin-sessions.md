@@ -120,3 +120,20 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-19
+
+PASS
+
+**Stage 1 — Spec compliance:** All four acceptance criteria are met.
+
+- AC-1: `handle_sessions_list` calls `supervisor.list_sessions()` and the new test `dispatch_sessions_list_with_active_session_returns_that_session_id` confirms real session IDs flow through to the JSON-RPC response. Pass.
+- AC-2: `handle_sessions_kill` calls `supervisor.kill_session(session_id)` and returns `{ ok: true }` on success. Test `dispatch_sessions_kill_with_valid_session_id_returns_ok` exercises the happy path. Pass.
+- AC-3: An unknown session ID causes the supervisor to return `ServiceError::InvalidRequest`, which `map_service_error` maps to `CODE_INVALID_REQUEST` (-32602). Test `dispatch_sessions_kill_with_unknown_session_id_returns_invalid_request` verifies this. Missing params also returns `CODE_INVALID_REQUEST` (covered by a separate test). Pass.
+- AC-4: `Runtime.supervisor_join` is a dedicated field separated from `joins`. Phase 4 of `run_shutdown_protocol` awaits it under `shutdown_reap_deadline` instead of the previous `std::future::ready(())` no-op. Test `shutdown_phase4_awaits_supervisor_child_cleanup` and `runtime_holds_six_non_supervisor_join_handles` together confirm the structural change. Pass.
+
+Files touched: `dispatch.rs`, `serve.rs`, `shell_e2e.rs`. `lib.rs` was not modified, consistent with the task's "only if needed" qualifier. The `shell_e2e.rs` collateral change is justified — phase 4 now does real work and the test deadline had to include `SHUTDOWN_REAP_DEADLINE`; the change is limited to environment variable plumbing and deadline arithmetic with no structural additions.
+
+**Stage 2 — Code quality:** Logic is correct; input validation handles missing and unparseable params; error mapping covers all `ServiceError` variants; tests cover success, failure, and no-handle paths and are independent. No hardcoded secrets or unvalidated external input. Functions are focused. No dead code.
+
+**Minor observation (non-blocking):** The module-level method table in `the-intern/service/crates/admin-rpc/src/dispatch.rs` line 14 still reads `sessions.kill | Not yet implemented (NotImplemented)` — this is now inaccurate since `sessions.kill` is implemented. Worth correcting in a follow-up tidy, but it does not affect runtime behavior.
