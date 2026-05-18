@@ -4,12 +4,19 @@ use bob_core::{
     types::SessionId,
 };
 use std::collections::HashMap;
+use tokio::time::Instant;
+
+#[derive(Debug)]
+struct ActiveSessionWorker {
+    worker: crate::process::RpcWorkerProcess,
+    last_prompt_activity: Instant,
+}
 
 #[derive(Debug)]
 pub struct SessionPool {
     cfg: Config,
     warm_workers: Vec<crate::process::RpcWorkerProcess>,
-    active_workers: HashMap<SessionId, crate::process::RpcWorkerProcess>,
+    active_workers: HashMap<SessionId, ActiveSessionWorker>,
 }
 
 impl SessionPool {
@@ -48,12 +55,29 @@ impl SessionPool {
             });
         };
 
-        self.active_workers.insert(session_id, worker);
+        self.active_workers.insert(
+            session_id,
+            ActiveSessionWorker {
+                worker,
+                last_prompt_activity: Instant::now(),
+            },
+        );
         Ok(())
     }
 
     pub fn list_sessions(&self) -> Vec<SessionId> {
         self.active_workers.keys().copied().collect()
+    }
+
+    pub async fn kill_session(&mut self, session_id: SessionId) -> ServiceResult<()> {
+        let worker = self.active_workers.remove(&session_id).ok_or_else(|| {
+            ServiceError::InvalidRequest {
+                detail: "session is not active".to_string(),
+            }
+        })?;
+
+        worker.worker.terminate().await?;
+        Ok(())
     }
 
     pub async fn send_prompt(
@@ -65,24 +89,27 @@ impl SessionPool {
             self.acquire_session(session_id)?;
         }
 
-        let worker =
+        let active_worker =
             self.active_workers
                 .get_mut(&session_id)
                 .ok_or_else(|| ServiceError::ChildProcess {
                     detail: "session worker missing after acquire".to_string(),
                 })?;
         let command = rpc::PromptCommand::new(message);
-        worker.send_json(&command.to_json()).await?;
+        active_worker.worker.send_json(&command.to_json()).await?;
 
         loop {
-            let Some(record) = worker.read_next_stdout_json().await? else {
+            let Some(record) = active_worker.worker.read_next_stdout_json().await? else {
                 return Err(ServiceError::ChildProcess {
                     detail: "child stdout ended before prompt response".to_string(),
                 });
             };
 
             match rpc::parse_prompt_response(&record, &command.id)? {
-                Some(true) => return Ok(()),
+                Some(true) => {
+                    active_worker.last_prompt_activity = Instant::now();
+                    return Ok(());
+                }
                 Some(false) => {
                     return Err(ServiceError::ChildProcess {
                         detail: "prompt command rejected by child worker".to_string(),
@@ -95,6 +122,71 @@ impl SessionPool {
 
     pub fn warm_worker_count(&self) -> usize {
         self.warm_workers.len()
+    }
+
+    pub async fn reap_idle_and_surplus(&mut self) -> ServiceResult<crate::reaper::ReapReport> {
+        let now = Instant::now();
+        let stale_sessions = crate::reaper::select_idle_sessions(
+            now,
+            self.cfg.idle_reap_timeout,
+            self.active_workers
+                .iter()
+                .map(|(session_id, worker)| (*session_id, worker.last_prompt_activity)),
+        );
+        let mut report = crate::reaper::ReapReport::default();
+
+        for session_id in stale_sessions {
+            if let Some(worker) = self.active_workers.remove(&session_id) {
+                worker.worker.terminate().await?;
+                report.idle_sessions_reaped += 1;
+            }
+        }
+
+        let surplus = crate::reaper::surplus_warm_worker_count(
+            self.warm_workers.len(),
+            self.cfg.warm_pool_size,
+        );
+        for _ in 0..surplus {
+            if let Some(worker) = self.warm_workers.pop() {
+                worker.terminate().await?;
+                report.warm_workers_reaped += 1;
+            }
+        }
+
+        Ok(report)
+    }
+
+    pub async fn shutdown_all(&mut self) -> ServiceResult<crate::reaper::ShutdownReport> {
+        let mut report = crate::reaper::ShutdownReport::default();
+        let mut first_error = None;
+
+        for (_session_id, worker) in self.active_workers.drain() {
+            match worker.worker.terminate().await {
+                Ok(_) => report.active_workers_terminated += 1,
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
+        }
+
+        while let Some(worker) = self.warm_workers.pop() {
+            match worker.terminate().await {
+                Ok(_) => report.warm_workers_terminated += 1,
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
+        }
+
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+
+        Ok(report)
     }
 
     fn worker_process_config(cfg: &Config) -> WorkerProcessConfig {
@@ -207,5 +299,33 @@ mod tests {
             .expect_err("second session should fail at max capacity");
 
         assert!(matches!(error, ServiceError::ChildProcess { .. }));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn reap_idle_and_surplus_terminates_surplus_warm_workers_above_configured_pool_size() {
+        let cfg = test_config(
+            "sh",
+            &["-c", "trap 'exit 0' TERM; while :; do sleep 1; done"],
+            1,
+            4,
+        );
+        let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
+
+        let process_cfg = SessionPool::worker_process_config(&cfg);
+        pool.warm_workers.push(
+            crate::process::RpcWorkerProcess::spawn(&process_cfg).expect("spawn should work"),
+        );
+        pool.warm_workers.push(
+            crate::process::RpcWorkerProcess::spawn(&process_cfg).expect("spawn should work"),
+        );
+
+        let report = pool
+            .reap_idle_and_surplus()
+            .await
+            .expect("reap should succeed");
+
+        assert_eq!(report.idle_sessions_reaped, 0);
+        assert_eq!(report.warm_workers_reaped, 2);
+        assert_eq!(pool.warm_worker_count(), 1);
     }
 }
