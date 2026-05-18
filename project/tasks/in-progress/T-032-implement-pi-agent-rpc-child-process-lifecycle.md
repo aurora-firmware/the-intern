@@ -81,6 +81,14 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-18
+
+Implemented T-032 end-to-end using TDD in three behavior-focused cycles. First, I added failing tests for worker spawn semantics and spawn-failure mapping, then implemented `RpcWorkerProcess::spawn` to launch the configured command/args with piped stdin/stdout/stderr and convert spawn failures into `ServiceError::ChildProcess` with safe detail text. Second, I added failing tests for RPC JSON command framing and LF-delimited stdout parsing, including a non-LF Unicode separator case, then implemented `send_json` (exact JSON + `\\n`) and `read_next_stdout_json` (line-by-line parse using LF boundaries only). Third, I added failing termination tests for graceful shutdown and deadline-triggered force kill, then implemented `terminate` to request graceful stop first (SIGTERM on Unix) and force-kill after `child_termination_deadline` if still alive.
+
+Tried and rejected: an early force-kill test variant that terminated too quickly because SIGTERM could arrive before the child installed its TERM trap; added a short pre-terminate delay in that test to make the stubborn-child condition deterministic. Also briefly closed stdin at termination start, but removed that from the termination path because it could cause premature graceful exits unrelated to the signal/deadline behavior being tested.
+
+What remains: no additional implementation items for this task scope; follow-up tasks still own supervisor session registry, warm-pool allocation, prompt routing, and admin integration.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
