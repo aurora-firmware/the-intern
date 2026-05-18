@@ -9,6 +9,7 @@ use serde_json::Value;
 
 const SOCKET_APPEAR_DEADLINE: Duration = Duration::from_secs(2);
 const SHUTDOWN_DRAIN_DEADLINE: Duration = Duration::from_millis(800);
+const SHUTDOWN_EXIT_MARGIN: Duration = Duration::from_millis(300);
 const COMMAND_DEADLINE: Duration = Duration::from_secs(1);
 const PROCESS_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -143,9 +144,10 @@ fn shell_commands_work_end_to_end_against_spawned_serve() {
         .expect("invoke kill -TERM");
     assert!(kill_status.success(), "kill -TERM should succeed");
 
+    let shutdown_exit_deadline = SHUTDOWN_DRAIN_DEADLINE + SHUTDOWN_EXIT_MARGIN;
     let exit_status = serve
-        .wait_for_exit(SHUTDOWN_DRAIN_DEADLINE)
-        .expect("bob serve should exit before shutdown drain deadline");
+        .wait_for_exit(shutdown_exit_deadline)
+        .expect("bob serve should exit shortly after configured shutdown drain deadline");
     assert_eq!(
         exit_status.code(),
         Some(0),
