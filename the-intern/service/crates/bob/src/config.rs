@@ -123,6 +123,24 @@ impl BobConfig {
             ));
         }
 
+        if self.pi_agent_warm_pool_size == 0 {
+            return Err(configuration_error(
+                "pi_agent_warm_pool_size must be positive",
+            ));
+        }
+
+        if self.pi_agent_max_processes == 0 {
+            return Err(configuration_error(
+                "pi_agent_max_processes must be positive",
+            ));
+        }
+
+        if self.pi_agent_warm_pool_size > self.pi_agent_max_processes {
+            return Err(configuration_error(
+                "pi_agent_warm_pool_size cannot exceed pi_agent_max_processes",
+            ));
+        }
+
         Ok(self)
     }
 }
@@ -667,6 +685,39 @@ admin_allowed_uids = [1000]
     }
 
     #[test]
+    fn returns_configuration_error_when_pi_agent_warm_pool_size_is_zero() {
+        let result = load_with_env_overrides([("BOB_PI_AGENT_WARM_POOL_SIZE", "0")]);
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("pi_agent_warm_pool_size must be positive")),
+            "expected configuration error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn returns_configuration_error_when_pi_agent_max_processes_is_zero() {
+        let result = load_with_env_overrides([("BOB_PI_AGENT_MAX_PROCESSES", "0")]);
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("pi_agent_max_processes must be positive")),
+            "expected configuration error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn returns_configuration_error_when_warm_pool_size_exceeds_max_processes() {
+        let result = load_with_env_overrides([
+            ("BOB_PI_AGENT_WARM_POOL_SIZE", "5"),
+            ("BOB_PI_AGENT_MAX_PROCESSES", "4"),
+        ]);
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("pi_agent_warm_pool_size cannot exceed pi_agent_max_processes")),
+            "expected configuration error, got {result:?}"
+        );
+    }
+
+    #[test]
     fn loader_tracing_does_not_emit_secret_bearing_values() {
         let mut env = BTreeMap::new();
         if cfg!(target_os = "macos") {
@@ -708,6 +759,25 @@ admin_allowed_uids = [1000]
         let path = env::temp_dir().join(format!("bob-config-{unique}.toml"));
         fs::write(&path, contents).expect("temp config write should succeed");
         path
+    }
+
+    fn load_with_env_overrides<const N: usize>(overrides: [(&str, &str); N]) -> ServiceResult<BobConfig> {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+        for (key, value) in overrides {
+            env.insert(key.to_string(), value.to_string());
+        }
+
+        BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
     }
 
     #[derive(Clone, Default)]
