@@ -86,6 +86,14 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-18
+
+Implemented T-033 in four TDD cycles. First, I added pool startup tests and implemented warm-pool preallocation with a cap at `min(warm_pool_size, max_processes)`, plus fail-fast `ChildProcess` propagation when warm workers cannot spawn. Second, I added acquisition tests and implemented session binding semantics: consume warm workers first, spawn on demand when under capacity, and return `ServiceError::ChildProcess` when acquisition would exceed `max_processes`. Third, I wired the pool into the supervisor actor/handle flow: added `acquire_session`, implemented real `list_sessions`, and changed `start` to return `ServiceResult` so startup fails immediately if warm-pool spawn fails. Fourth, I updated `bob::serve` to handle fallible supervisor startup and added a serve test that verifies startup returns `ServiceDown` when the configured worker command is missing, ensuring `bob serve` does not continue in that state.
+
+Tried and rejected: relying on sandbox execution for `serve::tests`; Unix-socket bind tests failed with `Operation not permitted`, so verification was rerun outside sandbox. Also avoided introducing extra API churn in unrelated crates by keeping changes scoped to task-listed files only.
+
+Remaining work: none for this task's acceptance criteria; handoff ready for reviewer.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
