@@ -81,6 +81,14 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-18
+
+Implemented Phase 2 cleanup semantics in pi-agent-supervisor with TDD on the task branch. First cycle covered kill-session behavior: I replaced the old not-implemented test with explicit success/error cases, verified red, implemented pool-backed termination, and wired actor handling so active sessions are terminated and unknown sessions return ServiceError::InvalidRequest with safe detail. Second cycle added reaping/shutdown behavior: I introduced a dedicated reaper helper module, added last prompt activity tracking per active session, wired periodic reap ticks in the actor, implemented idle session termination and surplus warm-worker trimming, and added actor-stop cleanup that terminates all active and warm workers.
+
+For AC-5 validation, I first tried TERM-trap file markers and rejected that approach because shell trap timing was not reliable under test; I switched to PID-capture at worker startup plus post-shutdown `/proc` non-existence checks, which produced stable evidence that both active and warm workers are terminated.
+
+Remaining work in this task branch: none; ready for reviewer and loop handoff append on `dev-agent`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
