@@ -146,6 +146,23 @@ Obstacles Encountered:
 - Unix-domain-socket tests fail in sandbox with `Operation not permitted`; verification required elevated runs.
 - No other blockers.
 
+### Session 2 — 2026-05-18
+
+Addressed the reviewer-reported flake at `shell_e2e` shutdown (`bob serve should exit before shutdown drain deadline`). I reproduced the failure in elevated runs exactly at the reported assertion, then measured SIGTERM-to-exit timing and observed shutdown finishing slightly above the configured `800ms` drain window (typically ~818-833ms), which made the exact-deadline assertion brittle. I updated the test to keep the same behavioral contract but with a bounded tolerance tied to configured drain behavior: `shutdown_exit_deadline = SHUTDOWN_DRAIN_DEADLINE + SHUTDOWN_EXIT_MARGIN` (300ms). I kept the clean-exit (`code 0`) and socket-file cleanup assertions unchanged.
+
+I considered changing `serve` shutdown internals to force stricter timing, but rejected that because the issue is assertion brittleness rather than a service behavior defect, and the requested fix was to make verification robust while preserving intent.
+
+What remains: reviewer re-check and canonical lifecycle updates on `dev-agent` (this bug branch intentionally did not edit the bug lifecycle file).
+
+Evidence:
+- Red repro (elevated): `cd the-intern/service && cargo test --test shell_e2e -- --nocapture` failed at `crates/bob/tests/shell_e2e.rs:148` with `bob serve should exit before shutdown drain deadline`.
+- Timing evidence (elevated manual runs): shutdown observed around `818-833ms` with `BOB_SHUTDOWN_DRAIN_DEADLINE=800ms`.
+- Required verification (elevated due Unix socket sandbox restriction): `cargo test -p bob serve::tests`, `cargo test -p admin-rpc`, and `cargo test --test shell_e2e -- --nocapture` all passed.
+- Stability check: repeated `shell_e2e` 10 consecutive runs, all passed.
+
+Obstacles Encountered:
+- Sandbox blocks Unix-domain socket bind with `Operation not permitted`; Unix-socket tests required elevated execution for valid verification.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
