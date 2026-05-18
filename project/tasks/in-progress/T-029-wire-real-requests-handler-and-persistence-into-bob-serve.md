@@ -51,4 +51,14 @@ cd the-intern/service && cargo build -p bob
 
 ## Work Log
 
+### Session 1 — 2026-05-18
+
+Implemented T-029 by wiring `bob::serve` to use the real Phase 1b requests-handler and persistence path instead of the placeholder downstream closure. In `try_start_subsystems`, I kept the existing actor startup order, then replaced the `_event => async {}` closure with a call to `requests_handler::run_preflight`, passing a real `PersistenceStore` handle and an audit sink adapter backed by the monitoring handle. I added a small `MonitoringAuditSink` type in `serve.rs` that implements `AuditSink` and forwards audit records to monitoring's scaffold method.
+
+To prove the wiring behavior, I added `permitted_event_is_persisted_via_wired_requests_handler_and_persistence` in `serve::tests`. The test configures one allowed user ID, starts subsystems, submits an event through `_requests_handler`, then asserts the event appears in `_persistence.dequeue_next()` before shutdown. This validates that the live requests-handler path persists permitted events through the wired persistence handle.
+
+What I tried and rejected: I considered calling `requests_handler::start_with_preflight`, but that API currently hardcodes `context=None`, which denies all events and cannot satisfy AC-2. I therefore wired `start_with` directly with `run_preflight` and a placeholder context derived from configured allowed IDs so permitted flow is testable in `bob serve` until channel adapters provide real request context.
+
+What remains: no code changes remain in this task scope. Canonical task lifecycle updates (Work Log append on `dev-agent`) are still needed by the loop role.
+
 ## Review
