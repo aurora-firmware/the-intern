@@ -1,7 +1,7 @@
 ---
 id: T-036
 title: Wire Phase 2 supervisor into bob serve and admin sessions
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-18'
