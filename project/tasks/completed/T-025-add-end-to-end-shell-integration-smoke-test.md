@@ -1,7 +1,7 @@
 ---
 id: T-025
 title: Add end-to-end shell integration smoke test
-status: blocked
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-16'
@@ -76,3 +76,17 @@ Attempted: Implemented full smoke test, added deterministic command timeouts, re
 Failed because: `bob status` hangs even after sockets exist; fixing requires modifying production files outside the approved T-025 scope (`serve.rs` runtime wiring).
 
 Architect guidance: Block T-025 against `B-001` and route the production fix through bug handling first. T-025 must not expand into prior runtime/admin-RPC wiring repair. After `B-001` merges, resume T-025 as a test-only task and verify with `cd the-intern/service && cargo test --test shell_e2e -- --nocapture`.
+
+### Completion — 2026-05-18
+
+`B-001` was diagnosed, fixed, reviewed, merged into `dev-agent`, and moved to resolved. Its merge commit `8cb0473` added the requested shell E2E regression test at `the-intern/service/crates/bob/tests/shell_e2e.rs` and fixed the admin RPC wiring required for the test to pass.
+
+Verification after the bug merge:
+
+```bash
+cd the-intern/service && cargo test --test shell_e2e -- --nocapture
+```
+
+Result: PASS — 1 test passed, 0 failed.
+
+T-025 has no remaining unmerged task-branch diff because its implementation landed through the required B-001 bug fix. The stale task branch was not used for completion.
