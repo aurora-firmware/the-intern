@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test suite for T-003 the-intern folder structure
+# Test suite for the current the-intern application-code structure.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -9,7 +9,9 @@ EXTENSIONS_DIR="$ROOT_DIR/extensions"
 ROOT_README="$ROOT_DIR/README.md"
 SERVICE_README="$SERVICE_DIR/README.md"
 EXTENSIONS_README="$EXTENSIONS_DIR/README.md"
-SPEC_REF="project/specs/the-intern-agent-service-architecture.md"
+SERVICE_MANIFEST="$SERVICE_DIR/Cargo.toml"
+SPEC_REF="the-intern-agent-service-architecture.md"
+SHELL_SPEC_REF="bob-service-shell-architecture.md"
 
 pass_count=0
 fail_count=0
@@ -26,26 +28,7 @@ run_test() {
   fi
 }
 
-assert_readme_stub_requirements() {
-  local readme_path="$1"
-  local ok=0
-  local line_count
-  line_count=$(wc -l < "$readme_path") || ok=1
-
-  if [ "$line_count" -lt 3 ] || [ "$line_count" -gt 6 ]; then
-    ok=1
-    echo "  invalid line count in $readme_path: $line_count"
-  fi
-
-  grep -q "$SPEC_REF" "$readme_path" 2>/dev/null || {
-    ok=1
-    echo "  missing spec reference in $readme_path"
-  }
-
-  return "$ok"
-}
-
-# AC-1: required directories exist
+# Required directories exist.
 test_ac1_required_directories_exist() {
   local ok=0
   [ -d "$ROOT_DIR" ] || ok=1
@@ -54,42 +37,42 @@ test_ac1_required_directories_exist() {
   run_test "AC-1: required directories exist" "$ok"
 }
 
-# AC-2: each required README exists and is a 3-6 line stub with a spec reference
-test_ac2_required_readmes_exist_and_stubbed() {
+# READMEs exist and point to architecture/spec guidance.
+test_ac2_required_readmes_exist_and_reference_specs() {
   local ok=0
   [ -f "$ROOT_README" ] || ok=1
   [ -f "$SERVICE_README" ] || ok=1
   [ -f "$EXTENSIONS_README" ] || ok=1
 
   if [ "$ok" = "0" ]; then
-    assert_readme_stub_requirements "$ROOT_README" || ok=1
-    assert_readme_stub_requirements "$SERVICE_README" || ok=1
-    assert_readme_stub_requirements "$EXTENSIONS_README" || ok=1
+    grep -q "$SPEC_REF" "$ROOT_README" 2>/dev/null || { ok=1; echo "  root README missing S-001 reference"; }
+    grep -q "$SHELL_SPEC_REF" "$ROOT_README" 2>/dev/null || { ok=1; echo "  root README missing shell spec reference"; }
+    grep -q "$SPEC_REF" "$SERVICE_README" 2>/dev/null || { ok=1; echo "  service README missing S-001 reference"; }
+    grep -q "$SHELL_SPEC_REF" "$SERVICE_README" 2>/dev/null || { ok=1; echo "  service README missing shell spec reference"; }
+    grep -q "$SPEC_REF" "$EXTENSIONS_README" 2>/dev/null || { ok=1; echo "  extensions README missing S-001 reference"; }
   fi
 
-  run_test "AC-2: required READMEs exist and match stub requirements" "$ok"
+  run_test "AC-2: required READMEs exist and reference specs" "$ok"
 }
 
-# AC-3: no source files or build manifests are present under the-intern
-test_ac3_no_source_or_manifest_files() {
+# The Rust service workspace exists.
+test_ac3_service_workspace_exists() {
   local ok=0
-  if find "$ROOT_DIR" -type f \( -name '*.rs' -o -name '*.ts' -o -name '*.js' \
-    -o -name 'Cargo.toml' -o -name 'package.json' -o -name 'tsconfig.json' \) \
-    2>/dev/null | grep -q .; then
-    ok=1
-  fi
-  run_test "AC-3: no source files or manifests under the-intern" "$ok"
+  [ -f "$SERVICE_MANIFEST" ] || ok=1
+  [ -d "$SERVICE_DIR/crates/bob" ] || ok=1
+  [ -d "$SERVICE_DIR/crates/bob-core" ] || ok=1
+  run_test "AC-3: Rust service workspace exists" "$ok"
 }
 
-# AC-4: extensions README states pi-agent is in dev container and not vendored
-test_ac4_extensions_readme_mentions_dev_container_and_not_vendored() {
+# Extensions README states pi-agent is provided externally and not vendored.
+test_ac4_extensions_readme_mentions_external_pi_agent_and_not_vendored() {
   local ok=0
-  grep -qi "dev container" "$EXTENSIONS_README" 2>/dev/null || ok=1
-  grep -qiE "not vendored|not included|installed in" "$EXTENSIONS_README" 2>/dev/null || ok=1
-  run_test "AC-4: extensions README includes dev-container and not-vendored note" "$ok"
+  grep -qiE "local developer|runtime environment|provided" "$EXTENSIONS_README" 2>/dev/null || ok=1
+  grep -qiE "not vendored|not included" "$EXTENSIONS_README" 2>/dev/null || ok=1
+  run_test "AC-4: extensions README includes external pi-agent and not-vendored note" "$ok"
 }
 
-# AC-5: no additional top-level package/crate directories beyond service and extensions
+# No additional top-level package/crate directories beyond service and extensions.
 test_ac5_no_additional_top_level_code_directories() {
   local ok=0
   local extra_dirs
@@ -109,9 +92,9 @@ test_ac5_no_additional_top_level_code_directories() {
 
 # Run all tests
 test_ac1_required_directories_exist
-test_ac2_required_readmes_exist_and_stubbed
-test_ac3_no_source_or_manifest_files
-test_ac4_extensions_readme_mentions_dev_container_and_not_vendored
+test_ac2_required_readmes_exist_and_reference_specs
+test_ac3_service_workspace_exists
+test_ac4_extensions_readme_mentions_external_pi_agent_and_not_vendored
 test_ac5_no_additional_top_level_code_directories
 
 echo ""

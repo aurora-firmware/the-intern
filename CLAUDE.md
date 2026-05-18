@@ -20,8 +20,6 @@ Repository orchestration commands are provided by the slash-skills below, backed
 ├── CLAUDE.md                    # This file (AGENTS.md is a symlink to it)
 ├── README.md
 ├── .ai-team.toml                # Framework config (project.dir, version)
-├── .devcontainer/
-│   └── devcontainer.json        # Local dev container definition
 ├── .github/
 │   └── workflows/
 │       ├── build.yml            # Build workflow (pull requests)

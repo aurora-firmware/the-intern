@@ -46,8 +46,8 @@ runs `bob status` and `bob sessions list --json`, sends `SIGTERM`, and asserts
 clean shutdown plus socket cleanup.
 
 Some tests use Unix domain sockets and peer credentials. In a restricted
-sandbox they may fail with `Operation not permitted`; run them in the dev
-container or a normal local shell.
+sandbox they may fail with `Operation not permitted`; run them in a normal
+local development shell.
 
 ## Formatting and Linting
 

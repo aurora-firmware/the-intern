@@ -1,6 +1,0 @@
-{
-  "name": "the-intern local dev",
-  "image": "localhost/rust_dev:latest",
-  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,consistency=cached",
-  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}"
-}

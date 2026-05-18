@@ -11,11 +11,10 @@ the shell plus Phase 1b queue/session-state behavior.
 
 - Product overview: [project/docs/system_overview.md](project/docs/system_overview.md)
 - Delivery plan: [project/docs/roadmap.md](project/docs/roadmap.md)
-- Approved specifications: [project/specs/](project/specs/)
+- Approved specifications: [project/specs/the-intern-agent-service-architecture.md](project/specs/the-intern-agent-service-architecture.md), [project/specs/bob-service-shell-architecture.md](project/specs/bob-service-shell-architecture.md)
 - Application layout: [`the-intern/service`](the-intern/service), [`the-intern/extensions`](the-intern/extensions)
 - Rust service build/test instructions: [`the-intern/service/README.md`](the-intern/service/README.md)
 - GitHub workflows: [`.github/workflows/`](.github/workflows/) currently contain placeholder build/test/deploy jobs; use the local commands below for real verification.
-- Local development container: [.devcontainer/devcontainer.json](.devcontainer/devcontainer.json)
 - Coding guidelines: [Node.js](project/docs/coding-guidelines-node.md), [Rust](project/docs/coding-guidelines-rust.md)
 
 ## Current State
@@ -38,7 +37,7 @@ cargo test --workspace
 ```
 
 Some tests bind Unix domain sockets. In restricted sandboxes they may fail with
-`Operation not permitted`; run them in the dev container or a normal local shell.
+`Operation not permitted`; run them in a normal local development shell.
 
 Useful focused checks:
 
