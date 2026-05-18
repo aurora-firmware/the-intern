@@ -102,12 +102,7 @@ impl Dispatcher {
         match request.method.as_str() {
             "service.status" => self.handle_service_status(id).await,
             "sessions.list" => self.handle_sessions_list(id).await,
-            "sessions.kill" => DispatchOutcome::Err(ErrorResponse::error(
-                id,
-                CODE_METHOD_NOT_FOUND,
-                "sessions.kill is not yet implemented",
-                Some(json!({ "method": "sessions.kill" })),
-            )),
+            "sessions.kill" => self.handle_sessions_kill(id, &request.params).await,
             "policy.reload" => DispatchOutcome::Err(ErrorResponse::error(
                 id,
                 CODE_METHOD_NOT_FOUND,
@@ -283,6 +278,49 @@ impl Dispatcher {
             Err(e) => DispatchOutcome::Err(map_service_error(id, &e)),
         }
     }
+
+    async fn handle_sessions_kill(&self, id: Value, params: &Option<Value>) -> DispatchOutcome {
+        let Some(ref supervisor) = self.supervisor else {
+            return DispatchOutcome::Err(ErrorResponse::error(
+                id,
+                CODE_METHOD_NOT_FOUND,
+                "sessions.kill is not available",
+                Some(json!({ "method": "sessions.kill" })),
+            ));
+        };
+
+        // Parse the session id from params.id.
+        let session_id_str = params
+            .as_ref()
+            .and_then(|p| p.get("id"))
+            .and_then(|v| v.as_str());
+
+        let Some(session_id_str) = session_id_str else {
+            return DispatchOutcome::Err(ErrorResponse::error(
+                id,
+                CODE_INVALID_REQUEST,
+                "sessions.kill requires params.id",
+                Some(json!({ "category": "invalid_request" })),
+            ));
+        };
+
+        let session_id = match session_id_str.parse::<bob_core::types::SessionId>() {
+            Ok(sid) => sid,
+            Err(_) => {
+                return DispatchOutcome::Err(ErrorResponse::error(
+                    id,
+                    CODE_INVALID_REQUEST,
+                    "params.id is not a valid session id",
+                    Some(json!({ "category": "invalid_request" })),
+                ));
+            }
+        };
+
+        match supervisor.kill_session(session_id).await {
+            Ok(()) => DispatchOutcome::Ok(Response::ok(id, json!({ "ok": true }))),
+            Err(e) => DispatchOutcome::Err(map_service_error(id, &e)),
+        }
+    }
 }
 
 /// Map a [`ServiceError`] to a JSON-RPC error response.
@@ -382,9 +420,16 @@ mod tests {
     }
 
     fn make_dispatcher_with_supervisor() -> (Dispatcher, tokio::task::JoinHandle<()>) {
-        let (handle, join) = pi_agent_supervisor::start(pi_agent_supervisor::Config::default());
+        let (handle, join) =
+            pi_agent_supervisor::start(pi_agent_supervisor::Config::default())
+                .expect("supervisor start must succeed in tests");
         let dispatcher = Dispatcher::new(Some(handle), None, "0.1.0-test");
         (dispatcher, join)
+    }
+
+    fn make_supervisor_handle() -> (pi_agent_supervisor::Handle, tokio::task::JoinHandle<()>) {
+        pi_agent_supervisor::start(pi_agent_supervisor::Config::default())
+            .expect("supervisor start must succeed in tests")
     }
 
     fn make_registry() -> ConnectionRegistry {
@@ -788,9 +833,136 @@ mod tests {
         }
     }
 
-    // sessions.kill returns NotImplemented (-32601).
+    // AC-1 (T-036): sessions.list returns the session ids reported by the supervisor.
     #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_sessions_kill_returns_not_implemented() {
+    async fn dispatch_sessions_list_with_active_session_returns_that_session_id() {
+        let (sup_handle, sup_task) = make_supervisor_handle();
+        let session_id = bob_core::types::SessionId::new();
+        sup_handle
+            .acquire_session(session_id)
+            .await
+            .expect("acquire session must succeed");
+
+        let dispatcher = Dispatcher::new(Some(sup_handle), None, "0.1.0-test");
+        let req = make_request("sessions.list", json!(30));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => {
+                let ids: Vec<String> = resp.result
+                    .as_array()
+                    .expect("result must be an array")
+                    .iter()
+                    .map(|v| v.as_str().expect("each id must be a string").to_string())
+                    .collect();
+                assert_eq!(ids.len(), 1, "one active session must be returned");
+                assert_eq!(ids[0], session_id.to_string());
+            }
+            DispatchOutcome::Err(e) => panic!("expected Ok, got error: {}", e.error.message),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-2 (T-036): sessions.kill with a valid active session id returns success.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_sessions_kill_with_valid_session_id_returns_ok() {
+        let (sup_handle, sup_task) = make_supervisor_handle();
+        let session_id = bob_core::types::SessionId::new();
+        sup_handle
+            .acquire_session(session_id)
+            .await
+            .expect("acquire session must succeed");
+
+        let dispatcher = Dispatcher::new(Some(sup_handle), None, "0.1.0-test");
+        let req = make_request_with_params(
+            "sessions.kill",
+            json!(31),
+            json!({ "id": session_id.to_string() }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => {
+                assert_eq!(resp.id, json!(31));
+                assert_eq!(resp.result["ok"], json!(true));
+            }
+            DispatchOutcome::Err(e) => panic!("expected Ok, got error: {}", e.error.message),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-3 (T-036): sessions.kill with an unknown session id returns InvalidRequest (-32602).
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_sessions_kill_with_unknown_session_id_returns_invalid_request() {
+        let (dispatcher, sup_task) = make_dispatcher_with_supervisor();
+        let unknown_id = bob_core::types::SessionId::new();
+        let req = make_request_with_params(
+            "sessions.kill",
+            json!(32),
+            json!({ "id": unknown_id.to_string() }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(32));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for unknown session id"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-3 (T-036): sessions.kill without params returns InvalidRequest (-32602).
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_sessions_kill_without_params_returns_invalid_request() {
+        let (dispatcher, sup_task) = make_dispatcher_with_supervisor();
+        let req = make_request("sessions.kill", json!(33));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(33));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for missing params"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-2 (T-036): sessions.kill without a supervisor handle returns NotImplemented (-32601).
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_sessions_kill_without_handle_returns_not_implemented() {
+        let dispatcher = make_dispatcher_no_handles();
+        let req = make_request_with_params(
+            "sessions.kill",
+            json!(34),
+            json!({ "id": bob_core::types::SessionId::new().to_string() }),
+        );
+        let mut registry = make_registry();
+
+        match dispatcher.dispatch(req, &mut registry).await {
+            DispatchOutcome::Err(resp) => assert_eq!(resp.error.code, CODE_METHOD_NOT_FOUND),
+            DispatchOutcome::Ok(_) => panic!("expected error"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // (legacy) sessions.kill without params and no handle returns NotImplemented (-32601).
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_sessions_kill_no_handle_no_params_returns_not_implemented() {
         let dispatcher = make_dispatcher_no_handles();
         let req = make_request("sessions.kill", json!(8));
         let mut registry = make_registry();
