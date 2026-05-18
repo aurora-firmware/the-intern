@@ -56,7 +56,8 @@ async fn overload_submissions_admit_exact_capacity_and_preserve_order() {
                 async move {
                     if is_first_event.swap(false, Ordering::SeqCst) {
                         if let Some(tx) = blocked_tx.lock().expect("mutex poisoned").take() {
-                            tx.send(()).expect("blocking signal receiver should be present");
+                            tx.send(())
+                                .expect("blocking signal receiver should be present");
                         }
                         gate.notified().await;
                     }
