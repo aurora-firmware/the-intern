@@ -68,3 +68,20 @@ Obstacles Encountered:
 - No product-code blockers.
 
 ## Review
+
+### Review Verdict — 2026-05-18
+
+PASS
+
+Stage 1 (acceptance criteria):
+- AC-1 met: `queue_load` submits `request_queue_capacity * 10` events under deterministic backpressure and asserts exactly `request_queue_capacity` admissions with overflow errors matching `ServiceError::Timeout { operation: "requests-handler.submit" }`.
+- AC-2 met: admitted events are dequeued from persistence and asserted in the same submission order.
+- AC-3 met: `session_state_roundtrip` stores and retrieves multiple distinct `SessionId` values and asserts equality.
+- AC-4 met: unknown `SessionId` lookup asserts `Ok(None)` (`is_none()` after successful call).
+- Scope check: implementation changes are limited to the two new integration test files in `the-intern/service/crates/bob/tests/`.
+
+Stage 2 (code quality):
+- Correctness, test independence, readability, and performance are acceptable for integration-test scope.
+- Verification commands executed and passed:
+  - `cd the-intern/service && cargo test --test queue_load`
+  - `cd the-intern/service && cargo test --test session_state_roundtrip`
