@@ -136,6 +136,16 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-18
+
+Implemented B-001 using the recorded diagnosis as contract. I first reproduced the bug with the shell E2E test in elevated mode: `bob status` timed out while `bob serve` was running and both sockets existed, matching diagnosis. I then changed `bob::serve` wiring so `admin-rpc` is started with `admin_sock_path`, allowed UIDs, and subsystem handles (including supervisor), and removed the inert local admin listener binding in `serve.rs`. I kept extension socket lifecycle in `bob::serve` and retained explicit socket-file cleanup on shutdown. I added a guard that fails startup if `admin-rpc` did not create `admin.sock`, preserving service-down behavior for bind failures.
+
+I adopted the provisional untracked regression test `crates/bob/tests/shell_e2e.rs`, formatted it, and committed it with the fix. I considered keeping socket ownership in `bob::serve` and teaching `admin-rpc` to consume a pre-bound listener, but rejected that as broader than needed for this bug; the minimal fix is to let `admin-rpc` own admin socket serving and keep `bob` cleanup semantics. Remaining work: reviewer pass and lifecycle updates on `dev-agent`.
+
+Obstacles Encountered:
+- Unix-domain-socket tests fail in sandbox with `Operation not permitted`; verification required elevated runs.
+- No other blockers.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
