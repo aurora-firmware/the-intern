@@ -89,6 +89,18 @@ fn start_subsystems(cfg: &BobConfig) -> ServiceResult<Runtime> {
     }
 }
 
+fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Config {
+    pi_agent_supervisor::Config {
+        worker_command: cfg.pi_agent_command.clone(),
+        worker_args: cfg.pi_agent_args.clone(),
+        warm_pool_size: cfg.pi_agent_warm_pool_size,
+        max_processes: cfg.pi_agent_max_processes,
+        idle_reap_timeout: cfg.pi_agent_idle_reap_timeout,
+        command_buffer: cfg.request_queue_capacity,
+        child_termination_deadline: cfg.shutdown_reap_deadline,
+    }
+}
+
 fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::Error>> {
     info!("starting monitoring actor");
     let (monitoring_handle, monitoring_join) = monitoring::start(monitoring::Config::default());
@@ -104,8 +116,9 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     info!("policy-control actor started");
 
     info!("starting pi-agent-supervisor actor");
+    let pi_agent_supervisor_cfg = build_pi_agent_supervisor_config(cfg);
     let (pi_agent_supervisor_handle, pi_agent_supervisor_join) =
-        pi_agent_supervisor::start(pi_agent_supervisor::Config::default());
+        pi_agent_supervisor::start(pi_agent_supervisor_cfg);
     info!("pi-agent-supervisor actor started");
 
     info!("starting requests-handler actor");
@@ -395,6 +408,44 @@ pub mod tests {
             shutdown_reap_deadline: Duration::from_millis(50),
             ..BobConfig::default()
         }
+    }
+
+    #[test]
+    fn pi_agent_supervisor_config_maps_phase2_bob_settings() {
+        let cfg = BobConfig {
+            request_queue_capacity: 33,
+            shutdown_reap_deadline: Duration::from_secs(11),
+            pi_agent_command: "pi-custom".to_string(),
+            pi_agent_args: vec![
+                "--mode".to_string(),
+                "rpc".to_string(),
+                "--trace".to_string(),
+            ],
+            pi_agent_warm_pool_size: 3,
+            pi_agent_max_processes: 9,
+            pi_agent_idle_reap_timeout: Duration::from_secs(45),
+            ..BobConfig::default()
+        };
+
+        let supervisor_cfg = build_pi_agent_supervisor_config(&cfg);
+
+        assert_eq!(supervisor_cfg.worker_command, "pi-custom");
+        assert_eq!(
+            supervisor_cfg.worker_args,
+            vec![
+                "--mode".to_string(),
+                "rpc".to_string(),
+                "--trace".to_string()
+            ]
+        );
+        assert_eq!(supervisor_cfg.warm_pool_size, 3);
+        assert_eq!(supervisor_cfg.max_processes, 9);
+        assert_eq!(supervisor_cfg.idle_reap_timeout, Duration::from_secs(45));
+        assert_eq!(supervisor_cfg.command_buffer, 33);
+        assert_eq!(
+            supervisor_cfg.child_termination_deadline,
+            Duration::from_secs(11)
+        );
     }
 
     // AC-1: run constructs all subsystem actors and binds both sockets

@@ -4,11 +4,32 @@ use bob_core::{
     error::{ServiceError, ServiceResult},
     types::SessionId,
 };
+use std::time::Duration;
 use tokio::{sync::mpsc, task::JoinHandle};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
+    pub worker_command: String,
+    pub worker_args: Vec<String>,
+    pub warm_pool_size: usize,
+    pub max_processes: usize,
+    pub idle_reap_timeout: Duration,
     pub command_buffer: usize,
+    pub child_termination_deadline: Duration,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            worker_command: "pi".to_string(),
+            worker_args: vec!["--mode".to_string(), "rpc".to_string()],
+            warm_pool_size: 1,
+            max_processes: 8,
+            idle_reap_timeout: Duration::from_secs(300),
+            command_buffer: 64,
+            child_termination_deadline: Duration::from_secs(10),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -42,7 +63,13 @@ impl Handle {
 impl Actor {
     async fn run(mut self) {
         tracing::info!(
+            worker_command = %self.cfg.worker_command,
+            worker_args = ?self.cfg.worker_args,
+            warm_pool_size = self.cfg.warm_pool_size,
+            max_processes = self.cfg.max_processes,
+            idle_reap_timeout = ?self.cfg.idle_reap_timeout,
             command_buffer = self.cfg.command_buffer,
+            child_termination_deadline = ?self.cfg.child_termination_deadline,
             "pi-agent-supervisor actor started"
         );
         while let Some(command) = self.rx.recv().await {
@@ -76,6 +103,22 @@ pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
 mod tests {
     use super::*;
     use bob_core::error::ServiceError;
+    use std::time::Duration;
+
+    #[test]
+    fn default_config_sets_pi_rpc_and_positive_pool_settings() {
+        let cfg = Config::default();
+
+        assert_eq!(cfg.worker_command, "pi");
+        assert_eq!(
+            cfg.worker_args,
+            vec!["--mode".to_string(), "rpc".to_string()]
+        );
+        assert!(cfg.warm_pool_size > 0);
+        assert!(cfg.max_processes > 0);
+        assert!(cfg.idle_reap_timeout > Duration::from_secs(0));
+        assert!(cfg.child_termination_deadline > Duration::from_secs(0));
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn list_sessions_returns_empty_when_no_sessions() {
