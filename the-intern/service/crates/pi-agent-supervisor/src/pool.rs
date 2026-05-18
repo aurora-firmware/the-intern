@@ -1,4 +1,4 @@
-use crate::{process::WorkerProcessConfig, Config};
+use crate::{process::WorkerProcessConfig, rpc, Config};
 use bob_core::{
     error::{ServiceError, ServiceResult},
     types::SessionId,
@@ -54,6 +54,43 @@ impl SessionPool {
 
     pub fn list_sessions(&self) -> Vec<SessionId> {
         self.active_workers.keys().copied().collect()
+    }
+
+    pub async fn send_prompt(
+        &mut self,
+        session_id: SessionId,
+        message: String,
+    ) -> ServiceResult<()> {
+        if !self.active_workers.contains_key(&session_id) {
+            self.acquire_session(session_id)?;
+        }
+
+        let worker =
+            self.active_workers
+                .get_mut(&session_id)
+                .ok_or_else(|| ServiceError::ChildProcess {
+                    detail: "session worker missing after acquire".to_string(),
+                })?;
+        let command = rpc::PromptCommand::new(message);
+        worker.send_json(&command.to_json()).await?;
+
+        loop {
+            let Some(record) = worker.read_next_stdout_json().await? else {
+                return Err(ServiceError::ChildProcess {
+                    detail: "child stdout ended before prompt response".to_string(),
+                });
+            };
+
+            match rpc::parse_prompt_response(&record, &command.id)? {
+                Some(true) => return Ok(()),
+                Some(false) => {
+                    return Err(ServiceError::ChildProcess {
+                        detail: "prompt command rejected by child worker".to_string(),
+                    });
+                }
+                None => {}
+            }
+        }
     }
 
     pub fn warm_worker_count(&self) -> usize {

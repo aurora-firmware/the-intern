@@ -2,6 +2,7 @@
 
 pub mod pool;
 pub mod process;
+pub mod rpc;
 
 use bob_core::{
     error::{ServiceError, ServiceResult},
@@ -49,6 +50,11 @@ enum Command {
     },
     KillSession {
         session_id: SessionId,
+        response_tx: oneshot::Sender<ServiceResult<()>>,
+    },
+    SendPrompt {
+        session_id: SessionId,
+        message: String,
         response_tx: oneshot::Sender<ServiceResult<()>>,
     },
 }
@@ -100,6 +106,20 @@ impl Handle {
 
         response_rx.await.map_err(|_| ServiceError::Shutdown)?
     }
+
+    pub async fn send_prompt(&self, session_id: SessionId, message: String) -> ServiceResult<()> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.tx
+            .send(Command::SendPrompt {
+                session_id,
+                message,
+                response_tx,
+            })
+            .await
+            .map_err(|_| ServiceError::Shutdown)?;
+
+        response_rx.await.map_err(|_| ServiceError::Shutdown)?
+    }
 }
 
 impl Actor {
@@ -139,6 +159,18 @@ impl Actor {
                         "pi-agent-supervisor kill session command received"
                     );
                     let _ = response_tx.send(Err(ServiceError::NotImplemented));
+                }
+                Command::SendPrompt {
+                    session_id,
+                    message,
+                    response_tx,
+                } => {
+                    tracing::debug!(
+                        session_id = %session_id,
+                        message_len = message.len(),
+                        "pi-agent-supervisor send prompt command received"
+                    );
+                    let _ = response_tx.send(self.pool.send_prompt(session_id, message).await);
                 }
             }
         }
@@ -277,5 +309,111 @@ mod tests {
         };
 
         assert!(matches!(error, ServiceError::ChildProcess { .. }));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn send_prompt_returns_ok_for_active_session_on_success_response() {
+        let (handle, task) = start(test_config(
+            "sh",
+            &[
+                "-c",
+                "while IFS= read -r line; do id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); printf '{\"id\":\"%s\",\"type\":\"response\",\"success\":true}\\n' \"$id\"; done",
+            ],
+            1,
+            2,
+        ))
+        .expect("startup should succeed");
+        let session_id = SessionId::new();
+        handle
+            .acquire_session(session_id)
+            .await
+            .expect("session should be active");
+
+        let result = handle
+            .send_prompt(session_id, "hello prompt".to_string())
+            .await;
+
+        assert!(result.is_ok());
+        task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn send_prompt_acquires_missing_session_before_sending() {
+        let (handle, task) = start(test_config(
+            "sh",
+            &[
+                "-c",
+                "while IFS= read -r line; do id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); printf '{\"id\":\"%s\",\"type\":\"response\",\"success\":true}\\n' \"$id\"; done",
+            ],
+            0,
+            1,
+        ))
+        .expect("startup should succeed");
+        let session_id = SessionId::new();
+
+        handle
+            .send_prompt(session_id, "hello prompt".to_string())
+            .await
+            .expect("prompt routing should succeed");
+
+        let sessions = handle
+            .list_sessions()
+            .await
+            .expect("session listing should succeed");
+        assert_eq!(sessions, vec![session_id]);
+        task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn send_prompt_returns_child_process_error_on_unsuccessful_response() {
+        let (handle, task) = start(test_config(
+            "sh",
+            &[
+                "-c",
+                "while IFS= read -r line; do id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); printf '{\"id\":\"%s\",\"type\":\"response\",\"success\":false}\\n' \"$id\"; done",
+            ],
+            1,
+            2,
+        ))
+        .expect("startup should succeed");
+        let session_id = SessionId::new();
+
+        let result = handle
+            .send_prompt(session_id, "hello prompt".to_string())
+            .await;
+
+        assert!(matches!(result, Err(ServiceError::ChildProcess { .. })));
+        task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn send_prompt_keeps_session_available_when_events_follow_success_response() {
+        let (handle, task) = start(test_config(
+            "sh",
+            &[
+                "-c",
+                "while IFS= read -r line; do id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); printf '{\"id\":\"%s\",\"type\":\"response\",\"success\":true}\\n' \"$id\"; printf '{\"type\":\"event\",\"name\":\"progress\"}\\n'; done",
+            ],
+            1,
+            2,
+        ))
+        .expect("startup should succeed");
+        let session_id = SessionId::new();
+
+        handle
+            .send_prompt(session_id, "first".to_string())
+            .await
+            .expect("first prompt should succeed");
+        handle
+            .send_prompt(session_id, "second".to_string())
+            .await
+            .expect("second prompt should succeed");
+
+        let sessions = handle
+            .list_sessions()
+            .await
+            .expect("session listing should succeed");
+        assert_eq!(sessions, vec![session_id]);
+        task.abort();
     }
 }
