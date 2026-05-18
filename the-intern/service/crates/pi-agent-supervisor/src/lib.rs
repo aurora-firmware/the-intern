@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod pool;
 pub mod process;
 
 use bob_core::{

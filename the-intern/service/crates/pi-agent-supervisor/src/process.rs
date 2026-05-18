@@ -71,9 +71,10 @@ impl RpcWorkerProcess {
     }
 
     pub async fn send_json(&mut self, command: &Value) -> ServiceResult<()> {
-        let mut payload = serde_json::to_vec(command).map_err(|error| ServiceError::ChildProcess {
-            detail: format!("failed to serialize RPC command JSON ({error})"),
-        })?;
+        let mut payload =
+            serde_json::to_vec(command).map_err(|error| ServiceError::ChildProcess {
+                detail: format!("failed to serialize RPC command JSON ({error})"),
+            })?;
         payload.push(b'\n');
 
         let stdin = self
@@ -101,13 +102,13 @@ impl RpcWorkerProcess {
 
     pub async fn read_next_stdout_json(&mut self) -> ServiceResult<Option<Value>> {
         let mut line = String::new();
-        let read = self
-            .stdout
-            .read_line(&mut line)
-            .await
-            .map_err(|error| ServiceError::ChildProcess {
-                detail: format!("failed to read RPC output from child stdout ({error})"),
-            })?;
+        let read =
+            self.stdout
+                .read_line(&mut line)
+                .await
+                .map_err(|error| ServiceError::ChildProcess {
+                    detail: format!("failed to read RPC output from child stdout ({error})"),
+                })?;
 
         if read == 0 {
             return Ok(None);
@@ -120,9 +121,10 @@ impl RpcWorkerProcess {
             }
         }
 
-        let value = serde_json::from_str::<Value>(&line).map_err(|error| ServiceError::ChildProcess {
-            detail: format!("failed to parse JSON record from child stdout ({error})"),
-        })?;
+        let value =
+            serde_json::from_str::<Value>(&line).map_err(|error| ServiceError::ChildProcess {
+                detail: format!("failed to parse JSON record from child stdout ({error})"),
+            })?;
 
         Ok(Some(value))
     }
@@ -137,9 +139,15 @@ impl RpcWorkerProcess {
                 detail: format!("failed while waiting for child termination ({error})"),
             }),
             Err(_) => {
-                if let Some(_status) = self.child.try_wait().map_err(|error| ServiceError::ChildProcess {
-                    detail: format!("failed to inspect child status during termination ({error})"),
-                })? {
+                if let Some(_status) =
+                    self.child
+                        .try_wait()
+                        .map_err(|error| ServiceError::ChildProcess {
+                            detail: format!(
+                                "failed to inspect child status during termination ({error})"
+                            ),
+                        })?
+                {
                     return Ok(TerminationOutcome { forced: false });
                 }
 
@@ -150,9 +158,14 @@ impl RpcWorkerProcess {
                         detail: format!("failed to force-kill child process ({error})"),
                     })?;
 
-                self.child.wait().await.map_err(|error| ServiceError::ChildProcess {
-                    detail: format!("failed while waiting for force-killed child process ({error})"),
-                })?;
+                self.child
+                    .wait()
+                    .await
+                    .map_err(|error| ServiceError::ChildProcess {
+                        detail: format!(
+                            "failed while waiting for force-killed child process ({error})"
+                        ),
+                    })?;
 
                 Ok(TerminationOutcome { forced: true })
             }
@@ -302,10 +315,7 @@ mod tests {
     async fn terminate_requests_graceful_shutdown_before_deadline() {
         let worker = RpcWorkerProcess::spawn(&spawn_config(
             "sh",
-            &[
-                "-c",
-                "trap 'exit 0' TERM; while :; do sleep 1; done",
-            ],
+            &["-c", "trap 'exit 0' TERM; while :; do sleep 1; done"],
         ))
         .expect("spawn should succeed");
 
