@@ -1,7 +1,7 @@
 ---
 id: T-030
 title: Add Phase 1b integration tests for queue and session state
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-16'
