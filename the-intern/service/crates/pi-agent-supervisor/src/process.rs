@@ -18,7 +18,7 @@ pub struct RpcWorkerProcess {
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
-    stderr: ChildStderr,
+    _stderr: ChildStderr,
     child_termination_deadline: Duration,
 }
 
@@ -65,7 +65,7 @@ impl RpcWorkerProcess {
             child,
             stdin: Some(stdin),
             stdout: BufReader::new(stdout),
-            stderr,
+            _stderr: stderr,
             child_termination_deadline: cfg.child_termination_deadline,
         })
     }
@@ -208,7 +208,7 @@ mod tests {
         );
         let _ = &worker.stdin;
         let _ = &worker.stdout;
-        let _ = &worker.stderr;
+        let _ = &worker._stderr;
     }
 
     #[tokio::test(flavor = "current_thread")]
