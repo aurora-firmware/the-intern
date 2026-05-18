@@ -157,3 +157,14 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-18
+FAIL
+
+- File and location: `the-intern/service/crates/bob/tests/shell_e2e.rs:148`
+  - What is wrong: The canonical Fix Verification command in this bug file (`cd the-intern/service && cargo test --test shell_e2e -- --nocapture`) is not reliably passing on the implementation branch. Repeated elevated runs fail with `bob serve should exit before shutdown drain deadline`, so verification is unstable.
+  - What should change: Make the shutdown assertion robust (for example, add timing margin between configured drain deadline and wait timeout, or assert clean shutdown with a less brittle timeout strategy), then rerun the canonical Fix Verification command until stable.
+
+- File and location: `project/bugs/in-progress/B-001-bob-serve-does-not-answer-status-sessions-over-admin-socket.md` (Fix Verification section)
+  - What is wrong: Fix Verification is currently documented as satisfied by a single command, but the current implementation/test combination is flaky under review execution and does not consistently satisfy that step.
+  - What should change: Update implementation and/or test timing so this documented Fix Verification step passes consistently; keep the bug file verification step aligned with deterministic evidence.
