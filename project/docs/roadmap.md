@@ -4,10 +4,18 @@
 Phase 0 establishes the delivery baseline with CI scaffolding, the local development container, coding guidelines, and the `the-intern/service` plus `the-intern/extensions` layout so later architecture work lands in a stable environment. This preparatory phase aligns with the execution sequence described in `project/specs/the-intern-agent-service-architecture.md`, which defines the ordered implementation roadmap that starts at service fundamentals.
 
 ## Phase 1 — Rust service skeleton
+
+**Status: complete through Phase 1b as of T-030.**
+
 Phase 1 delivers the deterministic backbone for all later runtime behavior, in two steps defined by `project/specs/the-intern-agent-service-architecture.md` (S-001) and `project/specs/bob-service-shell-architecture.md` (S-002):
 
 - **Phase 1a — Service shell (S-002).** The `bob` binary, single Tokio runtime, the two Unix-domain sockets (`admin.sock` for JSON-RPC 2.0 control + future GUI/API; `extension.sock` for the JS-extension channel from S-001), subsystem actor scaffolds with port traits in the runtime-agnostic `bob-core` library crate, graceful shutdown, and the non-`serve` `bob` subcommands implemented as thin admin-RPC clients.
 - **Phase 1b — Working core subsystems (S-001 Implementation Order Phase 1).** Fill the scaffolds with the internal event queue, the Requests Handler, and persistence — landing them into the seats the shell already reserved.
+
+Current Phase 1 evidence includes a passing workspace test suite, shell E2E
+coverage for `bob serve`/`bob status`/`bob sessions list --json`, and
+integration coverage for requests-handler queue backpressure plus persistence
+session-state roundtrips.
 
 Phase 1a is positioned first because every later runtime feature lands into the shell; Phase 1b is positioned immediately after because S-001 Phases 2-7 depend on the working queue/handler/persistence rather than on the bare scaffolds.
 

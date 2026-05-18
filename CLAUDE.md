@@ -8,7 +8,7 @@ Two things live here, and they must not be confused:
 
 1. **The product being designed — "the Intern".** A logical architecture for an intelligent
    office-assistant agent, with architecture in `project/docs/system_overview.md`, implementation
-   roadmap in `project/docs/roadmap.md`, and early code layout in `the-intern/`.
+   roadmap in `project/docs/roadmap.md`, and current Rust service code in `the-intern/service/`.
 
 Repository orchestration commands are provided by the slash-skills below, backed by the
 `ai-team` CLI.
@@ -37,8 +37,8 @@ Repository orchestration commands are provided by the slash-skills below, backed
 ├── .codex/
 │   └── agents/                  # Mirror role definitions for the codex toolchain (*.toml)
 ├── the-intern/
-│   ├── extensions/              # Extension/plugin code area
-│   └── service/                 # Core service code area
+│   ├── extensions/              # Future JS extension/plugin code area
+│   └── service/                 # Rust service workspace (`bob` and subsystem crates)
 └── project/                     # Source of truth for product lifecycle state
     ├── docs/                    # Product design (system_overview.md, the-intern-architecture.md)
     │                            # Coding guidance and roadmap live here too
@@ -54,7 +54,13 @@ Directory *is* the status for tasks and bugs — moving a file is how state tran
 
 IMPORTANT: The skills used in this project, together with the ai-team CLI are under development. Please write down there every bug or problem you notice with any of them in ai-process-cli-reported-issues.md
 
-CI workflows run build and test on pull requests, and deploy on tags matching `v*`.
+GitHub workflows are currently placeholders:
+- `build.yml` and `test.yml` trigger on pull requests and pushes to `dev-agent`/`main`,
+  but only run placeholder `echo` steps.
+- `deploy.yml` triggers on `v*` tags and only runs a placeholder `echo` step.
+
+Use the local Rust verification commands in `the-intern/service/README.md` for
+real build/test evidence until the workflows are wired to actual commands.
 
 ## Pointers
 

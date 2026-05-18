@@ -1,6 +1,11 @@
 # the-intern
 
-The Intern is an AI office-assistant project with architecture and delivery work tracked in this repository; the current foundations include repo automation plus an initial app layout under `the-intern/service` and `the-intern/extensions`.
+The Intern is an AI office-assistant project with architecture, delivery state,
+and early implementation tracked in this repository. The Rust service shell
+(`bob`) now has a working Phase 1 foundation: Unix-socket admin and extension
+IPC scaffolding, admin JSON-RPC client subcommands, request queue/pre-flight
+wiring, in-memory persistence, graceful shutdown, and integration coverage for
+the shell plus Phase 1b queue/session-state behavior.
 
 ## Start Here
 
@@ -8,6 +13,41 @@ The Intern is an AI office-assistant project with architecture and delivery work
 - Delivery plan: [project/docs/roadmap.md](project/docs/roadmap.md)
 - Approved specifications: [project/specs/](project/specs/)
 - Application layout: [`the-intern/service`](the-intern/service), [`the-intern/extensions`](the-intern/extensions)
-- CI workflows: [`.github/workflows/`](.github/workflows/) (authoritative trigger details in [CLAUDE.md](CLAUDE.md))
+- Rust service build/test instructions: [`the-intern/service/README.md`](the-intern/service/README.md)
+- GitHub workflows: [`.github/workflows/`](.github/workflows/) currently contain placeholder build/test/deploy jobs; use the local commands below for real verification.
 - Local development container: [.devcontainer/devcontainer.json](.devcontainer/devcontainer.json)
 - Coding guidelines: [Node.js](project/docs/coding-guidelines-node.md), [Rust](project/docs/coding-guidelines-rust.md)
+
+## Current State
+
+- Task queue: drained through `T-030`; open/in-progress bug queue is empty.
+- Completed service phase: Phase 1a shell and Phase 1b queue/handler/persistence.
+- Main service workspace: `the-intern/service`.
+- JS extension area: `the-intern/extensions`; implementation is still future work.
+- Process/lifecycle state lives under `project/tasks/` and `project/bugs/`; directory location is status.
+
+## Local Verification
+
+From the Rust workspace:
+
+```bash
+cd the-intern/service
+cargo fmt --all -- --check
+cargo build -p bob
+cargo test --workspace
+```
+
+Some tests bind Unix domain sockets. In restricted sandboxes they may fail with
+`Operation not permitted`; run them in the dev container or a normal local shell.
+
+Useful focused checks:
+
+```bash
+cd the-intern/service
+cargo test --test shell_e2e -- --nocapture
+cargo test --test queue_load
+cargo test --test session_state_roundtrip
+```
+
+`cargo clippy --workspace -- -D warnings` is not yet a passing project gate;
+there is existing lint/documentation debt in the `bob` crate.
