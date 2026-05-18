@@ -1,7 +1,7 @@
 ---
 id: T-034
 title: Add pi-agent RPC prompt routing
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-18'
