@@ -87,6 +87,45 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-05-18
+
+Reproduction status:
+- Confirmed.
+- With elevated execution (outside sandbox socket restrictions), `cargo test --test shell_e2e -- --nocapture` fails consistently with:
+  - `bob status timed out after 1s` (panic at `crates/bob/tests/shell_e2e.rs:187`).
+
+Evidence captured:
+- Canonical repro command failed as reported:
+  - `cd the-intern/service && cargo test --test shell_e2e -- --nocapture`
+  - Failure: `bob status timed out after 1s`.
+- Direct trace with spawned `bob serve` showed:
+  - both `/tmp/.../admin.sock` and `/tmp/.../extension.sock` exist (`-S` true),
+  - `timeout 1s bob status` exits `124` (hang timeout),
+  - serve logs show `admin-rpc actor started` but no listener-bind log from `admin-rpc`.
+- Code evidence:
+  - `bob serve` starts admin-rpc with defaults: `the-intern/service/crates/bob/src/serve.rs`
+  - `admin-rpc` default has empty `admin_sock_path`: `the-intern/service/crates/admin-rpc/src/lib.rs`
+  - `admin-rpc` only spawns listener when `admin_sock_path` is non-empty.
+  - `bob serve`'s own listeners are explicitly "not polled".
+  - client `status` call waits on `read_line` with no timeout, so no response means hang.
+
+Isolated fault:
+- Runtime wiring in `bob::serve::try_start_subsystems`: it creates inert bound sockets (`UnixListener::bind`) and keeps them alive, but does not connect them to request handling.
+- Concurrently, `admin_rpc::start(Config::default())` disables `admin-rpc` listener creation, so no component accepts/dispatches admin RPC on `admin.sock`.
+
+Root cause or fault hypothesis:
+- Root cause: mismatched ownership contract for admin socket handling.
+  - `bob` assumes it owns socket binding.
+  - `admin-rpc` only runs accept loop when given `admin_sock_path`.
+  - Current combination yields a bound socket file with no request handler, causing client calls (`status`, `sessions list`) to block waiting for replies.
+
+Planned verification:
+- After fix, run:
+  - `cd the-intern/service && cargo test -p bob serve::tests`
+  - `cd the-intern/service && cargo test -p admin-rpc`
+  - `cd the-intern/service && cargo test --test shell_e2e -- --nocapture`
+- Confirm `bob status` exits `0` with non-empty payload and `bob sessions list --json` returns `[]` while `bob serve` is running.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
