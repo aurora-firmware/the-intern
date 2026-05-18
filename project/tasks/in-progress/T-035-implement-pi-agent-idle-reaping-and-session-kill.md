@@ -100,3 +100,20 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-18
+PASS
+
+Stage 1 (acceptance criteria) and Stage 2 (code quality) passed against branch `task/T-035-implement-pi-agent-idle-reaping-and-session-kill`.
+
+- AC-1: Verified idle reaping removes inactive sessions from active map/list and terminates workers via `Actor` reap tick + `SessionPool::reap_idle_and_surplus` (`src/lib.rs`, `src/pool.rs`) with coverage in `idle_reaper_removes_session_after_idle_timeout_without_prompt_activity`.
+- AC-2: Verified `Handle::kill_session` now routes to pool termination and returns `Ok(())` for active sessions with coverage in `kill_session_terminates_active_session_and_removes_it_from_list`.
+- AC-3: Verified unknown session kill returns `ServiceError::InvalidRequest` with safe detail text (`"session is not active"`) with coverage in `kill_session_returns_invalid_request_for_unknown_session`.
+- AC-4: Verified reap path trims surplus warm workers to at most `warm_pool_size` via `surplus_warm_worker_count` and `reap_idle_and_surplus`, covered in `reap_idle_and_surplus_terminates_surplus_warm_workers_above_configured_pool_size`.
+- AC-5: Verified actor shutdown calls pool-wide termination for active and warm workers via `shutdown_all`, with test `actor_shutdown_terminates_active_and_warm_worker_processes`.
+
+Verification evidence run on implementation branch:
+
+- `cd the-intern/service && cargo test -p pi-agent-supervisor reaper`
+- `cd the-intern/service && cargo test -p pi-agent-supervisor kill_session`
+- `cd the-intern/service && cargo test -p pi-agent-supervisor`
