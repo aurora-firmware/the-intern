@@ -31,9 +31,9 @@ struct Runtime {
     // Cancellation sender for the requests-handler actor.
     requests_handler_cancel_tx: watch::Sender<bool>,
 
-    // Bound-but-not-yet-polled listeners.  Dropping them removes the socket
-    // file descriptor; the shutdown protocol removes the on-disk path explicitly.
-    _admin_listener: UnixListener,
+    // Bound-but-not-yet-polled extension listener.  Dropping it removes the
+    // socket file descriptor; the shutdown protocol removes the on-disk path
+    // explicitly.
     _extension_listener: UnixListener,
 
     // Join handles used to await actor completion during shutdown.
@@ -157,17 +157,27 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     info!("extension-ipc actor started");
 
     info!("starting admin-rpc actor");
-    let (admin_rpc_handle, admin_rpc_join) = admin_rpc::start(admin_rpc::Config::default());
+    let admin_rpc_cfg = admin_rpc::Config {
+        admin_sock_path: cfg.admin_sock_path.clone(),
+        admin_allowed_uids: cfg.admin_allowed_uids.clone(),
+        supervisor: Some(pi_agent_supervisor_handle.clone()),
+        policy: Some(policy_control_handle.clone()),
+        ..admin_rpc::Config::default()
+    };
+    let (admin_rpc_handle, admin_rpc_join) = admin_rpc::start(admin_rpc_cfg);
     info!("admin-rpc actor started");
 
-    info!(path = %cfg.admin_sock_path.display(), "binding admin socket");
-    let admin_listener = UnixListener::bind(&cfg.admin_sock_path).map_err(|e| {
-        format!(
-            "failed to bind admin socket at {}: {e}",
+    if !cfg.admin_sock_path.exists() {
+        return Err(format!(
+            "admin-rpc did not create admin socket at {}",
             cfg.admin_sock_path.display()
         )
-    })?;
-    info!(path = %cfg.admin_sock_path.display(), "admin socket bound");
+        .into());
+    }
+    info!(
+        path = %cfg.admin_sock_path.display(),
+        "admin socket bound by admin-rpc"
+    );
 
     // If the second bind fails, remove the first socket file explicitly before
     // propagating — `remove_socket_files_best_effort` in `start_subsystems`
@@ -202,7 +212,6 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         _policy_control: policy_control_handle,
         _pi_agent_supervisor: pi_agent_supervisor_handle,
         requests_handler_cancel_tx: rh_cancel_tx,
-        _admin_listener: admin_listener,
         _extension_listener: extension_listener,
         joins,
         admin_sock_path: cfg.admin_sock_path.clone(),
@@ -269,7 +278,6 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
         _policy_control,
         _pi_agent_supervisor,
         requests_handler_cancel_tx,
-        _admin_listener,
         _extension_listener,
         joins,
         admin_sock_path,
@@ -287,7 +295,6 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
     drop(_policy_control);
     drop(_pi_agent_supervisor);
     // Drop listeners to release the socket file descriptors.
-    drop(_admin_listener);
     drop(_extension_listener);
 
     info!("shutdown: phase 2 — cancelling subsystem workers");
