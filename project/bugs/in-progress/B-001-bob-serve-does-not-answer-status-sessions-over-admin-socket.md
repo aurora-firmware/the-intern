@@ -185,3 +185,18 @@ FAIL
 - File and location: `project/bugs/in-progress/B-001-bob-serve-does-not-answer-status-sessions-over-admin-socket.md` (Fix Verification section)
   - What is wrong: Fix Verification is currently documented as satisfied by a single command, but the current implementation/test combination is flaky under review execution and does not consistently satisfy that step.
   - What should change: Update implementation and/or test timing so this documented Fix Verification step passes consistently; keep the bug file verification step aligned with deterministic evidence.
+
+### Review Verdict — 2026-05-18
+PASS
+
+- Stage 1 (bug criteria): passed.
+  - Diagnosis Log includes reproduction status, captured evidence, isolated fault, and root cause hypothesis.
+  - Implementation in `the-intern/service/crates/bob/src/serve.rs` now starts `admin-rpc` with `admin_sock_path`/UID policy and subsystem handles, and no longer relies on an inert admin listener owned by `bob serve`, aligning with the isolated cause.
+  - Regression test exists at `the-intern/service/crates/bob/tests/shell_e2e.rs` and validates `bob status` plus `bob sessions list --json` over `admin.sock`.
+- Stage 2 (code quality and verification): passed.
+  - Shutdown assertion was stabilized via explicit margin (`SHUTDOWN_EXIT_MARGIN`) and is no longer brittle against small scheduling overhead.
+  - Required Fix Verification commands passed in elevated mode:
+    - `cd the-intern/service && cargo test -p bob serve::tests`
+    - `cd the-intern/service && cargo test -p admin-rpc`
+    - `cd the-intern/service && cargo test --test shell_e2e -- --nocapture`
+  - Stability spot-check: `shell_e2e` passed 10 consecutive elevated runs.
