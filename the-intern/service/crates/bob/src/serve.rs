@@ -118,7 +118,7 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     info!("starting pi-agent-supervisor actor");
     let pi_agent_supervisor_cfg = build_pi_agent_supervisor_config(cfg);
     let (pi_agent_supervisor_handle, pi_agent_supervisor_join) =
-        pi_agent_supervisor::start(pi_agent_supervisor_cfg);
+        pi_agent_supervisor::start(pi_agent_supervisor_cfg)?;
     info!("pi-agent-supervisor actor started");
 
     info!("starting requests-handler actor");
@@ -392,6 +392,8 @@ pub mod tests {
             // Empty paths — tests that do not bind sockets use these.
             admin_sock_path: std::path::PathBuf::new(),
             extension_sock_path: std::path::PathBuf::new(),
+            pi_agent_command: "sh".to_string(),
+            pi_agent_args: vec!["-c".to_string(), "exit 0".to_string()],
             request_queue_capacity: 16,
             shutdown_drain_deadline: Duration::from_millis(100),
             shutdown_reap_deadline: Duration::from_millis(50),
@@ -403,6 +405,8 @@ pub mod tests {
         BobConfig {
             admin_sock_path: tmp.path().join("admin.sock"),
             extension_sock_path: tmp.path().join("extension.sock"),
+            pi_agent_command: "sh".to_string(),
+            pi_agent_args: vec!["-c".to_string(), "exit 0".to_string()],
             request_queue_capacity: 16,
             shutdown_drain_deadline: Duration::from_millis(100),
             shutdown_reap_deadline: Duration::from_millis(50),
@@ -557,6 +561,31 @@ pub mod tests {
         assert!(
             !admin_sock.exists(),
             "admin.sock should be cleaned up when second bind fails"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_subsystems_returns_service_down_when_warm_pool_spawn_fails() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let mut cfg = test_cfg_with_sockets(&tmp);
+        cfg.pi_agent_command = "__definitely_missing_pi_binary__".to_string();
+        cfg.pi_agent_args = vec!["--mode".to_string(), "rpc".to_string()];
+        cfg.pi_agent_warm_pool_size = 1;
+        cfg.pi_agent_max_processes = 2;
+
+        let result = start_subsystems(&cfg);
+
+        assert!(
+            matches!(result, Err(ServiceError::ServiceDown)),
+            "expected ServiceError::ServiceDown on warm-pool spawn failure"
+        );
+        assert!(
+            !cfg.admin_sock_path.exists(),
+            "admin socket should not remain after failed startup"
+        );
+        assert!(
+            !cfg.extension_sock_path.exists(),
+            "extension socket should not remain after failed startup"
         );
     }
 
