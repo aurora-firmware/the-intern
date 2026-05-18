@@ -1,7 +1,7 @@
 ---
 id: T-035
 title: Implement pi-agent idle reaping and session kill
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-18'
