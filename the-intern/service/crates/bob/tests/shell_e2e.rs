@@ -9,6 +9,9 @@ use serde_json::Value;
 
 const SOCKET_APPEAR_DEADLINE: Duration = Duration::from_secs(2);
 const SHUTDOWN_DRAIN_DEADLINE: Duration = Duration::from_millis(800);
+// Phase 4 now awaits supervisor child cleanup; give it a tight deadline so the
+// test does not hang on a slow pi-agent SIGTERM response.
+const SHUTDOWN_REAP_DEADLINE: Duration = Duration::from_millis(200);
 const SHUTDOWN_EXIT_MARGIN: Duration = Duration::from_millis(300);
 const COMMAND_DEADLINE: Duration = Duration::from_secs(1);
 const PROCESS_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -26,6 +29,10 @@ impl BobServeChild {
             .env(
                 "BOB_SHUTDOWN_DRAIN_DEADLINE",
                 format!("{}ms", SHUTDOWN_DRAIN_DEADLINE.as_millis()),
+            )
+            .env(
+                "BOB_SHUTDOWN_REAP_DEADLINE",
+                format!("{}ms", SHUTDOWN_REAP_DEADLINE.as_millis()),
             )
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -144,10 +151,12 @@ fn shell_commands_work_end_to_end_against_spawned_serve() {
         .expect("invoke kill -TERM");
     assert!(kill_status.success(), "kill -TERM should succeed");
 
-    let shutdown_exit_deadline = SHUTDOWN_DRAIN_DEADLINE + SHUTDOWN_EXIT_MARGIN;
+    // Exit deadline: phase 3 drain + phase 4 reap + safety margin.
+    let shutdown_exit_deadline =
+        SHUTDOWN_DRAIN_DEADLINE + SHUTDOWN_REAP_DEADLINE + SHUTDOWN_EXIT_MARGIN;
     let exit_status = serve
         .wait_for_exit(shutdown_exit_deadline)
-        .expect("bob serve should exit shortly after configured shutdown drain deadline");
+        .expect("bob serve should exit shortly after configured shutdown deadlines");
     assert_eq!(
         exit_status.code(),
         Some(0),
