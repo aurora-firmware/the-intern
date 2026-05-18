@@ -4,6 +4,7 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::time;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerProcessConfig {
@@ -15,10 +16,15 @@ pub struct WorkerProcessConfig {
 #[derive(Debug)]
 pub struct RpcWorkerProcess {
     child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     stderr: ChildStderr,
     child_termination_deadline: Duration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminationOutcome {
+    pub forced: bool,
 }
 
 impl RpcWorkerProcess {
@@ -57,26 +63,33 @@ impl RpcWorkerProcess {
 
         Ok(Self {
             child,
-            stdin,
+            stdin: Some(stdin),
             stdout: BufReader::new(stdout),
             stderr,
             child_termination_deadline: cfg.child_termination_deadline,
         })
     }
 
-    pub async fn send_json(&mut self, _command: &Value) -> ServiceResult<()> {
-        let mut payload = serde_json::to_vec(_command).map_err(|error| ServiceError::ChildProcess {
+    pub async fn send_json(&mut self, command: &Value) -> ServiceResult<()> {
+        let mut payload = serde_json::to_vec(command).map_err(|error| ServiceError::ChildProcess {
             detail: format!("failed to serialize RPC command JSON ({error})"),
         })?;
         payload.push(b'\n');
 
-        self.stdin
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| ServiceError::ChildProcess {
+                detail: "cannot send RPC command because child stdin is closed".to_string(),
+            })?;
+
+        stdin
             .write_all(&payload)
             .await
             .map_err(|error| ServiceError::ChildProcess {
                 detail: format!("failed to write RPC command to child stdin ({error})"),
             })?;
-        self.stdin
+        stdin
             .flush()
             .await
             .map_err(|error| ServiceError::ChildProcess {
@@ -113,12 +126,67 @@ impl RpcWorkerProcess {
 
         Ok(Some(value))
     }
+
+    pub async fn terminate(mut self) -> ServiceResult<TerminationOutcome> {
+        self.request_graceful_termination()?;
+
+        let wait_result = time::timeout(self.child_termination_deadline, self.child.wait()).await;
+        match wait_result {
+            Ok(Ok(_status)) => Ok(TerminationOutcome { forced: false }),
+            Ok(Err(error)) => Err(ServiceError::ChildProcess {
+                detail: format!("failed while waiting for child termination ({error})"),
+            }),
+            Err(_) => {
+                if let Some(_status) = self.child.try_wait().map_err(|error| ServiceError::ChildProcess {
+                    detail: format!("failed to inspect child status during termination ({error})"),
+                })? {
+                    return Ok(TerminationOutcome { forced: false });
+                }
+
+                self.child
+                    .kill()
+                    .await
+                    .map_err(|error| ServiceError::ChildProcess {
+                        detail: format!("failed to force-kill child process ({error})"),
+                    })?;
+
+                self.child.wait().await.map_err(|error| ServiceError::ChildProcess {
+                    detail: format!("failed while waiting for force-killed child process ({error})"),
+                })?;
+
+                Ok(TerminationOutcome { forced: true })
+            }
+        }
+    }
+
+    fn request_graceful_termination(&mut self) -> ServiceResult<()> {
+        #[cfg(unix)]
+        {
+            use nix::{
+                sys::signal::{self, Signal},
+                unistd::Pid,
+            };
+
+            if let Some(pid) = self.child.id() {
+                signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM).map_err(|error| {
+                    ServiceError::ChildProcess {
+                        detail: format!(
+                            "failed to request graceful child termination via SIGTERM ({error})"
+                        ),
+                    }
+                })?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::time::Instant;
     use tokio::time::{timeout, Duration as TokioDuration};
 
     fn spawn_config(command: &str, args: &[&str]) -> WorkerProcessConfig {
@@ -228,5 +296,49 @@ mod tests {
             .expect("record should be present");
 
         assert_eq!(value, Value::String("alpha\u{2028}omega".to_string()));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn terminate_requests_graceful_shutdown_before_deadline() {
+        let worker = RpcWorkerProcess::spawn(&spawn_config(
+            "sh",
+            &[
+                "-c",
+                "trap 'exit 0' TERM; while :; do sleep 1; done",
+            ],
+        ))
+        .expect("spawn should succeed");
+
+        let outcome = worker.terminate().await.expect("terminate should succeed");
+
+        assert!(
+            !outcome.forced,
+            "cooperative child should terminate without force-kill"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn terminate_force_kills_when_child_exceeds_deadline() {
+        let worker = RpcWorkerProcess::spawn(&WorkerProcessConfig {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "trap '' TERM; while :; do :; done".to_string(),
+            ],
+            child_termination_deadline: Duration::from_millis(25),
+        })
+        .expect("spawn should succeed");
+
+        tokio::time::sleep(TokioDuration::from_millis(10)).await;
+
+        let started_at = Instant::now();
+        let outcome = worker.terminate().await.expect("terminate should succeed");
+        let elapsed = started_at.elapsed();
+
+        assert!(outcome.forced, "stubborn child should require force-kill");
+        assert!(
+            elapsed >= Duration::from_millis(25),
+            "terminate should wait at least until deadline before force-kill"
+        );
     }
 }
