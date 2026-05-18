@@ -83,6 +83,14 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-18
+
+Implemented T-031 via TDD across three cycles. First, I added failing config tests for new Phase 2 keys, then implemented `BobConfig`/`RawBobConfig` fields (`pi_agent_command`, `pi_agent_args`, `pi_agent_warm_pool_size`, `pi_agent_max_processes`, `pi_agent_idle_reap_timeout`) with defaults (`pi`, `--mode rpc`, positive pool limits) and loader support. Second, I added failing validation tests for invalid pool settings and implemented startup validation errors when warm pool is zero, max processes is zero, or warm pool exceeds max. Third, I added failing tests for supervisor config expansion and serve wiring, then extended `pi-agent-supervisor::Config` with worker command/args, pool sizing, idle reap timeout, command buffer, and child termination deadline, and updated `bob serve` to pass all required values (including `shutdown_reap_deadline` as the child termination deadline).
+
+I also tried running the task's exact verification commands. `cargo test -p pi-agent-supervisor --lib` passed. The two bob commands that include socket-heavy tests failed in this sandbox with `Operation not permitted` when binding Unix sockets; I did not alter those unrelated tests or runtime behaviors because they are outside this task's scope.
+
+Remaining work: none in implementation scope; this is ready for reviewer/loop handoff and canonical Work Log append on `dev-agent`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
