@@ -105,3 +105,21 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-18
+PASS
+
+Stage 1 (acceptance criteria): PASS.
+- AC-1 met: startup warm pool preallocates `min(warm_pool_size, max_processes)` workers in `SessionPool::new` and is covered by `pool_new_spawns_warm_workers_up_to_min_of_warm_pool_and_max_processes`.
+- AC-2 met: `acquire_session` consumes warm workers first, then spawns when below cap, covered by `acquire_session_binds_idle_warm_worker_when_available` and `acquire_session_spawns_new_worker_when_no_warm_worker_exists`.
+- AC-3 met: capacity overflow returns `ServiceError::ChildProcess`, covered by `acquire_session_returns_child_process_when_max_processes_would_be_exceeded` and handle-level test `acquire_session_returns_child_process_error_when_max_processes_reached`.
+- AC-4 met: warm-pool spawn failures abort supervisor startup with `ServiceError::ChildProcess` via `start(...) -> ServiceResult`, covered by `start_returns_child_process_error_when_warm_pool_cannot_spawn`.
+- AC-5 met: `Handle::list_sessions()` now returns bound active sessions from pool state, covered by `list_sessions_returns_bound_session_ids`.
+- File scope check: implementation changes are limited to task-listed code files.
+
+Stage 2 (quality): PASS.
+- Correctness, tests, security/readability/performance checks passed for task scope.
+- Verification run:
+  - `cargo test -p pi-agent-supervisor pool` (pass)
+  - `cargo test -p pi-agent-supervisor list_sessions` (pass)
+  - `cargo test -p bob serve::tests` (sandbox run failed due Unix-socket permissions; rerun with escalated permissions passed).
