@@ -1,7 +1,7 @@
 ---
 id: T-025
 title: Add end-to-end shell integration smoke test
-status: pending
+status: blocked
 priority: medium
 assigned-role: unassigned
 created: '2026-05-16'
@@ -57,4 +57,22 @@ cd the-intern/service && cargo test --test shell_e2e
 
 ## Work Log
 
+### Session 1 — 2026-05-18
+
+Read the canonical task file and confirmed the Work Log was empty. Implemented a new end-to-end smoke test target (`shell_e2e`) in the Rust service workspace where Cargo resolves `--test` targets (`crates/bob/tests/`). The test spawns `bob serve` with ephemeral socket env overrides, waits up to 2 seconds for `admin.sock` and `extension.sock`, runs `bob status`, runs `bob sessions list --json`, sends SIGTERM, enforces shutdown deadline, and asserts socket cleanup.
+
+Initial red failures were compile-level (feature-gated `nix` signal imports), then converted to runtime-level by switching to `kill -TERM` command and adding explicit timeouts for child command execution to avoid indefinite hangs. The deterministic failure is now AC-2: `bob status` times out against a running `bob serve`. Inspection found `serve` starts `admin-rpc` with default config (no listener path) while separately binding raw sockets, which leaves no RPC request handling on the bound admin socket path.
+
+Since fixing that requires production-file changes outside T-025's test-only ownership, bug `B-001` was opened and the task was escalated for scope guidance. A process issue was also logged: the `new-bug` skill instructions are out of sync with the actual `ai-team bug new` CLI flags.
+
 ## Review
+
+### Escalation — 2026-05-18
+
+Problem: AC-2/AC-3 cannot pass with current runtime wiring under the task's file-ownership constraint.
+
+Attempted: Implemented full smoke test, added deterministic command timeouts, reran verification with escalated socket-capable environment, and isolated behavior to serve/admin-rpc integration.
+
+Failed because: `bob status` hangs even after sockets exist; fixing requires modifying production files outside the approved T-025 scope (`serve.rs` runtime wiring).
+
+Architect guidance: Block T-025 against `B-001` and route the production fix through bug handling first. T-025 must not expand into prior runtime/admin-RPC wiring repair. After `B-001` merges, resume T-025 as a test-only task and verify with `cd the-intern/service && cargo test --test shell_e2e -- --nocapture`.
