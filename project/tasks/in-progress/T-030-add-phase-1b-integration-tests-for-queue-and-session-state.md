@@ -55,4 +55,16 @@ cd the-intern/service && cargo test --test session_state_roundtrip
 
 ## Work Log
 
+### Session 1 — 2026-05-18
+
+Implemented T-030 with two red→green→refactor cycles. First, I added `queue_load.rs` as an integration test in `the-intern/service/crates/bob/tests/` (crate-local path chosen because `the-intern/service/tests/` does not exist in this workspace and Cargo test targets are currently crate-scoped here). I initially tried a direct flood where all submissions were expected to overflow, but that admitted all events because the actor drained concurrently. I rejected that approach and switched to a deterministic harness: a warm-up event blocks downstream processing, then the test submits `request_queue_capacity * 10` events quickly while the actor is blocked. This made backpressure deterministic and validated AC-1 (`ServiceError::Timeout { operation: "requests-handler.submit" }` for all overflowed submissions) and AC-2 (admitted events dequeue from persistence in submission order).
+
+Second, I added `session_state_roundtrip.rs` with integration tests that store/retrieve multiple distinct `SessionId` values and assert equality (AC-3), plus unknown id returning `Ok(None)` (AC-4).
+
+Both required verification commands pass. Nothing remains on this task branch besides reviewer/integration flow.
+
+Obstacles Encountered:
+- `git add/commit` initially failed in sandbox with `.git/index.lock: Read-only file system`; resolved by rerunning git commands with escalated permissions.
+- No product-code blockers.
+
 ## Review
