@@ -83,6 +83,14 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-18
+
+Implemented T-034 in two TDD cycles. First cycle added `rpc.rs` with `PromptCommand` generation (`id`, `type: "prompt"`, `message`) and response parsing helpers, with unit tests validating command shape, matching/non-matching response handling, and invalid response-shape errors. Second cycle started red by adding `send_prompt` tests in `lib.rs`; compile failed because `Handle::send_prompt` did not exist. Implemented actor command handling plus pool-level prompt routing that acquires a session when absent, writes prompt JSONL to the bound worker, then reads stdout JSONL records until it finds the matching `response` for that command id. On `success: true`, it returns `Ok(())`; on `success: false`, it returns `ServiceError::ChildProcess` with safe detail text. Non-response/event records and non-matching response ids are ignored so trailing event streams do not break subsequent prompts; verified by sending two prompts through a worker that emits response then event on each command.
+
+Tried and rejected: implementing prompt routing only inside `lib.rs` without pool changes; that was not viable because active workers are owned privately by `SessionPool`. I made the minimal extension in `pool.rs` to keep worker ownership/lifecycle coherent and avoid duplicate registry logic.
+
+Remaining work: none for task acceptance criteria; ready for reviewer.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
