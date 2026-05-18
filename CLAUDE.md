@@ -60,6 +60,14 @@ GitHub workflows are currently placeholders:
 Use the local Rust verification commands in `the-intern/service/README.md` for
 real build/test evidence until the workflows are wired to actual commands.
 
+## Runtime prerequisites
+
+- The pi-agent binary must be available as `pi` on `PATH`. This is a hard
+  project precondition for Phase 2 and later work.
+- If `pi` is not available at any point, stop the current work and escalate;
+  do not implement substitutes, mocks, or alternate process runners as a way
+  around the missing prerequisite.
+
 ## Pointers
 
 - Coding guidelines: `project/docs/coding-guidelines-node.md`,

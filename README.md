@@ -25,6 +25,14 @@ the shell plus Phase 1b queue/session-state behavior.
 - JS extension area: `the-intern/extensions`; implementation is still future work.
 - Process/lifecycle state lives under `project/tasks/` and `project/bugs/`; directory location is status.
 
+## Runtime Prerequisites
+
+- The pi-agent binary must be available as `pi` on `PATH`. This is a hard
+  project precondition for Phase 2 and later work.
+- If `pi` is not available at any point, stop the current work and escalate;
+  do not implement substitutes, mocks, or alternate process runners as a way
+  around the missing prerequisite.
+
 ## Local Verification
 
 From the Rust workspace:
