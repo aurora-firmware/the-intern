@@ -1,8 +1,11 @@
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use bob_core::error::{ServiceError, ServiceResult};
+use bob_core::ports::{AuditSink, PersistenceStore};
+use bob_core::types::{AuditRecord, ChannelId, RequestContext};
 use tokio::{net::UnixListener, sync::watch, task::JoinHandle, time};
 use tracing::info;
 
@@ -41,6 +44,20 @@ struct Runtime {
     extension_sock_path: PathBuf,
 }
 
+#[derive(Clone)]
+struct MonitoringAuditSink {
+    handle: monitoring::Handle,
+}
+
+#[async_trait::async_trait]
+impl AuditSink for MonitoringAuditSink {
+    async fn append(&self, record: AuditRecord) -> ServiceResult<()> {
+        self.handle
+            .record_event(format!("{:?}: {}", record.kind, record.description))
+            .await
+    }
+}
+
 /// Constructs every subsystem actor, binds the two Unix domain socket paths
 /// recorded in `cfg`, installs signal handlers, and runs the graceful-shutdown
 /// protocol when `SIGTERM` or `SIGINT` is received.
@@ -74,13 +91,11 @@ fn start_subsystems(cfg: &BobConfig) -> ServiceResult<Runtime> {
 
 fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::Error>> {
     info!("starting monitoring actor");
-    let (monitoring_handle, monitoring_join) =
-        monitoring::start(monitoring::Config::default());
+    let (monitoring_handle, monitoring_join) = monitoring::start(monitoring::Config::default());
     info!("monitoring actor started");
 
     info!("starting persistence actor");
-    let (persistence_handle, persistence_join) =
-        persistence::start(persistence::Config::default());
+    let (persistence_handle, persistence_join) = persistence::start(persistence::Config::default());
     info!("persistence actor started");
 
     info!("starting policy-control actor");
@@ -95,16 +110,45 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
 
     info!("starting requests-handler actor");
     let (rh_cancel_tx, rh_cancel_rx) = watch::channel(false);
-    let (requests_handler_handle, requests_handler_join) =
-        requests_handler::start_with(
-            requests_handler::Config {
-                request_queue_capacity: cfg.request_queue_capacity,
-                request_submit_timeout: cfg.request_submit_timeout,
-            },
-            // Downstream handler closure — T-027 will replace this placeholder.
-            |_event| async {},
-            rh_cancel_rx,
-        );
+    let preflight_cfg = requests_handler::PreflightConfig {
+        allowed_user_ids: cfg.allowed_user_ids.clone(),
+    };
+    let default_context = cfg
+        .allowed_user_ids
+        .first()
+        .copied()
+        .map(|sender| RequestContext {
+            sender,
+            source: ChannelId::new(),
+            context_id: None,
+        });
+    let persistence_store: Arc<dyn PersistenceStore> = Arc::new(persistence_handle.clone());
+    let audit_sink: Arc<dyn AuditSink> = Arc::new(MonitoringAuditSink {
+        handle: monitoring_handle.clone(),
+    });
+    let (requests_handler_handle, requests_handler_join) = requests_handler::start_with(
+        requests_handler::Config {
+            request_queue_capacity: cfg.request_queue_capacity,
+            request_submit_timeout: cfg.request_submit_timeout,
+        },
+        move |event| {
+            let preflight_cfg = preflight_cfg.clone();
+            let persistence_store = Arc::clone(&persistence_store);
+            let audit_sink = Arc::clone(&audit_sink);
+            let default_context = default_context.clone();
+            async move {
+                requests_handler::run_preflight(
+                    event,
+                    default_context.as_ref(),
+                    &preflight_cfg,
+                    persistence_store.as_ref(),
+                    audit_sink.as_ref(),
+                )
+                .await;
+            }
+        },
+        rh_cancel_rx,
+    );
     info!("requests-handler actor started");
 
     info!("starting extension-ipc actor");
@@ -113,13 +157,16 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     info!("extension-ipc actor started");
 
     info!("starting admin-rpc actor");
-    let (admin_rpc_handle, admin_rpc_join) =
-        admin_rpc::start(admin_rpc::Config::default());
+    let (admin_rpc_handle, admin_rpc_join) = admin_rpc::start(admin_rpc::Config::default());
     info!("admin-rpc actor started");
 
     info!(path = %cfg.admin_sock_path.display(), "binding admin socket");
-    let admin_listener = UnixListener::bind(&cfg.admin_sock_path)
-        .map_err(|e| format!("failed to bind admin socket at {}: {e}", cfg.admin_sock_path.display()))?;
+    let admin_listener = UnixListener::bind(&cfg.admin_sock_path).map_err(|e| {
+        format!(
+            "failed to bind admin socket at {}: {e}",
+            cfg.admin_sock_path.display()
+        )
+    })?;
     info!(path = %cfg.admin_sock_path.display(), "admin socket bound");
 
     // If the second bind fails, remove the first socket file explicitly before
@@ -246,20 +293,22 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
     info!("shutdown: phase 2 — cancelling subsystem workers");
     // Actors exit when their channel is drained and closed — no explicit cancel needed.
 
-    info!("shutdown: phase 3 — draining queues (deadline: {:?})", cfg.shutdown_drain_deadline);
+    info!(
+        "shutdown: phase 3 — draining queues (deadline: {:?})",
+        cfg.shutdown_drain_deadline
+    );
     let drain_result = time::timeout(cfg.shutdown_drain_deadline, drain_joins(joins)).await;
     match drain_result {
         Ok(()) => info!("shutdown: phase 3 — all queues drained"),
         Err(_) => info!("shutdown: phase 3 — drain deadline exceeded; proceeding"),
     }
 
-    info!("shutdown: phase 4 — reaping pi-agent children (deadline: {:?})", cfg.shutdown_reap_deadline);
+    info!(
+        "shutdown: phase 4 — reaping pi-agent children (deadline: {:?})",
+        cfg.shutdown_reap_deadline
+    );
     // No child processes in scaffold — sleep for 0 to honour the deadline pattern.
-    let reap_result = time::timeout(
-        cfg.shutdown_reap_deadline,
-        std::future::ready(()),
-    )
-    .await;
+    let reap_result = time::timeout(cfg.shutdown_reap_deadline, std::future::ready(())).await;
     match reap_result {
         Ok(()) => info!("shutdown: phase 4 — pi-agent children reaped"),
         Err(_) => info!("shutdown: phase 4 — reap deadline exceeded; proceeding"),
@@ -309,6 +358,10 @@ pub mod tests {
     use std::time::Duration;
 
     use bob_core::error::ServiceError;
+    use bob_core::{
+        ports::PersistenceStore,
+        types::{InternalEvent, UserId},
+    };
 
     use crate::config::BobConfig;
 
@@ -345,6 +398,43 @@ pub mod tests {
         let result = start_subsystems(&cfg);
         assert!(result.is_ok(), "start_subsystems should succeed");
         // Dropping runtime closes listeners and aborts actors cleanly.
+    }
+
+    // AC-2: permitted events submitted through requests-handler are persisted.
+    #[tokio::test(flavor = "current_thread")]
+    async fn permitted_event_is_persisted_via_wired_requests_handler_and_persistence() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let mut cfg = test_cfg_with_sockets(&tmp);
+        cfg.allowed_user_ids = vec![UserId::new()];
+        let runtime = start_subsystems(&cfg).expect("subsystems must start");
+
+        let event = InternalEvent::ChatMessage {
+            content: "persist me".to_owned(),
+        };
+        runtime
+            ._requests_handler
+            .submit_event(event.clone())
+            .await
+            .expect("submit must succeed");
+
+        let persisted = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(next) = runtime
+                    ._persistence
+                    .dequeue_next()
+                    .await
+                    .expect("dequeue should not fail")
+                {
+                    break next;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("event should be persisted before timeout");
+
+        assert_eq!(persisted, event);
+        run_shutdown_protocol(runtime, &cfg).await;
     }
 
     // AC-1: Runtime contains all expected join handles
@@ -419,10 +509,7 @@ pub mod tests {
         let cfg = test_cfg_with_sockets(&tmp);
         // With the scaffold actors and valid paths, start_subsystems returns Ok.
         let result = start_subsystems(&cfg);
-        assert!(
-            result.is_ok(),
-            "scaffold actors must start without error"
-        );
+        assert!(result.is_ok(), "scaffold actors must start without error");
     }
 
     // AC-4: actors emit start lifecycle events (verified structurally)
@@ -450,14 +537,18 @@ pub mod tests {
         // Bind and immediately drop so the socket files exist but are not held.
         // start_subsystems will re-bind them.
         {
-            let _a = tokio::net::UnixListener::bind(&admin_sock)
-                .expect("pre-bind admin sock");
-            let _e = tokio::net::UnixListener::bind(&ext_sock)
-                .expect("pre-bind extension sock");
+            let _a = tokio::net::UnixListener::bind(&admin_sock).expect("pre-bind admin sock");
+            let _e = tokio::net::UnixListener::bind(&ext_sock).expect("pre-bind extension sock");
         }
         // Both socket files now exist but are no longer bound.
-        assert!(admin_sock.exists(), "pre-bind should leave socket file on disk");
-        assert!(ext_sock.exists(), "pre-bind should leave socket file on disk");
+        assert!(
+            admin_sock.exists(),
+            "pre-bind should leave socket file on disk"
+        );
+        assert!(
+            ext_sock.exists(),
+            "pre-bind should leave socket file on disk"
+        );
 
         // Remove them so start_subsystems can bind fresh.
         std::fs::remove_file(&admin_sock).ok();
@@ -474,8 +565,14 @@ pub mod tests {
         let runtime = start_subsystems(&cfg).expect("subsystems must start");
 
         // Sockets must exist on disk while the runtime is live.
-        assert!(admin_sock.exists(), "admin.sock must exist while runtime is live");
-        assert!(ext_sock.exists(), "extension.sock must exist while runtime is live");
+        assert!(
+            admin_sock.exists(),
+            "admin.sock must exist while runtime is live"
+        );
+        assert!(
+            ext_sock.exists(),
+            "extension.sock must exist while runtime is live"
+        );
 
         run_shutdown_protocol(runtime, &cfg).await;
 
