@@ -1,7 +1,7 @@
 ---
 id: T-033
 title: Implement pi-agent session registry and warm pool
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-18'
