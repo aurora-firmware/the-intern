@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod process;
+
 use bob_core::{
     error::{ServiceError, ServiceResult},
     types::SessionId,
