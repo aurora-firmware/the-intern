@@ -1,7 +1,9 @@
 use bob_core::error::{ServiceError, ServiceResult};
-use std::time::Duration;
+use serde_json::Value;
 use std::process::Stdio;
-use tokio::process::{Child, Command};
+use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerProcessConfig {
@@ -13,11 +15,15 @@ pub struct WorkerProcessConfig {
 #[derive(Debug)]
 pub struct RpcWorkerProcess {
     child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    stderr: ChildStderr,
+    child_termination_deadline: Duration,
 }
 
 impl RpcWorkerProcess {
     pub fn spawn(cfg: &WorkerProcessConfig) -> ServiceResult<Self> {
-        let child = Command::new(&cfg.command)
+        let mut child = Command::new(&cfg.command)
             .args(&cfg.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -30,38 +36,119 @@ impl RpcWorkerProcess {
                 ),
             })?;
 
-        Ok(Self { child })
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| ServiceError::ChildProcess {
+                detail: "failed to create piped child stdin".to_string(),
+            })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| ServiceError::ChildProcess {
+                detail: "failed to create piped child stdout".to_string(),
+            })?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| ServiceError::ChildProcess {
+                detail: "failed to create piped child stderr".to_string(),
+            })?;
+
+        Ok(Self {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+            stderr,
+            child_termination_deadline: cfg.child_termination_deadline,
+        })
+    }
+
+    pub async fn send_json(&mut self, _command: &Value) -> ServiceResult<()> {
+        let mut payload = serde_json::to_vec(_command).map_err(|error| ServiceError::ChildProcess {
+            detail: format!("failed to serialize RPC command JSON ({error})"),
+        })?;
+        payload.push(b'\n');
+
+        self.stdin
+            .write_all(&payload)
+            .await
+            .map_err(|error| ServiceError::ChildProcess {
+                detail: format!("failed to write RPC command to child stdin ({error})"),
+            })?;
+        self.stdin
+            .flush()
+            .await
+            .map_err(|error| ServiceError::ChildProcess {
+                detail: format!("failed to flush RPC command to child stdin ({error})"),
+            })?;
+
+        Ok(())
+    }
+
+    pub async fn read_next_stdout_json(&mut self) -> ServiceResult<Option<Value>> {
+        let mut line = String::new();
+        let read = self
+            .stdout
+            .read_line(&mut line)
+            .await
+            .map_err(|error| ServiceError::ChildProcess {
+                detail: format!("failed to read RPC output from child stdout ({error})"),
+            })?;
+
+        if read == 0 {
+            return Ok(None);
+        }
+
+        if line.ends_with('\n') {
+            line.pop();
+            if line.ends_with('\r') {
+                line.pop();
+            }
+        }
+
+        let value = serde_json::from_str::<Value>(&line).map_err(|error| ServiceError::ChildProcess {
+            detail: format!("failed to parse JSON record from child stdout ({error})"),
+        })?;
+
+        Ok(Some(value))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use tokio::time::{timeout, Duration as TokioDuration};
 
-    fn cat_worker_config() -> WorkerProcessConfig {
+    fn spawn_config(command: &str, args: &[&str]) -> WorkerProcessConfig {
         WorkerProcessConfig {
-            command: "sh".to_string(),
-            args: vec!["-c".to_string(), "exit 0".to_string()],
+            command: command.to_string(),
+            args: args.iter().map(|arg| arg.to_string()).collect(),
             child_termination_deadline: Duration::from_millis(50),
         }
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn spawn_starts_configured_command_with_piped_stdio() {
-        let worker = RpcWorkerProcess::spawn(&cat_worker_config()).expect("spawn should succeed");
+        let worker = RpcWorkerProcess::spawn(&spawn_config("sh", &["-c", "exit 0"]))
+            .expect("spawn should succeed");
 
-        assert!(worker.child.stdin.is_some(), "stdin should be piped");
-        assert!(worker.child.stdout.is_some(), "stdout should be piped");
-        assert!(worker.child.stderr.is_some(), "stderr should be piped");
+        assert!(
+            worker.child.id().is_some(),
+            "spawned process should have an OS process id"
+        );
+        let _ = &worker.stdin;
+        let _ = &worker.stdout;
+        let _ = &worker.stderr;
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn spawn_failure_returns_child_process_error_with_safe_detail() {
-        let config = WorkerProcessConfig {
-            command: "__definitely_missing_pi_binary__".to_string(),
-            args: vec!["--mode".to_string(), "rpc".to_string()],
-            child_termination_deadline: Duration::from_millis(25),
-        };
+        let config = spawn_config(
+            "__definitely_missing_pi_binary__",
+            &["--mode", "rpc", "--trace"],
+        );
 
         let error = RpcWorkerProcess::spawn(&config).expect_err("spawn should fail");
 
@@ -69,5 +156,77 @@ mod tests {
             matches!(error, ServiceError::ChildProcess { ref detail } if detail.contains("failed to spawn worker process")),
             "expected ServiceError::ChildProcess with safe detail, got: {error:?}"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn send_json_writes_single_json_object_followed_by_lf() {
+        let mut worker =
+            RpcWorkerProcess::spawn(&spawn_config("cat", &[])).expect("spawn should succeed");
+        let payload = json!({"command":"ping","seq":1});
+
+        worker
+            .send_json(&payload)
+            .await
+            .expect("send_json should succeed");
+
+        let mut line = Vec::new();
+        worker
+            .stdout
+            .read_until(b'\n', &mut line)
+            .await
+            .expect("stdout read should succeed");
+
+        let mut expected = serde_json::to_vec(&payload).expect("payload serialization should work");
+        expected.push(b'\n');
+        assert_eq!(line, expected, "child stdin frame should be JSON + LF");
+
+        let mut extra = Vec::new();
+        let no_extra_line = timeout(
+            TokioDuration::from_millis(25),
+            worker.stdout.read_until(b'\n', &mut extra),
+        )
+        .await;
+        assert!(
+            no_extra_line.is_err(),
+            "unexpected extra line bytes from a single send_json call: {extra:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_next_stdout_json_parses_each_lf_delimited_record() {
+        let mut worker = RpcWorkerProcess::spawn(&spawn_config(
+            "sh",
+            &["-c", "printf '%s\\n' '{\"id\":1}' '{\"id\":2}'"],
+        ))
+        .expect("spawn should succeed");
+
+        let first = worker
+            .read_next_stdout_json()
+            .await
+            .expect("first record should parse");
+        let second = worker
+            .read_next_stdout_json()
+            .await
+            .expect("second record should parse");
+
+        assert_eq!(first, Some(json!({"id": 1})));
+        assert_eq!(second, Some(json!({"id": 2})));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_next_stdout_json_does_not_split_on_unicode_line_separator() {
+        let mut worker = RpcWorkerProcess::spawn(&spawn_config(
+            "sh",
+            &["-c", "printf '\"alpha\\342\\200\\250omega\"\\n'"],
+        ))
+        .expect("spawn should succeed");
+
+        let value = worker
+            .read_next_stdout_json()
+            .await
+            .expect("record should parse")
+            .expect("record should be present");
+
+        assert_eq!(value, Value::String("alpha\u{2028}omega".to_string()));
     }
 }
