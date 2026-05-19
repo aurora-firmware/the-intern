@@ -392,9 +392,13 @@ async fn run_listener(listener: Listener, dispatcher: Dispatcher, bus: Subscript
 /// command actor exits.  The listener task is detached; it will be cancelled
 /// when the process exits or when the socket file is removed externally.
 ///
-/// Callers that manage socket binding themselves (e.g. `bob::serve`) should
-/// leave `admin_sock_path` empty.
-pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
+/// # Errors
+///
+/// Returns `Err(std::io::Error)` when `admin_sock_path` is non-empty and
+/// `Listener::bind` fails.  The actor is **not** started in that case, so no
+/// cleanup is required by the caller.  When `admin_sock_path` is empty no bind
+/// is attempted and the function always returns `Ok`.
+pub fn start(cfg: Config) -> Result<(Handle, JoinHandle<()>), std::io::Error> {
     let buffer = cfg.command_buffer.max(1);
     let (tx, rx) = mpsc::channel(buffer);
 
@@ -411,8 +415,9 @@ pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
         .clone()
         .unwrap_or_else(|| SubscriptionBus::new(cfg.slow_subscriber_deadline));
 
-    // Optionally bind the listener.  If the path is empty we skip binding to
-    // stay compatible with `bob::serve` which does its own socket management.
+    // Optionally bind the listener.  If the path is empty we skip binding.
+    // If binding fails the error is returned immediately — the actor is not
+    // started and the caller must handle the failure.
     let maybe_listener = if cfg.admin_sock_path.as_os_str().is_empty() {
         None
     } else {
@@ -421,23 +426,19 @@ pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
             admin_allowed_uids: cfg.admin_allowed_uids.clone(),
             service_uid: cfg.service_uid,
         };
-        match Listener::bind(listener_cfg) {
-            Ok(l) => {
-                tracing::info!(
-                    path = %cfg.admin_sock_path.display(),
-                    "admin-rpc: listener bound"
-                );
-                Some(l)
-            }
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    path = %cfg.admin_sock_path.display(),
-                    "admin-rpc: failed to bind listener; running without socket"
-                );
-                None
-            }
-        }
+        let l = Listener::bind(listener_cfg).map_err(|e| {
+            tracing::error!(
+                error = %e,
+                path = %cfg.admin_sock_path.display(),
+                "admin-rpc: failed to bind listener"
+            );
+            e
+        })?;
+        tracing::info!(
+            path = %cfg.admin_sock_path.display(),
+            "admin-rpc: listener bound"
+        );
+        Some(l)
     };
 
     if let Some(listener) = maybe_listener {
@@ -448,7 +449,7 @@ pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
     let join = tokio::spawn(async move {
         actor.run().await;
     });
-    (Handle { tx }, join)
+    Ok((Handle { tx }, join))
 }
 
 #[cfg(test)]
@@ -459,7 +460,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn handle_ping_returns_not_implemented() {
-        let (handle, task) = start(Config::default());
+        let (handle, task) = start(Config::default()).expect("start must succeed with empty path");
 
         let result = handle.ping().await;
 
@@ -469,7 +470,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn handle_is_clonable() {
-        let (handle, task) = start(Config::default());
+        let (handle, task) = start(Config::default()).expect("start must succeed with empty path");
 
         let _clone = handle.clone();
 
@@ -487,7 +488,7 @@ mod tests {
             ..Config::default()
         };
 
-        let (_, task) = start(cfg);
+        let (_, task) = start(cfg).expect("start must succeed with valid path");
 
         // Give the spawn a moment to execute on the current-thread executor.
         tokio::task::yield_now().await;
@@ -502,9 +503,40 @@ mod tests {
     // Wiring test: start without a socket path does not create any socket file.
     #[tokio::test(flavor = "current_thread")]
     async fn start_without_sock_path_does_not_bind_any_socket() {
-        let (_, task) = start(Config::default());
+        let (_, task) = start(Config::default()).expect("start must succeed with empty path");
         // No assertion on filesystem — just verify it doesn't panic.
         task.abort();
+    }
+
+    // Regression test: start returns Err when the socket path is unwritable.
+    //
+    // This verifies that bind failures are surfaced rather than silently
+    // swallowed (the defect fixed in B-005).
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_returns_err_when_bind_fails_on_unwritable_path() {
+        // Pass a path inside a nonexistent directory that cannot be created —
+        // the listener parent-directory creation step will fail with a
+        // permission error when the grandparent is read-only.  We use a path
+        // rooted at a file (not a directory) so that `create_dir_all` fails.
+        let tmp = tempfile::tempdir().expect("temp dir");
+
+        // Write a plain file, then try to use it as a directory component of
+        // the socket path — this forces the bind to fail.
+        let file_path = tmp.path().join("not_a_dir");
+        std::fs::write(&file_path, b"block").expect("write blocking file");
+        let sock_path = file_path.join("admin.sock"); // file_path is a file, not a dir
+
+        let cfg = Config {
+            admin_sock_path: sock_path,
+            ..Config::default()
+        };
+
+        let result = start(cfg);
+
+        assert!(
+            result.is_err(),
+            "start must return Err when the socket bind fails"
+        );
     }
 
     // Helper: build a dispatcher and bus with no optional handles.
