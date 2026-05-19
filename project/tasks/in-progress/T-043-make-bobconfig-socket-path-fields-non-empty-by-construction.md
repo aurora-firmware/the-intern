@@ -78,3 +78,25 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-19
+
+PASS
+
+Stage 1 (spec compliance): all three acceptance criteria are met.
+
+- AC-1: `impl Default for BobConfig` is removed, enforcing the constraint at compile time for all non-test code. `validate()` adds two runtime guards at the top of the function that return `ServiceError::Configuration` with a message naming the offending field when either socket path is empty. Both layers confirmed in the diff.
+- AC-2: The production path (`load_with_sources` → `defaults_with_runtime_root`) is unchanged and continues to produce non-empty paths. No production call site was broken.
+- AC-3: `cargo test -p bob` ran 61 tests (54 unit + 7 integration); all passed.
+
+Files modified beyond the stated scope (`audit.rs`, `chat.rs`, `admin_rpc.rs`, `lib.rs`, `telemetry.rs`) were all `#[cfg(test)]` blocks within the same crate performing mechanical `BobConfig::default()` → `BobConfig::test_base()` substitutions, justified in the Work Log.
+
+Stage 2 (code quality): no issues found.
+
+- Correctness: `as_os_str().is_empty()` correctly identifies `PathBuf::new()`; checks run before the existing capacity guards.
+- Tests: two new tests cover each empty-path case independently via `load_with_sources`; the `test_base_has_pi_agent_rpc_worker_and_positive_pool_limits` rename correctly tracks the API change.
+- Security: no new permissions, no hardcoded secrets, input validation added.
+- Readability: comment block explaining the intentional absence of `Default`, and the `test_base()` docstring warning against misuse, are both clear and appropriately scoped.
+- Performance: no regressions.
+
+Minor observation (non-blocking): `serve.rs` contains a few cosmetic line-reflow changes (e.g., `audit_sink` and `extension_ipc_handle` binding style, one `assert_eq!` argument alignment) that are outside the task scope but harmless.
