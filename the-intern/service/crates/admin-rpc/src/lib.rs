@@ -21,7 +21,7 @@ use crate::{
     dispatch::{DispatchOutcome, Dispatcher},
     listener::{Listener, ListenerConfig},
     protocol::{read_frame, ErrorResponse, FrameRead, Notification},
-    subscriptions::{AuditRecord, ConnectionRegistry, SubscriptionBus, SubscriptionId},
+    subscriptions::{AdminSubscriptionId, AuditRecord, ConnectionRegistry, SubscriptionBus},
 };
 
 /// Configuration for the admin-rpc actor.
@@ -154,7 +154,7 @@ enum NotifMsg {
     /// A serialized notification frame to write to the client.
     Frame(Vec<u8>),
     /// The subscription sender was dropped (bus removed it — AC-4).
-    Dropped { id: SubscriptionId },
+    Dropped { id: AdminSubscriptionId },
 }
 
 /// Handle one accepted connection: read JSON-RPC 2.0 frames, dispatch each
@@ -267,7 +267,7 @@ async fn read_loop(
 /// When the sender is dropped (bus evicted the subscriber — AC-4), sends a
 /// `NotifMsg::Dropped` sentinel and exits.
 async fn audit_forwarder(
-    id: SubscriptionId,
+    id: AdminSubscriptionId,
     mut rx: mpsc::Receiver<AuditRecord>,
     bus: SubscriptionBus,
     notif_tx: mpsc::Sender<NotifMsg>,

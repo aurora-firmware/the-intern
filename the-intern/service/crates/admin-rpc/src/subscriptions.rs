@@ -6,7 +6,7 @@
 //! each admin-rpc connection (consumer). Producers call
 //! [`SubscriptionBus::publish`] to fan an [`AuditRecord`] out to every open
 //! subscriber. Consumers register via [`SubscriptionBus::subscribe`] and
-//! receive a [`SubscriptionId`] together with a bounded
+//! receive a [`AdminSubscriptionId`] together with a bounded
 //! `tokio::sync::mpsc::Receiver<AuditRecord>`.
 //!
 //! # Slow subscribers (AC-4)
@@ -20,7 +20,7 @@
 //! # Connection-level cleanup (AC-5)
 //!
 //! Each connection holds a [`ConnectionRegistry`] that tracks every
-//! [`SubscriptionId`] opened on that connection. When the registry is dropped
+//! [`AdminSubscriptionId`] opened on that connection. When the registry is dropped
 //! (connection ends) it calls [`SubscriptionBus::remove`] for every remaining
 //! id, preventing leaks.
 
@@ -35,26 +35,28 @@ use std::{
 
 use tokio::sync::mpsc;
 
-/// An opaque, unique identifier for a subscription.
+/// An opaque, unique identifier for a subscription within the admin-rpc bus.
 ///
-/// Represented as a monotonically increasing `u64` internally.
+/// This is a monotonically increasing `u64` counter local to the admin-rpc
+/// subscription bus. It is distinct from `bob_core::types::SubscriptionId`,
+/// which is a UUID-based public subscription handle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SubscriptionId(u64);
+pub struct AdminSubscriptionId(u64);
 
-impl std::fmt::Display for SubscriptionId {
+impl std::fmt::Display for AdminSubscriptionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl SubscriptionId {
-    /// Parse a `SubscriptionId` from its string representation.
+impl AdminSubscriptionId {
+    /// Parse an `AdminSubscriptionId` from its string representation.
     ///
     /// # Errors
     ///
     /// Returns `None` when the string is not a valid `u64`.
     pub fn parse(s: &str) -> Option<Self> {
-        s.parse::<u64>().ok().map(SubscriptionId)
+        s.parse::<u64>().ok().map(AdminSubscriptionId)
     }
 }
 
@@ -70,9 +72,9 @@ const SUBSCRIBER_CAPACITY: usize = 64;
 
 /// State shared between all clones of a [`SubscriptionBus`].
 struct BusState {
-    subscribers: HashMap<SubscriptionId, mpsc::Sender<AuditRecord>>,
-    slow_since: HashMap<SubscriptionId, Instant>,
-    slow_evicted: HashSet<SubscriptionId>,
+    subscribers: HashMap<AdminSubscriptionId, mpsc::Sender<AuditRecord>>,
+    slow_since: HashMap<AdminSubscriptionId, Instant>,
+    slow_evicted: HashSet<AdminSubscriptionId>,
     next_id: AtomicU64,
 }
 
@@ -105,10 +107,10 @@ impl SubscriptionBus {
 
     /// Register a new subscriber and return its id plus the receive end of the
     /// bounded channel.
-    pub fn subscribe(&self) -> (SubscriptionId, mpsc::Receiver<AuditRecord>) {
+    pub fn subscribe(&self) -> (AdminSubscriptionId, mpsc::Receiver<AuditRecord>) {
         let mut state = self.state.lock().expect("bus state lock poisoned");
         let id_raw = state.next_id.fetch_add(1, Ordering::Relaxed);
-        let id = SubscriptionId(id_raw);
+        let id = AdminSubscriptionId(id_raw);
         let (tx, rx) = mpsc::channel(SUBSCRIBER_CAPACITY);
         state.subscribers.insert(id, tx);
         (id, rx)
@@ -117,7 +119,7 @@ impl SubscriptionBus {
     /// Remove a subscriber by id.
     ///
     /// Returns `true` when the id existed, `false` when it was already absent.
-    pub fn remove(&self, id: SubscriptionId) -> bool {
+    pub fn remove(&self, id: AdminSubscriptionId) -> bool {
         let mut state = self.state.lock().expect("bus state lock poisoned");
         state.slow_since.remove(&id);
         state.slow_evicted.remove(&id);
@@ -129,7 +131,7 @@ impl SubscriptionBus {
     ///
     /// The marker is consumed when read so ordinary receiver shutdown
     /// (unsubscribe/cleanup) does not look like AC-4 eviction.
-    pub fn take_slow_evicted(&self, id: SubscriptionId) -> bool {
+    pub fn take_slow_evicted(&self, id: AdminSubscriptionId) -> bool {
         self.state
             .lock()
             .expect("bus state lock poisoned")
@@ -219,9 +221,9 @@ pub enum SubscriptionKind {
 pub struct ConnectionRegistry {
     bus: SubscriptionBus,
     /// All open subscription ids, regardless of kind.
-    ids: Vec<(SubscriptionId, SubscriptionKind)>,
+    ids: Vec<(AdminSubscriptionId, SubscriptionKind)>,
     /// Audit receivers waiting to be claimed by the write task.
-    pending_audit_receivers: HashMap<SubscriptionId, mpsc::Receiver<AuditRecord>>,
+    pending_audit_receivers: HashMap<AdminSubscriptionId, mpsc::Receiver<AuditRecord>>,
 }
 
 impl ConnectionRegistry {
@@ -236,10 +238,10 @@ impl ConnectionRegistry {
 
     /// Subscribe to the audit bus.
     ///
-    /// The returned `SubscriptionId` is registered for cleanup. The caller
+    /// The returned `AdminSubscriptionId` is registered for cleanup. The caller
     /// must retrieve the corresponding `Receiver` with
     /// [`Self::take_audit_receiver`] before it can be drained.
-    pub fn subscribe_audit(&mut self) -> (SubscriptionId, mpsc::Receiver<AuditRecord>) {
+    pub fn subscribe_audit(&mut self) -> (AdminSubscriptionId, mpsc::Receiver<AuditRecord>) {
         let (id, rx) = self.bus.subscribe();
         self.ids.push((id, SubscriptionKind::Audit));
         (id, rx)
@@ -248,7 +250,7 @@ impl ConnectionRegistry {
     /// Remove an audit subscription explicitly (e.g. on `audit.tail.unsubscribe`).
     ///
     /// Returns `true` when the id existed and was removed.
-    pub fn unsubscribe(&mut self, id: SubscriptionId) -> bool {
+    pub fn unsubscribe(&mut self, id: AdminSubscriptionId) -> bool {
         if let Some(pos) = self
             .ids
             .iter()
@@ -267,7 +269,7 @@ impl ConnectionRegistry {
     /// Chat subscriptions use a monotonically-increasing id but are tracked
     /// in the registry so they are cleaned up on connection close (AC-5).
     /// Chat fan-out is Phase-2 work; this call just allocates an id.
-    pub fn open_chat(&mut self) -> SubscriptionId {
+    pub fn open_chat(&mut self) -> AdminSubscriptionId {
         let (id, _rx) = self.bus.subscribe();
         self.ids.push((id, SubscriptionKind::Chat));
         id
@@ -276,7 +278,7 @@ impl ConnectionRegistry {
     /// Close a chat subscription explicitly (e.g. on `chat.close`).
     ///
     /// Returns `true` when the id existed and was removed.
-    pub fn close_chat(&mut self, id: SubscriptionId) -> bool {
+    pub fn close_chat(&mut self, id: AdminSubscriptionId) -> bool {
         if let Some(pos) = self
             .ids
             .iter()
@@ -290,7 +292,7 @@ impl ConnectionRegistry {
     }
 
     /// Iterate over all open subscription ids and their kinds.
-    pub fn ids(&self) -> impl Iterator<Item = (SubscriptionId, SubscriptionKind)> + '_ {
+    pub fn ids(&self) -> impl Iterator<Item = (AdminSubscriptionId, SubscriptionKind)> + '_ {
         self.ids.iter().copied()
     }
 
@@ -332,7 +334,7 @@ mod tests {
         }
     }
 
-    // AC-1: subscribe returns a unique SubscriptionId and a receiver.
+    // AC-1: subscribe returns a unique AdminSubscriptionId and a receiver.
     #[test]
     fn subscribe_returns_unique_ids() {
         let bus = make_bus();
@@ -396,7 +398,7 @@ mod tests {
     #[test]
     fn remove_unknown_id_returns_false() {
         let bus = make_bus();
-        let ghost_id = SubscriptionId(9999);
+        let ghost_id = AdminSubscriptionId(9999);
         let removed = bus.remove(ghost_id);
         assert!(!removed, "remove of unknown id must return false");
     }
@@ -486,7 +488,7 @@ mod tests {
     fn connection_registry_unsubscribe_unknown_id_returns_false() {
         let bus = make_bus();
         let mut registry = ConnectionRegistry::new(bus.clone());
-        let ghost_id = SubscriptionId(9999);
+        let ghost_id = AdminSubscriptionId(9999);
 
         let removed = registry.unsubscribe(ghost_id);
 
@@ -512,7 +514,7 @@ mod tests {
     fn connection_registry_chat_close_unknown_id_returns_false() {
         let bus = make_bus();
         let mut registry = ConnectionRegistry::new(bus.clone());
-        let ghost_id = SubscriptionId(9999);
+        let ghost_id = AdminSubscriptionId(9999);
 
         assert!(!registry.close_chat(ghost_id));
     }
@@ -528,24 +530,35 @@ mod tests {
         assert!(!registry.is_empty());
     }
 
-    // SubscriptionId can be displayed as a string.
+    // AdminSubscriptionId can be displayed as a string.
     #[test]
-    fn subscription_id_display_is_the_inner_u64() {
-        let id = SubscriptionId(42);
+    fn admin_subscription_id_display_is_the_inner_u64() {
+        let id = AdminSubscriptionId(42);
         assert_eq!(id.to_string(), "42");
     }
 
-    // SubscriptionId::parse round-trips with Display.
+    // AdminSubscriptionId::parse round-trips with Display.
     #[test]
-    fn subscription_id_parse_round_trips_with_display() {
-        let id = SubscriptionId(7);
-        let parsed = SubscriptionId::parse(&id.to_string());
+    fn admin_subscription_id_parse_round_trips_with_display() {
+        let id = AdminSubscriptionId(7);
+        let parsed = AdminSubscriptionId::parse(&id.to_string());
         assert_eq!(parsed, Some(id));
     }
 
-    // SubscriptionId::parse returns None for non-numeric input.
+    // AdminSubscriptionId::parse returns None for non-numeric input.
     #[test]
-    fn subscription_id_parse_returns_none_for_non_numeric_string() {
-        assert!(SubscriptionId::parse("not-a-number").is_none());
+    fn admin_subscription_id_parse_returns_none_for_non_numeric_string() {
+        assert!(AdminSubscriptionId::parse("not-a-number").is_none());
+    }
+
+    // AC-2 (T-042): AdminSubscriptionId is the bus-local u64 counter type and
+    // is distinct from the name SubscriptionId.
+    #[test]
+    fn admin_subscription_id_is_the_bus_local_u64_type() {
+        let id = AdminSubscriptionId(1);
+        assert_eq!(id.to_string(), "1");
+        let parsed = AdminSubscriptionId::parse("42");
+        assert_eq!(parsed, Some(AdminSubscriptionId(42)));
+        assert!(AdminSubscriptionId::parse("not-a-number").is_none());
     }
 }
