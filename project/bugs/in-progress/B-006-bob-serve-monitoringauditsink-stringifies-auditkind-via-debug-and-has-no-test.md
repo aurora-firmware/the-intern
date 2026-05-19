@@ -75,6 +75,27 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-05-19
+
+**Reproduction status:** Confirmed by static analysis. No runtime test existed to detect it.
+
+**Evidence captured:**
+- `bob/src/serve.rs:52-63` — inline `MonitoringAuditSink` struct whose `AuditSink::append` calls `self.handle.record_event(format!("{:?}: {}", record.kind, record.description))`.
+- `bob-core/src/types/records.rs` — `AuditKind` enum with 8 variants (`RequestReceived`, `PolicyDecision`, `ActionInvoked`, `ActionCompleted`, `ActionFailed`, `SessionStarted`, `SessionEnded`, `PreflightDenied`); each derives `Debug`, so `format!("{:?}", kind)` yields the variant identifier.
+- `monitoring::Handle::record_event` accepts `impl Into<String>` — no typed overload, no `AuditKind` discriminant on the wire.
+- No unit test covers `MonitoringAuditSink` anywhere in the workspace.
+
+**Isolated fault:** The `format!("{:?}: {}", record.kind, record.description)` call in the inline `MonitoringAuditSink::append`. This is the sole site converting `AuditKind` to a monitoring channel event name, and it uses `Debug` formatting as a shortcut.
+
+**Root cause or fault hypothesis:** The adapter was written inline in `serve.rs` (an assembly file) and reached for `Debug` formatting instead of a stable mapping. The `Debug` impl is derived from variant identifiers, so any rename silently rewrites the wire identifier on the monitoring channel — no compile error, no test failure.
+
+**Planned verification:**
+1. Add `audit_kind_to_event_name(&AuditKind) -> &'static str` to `monitoring/src/lib.rs` using an exhaustive `match` mapping each variant to a stable kebab-case string.
+2. Add a `MonitoringAuditSink` adapter struct + `AuditSink` impl in `monitoring` that delegates to `audit_kind_to_event_name` and then `record_event`.
+3. Add an exhaustive unit test pinning every variant to its expected string. Adding a new variant must require updating both the `match` and the test.
+4. Remove the inline adapter from `bob/src/serve.rs`; construct `monitoring::MonitoringAuditSink::new(monitoring_handle.clone())` at the wiring site.
+5. Run `cargo test -p monitoring -p bob && cargo test --workspace` — all green.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
@@ -84,6 +105,23 @@ rejected, decisions made, what remains for next session.
 
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
+
+### Session 1 — 2026-05-19
+
+Chose `monitoring` as the home for the typed adapter — it owns the destination side, and both the bug report and the AI review report prefer it. Added `audit_kind_to_event_name(&AuditKind) -> &'static str` with an exhaustive `match` mapping each of the 8 variants to a stable kebab-case string. Added `MonitoringAuditSink` (a public `Clone` struct with `new(Handle)`) and its `async_trait` `AuditSink` impl that delegates through `audit_kind_to_event_name` and then `record_event`. Added the unit test `audit_kind_to_event_name_maps_every_variant_to_stable_kebab_case_string` covering all 8 variants — both compile-time exhaustiveness (the `match`) and run-time assertion (the table) guard against silent renames and table drift.
+
+Removed the inline `MonitoringAuditSink` struct and `AuditSink` impl from `bob/src/serve.rs` (~12 lines), removed the now-unused `AuditRecord` import, and replaced the construction site with `monitoring::MonitoringAuditSink::new(monitoring_handle.clone())`.
+
+Rejected alternatives:
+- Putting the adapter in `bob-core` (pure domain crate has no dependency on `monitoring`, would create a circular or bridge-trait problem).
+- Snake_case event names — kebab-case is the conventional style for monitoring event identifiers in this stack and is documented in the function doc.
+
+Evidence:
+- `cargo test -p monitoring`: 3 passed, including the new mapping test.
+- `cargo test -p monitoring -p bob`: 3 monitoring + 58 bob tests passed.
+- `cargo test --workspace`: all crates green.
+
+Commit `ce9208f` on `bug/B-006-typed-monitoring-audit-sink` — `fix(monitoring,bob): typed AuditKind-to-event mapping with test coverage`. Nothing remains for the next session.
 
 ## Review
 
