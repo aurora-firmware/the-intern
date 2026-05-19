@@ -134,3 +134,26 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-19
+
+PASS
+
+**Stage 1 — Bug criteria**
+
+- Diagnosis Log present and complete: reproduction status (confirmed by code review), evidence (line-by-line inspection of `start()` showing synchronous bind and error-swallowing), isolated fault (`start()` unconditionally returns success even when `Listener::bind` fails), root cause (no error path in the signature), planned verification (change signature, add regression test, run test suite). The correction of the original TOCTOU misframing is appropriately documented and accepted.
+- Fix addresses the isolated fault: `admin_rpc::start` now returns `Result<(Handle, JoinHandle<()>), std::io::Error>`. Bind failure propagates via `?` to the caller rather than being logged and dropped.
+- The `cfg.admin_sock_path.exists()` check is fully removed from `bob::serve::try_start_subsystems`. The remaining `exists()` calls in `bob/src/serve.rs` are all in the test module and are appropriate socket-state assertions, not startup proxy checks.
+- All call sites of `admin_rpc::start` are updated: four tests in `admin-rpc/src/lib.rs` use `.expect(...)`, and `bob::serve` uses `.map_err(|e| format!(...))?`. No stale bare-tuple destructures remain.
+- Regression test `start_returns_err_when_bind_fails_on_unwritable_path` added in `admin-rpc/src/lib.rs`. It passes a path rooted inside a regular file (not a directory), forcing `create_dir_all` to fail. The test would not compile against the old `(Handle, JoinHandle<()>)` return type (`.is_err()` does not exist on a plain tuple), so it is definitionally red before the fix.
+- Fix Verification steps were followed and documented in the Work Log. Independent re-run confirms: `cargo test -p admin-rpc` 79 passed / 0 failed; `cargo test -p bob` all passed; `cargo test --workspace` 0 failures.
+
+**Stage 2 — Code quality**
+
+- Correctness: bind failure now propagates immediately; the actor is not started in the failure case, so no partial state is left behind. The `map_err` in `bob::serve` correctly formats the error message including both path and underlying `io::Error`.
+- Tests: the regression test exercises the failure path. Existing tests cover the success paths (empty path, valid path, socket-creates-file). Tests are independent (each uses its own `tempdir`).
+- Security: no secrets, no unvalidated external input, no new permissions.
+- Readability: doc-comment on `start()` is updated to document both the `Ok` and `Err` cases. The removal of the nested `match` in favour of `map_err(...)?` is cleaner. Log message wording is accurate. No dead code or debugging artifacts.
+- Performance: no hot-path changes; the error path returns immediately.
+
+No minor observations.
