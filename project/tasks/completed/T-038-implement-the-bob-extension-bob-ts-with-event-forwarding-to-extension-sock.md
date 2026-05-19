@@ -2,7 +2,7 @@
 id: T-038
 title: Implement the bob extension bob.ts with event forwarding to 
   extension.sock
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-19'
