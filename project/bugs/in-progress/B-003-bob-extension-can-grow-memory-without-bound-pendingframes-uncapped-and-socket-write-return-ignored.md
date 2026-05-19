@@ -125,3 +125,24 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-19
+
+PASS
+
+**Stage 1 — Bug criteria**
+
+- Diagnosis Log is present and complete: reproduction status (confirmed by code inspection), evidence captured (line references for both faults), isolated faults (A: uncapped push, B: discarded `socket.write` return), root cause documented, planned verification matches the fix-verification steps. No gaps.
+- Fault A fix verified: `PENDING_FRAMES_CAP = 64` is declared at module scope in `the-intern/extensions/bob.ts` (line 77). The guard `if (pendingFrames.length >= PENDING_FRAMES_CAP)` fires in `ensureConnected` (line 129) before `pendingFrames.push(frame)` — so the push is blocked when the cap is reached. `markDead` is called exactly once: the first capped event triggers it, setting `transportDead = true`; every subsequent call returns immediately at `if (transportDead) return` (line 127). Correct.
+- Fault B fix verified: `flushPending` captures `const ok = socket.write(frame)` (line 113) and on `!ok` clears `pendingFrames.length`, calls `markDead`, and returns (lines 117–121). Back-pressure and peer-close are both handled. `pendingFrames.length = 0` before `markDead` prevents re-entrant flush confusion. Correct.
+- `socket.destroyed` removal is safe: `socket.write()` on a destroyed socket returns `false` in Node.js, so the `!ok` branch fully subsumes the old `socket.destroyed` path. No behavior gap.
+- No drain listener was added — compliant with S-003 "no buffering, loud once + dead" policy.
+- No unrelated behavior was added.
+
+**Stage 2 — Code quality**
+
+- Correctness: Guard placement is correct (check before push, not after). `markDead` sets `socket = null` and `transportDead = true`, so no double-write or post-dead flush is possible. The already-connected fast path (`socket !== null` branch in `ensureConnected`) also hits the cap guard before pushing and calling `flushPending` — correct.
+- Tests: Two new regression tests in `bob.test.ts` (B-003-A and B-003-B). B-003-A fires `CAP + 1 = 65` events synchronously (all handlers are synchronous so all 65 run before the event loop yields), verifies exactly one `warn` emitted, transport dead afterwards, and `server.lines().length <= 64`. B-003-B monkey-patches `net.Socket.prototype.write` to return `false` once, verifies exactly one `warn` and transport dead. Both tests are independent (each creates its own temp dir via `beforeEach`). Work Log records red-then-green evidence. `npx tsc --noEmit` is clean; `npm test` reports 11/11 passed (confirmed locally).
+- Security: No hardcoded secrets; no new external input paths; no credential handling.
+- Readability: `PENDING_FRAMES_CAP` is a named constant with a block comment explaining the policy. The `markDead` message strings are descriptive. No dead code or debugging artifacts.
+- Performance: No new loops over large data sets; `pendingFrames.length = 0` truncates in O(1) rather than splicing; no blocking calls introduced.
