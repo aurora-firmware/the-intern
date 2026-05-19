@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use bob_core::error::{ServiceError, ServiceResult};
 use bob_core::ports::{AuditSink, PersistenceStore};
-use bob_core::types::{AuditRecord, ChannelId, RequestContext};
+use bob_core::types::{ChannelId, RequestContext};
 use tokio::{net::UnixListener, sync::watch, task::JoinHandle, time};
 use tracing::info;
 
@@ -48,19 +48,6 @@ struct Runtime {
     extension_sock_path: PathBuf,
 }
 
-#[derive(Clone)]
-struct MonitoringAuditSink {
-    handle: monitoring::Handle,
-}
-
-#[async_trait::async_trait]
-impl AuditSink for MonitoringAuditSink {
-    async fn append(&self, record: AuditRecord) -> ServiceResult<()> {
-        self.handle
-            .record_event(format!("{:?}: {}", record.kind, record.description))
-            .await
-    }
-}
 
 /// Constructs every subsystem actor, binds the two Unix domain socket paths
 /// recorded in `cfg`, installs signal handlers, and runs the graceful-shutdown
@@ -141,9 +128,8 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
             context_id: None,
         });
     let persistence_store: Arc<dyn PersistenceStore> = Arc::new(persistence_handle.clone());
-    let audit_sink: Arc<dyn AuditSink> = Arc::new(MonitoringAuditSink {
-        handle: monitoring_handle.clone(),
-    });
+    let audit_sink: Arc<dyn AuditSink> =
+        Arc::new(monitoring::MonitoringAuditSink::new(monitoring_handle.clone()));
     let (requests_handler_handle, requests_handler_join) = requests_handler::start_with(
         requests_handler::Config {
             request_queue_capacity: cfg.request_queue_capacity,
