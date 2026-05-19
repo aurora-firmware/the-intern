@@ -1,7 +1,7 @@
 ---
 id: T-047
 title: Annotate placeholder crates with doc scaffold markers
-status: pending
+status: completed
 priority: low
 assigned-role: unassigned
 created: '2026-05-19'
