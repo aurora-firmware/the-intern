@@ -2,7 +2,7 @@
 id: T-045
 title: Cover unknown-session-after-default-route-close path in extension-ipc 
   multiplex tests
-status: pending
+status: completed
 priority: low
 assigned-role: unassigned
 created: '2026-05-19'
@@ -53,6 +53,10 @@ rejected, decisions made, what remains for next session.
 
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
+
+### Session 1 — 2026-05-19
+
+Superseded by the B-004 bug fix. The regression test the task asks for — `route_for_session_reflects_new_default_for_unknown_session_after_default_replaced` — was added on `bug/B-004-multiplex-unknown-session-cache` (commit `00be9f3`, merged to `dev-agent` as `c804294`) and now lives at `crates/extension-ipc/src/multiplex.rs:358`. AC-1 and AC-2 are satisfied by the merged change. Closing without further work.
 
 ## Review
 
