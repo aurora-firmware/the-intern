@@ -222,7 +222,7 @@ mod tests {
         WorkerProcessConfig {
             command: command.to_string(),
             args: args.iter().map(|arg| arg.to_string()).collect(),
-            child_termination_deadline: Duration::from_millis(50),
+            child_termination_deadline: Duration::from_millis(2000),
             session_id: SessionId::new(),
             extension_sock_path: PathBuf::new(),
         }

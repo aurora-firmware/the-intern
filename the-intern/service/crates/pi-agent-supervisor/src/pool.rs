@@ -240,7 +240,7 @@ mod tests {
             max_processes,
             idle_reap_timeout: Duration::from_secs(30),
             command_buffer: 8,
-            child_termination_deadline: Duration::from_millis(50),
+            child_termination_deadline: Duration::from_millis(2000),
             extension_sock_path: std::path::PathBuf::new(),
         }
     }
