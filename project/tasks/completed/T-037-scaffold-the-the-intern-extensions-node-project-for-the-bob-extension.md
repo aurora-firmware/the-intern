@@ -1,7 +1,7 @@
 ---
 id: T-037
 title: Scaffold the the-intern/extensions Node project for the bob extension
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-19'
