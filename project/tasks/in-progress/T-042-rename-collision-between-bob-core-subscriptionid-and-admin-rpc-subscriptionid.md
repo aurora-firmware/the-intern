@@ -95,3 +95,22 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-19
+
+PASS
+
+**Stage 1 — Spec compliance**
+
+- AC-1: Confirmed. No bare `SubscriptionId` type use remains anywhere in the three modified files. The only occurrences of the bare string "SubscriptionId" in admin-rpc code are in doc comments (the reference to `bob_core::types::SubscriptionId` clarifying the distinction) and one explanatory test comment — neither is a type use.
+- AC-2: Confirmed. The type is now `AdminSubscriptionId` throughout. The definition, all method signatures (`subscribe`, `remove`, `take_slow_evicted`, `subscribe_audit`, `unsubscribe`, `open_chat`, `close_chat`, `ids`), all struct field types (`BusState`, `ConnectionRegistry`), all enum variants (`DispatchOutcome`), and all internal usages in `lib.rs` and `dispatch.rs` use `AdminSubscriptionId`. A new test (`admin_subscription_id_is_the_bus_local_u64_type`) explicitly exercises the type's parse/display/identity behaviour.
+- AC-3: Confirmed. `cargo build --workspace && cargo test --workspace` ran locally on the implementation branch. Result: 330 tests across all workspace crates, 0 failures.
+- Scope: only the three files listed in the task were modified. No unspecified files were touched.
+
+**Stage 2 — Code quality**
+
+- Correctness: The rename is mechanical and complete. Logic is unchanged; no new edge cases are introduced.
+- Tests: Three existing test functions were renamed to match the type name; two test literal constructions (`SubscriptionId(9999)`) were updated; a new test (`admin_subscription_id_is_the_bus_local_u64_type`) covers AC-2's naming requirement. Success and failure paths for `parse` are both exercised.
+- Security: No credentials, no new permissions, no external input paths changed.
+- Readability: `AdminSubscriptionId` is unambiguous. The updated doc comment in `subscriptions.rs` (lines 39-43 of the diff) now explicitly contrasts the two types, which improves cross-crate clarity. No dead code introduced.
+- Performance: No change to runtime behaviour; rename only.
