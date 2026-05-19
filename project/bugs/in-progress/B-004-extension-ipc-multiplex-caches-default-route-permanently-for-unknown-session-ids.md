@@ -74,6 +74,18 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-05-19
+
+**Reproduction status:** Confirmed by code inspection. Structurally unambiguous; runtime reproduction not required to observe the defect.
+
+**Evidence captured:** `route_for_session` at `crates/extension-ipc/src/multiplex.rs:116-121` uses `self.session_routes.entry(session).or_insert_with(|| self.default_route.clone())`. `HashMap::entry().or_insert_with()` permanently inserts the closure's return value into the map. On the first lookup for an unknown session id, a clone of `self.default_route` is stored under that id; later lookups hit the occupied entry and return the stale clone regardless of subsequent changes to `self.default_route`.
+
+**Isolated fault:** `route_for_session` (line 119) — the entry-API pattern was chosen for lazy initialisation but, as a side effect, binds unknown session ids to a snapshot of the default route at first lookup.
+
+**Root cause or fault hypothesis:** The fall-back-to-default behaviour was conflated with permanent registration. The fix is to keep the fallback live: on a missing session entry, read `self.default_route` directly without inserting.
+
+**Planned verification:** Replace the `entry().or_insert_with()` pattern with `get(&session).unwrap_or(&self.default_route)`. Relax `&mut self` to `&self` since no mutation happens. Add a public `set_default_route` so the regression test can replace the default at runtime through the observable interface. Regression test: register default A → look up unknown session id → replace default with B → look up the same unknown session id → assert the second message arrives on B, not A. Verify with `cargo test -p extension-ipc`.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
@@ -83,6 +95,16 @@ rejected, decisions made, what remains for next session.
 
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
+
+### Session 1 — 2026-05-19
+
+Wrote the failing regression test `route_for_session_reflects_new_default_for_unknown_session_after_default_replaced` in `multiplex.rs` (red). Pre-fix it failed with: "second reply must NOT arrive on old default route A (stale cache)".
+
+Implementation: replaced `self.session_routes.entry(session).or_insert_with(|| self.default_route.clone())` with `self.session_routes.get(&session).cloned().unwrap_or_else(|| self.default_route.clone())` (i.e. a live read of `self.default_route` on cache miss with no insertion). The receiver of `route_for_session` was relaxed from `&mut self` to `&self`. Added a public `set_default_route` to `SessionMultiplexer` so the regression test could replace the default through the observable interface (no production caller currently uses it, but the regression test does).
+
+Considered exposing `session_routes` directly for testing and rejected it — would couple tests to implementation details.
+
+After the fix: `cargo test -p extension-ipc` reports 29/29 passing (28 pre-existing + 1 new). Commit `00be9f3` on `bug/B-004-multiplex-unknown-session-cache` — `fix(extension-ipc): stop caching default route for unknown session ids`. Nothing remains for the next session.
 
 ## Review
 
