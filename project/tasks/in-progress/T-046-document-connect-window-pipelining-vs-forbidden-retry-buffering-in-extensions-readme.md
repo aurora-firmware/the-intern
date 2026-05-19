@@ -72,3 +72,20 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-19
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Spec compliance**
+- AC-1: Met. `the-intern/extensions/README.md` contains the new section "Connect-Window Pipelining vs Retry/Backoff Buffering" with three subsections that explain the connect-window pipelining behaviour and explicitly contrast it with S-003's prohibition on retry/backoff buffering, including a comparison table.
+- AC-2: Met. The "Bound on the buffer (B-003)" subsection references B-003 by name and states the `PENDING_FRAMES_CAP = 64` constant so a reader understands the queue is finite and bounded.
+- Only `the-intern/extensions/README.md` was modified, matching the task's stated file scope exactly.
+
+**Stage 2 — Code quality**
+- Correctness: The description accurately captures the implementation behaviour — buffer active only during initial connect, discarded immediately on connect failure, no replay, silent drops thereafter. The comparison table maps the distinction correctly.
+- Tests: No automated test command exists or is required for a documentation-only change; the task's Verification section explicitly specifies manual inspection only. The Work Log records that all 16 pre-existing tests pass unchanged.
+- Security, Performance: Not applicable.
+- Readability: Section is well-structured, uses consistent heading levels, and names (S-003, B-003, `PENDING_FRAMES_CAP`) follow project conventions. No dead text or debug artifacts.
