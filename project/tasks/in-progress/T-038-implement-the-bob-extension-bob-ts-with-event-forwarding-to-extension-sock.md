@@ -120,3 +120,27 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-19
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Spec compliance**
+
+- AC-1: All 29 events from `ExtensionAPI.on()` overloads in `@earendil-works/pi-coding-agent@0.75.3 dist/core/extensions/types.d.ts` are registered. Using the installed package's type definitions as the canonical source is reasonable given that the live docs page is a client-rendered SPA. The `PI_EVENTS` array matches the overload list exactly. Pass.
+- AC-2: `buildFrame()` produces `{"kind":"event","session":"<id>","payload":{"event":"<name>","data":<object>}}\n`, which deserialises correctly as `InboundFrame::Event` (Rust `#[serde(tag = "kind")]`, `payload: Value`). Tests verify `kind`, `session`, `payload.event`, and `payload.data`. Pass.
+- AC-3: Factory returns early with one `warn()` call and zero `piGeneric.on()` calls when either env var is absent. Three tests cover the three missing-env-var combinations. Pass.
+- AC-4: Connect failure handled via `sock.on("error", ...)` → `markDead` (one warning, dead flag set). Mid-session write failure (peer close without error event) detected via post-write `socket.destroyed` check in `flushPending()` → `markDead`. Subsequent event handlers are no-ops due to `transportDead` guard. Tests confirm one warning and no subsequent warnings in both scenarios. Pass.
+- Files touched: only `the-intern/extensions/bob.ts` and `the-intern/extensions/bob.test.ts`, matching the stated scope exactly. Pass.
+
+**Stage 2 — Code quality**
+
+- Correctness: Lazy-connect state machine (`socket`, `transportDead`, `connecting`, `pendingFrames`) is correct. The `pendingFrames.length = 0` reset before `markDead` prevents stale frames. The peer-close detection is an appropriate workaround for a documented Node.js platform behaviour.
+- Tests: 9 independent tests with isolated temp dirs and socket servers. Success and failure paths both covered. `waitUntil` polling prevents flaky timing assertions.
+- Security: No hardcoded secrets; no external input paths.
+- Readability: Function responsibilities are clearly separated; non-obvious platform behaviours are commented.
+- Performance: No resource leaks; socket is destroyed on `markDead`.
+
+**Verification evidence**: `npx tsc --noEmit` exits 0; `npm test` reports 9/9 tests passed in 387 ms.
