@@ -3,7 +3,7 @@ id: B-006
 title: bob serve MonitoringAuditSink stringifies AuditKind via Debug and has no 
   test
 severity: medium
-status: open
+status: in-progress
 created: '2026-05-19'
 ---
 
