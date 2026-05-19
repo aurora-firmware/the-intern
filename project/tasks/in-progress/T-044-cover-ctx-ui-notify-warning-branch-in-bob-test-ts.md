@@ -55,6 +55,24 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-19
+
+Examined `bob.ts` to identify the three warning paths where `ctx` is propagated: connect failure (socket `error` event → `markDead` → `warn`), socket.write returning false (in `flushPending` → `markDead` → `warn`), and pendingFrames cap breach (`ensureConnected` → `markDead` → `warn`). The missing-env-var path calls `warn` with no `ctx`, so `ctx.ui.notify` cannot be exercised there by design.
+
+Added `emitWithCtx(event, data, ctx)` to the `StubPi` interface and implementation, and a `makeCtxWithUi()` factory that returns a minimal ctx stub with `ui.notify` as a `vi.fn()` spy. Five new tests were written:
+
+- **AC-1 / connect failure**: emits with ctx-having-ui to a nonexistent socket path, waits for async error, asserts `notifySpy` called once with type `"warning"` and `stderrSpy` called zero times.
+- **AC-1 / socket.write false**: establishes a real connection via empty-ctx emit, patches `net.Socket.prototype.write` to return `false` once, emits the triggering event with ctx-having-ui, asserts `notifySpy` once and zero stderr writes.
+- **AC-1 / pendingFrames cap**: fires CAP+1 events synchronously via `emitWithCtx` with ctx-having-ui, waits for connect/flush to settle, asserts exactly one notify call and zero stderr writes.
+- **AC-2 / connect failure**: mirrors the connect-failure scenario using plain `emit()` (empty ctx), confirms `stderrSpy` called once.
+- **AC-2 / socket.write false**: mirrors the write-false scenario with plain `emit()`, confirms `stderrSpy` called once.
+
+**What was tried and rejected.** Initial `vi.fn<[string, type?], void>()` generic syntax was rejected by the installed vitest TypeScript types; replaced with plain `vi.fn()` — no behavior change.
+
+**What remains.** Nothing. 16/16 tests pass, `npx tsc --noEmit` is clean.
+
+**Obstacles encountered.** One vitest typing quirk with the two-argument generic form of `vi.fn`; resolved trivially.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
