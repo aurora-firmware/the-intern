@@ -64,11 +64,13 @@ enum Command {
     SendMessage(String),
 }
 
+#[doc = "scaffold — see project/docs/roadmap.md phase 3"]
 #[derive(Clone)]
 pub struct Handle {
     tx: mpsc::Sender<Command>,
 }
 
+#[doc = "scaffold — see project/docs/roadmap.md phase 3"]
 pub struct Actor {
     cfg: Config,
     rx: mpsc::Receiver<Command>,
