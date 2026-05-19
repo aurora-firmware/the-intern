@@ -2,7 +2,7 @@
 id: T-039
 title: Set BOB_SESSION_ID and BOB_EXTENSION_SOCK_PATH on every pi-agent child 
   spawn
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-19'
