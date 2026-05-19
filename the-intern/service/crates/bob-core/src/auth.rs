@@ -18,6 +18,7 @@ pub struct PeerCred {
 ///
 /// A uid is allowed when it equals `service_uid` (the process owner of the
 /// running service) or when it appears in `allowed_uids`.
+#[must_use]
 pub fn is_allowed(peer_uid: u32, allowed_uids: &[u32], service_uid: u32) -> bool {
     peer_uid == service_uid || allowed_uids.contains(&peer_uid)
 }

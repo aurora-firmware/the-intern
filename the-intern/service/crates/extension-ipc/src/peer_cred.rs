@@ -1,37 +1,9 @@
-use std::os::fd::AsFd;
+//! Peer-credential types and helpers for the extension IPC channel.
+//!
+//! Re-exports the canonical [`bob_core::auth`] items so that callers within
+//! this crate continue to import from `crate::peer_cred` without change.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PeerCred {
-    pub uid: u32,
-}
-
-pub fn is_allowed(peer_uid: u32, allowed_uids: &[u32], service_uid: u32) -> bool {
-    peer_uid == service_uid || allowed_uids.contains(&peer_uid)
-}
-
-#[cfg(target_os = "linux")]
-pub fn peer_cred_from_fd<F: AsFd>(fd: &F) -> std::io::Result<PeerCred> {
-    use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
-    let raw =
-        getsockopt(fd, PeerCredentials).map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
-    Ok(PeerCred { uid: raw.uid() })
-}
-
-#[cfg(target_os = "macos")]
-pub fn peer_cred_from_fd<F: AsFd>(fd: &F) -> std::io::Result<PeerCred> {
-    use nix::sys::socket::{getsockopt, sockopt::LocalPeerCred};
-    let raw =
-        getsockopt(fd, LocalPeerCred).map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
-    Ok(PeerCred { uid: raw.uid() })
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn peer_cred_from_fd<F: AsFd>(_fd: &F) -> std::io::Result<PeerCred> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "peer credentials are not supported on this platform",
-    ))
-}
+pub use bob_core::auth::{is_allowed, peer_cred_from_fd, PeerCred};
 
 #[cfg(test)]
 mod tests {
