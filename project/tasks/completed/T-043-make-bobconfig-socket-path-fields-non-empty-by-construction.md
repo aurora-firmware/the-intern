@@ -1,7 +1,7 @@
 ---
 id: T-043
 title: Make BobConfig socket-path fields non-empty by construction
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-19'
