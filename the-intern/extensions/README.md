@@ -102,6 +102,48 @@ deployment.
 
 ---
 
+## Connect-Window Pipelining vs Retry/Backoff Buffering
+
+### What the spec says
+
+S-003 specifies **no buffering**: when a lost-connection window occurs, frames
+are dropped silently. There is no retry queue, no exponential back-off, and no
+attempt to replay events that were lost while the transport was down.
+
+### What the implementation does — and why it is not the same thing
+
+`bob.ts` uses a `pendingFrames` array that holds frames during the **in-flight
+first connect**. This is a *connect-window pipeline buffer*, not a retry buffer:
+
+- **Scope:** The buffer is active only from the moment the first event fires
+  (triggering a `net.createConnection` call) until the UDS `connect` callback
+  fires — a window measured in single-digit milliseconds under normal conditions.
+- **No retry:** If the connect fails (e.g. `ENOENT`, `ECONNREFUSED`), the
+  buffer is discarded immediately and the transport is marked dead. No replay,
+  no reconnect attempt.
+- **No post-failure queue:** Once the transport is dead the buffer is gone.
+  Every subsequent event is silently dropped — exactly as S-003 requires.
+
+The distinction is:
+
+| Behaviour | Connect-window pipelining | Retry/backoff buffering |
+|---|---|---|
+| **When active** | During initial UDS connect only | After a failure, while waiting to reconnect |
+| **On connect failure** | Buffer discarded, transport dead | Buffer retained for replay |
+| **Spec compliance** | Compatible with S-003 | Prohibited by S-003 |
+
+### Bound on the buffer (B-003)
+
+Without a cap, `pendingFrames` could grow without bound if the bob service is
+slow to accept the connection — a real memory-growth risk under bursty load.
+B-003 tracked this defect. The fix introduces `PENDING_FRAMES_CAP = 64`: if the
+queue reaches 64 frames before the connect callback fires, the transport is
+killed immediately (one warning, then silent no-op) rather than buffering
+further. This keeps the pre-connect window finite and bounded regardless of
+event rate.
+
+---
+
 ## Development
 
 This is a pure TypeScript package with no runtime dependencies. Everything
