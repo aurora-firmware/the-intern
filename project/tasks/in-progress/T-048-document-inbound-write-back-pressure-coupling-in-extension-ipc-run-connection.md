@@ -79,3 +79,20 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-19
+PASS
+
+**Stage 1 — Spec compliance**
+
+- AC-1: Met. A 17-line comment block is present immediately before `async fn run_connection` in `the-intern/service/crates/extension-ipc/src/lib.rs`. It explicitly names the back-pressure coupling (the `out_rx.try_recv()` drain inside the inbound loop, the `write_all_nonblocking` await, and the intentional stall propagation) and the single-connection assumption (coupling is safe only with one connection per actor; multi-connection designs would need the write path decoupled). Both required elements are present.
+- AC-2: Met. `cargo build --workspace` completed with no errors or warnings (`Finished dev profile` on the implementation branch). Only `extension-ipc` and `bob` recompiled, confirming no behavioural change.
+- Scope: Only two files changed — the target source file and the task's own work-log entry. No unspecified files touched.
+
+**Stage 2 — Code quality**
+
+- Correctness: Documentation-only change; no logic altered.
+- Tests: No test change is required or expected for a comment-only addition.
+- Security: No credentials, secrets, or input handling introduced.
+- Readability: Comment is clear, well-structured with named sections, and explains the *why* rather than the *what*. Follows existing code style.
+- Performance: No code path altered.
