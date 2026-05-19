@@ -2,7 +2,7 @@
 id: T-042
 title: Rename collision between bob-core SubscriptionId and admin-rpc 
   SubscriptionId
-status: pending
+status: completed
 priority: low
 assigned-role: unassigned
 created: '2026-05-19'
