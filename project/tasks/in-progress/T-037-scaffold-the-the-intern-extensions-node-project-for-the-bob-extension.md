@@ -103,3 +103,28 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-19
+
+PASS
+
+Both stages passed. Branch `task/T-037-scaffold-extensions-node-project` at commit `c878cf6` reviewed against all four acceptance criteria.
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1: `npm install` installs `@earendil-works/pi-coding-agent`, `@types/node`, `typescript`, and `vitest` as devDependencies. No `dependencies` key is present. Verified locally — exit 0, 181 packages installed.
+- AC-2: `npx tsc --noEmit` exits 0. The `env.d.ts` ambient declaration file provides TypeScript a valid input file and avoids TS18003 on the otherwise empty project. Verified locally.
+- AC-3: `npm test` runs `vitest run` with `passWithNoTests: true`; exits 0 with "No test files found, exiting with code 0". Verified locally.
+- AC-4: `README.md` documents the env-var contract (`BOB_SESSION_ID` and `BOB_EXTENSION_SOCK_PATH`) with type, format, required/absent behaviour, and diagnostic hint; both pi install paths (`~/.pi/agent/extensions/` and `<project>/.pi/extensions/`) with examples; and the bob service vs bob extension naming distinction in a named section with a comparison table.
+
+Files outside "Files to Touch" (`env.d.ts`, `.gitignore`, `package-lock.json`) are each justified in the Work Log. The justifications are substantive and accurate.
+
+**Stage 2 — Code Quality**
+
+- Correctness: `tsconfig.json` uses `strict: true`, `noEmit: true`, `NodeNext` module system — appropriate for a pi extension loaded via jiti. `skipLibCheck: true` avoids type errors in vendored declaration files without affecting user code safety. No logic defects in scaffold files.
+- Tests: No source tests expected at this phase. `vitest.config.ts` correctly sets `passWithNoTests: true`. Test configuration is clean and independent.
+- Security: No secrets, no runtime deps, no hardcoded paths. `env.d.ts` extends `ProcessEnv` with optional (`?`) typings, matching the absence-behaviour described in the README.
+- Readability: All files are focused, names are descriptive, comments explain rationale (e.g., why vitest over `node --test`).
+- Performance: No loops or resource concerns in scaffold files.
+
+**Minor observation (non-blocking):** The coding guidelines §10 require `prettier` and `eslint` in the project setup. Neither is included in `devDependencies`. This is acceptable for this scaffold task because no source files exist yet and no AC mentions a linter or formatter. T-038 should add these when authoring `bob.ts`.
