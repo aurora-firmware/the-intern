@@ -3,6 +3,45 @@
 Running log of bugs and friction observed while using the `ai-team` CLI and the
 slash-skills that wrap it. New entries at the top.
 
+## 2026-05-19 — `new-spec` skill uses unsupported CLI flags
+
+**Symptom.** The `new-spec` skill prescribes
+`ai-team spec new --json --title "<title>" --description "<description>" ...`.
+The current CLI rejects `--title` (title is positional) and has no
+`--description` option.
+
+**Reproduction.**
+```
+ai-team spec new --json --title "x" --description "y" --author planner --status draft
+# → Error: No such option: --title
+ai-team spec new --help
+# shows: ai-team spec new [OPTIONS] TITLE; options are --author, --status, --json only
+```
+
+**Impact.** Same shape as the 2026-05-18 `new-bug` issue: the skill's prescribed
+command fails on first call. The caller has to inspect `--help`, drop `--title`
+to positional, and then fill the `description` directly into the created spec
+file because the CLI does not accept it.
+
+**Suggested fix.** Update `.claude/skills/new-spec/SKILL.md` so the command
+construction uses `"<title>"` as positional and removes `--description`. Either
+have the skill seed the spec body from the description after creation (current
+workaround) or add a `--description` option to the CLI.
+
+## 2026-05-19 — `ai-team spec new` duplicate-ID bug recurs
+
+Same as the 2026-05-16 entry below; hit again today.
+
+```
+ai-team spec new --json --author planner --status draft "JS extension for pi-agent event forwarding"
+# → {"id": "S-001", "path": ".../js-extension-for-pi-agent-event-forwarding.md"}
+# project/specs/ already contains the-intern-agent-service-architecture.md (id S-001)
+# and bob-service-shell-architecture.md (id S-002).
+```
+
+Manual fix: rewrote the new file's frontmatter `id` to `S-003`. The 2026-05-16
+entry's suggested fix still stands and has not been applied.
+
 ## 2026-05-18 — `new-bug` skill uses unsupported CLI flags
 
 **Symptom.** The `new-bug` skill prescribes
