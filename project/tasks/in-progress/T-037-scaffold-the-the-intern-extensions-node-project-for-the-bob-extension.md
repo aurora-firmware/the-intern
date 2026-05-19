@@ -70,6 +70,28 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-19
+
+Scaffolded the `the-intern/extensions/` TypeScript Node project from scratch. All four acceptance criteria were addressed in a single TDD cycle.
+
+**What was done:**
+
+Created `package.json` with `@earendil-works/pi-coding-agent`, `@types/node`, `typescript`, and `vitest` as dev-dependencies with no runtime deps. Chose vitest as the test runner over `node --test` because its `passWithNoTests` configuration option makes it trivial to exit 0 on an empty test suite, whereas `node --test` requires a workaround to achieve the same. Created `tsconfig.json` with `strict: true`, `target: ESNext`, `module: NodeNext`, `moduleResolution: NodeNext`, and `noEmit: true`.
+
+Created `vitest.config.ts` with `passWithNoTests: true` so `npm test` exits 0 when no `*.test.ts` files exist yet (they land in T-038). Created `env.d.ts` as an ambient declaration file that extends `NodeJS.ProcessEnv` with `BOB_SESSION_ID` and `BOB_EXTENSION_SOCK_PATH` — this file serves double duty: it gives TypeScript an input file to parse (avoiding the TS18003 "no inputs found" error on an otherwise empty project) and provides typed access to the env-var contract for T-038.
+
+Rewrote `README.md` to cover: the bob service vs bob extension naming distinction (per S-003 §"Throughout this spec"), the env-var contract for `BOB_SESSION_ID` and `BOB_EXTENSION_SOCK_PATH` with their types, formats, required/absent behaviours, and diagnostic hints, the two pi install paths (`~/.pi/agent/extensions/` and `<project>/.pi/extensions/`), and a development quick-start.
+
+Added a `.gitignore` excluding `node_modules/` — not listed in "Files to Touch" but unavoidable to avoid committing 130 packages; the lock file is committed per the Node coding guidelines section 9.
+
+**What was tried and rejected:**
+
+Initially tried `npx tsc --noEmit` without adding `typescript` as a dev-dependency; npx resolved to the unrelated `tsc` package from npm and failed loudly. Fixed by adding `typescript` explicitly to devDependencies. Considered `node --test` but it has no built-in empty-suite pass flag without writing a wrapper script; vitest's `passWithNoTests` is cleaner.
+
+**What remains:**
+
+T-038 authors `bob.ts` (the default factory, UDS connect, per-event subscriptions, one-shot warning behaviour) and its test suite.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
