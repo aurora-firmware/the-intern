@@ -1,5 +1,9 @@
-use bob_core::error::{ServiceError, ServiceResult};
+use bob_core::{
+    error::{ServiceError, ServiceResult},
+    types::SessionId,
+};
 use serde_json::Value;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -11,6 +15,11 @@ pub struct WorkerProcessConfig {
     pub command: String,
     pub args: Vec<String>,
     pub child_termination_deadline: Duration,
+    /// The session id to set as `BOB_SESSION_ID` on the child process environment.
+    pub session_id: SessionId,
+    /// Absolute path to the extension socket, set as `BOB_EXTENSION_SOCK_PATH`.
+    /// If the path is empty, the variable is not set on the child environment.
+    pub extension_sock_path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -29,11 +38,18 @@ pub struct TerminationOutcome {
 
 impl RpcWorkerProcess {
     pub fn spawn(cfg: &WorkerProcessConfig) -> ServiceResult<Self> {
-        let mut child = Command::new(&cfg.command)
-            .args(&cfg.args)
+        let mut cmd = Command::new(&cfg.command);
+        cmd.args(&cfg.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .env("BOB_SESSION_ID", cfg.session_id.to_string());
+
+        if !cfg.extension_sock_path.as_os_str().is_empty() {
+            cmd.env("BOB_EXTENSION_SOCK_PATH", &cfg.extension_sock_path);
+        }
+
+        let mut child = cmd
             .spawn()
             .map_err(|error| ServiceError::ChildProcess {
                 detail: format!(
@@ -207,7 +223,103 @@ mod tests {
             command: command.to_string(),
             args: args.iter().map(|arg| arg.to_string()).collect(),
             child_termination_deadline: Duration::from_millis(50),
+            session_id: SessionId::new(),
+            extension_sock_path: PathBuf::new(),
         }
+    }
+
+    // AC-1: BOB_SESSION_ID is set on the spawned child environment.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_sets_bob_session_id_on_child_environment() {
+        let session_id = SessionId::new();
+        let cfg = WorkerProcessConfig {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                // Output the env var as a JSON string for read_next_stdout_json.
+                "printf '\"%s\"\\n' \"$BOB_SESSION_ID\"".to_string(),
+            ],
+            child_termination_deadline: Duration::from_millis(50),
+            session_id,
+            extension_sock_path: PathBuf::new(),
+        };
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+
+        let value = worker
+            .read_next_stdout_json()
+            .await
+            .expect("stdout read should succeed")
+            .expect("value should be present");
+
+        assert_eq!(
+            value,
+            Value::String(session_id.to_string()),
+            "BOB_SESSION_ID on child env should match the configured session_id"
+        );
+    }
+
+    // AC-2: BOB_EXTENSION_SOCK_PATH is set when configured to a non-empty path.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_sets_bob_extension_sock_path_when_path_is_non_empty() {
+        let session_id = SessionId::new();
+        let sock_path = PathBuf::from("/run/bob/extension.sock");
+        let cfg = WorkerProcessConfig {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                // Output the env var as a JSON string for read_next_stdout_json.
+                "printf '\"%s\"\\n' \"$BOB_EXTENSION_SOCK_PATH\"".to_string(),
+            ],
+            child_termination_deadline: Duration::from_millis(50),
+            session_id,
+            extension_sock_path: sock_path.clone(),
+        };
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+
+        let value = worker
+            .read_next_stdout_json()
+            .await
+            .expect("stdout read should succeed")
+            .expect("value should be present");
+
+        assert_eq!(
+            value,
+            Value::String(sock_path.to_string_lossy().into_owned()),
+            "BOB_EXTENSION_SOCK_PATH on child env should match the configured path"
+        );
+    }
+
+    // AC-3: When extension_sock_path is empty, spawn proceeds without that var.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_omits_bob_extension_sock_path_when_path_is_empty() {
+        let session_id = SessionId::new();
+        let cfg = WorkerProcessConfig {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                // Print "unset" when the variable is absent, "set:<value>" when present.
+                "if [ -z \"${BOB_EXTENSION_SOCK_PATH+x}\" ]; then printf '\"unset\"\\n'; else printf '\"set:%s\"\\n' \"$BOB_EXTENSION_SOCK_PATH\"; fi".to_string(),
+            ],
+            child_termination_deadline: Duration::from_millis(50),
+            session_id,
+            extension_sock_path: PathBuf::new(),
+        };
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+
+        let value = worker
+            .read_next_stdout_json()
+            .await
+            .expect("stdout read should succeed")
+            .expect("value should be present");
+
+        assert_eq!(
+            value,
+            Value::String("unset".to_string()),
+            "BOB_EXTENSION_SOCK_PATH should not be set on child env when path is empty"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -336,6 +448,8 @@ mod tests {
                 "trap '' TERM; while :; do :; done".to_string(),
             ],
             child_termination_deadline: Duration::from_millis(25),
+            session_id: SessionId::new(),
+            extension_sock_path: PathBuf::new(),
         })
         .expect("spawn should succeed");
 
