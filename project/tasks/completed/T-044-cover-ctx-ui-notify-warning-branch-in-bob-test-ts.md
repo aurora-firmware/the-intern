@@ -1,7 +1,7 @@
 ---
 id: T-044
 title: Cover ctx.ui.notify warning branch in bob.test.ts
-status: pending
+status: completed
 priority: low
 assigned-role: unassigned
 created: '2026-05-19'
