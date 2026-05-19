@@ -86,6 +86,32 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-19
+
+Implemented all four acceptance criteria for T-039. The change touches the files listed in the task plus `admin-rpc/src/dispatch.rs` (test-only lines), which required a design decision explained below.
+
+**What was done**
+
+`process.rs` — extended `WorkerProcessConfig` with two new fields: `session_id: SessionId` and `extension_sock_path: PathBuf`. The `spawn` method now always calls `cmd.env("BOB_SESSION_ID", ...)` and conditionally calls `cmd.env("BOB_EXTENSION_SOCK_PATH", ...)` only when the path is non-empty. Three new tests cover AC-1, AC-2, and AC-3 at the spawn level.
+
+`lib.rs` — added `extension_sock_path: PathBuf` to `Config` (defaulting to empty `PathBuf`). Changed the `Command::AcquireSession` variant and `Handle::acquire_session` to remove the `session_id` input and return `ServiceResult<SessionId>` — the actual id used for the session. The actor logs the allocated id on success.
+
+`pool.rs` — introduced a `WarmWorker { session_id, worker }` struct. Warm workers are now spawned via `spawn_warm_worker(cfg)` which allocates a fresh `SessionId` and sets it as `BOB_SESSION_ID`. `acquire_session()` promotes a warm worker using its pre-allocated id (or spawns an overflow worker with a new id) and returns that id. `send_prompt` no longer implicitly acquires — callers must call `acquire_session` first. The surplus-reap and shutdown paths were updated to access `.worker` through the new struct.
+
+`bob/src/serve.rs` — `build_pi_agent_supervisor_config` now maps `cfg.extension_sock_path` into the supervisor `Config`. Two new unit tests verify the mapping for non-empty and empty paths.
+
+**Design decision: acquire_session API shape**
+
+The task explicitly permits changing the Handle API shape. The previous `acquire_session(external_session_id)` signature was incompatible with AC-4 for warm workers because `BOB_SESSION_ID` is set at spawn time (before any external id exists), so the session id stored in `active_workers` must equal the pre-allocated id. Changing the return type to `ServiceResult<SessionId>` and removing the input was the only design that satisfies AC-1, AC-4, and keeps the pool logic coherent.
+
+The admin-rpc `dispatch.rs` had two test-setup call sites (`acquire_session(session_id)`) that needed updating to `acquire_session()` with the return value captured. The production dispatch methods (`sessions.list`, `sessions.kill`) were unaffected — the existing admin-RPC contract is preserved. A `test(admin-rpc)` commit documents this as a test-only consequence of the API change.
+
+**Removed behavior**: `send_prompt` no longer implicitly acquires a session for an unknown id. The old test `send_prompt_acquires_missing_session_before_sending` was replaced by `send_prompt_returns_child_process_error_when_session_not_yet_acquired` which documents the new explicit-acquire requirement.
+
+**Obstacles**: one pre-existing flaky test (`terminate_requests_graceful_shutdown_before_deadline`) appeared once in a full run but passed consistently when isolated. This is a SIGTERM timing race unrelated to this task.
+
+**All verification commands pass**: `cargo test -p pi-agent-supervisor` (39 tests), `cargo test -p bob serve::tests` (14 tests).
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
