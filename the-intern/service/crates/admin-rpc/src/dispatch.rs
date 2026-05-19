@@ -30,7 +30,7 @@ use crate::{
     protocol::{
         ErrorResponse, Request, Response, CODE_INVALID_REQUEST, CODE_METHOD_NOT_FOUND, CODE_TIMEOUT,
     },
-    subscriptions::{AuditRecord, ConnectionRegistry, SubscriptionId},
+    subscriptions::{AdminSubscriptionId, AuditRecord, ConnectionRegistry},
 };
 
 /// Context provided to the dispatcher at construction time.
@@ -57,13 +57,13 @@ pub enum DispatchOutcome {
     /// audit records out as JSON-RPC notifications.
     Subscribed {
         response: Response,
-        id: SubscriptionId,
+        id: AdminSubscriptionId,
         rx: mpsc::Receiver<AuditRecord>,
     },
     /// An audit subscription was removed.
     Unsubscribed {
         response: Response,
-        id: SubscriptionId,
+        id: AdminSubscriptionId,
     },
 }
 
@@ -168,7 +168,7 @@ impl Dispatcher {
             ));
         };
 
-        let Some(sub_id) = SubscriptionId::parse(sub_id_str) else {
+        let Some(sub_id) = AdminSubscriptionId::parse(sub_id_str) else {
             return DispatchOutcome::Err(ErrorResponse::error(
                 id,
                 CODE_INVALID_REQUEST,
@@ -224,7 +224,7 @@ impl Dispatcher {
             ));
         };
 
-        let Some(sub_id) = SubscriptionId::parse(sub_id_str) else {
+        let Some(sub_id) = AdminSubscriptionId::parse(sub_id_str) else {
             return DispatchOutcome::Err(ErrorResponse::error(
                 id,
                 CODE_INVALID_REQUEST,
