@@ -102,6 +102,7 @@ fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Con
         idle_reap_timeout: cfg.pi_agent_idle_reap_timeout,
         command_buffer: cfg.request_queue_capacity,
         child_termination_deadline: cfg.shutdown_reap_deadline,
+        extension_sock_path: cfg.extension_sock_path.clone(),
     }
 }
 
@@ -466,6 +467,40 @@ pub mod tests {
         assert_eq!(
             supervisor_cfg.child_termination_deadline,
             Duration::from_secs(11)
+        );
+    }
+
+    // AC-2 (T-039): extension_sock_path from BobConfig is plumbed into the supervisor config.
+    #[test]
+    fn pi_agent_supervisor_config_maps_extension_sock_path_from_bob_config() {
+        let extension_path = std::path::PathBuf::from("/run/bob/extension.sock");
+        let cfg = BobConfig {
+            extension_sock_path: extension_path.clone(),
+            ..BobConfig::default()
+        };
+
+        let supervisor_cfg = build_pi_agent_supervisor_config(&cfg);
+
+        assert_eq!(
+            supervisor_cfg.extension_sock_path,
+            extension_path,
+            "extension_sock_path must be plumbed from BobConfig into supervisor Config"
+        );
+    }
+
+    // AC-3 (T-039): empty extension_sock_path from BobConfig maps to empty in supervisor config.
+    #[test]
+    fn pi_agent_supervisor_config_maps_empty_extension_sock_path_when_unset() {
+        let cfg = BobConfig {
+            extension_sock_path: std::path::PathBuf::new(),
+            ..BobConfig::default()
+        };
+
+        let supervisor_cfg = build_pi_agent_supervisor_config(&cfg);
+
+        assert!(
+            supervisor_cfg.extension_sock_path.as_os_str().is_empty(),
+            "empty extension_sock_path in BobConfig must result in empty path in supervisor Config"
         );
     }
 
