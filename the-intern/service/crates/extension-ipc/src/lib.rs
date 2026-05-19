@@ -14,6 +14,8 @@ use tokio::{net::UnixStream, sync::mpsc, task::JoinHandle};
 use crate::listener::{Listener, ListenerConfig};
 use crate::multiplex::{MonitoringHandle, NoopMonitoringHandle, SessionMultiplexer};
 
+pub use crate::multiplex::TracingMonitoringHandle;
+
 #[derive(Clone)]
 pub struct Config {
     pub command_buffer: usize,

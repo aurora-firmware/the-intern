@@ -25,6 +25,30 @@ impl MonitoringHandle for NoopMonitoringHandle {
     async fn record_event(&self, _event: MonitoringEvent) {}
 }
 
+/// A `MonitoringHandle` that emits structured `tracing::info!` events for each
+/// forwarded extension event.
+///
+/// For every `MonitoringEvent`, one `INFO` log line is emitted carrying the
+/// `session` (displayed `SessionId`) and `event` (the string value of
+/// `payload.event`).  The full JSON payload is additionally attached at
+/// `DEBUG` level.
+#[derive(Default)]
+pub struct TracingMonitoringHandle;
+
+#[async_trait]
+impl MonitoringHandle for TracingMonitoringHandle {
+    async fn record_event(&self, event: MonitoringEvent) {
+        let session = event.session;
+        let event_name = event
+            .payload
+            .get("event")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<unknown>");
+        tracing::info!(session = %session, event = event_name, "extension event received");
+        tracing::debug!(session = %session, payload = ?event.payload, "extension event full payload");
+    }
+}
+
 #[derive(Debug)]
 pub enum MultiplexError {
     SessionRouteClosed { session: SessionId },
@@ -99,11 +123,95 @@ impl SessionMultiplexer {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use bob_core::types::{PolicyVerdict, SessionId};
 
     use super::*;
+
+    // ---- TracingMonitoringHandle tests (AC-1, AC-2) ----
+
+    /// Captures tracing events emitted while the guard is alive.
+    struct TracingCapture {
+        lines: Arc<Mutex<Vec<String>>>,
+        _guard: tracing::subscriber::DefaultGuard,
+    }
+
+    impl TracingCapture {
+        fn new() -> Self {
+            let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let lines_clone = Arc::clone(&lines);
+
+            // Build a writer that appends each formatted line to the shared vec.
+            let make_writer = move || {
+                let l = Arc::clone(&lines_clone);
+                LineWriter { lines: l }
+            };
+
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_ansi(false)
+                .with_writer(make_writer)
+                .finish();
+
+            let guard = tracing::subscriber::set_default(subscriber);
+            Self {
+                lines,
+                _guard: guard,
+            }
+        }
+
+        fn captured(&self) -> Vec<String> {
+            self.lines.lock().expect("lines lock").clone()
+        }
+    }
+
+    struct LineWriter {
+        lines: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl std::io::Write for LineWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let s = String::from_utf8_lossy(buf).into_owned();
+            self.lines.lock().expect("lines lock").push(s);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn tracing_monitoring_handle_record_event_emits_one_info_event_with_session_and_event_fields()
+    {
+        let capture = TracingCapture::new();
+        let handle = TracingMonitoringHandle;
+        let session = SessionId::new();
+        let payload = serde_json::json!({ "event": "session.started" });
+
+        handle
+            .record_event(MonitoringEvent { session, payload })
+            .await;
+
+        let lines = capture.captured();
+        let session_str = session.to_string();
+        let info_lines: Vec<&String> = lines.iter().filter(|l| l.contains(" INFO ")).collect();
+        assert_eq!(
+            info_lines.len(),
+            1,
+            "exactly one INFO event expected; captured: {lines:?}"
+        );
+        let info_line = info_lines[0];
+        assert!(
+            info_line.contains(&session_str),
+            "INFO event must carry session field; line: {info_line}"
+        );
+        assert!(
+            info_line.contains("session.started"),
+            "INFO event must carry event field value; line: {info_line}"
+        );
+    }
 
     #[derive(Default)]
     struct CapturingMonitoringHandle {
