@@ -117,3 +117,22 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-19
+
+PASS
+
+**Stage 1 — Bug criteria**
+
+- Diagnosis Log present before the Work Log. Reproduction status explicitly marked "confirmed by code inspection". Evidence: exact file and lines cited (`multiplex.rs:116-121`). Isolated fault documented (`entry().or_insert_with()` side-effect). Root cause articulated (fallback conflated with permanent registration). Planned verification matches the fix applied. All Diagnosis Log fields satisfied.
+- Fix is scoped to the isolated cause. The `entry().or_insert_with()` pattern is replaced with `self.session_routes.get(&session).unwrap_or(&self.default_route).clone()`. No insertion happens for unknown session ids; the live `default_route` field is always consulted on cache miss.
+- No unrelated behaviour added. The only production additions are the receiver relaxation and `set_default_route`; both are directly motivated by the fix and its regression test.
+- Fix Verification steps executed: `cargo test -p extension-ipc` ran 29/29 green on `bug/B-004-multiplex-unknown-session-cache` at commit `00be9f3`.
+
+**Stage 2 — Code quality**
+
+- `route_for_session` receiver changed from `&mut self` to `&self` — correct, since no mutation occurs. `handle_frame` keeps `&mut self` (still mutates via `monitoring.record_event` and needs it for `register_session` callers). The borrow relationship is sound; the Rust compiler accepted it without issue.
+- `set_default_route` signature is `&mut self` with a single assignment to `self.default_route`. Internally coherent. Doc-comment accurately describes post-condition. The regression test uses it to trigger the exact stale-cache path described in the diagnosis.
+- Regression test `route_for_session_reflects_new_default_for_unknown_session_after_default_replaced` exercises the precise fault sequence: register default A → lookup unknown session (reply on A confirmed) → `set_default_route(B)` → lookup same unknown session → assert no reply on A and reply on B. The negative assertion (`rx_a.try_recv().is_err()`) guards against the stale-cache regression.
+- Existing tests `distinct_sessions_do_not_cross_deliver_replies`, `authz_frame_returns_deny_by_default_on_same_session_route`, `event_frame_forwards_to_monitoring_without_wire_reply`, and all 25 other tests remain green.
+- No hardcoded secrets, no dead code, no commented-out blocks. Names are descriptive and follow project conventions.
