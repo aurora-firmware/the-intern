@@ -2,7 +2,7 @@
 id: T-040
 title: Wire TracingMonitoringHandle into extension-ipc actor for forwarded 
   events
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-19'
