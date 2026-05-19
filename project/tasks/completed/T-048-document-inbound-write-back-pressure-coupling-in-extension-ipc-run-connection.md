@@ -2,7 +2,7 @@
 id: T-048
 title: Document inbound-write back-pressure coupling in extension-ipc 
   run_connection
-status: pending
+status: completed
 priority: low
 assigned-role: unassigned
 created: '2026-05-19'
