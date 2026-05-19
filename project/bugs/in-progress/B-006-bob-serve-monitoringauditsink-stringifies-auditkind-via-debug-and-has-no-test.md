@@ -134,3 +134,23 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-19
+
+PASS
+
+**Stage 1 — Bug Criteria**
+
+- Diagnosis Log is present and complete: reproduction status (confirmed by static analysis), evidence (file and line of the `{:?}` call, 8-variant enum, absence of any test), isolated fault (the `format!("{:?}: {}", ...)` call), root cause (inline adapter using Debug formatting), and planned verification (5-step plan) are all recorded before the Work Log.
+- Fix addresses the isolated fault exactly: the `format!("{kind:?}")` call is gone; all event names now come from an exhaustive `match`.
+- No unrelated behaviour was added; commit touches only `monitoring/src/lib.rs` and `bob/src/serve.rs`.
+- Fix Verification steps were executed and recorded: `cargo test -p monitoring`, `cargo test -p monitoring -p bob`, and `cargo test --workspace` all passed per the Work Log, confirmed independently during this review.
+
+**Stage 2 — Code Quality**
+
+- `audit_kind_to_event_name` lives in `monitoring/src/lib.rs`, not inline in `bob::serve`. All 8 `AuditKind` variants are covered with distinct kebab-case strings (`request-received`, `policy-decision`, `action-invoked`, `action-completed`, `action-failed`, `session-started`, `session-ended`, `preflight-denied`).
+- `MonitoringAuditSink` is a `pub` `Clone` struct with a `pub fn new(Handle) -> Self` constructor. Its `AuditSink` impl delegates through `audit_kind_to_event_name` then `record_event`. Logic is correct.
+- The new unit test `audit_kind_to_event_name_maps_every_variant_to_stable_kebab_case_string` covers all 8 variants in a table, with a descriptive `assert_eq!` message. Both compile-time exhaustiveness (the `match`) and run-time pinning (the table) guard against silent renames.
+- `bob/src/serve.rs` contains no `MonitoringAuditSink` struct, no `AuditSink` impl, and no `AuditRecord` import. The construction site uses `monitoring::MonitoringAuditSink::new(monitoring_handle.clone())`.
+- No dead code, no debugging artifacts, no scaffolding markers, no hardcoded secrets. Names are descriptive and follow project conventions. Function doc explains the "why" of the exhaustive `match`.
+- No performance or security concerns introduced.
