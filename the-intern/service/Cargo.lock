@@ -154,8 +154,10 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures",
+ "nix",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "uuid",
 ]

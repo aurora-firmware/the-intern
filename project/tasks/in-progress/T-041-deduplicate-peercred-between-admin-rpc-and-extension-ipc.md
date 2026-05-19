@@ -100,3 +100,23 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-19
+
+PASS
+
+**Stage 1 — Spec compliance**
+
+- AC-1 met: `bob_core::auth` is the single canonical source for `PeerCred`, `is_allowed`, and `peer_cred_from_fd`. Neither `admin-rpc/src/peer_cred.rs` nor `extension-ipc/src/peer_cred.rs` contains any duplicated definitions; both are now thin `pub use bob_core::auth::{…}` re-export modules.
+- AC-2 met: Both re-export modules expose `PeerCred`, `is_allowed`, and `peer_cred_from_fd` under their original `crate::peer_cred` paths. No call sites in `listener.rs` or elsewhere required any change.
+- AC-3 met: `cargo test -p admin-rpc -p extension-ipc` ran on the implementation branch and passed: 79 tests in `admin-rpc`, 29 tests in `extension-ipc`, 0 failures.
+
+No files were modified outside the stated scope (`bob-core/src/auth.rs` + `bob-core/src/lib.rs` + `bob-core/Cargo.toml` + the two `peer_cred.rs` re-export stubs + `Cargo.lock`). All are either listed in "Files to Touch" or an implicit consequence of adding `nix`/`tempfile` to `bob-core`.
+
+**Stage 2 — Code quality**
+
+- Correctness: `is_allowed` logic matches the original; `peer_cred_from_fd` is platform-gated identically (`linux`/`macos`/fallback). `#[must_use]` on `is_allowed` is a correct addition that prevents silent discard of the predicate result.
+- Tests: `bob-core/src/auth.rs` contains seven unit tests covering struct construction, `Copy` derivation, equality, all four `is_allowed` branches, and a live socket round-trip test (platform-gated). Both re-export modules retain their own test suites (five tests each, including the socket round-trip). Success and failure paths for `is_allowed` are covered; the live-socket test exercises `peer_cred_from_fd`. Tests are independent (no shared mutable state).
+- Security: No hardcoded credentials. Input validated by types. No raw queries. No new permissions.
+- Readability: Names follow project `snake_case`/`UpperCamelCase` conventions. `auth.rs` is well-documented with `# Errors` on the fallible function. Module docstrings are clear and accurate. No dead code or debugging artifacts.
+- Performance: No loops over large data, no blocking in hot paths, no resource leaks.

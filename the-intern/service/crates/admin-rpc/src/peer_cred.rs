@@ -1,61 +1,9 @@
-//! Peer-credential extraction from Unix domain sockets.
+//! Peer-credential types and helpers for the admin RPC channel.
 //!
-//! Platform-specific code is gated behind `#[cfg(target_os = "linux")]` and
-//! `#[cfg(target_os = "macos")]` as required by S-002 §Component 4.
+//! Re-exports the canonical [`bob_core::auth`] items so that callers within
+//! this crate continue to import from `crate::peer_cred` without change.
 
-use std::os::fd::AsFd;
-
-/// Peer credentials extracted from a connected Unix domain socket.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PeerCred {
-    /// Effective user id of the connecting process.
-    pub uid: u32,
-}
-
-/// Returns `true` when `peer_uid` is permitted to use the admin RPC channel.
-///
-/// A uid is allowed when it equals `service_uid` (the process owner of the
-/// running service) or when it appears in `allowed_uids`.
-pub fn is_allowed(peer_uid: u32, allowed_uids: &[u32], service_uid: u32) -> bool {
-    peer_uid == service_uid || allowed_uids.contains(&peer_uid)
-}
-
-/// Reads peer credentials from a connected Unix domain socket file descriptor.
-///
-/// # Errors
-///
-/// Returns an `std::io::Error` when the syscall fails or when the platform is
-/// not supported.
-#[cfg(target_os = "linux")]
-pub fn peer_cred_from_fd<F: AsFd>(fd: &F) -> std::io::Result<PeerCred> {
-    use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
-    let raw =
-        getsockopt(fd, PeerCredentials).map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
-    Ok(PeerCred { uid: raw.uid() })
-}
-
-/// Reads peer credentials from a connected Unix domain socket file descriptor.
-///
-/// # Errors
-///
-/// Returns an `std::io::Error` when the syscall fails or when the platform is
-/// not supported.
-#[cfg(target_os = "macos")]
-pub fn peer_cred_from_fd<F: AsFd>(fd: &F) -> std::io::Result<PeerCred> {
-    use nix::sys::socket::{getsockopt, sockopt::LocalPeerCred};
-    let raw =
-        getsockopt(fd, LocalPeerCred).map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
-    Ok(PeerCred { uid: raw.uid() })
-}
-
-/// Fallback for platforms other than Linux and macOS.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn peer_cred_from_fd<F: AsFd>(_fd: &F) -> std::io::Result<PeerCred> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "peer credentials are not supported on this platform",
-    ))
-}
+pub use bob_core::auth::{is_allowed, peer_cred_from_fd, PeerCred};
 
 #[cfg(test)]
 mod tests {
