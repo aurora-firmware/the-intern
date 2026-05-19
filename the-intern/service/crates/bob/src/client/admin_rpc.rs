@@ -292,7 +292,7 @@ mod tests {
     async fn connect_returns_service_down_when_socket_is_absent() {
         let cfg = BobConfig {
             admin_sock_path: unique_socket_path("missing-admin"),
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         };
 
         let result = AdminClient::connect(&cfg).await;
@@ -314,7 +314,7 @@ mod tests {
 
         let cfg = BobConfig {
             admin_sock_path: sock_path,
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         };
 
         let result = AdminClient::connect(&cfg).await;
@@ -351,7 +351,7 @@ mod tests {
 
         let cfg = BobConfig {
             admin_sock_path: sock_path,
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         };
 
         let mut client = AdminClient::connect(&cfg).await.expect("connect");
@@ -384,7 +384,7 @@ mod tests {
 
         let cfg = BobConfig {
             admin_sock_path: sock_path,
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         };
 
         let mut client = AdminClient::connect(&cfg).await.expect("connect");
@@ -417,7 +417,7 @@ mod tests {
 
         let cfg = BobConfig {
             admin_sock_path: sock_path,
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         };
 
         let mut client = AdminClient::connect(&cfg).await.expect("connect");
@@ -466,7 +466,7 @@ mod tests {
 
         let cfg = BobConfig {
             admin_sock_path: sock_path,
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         };
         let mut client = AdminClient::connect(&cfg).await.expect("connect");
         let mut sub = client
@@ -523,7 +523,7 @@ mod tests {
 
         let cfg = BobConfig {
             admin_sock_path: sock_path,
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         };
         let mut client = AdminClient::connect(&cfg).await.expect("connect");
         let sub = client

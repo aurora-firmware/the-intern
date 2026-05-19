@@ -48,7 +48,6 @@ struct Runtime {
     extension_sock_path: PathBuf,
 }
 
-
 /// Constructs every subsystem actor, binds the two Unix domain socket paths
 /// recorded in `cfg`, installs signal handlers, and runs the graceful-shutdown
 /// protocol when `SIGTERM` or `SIGINT` is received.
@@ -128,8 +127,9 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
             context_id: None,
         });
     let persistence_store: Arc<dyn PersistenceStore> = Arc::new(persistence_handle.clone());
-    let audit_sink: Arc<dyn AuditSink> =
-        Arc::new(monitoring::MonitoringAuditSink::new(monitoring_handle.clone()));
+    let audit_sink: Arc<dyn AuditSink> = Arc::new(monitoring::MonitoringAuditSink::new(
+        monitoring_handle.clone(),
+    ));
     let (requests_handler_handle, requests_handler_join) = requests_handler::start_with(
         requests_handler::Config {
             request_queue_capacity: cfg.request_queue_capacity,
@@ -156,11 +156,10 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     info!("requests-handler actor started");
 
     info!("starting extension-ipc actor");
-    let (extension_ipc_handle, extension_ipc_join) =
-        extension_ipc::start(extension_ipc::Config {
-            monitoring_handle: Arc::new(extension_ipc::TracingMonitoringHandle),
-            ..extension_ipc::Config::default()
-        });
+    let (extension_ipc_handle, extension_ipc_join) = extension_ipc::start(extension_ipc::Config {
+        monitoring_handle: Arc::new(extension_ipc::TracingMonitoringHandle),
+        ..extension_ipc::Config::default()
+    });
     info!("extension-ipc actor started");
 
     info!("starting admin-rpc actor");
@@ -171,13 +170,12 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         policy: Some(policy_control_handle.clone()),
         ..admin_rpc::Config::default()
     };
-    let (admin_rpc_handle, admin_rpc_join) =
-        admin_rpc::start(admin_rpc_cfg).map_err(|e| {
-            format!(
-                "failed to bind admin socket at {}: {e}",
-                cfg.admin_sock_path.display()
-            )
-        })?;
+    let (admin_rpc_handle, admin_rpc_join) = admin_rpc::start(admin_rpc_cfg).map_err(|e| {
+        format!(
+            "failed to bind admin socket at {}: {e}",
+            cfg.admin_sock_path.display()
+        )
+    })?;
     info!(
         path = %cfg.admin_sock_path.display(),
         "admin-rpc actor started and socket bound"
@@ -401,7 +399,7 @@ pub mod tests {
             request_queue_capacity: 16,
             shutdown_drain_deadline: Duration::from_millis(100),
             shutdown_reap_deadline: Duration::from_millis(50),
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         }
     }
 
@@ -414,7 +412,7 @@ pub mod tests {
             request_queue_capacity: 16,
             shutdown_drain_deadline: Duration::from_millis(100),
             shutdown_reap_deadline: Duration::from_millis(50),
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         }
     }
 
@@ -432,7 +430,7 @@ pub mod tests {
             pi_agent_warm_pool_size: 3,
             pi_agent_max_processes: 9,
             pi_agent_idle_reap_timeout: Duration::from_secs(45),
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         };
 
         let supervisor_cfg = build_pi_agent_supervisor_config(&cfg);
@@ -462,14 +460,13 @@ pub mod tests {
         let extension_path = std::path::PathBuf::from("/run/bob/extension.sock");
         let cfg = BobConfig {
             extension_sock_path: extension_path.clone(),
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         };
 
         let supervisor_cfg = build_pi_agent_supervisor_config(&cfg);
 
         assert_eq!(
-            supervisor_cfg.extension_sock_path,
-            extension_path,
+            supervisor_cfg.extension_sock_path, extension_path,
             "extension_sock_path must be plumbed from BobConfig into supervisor Config"
         );
     }
@@ -479,7 +476,7 @@ pub mod tests {
     fn pi_agent_supervisor_config_maps_empty_extension_sock_path_when_unset() {
         let cfg = BobConfig {
             extension_sock_path: std::path::PathBuf::new(),
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         };
 
         let supervisor_cfg = build_pi_agent_supervisor_config(&cfg);
@@ -568,7 +565,7 @@ pub mod tests {
             request_queue_capacity: 16,
             shutdown_drain_deadline: Duration::from_millis(100),
             shutdown_reap_deadline: Duration::from_millis(200),
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         };
 
         let runtime = start_subsystems(&cfg).expect("subsystems must start");
@@ -622,7 +619,7 @@ pub mod tests {
             request_queue_capacity: 16,
             shutdown_drain_deadline: Duration::from_millis(50),
             shutdown_reap_deadline: Duration::from_millis(25),
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         };
 
         let result = start_subsystems(&cfg);
@@ -722,7 +719,7 @@ pub mod tests {
             extension_sock_path: ext_sock.clone(),
             shutdown_drain_deadline: Duration::from_millis(50),
             shutdown_reap_deadline: Duration::from_millis(25),
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         };
 
         let runtime = start_subsystems(&cfg).expect("subsystems must start");

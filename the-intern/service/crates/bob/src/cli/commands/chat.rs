@@ -302,7 +302,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn chat_opens_with_session_and_sends_each_input_line() {
-        let cfg = BobConfig::default();
+        let cfg = BobConfig::test_base();
         let closed = Arc::new(AtomicBool::new(false));
         let sent_params = Arc::new(Mutex::new(Vec::<Value>::new()));
         let (notif_tx, notif_rx) = mpsc::unbounded_channel();
@@ -358,7 +358,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn chat_json_mode_prints_one_json_document_per_notification() {
-        let cfg = BobConfig::default();
+        let cfg = BobConfig::test_base();
         let closed = Arc::new(AtomicBool::new(false));
         let (notif_tx, notif_rx) = mpsc::unbounded_channel();
         let (stop_tx, stop_rx) = oneshot::channel();

@@ -36,8 +36,25 @@ pub struct BobConfig {
     pub allowed_user_ids: Vec<UserId>,
 }
 
-impl Default for BobConfig {
-    fn default() -> Self {
+// `Default` is intentionally not implemented for `BobConfig`.
+//
+// Both `admin_sock_path` and `extension_sock_path` must be non-empty for the
+// service to bind its Unix domain sockets.  A derived or hand-written `Default`
+// would produce empty `PathBuf` values that silently create a non-bootable
+// runtime.  All construction must go through `BobConfig::load()` (which calls
+// `validate()`) or through the test helper `BobConfig::test_base()` (which is
+// intentionally visible only in `#[cfg(test)]` contexts).
+
+#[cfg(test)]
+impl BobConfig {
+    /// Returns a `BobConfig` whose non-path fields carry production-like defaults
+    /// and whose socket paths are intentionally empty.
+    ///
+    /// Use this only as a struct-update base (`..BobConfig::test_base()`) in
+    /// unit tests that supply real socket paths before the config is used to
+    /// bind sockets.  Do not use it in tests that exercise the `validate()`
+    /// or `load_with_sources()` paths.
+    pub(crate) fn test_base() -> Self {
         Self {
             admin_sock_path: PathBuf::new(),
             extension_sock_path: PathBuf::new(),
@@ -117,6 +134,18 @@ impl BobConfig {
     }
 
     fn validate(self) -> ServiceResult<Self> {
+        if self.admin_sock_path.as_os_str().is_empty() {
+            return Err(configuration_error(
+                "admin_sock_path must not be empty; provide a valid socket path",
+            ));
+        }
+
+        if self.extension_sock_path.as_os_str().is_empty() {
+            return Err(configuration_error(
+                "extension_sock_path must not be empty; provide a valid socket path",
+            ));
+        }
+
         if self.request_queue_capacity == 0 {
             return Err(configuration_error(
                 "request_queue_capacity must be positive",
@@ -515,6 +544,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn returns_configuration_error_when_admin_sock_path_is_empty() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+        // Override admin_sock_path to empty via CLI override.
+        let mut cli_overrides = BTreeMap::new();
+        cli_overrides.insert("admin_sock_path".to_string(), "".to_string());
+
+        let result = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+            cli_overrides,
+            uid: 4242,
+        });
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("admin_sock_path")),
+            "expected Configuration error mentioning admin_sock_path, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn returns_configuration_error_when_extension_sock_path_is_empty() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+        // Override extension_sock_path to empty via CLI override.
+        let mut cli_overrides = BTreeMap::new();
+        cli_overrides.insert("extension_sock_path".to_string(), "".to_string());
+
+        let result = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+            cli_overrides,
+            uid: 4242,
+        });
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("extension_sock_path")),
+            "expected Configuration error mentioning extension_sock_path, got {result:?}"
+        );
+    }
+
+    #[test]
     fn loads_defaults_with_platform_socket_roots_when_no_sources_present() {
         let runtime_dir = if cfg!(target_os = "macos") {
             ("TMPDIR", "/tmp/bob-tests")
@@ -563,8 +642,8 @@ mod tests {
     }
 
     #[test]
-    fn default_sets_pi_agent_rpc_worker_and_positive_pool_limits() {
-        let config = BobConfig::default();
+    fn test_base_has_pi_agent_rpc_worker_and_positive_pool_limits() {
+        let config = BobConfig::test_base();
 
         assert_eq!(config.pi_agent_command, "pi");
         assert_eq!(
