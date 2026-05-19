@@ -3,7 +3,7 @@ id: B-002
 title: pi-agent-supervisor terminate test flakes under load because spawn_config
   sets 50 ms deadline
 severity: high
-status: open
+status: in-progress
 created: '2026-05-19'
 ---
 
