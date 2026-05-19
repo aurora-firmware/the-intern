@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![doc = "scaffold — see project/docs/roadmap.md phase 5"]
 
 use async_trait::async_trait;
 use bob_core::error::{ServiceError, ServiceResult};

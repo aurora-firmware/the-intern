@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![doc = "scaffold — see project/docs/roadmap.md phase 4"]
 
 use bob_core::error::{ServiceError, ServiceResult};
 use tokio::{sync::mpsc, task::JoinHandle};
