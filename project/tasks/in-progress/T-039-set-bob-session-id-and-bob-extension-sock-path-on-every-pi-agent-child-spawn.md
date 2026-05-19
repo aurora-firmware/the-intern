@@ -123,3 +123,27 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-19
+
+PASS
+
+**Stage 1 — Spec compliance**
+
+- AC-1: Confirmed. `process.rs` line 46 calls `cmd.env("BOB_SESSION_ID", cfg.session_id.to_string())` unconditionally on every spawn. Both warm workers (via `spawn_warm_worker` in `pool.rs`) and overflow workers (allocated inline in `acquire_session`) receive a pre-allocated `SessionId` at spawn time. Verified by `process::tests::spawn_sets_bob_session_id_on_child_environment`. PASS.
+- AC-2: Confirmed. `process.rs` lines 48-50 call `cmd.env("BOB_EXTENSION_SOCK_PATH", &cfg.extension_sock_path)` when the path is non-empty. Verified by `process::tests::spawn_sets_bob_extension_sock_path_when_path_is_non_empty`. PASS.
+- AC-3: Confirmed. The guard `!cfg.extension_sock_path.as_os_str().is_empty()` correctly skips setting the variable when the path is empty, and spawn continues without it. Verified by `process::tests::spawn_omits_bob_extension_sock_path_when_path_is_empty`. PASS.
+- AC-4: Confirmed. `pool.rs` `WarmWorker` stores the pre-allocated `session_id`; `acquire_session` promotes the warm worker using that same id as the `active_workers` key, which is what `list_sessions` returns. The integration test `tests::sessions_list_reports_same_id_as_bob_session_id_env_on_worker_process` spawns a real sh process, captures `BOB_SESSION_ID` from its environment via a temp file, and asserts equality with the `sessions.list` result. PASS.
+- Files outside the stated scope: `admin-rpc/src/dispatch.rs` was touched. Both hunks fall entirely inside `mod tests` (at lines 836 and 869 of the diff). Production dispatch methods (`sessions.list`, `sessions.kill`) are unchanged. The scope expansion is test-only and is justified in the Work Log. PASS.
+- `acquire_session` API shape change: the task explicitly permits handle API changes. Removing the input parameter and returning `ServiceResult<SessionId>` is the only design consistent with pre-allocated warm-worker ids. PASS.
+
+**Stage 2 — Code quality**
+
+- Correctness: Logic is correct for warm-pool promotion, overflow spawn, and max-capacity rejection. `send_prompt` now requires an explicit prior `acquire_session` call; the changed behaviour is documented in the Work Log and covered by a new test. No off-by-one or null-reference issues observed.
+- Tests: 39 pi-agent-supervisor tests, 14 bob serve::tests, 78 admin-rpc tests — all pass. New tests cover AC-1/AC-2/AC-3 at the `process.rs` level, AC-1/AC-4 at the `pool.rs` level, AC-4 at the `lib.rs` integration level, and AC-2/AC-3 at the `serve.rs` plumbing level. Success and failure paths are covered. Tests are independent.
+- Security: no hardcoded secrets; paths are passed as `PathBuf` values, not interpolated strings; no new permissions.
+- Readability: `WarmWorker` struct, `spawn_warm_worker`, and `worker_process_config_for_session` are well-named. Doc-comments explain the pre-allocation invariant. No dead code or debugging artifacts.
+- Performance: no unnecessary loops or blocking operations introduced.
+- Pre-existing flaky test (`terminate_requests_graceful_shutdown_before_deadline`): confirmed pre-existing in `dev-agent` baseline — present before this branch. Non-blocking.
+
+Both stages pass. No escalation required.
