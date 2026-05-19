@@ -168,7 +168,7 @@ mod tests {
         let cfg = BobConfig {
             tracing_level: "info".to_string(),
             tracing_format: "pretty".to_string(),
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         };
 
         let writer = CaptureWriter::default();
@@ -258,7 +258,7 @@ mod tests {
         let cfg = BobConfig {
             tracing_level: "info".to_string(),
             tracing_format: "pretty".to_string(),
-            ..BobConfig::default()
+            ..BobConfig::test_base()
         };
 
         let guard_was_unset_before = SUBSCRIBER_SET.get().is_none();

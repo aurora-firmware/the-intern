@@ -169,7 +169,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn audit_tail_subscribes_prints_json_notifications_and_closes() {
         let mut out = Vec::new();
-        let cfg = BobConfig::default();
+        let cfg = BobConfig::test_base();
         let (tx, rx) = mpsc::unbounded_channel();
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
         let closed = Arc::new(AtomicBool::new(false));
