@@ -55,6 +55,18 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-19
+
+**What was done.** Implemented both halves of AC-1: runtime validation and compile-time enforcement. Added two new tests (`returns_configuration_error_when_admin_sock_path_is_empty` and `returns_configuration_error_when_extension_sock_path_is_empty`) that drove the addition of empty-path checks at the top of `BobConfig::validate()`. Those tests went red-then-green with a four-line change. In the refactor step, `impl Default for BobConfig` was removed entirely and replaced with `#[cfg(test)] pub(crate) fn test_base() -> Self` carrying the same field values, so the empty-path state is unrepresentable outside `#[cfg(test)]` contexts. All `..BobConfig::default()` call sites across seven files in the `bob` crate were mechanically migrated to `..BobConfig::test_base()`.
+
+**What was tried and rejected.** Keeping `Default` but routing it through `validate()` was considered — rejected because `Default::default()` must return `Self` (infallible) and cannot call `validate()` which returns `ServiceResult<Self>`. Adding validation only to `load_with_sources` without removing `Default` was also considered, but that leaves `BobConfig::default()` producing empty paths silently, which violates AC-1's "never silently produce a non-bootable runtime" requirement.
+
+**Decisions made.** The chosen approach: remove `Default`, add runtime validation in `validate()`, introduce a test-only `test_base()` as the spread-base for unit tests. This satisfies AC-1 in two layers (compile-time: `Default` gone; runtime: validate rejects empty paths), keeps AC-2 intact (all `load_with_sources` paths produce non-empty paths via `defaults_with_runtime_root`), and satisfies AC-3 (all 60 tests pass). Modifying files beyond `config.rs` and `serve.rs` was necessary to compile — all additional changes were in `#[cfg(test)]` blocks within the same crate.
+
+**What remains.** Nothing; all acceptance criteria are met and all tests pass.
+
+**Obstacles encountered.** `BobConfig::default()` appeared in seven files rather than the two listed in "Files to Touch". All extra usages were confined to `#[cfg(test)]` blocks, so the migration was purely mechanical and no escalation was warranted.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
