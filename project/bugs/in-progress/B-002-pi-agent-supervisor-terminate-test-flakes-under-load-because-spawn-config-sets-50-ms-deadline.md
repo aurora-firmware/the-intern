@@ -74,6 +74,26 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-05-19
+
+**Reproduction status:** Confirmed. Isolation runs (single test, 10×) 0/10 failures. Full suite default concurrency (20 runs) 3 failures with panic at `process.rs:436` (`cooperative child should terminate without force-kill`). `--test-threads=1` (5 runs) 0/5 failures. `--test-threads=16` (10 runs) 4/10 failures. Flake rate scales with concurrency, confirming a load-driven timing fault rather than a logic fault.
+
+**Evidence captured:**
+- Panic location: `crates/pi-agent-supervisor/src/process.rs:436` — assertion inside `terminate_requests_graceful_shutdown_before_deadline`.
+- Failure observed only under concurrent test load; isolation always passes; sequential always passes.
+- Test ordering shows `terminate_requests_graceful_shutdown_before_deadline` runs concurrently with other shell-spawning tests (T-039's pool-level tests), each launching `sh -c "trap 'exit 0' TERM; while :; do sleep 1; done"` children.
+
+**Isolated fault:** `spawn_config` (`crates/pi-agent-supervisor/src/process.rs:225`) and `test_config` (`crates/pi-agent-supervisor/src/pool.rs:243` and `crates/pi-agent-supervisor/src/lib.rs:257`) set `child_termination_deadline: Duration::from_millis(50)`. With many concurrent `sh` children running `trap 'exit 0' TERM; while :; do sleep 1; done`, SIGTERM delivery + shell interrupting its `sleep 1` subprocess + trap handler + `exit 0` + kernel wait notification can collectively exceed 50 ms under scheduling pressure. `time::timeout(50ms, child.wait())` then expires, the supervisor force-kills, and `outcome.forced` becomes `true`, violating the test assertion.
+
+**Root cause or fault hypothesis:** The 50 ms `child_termination_deadline` in the three test helpers is too tight for reliable cooperative shell termination on a loaded machine. Production `Config::default()` uses 10 s and is unaffected. The inline 25 ms config in `actor_shutdown_terminates_active_and_warm_worker_processes` (which uses `trap '' TERM` workers to intentionally exercise force-kill) is also unaffected by this hypothesis and must remain unchanged.
+
+**Planned verification:** Raise `child_termination_deadline` to 500 ms (10× current value) in `spawn_config` (`process.rs:225`), `test_config` in `pool.rs:243`, and `test_config` in `lib.rs:257`. Leave the inline 25 ms configs intact. Then run:
+```
+for i in 1..10; do cargo test -p pi-agent-supervisor 2>&1 | grep "test result" | head -1; done
+for i in 1..10; do cargo test -p pi-agent-supervisor -- --test-threads=16 2>&1 | grep "test result" | head -1; done
+```
+All runs must report `39 passed; 0 failed`.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
