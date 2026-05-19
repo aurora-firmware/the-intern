@@ -3,7 +3,7 @@ id: B-005
 title: bob serve admin-socket existence check is a TOCTOU race after 
   admin_rpc::start()
 severity: medium
-status: open
+status: in-progress
 created: '2026-05-19'
 ---
 
