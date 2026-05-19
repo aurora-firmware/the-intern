@@ -3,7 +3,7 @@ id: B-003
 title: bob extension can grow memory without bound — pendingFrames uncapped and 
   socket.write() return ignored
 severity: high
-status: open
+status: in-progress
 created: '2026-05-19'
 ---
 
