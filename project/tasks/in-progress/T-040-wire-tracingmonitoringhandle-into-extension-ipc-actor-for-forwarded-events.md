@@ -100,3 +100,27 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-19
+
+PASS
+
+Both Stage 1 (spec compliance) and Stage 2 (code quality) passed.
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1: `TracingMonitoringHandle` is defined as a unit struct in `extension-ipc/src/multiplex.rs` with `#[async_trait] impl MonitoringHandle`. Re-exported from `lib.rs`. Met.
+- AC-2: `record_event` extracts `payload["event"]` as a string (falling back to `"<unknown>"`), emits exactly one `tracing::info!` with `session = %session` and `event = event_name`, and one `tracing::debug!` with the full payload. The unit test `tracing_monitoring_handle_record_event_emits_one_info_event_with_session_and_event_fields` asserts: exactly one INFO line, the session UUID is present, and the event string value is present. Met.
+- AC-3: `bob::serve::try_start_subsystems` now constructs `extension_ipc::Config { monitoring_handle: Arc::new(extension_ipc::TracingMonitoringHandle), ..extension_ipc::Config::default() }`. `NoopMonitoringHandle` is no longer used in that code path. Met.
+
+**File scope note:** `extension-ipc/Cargo.toml` was modified outside the "Files to Touch" list to add `tracing-subscriber` as a `[dev-dependencies]` entry. This is minimal, dev-only, and necessary to build the test subscriber; `tracing-subscriber` was already present in `Cargo.lock` transitively, so `Cargo.lock` required no changes. The Work Log documents this decision explicitly. Accepted.
+
+**Stage 2 — Code Quality**
+
+- Correctness: The `unwrap_or("<unknown>")` fallback handles missing or non-string `event` fields correctly. Both the info and debug spans carry the right fields. No off-by-one or unhandled states.
+- Tests: 28 extension-ipc tests pass (including the new AC-2 unit test). 52 bob unit tests pass (including `extension_ipc_config_accepts_tracing_monitoring_handle` for AC-3). The `TracingCapture` helper is self-contained and installs a thread-local subscriber guard, so tests are independent.
+- Security: No credentials, no external input bypassing validation, no new permissions.
+- Readability: `TracingMonitoringHandle`, `TracingCapture`, and `LineWriter` are well-named and focused. Doc comment on the struct accurately describes behaviour. No dead code or debug artifacts.
+- Performance: One async call per event with no buffering or allocation beyond string extraction. No blocking operations.
+
+**Verification evidence:** `cargo test -p extension-ipc` — 28 passed, 0 failed. `cargo test -p bob` — 55 passed across all test binaries, 0 failed. The pre-existing flaky test `pi-agent-supervisor process::tests::terminate_requests_graceful_shutdown_before_deadline` did not appear in this run.
