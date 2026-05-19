@@ -84,3 +84,24 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-19
+
+PASS
+
+**Stage 1 — Spec compliance**
+
+- AC-1: Met. Three new describe blocks (`connect failure`, `socket.write false`, `pendingFrames cap`) each use `makeCtxWithUi()` and `emitWithCtx()` to supply a real `ctx.ui.notify` spy. Every test asserts `notifySpy` called exactly once with second argument `"warning"` and `stderrSpy` called zero times. Verified against `bob.ts` line 66: `ctx.ui.notify(message, "warning")`.
+- AC-2: Met. Two new describe blocks use plain `emit()` (passes `{} as ExtensionContext`) and assert `stderrSpy` called exactly once with output matching `/warn/i`. The empty-ctx design ensures the `else` branch runs; no `ui.notify` is available to call accidentally.
+- AC-3: Met. `npx tsc --noEmit` returned clean; `npm test` reported 16/16 tests passed (1413 ms).
+- File scope: only `the-intern/extensions/bob.test.ts` was modified (plus the task file on dev-agent). No unspecified files touched.
+
+**Stage 2 — Code quality**
+
+- Correctness: `emitWithCtx` is a minimal, correct addition to `StubPi` — it mirrors `emit()` but forwards the supplied ctx rather than `{} as ExtensionContext`. The `makeCtxWithUi()` factory is focused and typesafe (`as unknown as ExtensionContext` is the standard escape hatch for test stubs here). Assertions target the second argument of `notify` correctly matching the source call.
+- Tests: Five independent tests, each in its own describe block with no shared mutable state beyond module-level `beforeEach`/`afterEach` env management already present in the file. Success paths (notify called) and negative paths (zero stderr) are both asserted for AC-1; AC-2 mirrors the inverse.
+- Security: No secrets, no new permissions.
+- Readability: Names (`makeCtxWithUi`, `notifySpy`, `emitWithCtx`) are descriptive and follow existing file conventions. Comments explain the intent of each test setup step.
+- Performance: No unnecessary loops; the `setTimeout(r, 100/200)` delays follow the same pattern used throughout the file for async socket events.
+
+**Minor observation (non-blocking):** The AC-2 test descriptions include the phrase "calls no ui.notify" but do not contain an explicit assertion to that effect. This is not a defect — the empty-ctx design structurally prevents any `ui.notify` call — but a `expect(someNotifySpy).not.toHaveBeenCalled()` assertion would make the guarantee explicit. The spec requires only "exactly one stderr write" and that is fully asserted.
