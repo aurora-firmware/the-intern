@@ -2,7 +2,7 @@
 id: T-046
 title: Document connect-window pipelining vs forbidden retry-buffering in 
   extensions README
-status: pending
+status: completed
 priority: low
 assigned-role: unassigned
 created: '2026-05-19'
