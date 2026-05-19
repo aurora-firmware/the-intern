@@ -104,6 +104,20 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-19
+
+The diagnosis prescribed raising `child_termination_deadline` from 50 ms to 500 ms in the three test helpers (`spawn_config` in `process.rs:225`, `test_config` in `pool.rs:243`, `test_config` in `lib.rs:257`). The edits were applied and verification run.
+
+500 ms turned out to be insufficient: under `--test-threads=16`, `terminate_requests_graceful_shutdown_before_deadline` still failed ~15% of the time. The cooperative worker is `sh -c "trap 'exit 0' TERM; while :; do sleep 1; done"`, and the shell only delivers the trap after the current `sleep 1` syscall returns. Worst-case cooperative response is therefore close to 1 s plus scheduling jitter — a 500 ms deadline is structurally too tight.
+
+The deadline was raised to 2000 ms (2× margin over the 1 s sleep). 20 consecutive `--test-threads=16` runs passed. The official verification (10 normal-concurrency + 10 high-concurrency) then ran clean: `39 passed; 0 failed` every time.
+
+The inline 25 ms `Config` in tests that intentionally exercise force-kill (e.g. `actor_shutdown_terminates_active_and_warm_worker_processes`, whose workers use `trap '' TERM`) was left untouched. Production `Config::default()` (10 s) was left untouched.
+
+`Cargo.lock` also picked up one line: `tracing-subscriber` under the `extension-ipc` entry. That entry was already declared in `extension-ipc/Cargo.toml` as a `dev-dependencies` member; the lockfile was simply out of sync on `dev-agent`. The lockfile sync is included in the commit.
+
+Commit on `bug/B-002-terminate-deadline-flake`: `2d2ed3f` — `fix(pi-agent-supervisor): raise test child_termination_deadline to 2000ms`. Nothing remains for the next session.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
