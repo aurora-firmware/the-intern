@@ -1,7 +1,7 @@
 ---
 id: T-041
 title: Deduplicate PeerCred between admin-rpc and extension-ipc
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-19'
