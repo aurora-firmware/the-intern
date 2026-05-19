@@ -57,6 +57,38 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-19
+
+**What was done**
+
+The task required eliminating identical `PeerCred`/`is_allowed`/`peer_cred_from_fd` definitions duplicated in `admin-rpc/src/peer_cred.rs` and `extension-ipc/src/peer_cred.rs`.
+
+The consolidation target chosen was `bob_core::auth` (new file), not a new `bob-ipc-common` crate. Both `admin-rpc` and `extension-ipc` already depend on `bob-core`, so adding a shared module there required only one new source file and minor Cargo.toml changes — no new crate registration in the workspace.
+
+Three TDD cycles were run:
+
+1. **AC-1 — canonical module:** Wrote failing tests in the empty `bob-core/src/auth.rs` (and wired it into `lib.rs`). Compile failed as expected. Added `nix` dependency to `bob-core/Cargo.toml`, wrote the full implementation (struct, `is_allowed`, platform-gated `peer_cred_from_fd`). All 80 bob-core tests passed. Added `#[must_use]` to `is_allowed` during refactor to silence the pedantic clippy lint.
+
+2. **AC-2 / AC-3 — re-exports and no regression:** Replaced both crate-local `peer_cred.rs` files with `pub use bob_core::auth::{…}` re-export modules, preserving all original test coverage within each crate. Ran `cargo test -p admin-rpc -p extension-ipc`; 79 + 29 tests passed, 0 failed.
+
+**What was tried and rejected**
+
+- Creating a new `bob-ipc-common` crate: rejected because both consumers already depend on `bob-core`, adding the module there avoids a new crate and all the workspace plumbing that comes with it.
+
+**Decisions made**
+
+- Canonical location: `bob_core::auth`. Rationale: zero new dependency edges; `bob-core` is already the shared kernel crate.
+- Re-export strategy: each crate's `peer_cred.rs` becomes a thin `pub use` module, so no callsites in `listener.rs` or elsewhere needed updating.
+- Added `tempfile = "3"` to `bob-core` dev-dependencies to support the socket test in `auth`.
+
+**What remains**
+
+Nothing. All three acceptance criteria are satisfied and both branches of the task scope are covered by passing tests.
+
+**Obstacles Encountered**
+
+A `git stash pop` conflict on the generated `Cargo.lock` file during a baseline clippy check required a `git checkout the-intern/service/Cargo.lock` before the pop succeeded; no code was affected.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
