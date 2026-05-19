@@ -194,7 +194,7 @@ Priorities reflect the triage above: mistakes go first as bugs, deferred-by-desi
 |---|---|---|
 | Raise `child_termination_deadline` from 50 ms to ~500 ms in `spawn_config` / `test_config` (fix the flake) | `/new-bug` | **B-002 — resolved 2026-05-19** (raised to 2000 ms after 500 ms still flaked; 20× verification clean) |
 | Cap `bob.ts` `pendingFrames` (e.g. 64) with one warn-then-drop; check `socket.write()` return value and stop pushing when it returns `false` | `/new-bug` | **B-003 — resolved 2026-05-19** (`PENDING_FRAMES_CAP = 64`; `markDead` on write `false`; 2 regression tests; 11/11 passing) |
-| Stop caching `default_route` permanently for unknown sessions in `multiplex.rs::route_for_session` | `/new-bug` | B-004 — open |
+| Stop caching `default_route` permanently for unknown sessions in `multiplex.rs::route_for_session` | `/new-bug` | **B-004 — resolved 2026-05-19** (live default-route fallback; regression test; 29/29 passing) |
 | Await admin-socket bind in `bob/src/serve.rs` instead of synchronously checking `cfg.admin_sock_path.exists()` | `/new-bug` | B-005 — open |
 | Replace the inline `MonitoringAuditSink` in `serve.rs` with a typed adapter living in `monitoring` (no debug-format strings) and cover it with a test | `/new-bug` | B-006 — open |
 

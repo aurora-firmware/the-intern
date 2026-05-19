@@ -3,7 +3,7 @@ id: B-004
 title: extension-ipc multiplex caches default_route permanently for unknown 
   session ids
 severity: medium
-status: in-progress
+status: resolved
 created: '2026-05-19'
 ---
 
