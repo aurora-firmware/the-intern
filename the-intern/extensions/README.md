@@ -1,8 +1,118 @@
-# extensions
+# the-intern/extensions
 
-This folder will contain JS extensions authored for pi-agent.
-`pi-agent` is expected to be provided by the local developer/runtime
-environment and is not vendored in this repository.
+TypeScript extensions for the pi-agent coding agent. This package hosts the
+**bob extension** (`bob.ts`), which is the event-forwarding membrane described
+in S-003.
 
-Extension code lands here in later tasks; see
-[`../../project/specs/the-intern-agent-service-architecture.md`](../../project/specs/the-intern-agent-service-architecture.md).
+---
+
+## Naming Convention: bob service vs bob extension
+
+These two components share the name "bob" deliberately — the extension exists
+only to talk to the service — but they are **distinct artifacts**:
+
+| | bob service | bob extension |
+|---|---|---|
+| **Artifact** | Rust binary `bob` | TypeScript file `bob.ts` |
+| **Location** | `the-intern/service/` | `the-intern/extensions/` |
+| **Runtime** | Managed by the OS / systemd / docker | Loaded inside each `pi` process by pi's own extension loader |
+| **Lifecycle** | Long-running server process | One instance per `pi` session, torn down with the pi process |
+| **Install path** | System PATH or container image | pi's extension search path (see below) |
+
+The bob service spawns `pi` processes and controls their environment. The bob
+extension runs *inside* those pi processes and uses the environment variables
+set by the bob service to connect back to it.
+
+---
+
+## Environment-Variable Contract
+
+The bob service supervisor sets these two variables on every `pi` child process
+it spawns. The bob extension reads them at load time; they are the sole
+communication channel between the two components at startup.
+
+### `BOB_SESSION_ID`
+
+- **Type:** string, REQUIRED
+- **Format:** Serialised form of `bob_core::types::SessionId` — a UUID string
+  as currently produced by the supervisor.
+- **Purpose:** Tags every event frame the bob extension writes to the UDS socket
+  with the session identity. The bob service's multiplexer routes inbound frames
+  by exact match on this value.
+- **Absence behaviour:** If this variable is missing, the bob extension logs one
+  warning line and becomes a no-op for the remainder of the session. The bob
+  service never fails to spawn `pi` because of a missing value; it omits the
+  variable instead, which produces the same "no events forwarded" outcome.
+
+### `BOB_EXTENSION_SOCK_PATH`
+
+- **Type:** string (filesystem path), REQUIRED
+- **Format:** Absolute path to the `extension.sock` Unix domain socket that the
+  `extension-ipc` actor binds.
+- **Purpose:** The bob extension opens a UDS connection to this path on the first
+  event it intercepts.
+- **Absence behaviour:** Same as `BOB_SESSION_ID` — one warning, then no-op.
+
+An operator can verify the contract by inspecting the environment of any running
+`pi` process that was spawned by `bob serve`:
+
+```sh
+cat /proc/<pi-pid>/environ | tr '\0' '\n' | grep -E '^BOB_'
+```
+
+---
+
+## Installation
+
+The bob extension is shipped as source only. No npm publish, no build
+artifact, no `pi install` command is invoked by the bob service itself. An
+operator places the extension into one of pi's own discovery directories.
+
+### Install Paths
+
+| Scope | Path | When to use |
+|---|---|---|
+| Per-user (global) | `~/.pi/agent/extensions/bob.ts` | The extension should apply to all projects on this machine |
+| Per-project | `<project>/.pi/extensions/bob.ts` | The extension should apply only within one project directory |
+
+Both paths are pi's own discovery directories; the bob service plays no role in
+extension discovery or loading.
+
+**Example — per-user install:**
+
+```sh
+mkdir -p ~/.pi/agent/extensions
+cp /path/to/the-intern/extensions/bob.ts ~/.pi/agent/extensions/bob.ts
+```
+
+**Example — per-project install (run from the project root):**
+
+```sh
+mkdir -p .pi/extensions
+cp /path/to/the-intern/extensions/bob.ts .pi/extensions/bob.ts
+```
+
+### Running Without the Extension
+
+Installing the bob extension is **optional**. If `bob.ts` is not in any pi
+discovery directory, `bob serve` runs unchanged: prompts reach pi over
+`runRpcMode()`, tool calls execute, and no event-forwarding observability is
+added. The bob service emits no error and behaves identically to a pre-Phase-3
+deployment.
+
+---
+
+## Development
+
+This is a pure TypeScript package with no runtime dependencies. Everything
+listed in `devDependencies` is used during development and testing only.
+
+```sh
+npm install       # install dev-deps
+npx tsc --noEmit  # type-check without emitting JS (pi uses jiti for source-level loading)
+npm test          # run vitest
+```
+
+TypeScript is configured with strict mode and targets ESNext/NodeNext. The
+extension code uses `node:net` for the UDS connection; no external networking
+library is required.
