@@ -102,6 +102,18 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-19
+
+Introduced `PENDING_FRAMES_CAP = 64` at module scope in `the-intern/extensions/bob.ts`. In `ensureConnected`, added a guard before `pendingFrames.push(frame)`: if `pendingFrames.length >= PENDING_FRAMES_CAP`, call `markDead` and return without pushing. In `flushPending`, captured the boolean return of `socket.write(frame)`: on `false` call `markDead`, clear pending frames, and stop flushing. The pre-existing `socket.destroyed` check was removed because `write()` returns `false` on destroyed sockets too, so the `!ok` guard subsumes it. No drain listener was wired — per S-003 "no buffering" the preferred response is loud-once + dead.
+
+Two regression tests were added to `bob.test.ts` first (red), confirming both faults reproduced with the expected `warn` call counts being zero before the fix:
+- **B-003-A pre-connect cap**: starts a real UDS server, fires `PENDING_FRAMES_CAP + 1` events synchronously while the connect is still in flight; asserts exactly one stderr `warn`, transport dead (subsequent events silent), and ≤ CAP frames reach the server.
+- **B-003-B back-pressure**: establishes a real connection, monkey-patches `net.Socket.prototype.write` to return `false` for a single call, fires an event; asserts exactly one `warn` and that subsequent events are no-ops.
+
+Both tests went green after the fix. `npx tsc --noEmit` is clean. `npm test` reports 11/11 passed (9 pre-existing + 2 new).
+
+Commit: `6e17c6f` on `bug/B-003-bob-extension-pending-frames-cap` — `fix(bob-extension): cap pendingFrames and honour socket.write back-pressure`. Nothing remains for the next session.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
