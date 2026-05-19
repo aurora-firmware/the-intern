@@ -102,6 +102,23 @@ impl Actor {
     }
 }
 
+// Back-pressure coupling — inbound reads and outbound writes share a single loop.
+//
+// After every inbound frame is dispatched, `out_rx.try_recv()` drains any
+// outbound frames that the multiplexer has queued, writing each one to the
+// socket via `write_all_nonblocking`. Because `write_all_nonblocking` awaits
+// the socket to become writable before retrying a short write, a slow or
+// stalled peer causes that await to block, which in turn stalls the next
+// iteration of the inbound read loop. This is intentional: it applies
+// back-pressure from the write side to the read side, so the bob service
+// cannot consume inbound frames faster than the peer can accept outbound
+// replies.
+//
+// Single-connection assumption: this coupling is correct only when there is
+// exactly one active connection per actor. With multiple concurrent connections
+// sharing a single loop the stall from one slow peer would block inbound
+// processing for all other peers. If the design ever moves to multiple
+// connections, the write path must be decoupled from the read loop.
 async fn run_connection(stream: UnixStream, monitoring_handle: Arc<dyn MonitoringHandle>) {
     let stream = stream;
     let (out_tx, mut out_rx) = mpsc::unbounded_channel();
