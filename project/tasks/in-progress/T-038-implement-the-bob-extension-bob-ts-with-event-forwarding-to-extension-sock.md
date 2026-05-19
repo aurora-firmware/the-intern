@@ -79,6 +79,36 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-19
+
+**What was done**
+
+Implemented `the-intern/extensions/bob.ts` and its test suite `the-intern/extensions/bob.test.ts` from scratch, covering all four acceptance criteria.
+
+**Event list (AC-1)**
+
+The live docs at `https://pi.dev/docs/latest/extensions` are reachable but the page is a client-rendered SPA that does not expose the event list in parseable HTML. The canonical list of 29 events was extracted from the installed package's TypeScript type definitions (`@earendil-works/pi-coding-agent@0.75.3`, `dist/core/extensions/types.d.ts`, the `ExtensionAPI.on()` overloads). This is noted in a comment in `bob.ts`.
+
+**Implementation design**
+
+The factory captures `BOB_SESSION_ID` and `BOB_EXTENSION_SOCK_PATH` from `process.env` at call time (not at module load), maintains a closure-local transport state (`socket`, `transportDead`, `connecting`, `pendingFrames`), and opens the UDS lazily on the first event. Frames are queued while the connect is in progress and flushed on connect. The `markDead` path sets `transportDead = true`, destroys the socket, and writes one warning to `ctx.ui` (if available) or stderr.
+
+**Failure mode discoveries during testing**
+
+Two non-obvious platform behaviours shaped the implementation:
+
+1. _Peer-close is silent on the client._ When the server calls `destroy()` on its end of a UDS connection, Node.js does NOT emit an `error` event on the client socket; it only emits `close` (and `end`). Subsequent `write()` calls return `false` and the socket's `destroyed` property becomes `true`. I therefore added a post-write `socket.destroyed` check inside `flushPending()` to detect this condition instead of relying on the `error` event alone.
+
+2. _Async close event leaks across tests._ An earlier design included a `close` event handler on the socket to detect peer closes. This caused cross-test contamination: when AC-2 tests called `server.close()` to destroy the test server, the `close` event on bob's socket fired asynchronously — sometimes after `afterEach` and into the setup phase of the next test, causing stray stderr writes to be captured by the AC-4 spy. Removing the `close` handler and relying solely on the post-write `destroyed` check eliminated the contamination.
+
+3. _Test server must be awaited before factory runs._ `net.Server.listen()` is asynchronous on UDS. The initial test helper called `server.listen(sockPath)` without waiting for the `listening` event, so the factory would attempt to connect before the socket file existed. Fixed by awaiting a promise that resolves on the `listening` event.
+
+4. _Test server must eagerly destroy connections before closing._ `server.close()` waits for all existing connections to drain before invoking its callback. Since bob's socket stays open (no connection teardown on the extension side), `server.close()` would never resolve. Fixed by tracking connections in a `Set` and calling `conn.destroy()` on each before closing the server.
+
+**What remains**
+
+Nothing — all four acceptance criteria are met, all 9 tests pass, and `npx tsc --noEmit && npm test` exits 0.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
