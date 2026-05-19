@@ -1,0 +1,17 @@
+{
+  "name": "@the-intern/extensions",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript extensions for pi-agent, starting with the bob event-forwarding extension.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.75.3",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^3.0.0"
+  }
+}
