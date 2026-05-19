@@ -54,6 +54,20 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-19
+
+Added a 17-line comment block immediately before the `async fn run_connection` signature in `extension-ipc/src/lib.rs`. The comment has two named sections:
+
+**Back-pressure coupling** — explains that `out_rx.try_recv()` drains outbound frames inside the inbound frame loop and that `write_all_nonblocking` awaits the socket writable event before retrying a short write. Makes explicit that a slow peer's stall propagates backward into the inbound read loop, which is intentional so the bob service cannot consume frames faster than the peer can accept replies.
+
+**Single-connection assumption** — explains that the coupling is safe only when one connection is active per actor, and names what would need to change (decouple the write path from the read loop) if the design ever moves to multiple concurrent connections.
+
+No logic was changed. Build verified clean before and after (recompiled only `extension-ipc` and `bob`, no errors or warnings).
+
+**What remains.** Nothing.
+
+**Obstacles encountered.** None.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
