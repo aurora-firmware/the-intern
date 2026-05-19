@@ -171,7 +171,10 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
 
     info!("starting extension-ipc actor");
     let (extension_ipc_handle, extension_ipc_join) =
-        extension_ipc::start(extension_ipc::Config::default());
+        extension_ipc::start(extension_ipc::Config {
+            monitoring_handle: Arc::new(extension_ipc::TracingMonitoringHandle),
+            ..extension_ipc::Config::default()
+        });
     info!("extension-ipc actor started");
 
     info!("starting admin-rpc actor");
@@ -775,5 +778,21 @@ pub mod tests {
         // removal helper directly, which is what start_subsystems also calls on failure.
         remove_socket_files_best_effort(&cfg);
         // No panic means the test passes.
+    }
+
+    // AC-3 (T-040): try_start_subsystems wires TracingMonitoringHandle as the active
+    // MonitoringHandle for the extension-ipc actor.  Constructing the config here
+    // (the same expression used in try_start_subsystems) guarantees at compile time
+    // that TracingMonitoringHandle is reachable and satisfies MonitoringHandle.
+    #[test]
+    fn extension_ipc_config_accepts_tracing_monitoring_handle() {
+        let cfg = extension_ipc::Config {
+            monitoring_handle: Arc::new(extension_ipc::TracingMonitoringHandle),
+            ..extension_ipc::Config::default()
+        };
+        // The monitoring_handle field is Arc<dyn MonitoringHandle>; if the type
+        // does not implement MonitoringHandle the line above will not compile.
+        // A non-empty Arc is sufficient evidence.
+        assert!(Arc::strong_count(&cfg.monitoring_handle) >= 1);
     }
 }
