@@ -185,19 +185,16 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         policy: Some(policy_control_handle.clone()),
         ..admin_rpc::Config::default()
     };
-    let (admin_rpc_handle, admin_rpc_join) = admin_rpc::start(admin_rpc_cfg);
-    info!("admin-rpc actor started");
-
-    if !cfg.admin_sock_path.exists() {
-        return Err(format!(
-            "admin-rpc did not create admin socket at {}",
-            cfg.admin_sock_path.display()
-        )
-        .into());
-    }
+    let (admin_rpc_handle, admin_rpc_join) =
+        admin_rpc::start(admin_rpc_cfg).map_err(|e| {
+            format!(
+                "failed to bind admin socket at {}: {e}",
+                cfg.admin_sock_path.display()
+            )
+        })?;
     info!(
         path = %cfg.admin_sock_path.display(),
-        "admin socket bound by admin-rpc"
+        "admin-rpc actor started and socket bound"
     );
 
     // If the second bind fails, remove the first socket file explicitly before
