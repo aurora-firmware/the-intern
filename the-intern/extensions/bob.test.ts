@@ -32,8 +32,10 @@ interface StubPi {
   handlers: Map<string, EventHandler[]>;
   /** The on() method the extension calls. */
   on(event: string, handler: EventHandler): void;
-  /** Fire a fake event synchronously and await all handlers. */
+  /** Fire a fake event synchronously and await all handlers using an empty ctx. */
   emit(event: string, data: unknown): Promise<void>;
+  /** Fire a fake event synchronously and await all handlers using the provided ctx. */
+  emitWithCtx(event: string, data: unknown, ctx: ExtensionContext): Promise<void>;
 }
 
 function makeStubPi(): StubPi {
@@ -50,7 +52,28 @@ function makeStubPi(): StubPi {
         await h(data, {} as ExtensionContext);
       }
     },
+    async emitWithCtx(event: string, data: unknown, ctx: ExtensionContext) {
+      const list = handlers.get(event) ?? [];
+      for (const h of list) {
+        await h(data, ctx);
+      }
+    },
   };
+}
+
+/**
+ * Build a minimal ExtensionContext stub with a spy on ui.notify.
+ * The returned object satisfies the shape bob.ts needs: ctx?.ui is truthy and
+ * ctx.ui.notify is a callable function.
+ */
+function makeCtxWithUi(): { ctx: ExtensionContext; notifySpy: ReturnType<typeof vi.fn> } {
+  const notifySpy = vi.fn();
+  const ctx = {
+    ui: {
+      notify: notifySpy,
+    },
+  } as unknown as ExtensionContext;
+  return { ctx, notifySpy };
 }
 
 // ---------------------------------------------------------------------------
@@ -497,5 +520,179 @@ describe("AC-4: transport failure handling", () => {
     expect(stderrSpy).toHaveBeenCalledTimes(1);
 
     stderrSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-044 AC-1: ctx.ui.notify branch — ctx.ui present → exactly one notify call
+// and zero stderr writes per warning path.
+// ---------------------------------------------------------------------------
+
+describe("T-044 AC-1: ctx.ui.notify branch — connect failure with ctx.ui present", () => {
+  it("calls ctx.ui.notify exactly once and writes nothing to stderr when UDS connect fails", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    // Point at a socket path that has no server listening so the connect fails.
+    process.env.BOB_EXTENSION_SOCK_PATH = path.join(tmpDir, "nonexistent.sock");
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { ctx, notifySpy } = makeCtxWithUi();
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    // Fire an event with a ctx that has ctx.ui; this ctx propagates through
+    // handleEvent → ensureConnected → markDead → warn.
+    await pi.emitWithCtx("session_start", { type: "session_start", reason: "startup" }, ctx);
+
+    // Allow the async connect error to propagate.
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Exactly one ctx.ui.notify call carrying the warning.
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    expect(notifySpy.mock.calls[0]![1]).toBe("warning");
+
+    // Zero writes to process.stderr because ui.notify was used instead.
+    expect(stderrSpy).toHaveBeenCalledTimes(0);
+
+    stderrSpy.mockRestore();
+  });
+});
+
+describe("T-044 AC-1: ctx.ui.notify branch — socket.write false with ctx.ui present", () => {
+  it("calls ctx.ui.notify exactly once and writes nothing to stderr when socket.write returns false", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+
+    const server = await createTestServer(sockPath);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    // First event — establishes the connection via the empty-ctx path so that
+    // socket.write patching applies to the second event only.
+    await pi.emit("session_start", { type: "session_start", reason: "startup" });
+    await waitUntil(() => server.lines().length >= 1);
+
+    // Patch socket.write to return false for the next call only.
+    const originalWrite = net.Socket.prototype.write;
+    net.Socket.prototype.write = function (..._args: unknown[]) {
+      net.Socket.prototype.write = originalWrite;
+      return false as any;
+    };
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { ctx, notifySpy } = makeCtxWithUi();
+
+    // Second event — write returns false; markDead fires with the provided ctx.
+    await pi.emitWithCtx("agent_start", { type: "agent_start" }, ctx);
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Exactly one ctx.ui.notify call carrying the warning.
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    expect(notifySpy.mock.calls[0]![1]).toBe("warning");
+
+    // Zero writes to process.stderr because ui.notify was used instead.
+    expect(stderrSpy).toHaveBeenCalledTimes(0);
+
+    stderrSpy.mockRestore();
+    net.Socket.prototype.write = originalWrite; // safety restore
+    await server.close();
+  });
+});
+
+describe("T-044 AC-1: ctx.ui.notify branch — pendingFrames cap breach with ctx.ui present", () => {
+  it("calls ctx.ui.notify exactly once and writes nothing to stderr when pendingFrames cap is exceeded", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+
+    const server = await createTestServer(sockPath);
+    const pi = makeStubPi();
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { ctx, notifySpy } = makeCtxWithUi();
+
+    bobFactory(pi as any);
+
+    // Fire CAP + 1 events synchronously with ctx.ui; the cap guard fires with
+    // the last ctx that arrived — the same ctx object in every call here.
+    const eventCount = PENDING_FRAMES_CAP + 1;
+    for (let i = 0; i < eventCount; i++) {
+      void pi.emitWithCtx("session_start", { index: i }, ctx);
+    }
+
+    // Allow async connect and flush to settle.
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Exactly one ctx.ui.notify call for the cap breach.
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    expect(notifySpy.mock.calls[0]![1]).toBe("warning");
+
+    // Zero writes to process.stderr because ui.notify was used instead.
+    expect(stderrSpy).toHaveBeenCalledTimes(0);
+
+    stderrSpy.mockRestore();
+    await server.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-044 AC-2: ctx.ui absent — existing behaviour still passes (stderr write).
+// These describe blocks explicitly label the coverage already present via the
+// earlier describe blocks above; they add one additional assertion per path
+// that makes the AC-2 contract unambiguous.
+// ---------------------------------------------------------------------------
+
+describe("T-044 AC-2: ctx.ui absent — connect failure falls back to stderr", () => {
+  it("writes exactly one line to stderr and calls no ui.notify when UDS connect fails without ctx.ui", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = path.join(tmpDir, "nonexistent.sock");
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    // emit() passes {} as ExtensionContext — no ui property present.
+    await pi.emit("session_start", { type: "session_start", reason: "startup" });
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+  });
+});
+
+describe("T-044 AC-2: ctx.ui absent — socket.write false falls back to stderr", () => {
+  it("writes exactly one line to stderr and calls no ui.notify when socket.write returns false without ctx.ui", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+
+    const server = await createTestServer(sockPath);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    await pi.emit("session_start", { type: "session_start", reason: "startup" });
+    await waitUntil(() => server.lines().length >= 1);
+
+    const originalWrite = net.Socket.prototype.write;
+    net.Socket.prototype.write = function (..._args: unknown[]) {
+      net.Socket.prototype.write = originalWrite;
+      return false as any;
+    };
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    // emit() passes {} as ExtensionContext — no ui property present.
+    await pi.emit("agent_start", { type: "agent_start" });
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+    net.Socket.prototype.write = originalWrite;
+    await server.close();
   });
 });
