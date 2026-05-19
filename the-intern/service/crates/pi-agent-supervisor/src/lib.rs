@@ -9,6 +9,7 @@ use bob_core::{
     error::{ServiceError, ServiceResult},
     types::SessionId,
 };
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::{
     sync::{mpsc, oneshot},
@@ -25,6 +26,9 @@ pub struct Config {
     pub idle_reap_timeout: Duration,
     pub command_buffer: usize,
     pub child_termination_deadline: Duration,
+    /// Absolute path to the extension socket passed to each child as
+    /// `BOB_EXTENSION_SOCK_PATH`.  An empty path means the variable is not set.
+    pub extension_sock_path: PathBuf,
 }
 
 impl Default for Config {
@@ -37,6 +41,7 @@ impl Default for Config {
             idle_reap_timeout: Duration::from_secs(300),
             command_buffer: 64,
             child_termination_deadline: Duration::from_secs(10),
+            extension_sock_path: PathBuf::new(),
         }
     }
 }
@@ -44,8 +49,7 @@ impl Default for Config {
 #[derive(Debug)]
 enum Command {
     AcquireSession {
-        session_id: SessionId,
-        response_tx: oneshot::Sender<ServiceResult<()>>,
+        response_tx: oneshot::Sender<ServiceResult<SessionId>>,
     },
     ListSessions {
         response_tx: oneshot::Sender<ServiceResult<Vec<SessionId>>>,
@@ -73,13 +77,16 @@ pub struct Actor {
 }
 
 impl Handle {
-    pub async fn acquire_session(&self, session_id: SessionId) -> ServiceResult<()> {
+    /// Acquires a worker for a new session.
+    ///
+    /// Returns the `SessionId` that was allocated for the session.  For warm
+    /// workers this is the id that was pre-allocated at spawn time and set as
+    /// `BOB_SESSION_ID` on the child process.  Callers must use the returned id
+    /// for all subsequent operations (`send_prompt`, `kill_session`, etc.).
+    pub async fn acquire_session(&self) -> ServiceResult<SessionId> {
         let (response_tx, response_rx) = oneshot::channel();
         self.tx
-            .send(Command::AcquireSession {
-                session_id,
-                response_tx,
-            })
+            .send(Command::AcquireSession { response_tx })
             .await
             .map_err(|_| ServiceError::Shutdown)?;
 
@@ -148,15 +155,18 @@ impl Actor {
                     };
 
                     match command {
-                        Command::AcquireSession {
-                            session_id,
-                            response_tx,
-                        } => {
+                        Command::AcquireSession { response_tx } => {
                             tracing::debug!(
-                                session_id = %session_id,
                                 "pi-agent-supervisor acquire session command received"
                             );
-                            let _ = response_tx.send(self.pool.acquire_session(session_id));
+                            let result = self.pool.acquire_session();
+                            if let Ok(session_id) = &result {
+                                tracing::debug!(
+                                    session_id = %session_id,
+                                    "pi-agent-supervisor session acquired"
+                                );
+                            }
+                            let _ = response_tx.send(result);
                         }
                         Command::ListSessions { response_tx } => {
                             tracing::debug!("pi-agent-supervisor list sessions command received");
@@ -245,6 +255,7 @@ mod tests {
             idle_reap_timeout: Duration::from_secs(60),
             command_buffer: 16,
             child_termination_deadline: Duration::from_millis(50),
+            extension_sock_path: std::path::PathBuf::new(),
         }
     }
 
@@ -278,10 +289,9 @@ mod tests {
     async fn kill_session_terminates_active_session_and_removes_it_from_list() {
         let (handle, task) =
             start(test_config("sh", &["-c", "exit 0"], 1, 2)).expect("startup should succeed");
-        let session_id = SessionId::new();
 
-        handle
-            .acquire_session(session_id)
+        let session_id = handle
+            .acquire_session()
             .await
             .expect("session should be acquired");
         let result = handle.kill_session(session_id).await;
@@ -323,10 +333,9 @@ mod tests {
     async fn list_sessions_returns_bound_session_ids() {
         let (handle, task) =
             start(test_config("sh", &["-c", "exit 0"], 1, 2)).expect("startup should succeed");
-        let session_id = SessionId::new();
 
-        handle
-            .acquire_session(session_id)
+        let session_id = handle
+            .acquire_session()
             .await
             .expect("session acquire should succeed");
         let sessions = handle
@@ -348,10 +357,9 @@ mod tests {
         );
         cfg.idle_reap_timeout = Duration::from_millis(40);
         let (handle, task) = start(cfg).expect("startup should succeed");
-        let session_id = SessionId::new();
 
         handle
-            .acquire_session(session_id)
+            .acquire_session()
             .await
             .expect("session acquire should succeed");
 
@@ -375,11 +383,11 @@ mod tests {
             start(test_config("sh", &["-c", "exit 0"], 1, 1)).expect("startup should succeed");
 
         handle
-            .acquire_session(SessionId::new())
+            .acquire_session()
             .await
             .expect("first session acquire should succeed");
         let error = handle
-            .acquire_session(SessionId::new())
+            .acquire_session()
             .await
             .expect_err("second session should fail at max capacity");
 
@@ -414,9 +422,8 @@ mod tests {
             2,
         ))
         .expect("startup should succeed");
-        let session_id = SessionId::new();
-        handle
-            .acquire_session(session_id)
+        let session_id = handle
+            .acquire_session()
             .await
             .expect("session should be active");
 
@@ -429,7 +436,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn send_prompt_acquires_missing_session_before_sending() {
+    async fn send_prompt_returns_child_process_error_when_session_not_yet_acquired() {
         let (handle, task) = start(test_config(
             "sh",
             &[
@@ -440,18 +447,17 @@ mod tests {
             1,
         ))
         .expect("startup should succeed");
-        let session_id = SessionId::new();
 
-        handle
-            .send_prompt(session_id, "hello prompt".to_string())
-            .await
-            .expect("prompt routing should succeed");
+        // send_prompt no longer implicitly acquires; callers must call acquire_session first.
+        let unknown_session = SessionId::new();
+        let result = handle
+            .send_prompt(unknown_session, "hello prompt".to_string())
+            .await;
 
-        let sessions = handle
-            .list_sessions()
-            .await
-            .expect("session listing should succeed");
-        assert_eq!(sessions, vec![session_id]);
+        assert!(
+            matches!(result, Err(ServiceError::ChildProcess { .. })),
+            "send_prompt to an unacquired session should return ChildProcess error, got {result:?}"
+        );
         task.abort();
     }
 
@@ -467,7 +473,10 @@ mod tests {
             2,
         ))
         .expect("startup should succeed");
-        let session_id = SessionId::new();
+        let session_id = handle
+            .acquire_session()
+            .await
+            .expect("session acquire should succeed");
 
         let result = handle
             .send_prompt(session_id, "hello prompt".to_string())
@@ -489,7 +498,10 @@ mod tests {
             2,
         ))
         .expect("startup should succeed");
-        let session_id = SessionId::new();
+        let session_id = handle
+            .acquire_session()
+            .await
+            .expect("session acquire should succeed");
 
         handle
             .send_prompt(session_id, "first".to_string())
@@ -529,11 +541,12 @@ mod tests {
             idle_reap_timeout: Duration::from_secs(60),
             command_buffer: 8,
             child_termination_deadline: Duration::from_millis(25),
+            extension_sock_path: std::path::PathBuf::new(),
         };
 
         let (handle, task) = start(cfg).expect("startup should succeed");
         handle
-            .acquire_session(SessionId::new())
+            .acquire_session()
             .await
             .expect("session acquire should succeed");
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -566,5 +579,130 @@ mod tests {
         }
 
         let _ = fs::remove_file(pid_file);
+    }
+
+    // AC-4: sessions.list reports the same id that is set as BOB_SESSION_ID on the
+    // worker process.  The sh child writes its BOB_SESSION_ID to a temp file on
+    // startup; we compare that against the id returned by list_sessions.
+    #[tokio::test(flavor = "current_thread")]
+    async fn sessions_list_reports_same_id_as_bob_session_id_env_on_worker_process() {
+        let id_file = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-session-id-{}.txt",
+            SessionId::new()
+        ));
+        let _ = fs::remove_file(&id_file);
+        let id_file_path = id_file.to_string_lossy().into_owned();
+
+        // Worker script: write BOB_SESSION_ID to a file, then loop to stay alive.
+        let worker_script = format!(
+            "printf '%s\\n' \"$BOB_SESSION_ID\" > \"{}\"; trap 'exit 0' TERM; while :; do sleep 0.1; done",
+            id_file_path
+        );
+
+        let (handle, task) = start(test_config(
+            "sh",
+            &["-c", &worker_script],
+            1,
+            1,
+        ))
+        .expect("startup should succeed");
+
+        // Acquire a session — the warm worker is promoted.
+        let session_id = handle.acquire_session().await.expect("acquire should succeed");
+
+        // Give the worker a moment to write the file.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // sessions.list must return the same id that is set as BOB_SESSION_ID.
+        let sessions = handle.list_sessions().await.expect("list sessions should succeed");
+        assert_eq!(sessions, vec![session_id], "sessions.list should return the acquired session id");
+
+        let written = fs::read_to_string(&id_file)
+            .expect("worker should have written BOB_SESSION_ID to file");
+        let written_id = written.trim().to_string();
+
+        assert_eq!(
+            session_id.to_string(),
+            written_id,
+            "sessions.list session id must equal BOB_SESSION_ID set on the worker process"
+        );
+
+        task.abort();
+        let _ = fs::remove_file(id_file);
+    }
+
+    // AC-2: when extension_sock_path is non-empty, BOB_EXTENSION_SOCK_PATH is set on the worker.
+    #[tokio::test(flavor = "current_thread")]
+    async fn extension_sock_path_is_propagated_to_worker_process_environment() {
+        let id_file = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-ext-path-{}.txt",
+            SessionId::new()
+        ));
+        let _ = fs::remove_file(&id_file);
+        let id_file_path = id_file.to_string_lossy().into_owned();
+        let sock_path = std::path::PathBuf::from("/run/bob/extension.sock");
+
+        let worker_script = format!(
+            "printf '%s\\n' \"$BOB_EXTENSION_SOCK_PATH\" > \"{}\"; trap 'exit 0' TERM; while :; do sleep 0.1; done",
+            id_file_path
+        );
+
+        let mut cfg = test_config("sh", &["-c", &worker_script], 1, 1);
+        cfg.extension_sock_path = sock_path.clone();
+
+        let (handle, task) = start(cfg).expect("startup should succeed");
+        handle.acquire_session().await.expect("acquire should succeed");
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let written = fs::read_to_string(&id_file)
+            .expect("worker should have written BOB_EXTENSION_SOCK_PATH to file");
+        let written_path = written.trim().to_string();
+
+        assert_eq!(
+            written_path,
+            sock_path.to_string_lossy(),
+            "BOB_EXTENSION_SOCK_PATH on worker must match configured extension_sock_path"
+        );
+
+        task.abort();
+        let _ = fs::remove_file(id_file);
+    }
+
+    // AC-3: when extension_sock_path is empty, BOB_EXTENSION_SOCK_PATH is NOT set.
+    #[tokio::test(flavor = "current_thread")]
+    async fn empty_extension_sock_path_does_not_set_bob_extension_sock_path_on_worker() {
+        let id_file = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-ext-path-absent-{}.txt",
+            SessionId::new()
+        ));
+        let _ = fs::remove_file(&id_file);
+        let id_file_path = id_file.to_string_lossy().into_owned();
+
+        // Write "unset" if BOB_EXTENSION_SOCK_PATH is absent, "set:<value>" if present.
+        let worker_script = format!(
+            "if [ -z \"${{BOB_EXTENSION_SOCK_PATH+x}}\" ]; then printf 'unset\\n' > \"{0}\"; else printf 'set:%s\\n' \"$BOB_EXTENSION_SOCK_PATH\" > \"{0}\"; fi; trap 'exit 0' TERM; while :; do sleep 0.1; done",
+            id_file_path
+        );
+
+        // extension_sock_path is empty (the default).
+        let cfg = test_config("sh", &["-c", &worker_script], 1, 1);
+
+        let (handle, task) = start(cfg).expect("startup should succeed");
+        handle.acquire_session().await.expect("acquire should succeed");
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let written = fs::read_to_string(&id_file)
+            .expect("worker should have written result to file");
+        let result = written.trim().to_string();
+
+        assert_eq!(
+            result, "unset",
+            "BOB_EXTENSION_SOCK_PATH should not be set on worker when extension_sock_path is empty"
+        );
+
+        task.abort();
+        let _ = fs::remove_file(id_file);
     }
 }

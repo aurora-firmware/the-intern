@@ -12,10 +12,21 @@ struct ActiveSessionWorker {
     last_prompt_activity: Instant,
 }
 
+/// A warm worker waiting to be assigned to a session.
+///
+/// The `session_id` is pre-allocated at spawn time and set as `BOB_SESSION_ID`
+/// on the child process environment.  The same id is used as the canonical
+/// session id when the worker is promoted to active.
+#[derive(Debug)]
+struct WarmWorker {
+    session_id: SessionId,
+    worker: crate::process::RpcWorkerProcess,
+}
+
 #[derive(Debug)]
 pub struct SessionPool {
     cfg: Config,
-    warm_workers: Vec<crate::process::RpcWorkerProcess>,
+    warm_workers: Vec<WarmWorker>,
     active_workers: HashMap<SessionId, ActiveSessionWorker>,
 }
 
@@ -23,10 +34,9 @@ impl SessionPool {
     pub fn new(cfg: &Config) -> ServiceResult<Self> {
         let mut warm_workers = Vec::new();
         let warm_target = cfg.warm_pool_size.min(cfg.max_processes);
-        let process_cfg = Self::worker_process_config(cfg);
 
         for _ in 0..warm_target {
-            warm_workers.push(crate::process::RpcWorkerProcess::spawn(&process_cfg)?);
+            warm_workers.push(Self::spawn_warm_worker(cfg)?);
         }
 
         Ok(Self {
@@ -36,16 +46,20 @@ impl SessionPool {
         })
     }
 
-    pub fn acquire_session(&mut self, session_id: SessionId) -> ServiceResult<()> {
-        if self.active_workers.contains_key(&session_id) {
-            return Ok(());
-        }
-
-        let worker = if let Some(worker) = self.warm_workers.pop() {
-            worker
+    /// Acquires a worker for a new session.
+    ///
+    /// Returns the `SessionId` that was allocated for the session.  For warm
+    /// workers the id was pre-allocated at spawn time and is already set as
+    /// `BOB_SESSION_ID` on the child process.  For overflow workers a fresh id
+    /// is generated and set at spawn time.
+    pub fn acquire_session(&mut self) -> ServiceResult<SessionId> {
+        let (session_id, worker) = if let Some(warm) = self.warm_workers.pop() {
+            (warm.session_id, warm.worker)
         } else if self.total_process_count() < self.cfg.max_processes {
-            let process_cfg = Self::worker_process_config(&self.cfg);
-            crate::process::RpcWorkerProcess::spawn(&process_cfg)?
+            let session_id = SessionId::new();
+            let process_cfg = Self::worker_process_config_for_session(&self.cfg, session_id);
+            let worker = crate::process::RpcWorkerProcess::spawn(&process_cfg)?;
+            (session_id, worker)
         } else {
             return Err(ServiceError::ChildProcess {
                 detail: format!(
@@ -62,7 +76,7 @@ impl SessionPool {
                 last_prompt_activity: Instant::now(),
             },
         );
-        Ok(())
+        Ok(session_id)
     }
 
     pub fn list_sessions(&self) -> Vec<SessionId> {
@@ -85,15 +99,11 @@ impl SessionPool {
         session_id: SessionId,
         message: String,
     ) -> ServiceResult<()> {
-        if !self.active_workers.contains_key(&session_id) {
-            self.acquire_session(session_id)?;
-        }
-
         let active_worker =
             self.active_workers
                 .get_mut(&session_id)
                 .ok_or_else(|| ServiceError::ChildProcess {
-                    detail: "session worker missing after acquire".to_string(),
+                    detail: format!("no active worker for session {session_id}; call acquire_session first"),
                 })?;
         let command = rpc::PromptCommand::new(message);
         active_worker.worker.send_json(&command.to_json()).await?;
@@ -147,8 +157,8 @@ impl SessionPool {
             self.cfg.warm_pool_size,
         );
         for _ in 0..surplus {
-            if let Some(worker) = self.warm_workers.pop() {
-                worker.terminate().await?;
+            if let Some(warm) = self.warm_workers.pop() {
+                warm.worker.terminate().await?;
                 report.warm_workers_reaped += 1;
             }
         }
@@ -171,8 +181,8 @@ impl SessionPool {
             }
         }
 
-        while let Some(worker) = self.warm_workers.pop() {
-            match worker.terminate().await {
+        while let Some(warm) = self.warm_workers.pop() {
+            match warm.worker.terminate().await {
                 Ok(_) => report.warm_workers_terminated += 1,
                 Err(error) => {
                     if first_error.is_none() {
@@ -189,11 +199,21 @@ impl SessionPool {
         Ok(report)
     }
 
-    fn worker_process_config(cfg: &Config) -> WorkerProcessConfig {
+    /// Spawns a warm worker with a freshly-allocated `SessionId`.
+    fn spawn_warm_worker(cfg: &Config) -> ServiceResult<WarmWorker> {
+        let session_id = SessionId::new();
+        let process_cfg = Self::worker_process_config_for_session(cfg, session_id);
+        let worker = crate::process::RpcWorkerProcess::spawn(&process_cfg)?;
+        Ok(WarmWorker { session_id, worker })
+    }
+
+    fn worker_process_config_for_session(cfg: &Config, session_id: SessionId) -> WorkerProcessConfig {
         WorkerProcessConfig {
             command: cfg.worker_command.clone(),
             args: cfg.worker_args.clone(),
             child_termination_deadline: cfg.child_termination_deadline,
+            session_id,
+            extension_sock_path: cfg.extension_sock_path.clone(),
         }
     }
 
@@ -221,6 +241,7 @@ mod tests {
             idle_reap_timeout: Duration::from_secs(30),
             command_buffer: 8,
             child_termination_deadline: Duration::from_millis(50),
+            extension_sock_path: std::path::PathBuf::new(),
         }
     }
 
@@ -249,13 +270,16 @@ mod tests {
         );
     }
 
+    // AC-1/AC-4: warm worker is promoted to active using its pre-allocated session id.
     #[tokio::test(flavor = "current_thread")]
-    async fn acquire_session_binds_idle_warm_worker_when_available() {
+    async fn acquire_session_binds_idle_warm_worker_using_preallocated_session_id() {
         let cfg = test_config("sh", &["-c", "exit 0"], 1, 2);
         let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
-        let session_id = SessionId::new();
+        // Capture the warm worker's pre-allocated id before promoting it.
+        let expected_session_id = pool.warm_workers[0].session_id;
 
-        pool.acquire_session(session_id)
+        let returned_id = pool
+            .acquire_session()
             .expect("acquiring first session should succeed");
 
         let sessions = pool.list_sessions();
@@ -265,19 +289,26 @@ mod tests {
             "warm worker should be consumed"
         );
         assert_eq!(sessions.len(), 1, "one session should be active");
-        assert_eq!(sessions[0], session_id, "session id should be bound");
+        assert_eq!(
+            returned_id, expected_session_id,
+            "acquire_session should return the warm worker's pre-allocated session id"
+        );
+        assert_eq!(
+            sessions[0], expected_session_id,
+            "active sessions list should use the pre-allocated session id"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn acquire_session_spawns_new_worker_when_no_warm_worker_exists() {
         let cfg = test_config("sh", &["-c", "exit 0"], 1, 2);
         let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
-        let session_a = SessionId::new();
-        let session_b = SessionId::new();
 
-        pool.acquire_session(session_a)
+        let session_a = pool
+            .acquire_session()
             .expect("first session should consume warm worker");
-        pool.acquire_session(session_b)
+        let session_b = pool
+            .acquire_session()
             .expect("second session should spawn new worker");
 
         let sessions = pool.list_sessions();
@@ -292,10 +323,10 @@ mod tests {
         let cfg = test_config("sh", &["-c", "exit 0"], 1, 1);
         let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
 
-        pool.acquire_session(SessionId::new())
+        pool.acquire_session()
             .expect("first session should succeed");
         let error = pool
-            .acquire_session(SessionId::new())
+            .acquire_session()
             .expect_err("second session should fail at max capacity");
 
         assert!(matches!(error, ServiceError::ChildProcess { .. }));
@@ -311,12 +342,11 @@ mod tests {
         );
         let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
 
-        let process_cfg = SessionPool::worker_process_config(&cfg);
         pool.warm_workers.push(
-            crate::process::RpcWorkerProcess::spawn(&process_cfg).expect("spawn should work"),
+            SessionPool::spawn_warm_worker(&cfg).expect("spawn should work"),
         );
         pool.warm_workers.push(
-            crate::process::RpcWorkerProcess::spawn(&process_cfg).expect("spawn should work"),
+            SessionPool::spawn_warm_worker(&cfg).expect("spawn should work"),
         );
 
         let report = pool

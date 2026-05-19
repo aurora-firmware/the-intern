@@ -836,9 +836,8 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_sessions_list_with_active_session_returns_that_session_id() {
         let (sup_handle, sup_task) = make_supervisor_handle();
-        let session_id = bob_core::types::SessionId::new();
-        sup_handle
-            .acquire_session(session_id)
+        let session_id = sup_handle
+            .acquire_session()
             .await
             .expect("acquire session must succeed");
 
@@ -870,9 +869,8 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_sessions_kill_with_valid_session_id_returns_ok() {
         let (sup_handle, sup_task) = make_supervisor_handle();
-        let session_id = bob_core::types::SessionId::new();
-        sup_handle
-            .acquire_session(session_id)
+        let session_id = sup_handle
+            .acquire_session()
             .await
             .expect("acquire session must succeed");
 
