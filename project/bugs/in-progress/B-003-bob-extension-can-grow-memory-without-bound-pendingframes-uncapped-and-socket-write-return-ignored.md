@@ -69,6 +69,29 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-05-19
+
+**Reproduction status:** Confirmed by code inspection. Both faults are structural and present in `dev-agent`. `npm test` (9/9 pass) and `npx tsc --noEmit` (clean) — no regression guard exists for either fault.
+
+**Evidence captured:**
+- `the-intern/extensions/bob.ts:94` — `const pendingFrames: string[] = [];` (no length limit declared).
+- `the-intern/extensions/bob.ts:123` — `pendingFrames.push(frame)` inside `ensureConnected` runs unconditionally; no `pendingFrames.length` guard anywhere.
+- `the-intern/extensions/bob.ts:103-118` — `flushPending` loops over `pendingFrames` and calls `socket.write(frame)` at line 106; the boolean return value is discarded. The only guard is `socket.destroyed` (peer-close), which does not handle back-pressure.
+- `the-intern/extensions/bob.ts:125-128` — the already-connected path also flows through `flushPending`, so the unchecked `socket.write` is the sole write path.
+- `bob.test.ts` — no tests for cap, drain, back-pressure, or `socket.write() === false`.
+
+**Isolated fault:**
+- Fault A: pre-connect buffer is uncapped. `pendingFrames.push(frame)` at line 123 appends without limit while `connecting === true`.
+- Fault B: `socket.write()` return discarded at line 106. Node's internal send buffer grows unbounded under a slow consumer.
+
+**Root cause or fault hypothesis:** Two structural omissions. (A) the connect-window queue lacks a length cap and drop policy. (B) the writer does not check `socket.write()` for back-pressure. Per S-003 "no buffering, lost-connection windows are dropped silently" — both should fail loud-once then mark the transport dead.
+
+**Planned verification:**
+1. Add a regression test for the pre-connect cap: queue `CAP + 1` events while a delayed-accept server holds the connect open; assert exactly one `warn`, `transportDead === true`, and ≤ `CAP` frames delivered.
+2. Add a regression test for `socket.write() === false`: after connect, mock `socket.write` to return `false`; assert exactly one `warn` and that subsequent events are no-ops.
+3. Implement the minimal fix: a small `CAP` constant (suggested 64), a length guard before `pendingFrames.push`, a return-value check on `socket.write`, both paths transitioning the transport to dead with one `warn`.
+4. Verification command: `npx tsc --noEmit && npm test` — all green.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
