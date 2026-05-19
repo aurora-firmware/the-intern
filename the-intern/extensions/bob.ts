@@ -70,6 +70,13 @@ function warn(message: string, ctx?: ExtensionContext): void {
 }
 
 // ---------------------------------------------------------------------------
+// Maximum number of frames allowed in the pre-connect queue.
+// Exceeding this limit means the transport is too slow to drain; we kill it
+// immediately (one warn, then silent no-op) rather than buffer unboundedly.
+// ---------------------------------------------------------------------------
+const PENDING_FRAMES_CAP = 64;
+
+// ---------------------------------------------------------------------------
 // Extension factory — default export consumed by pi's extension loader.
 // ---------------------------------------------------------------------------
 export default function bobFactory(pi: ExtensionAPI): void {
@@ -103,14 +110,13 @@ export default function bobFactory(pi: ExtensionAPI): void {
   function flushPending(ctx?: ExtensionContext): void {
     if (!socket || transportDead) return;
     for (const frame of pendingFrames) {
-      socket.write(frame);
-      // After each write, check whether the socket has been destroyed by the
-      // peer (e.g. server close).  Node.js does not emit an error event in
-      // this case; the socket is silently marked destroyed and write() returns
-      // false without buffering.
-      if (socket.destroyed) {
+      const ok = socket.write(frame);
+      // write() returns false when the kernel send-buffer is full (back-pressure)
+      // or when the socket has been destroyed by the peer.  Either way the frame
+      // was not accepted; kill the transport immediately rather than buffering.
+      if (!ok) {
         pendingFrames.length = 0;
-        markDead("socket closed by peer", ctx);
+        markDead("socket.write returned false — back-pressure or peer closed", ctx);
         return;
       }
     }
@@ -119,6 +125,16 @@ export default function bobFactory(pi: ExtensionAPI): void {
 
   function ensureConnected(frame: string, ctx?: ExtensionContext): void {
     if (transportDead) return;
+
+    if (pendingFrames.length >= PENDING_FRAMES_CAP) {
+      // Queue is full — the transport is too slow.  Drop this frame and all
+      // future frames by marking the transport dead (one warn, then silent).
+      markDead(
+        `pendingFrames cap of ${PENDING_FRAMES_CAP} exceeded — dropping frames`,
+        ctx
+      );
+      return;
+    }
 
     pendingFrames.push(frame);
 

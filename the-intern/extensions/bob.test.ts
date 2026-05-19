@@ -327,6 +327,111 @@ describe("AC-2: NDJSON frame shape", () => {
 });
 
 // ---------------------------------------------------------------------------
+// B-003-A: pendingFrames cap — queue > CAP events pre-connect → one warn,
+// transportDead, ≤ CAP frames delivered.
+// ---------------------------------------------------------------------------
+
+/** The same cap the production code uses — must stay in sync with bob.ts. */
+const PENDING_FRAMES_CAP = 64;
+
+describe("B-003-A: pendingFrames cap (pre-connect)", () => {
+  it("warns exactly once, kills transport, and delivers at most CAP frames when more than CAP events arrive before connect", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+
+    // Start a real server so the UDS path exists and the OS-level handshake
+    // can complete, but we fire all events synchronously before the connect
+    // callback fires (it is always async on the event loop).
+    const server = await createTestServer(sockPath);
+    const pi = makeStubPi();
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    bobFactory(pi as any);
+
+    // Fire CAP + 1 events synchronously — none awaited so the connect
+    // callback has not had a chance to fire yet; all frames land in
+    // pendingFrames (or get rejected by the cap guard).
+    const eventCount = PENDING_FRAMES_CAP + 1;
+    for (let i = 0; i < eventCount; i++) {
+      // Use the non-awaited internal call path: emit returns a promise but we
+      // do not await it so handlers run in the same microtask batch.
+      void pi.emit("session_start", { index: i });
+    }
+
+    // Wait for the connection and flush to settle.
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Exactly one warn for the cap breach.
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    // Transport is dead — subsequent events must be silent no-ops.
+    const warnCountBefore = stderrSpy.mock.calls.length;
+    await pi.emit("agent_start", { type: "agent_start" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(stderrSpy).toHaveBeenCalledTimes(warnCountBefore);
+
+    // At most CAP frames were delivered to the server.
+    expect(server.lines().length).toBeLessThanOrEqual(PENDING_FRAMES_CAP);
+
+    stderrSpy.mockRestore();
+    await server.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B-003-B: socket.write() back-pressure — write returns false → one warn,
+// transport marked dead, subsequent events become no-ops.
+// ---------------------------------------------------------------------------
+
+describe("B-003-B: socket.write() back-pressure", () => {
+  it("warns exactly once and marks transport dead when socket.write returns false", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+
+    const server = await createTestServer(sockPath);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    // First event — establishes the connection.
+    await pi.emit("session_start", { type: "session_start", reason: "startup" });
+    await waitUntil(() => server.lines().length >= 1);
+
+    // Monkey-patch the underlying Socket.write so the next call returns false.
+    // We reach into the net module and intercept the prototype method only for
+    // the duration of this assertion.
+    const originalWrite = net.Socket.prototype.write;
+    net.Socket.prototype.write = function (..._args: unknown[]) {
+      // Restore immediately so only one call returns false.
+      net.Socket.prototype.write = originalWrite;
+      return false as any;
+    };
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    // Second event — write returns false, markDead should fire.
+    await pi.emit("agent_start", { type: "agent_start" });
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Exactly one warn.
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    // Transport is dead — third event must be a silent no-op.
+    const warnCountBefore = stderrSpy.mock.calls.length;
+    await pi.emit("agent_end", { type: "agent_end", messages: [] });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(stderrSpy).toHaveBeenCalledTimes(warnCountBefore);
+
+    stderrSpy.mockRestore();
+    net.Socket.prototype.write = originalWrite; // safety restore
+    await server.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // AC-4: UDS connect failure → one warning, subsequent events are no-ops.
 // ---------------------------------------------------------------------------
 
