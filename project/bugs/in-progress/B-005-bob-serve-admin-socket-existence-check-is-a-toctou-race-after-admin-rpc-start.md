@@ -75,6 +75,22 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-05-19
+
+**Reproduction status:** Confirmed by code review. Not reproducible at runtime without artificial scheduler delays.
+
+**Evidence captured:**
+- `admin_rpc::start()` (`crates/admin-rpc/src/lib.rs:397`) is synchronous: `pub fn start(cfg: Config) -> (Handle, JoinHandle<()>)`. Inside `start()`, `Listener::bind` is called on the current thread, not inside the spawned task. For AF_UNIX the inode is created before `start()` returns.
+- The bug report's framing — "the UDS bind happens inside the spawned actor task" — is incorrect. Only `run_listener` (the accept loop) is spawned; bind completes synchronously.
+- However: when `Listener::bind` fails, the `Err` is matched at lines 431-439, an error is logged, and `maybe_listener` is set to `None`. The error is then dropped. `start()` still returns `(Handle, JoinHandle<()>)`.
+- `bob/src/serve.rs:191-197` detects this with `if !cfg.admin_sock_path.exists() { return Err(...); }` — a weak filesystem proxy.
+
+**Isolated fault:** `admin_rpc::start` swallows `std::io::Error` from `Listener::bind` and unconditionally returns `(Handle, JoinHandle<()>)`. The caller cannot distinguish "started with listener" from "started without listener because bind failed" except by probing the filesystem.
+
+**Root cause or fault hypothesis:** The `start()` signature has no error path, so there is no mechanism to surface a bind failure. The filesystem existence check is a contract workaround. The original TOCTOU framing is a secondary concern; the primary defect is the silently-swallowed bind failure.
+
+**Planned verification:** Change `start()` to return `Result<(Handle, JoinHandle<()>), std::io::Error>`. Propagate the bind failure as `Err`; remove the `exists()` check in `bob::serve`. Add a regression test in `admin-rpc/src/lib.rs` that exercises an unwritable bind path and asserts `start()` returns `Err`. Run `cargo test -p admin-rpc && cargo test -p bob && cargo test --workspace`.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
@@ -84,6 +100,28 @@ rejected, decisions made, what remains for next session.
 
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
+
+### Session 1 — 2026-05-19
+
+After reading `admin-rpc/src/lib.rs::start`, `admin-rpc/src/listener.rs::bind`, and `bob/src/serve.rs::try_start_subsystems`, the actual defect is that `admin_rpc::start` swallows `Listener::bind` errors and returns a success-equivalent `(Handle, JoinHandle<()>)` tuple unconditionally — `bob::serve` detects failure only via `cfg.admin_sock_path.exists()`. The "async bind TOCTOU" framing was incorrect; the bind is fully synchronous.
+
+Fix chosen: change `admin_rpc::start` to return `Result<(Handle, JoinHandle<()>), std::io::Error>` so bind failures propagate to `bob::serve`. Removed the `exists()` check entirely.
+
+TDD:
+- Wrote `start_returns_err_when_bind_fails_on_unwritable_path` first (red) — verifies the new error path.
+- Changed the `start()` signature, propagated the `Listener::bind` failure with `?`, updated every call site in the `admin-rpc` test module to `.expect(...)`.
+- Updated `bob::serve` to `admin_rpc::start(cfg).map_err(|e| format!(...))?`; removed the `cfg.admin_sock_path.exists()` block.
+
+Rejected alternatives:
+- Oneshot bind-ready channel — unnecessary indirection given the bind is already synchronous.
+- Retry/sleep around the existence check — addresses a symptom, not the contract.
+
+Evidence:
+- `cargo test -p admin-rpc` — 79 passed, 0 failed (includes the new regression test).
+- `cargo test -p bob` — 53 total passed, 0 failed.
+- `cargo test --workspace` — green, 0 failures.
+
+Commit `0357a62` on `bug/B-005-admin-socket-bind-readiness` — `fix(admin-rpc,bob): surface admin socket bind failure from start()`. Nothing remains for the next session.
 
 ## Review
 
