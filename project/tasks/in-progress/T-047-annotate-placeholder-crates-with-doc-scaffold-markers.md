@@ -56,6 +56,25 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-19
+
+Read `project/docs/roadmap.md` to establish the correct phase number for each placeholder crate:
+- `extension-ipc` Actor/Handle → Phase 3 (JS extension surface, builds on Phase 2 supervision)
+- `policy-control` → Phase 4 (deterministic pre-flight access checks)
+- `monitoring` → Phase 5 (append-only audit capture)
+
+Added crate-level `#![doc = "scaffold — see project/docs/roadmap.md phase N"]` inner attributes to `monitoring/src/lib.rs` (phase 5) and `policy-control/src/lib.rs` (phase 4), placed immediately after the existing `#![forbid(unsafe_code)]` inner attribute.
+
+Added item-level `#[doc = "scaffold — see project/docs/roadmap.md phase 3"]` outer attributes to `extension-ipc`'s `Handle` and `Actor` structs only. The `run_connection`, `run_listener`, and multiplex code were not touched, as required.
+
+Ran `cargo build --workspace` (clean) and `cargo doc --no-deps --workspace` (clean; four pre-existing unrelated warnings in `admin-rpc` present before this change). Confirmed the scaffold text appears in the generated HTML for all four targets.
+
+**Decisions made.** Phase assignments from roadmap text: extension-ipc Actor/Handle → Phase 3, policy-control → Phase 4, monitoring → Phase 5. Crate-level `#![doc]` for the two standalone crates; item-level `#[doc]` for extension-ipc because the crate also contains real implemented code and only the Actor/Handle pair is a scaffold.
+
+**What remains.** Nothing.
+
+**Obstacles encountered.** None.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
