@@ -92,6 +92,14 @@ impl SessionMultiplexer {
         self.session_routes.insert(session, route);
     }
 
+    /// Replace the default route used for sessions that have no explicit registration.
+    ///
+    /// After this call, any subsequent lookup for an unknown session id returns a sender
+    /// from the new default channel, not any previously observed default.
+    pub fn set_default_route(&mut self, route: mpsc::UnboundedSender<OutboundFrame>) {
+        self.default_route = route;
+    }
+
     pub async fn handle_frame(&mut self, frame: InboundFrame) -> Result<(), MultiplexError> {
         match frame {
             InboundFrame::Authz { session, .. } => {
@@ -113,10 +121,12 @@ impl SessionMultiplexer {
         Ok(())
     }
 
-    fn route_for_session(&mut self, session: SessionId) -> mpsc::UnboundedSender<OutboundFrame> {
+    fn route_for_session(&self, session: SessionId) -> mpsc::UnboundedSender<OutboundFrame> {
+        // Do not cache the default under unknown session ids: always consult the live
+        // default_route field so that a subsequent set_default_route call is reflected.
         self.session_routes
-            .entry(session)
-            .or_insert_with(|| self.default_route.clone())
+            .get(&session)
+            .unwrap_or(&self.default_route)
             .clone()
     }
 }
@@ -333,5 +343,69 @@ mod tests {
             rx_b.try_recv().is_err(),
             "session b should not receive a reply"
         );
+    }
+
+    /// Regression test for B-004: an unknown session id must always reflect the live
+    /// default route and must not be permanently cached from the first lookup.
+    ///
+    /// Steps:
+    ///   1. Build a multiplexer with default route A.
+    ///   2. Send an authz frame for an unknown session → reply arrives on A's receiver.
+    ///   3. Replace the default route with route B via `set_default_route`.
+    ///   4. Send the same authz frame again for the same unknown session.
+    ///   5. Assert the reply arrives on B's receiver, not A's (the stale cached default).
+    #[tokio::test(flavor = "current_thread")]
+    async fn route_for_session_reflects_new_default_for_unknown_session_after_default_replaced() {
+        let (tx_a, mut rx_a) = mpsc::unbounded_channel::<OutboundFrame>();
+        let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
+        let mut mux = SessionMultiplexer::new(monitoring, tx_a);
+
+        // Unknown session — no explicit registration.
+        let unknown_session = SessionId::new();
+
+        // First authz: should go to default route A.
+        mux.handle_frame(InboundFrame::Authz {
+            session: unknown_session,
+            tool: "bash".to_owned(),
+            arguments: serde_json::json!({"cmd": "id"}),
+            user: "alice".to_owned(),
+        })
+        .await
+        .expect("first frame should process");
+
+        let first_reply = rx_a.recv().await.expect("first reply must arrive on route A");
+        match &first_reply {
+            OutboundFrame::AuthzVerdict { session, .. } => {
+                assert_eq!(*session, unknown_session, "first reply session must match");
+            }
+        }
+
+        // Replace the default route with a fresh channel B.
+        let (tx_b, mut rx_b) = mpsc::unbounded_channel::<OutboundFrame>();
+        mux.set_default_route(tx_b);
+
+        // Second authz for the same unknown session id: must go to new default B.
+        mux.handle_frame(InboundFrame::Authz {
+            session: unknown_session,
+            tool: "bash".to_owned(),
+            arguments: serde_json::json!({"cmd": "id"}),
+            user: "alice".to_owned(),
+        })
+        .await
+        .expect("second frame should process");
+
+        assert!(
+            rx_a.try_recv().is_err(),
+            "second reply must NOT arrive on old default route A (stale cache)"
+        );
+        let second_reply = rx_b
+            .recv()
+            .await
+            .expect("second reply must arrive on new default route B");
+        match second_reply {
+            OutboundFrame::AuthzVerdict { session, .. } => {
+                assert_eq!(session, unknown_session, "second reply session must match");
+            }
+        }
     }
 }
