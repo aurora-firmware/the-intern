@@ -83,6 +83,18 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+Implemented T-060 in the `monitoring` crate with three incremental commits. First, I replaced the scaffold with a typed actor/handle that accepts canonical `AuditRecord` values and appends them to a configured JSONL file as one serialized object per line. The write path now uses typed `ServiceError::Persistence` failures when the audit file cannot be opened or written. I also updated `MonitoringAuditSink` to forward canonical records directly to the actor instead of stringifying legacy event placeholders.
+
+Second, I added live tail subscriber support in the actor using a subscription registry and per-subscriber `AuditFilterKind` filters. Delivery now applies filters only to live fan-out, while persistence remains unconditional. Tests cover that subscriptions receive only future matching records and that non-matching records are suppressed for that subscriber.
+
+Third, I added explicit tests for the two remaining acceptance criteria: open failure returns a typed error, and buffered audit lines are flushed during actor shutdown. I intentionally validated flush behavior by asserting the file is empty before shutdown and non-empty after dropping the handle and awaiting actor exit. I briefly tried running two test names in one `cargo test` command and rejected it after Cargo reported an unexpected argument; I then ran targeted tests individually. Remaining work on this branch: none; verification commands are passing and the task is ready for reviewer handoff.
+
+Obstacles Encountered:
+- `cargo test` with two test-name filters in one command failed (`unexpected argument ...`); resolved by running targeted tests separately.
+- No sandbox/escalation blockers encountered.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
