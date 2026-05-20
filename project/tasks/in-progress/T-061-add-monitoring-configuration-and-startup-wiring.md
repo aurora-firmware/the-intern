@@ -157,3 +157,26 @@ FAIL
 - **What should change**: Leave `monitoring.audit_log_path` unset in defaults (or compute it from `sources.env` before extraction) so omitted config resolves through the environment-aware path logic. Add/adjust a test that asserts the resolved default uses `XDG_STATE_HOME` (or `HOME` fallback) when provided.
 
 Stage 2 was not executed because Stage 1 failed.
+
+### Review Verdict — 2026-05-20 (cycle 2)
+PASS
+
+Stage 1 — all five acceptance criteria met:
+
+- AC-1: `MonitoringConfig` struct with `audit_log_path` and `default_tail_filters` is loaded from the `[monitoring]` TOML section via `RawMonitoringConfig` / figment layering. Confirmed by `loads_monitoring_section_with_audit_path_and_default_tail_filters`.
+- AC-2 (FAIL remediation): `defaults_with_runtime_root` now receives `&sources.env` and calls `default_monitoring_audit_log_path_for_env(env, uid)` with the real environment, not an empty map. The resolved default correctly follows XDG_STATE_HOME → HOME fallback → tempdir. Two targeted tests confirm both the XDG and HOME-fallback paths.
+- AC-3: `ensure_monitoring_audit_log_path` is invoked from `validate()` and returns a `Configuration` error when the path cannot be opened for append. Confirmed by `returns_configuration_error_when_monitoring_audit_path_is_not_appendable`.
+- AC-4: `try_start_subsystems` calls `monitoring::start(build_monitoring_config(cfg))`, passing `audit_log_path` and `command_buffer` from `BobConfig`. Confirmed by `monitoring_config_maps_audit_log_path_from_bob_config`.
+- AC-5: `create_monitoring_parent_dirs` calls `create_dir_all` then `set_owner_only_permissions` (0o700 on unix, no-op on non-unix). Confirmed by `creates_missing_monitoring_parent_directories_with_owner_only_permissions`.
+
+Files touched: only `config.rs` and `serve.rs`, matching the declared Files to Touch scope.
+
+Stage 2 — all checks pass:
+
+- Correctness: XDG/HOME/tempdir chain is correct per platform. Empty-path guard prevents a footgun. File handle from `OpenOptions::open` in `ensure_monitoring_audit_log_path` is dropped immediately with no leak.
+- Tests: 5 new config tests and 1 new serve test cover AC-1 through AC-5 with both success and failure paths. Tests use tempfiles and explicit env maps — no shared mutable state.
+- Security: No hardcoded credentials. External paths are validated before use. No new permissions beyond what the spec requires.
+- Readability: Function names are consistent with project conventions, each function has one responsibility, no dead code or debug artifacts.
+- Performance: No unnecessary loops or blocking in hot paths; filesystem checks are expected at startup.
+
+Pre-existing clippy errors (4) are all in `cli/commands/chat.rs` and `cli/commands.rs`, outside T-061 scope, and unchanged from `dev-agent`.
