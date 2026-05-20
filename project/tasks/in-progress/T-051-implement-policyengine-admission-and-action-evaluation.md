@@ -80,6 +80,16 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+Implemented `PolicyEngine` in a new `engine.rs` module inside the `policy-control` crate. The engine is a stateless unit struct with two associated functions: `evaluate_admission`, which checks whether a `UserId` is in the snapshot's admitted-users list and returns allow or deny accordingly, and `evaluate_action`, which iterates the snapshot's action rules looking for any rule whose tool name matches and whose every `ArgMatcher` passes on the supplied JSON arguments (allow-only, default-deny). A small private `rule_matches` helper keeps both logic branches clean. Both functions are pure and synchronous and take the snapshot by reference, satisfying AC-5.
+
+Nine unit tests cover the five acceptance criteria directly: admitted user returns allow (AC-1); absent user and empty list return deny with a non-empty reason (AC-2); tool with no matchers returns allow, and tool with all matchers passing returns allow (AC-3); absent tool, empty rules, and one failing matcher all return deny with a non-empty reason (AC-4); and a multi-rule test confirms any-rule semantics (a second matching rule allows even when the first fails).
+
+During the refactor step, clippy flagged `clone_on_copy` (UserId implements Copy, so `vec![user.clone()]` was unnecessary) and five `unnecessary_map_or` patterns in test assertions (replaced with `is_some_and`). Both were cleaned up before committing. No production-code changes were needed during refactor.
+
+Nothing remains — all acceptance criteria are met, tests pass, and clippy is clean.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
