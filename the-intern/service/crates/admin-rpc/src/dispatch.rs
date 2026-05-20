@@ -7,22 +7,28 @@
 //!
 //! # Method set
 //!
-//! | Method | Behaviour |
-//! |---|---|
-//! | `service.status` | Returns `{ ok, version, uptime_seconds }` |
-//! | `sessions.list` | Invokes `pi_agent_supervisor::Handle::list_sessions` |
-//! | `sessions.kill` | Not yet implemented (NotImplemented) |
-//! | `policy.reload` | Invokes `policy_control::Handle::reload`; returns success on reload or an error with rejection reason |
-//! | `audit.tail.subscribe` | Registers a new audit subscription; returns `{ id }` |
-//! | `audit.tail.unsubscribe` | Removes an audit subscription; returns `{ ok: true }` |
-//! | `chat.open` | Opens a chat subscription; returns `{ id }` |
-//! | `chat.close` | Closes a chat subscription; returns `{ ok: true }` |
-//! | `chat.send` | Placeholder — not yet implemented |
+//! | Method | Auth gate | Behaviour |
+//! |---|---|---|
+//! | `service.status` | admin socket peer gate | Returns `{ ok, version, uptime_seconds }` |
+//! | `sessions.list` | admin socket peer gate | Invokes `pi_agent_supervisor::Handle::list_sessions` |
+//! | `sessions.kill` | admin socket peer gate | Not yet implemented (NotImplemented) |
+//! | `policy.reload` | admin socket peer gate | Invokes `policy_control::Handle::reload`; returns success on reload or an error with rejection reason |
+//! | `audit.tail.subscribe` | admin socket peer gate | Registers a new audit subscription; returns `{ id }` |
+//! | `audit.tail.unsubscribe` | admin socket peer gate | Removes an audit subscription; returns `{ ok: true }` |
+//! | `chat.open` | admin socket peer gate | Opens a chat subscription; returns `{ id }` |
+//! | `chat.close` | admin socket peer gate | Closes a chat subscription; returns `{ ok: true }` |
+//! | `chat.send` | admin socket peer gate | Placeholder — not yet implemented |
+//! | `report.submit` | admin socket peer gate | Accepts an [`ExternalReportAuditPayload`][bob_core::types::ExternalReportAuditPayload], delegates to Monitoring, returns `{ ok: true }` |
 
 use std::time::Instant;
 
 use bob_core::error::ServiceError;
+use bob_core::types::{
+    AuditRecord as MonitoringAuditRecord, AuditRecordKind, AuditRecordPayload,
+    ExternalReportAuditPayload,
+};
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 use tokio::sync::mpsc;
 
@@ -35,12 +41,13 @@ use crate::{
 
 /// Context provided to the dispatcher at construction time.
 ///
-/// Both handles are optional so the dispatcher degrades gracefully when a
+/// All handles are optional so the dispatcher degrades gracefully when a
 /// subsystem is not started.
 #[derive(Clone)]
 pub struct Dispatcher {
     supervisor: Option<pi_agent_supervisor::Handle>,
     policy: Option<policy_control::Handle>,
+    monitoring: Option<monitoring::Handle>,
     started_at: Instant,
     version: &'static str,
 }
@@ -75,11 +82,13 @@ impl Dispatcher {
     pub fn new(
         supervisor: Option<pi_agent_supervisor::Handle>,
         policy: Option<policy_control::Handle>,
+        monitoring: Option<monitoring::Handle>,
         version: &'static str,
     ) -> Self {
         Self {
             supervisor,
             policy,
+            monitoring,
             started_at: Instant::now(),
             version,
         }
@@ -111,6 +120,7 @@ impl Dispatcher {
             }
             "chat.open" => self.handle_chat_open(id, registry).await,
             "chat.close" => self.handle_chat_close(id, &request.params, registry).await,
+            "report.submit" => self.handle_report_submit(id, &request.params).await,
             "chat.send" => DispatchOutcome::Err(ErrorResponse::error(
                 id,
                 CODE_METHOD_NOT_FOUND,
@@ -317,6 +327,72 @@ impl Dispatcher {
         }
     }
 
+    /// Handle `report.submit`.
+    ///
+    /// Accepts only the [`ExternalReportAuditPayload`] shape (deny_unknown_fields).
+    /// Builds an [`AuditRecord`] of kind `report`, delegates it to the Monitoring
+    /// handle, and returns `{ ok: true }` on success.
+    ///
+    /// Returns `CODE_METHOD_NOT_FOUND` (-32601) when no Monitoring handle is
+    /// configured and `CODE_INVALID_REQUEST` (-32602) when params are absent,
+    /// malformed, or contain unknown fields.
+    async fn handle_report_submit(&self, id: Value, params: &Option<Value>) -> DispatchOutcome {
+        let Some(ref monitoring) = self.monitoring else {
+            return DispatchOutcome::Err(ErrorResponse::error(
+                id,
+                CODE_METHOD_NOT_FOUND,
+                "report.submit is not available",
+                Some(json!({ "method": "report.submit" })),
+            ));
+        };
+
+        let Some(ref params_value) = params else {
+            return DispatchOutcome::Err(ErrorResponse::error(
+                id,
+                CODE_INVALID_REQUEST,
+                "report.submit requires params",
+                Some(json!({ "category": "invalid_request" })),
+            ));
+        };
+
+        // Deserialize with deny_unknown_fields so unexpected keys are rejected.
+        let payload: ExternalReportAuditPayload = match serde_json::from_value(params_value.clone())
+        {
+            Ok(p) => p,
+            Err(e) => {
+                return DispatchOutcome::Err(ErrorResponse::error(
+                    id,
+                    CODE_INVALID_REQUEST,
+                    "report.submit params are invalid",
+                    Some(json!({
+                        "category": "invalid_request",
+                        "reason": e.to_string(),
+                    })),
+                ));
+            }
+        };
+
+        // Build the audit envelope; id and timestamp are assigned here by the
+        // facade, not by the caller.
+        let record = MonitoringAuditRecord {
+            id: Uuid::new_v4().to_string(),
+            timestamp: chrono_timestamp(),
+            kind: AuditRecordKind::Report,
+            session_id: payload.session_id,
+            payload: AuditRecordPayload::Report(ExternalReportAuditPayload {
+                action: payload.action,
+                outcome: payload.outcome,
+                session_id: None,
+                summary: payload.summary,
+            }),
+        };
+
+        match monitoring.append_record(record).await {
+            Ok(()) => DispatchOutcome::Ok(Response::ok(id, json!({ "ok": true }))),
+            Err(e) => DispatchOutcome::Err(map_service_error(id, &e)),
+        }
+    }
+
     async fn handle_policy_reload(&self, id: Value) -> DispatchOutcome {
         let Some(ref policy) = self.policy else {
             return DispatchOutcome::Err(ErrorResponse::error(
@@ -408,6 +484,11 @@ pub fn map_service_error(id: Value, error: &ServiceError) -> ErrorResponse {
     }
 }
 
+/// Returns the current UTC time as an RFC 3339 string.
+fn chrono_timestamp() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -438,13 +519,13 @@ mod tests {
     }
 
     fn make_dispatcher_no_handles() -> Dispatcher {
-        Dispatcher::new(None, None, "0.1.0-test")
+        Dispatcher::new(None, None, None, "0.1.0-test")
     }
 
     fn make_dispatcher_with_supervisor() -> (Dispatcher, tokio::task::JoinHandle<()>) {
         let (handle, join) = pi_agent_supervisor::start(pi_agent_supervisor::Config::default())
             .expect("supervisor start must succeed in tests");
-        let dispatcher = Dispatcher::new(Some(handle), None, "0.1.0-test");
+        let dispatcher = Dispatcher::new(Some(handle), None, None, "0.1.0-test");
         (dispatcher, join)
     }
 
@@ -741,6 +822,154 @@ mod tests {
         }
     }
 
+    fn make_monitoring_handle() -> (monitoring::Handle, tokio::task::JoinHandle<()>) {
+        let tmp = tempfile::NamedTempFile::new().expect("temp file");
+        monitoring::start(monitoring::Config {
+            command_buffer: 4,
+            audit_log_path: tmp.path().to_path_buf(),
+        })
+    }
+
+    fn make_dispatcher_with_monitoring() -> (Dispatcher, tokio::task::JoinHandle<()>) {
+        let (handle, join) = make_monitoring_handle();
+        let dispatcher = Dispatcher::new(None, None, Some(handle), "0.1.0-test");
+        (dispatcher, join)
+    }
+
+    // AC-1 (T-062): report.submit with a valid report and a Monitoring handle returns success.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_report_submit_with_monitoring_handle_returns_ok() {
+        let (dispatcher, task) = make_dispatcher_with_monitoring();
+        let req = make_request_with_params(
+            "report.submit",
+            json!(51),
+            json!({
+                "action": "tool.fs.read",
+                "outcome": "success",
+                "session_id": null,
+                "summary": "read complete"
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        task.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => {
+                assert_eq!(resp.id, json!(51));
+                assert_eq!(resp.result["ok"], json!(true));
+            }
+            DispatchOutcome::Err(e) => panic!("expected Ok, got error: {}", e.error.message),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-2 (T-062): report.submit with an unknown field returns invalid-request error.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_report_submit_with_unknown_field_returns_invalid_request() {
+        let (dispatcher, task) = make_dispatcher_with_monitoring();
+        let req = make_request_with_params(
+            "report.submit",
+            json!(52),
+            json!({
+                "action": "tool.fs.read",
+                "outcome": "success",
+                "session_id": null,
+                "summary": "ok",
+                "metadata": { "unreviewed": true }
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        task.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(52));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for unknown field, got Ok"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-2 (T-062): report.submit with missing required fields returns invalid-request error.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_report_submit_with_missing_required_field_returns_invalid_request() {
+        let (dispatcher, task) = make_dispatcher_with_monitoring();
+        // Missing "outcome" field.
+        let req = make_request_with_params(
+            "report.submit",
+            json!(53),
+            json!({
+                "action": "tool.fs.read"
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        task.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(53));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for missing field, got Ok"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-2 (T-062): report.submit with no params returns invalid-request error.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_report_submit_with_no_params_returns_invalid_request() {
+        let (dispatcher, task) = make_dispatcher_with_monitoring();
+        let req = make_request("report.submit", json!(54));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        task.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(54));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for missing params, got Ok"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-3 (T-062): report.submit without a Monitoring handle returns NotImplemented (-32601).
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_report_submit_without_monitoring_handle_returns_not_implemented() {
+        let dispatcher = make_dispatcher_no_handles();
+        let req = make_request_with_params(
+            "report.submit",
+            json!(50),
+            json!({
+                "action": "tool.fs.read",
+                "outcome": "success",
+                "session_id": null,
+                "summary": "read complete"
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(50));
+                assert_eq!(resp.error.code, CODE_METHOD_NOT_FOUND);
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error, got Ok"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
     // chat.send returns NotImplemented (-32601).
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_chat_send_returns_not_implemented() {
@@ -863,7 +1092,7 @@ mod tests {
             .await
             .expect("acquire session must succeed");
 
-        let dispatcher = Dispatcher::new(Some(sup_handle), None, "0.1.0-test");
+        let dispatcher = Dispatcher::new(Some(sup_handle), None, None, "0.1.0-test");
         let req = make_request("sessions.list", json!(30));
         let mut registry = make_registry();
 
@@ -896,7 +1125,7 @@ mod tests {
             .await
             .expect("acquire session must succeed");
 
-        let dispatcher = Dispatcher::new(Some(sup_handle), None, "0.1.0-test");
+        let dispatcher = Dispatcher::new(Some(sup_handle), None, None, "0.1.0-test");
         let req = make_request_with_params(
             "sessions.kill",
             json!(31),
@@ -1022,7 +1251,7 @@ mod tests {
             ..policy_control::Config::default()
         };
         let (policy_handle, policy_task, _snapshot) = policy_control::start(cfg);
-        let dispatcher = Dispatcher::new(None, Some(policy_handle), "0.1.0-test");
+        let dispatcher = Dispatcher::new(None, Some(policy_handle), None, "0.1.0-test");
         let req = make_request("policy.reload", json!(35));
         let mut registry = make_registry();
 
@@ -1050,7 +1279,7 @@ mod tests {
             ..policy_control::Config::default()
         };
         let (policy_handle, policy_task, _snapshot) = policy_control::start(cfg);
-        let dispatcher = Dispatcher::new(None, Some(policy_handle), "0.1.0-test");
+        let dispatcher = Dispatcher::new(None, Some(policy_handle), None, "0.1.0-test");
         let req = make_request("policy.reload", json!(36));
         let mut registry = make_registry();
 

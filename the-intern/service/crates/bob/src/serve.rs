@@ -199,6 +199,7 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         admin_allowed_uids: cfg.admin_allowed_uids.clone(),
         supervisor: Some(pi_agent_supervisor_handle.clone()),
         policy: Some(policy_control_handle.clone()),
+        monitoring: Some(monitoring_handle.clone()),
         ..admin_rpc::Config::default()
     };
     let (admin_rpc_handle, admin_rpc_join) = admin_rpc::start(admin_rpc_cfg).map_err(|e| {

@@ -51,6 +51,10 @@ pub struct Config {
     /// `policy.reload` calls `Handle::reload`; when `None`, the method returns
     /// `NotImplemented`.
     pub policy: Option<policy_control::Handle>,
+    /// Optional handle to the monitoring actor.  When set,
+    /// `report.submit` delegates the report to Monitoring; when `None`, the
+    /// method returns `NotImplemented`.
+    pub monitoring: Option<monitoring::Handle>,
     /// Optional audit subscription bus.  When `None`, `audit.tail.subscribe`
     /// still registers subscriptions but no audit events will be delivered.
     pub audit_bus: Option<SubscriptionBus>,
@@ -68,6 +72,7 @@ impl Default for Config {
             service_uid: current_uid(),
             supervisor: None,
             policy: None,
+            monitoring: None,
             audit_bus: None,
             slow_subscriber_deadline: Duration::from_secs(5),
         }
@@ -407,6 +412,7 @@ pub fn start(cfg: Config) -> Result<(Handle, JoinHandle<()>), std::io::Error> {
     let dispatcher = Dispatcher::new(
         cfg.supervisor.clone(),
         cfg.policy.clone(),
+        cfg.monitoring.clone(),
         env!("CARGO_PKG_VERSION"),
     );
 
@@ -542,7 +548,7 @@ mod tests {
 
     // Helper: build a dispatcher and bus with no optional handles.
     fn make_dispatcher() -> Dispatcher {
-        Dispatcher::new(None, None, "0.1.0-test")
+        Dispatcher::new(None, None, None, "0.1.0-test")
     }
 
     fn make_bus() -> SubscriptionBus {
