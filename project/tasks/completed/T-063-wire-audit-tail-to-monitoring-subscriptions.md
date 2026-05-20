@@ -1,7 +1,7 @@
 ---
 id: T-063
 title: Wire audit.tail to Monitoring subscriptions
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-20'
