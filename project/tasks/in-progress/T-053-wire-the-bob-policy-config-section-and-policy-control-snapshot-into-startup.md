@@ -124,3 +124,26 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+PASS
+
+Both stages passed.
+
+**Stage 1 — Spec compliance:**
+
+- AC-1: `BobConfig` and `RawBobConfig` both carry a `policy: PolicyConfig` field populated from the `[policy]` TOML section. Test `loads_policy_section_with_admitted_users_and_action_rules_from_config_file` confirms parsing of `admitted_users` and `action_rules`. Met.
+- AC-2: `#[serde(default)]` on `RawBobConfig.policy` ensures an absent `[policy]` section yields `PolicyConfig::default()` (empty / deny-all). Test `loads_config_successfully_when_policy_section_is_absent_yielding_deny_all` exercises this path. Met.
+- AC-3: The legacy top-level `allowed_user_ids` field is removed from both `BobConfig` and `RawBobConfig`, along with `deserialize_user_id_vec` and the related imports. Compilation proves no remnant. Test `bob_config_does_not_have_top_level_allowed_user_ids_field` confirms the structural change. Met.
+- AC-4: `try_start_subsystems` builds `RulesetSnapshot::from_config(cfg.policy.clone())` and passes a real `policy_control::Config { initial_snapshot, config_path, command_buffer: 16 }` to `policy_control::start`. The returned `SnapshotHandle` is stored on `Runtime.policy_snapshot`. Test `policy_snapshot_handle_reflects_admitted_users_from_config_on_startup` verifies the snapshot immediately reflects the config-sourced users. Met.
+- Files modified: `crates/bob/src/config.rs` and `crates/bob/src/serve.rs` only — exactly the stated scope. No unexpected file changes.
+
+**Stage 2 — Code quality:**
+
+- Correctness: error from `RulesetSnapshot::from_config` is propagated through `map_err` and causes startup to fail fast, which is the correct behavior. The `filter_map` / silent UUID parse drop on `admitted_user_ids` in `serve.rs` is a pre-existing pattern from the policy-control crate itself and is explicitly noted as a T-054 throwaway.
+- Tests: AC-1, AC-2, AC-3 each have a dedicated test in `config.rs`; AC-4 has a dedicated test in `serve.rs`. All tests are independent, cover the relevant path, and `cargo test -p bob` passes with 0 failures.
+- Security: no hardcoded credentials; external input (TOML `[policy]`) is deserialized through serde into typed fields; `config_path` is derived from the same figment resolution path already trusted for all other config.
+- Readability: doc comments on `BobConfig.policy` and `BobConfig.config_path` explain the semantics; the `skip_serializing` workaround is explained inline. The T-054 comment on the `admitted_user_ids` bridging block is precise and actionable. No dead code.
+- Performance: no unnecessary iterations; no blocking calls in hot paths.
+
+**Pre-existing clippy errors confirmed:** Running `cargo clippy -p bob --all-targets` on `dev-agent` (without this branch) produces exactly the same 4 errors in `crates/bob/src/cli/commands/chat.rs` and `crates/bob/src/cli/commands.rs`. The task branch introduces no new clippy errors.
