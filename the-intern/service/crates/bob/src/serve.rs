@@ -102,7 +102,7 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     info!("persistence actor started");
 
     info!("starting policy-control actor");
-    let (policy_control_handle, policy_control_join) =
+    let (policy_control_handle, policy_control_join, _policy_snapshot) =
         policy_control::start(policy_control::Config::default());
     info!("policy-control actor started");
 
