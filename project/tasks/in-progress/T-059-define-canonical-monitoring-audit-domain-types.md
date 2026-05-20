@@ -84,6 +84,30 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+Implemented Phase 1 canonical monitoring audit domain types in `bob-core` using TDD in two red→green→refactor cycles. First cycle replaced the legacy audit placeholders with a canonical `AuditRecord` envelope (`id`, `timestamp`, `kind`, optional envelope `session_id`, and typed payload) plus structured payload types for extension events, policy verdicts, and external reports. I kept `PolicyVerdict` for existing policy interfaces and updated the `ports.rs` test fixture to the new `AuditRecord` shape. Second cycle added `AuditFilterKind` parsing for CLI/config values (`events`, `reports`, `verdicts`) with a typed parse error, added tests for unknown filter rejection, and added a deserialization test ensuring arbitrary report metadata is rejected. I considered leaving report payloads open for future metadata, but rejected that because S-005 and AC-4 explicitly require rejecting unstructured metadata now. Remaining work: none in this task branch; ready for reviewer handoff.
+
+Evidence:
+- Red step (cycle 1) failing test run:
+  - `cargo test -p bob-core types::records::tests::audit_record_envelope_supports_kind_specific_payloads` (failed with missing canonical types/fields)
+- Green/refactor checks (cycle 1):
+  - `cargo test -p bob-core types::records::tests::audit_record_envelope_supports_kind_specific_payloads`
+  - `cargo test -p bob-core types::records`
+  - `cargo fmt -p bob-core`
+- Red step (cycle 2) failing test run:
+  - `cargo test -p bob-core types::records::tests::audit_filter_kind_from_str_accepts_plural_cli_values` (failed with missing `AuditFilterKind`)
+- Green/refactor checks (cycle 2):
+  - `cargo test -p bob-core types::records::tests::`
+  - `cargo test -p bob-core ports::tests::audit_sink_append_returns_service_result`
+  - `cargo fmt -p bob-core`
+- Task verification:
+  - `cd the-intern/service && cargo test -p bob-core` (pass, run with escalation due sandbox socket permission behavior)
+
+Obstacles Encountered:
+- `cargo test -p bob-core` fails inside sandbox on `peer_cred_from_fd_returns_current_process_uid_on_real_socket` (`Operation not permitted` on socket bind); resolved by rerunning verification with escalated permissions.
+- Initial `git add`/`git commit` failed in sandbox due `.git/index.lock` read-only restriction; resolved via escalated git commands.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
