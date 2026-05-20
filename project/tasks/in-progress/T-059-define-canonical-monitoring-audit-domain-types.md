@@ -119,3 +119,10 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+FAIL
+
+- **File and location**: `the-intern/service/crates/bob-core/src/types/records.rs` (tests around `audit_record_envelope_supports_kind_specific_payloads`, lines 157-187 on the task branch).
+  **What is wrong**: AC-5 requires serde JSON round-trip coverage for every audit record kind and filter kind. Current tests only round-trip a full `AuditRecord` for the `report` payload path; `event` and `verdict` payload record variants are not round-tripped as records.
+  **What should change**: Add serde round-trip tests that build and round-trip full `AuditRecord` values for `AuditRecordPayload::Event` and `AuditRecordPayload::Verdict` (in addition to existing `Report`) so every record kind is covered end-to-end.
