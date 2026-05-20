@@ -80,6 +80,27 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+Picked up the task on the assigned branch. The Work Log was empty; this is the first session.
+
+**What was done**
+
+All four acceptance criteria were implemented in a single TDD cycle:
+
+- `extension-ipc/Cargo.toml`: added `policy-control = { path = "../policy-control" }` as a direct dependency.
+- `extension-ipc/src/multiplex.rs`: imported `policy_control::{PolicyEngine, SnapshotHandle}`, added `snapshot: SnapshotHandle` to `SessionMultiplexer`, updated its `new` constructor to accept the handle as a third argument, and replaced the hardcoded deny verdict in `handle_frame` with a call to `PolicyEngine::evaluate_action(snapshot.load(), &tool, &arguments)`. New tests added: `authz_frame_returns_allow_when_snapshot_has_matching_rule` (AC-1/AC-2) and `authz_verdict_reason_is_absent_when_snapshot_returns_not_the_hardcoded_string` (AC-3). Existing deny test renamed and updated; all other tests updated to pass the snapshot handle.
+- `extension-ipc/src/lib.rs`: added `policy_snapshot: policy_control::SnapshotHandle` to `Config`, updated `Default` to start a deny-all `policy_control` actor and use its snapshot handle, updated `run_connection` and `run_listener` to accept and propagate the handle, updated `start()` to clone the handle from config into `run_listener`.
+- `bob/src/serve.rs`: in `try_start_subsystems`, passed `policy_snapshot: policy_snapshot.clone()` into `extension_ipc::Config`. Also converted the pre-existing `extension_ipc_config_accepts_tracing_monitoring_handle` test from `#[test]` to `#[tokio::test(flavor = "current_thread")]` because `Config::default()` now calls `policy_control::start()` which requires a Tokio runtime.
+
+**Tried and rejected**
+
+Making `SnapshotHandle::new` public to avoid starting an actor in `Config::default()` was considered but `policy-control/src/lib.rs` is not in the task's Files to Touch. The simpler fix of promoting the existing test to async was the right call since `serve.rs` is in scope.
+
+**What remains**
+
+Nothing — all ACs are implemented, all tests pass, and no new clippy errors were introduced. The task is ready for review.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
