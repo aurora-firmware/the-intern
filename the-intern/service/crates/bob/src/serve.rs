@@ -96,9 +96,17 @@ fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Con
     }
 }
 
+fn build_monitoring_config(cfg: &BobConfig) -> monitoring::Config {
+    monitoring::Config {
+        command_buffer: cfg.request_queue_capacity,
+        audit_log_path: cfg.monitoring.audit_log_path.clone(),
+    }
+}
+
 fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::Error>> {
     info!("starting monitoring actor");
-    let (monitoring_handle, monitoring_join) = monitoring::start(monitoring::Config::default());
+    let monitoring_cfg = build_monitoring_config(cfg);
+    let (monitoring_handle, monitoring_join) = monitoring::start(monitoring_cfg);
     info!("monitoring actor started");
 
     info!("starting persistence actor");
@@ -512,6 +520,24 @@ pub mod tests {
             supervisor_cfg.extension_sock_path.as_os_str().is_empty(),
             "empty extension_sock_path in BobConfig must result in empty path in supervisor Config"
         );
+    }
+
+    #[test]
+    fn monitoring_config_maps_audit_log_path_from_bob_config() {
+        let audit_log_path = std::path::PathBuf::from("/tmp/bob-monitoring/audit.jsonl");
+        let cfg = BobConfig {
+            request_queue_capacity: 55,
+            monitoring: crate::config::MonitoringConfig {
+                audit_log_path: audit_log_path.clone(),
+                default_tail_filters: vec![],
+            },
+            ..BobConfig::test_base()
+        };
+
+        let monitoring_cfg = build_monitoring_config(&cfg);
+
+        assert_eq!(monitoring_cfg.audit_log_path, audit_log_path);
+        assert_eq!(monitoring_cfg.command_buffer, 55);
     }
 
     // AC-1: run constructs all subsystem actors and binds both sockets
