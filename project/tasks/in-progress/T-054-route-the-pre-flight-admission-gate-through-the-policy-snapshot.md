@@ -116,3 +116,30 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+
+PASS
+
+**Stage 1 — Spec compliance**
+
+All four acceptance criteria are met:
+
+- AC-1: `run_preflight` now calls `PolicyEngine::evaluate_admission` and enqueues the event when `verdict.allow` is true. Two unit tests cover the admitted-user path (single user and multi-user list).
+- AC-2: The deny path (missing context or denied user) drops the event, emits a `tracing::warn!` containing only the string reason (never the payload), and appends a `PreflightDenied` `AuditRecord`. Five unit tests cover this path; the audit-description tests explicitly assert the raw payload string is absent.
+- AC-3: `PreflightConfig` is gone from `handler.rs` and from the crate re-exports in `lib.rs`. Admission is evaluated exclusively through `PolicyEngine::evaluate_admission`.
+- AC-4: `bob/src/serve.rs` clones `policy_snapshot` into `preflight_snapshot`, passes it into the per-event closure, and forwards it to `run_preflight`. The new integration test `deny_all_policy_snapshot_causes_all_events_to_be_denied_and_not_persisted` confirms the live gate reads from the snapshot handle rather than any static list.
+
+Removal of `start_with_preflight` and the `PreflightConfig` re-export is justified: the task description explicitly says to remove `start_with_preflight` if unused, the work log confirms `bob/src/serve.rs` was already calling `start_with` directly, and the three integration tests deleted alongside it only tested the now-gone `PreflightConfig`-based wrapper.
+
+No files were modified outside the four declared scope files (`requests-handler/Cargo.toml`, `handler.rs`, `lib.rs`, `bob/src/serve.rs`) plus the auto-updated `Cargo.lock`.
+
+**Stage 2 — Code quality**
+
+- Correctness: `snapshot.load()` is called inside the per-event invocation, so every event sees the current snapshot atomically. The `verdict.as_ref().map(|v| v.allow).unwrap_or(false)` idiom correctly maps absent context to deny without needing a special branch.
+- Tests: 13 unit tests in `requests-handler` (7 new handler tests + 6 pre-existing queue tests) and 60 tests in `bob` all pass. Both success and failure paths are covered. Tests are independent; `make_snapshot` creates a fresh `SnapshotHandle` per test.
+- Security: warn lines carry only the string reason, never the event payload. No hardcoded credentials. No new permissions.
+- Readability: naming (`preflight_snapshot`, `verdict`, `admitted`, `intruder`) is clear and follows project conventions. Functions remain focused. The dead-code comment block left over from T-053's transitional `PreflightConfig` wiring is fully removed.
+- Performance: `snapshot.load()` is a lock-free `ArcSwap` read; no blocking in the hot path.
+
+**Clippy**: `cargo clippy -p requests-handler --all-targets` is clean. `cargo clippy -p bob --all-targets` produces exactly the 4 pre-existing errors in `cli/commands/chat.rs` and `cli/commands.rs` that predate all S-004 work; no new errors were introduced by this task.
