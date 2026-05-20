@@ -170,3 +170,37 @@ Next Owner:
 
 Next Action:
 - Update transport-failure handling so one failed `tool_call` emits exactly one warning while still failing closed, add regression coverage for connect-time failure without verdict, and resubmit for review.
+
+### Review Verdict — 2026-05-20
+PASS
+
+Result: PASS
+
+Summary:
+- Reviewed cycle-2 changes for `task/T-057-add-the-blocking-tool-call-authorization-hook-to-the-bob-extension`, including commit `731a5ac`.
+- Stage 1 passed: AC-1..AC-4 are satisfied, including the previously failing connect-time transport path now emitting a single warning for one failed `tool_call`.
+- Stage 2 passed: correctness, regression coverage, readability, security, and performance are acceptable for scope.
+
+Artifacts:
+- Updated canonical task file: `project/tasks/in-progress/T-057-add-the-blocking-tool-call-authorization-hook-to-the-bob-extension.md` (this verdict entry).
+- Diff reviewed: `the-intern/extensions/bob.ts`, `the-intern/extensions/bob.test.ts`, `the-intern/extensions/env.d.ts`, `the-intern/extensions/README.md`.
+- Primary implementation evidence inspected at:
+  - `the-intern/extensions/bob.ts` (`resolvePendingVerdicts`/`markDead`/`handleToolCall` fail-closed flow).
+  - `the-intern/extensions/bob.test.ts` (`T-057 AC-3e: connect-time failure without verdict` regression).
+
+Evidence:
+- Checked expected changed files with `git diff --name-status dev-agent..task/T-057-add-the-blocking-tool-call-authorization-hook-to-the-bob-extension`.
+- Reviewed code diffs and line-level behavior for AC-1..AC-4.
+- Ran targeted regression: `cd the-intern/extensions && npx vitest run bob.test.ts -t "connect-time failure without verdict"` (pass).
+- Ran full verification:
+  - `cd the-intern/extensions && npx vitest run` (initial sandbox run failed with UDS `listen EPERM`; rerun with escalation passed, `25 passed`).
+  - `cd the-intern/extensions && npx tsc --noEmit` (pass).
+
+Obstacles Encountered:
+- Sandbox blocked Unix domain socket bind (`listen EPERM`) during full `vitest`; resolved by rerunning the same verification command with escalated permissions.
+
+Next Owner:
+- Development Loop
+
+Next Action:
+- none
