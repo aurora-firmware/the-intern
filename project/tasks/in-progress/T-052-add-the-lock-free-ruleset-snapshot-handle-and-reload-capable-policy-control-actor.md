@@ -84,6 +84,20 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+Implemented all five acceptance criteria for T-052 in a single TDD session.
+
+**What was done.** The scaffold `policy-control` actor was rewritten to introduce `SnapshotHandle` (AC-1), a revised `Config` with a working `Default` yielding a deny-all snapshot (AC-2), `Handle::reload()` that atomically swaps the snapshot on successful parse/validation and returns an error while preserving the previous snapshot on failure (AC-3, AC-4), and an updated `start` function that returns the `(Handle, JoinHandle, SnapshotHandle)` triple and immediately seeds the snapshot from `Config::initial_snapshot` (AC-5). The `toml` dependency was promoted from dev-only to a production dependency; `arc-swap = "1"` and `tempfile = "3"` (dev) were added to the crate manifest.
+
+A `Default` derive was added to `PolicyConfig` in `ruleset.rs` — required because the private `Root` struct used in `load_policy_config_from_toml_str` carries `#[serde(default)]` on its `policy` field, which serde's derive requires.
+
+**Files touched outside the task's listed scope.** `bob/src/serve.rs` was updated by one line — the `start()` call was changed from a 2-tuple destructuring to a 3-tuple destructuring (`_policy_snapshot` discarded with `_`). This was unavoidable: the verification command `cargo build -p bob` would otherwise fail. The change is trivially mechanical and introduces no logic.
+
+**What was tried and rejected.** An early draft kept a `snapshot: SnapshotHandle` field on `Handle` so callers could reach the snapshot through the handle rather than through the separately returned `SnapshotHandle`. This produced a dead-code warning and was not needed by the spec (gates hold `SnapshotHandle` directly per T-053/T-054/T-056), so the field was dropped.
+
+**What remains.** Nothing for this task. All 45 tests pass, `cargo build -p bob` succeeds, and `cargo clippy -p policy-control --all-targets` is clean. T-053/T-054/T-056 will wire the returned `SnapshotHandle` into the gate crates.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
