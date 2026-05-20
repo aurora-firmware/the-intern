@@ -88,6 +88,30 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+Three TDD cycles implemented all four acceptance criteria.
+
+Cycle 1 (AC-1, AC-2 tool-call, AC-3 — extension-ipc): added `monitoring` and `chrono` as dependencies to `extension-ipc`. Introduced a `MonitoringVerdict` struct alongside the existing `MonitoringEvent`. Extended the `MonitoringHandle` trait with a `record_verdict` method; updated `NoopMonitoringHandle` and `TracingMonitoringHandle` with no-op and tracing-only implementations. Created `MonitoringBackedHandle`, which wraps `monitoring::Handle` and appends `AuditRecord` instances of kind `Event` or `Verdict` per call; monitoring failures are logged via `tracing::warn!` and never propagate to the caller (AC-3). Updated `SessionMultiplexer::handle_frame` to call `record_verdict` on `InboundFrame::Authz` after policy evaluation and before sending the wire reply — the policy outcome is never changed. Updated `CapturingMonitoringHandle` in tests; exported `MonitoringBackedHandle` from the crate root.
+
+Cycle 2 (AC-2 preflight — requests-handler): added allow-verdict `AuditRecord` emission to `run_preflight` for every admitted event (the deny path already existed). Updated two existing tests that previously asserted no audit records on allow; they now assert exactly one allow-verdict record.
+
+Cycle 3 (AC-4 — bob serve): changed `try_start_subsystems` to pass `MonitoringBackedHandle::new(monitoring_handle.clone())` to the extension-ipc config instead of `TracingMonitoringHandle`. Added a test verifying the real monitoring handle supports pub/sub end-to-end after startup.
+
+Tried and rejected: replacing the `MonitoringHandle` trait entirely with `monitoring::Handle` in extension-ipc — retained the trait as a testability seam, since `CapturingMonitoringHandle` remains useful for verifying call counts without a real monitoring actor. Also considered adding `append_event_record`/`append_verdict_record` helpers to `monitoring/src/lib.rs` — rejected because `Handle::append_record` is already the correct API and helpers would only relocate construction logic.
+
+Verification (run from `the-intern/service`):
+- `cargo test -p extension-ipc` — 35 passed, 0 failed.
+- `cargo test -p requests-handler` — 14 passed, 0 failed.
+- `cargo test -p bob --lib serve` — 21 passed, 0 failed (66 total lib tests, 0 failures workspace-wide).
+- Three commits on the task branch.
+
+Nothing remains; all four ACs are met.
+
+Obstacles Encountered:
+- The AC-4 test initially failed because `test_cfg_with_sockets` uses an empty `monitoring.audit_log_path`; fixed by constructing a `BobConfig` with a temp-dir-based audit log path in the test.
+- `cargo test -p bob serve::tests` from the task's verification block was reported by the Developer as matching no tests in their environment; `cargo test -p bob --lib serve` matches the serve-module tests reliably. (Reviewer/integrator should confirm the canonical `serve::tests` filter.)
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
