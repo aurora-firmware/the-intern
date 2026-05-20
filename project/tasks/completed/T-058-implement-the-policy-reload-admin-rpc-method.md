@@ -1,7 +1,7 @@
 ---
 id: T-058
 title: Implement the policy.reload admin-RPC method
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-20'
