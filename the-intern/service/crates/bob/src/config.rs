@@ -104,7 +104,7 @@ impl BobConfig {
 
     fn load_with_sources(sources: ConfigSources) -> ServiceResult<Self> {
         let runtime_root = resolve_runtime_root(&sources)?;
-        let defaults = defaults_with_runtime_root(runtime_root, sources.uid);
+        let defaults = defaults_with_runtime_root(runtime_root, &sources.env, sources.uid);
 
         let config_path = if let Some(path) = sources.config_path.clone() {
             path
@@ -551,8 +551,12 @@ fn resolve_runtime_root(sources: &ConfigSources) -> ServiceResult<PathBuf> {
     Ok(Path::new(&runtime).join("bob"))
 }
 
-fn defaults_with_runtime_root(runtime_root: PathBuf, uid: u32) -> RawBobConfig {
-    let monitoring_audit_log_path = default_monitoring_audit_log_path_for_env(&BTreeMap::new(), uid);
+fn defaults_with_runtime_root(
+    runtime_root: PathBuf,
+    env: &BTreeMap<String, String>,
+    uid: u32,
+) -> RawBobConfig {
+    let monitoring_audit_log_path = default_monitoring_audit_log_path_for_env(env, uid);
 
     RawBobConfig {
         admin_sock_path: runtime_root.join("admin.sock"),
@@ -1085,12 +1089,76 @@ default_tail_filters = ["events", "verdicts"]
     }
 
     #[test]
-    fn resolves_default_monitoring_audit_path_when_not_configured() {
-        let config = load_with_env_overrides([]).expect("config should load");
+    fn resolves_default_monitoring_audit_path_from_xdg_state_home_when_not_configured() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let state_home = temp.path().join("xdg-state-home");
+        let home = temp.path().join("home");
 
-        assert!(
-            !config.monitoring.audit_log_path.as_os_str().is_empty(),
-            "default monitoring audit path must be non-empty"
+        fs::create_dir_all(&state_home).expect("state home should be created");
+        fs::create_dir_all(&home).expect("home should be created");
+
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+        env.insert("XDG_STATE_HOME".to_string(), state_home.display().to_string());
+        env.insert("HOME".to_string(), home.display().to_string());
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("config should load");
+
+        assert_eq!(
+            config.monitoring.audit_log_path,
+            state_home.join("bob").join("audit.jsonl"),
+            "default monitoring audit path should be resolved from XDG_STATE_HOME"
+        );
+    }
+
+    #[test]
+    fn resolves_default_monitoring_audit_path_from_home_fallback_when_xdg_state_home_missing() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let home = temp.path().join("home");
+
+        fs::create_dir_all(&home).expect("home should be created");
+
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+        env.insert("HOME".to_string(), home.display().to_string());
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("config should load");
+
+        let expected = if cfg!(target_os = "macos") {
+            home.join("Library")
+                .join("Application Support")
+                .join("bob")
+                .join("audit.jsonl")
+        } else {
+            home.join(".local")
+                .join("state")
+                .join("bob")
+                .join("audit.jsonl")
+        };
+
+        assert_eq!(
+            config.monitoring.audit_log_path, expected,
+            "default monitoring audit path should fall back to HOME when XDG_STATE_HOME is absent"
         );
     }
 
