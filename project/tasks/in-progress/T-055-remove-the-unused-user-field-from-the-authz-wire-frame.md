@@ -96,3 +96,24 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Spec compliance**
+
+- AC-1: `InboundFrame::Authz` on the task branch defines exactly `session`, `tool`, and `arguments` — the `user` field is absent. Confirmed.
+- AC-2: New test `parses_authz_frame_without_user_field` in `framing.rs` explicitly asserts that an `authz` JSON frame with no `user` key parses successfully. Confirmed.
+- AC-3: All `user` field references removed from every `Authz` frame construction or destructuring site across the three stated files (`framing.rs`, `lib.rs`, `multiplex.rs`). Six removal hunks in `multiplex.rs`, one in `lib.rs`, and the `framing.rs` test match pattern. No remaining `"alice"` or `"bob"` strings tied to the removed field. Confirmed.
+- No files outside the stated scope were modified.
+- `multiplex::handle_frame` verdict logic left untouched per the task constraint (T-056 scope).
+
+**Stage 2 — Code quality**
+
+- `cargo test -p extension-ipc`: 32 tests pass, 0 failed. Verified locally.
+- `cargo clippy -p extension-ipc --all-targets`: clean. Verified locally.
+- New test is independent and covers the exact boundary case stated in AC-2.
+- No dead code, no hardcoded secrets, no unrelated behavior added.
