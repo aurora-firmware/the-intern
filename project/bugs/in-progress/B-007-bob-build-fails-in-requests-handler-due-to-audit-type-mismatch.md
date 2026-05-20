@@ -84,6 +84,33 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-05-20
+
+Reproduction status:
+Confirmed. Reproduced consistently on this bug branch with both target commands.
+
+Evidence captured:
+- `cd the-intern/service && cargo test -p bob config::tests` fails compiling `requests-handler` with:
+  - `E0432`: unresolved import `bob_core::types::AuditKind` at `crates/requests-handler/src/handler.rs:5`
+  - `E0560`: `AuditRecord` has no field `description` at `crates/requests-handler/src/handler.rs:54`
+- `cd the-intern/service && cargo test -p bob serve::tests` fails with the same two compile errors.
+- `cd the-intern/service && cargo check -p requests-handler` fails with the same two errors.
+- Current `bob-core` canonical types export `AuditRecordKind`/`AuditRecordPayload` and `AuditRecord { id, timestamp, kind, session_id, payload }` (no `AuditKind`, no `description`) in `crates/bob-core/src/types/mod.rs` and `crates/bob-core/src/types/records.rs`.
+
+Isolated fault:
+`requests-handler` preflight denial audit construction still uses legacy audit API shape (`AuditKind::PreflightDenied` and `description`) in `crates/requests-handler/src/handler.rs` (production and tests), while `bob-core` now defines canonical envelope/payload types.
+
+Root cause or fault hypothesis:
+Root cause: incomplete migration after the audit model change introduced in bob-core (`AuditKind` removed; `AuditRecord` structure changed). `requests-handler` was not updated to the new `AuditRecordKind` + `AuditRecordPayload` contract, causing compile-time type mismatch.
+
+Planned verification:
+1. Update `requests-handler` audit imports and `AuditRecord` construction to canonical types.
+2. Update affected `requests-handler` tests to assert against canonical payload/kind.
+3. Run:
+   - `cd the-intern/service && cargo test -p requests-handler`
+   - `cd the-intern/service && cargo test -p bob config::tests`
+   - `cd the-intern/service && cargo test -p bob serve::tests`
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
