@@ -85,6 +85,31 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+Implemented all four acceptance criteria in one session.
+
+The feature required threading a new `filters: Vec<AuditFilterKind>` parameter from the Clap CLI definition all the way down to the JSON-RPC subscribe call. Changes landed in four files:
+
+- `cli/mod.rs`: changed `AuditCommand::Tail` from a unit variant to a struct variant carrying `filters: Vec<AuditFilterKind>` behind a Clap `--filter KIND` repeating argument. Clap uses `AuditFilterKind`'s `FromStr` impl (already in `bob-core`) to validate each value, so unknown spellings — including the intentionally excluded `veredicts` — are rejected before any subscription call is attempted (AC-3).
+- `cli/commands/audit.rs`: added `build_subscribe_params(&[AuditFilterKind]) -> Value`, which returns `{}` for an empty slice (AC-1) and `{"filters":[...]}` otherwise (AC-2). Threaded the filter vec through `run()`, `run_with_config()`, `run_with_connector()`, and `run_with_connector_async()`. Added five new tests: three unit tests on `build_subscribe_params`, one connector-level integration test capturing the params sent to the connector (AC-2), and one `--json` regression test (AC-4).
+- `cli/commands.rs`: updated the `audit_tail` function signature to accept `Vec<AuditFilterKind>`.
+- `lib.rs`: updated the `DispatchRuntime::audit_tail` trait method, the `ProductionRuntime` impl, and the `run_cli_with_runtime` match arm to destructure and pass filters.
+
+Tried and rejected: the AC-2 connector test initially used a dropped-sender pattern to end the subscription immediately, which panicked because `stop_tx.send(())` failed after `stop_rx` was already dropped. Replaced with a channel that captures params inside the connector closure before the subscription starts, using `.ok()` on shutdown channels to tolerate early task termination. `build_subscribe_params` was changed from `Vec` ownership to `&[AuditFilterKind]` after a clippy `needless_pass_by_value` warning.
+
+Verification (run from `the-intern/service`):
+- `cargo test -p bob --lib "cli::commands::audit"` — 6 tests, all pass.
+- `cargo test -p bob --lib "cli::tests"` — 6 tests, all pass.
+- `cargo test -p bob --lib` — 74 tests, all pass (was 69 before).
+- Commit `fb5c15d` on the task branch.
+
+Nothing remains; all four ACs are covered and passing.
+
+Obstacles Encountered:
+- The task's verification commands (`cargo test -p bob cli::commands::audit` / `cli::tests`) match 0 tests because they run against binary test targets, while the test modules live in the library crate. The correct commands are `cargo test -p bob --lib "cli::commands::audit"` and `cargo test -p bob --lib "cli::tests"`.
+- Four pre-existing clippy errors in `cli/commands/chat.rs` and `cli/commands.rs` (unrelated to this task — known issue from T-061 review) cause `cargo clippy -p bob` to fail identically before and after this change.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
