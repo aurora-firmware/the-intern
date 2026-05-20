@@ -131,19 +131,14 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
 
     info!("starting requests-handler actor");
     let (rh_cancel_tx, rh_cancel_rx) = watch::channel(false);
-    // Admission users now come from the [policy] section.  T-054 will replace
-    // this PreflightConfig path entirely; until then, source the list from
-    // the policy config so PreflightConfig keeps compiling.
-    let admitted_user_ids: Vec<bob_core::types::UserId> = cfg
-        .policy
-        .admitted_users
-        .iter()
-        .filter_map(|s| s.parse().ok())
-        .collect();
-    let preflight_cfg = requests_handler::PreflightConfig {
-        allowed_user_ids: admitted_user_ids.clone(),
-    };
-    let default_context = admitted_user_ids
+    // Build the pre-flight context from the initial snapshot.  Channel adapters
+    // will supply real RequestContexts once they are wired in; until then the
+    // first admitted user from the snapshot is used as a synthetic default so
+    // that the existing integration tests (which submit events expecting
+    // persistence) continue to work.
+    let default_context = policy_snapshot
+        .load()
+        .admitted_users()
         .first()
         .copied()
         .map(|sender| RequestContext {
@@ -155,13 +150,15 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     let audit_sink: Arc<dyn AuditSink> = Arc::new(monitoring::MonitoringAuditSink::new(
         monitoring_handle.clone(),
     ));
+    // Clone the snapshot handle for use in the pre-flight closure.
+    let preflight_snapshot = policy_snapshot.clone();
     let (requests_handler_handle, requests_handler_join) = requests_handler::start_with(
         requests_handler::Config {
             request_queue_capacity: cfg.request_queue_capacity,
             request_submit_timeout: cfg.request_submit_timeout,
         },
         move |event| {
-            let preflight_cfg = preflight_cfg.clone();
+            let preflight_snapshot = preflight_snapshot.clone();
             let persistence_store = Arc::clone(&persistence_store);
             let audit_sink = Arc::clone(&audit_sink);
             let default_context = default_context.clone();
@@ -169,7 +166,7 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
                 requests_handler::run_preflight(
                     event,
                     default_context.as_ref(),
-                    &preflight_cfg,
+                    &preflight_snapshot,
                     persistence_store.as_ref(),
                     audit_sink.as_ref(),
                 )
@@ -837,5 +834,43 @@ pub mod tests {
             user_id,
             "admitted user in snapshot must match the one in cfg.policy"
         );
+    }
+
+    // AC-4 (T-054): deny-all policy snapshot means events are never persisted,
+    // proving the pre-flight gate reads the snapshot handle rather than any
+    // static allow-list.
+    #[tokio::test(flavor = "current_thread")]
+    async fn deny_all_policy_snapshot_causes_all_events_to_be_denied_and_not_persisted() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let mut cfg = test_cfg_with_sockets(&tmp);
+        // No admitted users → deny-all snapshot.
+        cfg.policy.admitted_users = vec![];
+
+        let runtime = start_subsystems(&cfg).expect("subsystems must start");
+
+        let event = InternalEvent::ChatMessage {
+            content: "should be denied".to_owned(),
+        };
+        runtime
+            ._requests_handler
+            .submit_event(event)
+            .await
+            .expect("submit must succeed");
+
+        // With no admitted users the snapshot denies all; nothing should be persisted.
+        // Give the actor a moment to process the event, then verify the store is empty.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let result = runtime
+            ._persistence
+            .dequeue_next()
+            .await
+            .expect("dequeue should not fail");
+        assert!(
+            result.is_none(),
+            "deny-all snapshot must prevent any event from reaching persistence"
+        );
+
+        run_shutdown_protocol(runtime, &cfg).await;
     }
 }
