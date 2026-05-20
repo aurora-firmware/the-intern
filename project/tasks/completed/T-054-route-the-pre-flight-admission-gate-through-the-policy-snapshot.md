@@ -1,7 +1,7 @@
 ---
 id: T-054
 title: Route the pre-flight admission gate through the policy snapshot
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-20'
