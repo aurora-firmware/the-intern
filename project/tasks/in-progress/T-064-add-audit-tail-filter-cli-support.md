@@ -121,3 +121,28 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+PASS
+
+Both stages passed. Review cycle 1, commit `fb5c15d`.
+
+**Stage 1 — Spec compliance**
+
+- AC-1: `build_subscribe_params(&[])` returns `json!({})`, confirmed by unit test and by the pre-existing connector test which passes `vec![]` and asserts `params == json!({})`. The subscribe call in `run_with_connector_async` uses these params directly.
+- AC-2: `build_subscribe_params(&[Events, Verdicts])` returns `{"filters":["events","verdicts"]}`, confirmed by unit test and by the end-to-end connector-level integration test `audit_tail_with_filters_sends_filter_array_in_subscribe_params` which captures and asserts the exact params received by the connector closure.
+- AC-3: `AuditFilterKind` has no `veredicts` variant and its `FromStr` impl returns `Err` for any unrecognised input. Clap calls `FromStr` at parse time; `audit_tail_with_misspelled_filter_veredicts_is_rejected_by_clap` confirms `Cli::try_parse_from` returns `Err` before any subscribe call is attempted.
+- AC-4: `audit_tail_json_mode_prints_one_json_document_per_notification` confirms `write_notification` with `json_output = true` calls `write_json_line` for each notification. The single notification sent produces exactly one output line of valid JSON.
+
+Only the four task-scoped files were modified (`commands.rs`, `mod.rs`, `commands/audit.rs`, `lib.rs`).
+
+**Stage 2 — Code quality**
+
+- Correctness: `build_subscribe_params` correctly handles both the empty and non-empty cases. Filter threading through all four function layers (`run` → `run_with_config` → `run_with_connector` → `run_with_connector_async`) is complete and consistent. Parameter changed from `Vec` ownership to `&[AuditFilterKind]` slice reference after a clippy suggestion, which is correct.
+- Tests: Six tests in `cli::commands::audit`, six in `cli::tests`, all pass. Both success and parse-failure paths are covered. Tests are independent.
+- Security: No hardcoded secrets or credentials. Filter input is validated by `FromStr` before reaching any RPC call.
+- Readability: Names are descriptive and consistent with project conventions. `build_subscribe_params` has a doc comment explaining both branches.
+- Performance: No loops over large data sets; no blocking operations in hot paths.
+- Clippy: No new errors introduced in the changed files. The 48 pre-existing clippy errors (in `chat.rs`, `status.rs`, `commands.rs`, `lib.rs`, and other files) are identical between `dev-agent` and this branch — confirmed by running `cargo clippy -p bob -- -D warnings` on both a temporary `dev-agent` worktree and the task branch.
+
+No minor observations to record.
