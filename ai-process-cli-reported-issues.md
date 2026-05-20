@@ -3,6 +3,27 @@
 Running log of bugs and friction observed while using the `ai-team` CLI and the
 slash-skills that wrap it. New entries at the top.
 
+## 2026-05-20 — Reviewer committed a review verdict onto the task branch
+
+**Symptom.** During `dev-loop` processing of T-063, the cycle-1 Reviewer
+(`code-review` skill) committed the review verdict to the canonical task file
+on the **task branch** (`task/T-063-...`, commit `af89483`) in addition to the
+correct commit on `dev-agent` (`1e9516c`). The Reviewer's own report stated the
+verdict was committed on `dev-agent`, so the stray task-branch commit was
+silent. It was caught by the `integrate` skill's Step 3.4 hard stop (source
+diff must not modify the canonical lifecycle file); the loop reverted it on the
+branch before merging.
+
+**Impact.** Implementation branches accumulate lifecycle-file edits that must
+not be merged into `dev-agent`. Without the `integrate` guard this would have
+double-applied work-log/verdict content or caused a merge conflict on the task
+file.
+
+**Suggested fix.** The `code-review` skill should explicitly `git checkout
+dev-agent` before staging/committing the verdict, and verify the current branch
+is the destination branch before committing. Consider adding a check that the
+verdict commit's branch is not a `task/`/`bug/` branch.
+
 ## 2026-05-19 — `new-spec` skill uses unsupported CLI flags
 
 **Symptom.** The `new-spec` skill prescribes
