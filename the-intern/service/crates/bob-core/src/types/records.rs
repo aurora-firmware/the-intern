@@ -1,3 +1,6 @@
+use std::fmt;
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
 use crate::types::SessionId;
@@ -87,8 +90,52 @@ pub enum ReportOutcome {
     Error,
 }
 
+/// Filter kinds accepted from CLI/config text for audit tailing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AuditFilterKind {
+    Events,
+    Reports,
+    Verdicts,
+}
+
+/// Parse error for [`AuditFilterKind`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseAuditFilterKindError {
+    pub input: String,
+}
+
+impl fmt::Display for ParseAuditFilterKindError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "unknown audit filter kind \"{}\"; expected one of: events, reports, verdicts",
+            self.input
+        )
+    }
+}
+
+impl std::error::Error for ParseAuditFilterKindError {}
+
+impl FromStr for AuditFilterKind {
+    type Err = ParseAuditFilterKindError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "events" => Ok(Self::Events),
+            "reports" => Ok(Self::Reports),
+            "verdicts" => Ok(Self::Verdicts),
+            _ => Err(ParseAuditFilterKindError {
+                input: s.to_owned(),
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
@@ -137,5 +184,75 @@ mod tests {
                 summary: Some(summary),
             }) if action == "tool.fs.read" && summary == "read complete"
         ));
+    }
+
+    #[test]
+    fn audit_filter_kind_from_str_accepts_plural_cli_values() {
+        assert_eq!(
+            AuditFilterKind::from_str("events").expect("events should parse"),
+            AuditFilterKind::Events
+        );
+        assert_eq!(
+            AuditFilterKind::from_str("reports").expect("reports should parse"),
+            AuditFilterKind::Reports
+        );
+        assert_eq!(
+            AuditFilterKind::from_str("verdicts").expect("verdicts should parse"),
+            AuditFilterKind::Verdicts
+        );
+    }
+
+    #[test]
+    fn audit_filter_kind_from_str_rejects_unknown_values() {
+        let err = AuditFilterKind::from_str("veredicts")
+            .expect_err("unknown filter value should return an error");
+        assert_eq!(err.input, "veredicts");
+    }
+
+    #[test]
+    fn external_report_payload_deserialization_rejects_unknown_metadata_fields() {
+        let report = json!({
+            "action": "tool.exec",
+            "outcome": "success",
+            "session_id": null,
+            "summary": "ok",
+            "metadata": { "unreviewed": true }
+        });
+
+        let err = serde_json::from_value::<ExternalReportAuditPayload>(report)
+            .expect_err("unknown metadata must fail deserialization");
+        assert!(
+            err.to_string().contains("unknown field"),
+            "expected unknown field error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn audit_record_kinds_and_filter_kinds_support_serde_json_round_trip() {
+        let record_kinds = [
+            AuditRecordKind::Event,
+            AuditRecordKind::Report,
+            AuditRecordKind::Verdict,
+        ];
+
+        for kind in record_kinds {
+            let json = serde_json::to_string(&kind).expect("serialization must succeed");
+            let restored: AuditRecordKind =
+                serde_json::from_str(&json).expect("deserialization must succeed");
+            assert_eq!(kind, restored);
+        }
+
+        let filter_kinds = [
+            AuditFilterKind::Events,
+            AuditFilterKind::Reports,
+            AuditFilterKind::Verdicts,
+        ];
+
+        for kind in filter_kinds {
+            let json = serde_json::to_string(&kind).expect("serialization must succeed");
+            let restored: AuditFilterKind =
+                serde_json::from_str(&json).expect("deserialization must succeed");
+            assert_eq!(kind, restored);
+        }
     }
 }
