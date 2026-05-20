@@ -105,6 +105,27 @@ Picked up T-057 fresh — Work Log was empty. Read the task file, all four sourc
 
 **What remains:** Nothing. All four ACs are implemented and tested. Ready for reviewer.
 
+### Session 2 — 2026-05-20
+
+Picked up the canonical Session 1 and reviewer FAIL verdict, then reproduced the reported issue with a new regression test that drives a `tool_call` against an unbound UDS path. The new test failed first (red) with two warnings for one failed call, confirming the connect-time duplicate-warning defect.
+
+Implemented a minimal fix in `bob.ts`: introduced a `VerdictOutcome` state that includes `transport_error_logged`, added `resolvePendingVerdicts(...)`, and updated `markDead(...)` to resolve all in-flight authz waiters immediately with that outcome before logging the transport warning. In `handleToolCall`, this new outcome now returns `{ block: true }` fail-closed without emitting a second warning. This preserves fail-closed behavior and removes the duplicate-warning path.
+
+Tried and rejected suppressing timeout warnings conditionally in `handleToolCall` alone, because it still leaves pending verdicts unresolved after transport death and risks delayed behavior; immediate settlement from `markDead` is deterministic and simpler.
+
+Ran targeted and full verification after the change; all tests pass and typecheck is clean. Nothing remains on the implementation branch for this review cycle.
+
+Evidence:
+- `npx vitest run bob.test.ts -t "connect-time failure without verdict"` (before fix): failed with `expected spy to be called 1 times, but got 2 times`.
+- `npx vitest run bob.test.ts -t "connect-time failure without verdict"` (after fix): passed.
+- `npx vitest run` (initial sandbox run): failed with UDS `listen EPERM` (environment/sandbox issue).
+- `npx vitest run` (rerun with escalation): passed (`25 passed`).
+- `npx tsc --noEmit`: passed.
+- `git log -1 --oneline`: `731a5ac fix(extensions): avoid duplicate authz warning on transport fail`.
+
+Obstacles Encountered:
+- Full socket-based suite hit sandbox UDS bind `EPERM`; resolved by rerunning verification with escalated permissions.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
