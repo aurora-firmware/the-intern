@@ -1,9 +1,11 @@
 #![forbid(unsafe_code)]
 #![doc = "scaffold — see project/docs/roadmap.md phase 4"]
 
+pub mod engine;
 pub mod matcher;
 pub mod ruleset;
 
+pub use engine::PolicyEngine;
 pub use ruleset::{ActionRule, ArgMatcher, PolicyConfig, RulesetError, RulesetSnapshot};
 
 use bob_core::error::{ServiceError, ServiceResult};
