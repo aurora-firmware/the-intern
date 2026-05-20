@@ -2,7 +2,10 @@
 
 use bob_core::{
     ports::{AuditSink, PersistenceStore},
-    types::{AuditKind, AuditRecord, InternalEvent, RequestContext},
+    types::{
+        AuditRecord, AuditRecordKind, AuditRecordPayload, InternalEvent, PolicyVerdictAuditPayload,
+        RequestContext,
+    },
 };
 use policy_control::{PolicyEngine, SnapshotHandle};
 
@@ -48,10 +51,19 @@ pub async fn run_preflight(
         tracing::warn!(reason, "preflight: event denied");
 
         let timestamp = chrono::Utc::now().to_rfc3339();
+        let id = format!(
+            "audit_preflight_denied_{}",
+            chrono::Utc::now().timestamp_millis()
+        );
         let record = AuditRecord {
+            id,
             timestamp,
-            kind: AuditKind::PreflightDenied,
-            description: format!("preflight denied: {reason}"),
+            kind: AuditRecordKind::Verdict,
+            session_id: None,
+            payload: AuditRecordPayload::Verdict(PolicyVerdictAuditPayload {
+                allow: false,
+                reason: Some(format!("preflight denied: {reason}")),
+            }),
         };
 
         if let Err(err) = audit.append(record).await {
@@ -69,7 +81,8 @@ mod tests {
         error::ServiceResult,
         ports::{AuditSink, PersistenceStore, SessionState},
         types::{
-            AuditKind, AuditRecord, ChannelId, InternalEvent, RequestContext, SessionId, UserId,
+            AuditRecord, AuditRecordKind, AuditRecordPayload, ChannelId, InternalEvent,
+            RequestContext, SessionId, UserId,
         },
     };
     use policy_control::{PolicyConfig, RulesetSnapshot};
@@ -199,7 +212,14 @@ mod tests {
         let audit = RecordingAudit::default();
         let ctx = make_context(intruder);
 
-        run_preflight(chat_event("secret payload"), Some(&ctx), &snapshot, &store, &audit).await;
+        run_preflight(
+            chat_event("secret payload"),
+            Some(&ctx),
+            &snapshot,
+            &store,
+            &audit,
+        )
+        .await;
 
         assert!(
             store.enqueued.lock().unwrap().is_empty(),
@@ -207,10 +227,18 @@ mod tests {
         );
         let records = audit.records.lock().unwrap();
         assert_eq!(records.len(), 1, "exactly one audit record expected");
+        assert_eq!(
+            records[0].kind,
+            AuditRecordKind::Verdict,
+            "audit record kind must be verdict"
+        );
         assert!(
-            matches!(records[0].kind, AuditKind::PreflightDenied),
-            "audit record kind must be PreflightDenied, got {:?}",
-            records[0].kind
+            matches!(
+                records[0].payload,
+                AuditRecordPayload::Verdict(ref payload) if !payload.allow
+            ),
+            "audit payload must be a denied verdict, got {:?}",
+            records[0].payload
         );
     }
 
@@ -222,12 +250,23 @@ mod tests {
         let audit = RecordingAudit::default();
         let ctx = make_context(UserId::new());
 
-        run_preflight(chat_event("anything"), Some(&ctx), &snapshot, &store, &audit).await;
+        run_preflight(
+            chat_event("anything"),
+            Some(&ctx),
+            &snapshot,
+            &store,
+            &audit,
+        )
+        .await;
 
         assert!(store.enqueued.lock().unwrap().is_empty());
         let records = audit.records.lock().unwrap();
         assert_eq!(records.len(), 1);
-        assert!(matches!(records[0].kind, AuditKind::PreflightDenied));
+        assert_eq!(records[0].kind, AuditRecordKind::Verdict);
+        assert!(matches!(
+            records[0].payload,
+            AuditRecordPayload::Verdict(ref payload) if !payload.allow
+        ));
     }
 
     // AC-2: absent RequestContext is treated as denied with PreflightDenied audit record.
@@ -245,16 +284,16 @@ mod tests {
         );
         let records = audit.records.lock().unwrap();
         assert_eq!(records.len(), 1);
-        assert!(
-            matches!(records[0].kind, AuditKind::PreflightDenied),
-            "audit record kind must be PreflightDenied, got {:?}",
-            records[0].kind
-        );
+        assert_eq!(records[0].kind, AuditRecordKind::Verdict);
+        assert!(matches!(
+            records[0].payload,
+            AuditRecordPayload::Verdict(ref payload) if !payload.allow
+        ));
     }
 
-    // AC-2: audit record description does not contain the raw event payload.
+    // AC-2: audit record reason does not contain the raw event payload.
     #[tokio::test]
-    async fn audit_record_description_does_not_contain_raw_event_payload() {
+    async fn audit_record_reason_does_not_contain_raw_event_payload() {
         let snapshot = make_snapshot(vec![]);
         let store = RecordingStore::default();
         let audit = RecordingAudit::default();
@@ -274,15 +313,22 @@ mod tests {
 
         let records = audit.records.lock().unwrap();
         assert_eq!(records.len(), 1);
+        let denied_reason = match &records[0].payload {
+            AuditRecordPayload::Verdict(payload) => payload
+                .reason
+                .as_deref()
+                .expect("denied verdict should include a reason"),
+            payload => panic!("expected verdict payload, got {payload:?}"),
+        };
         assert!(
-            !records[0].description.contains(secret),
-            "audit description must not contain the raw event payload"
+            !denied_reason.contains(secret),
+            "audit reason must not contain the raw event payload"
         );
     }
 
-    // AC-2: missing context audit record description does not contain event payload.
+    // AC-2: missing context audit record reason does not contain event payload.
     #[tokio::test]
-    async fn missing_context_audit_record_description_does_not_contain_event_payload() {
+    async fn missing_context_audit_record_reason_does_not_contain_event_payload() {
         let snapshot = make_snapshot(vec![]);
         let store = RecordingStore::default();
         let audit = RecordingAudit::default();
@@ -301,9 +347,16 @@ mod tests {
 
         let records = audit.records.lock().unwrap();
         assert_eq!(records.len(), 1);
+        let denied_reason = match &records[0].payload {
+            AuditRecordPayload::Verdict(payload) => payload
+                .reason
+                .as_deref()
+                .expect("denied verdict should include a reason"),
+            payload => panic!("expected verdict payload, got {payload:?}"),
+        };
         assert!(
-            !records[0].description.contains(secret),
-            "audit description must not contain the raw event payload"
+            !denied_reason.contains(secret),
+            "audit reason must not contain the raw event payload"
         );
     }
 }
