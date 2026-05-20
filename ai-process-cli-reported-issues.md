@@ -105,3 +105,35 @@ that `description` is purely an input to the spec body, not a CLI flag.
 **Suggested fix.** Update `.claude/skills/new-spec/SKILL.md` step 2 to use
 `ai-team spec new --json [--author X] [--status Y] "<title>"` and to instruct
 the caller to write the description into the spec body during step 4.
+
+## 2026-05-20 — `new-bug` skill/CLI mismatch still causes first-call failure
+
+The `new-bug` skill still documents unsupported flags (`--title`, `--description`).
+Following the skill literally failed again today before adaptation.
+
+**Reproduction.**
+```
+ai-team bug new --json --title "x" --description "y" --severity high
+# -> Error: No such option '--title'
+ai-team bug new --help
+# shows: ai-team bug new [OPTIONS] TITLE
+```
+
+**Impact.** Bug capture flow fails on first attempt unless the caller manually
+checks CLI help and rewrites the command.
+
+**Suggested fix.** Update `.claude/skills/new-bug/SKILL.md` to use positional
+`TITLE` and remove the unsupported `--description` flag from command examples.
+
+## 2026-05-20 — `ai-team bug new` fails from repo root with Cargo lookup error
+
+Running `ai-team bug new` from `/home/daneel/projects/the-intern` failed with:
+`could not find Cargo.toml in /home/daneel/projects/the-intern or any parent directory`.
+The command succeeds from `/home/daneel/projects/the-intern/the-intern/service`.
+
+**Impact.** The CLI appears sensitive to working directory in a way that is not
+explained by `--help`, causing avoidable failures during bug creation.
+
+**Suggested fix.** Either (a) make `ai-team` resolve project root from
+`.ai-team.toml` regardless of cwd, or (b) document the required cwd in CLI help
+and all relevant skills.
