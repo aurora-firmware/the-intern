@@ -108,6 +108,14 @@ Obstacles Encountered:
 - `cargo test -p bob-core` fails inside sandbox on `peer_cred_from_fd_returns_current_process_uid_on_real_socket` (`Operation not permitted` on socket bind); resolved by rerunning verification with escalated permissions.
 - Initial `git add`/`git commit` failed in sandbox due `.git/index.lock` read-only restriction; resolved via escalated git commands.
 
+### Session 2 — 2026-05-20
+
+Implemented the reviewer-requested AC-5 fix by adding explicit full `AuditRecord` serde JSON round-trip tests for both `AuditRecordPayload::Event` and `AuditRecordPayload::Verdict`, while preserving and renaming the existing `Report` round-trip test. I refactored these into a shared `assert_audit_record_round_trip` helper that validates envelope fields (`id`, `timestamp`, `kind`, `session_id`) and payload equality end-to-end so each record kind is now covered as a full record, not only as enum/value-level serialization.
+
+I initially tried invoking `cargo test` with two separate test-name arguments, but rejected that approach after Cargo reported an unexpected extra argument; I switched to a single filter (`audit_record_`) for targeted validation. I also considered adding only payload-level round-trip assertions, but rejected that because the reviewer finding explicitly requires full `AuditRecord` envelope round-trip coverage by record kind.
+
+What remains: nothing for this reviewer finding; task branch is ready for reviewer re-check.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
