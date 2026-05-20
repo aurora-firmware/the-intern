@@ -112,3 +112,30 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+
+PASS
+
+**Stage 1 — Spec compliance**
+
+All four acceptance criteria are met:
+
+- AC-1: `multiplex::handle_frame` calls `PolicyEngine::evaluate_action(snapshot.load(), &tool, &arguments)` for every `Authz` frame. (`extension-ipc/src/multiplex.rs`, `handle_frame` method.)
+- AC-2: The resulting verdict is routed back as `OutboundFrame::AuthzVerdict { session, verdict }` via the per-session or default route. Same method.
+- AC-3: No hardcoded `"policy not implemented"` string exists in the implementation; the only occurrence is in the test asserting it is absent.
+- AC-4: `bob/src/serve.rs` `try_start_subsystems` passes `policy_snapshot: policy_snapshot.clone()` into `extension_ipc::Config`.
+
+Files touched are exactly the four listed in "Files to Touch"; no out-of-scope files were modified.
+
+**Stage 2 — Code quality**
+
+*Correctness*: Logic is correct. `SnapshotHandle::load()` returns `Arc<RulesetSnapshot>`, which auto-derefs to `&RulesetSnapshot` as expected by `PolicyEngine::evaluate_action`. The `user` field from the `Authz` frame is intentionally unused (not part of the current action-evaluation API, consistent with T-056 scope).
+
+*Tests*: Three new multiplex unit tests cover AC-1/AC-2 (allow path), AC-2 (deny path, renamed), and AC-3 (no hardcoded string). The integration-level test in `lib.rs` exercises the full deny-all verdict over a real socket. All 31 `extension-ipc` tests and all `bob` tests pass.
+
+*Side effect — `Config::default()` now requires a Tokio runtime*: `Config::default()` calls `policy_control::start()` to produce a deny-all `SnapshotHandle`. This means callers of `Config::default()` (including struct-update expressions like `..Config::default()`) must run inside a Tokio runtime. The one pre-existing sync test in `bob/src/serve.rs` that used `..extension_ipc::Config::default()` was correctly promoted to `#[tokio::test(flavor = "current_thread")]` with an explanatory comment. The design choice is acceptable: `Config::default()` is only ever called from async contexts (actor startup, test setup), and the spawned deny-all actor exits as soon as its dropped handle closes the channel. No sync code paths outside tests call `Config::default()`.
+
+*Clippy*: No new clippy errors introduced. The four pre-existing errors in `crates/bob/src/cli/commands/chat.rs` and `crates/bob/src/cli/commands.rs` are confirmed baseline — identical errors exist on `dev-agent` before this task.
+
+*Security, readability, performance*: No hardcoded secrets. External input (`tool`, `arguments`) is passed directly to `PolicyEngine::evaluate_action` which applies the rule-set gate. No unnecessary loops or blocking calls in hot paths.
