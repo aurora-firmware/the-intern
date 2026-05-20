@@ -82,6 +82,37 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+**What was done:**
+
+This session implemented all four acceptance criteria for T-053 in two TDD cycles.
+
+**Cycle 1 (AC-1, AC-2, AC-3 — config.rs):**
+
+Replaced the legacy top-level `allowed_user_ids: Vec<UserId>` field in `BobConfig` and `RawBobConfig` with `policy: PolicyConfig` from the `policy-control` crate. The field is decorated with `#[serde(default, skip_serializing)]` on `RawBobConfig` — `skip_serializing` was necessary because `PolicyConfig` only derives `Deserialize`, not `Serialize`, and `RawBobConfig` is passed to `Serialized::defaults(...)` in figment, which requires `Serialize`. The `#[serde(default)]` attribute satisfies AC-2 (absent `[policy]` section yields deny-all rather than a parse error). Added `config_path: PathBuf` to `BobConfig` so the startup path can pass it to `policy-control::Config` for hot-reload. Removed `deserialize_user_id_vec`, `UserId`, and `FromStr` imports which were only used by the now-removed `allowed_user_ids` field. Updated `serve.rs` to source `PreflightConfig.allowed_user_ids` from `cfg.policy.admitted_users` (T-054 will replace this path entirely). Updated the test in `serve.rs` that set `cfg.allowed_user_ids` to use `cfg.policy.admitted_users`.
+
+**Cycle 2 (AC-4 — serve.rs):**
+
+Added `policy_snapshot: policy_control::SnapshotHandle` to the `Runtime` struct. In `try_start_subsystems`, replaced `policy_control::start(Config::default())` with building a `RulesetSnapshot::from_config(cfg.policy.clone())` and starting the actor with a real `Config { initial_snapshot, config_path: cfg.config_path.clone(), command_buffer: 16 }`. The returned `SnapshotHandle` is now stored in `Runtime.policy_snapshot` for later gate-crate wiring (T-054/T-056). The shutdown protocol destructures it as `policy_snapshot: _policy_snapshot` so it compiles without unused-variable warnings.
+
+**What was tried and rejected:**
+
+Considered implementing `Serialize` for `PolicyConfig` in the policy-control crate, but that would have required modifying a file outside the task's `Files to Touch`. The `skip_serializing` attribute was the correct scope-bounded solution.
+
+**Decisions made:**
+
+- Dropped `PartialEq` and `Eq` derives from `BobConfig` since `PolicyConfig` does not implement them. None of the existing tests compared `BobConfig` instances with `==`, so this was a safe change.
+- `config_path` in `BobConfig` stores whatever path the figment loader resolved (whether from override, default, or `ConfigSources`). Tests that use `test_base()` get an empty `PathBuf`, which correctly signals to `policy-control` that reload is unsupported.
+
+**Pre-existing issues noted:**
+
+Four `cargo clippy --all-targets` errors exist in `crates/bob/src/cli/commands/chat.rs` and `crates/bob/src/cli/commands.rs` that predate this task. They are not in the files this task touched and were present before the first commit on this branch.
+
+**What remains:**
+
+Nothing — all four acceptance criteria are implemented, tested, and committed.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
