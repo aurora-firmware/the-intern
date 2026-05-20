@@ -38,7 +38,7 @@ pub struct ActionRule {
 ///
 /// Deserialised once at start-up and then converted to a [`RulesetSnapshot`]
 /// via [`RulesetSnapshot::from_config`].
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct PolicyConfig {
     /// Users whose requests are admitted to the system.
     #[serde(default)]

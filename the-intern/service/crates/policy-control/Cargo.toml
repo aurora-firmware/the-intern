@@ -12,6 +12,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 wildmatch = "2"
+arc-swap = "1"
+toml = "0.8"
 
 [dev-dependencies]
-toml = "0.8"
+tempfile = "3"
