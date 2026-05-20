@@ -75,6 +75,23 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+Implemented T-058 with a strict TDD cycle in `admin-rpc`. I first read the canonical task on `dev-agent` and the existing Work Log section (empty), then added failing tests for `policy.reload`: one for the existing no-handle NotImplemented path, one success case with a real `policy-control` handle and valid temp config, and one failure case with invalid config asserting the JSON-RPC error carries a non-empty `reason`. After confirming red, I wired `policy.reload` in `Dispatcher::dispatch` to a new `handle_policy_reload` method. The new handler preserves NotImplemented when `policy` is `None`, returns success `{ ok: true, reloaded: true }` when reload succeeds, and returns a JSON-RPC error with `category` and `reason` data when reload fails. I also renamed `_policy` to `policy`, updated the dispatch method table, and updated the `admin-rpc/src/lib.rs` policy handle doc comment. I considered reusing `map_service_error` for reload failures, but rejected that because this task requires surfacing a rejection reason in the RPC error payload; the dedicated policy-reload error response is clearer and directly testable. Remaining work on this branch is complete; next steps are lifecycle-log append on `dev-agent` and reviewer validation.
+
+Evidence:
+- Red phase:
+  - `cargo test -p admin-rpc dispatch_policy_reload` (failed as expected before implementation; 2 failing tests for unimplemented path/code mismatch).
+- Green phase:
+  - `cargo test -p admin-rpc dispatch_policy_reload` (3/3 passed).
+- Refactor safety / verification:
+  - `cargo test -p admin-rpc` initially failed in sandbox due Unix socket `Operation not permitted` on listener tests.
+  - Re-ran unsandboxed with approval: `cargo test -p admin-rpc` (82 passed).
+  - `cargo clippy -p admin-rpc --all-targets` (passed).
+
+Obstacles Encountered:
+- Sandbox environment blocks some Unix socket bind tests (`Operation not permitted`), so full test verification required an escalated run outside sandbox restrictions.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
