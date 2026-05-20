@@ -154,3 +154,19 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+PASS
+
+Stage 1 (bug criteria) passed:
+- Diagnosis Log includes reproduction status, concrete evidence, isolated fault, and explicit root cause aligned to the compile errors.
+- Fix updates `requests-handler` from legacy `AuditKind`/`description` usage to canonical `AuditRecordKind` + `AuditRecordPayload` with `session_id`, matching the isolated fault.
+- Fix Verification commands from this bug file were rerun by review:
+  - `cd the-intern/service && cargo test -p bob config::tests` (pass)
+  - `cd the-intern/service && cargo test -p bob serve::tests` (sandbox run hit Unix socket `PermissionDenied`; unsandboxed rerun passed)
+- No unrelated behavior changes were found in the implementation diff.
+
+Stage 2 (code quality) passed:
+- Correctness/readability: denial audit construction now matches canonical `bob-core` record schema.
+- Tests/regression: `requests-handler` denial-path assertions were updated to validate verdict payload semantics, and `cargo test -p requests-handler` passed.
+- Security/performance: denial logs and audit reason checks still avoid raw event payload leakage; no new performance risk introduced.
