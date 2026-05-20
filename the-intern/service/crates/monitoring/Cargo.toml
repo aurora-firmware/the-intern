@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1", features = ["rt", "sync", "net", "signal", "macros"] }
+tokio = { version = "1", features = ["rt", "sync", "net", "signal", "macros", "fs", "io-util"] }
 bob-core = { path = "../bob-core" }
 tracing = "0.1"
 async-trait = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
