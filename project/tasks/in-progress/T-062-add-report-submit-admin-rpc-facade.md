@@ -87,6 +87,28 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+Implemented the `report.submit` Admin-RPC facade in a single TDD cycle covering all four acceptance criteria.
+
+Added `monitoring` (plus `chrono` and `uuid`) as dependencies of `admin-rpc`. Extended `Dispatcher` with an optional `monitoring::Handle` field and updated its constructor signature; all existing call sites updated. Added `handle_report_submit` which enforces the `ExternalReportAuditPayload` shape via `deny_unknown_fields`, generates a UUID record-id and RFC 3339 timestamp, and delegates to `monitoring::Handle::append_record`. Added the `report.submit` dispatch arm. Extended the module-level method table with an "Auth gate" column noting all methods use the existing admin socket peer gate (AC-4). Added `monitoring: Option<monitoring::Handle>` to `admin_rpc::Config` and threaded the monitoring handle from `bob::serve::try_start_subsystems` into the config.
+
+Five new tests cover: valid report with handle returns `{ ok: true }` (AC-1); unknown field, missing required field, and absent params each return -32602 (AC-2); absent handle returns -32601 (AC-3). All 87 admin-rpc tests and all 18 bob serve tests pass; clippy is clean.
+
+One naming collision resolved: `bob_core::types::AuditRecord` clashes with `crate::subscriptions::AuditRecord`; resolved by aliasing the bob_core import as `MonitoringAuditRecord` at the import site in `dispatch.rs`. Using `chrono` for timestamps was chosen over `SystemTime` to stay consistent with the existing pattern in `requests-handler`.
+
+Verification (run from `the-intern/service`):
+- `cargo test -p admin-rpc report_submit` — 5 passed, 0 failed.
+- `cargo test -p bob serve::tests` — 18 passed, 0 failed.
+- `cargo clippy -p admin-rpc --all-targets` — clean, no warnings.
+- Git evidence: `010052a feat(admin-rpc): add report.submit facade over monitoring handle`.
+
+Nothing remains; all ACs are covered.
+
+Obstacles Encountered:
+- `bob_core::types::AuditRecord` and `crate::subscriptions::AuditRecord` share the same name. Resolved by aliasing the bob_core type as `MonitoringAuditRecord` in the import statement — no functional change required.
+- `ExternalReportAuditPayload` has `session_id` at both the payload level and the `AuditRecord` envelope level. The facade promotes the caller-supplied `session_id` to the envelope and sets the inner payload's `session_id` to `None`, matching the conventions visible in existing test fixtures.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
