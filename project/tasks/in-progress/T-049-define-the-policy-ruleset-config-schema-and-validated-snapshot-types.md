@@ -122,3 +122,26 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+PASS
+
+Both stages passed.
+
+**Stage 1 — Acceptance Criteria:**
+- AC-1: `PolicyConfig` with `admitted_users: Vec<String>` and `action_rules: Vec<ActionRule>` deserializes TOML correctly. Test `policy_config_deserializes_admitted_users_and_action_rules_from_toml` confirms round-trip through `toml::from_str`.
+- AC-2: `RulesetSnapshot`, `ActionRule`, and `ArgMatcher` are all defined and exported. `RulesetSnapshot` wraps both inner collections in `Arc<Vec<_>>`, making clone an O(1) refcount increment. Test `ruleset_snapshot_is_cheaply_cloneable_via_arc_sharing` verifies `Arc::ptr_eq` holds after clone.
+- AC-3: `from_config` with a non-empty valid config returns `Ok` and the snapshot reflects the input. Test `from_config_with_valid_config_returns_ok_snapshot_reflecting_config` confirms.
+- AC-4: `from_config` with an empty config returns `Ok` with empty `admitted_users` and `action_rules`. Test `from_config_with_empty_config_returns_deny_all_snapshot` confirms.
+- AC-5: Empty `field_path` or `pattern` in an `ArgMatcher` returns `Err(RulesetError::EmptyArgMatcher)`. Two tests cover both invalid-field-path and invalid-pattern cases; neither panics.
+
+Files modified are exactly those listed in the task. The `Cargo.lock` change is an expected side effect of adding `serde`, `thiserror`, and `toml` dependencies — not an out-of-scope modification. `serde_json` was not added (mentioned in the task's Cargo.toml note as "if absent"), which is correct since the crate has no JSON serialization requirement at this phase.
+
+**Stage 2 — Code Quality:**
+- Correctness: UUID parsing in `from_config` silently drops unparseable strings — rationale is documented in the Work Log and no AC requires an error for malformed user IDs. Validation of empty `ArgMatcher` fields is sound.
+- Tests: 10 tests total; 8 new tests cover all 5 ACs across both success and failure paths. Tests are independent with no shared mutable state.
+- Security: No hardcoded credentials, no external input beyond the scope of a config data layer.
+- Readability: Names are descriptive, follow Rust conventions, and comments explain purpose. Forward-references to T-050 are appropriate. No dead code or debugging artifacts.
+- Performance: `Arc` wrapping for cheap clone is appropriate. No unnecessary loops or resource leaks.
+
+All 10 tests passed (`cargo test -p policy-control`). Clippy reported no warnings (`cargo clippy -p policy-control --all-targets`).
