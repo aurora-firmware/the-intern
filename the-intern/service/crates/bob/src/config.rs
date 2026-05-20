@@ -34,6 +34,11 @@ pub struct BobConfig {
     ///
     /// An absent `[policy]` section yields an empty (deny-all) config.
     pub policy: PolicyConfig,
+    /// Resolved path to the TOML config file used to load this config.
+    ///
+    /// An empty path means no config file was loaded (defaults only).
+    /// Used by the policy-control actor for hot-reload.
+    pub config_path: PathBuf,
 }
 
 // `Default` is intentionally not implemented for `BobConfig`.
@@ -72,6 +77,7 @@ impl BobConfig {
             tracing_level: "info".to_string(),
             tracing_format: "pretty".to_string(),
             policy: PolicyConfig::default(),
+            config_path: PathBuf::new(),
         }
     }
 }
@@ -128,6 +134,9 @@ impl BobConfig {
             tracing_level: raw.tracing_level,
             tracing_format: raw.tracing_format,
             policy: raw.policy,
+            // Carry the resolved config file path so the policy-control actor
+            // can hot-reload from the same file on Handle::reload().
+            config_path: config_path.clone(),
         };
 
         cfg.validate()
