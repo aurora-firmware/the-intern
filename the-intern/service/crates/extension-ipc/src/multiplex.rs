@@ -1,7 +1,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use bob_core::types::SessionId;
+use bob_core::types::{
+    AuditRecord, AuditRecordKind, AuditRecordPayload, ExtensionEventAuditPayload,
+    PolicyVerdictAuditPayload, SessionId,
+};
 use tokio::sync::mpsc;
 
 use crate::framing::{InboundFrame, OutboundFrame};
@@ -13,9 +16,17 @@ pub struct MonitoringEvent {
     pub payload: serde_json::Value,
 }
 
+#[derive(Debug, Clone)]
+pub struct MonitoringVerdict {
+    pub session: SessionId,
+    pub allow: bool,
+    pub reason: Option<String>,
+}
+
 #[async_trait]
 pub trait MonitoringHandle: Send + Sync {
-    async fn record_event(&self, _event: MonitoringEvent);
+    async fn record_event(&self, event: MonitoringEvent);
+    async fn record_verdict(&self, verdict: MonitoringVerdict);
 }
 
 #[derive(Default)]
@@ -24,6 +35,7 @@ pub struct NoopMonitoringHandle;
 #[async_trait]
 impl MonitoringHandle for NoopMonitoringHandle {
     async fn record_event(&self, _event: MonitoringEvent) {}
+    async fn record_verdict(&self, _verdict: MonitoringVerdict) {}
 }
 
 /// A `MonitoringHandle` that emits structured `tracing::info!` events for each
@@ -47,6 +59,102 @@ impl MonitoringHandle for TracingMonitoringHandle {
             .unwrap_or("<unknown>");
         tracing::info!(session = %session, event = event_name, "extension event received");
         tracing::debug!(session = %session, payload = ?event.payload, "extension event full payload");
+    }
+
+    async fn record_verdict(&self, verdict: MonitoringVerdict) {
+        tracing::info!(
+            session = %verdict.session,
+            allow = verdict.allow,
+            reason = ?verdict.reason,
+            "extension authz verdict"
+        );
+    }
+}
+
+/// A `MonitoringHandle` backed by the real `monitoring::Handle`.
+///
+/// Forwards each event and verdict to the monitoring subsystem as a persistent
+/// `AuditRecord`, and also emits a secondary tracing log for observability.
+/// If monitoring rejects a record the failure is logged and control flow
+/// continues unaffected.
+pub struct MonitoringBackedHandle {
+    handle: monitoring::Handle,
+}
+
+impl MonitoringBackedHandle {
+    pub fn new(handle: monitoring::Handle) -> Self {
+        Self { handle }
+    }
+}
+
+#[async_trait]
+impl MonitoringHandle for MonitoringBackedHandle {
+    async fn record_event(&self, event: MonitoringEvent) {
+        let session = event.session;
+        let event_name = event
+            .payload
+            .get("event")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<unknown>")
+            .to_owned();
+
+        tracing::info!(session = %session, event = %event_name, "extension event received");
+        tracing::debug!(session = %session, payload = ?event.payload, "extension event full payload");
+
+        let record = AuditRecord {
+            id: format!(
+                "audit_ext_event_{}",
+                chrono::Utc::now().timestamp_millis()
+            ),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            kind: AuditRecordKind::Event,
+            session_id: Some(session),
+            payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
+                name: event_name,
+                summary: None,
+            }),
+        };
+
+        if let Err(err) = self.handle.append_record(record).await {
+            tracing::warn!(
+                error = %err,
+                session = %session,
+                "extension-ipc: monitoring rejected event audit record"
+            );
+        }
+    }
+
+    async fn record_verdict(&self, verdict: MonitoringVerdict) {
+        let session = verdict.session;
+
+        tracing::info!(
+            session = %session,
+            allow = verdict.allow,
+            reason = ?verdict.reason,
+            "extension authz verdict"
+        );
+
+        let record = AuditRecord {
+            id: format!(
+                "audit_ext_verdict_{}",
+                chrono::Utc::now().timestamp_millis()
+            ),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            kind: AuditRecordKind::Verdict,
+            session_id: Some(session),
+            payload: AuditRecordPayload::Verdict(PolicyVerdictAuditPayload {
+                allow: verdict.allow,
+                reason: verdict.reason,
+            }),
+        };
+
+        if let Err(err) = self.handle.append_record(record).await {
+            tracing::warn!(
+                error = %err,
+                session = %session,
+                "extension-ipc: monitoring rejected verdict audit record"
+            );
+        }
     }
 }
 
@@ -114,6 +222,17 @@ impl SessionMultiplexer {
             } => {
                 let snapshot = self.snapshot.load();
                 let verdict = PolicyEngine::evaluate_action(&snapshot, &tool, &arguments);
+
+                // Record the verdict to monitoring before sending the wire reply.  A
+                // monitoring failure is logged but never changes the policy outcome.
+                self.monitoring
+                    .record_verdict(MonitoringVerdict {
+                        session,
+                        allow: verdict.allow,
+                        reason: verdict.reason.clone(),
+                    })
+                    .await;
+
                 let route = self.route_for_session(session);
                 route
                     .send(OutboundFrame::AuthzVerdict { session, verdict })
@@ -267,12 +386,17 @@ mod tests {
     #[derive(Default)]
     struct CapturingMonitoringHandle {
         events: Mutex<Vec<MonitoringEvent>>,
+        verdicts: Mutex<Vec<MonitoringVerdict>>,
     }
 
     #[async_trait]
     impl MonitoringHandle for CapturingMonitoringHandle {
         async fn record_event(&self, event: MonitoringEvent) {
             self.events.lock().expect("events mutex").push(event);
+        }
+
+        async fn record_verdict(&self, verdict: MonitoringVerdict) {
+            self.verdicts.lock().expect("verdicts mutex").push(verdict);
         }
     }
 
@@ -439,6 +563,147 @@ mod tests {
         assert!(
             rx_b.try_recv().is_err(),
             "session b should not receive a reply"
+        );
+    }
+
+    // ---- MonitoringBackedHandle tests (AC-1, AC-2) ----
+
+    /// AC-1: When an Event frame is handled, an `AuditRecord` of kind `Event` is
+    /// submitted to the real Monitoring subsystem with the correct session id.
+    #[tokio::test(flavor = "current_thread")]
+    async fn event_frame_submits_event_audit_record_to_monitoring_with_session_id() {
+        use bob_core::types::{AuditFilterKind, AuditRecordKind};
+        use std::str::FromStr;
+        use std::time::Duration;
+        use tokio::time::timeout;
+
+        let temp = tempfile::tempdir().expect("tempdir must be created");
+        let log_path = temp.path().join("audit.jsonl");
+        let (monitoring_handle, _monitoring_task) = monitoring::start(monitoring::Config {
+            command_buffer: 4,
+            audit_log_path: log_path.clone(),
+        });
+
+        let mut subscription = monitoring_handle
+            .subscribe_tail(vec![AuditFilterKind::from_str("events").expect("events parses")])
+            .await
+            .expect("subscribe must succeed");
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let backed = Arc::new(MonitoringBackedHandle::new(monitoring_handle));
+        let monitoring: Arc<dyn MonitoringHandle> = backed;
+        let mut mux = SessionMultiplexer::new(monitoring, deny_all_snapshot(), tx);
+        let session = SessionId::new();
+
+        mux.handle_frame(InboundFrame::Event {
+            session,
+            payload: serde_json::json!({"event": "session.started"}),
+        })
+        .await
+        .expect("event frame must process");
+
+        let record = timeout(Duration::from_millis(500), subscription.recv())
+            .await
+            .expect("audit record must arrive within deadline")
+            .expect("subscription must stay open");
+
+        assert_eq!(record.kind, AuditRecordKind::Event);
+        assert_eq!(record.session_id, Some(session));
+    }
+
+    /// AC-2: When an Authz frame is handled, an `AuditRecord` of kind `Verdict` is
+    /// submitted to Monitoring with the correct session id, without changing the
+    /// policy verdict outcome.
+    #[tokio::test(flavor = "current_thread")]
+    async fn authz_frame_submits_verdict_audit_record_to_monitoring_with_session_id() {
+        use bob_core::types::{AuditFilterKind, AuditRecordKind, AuditRecordPayload};
+        use std::str::FromStr;
+        use std::time::Duration;
+        use tokio::time::timeout;
+
+        let temp = tempfile::tempdir().expect("tempdir must be created");
+        let log_path = temp.path().join("audit.jsonl");
+        let (monitoring_handle, _monitoring_task) = monitoring::start(monitoring::Config {
+            command_buffer: 4,
+            audit_log_path: log_path.clone(),
+        });
+
+        let mut subscription = monitoring_handle
+            .subscribe_tail(vec![AuditFilterKind::from_str("verdicts").expect("verdicts parses")])
+            .await
+            .expect("subscribe must succeed");
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let backed = Arc::new(MonitoringBackedHandle::new(monitoring_handle));
+        let monitoring: Arc<dyn MonitoringHandle> = backed;
+        let mut mux = SessionMultiplexer::new(monitoring, deny_all_snapshot(), tx);
+        let session = SessionId::new();
+
+        mux.handle_frame(InboundFrame::Authz {
+            session,
+            tool: "bash".to_owned(),
+            arguments: serde_json::json!({"cmd": "ls"}),
+        })
+        .await
+        .expect("authz frame must process");
+
+        // Policy outcome must still be a deny verdict on the wire.
+        let wire_reply = rx.recv().await.expect("wire reply must arrive");
+        match wire_reply {
+            OutboundFrame::AuthzVerdict {
+                session: got,
+                verdict,
+            } => {
+                assert_eq!(got, session);
+                assert!(!verdict.allow, "deny-all snapshot must produce deny verdict");
+            }
+        }
+
+        // Monitoring must have received a Verdict record.
+        let record = timeout(Duration::from_millis(500), subscription.recv())
+            .await
+            .expect("verdict audit record must arrive within deadline")
+            .expect("subscription must stay open");
+
+        assert_eq!(record.kind, AuditRecordKind::Verdict);
+        assert_eq!(record.session_id, Some(session));
+        // The audit payload must match the policy verdict.
+        match record.payload {
+            AuditRecordPayload::Verdict(ref p) => {
+                assert!(!p.allow, "audit verdict allow must match policy verdict");
+            }
+            ref other => panic!("expected Verdict payload, got {other:?}"),
+        }
+    }
+
+    /// AC-3: When Monitoring rejects an event audit record, the frame processing
+    /// succeeds and control flow is preserved.
+    #[tokio::test(flavor = "current_thread")]
+    async fn event_frame_monitoring_rejection_logs_failure_and_preserves_control_flow() {
+        // Start monitoring with an invalid path (directory as log path) so append fails.
+        let temp = tempfile::tempdir().expect("tempdir must be created");
+        let (monitoring_handle, _monitoring_task) = monitoring::start(monitoring::Config {
+            command_buffer: 4,
+            audit_log_path: temp.path().to_path_buf(), // directory — open fails
+        });
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let backed = Arc::new(MonitoringBackedHandle::new(monitoring_handle));
+        let monitoring: Arc<dyn MonitoringHandle> = backed;
+        let mut mux = SessionMultiplexer::new(monitoring, deny_all_snapshot(), tx);
+        let session = SessionId::new();
+
+        // Control flow must succeed even when monitoring rejects the record.
+        let result = mux
+            .handle_frame(InboundFrame::Event {
+                session,
+                payload: serde_json::json!({"event": "session.started"}),
+            })
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "monitoring rejection must not propagate as error; got: {result:?}"
         );
     }
 

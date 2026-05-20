@@ -40,6 +40,26 @@ pub async fn run_preflight(
         if let Err(err) = store.enqueue(event).await {
             tracing::warn!(error = %err, "preflight: persistence enqueue failed");
         }
+
+        // Record the allow verdict to the audit sink.  A monitoring failure is
+        // logged but does not affect the event's persistence outcome.
+        let record = AuditRecord {
+            id: format!(
+                "audit_preflight_allow_{}",
+                chrono::Utc::now().timestamp_millis()
+            ),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            kind: AuditRecordKind::Verdict,
+            session_id: None,
+            payload: AuditRecordPayload::Verdict(PolicyVerdictAuditPayload {
+                allow: true,
+                reason: None,
+            }),
+        };
+
+        if let Err(err) = audit.append(record).await {
+            tracing::warn!(error = %err, "preflight: audit append failed after allow");
+        }
     } else {
         let reason = if context.is_none() {
             "missing request context"
@@ -178,9 +198,12 @@ mod tests {
         let enqueued = store.enqueued.lock().unwrap();
         assert_eq!(enqueued.len(), 1, "expected exactly one event enqueued");
         assert_eq!(enqueued[0], event);
+        // An allow-verdict audit record is now emitted for every admitted event.
+        let records = audit.records.lock().unwrap();
+        assert_eq!(records.len(), 1, "allow-verdict audit record must be written on admit");
         assert!(
-            audit.records.lock().unwrap().is_empty(),
-            "no audit record should be written on allow"
+            matches!(records[0].payload, AuditRecordPayload::Verdict(ref p) if p.allow),
+            "audit record must be an allow verdict"
         );
     }
 
@@ -199,7 +222,12 @@ mod tests {
 
         let enqueued = store.enqueued.lock().unwrap();
         assert_eq!(enqueued.len(), 1);
-        assert!(audit.records.lock().unwrap().is_empty());
+        // An allow-verdict audit record must still be present.
+        let records = audit.records.lock().unwrap();
+        assert_eq!(records.len(), 1, "allow-verdict audit record must be written");
+        assert!(
+            matches!(records[0].payload, AuditRecordPayload::Verdict(ref p) if p.allow),
+        );
     }
 
     // AC-2: non-admitted user causes denial and PreflightDenied audit record.
@@ -289,6 +317,35 @@ mod tests {
             records[0].payload,
             AuditRecordPayload::Verdict(ref payload) if !payload.allow
         ));
+    }
+
+    // AC-2 (T-065): admitted user causes an allow-verdict audit record to be emitted.
+    #[tokio::test]
+    async fn admitted_user_causes_allow_verdict_audit_record_to_be_emitted() {
+        let user_id = UserId::new();
+        let snapshot = make_snapshot(vec![user_id]);
+        let store = RecordingStore::default();
+        let audit = RecordingAudit::default();
+        let event = chat_event("hello");
+        let ctx = make_context(user_id);
+
+        run_preflight(event.clone(), Some(&ctx), &snapshot, &store, &audit).await;
+
+        let records = audit.records.lock().unwrap();
+        assert_eq!(
+            records.len(),
+            1,
+            "exactly one verdict audit record expected on allow"
+        );
+        assert_eq!(records[0].kind, AuditRecordKind::Verdict);
+        assert!(
+            matches!(
+                records[0].payload,
+                AuditRecordPayload::Verdict(ref payload) if payload.allow
+            ),
+            "audit payload must be an allow verdict, got {:?}",
+            records[0].payload
+        );
     }
 
     // AC-2: audit record reason does not contain the raw event payload.

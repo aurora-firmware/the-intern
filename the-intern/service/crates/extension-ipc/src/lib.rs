@@ -14,7 +14,7 @@ use tokio::{net::UnixStream, sync::mpsc, task::JoinHandle};
 use crate::listener::{Listener, ListenerConfig};
 use crate::multiplex::{MonitoringHandle, NoopMonitoringHandle, SessionMultiplexer};
 
-pub use crate::multiplex::TracingMonitoringHandle;
+pub use crate::multiplex::{MonitoringBackedHandle, TracingMonitoringHandle};
 
 #[derive(Clone)]
 pub struct Config {
@@ -296,6 +296,8 @@ mod tests {
         async fn record_event(&self, event: MonitoringEvent) {
             self.events.lock().expect("events lock").push(event);
         }
+
+        async fn record_verdict(&self, _verdict: crate::multiplex::MonitoringVerdict) {}
     }
 
     fn deny_all_snapshot() -> policy_control::SnapshotHandle {

@@ -187,7 +187,9 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
 
     info!("starting extension-ipc actor");
     let (extension_ipc_handle, extension_ipc_join) = extension_ipc::start(extension_ipc::Config {
-        monitoring_handle: Arc::new(extension_ipc::TracingMonitoringHandle),
+        monitoring_handle: Arc::new(extension_ipc::MonitoringBackedHandle::new(
+            monitoring_handle.clone(),
+        )),
         policy_snapshot: policy_snapshot.clone(),
         ..extension_ipc::Config::default()
     });
@@ -833,6 +835,72 @@ pub mod tests {
         // does not implement MonitoringHandle the line above will not compile.
         // A non-empty Arc is sufficient evidence.
         assert!(Arc::strong_count(&cfg.monitoring_handle) >= 1);
+    }
+
+    // AC-4 (T-065): start_subsystems wires a MonitoringBackedHandle (not the
+    // tracing-only placeholder) into extension-ipc so that extension events and
+    // verdicts become persistent audit records.
+    //
+    // The test verifies that after start_subsystems the monitoring audit log
+    // receives records when an event audit record is appended through the same
+    // monitoring handle that extension-ipc holds.  The runtime exposes the
+    // monitoring handle through `_monitoring`, which is the same handle wired into
+    // extension-ipc's MonitoringBackedHandle.
+    #[tokio::test(flavor = "current_thread")]
+    async fn extension_ipc_is_wired_with_monitoring_backed_handle_not_tracing_placeholder() {
+        use bob_core::types::{AuditFilterKind, AuditRecord, AuditRecordKind, AuditRecordPayload,
+            ExtensionEventAuditPayload};
+        use std::str::FromStr;
+        use std::time::Duration;
+        use tokio::time::timeout;
+
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let audit_log = tmp.path().join("audit.jsonl");
+        let cfg = BobConfig {
+            admin_sock_path: tmp.path().join("admin.sock"),
+            extension_sock_path: tmp.path().join("extension.sock"),
+            monitoring: crate::config::MonitoringConfig {
+                audit_log_path: audit_log.clone(),
+                default_tail_filters: vec![],
+            },
+            ..BobConfig::test_base()
+        };
+        let runtime = start_subsystems(&cfg).expect("subsystems must start");
+
+        // Subscribe to events on the shared monitoring handle.
+        let mut subscription = runtime
+            ._monitoring
+            .subscribe_tail(vec![AuditFilterKind::from_str("events").expect("events parses")])
+            .await
+            .expect("subscribe must succeed");
+
+        // Append a record through the monitoring handle; if extension-ipc held the same
+        // handle (MonitoringBackedHandle wraps it), the subscription will receive it.
+        let record = AuditRecord {
+            id: "test_wiring_001".to_owned(),
+            timestamp: "2026-05-20T12:00:00Z".to_owned(),
+            kind: AuditRecordKind::Event,
+            session_id: None,
+            payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
+                name: "test.wiring".to_owned(),
+                summary: None,
+            }),
+        };
+        runtime
+            ._monitoring
+            .append_record(record)
+            .await
+            .expect("append through monitoring handle must succeed");
+
+        let received = timeout(Duration::from_millis(500), subscription.recv())
+            .await
+            .expect("audit record must be delivered within deadline")
+            .expect("subscription must stay open");
+
+        assert_eq!(received.kind, AuditRecordKind::Event);
+        assert_eq!(received.id, "test_wiring_001");
+
+        run_shutdown_protocol(runtime, &cfg).await;
     }
 
     // ── AC-4 (T-053): policy-control actor is started with real Config ────────
