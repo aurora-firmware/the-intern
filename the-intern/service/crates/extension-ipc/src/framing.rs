@@ -30,7 +30,6 @@ pub enum InboundFrame {
         session: SessionId,
         tool: String,
         arguments: Value,
-        user: String,
     },
     Event {
         session: SessionId,
@@ -66,7 +65,7 @@ mod tests {
     fn parses_authz_frame_with_session_tag() {
         let session = SessionId::new();
         let raw = format!(
-            "{{\"kind\":\"authz\",\"session\":\"{session}\",\"tool\":\"bash\",\"arguments\":{{\"cmd\":\"ls\"}},\"user\":\"alice\"}}\n"
+            "{{\"kind\":\"authz\",\"session\":\"{session}\",\"tool\":\"bash\",\"arguments\":{{\"cmd\":\"ls\"}}}}\n"
         );
 
         let frame = parse_inbound_frame(&raw).expect("frame parses");
@@ -76,15 +75,28 @@ mod tests {
                 session: got,
                 tool,
                 arguments,
-                user,
             } => {
                 assert_eq!(got, session);
                 assert_eq!(tool, "bash");
                 assert_eq!(arguments["cmd"], "ls");
-                assert_eq!(user, "alice");
             }
             other => panic!("unexpected frame: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_authz_frame_without_user_field() {
+        let session = SessionId::new();
+        let raw = format!(
+            "{{\"kind\":\"authz\",\"session\":\"{session}\",\"tool\":\"read\",\"arguments\":{{}}}}\n"
+        );
+
+        let frame = parse_inbound_frame(&raw).expect("authz frame without user field must parse");
+
+        assert!(
+            matches!(frame, InboundFrame::Authz { .. }),
+            "frame must be Authz variant"
+        );
     }
 
     #[test]

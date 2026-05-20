@@ -287,7 +287,6 @@ mod tests {
             session,
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"cmd": "ls"}),
-            user: "alice".to_owned(),
         })
         .await
         .expect("frame should process");
@@ -316,7 +315,6 @@ mod tests {
             session,
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"cmd": "ls"}),
-            user: "alice".to_owned(),
         })
         .await
         .expect("frame should process");
@@ -348,7 +346,6 @@ mod tests {
             session,
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"cmd": "ls"}),
-            user: "alice".to_owned(),
         })
         .await
         .expect("frame should process");
@@ -407,7 +404,6 @@ mod tests {
             session: session_a,
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"cmd": "echo a"}),
-            user: "alice".to_owned(),
         })
         .await
         .expect("session a frame");
@@ -415,7 +411,6 @@ mod tests {
             session: session_b,
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"cmd": "echo b"}),
-            user: "bob".to_owned(),
         })
         .await
         .expect("session b frame");
@@ -470,7 +465,6 @@ mod tests {
             session: unknown_session,
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"cmd": "id"}),
-            user: "alice".to_owned(),
         })
         .await
         .expect("first frame should process");
@@ -491,7 +485,6 @@ mod tests {
             session: unknown_session,
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"cmd": "id"}),
-            user: "alice".to_owned(),
         })
         .await
         .expect("second frame should process");
