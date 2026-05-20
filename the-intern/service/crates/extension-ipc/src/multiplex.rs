@@ -5,6 +5,7 @@ use bob_core::types::SessionId;
 use tokio::sync::mpsc;
 
 use crate::framing::{InboundFrame, OutboundFrame};
+use policy_control::{PolicyEngine, SnapshotHandle};
 
 #[derive(Debug, Clone)]
 pub struct MonitoringEvent {
@@ -68,6 +69,7 @@ impl std::error::Error for MultiplexError {}
 
 pub struct SessionMultiplexer {
     monitoring: Arc<dyn MonitoringHandle>,
+    snapshot: SnapshotHandle,
     default_route: mpsc::UnboundedSender<OutboundFrame>,
     session_routes: HashMap<SessionId, mpsc::UnboundedSender<OutboundFrame>>,
 }
@@ -75,10 +77,12 @@ pub struct SessionMultiplexer {
 impl SessionMultiplexer {
     pub fn new(
         monitoring: Arc<dyn MonitoringHandle>,
+        snapshot: SnapshotHandle,
         default_route: mpsc::UnboundedSender<OutboundFrame>,
     ) -> Self {
         Self {
             monitoring,
+            snapshot,
             default_route,
             session_routes: HashMap::new(),
         }
@@ -102,11 +106,14 @@ impl SessionMultiplexer {
 
     pub async fn handle_frame(&mut self, frame: InboundFrame) -> Result<(), MultiplexError> {
         match frame {
-            InboundFrame::Authz { session, .. } => {
-                let verdict = bob_core::types::PolicyVerdict {
-                    allow: false,
-                    reason: Some("policy not implemented".to_owned()),
-                };
+            InboundFrame::Authz {
+                session,
+                tool,
+                arguments,
+                ..
+            } => {
+                let snapshot = self.snapshot.load();
+                let verdict = PolicyEngine::evaluate_action(&snapshot, &tool, &arguments);
                 let route = self.route_for_session(session);
                 route
                     .send(OutboundFrame::AuthzVerdict { session, verdict })
@@ -136,8 +143,42 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use bob_core::types::{PolicyVerdict, SessionId};
+    use policy_control::{ActionRule, PolicyConfig, RulesetSnapshot, SnapshotHandle};
 
     use super::*;
+
+    // ---- Helpers ----
+
+    /// Returns a deny-all `SnapshotHandle` (no admitted users, no action rules).
+    fn deny_all_snapshot() -> SnapshotHandle {
+        let snapshot = RulesetSnapshot::from_config(PolicyConfig {
+            admitted_users: vec![],
+            action_rules: vec![],
+        })
+        .expect("valid deny-all config");
+        let (_, _, handle) = policy_control::start(policy_control::Config {
+            initial_snapshot: snapshot,
+            ..policy_control::Config::default()
+        });
+        handle
+    }
+
+    /// Returns a `SnapshotHandle` that permits `tool` unconditionally.
+    fn allow_tool_snapshot(tool: &str) -> SnapshotHandle {
+        let snapshot = RulesetSnapshot::from_config(PolicyConfig {
+            admitted_users: vec![],
+            action_rules: vec![ActionRule {
+                tool: tool.to_owned(),
+                arg_matchers: vec![],
+            }],
+        })
+        .expect("valid allow config");
+        let (_, _, handle) = policy_control::start(policy_control::Config {
+            initial_snapshot: snapshot,
+            ..policy_control::Config::default()
+        });
+        handle
+    }
 
     // ---- TracingMonitoringHandle tests (AC-1, AC-2) ----
 
@@ -236,10 +277,10 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn authz_frame_returns_deny_by_default_on_same_session_route() {
+    async fn authz_frame_returns_deny_when_no_rule_permits_the_tool() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
-        let mut mux = SessionMultiplexer::new(monitoring, tx);
+        let mut mux = SessionMultiplexer::new(monitoring, deny_all_snapshot(), tx);
         let session = SessionId::new();
 
         mux.handle_frame(InboundFrame::Authz {
@@ -265,11 +306,72 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn authz_frame_returns_allow_when_snapshot_has_matching_rule() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
+        let mut mux = SessionMultiplexer::new(monitoring, allow_tool_snapshot("bash"), tx);
+        let session = SessionId::new();
+
+        mux.handle_frame(InboundFrame::Authz {
+            session,
+            tool: "bash".to_owned(),
+            arguments: serde_json::json!({"cmd": "ls"}),
+            user: "alice".to_owned(),
+        })
+        .await
+        .expect("frame should process");
+
+        let sent = rx.recv().await.expect("reply frame");
+        match sent {
+            OutboundFrame::AuthzVerdict {
+                session: got,
+                verdict,
+            } => {
+                assert_eq!(got, session);
+                assert!(
+                    verdict.allow,
+                    "snapshot permits bash; verdict must be allow, got: {verdict:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn authz_verdict_reason_is_absent_when_snapshot_returns_not_the_hardcoded_string() {
+        // AC-3: the deny reason must NOT be the old hardcoded "policy not implemented" string.
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
+        let mut mux = SessionMultiplexer::new(monitoring, deny_all_snapshot(), tx);
+        let session = SessionId::new();
+
+        mux.handle_frame(InboundFrame::Authz {
+            session,
+            tool: "bash".to_owned(),
+            arguments: serde_json::json!({"cmd": "ls"}),
+            user: "alice".to_owned(),
+        })
+        .await
+        .expect("frame should process");
+
+        let sent = rx.recv().await.expect("reply frame");
+        match sent {
+            OutboundFrame::AuthzVerdict { verdict, .. } => {
+                assert!(!verdict.allow);
+                let reason = verdict.reason.as_deref().unwrap_or("");
+                assert_ne!(
+                    reason, "policy not implemented",
+                    "hardcoded deny string must not appear; reason: {reason}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn event_frame_forwards_to_monitoring_without_wire_reply() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let monitor = Arc::new(CapturingMonitoringHandle::default());
         let monitoring: Arc<dyn MonitoringHandle> = monitor.clone();
-        let mut mux = SessionMultiplexer::new(monitoring, tx);
+        let mut mux = SessionMultiplexer::new(monitoring, deny_all_snapshot(), tx);
         let session = SessionId::new();
 
         mux.handle_frame(InboundFrame::Event {
@@ -291,7 +393,7 @@ mod tests {
     async fn distinct_sessions_do_not_cross_deliver_replies() {
         let (default_tx, _default_rx) = mpsc::unbounded_channel();
         let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
-        let mut mux = SessionMultiplexer::new(monitoring, default_tx);
+        let mut mux = SessionMultiplexer::new(monitoring, deny_all_snapshot(), default_tx);
 
         let session_a = SessionId::new();
         let session_b = SessionId::new();
@@ -358,7 +460,7 @@ mod tests {
     async fn route_for_session_reflects_new_default_for_unknown_session_after_default_replaced() {
         let (tx_a, mut rx_a) = mpsc::unbounded_channel::<OutboundFrame>();
         let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
-        let mut mux = SessionMultiplexer::new(monitoring, tx_a);
+        let mut mux = SessionMultiplexer::new(monitoring, deny_all_snapshot(), tx_a);
 
         // Unknown session — no explicit registration.
         let unknown_session = SessionId::new();

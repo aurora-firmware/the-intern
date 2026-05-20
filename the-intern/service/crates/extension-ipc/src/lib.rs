@@ -23,6 +23,7 @@ pub struct Config {
     pub extension_allowed_uids: Vec<u32>,
     pub service_uid: u32,
     pub monitoring_handle: Arc<dyn MonitoringHandle>,
+    pub policy_snapshot: policy_control::SnapshotHandle,
 }
 
 impl std::fmt::Debug for Config {
@@ -33,18 +34,21 @@ impl std::fmt::Debug for Config {
             .field("extension_allowed_uids", &self.extension_allowed_uids)
             .field("service_uid", &self.service_uid)
             .field("monitoring_handle", &"<dyn MonitoringHandle>")
+            .field("policy_snapshot", &"<SnapshotHandle>")
             .finish()
     }
 }
 
 impl Default for Config {
     fn default() -> Self {
+        let (_, _, snapshot) = policy_control::start(policy_control::Config::default());
         Self {
             command_buffer: 0,
             extension_sock_path: PathBuf::new(),
             extension_allowed_uids: Vec::new(),
             service_uid: current_uid(),
             monitoring_handle: Arc::new(NoopMonitoringHandle),
+            policy_snapshot: snapshot,
         }
     }
 }
@@ -119,10 +123,14 @@ impl Actor {
 // sharing a single loop the stall from one slow peer would block inbound
 // processing for all other peers. If the design ever moves to multiple
 // connections, the write path must be decoupled from the read loop.
-async fn run_connection(stream: UnixStream, monitoring_handle: Arc<dyn MonitoringHandle>) {
+async fn run_connection(
+    stream: UnixStream,
+    monitoring_handle: Arc<dyn MonitoringHandle>,
+    snapshot: policy_control::SnapshotHandle,
+) {
     let stream = stream;
     let (out_tx, mut out_rx) = mpsc::unbounded_channel();
-    let mut multiplexer = SessionMultiplexer::new(monitoring_handle, out_tx.clone());
+    let mut multiplexer = SessionMultiplexer::new(monitoring_handle, snapshot, out_tx.clone());
     let mut inbound = Vec::new();
     let mut read_buf = [0_u8; 4096];
 
@@ -204,12 +212,17 @@ async fn write_all_nonblocking(stream: &UnixStream, mut payload: &[u8]) -> std::
     Ok(())
 }
 
-async fn run_listener(listener: Listener, monitoring_handle: Arc<dyn MonitoringHandle>) {
+async fn run_listener(
+    listener: Listener,
+    monitoring_handle: Arc<dyn MonitoringHandle>,
+    snapshot: policy_control::SnapshotHandle,
+) {
     loop {
         match listener.accept().await {
             Ok(Some(stream)) => {
                 let monitoring = Arc::clone(&monitoring_handle);
-                tokio::spawn(run_connection(stream, monitoring));
+                let snapshot = snapshot.clone();
+                tokio::spawn(run_connection(stream, monitoring, snapshot));
             }
             Ok(None) => {
                 // Rejected peer already logged in `Listener::accept`.
@@ -225,6 +238,7 @@ pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
     let buffer = cfg.command_buffer.max(1);
     let (tx, rx) = mpsc::channel(buffer);
     let monitoring_handle = Arc::clone(&cfg.monitoring_handle);
+    let snapshot = cfg.policy_snapshot.clone();
 
     let maybe_listener = if cfg.extension_sock_path.as_os_str().is_empty() {
         None
@@ -254,7 +268,7 @@ pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
     };
 
     if let Some(listener) = maybe_listener {
-        tokio::spawn(run_listener(listener, monitoring_handle));
+        tokio::spawn(run_listener(listener, monitoring_handle, snapshot));
     }
 
     let actor = Actor { cfg, rx };
@@ -282,6 +296,11 @@ mod tests {
         async fn record_event(&self, event: MonitoringEvent) {
             self.events.lock().expect("events lock").push(event);
         }
+    }
+
+    fn deny_all_snapshot() -> policy_control::SnapshotHandle {
+        let (_, _, handle) = policy_control::start(policy_control::Config::default());
+        handle
     }
 
     async fn write_frame(stream: &UnixStream, payload: &str) {
@@ -392,7 +411,7 @@ mod tests {
     async fn connection_authz_frame_returns_deny_verdict_with_same_session() {
         let (client, server) = UnixStream::pair().expect("socket pair");
         let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
-        let conn = tokio::spawn(run_connection(server, monitoring));
+        let conn = tokio::spawn(run_connection(server, monitoring, deny_all_snapshot()));
 
         let session = bob_core::types::SessionId::new();
         let authz = format!(
@@ -418,7 +437,7 @@ mod tests {
         let (client, server) = UnixStream::pair().expect("socket pair");
         let monitoring = Arc::new(CapturingMonitoringHandle::default());
         let sink: Arc<dyn MonitoringHandle> = monitoring.clone();
-        let conn = tokio::spawn(run_connection(server, sink));
+        let conn = tokio::spawn(run_connection(server, sink, deny_all_snapshot()));
         let session = bob_core::types::SessionId::new();
 
         let event = format!(
@@ -444,7 +463,7 @@ mod tests {
     async fn connection_parse_failures_close_socket_without_echo() {
         let (client, server) = UnixStream::pair().expect("socket pair");
         let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
-        let conn = tokio::spawn(run_connection(server, monitoring));
+        let conn = tokio::spawn(run_connection(server, monitoring, deny_all_snapshot()));
 
         write_frame(&client, "{\"kind\":\"event\",\"payload\":{\"bad\":true}}\n").await;
 
@@ -460,7 +479,7 @@ mod tests {
     async fn connection_malformed_json_closes_socket_without_echo() {
         let (client, server) = UnixStream::pair().expect("socket pair");
         let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
-        let conn = tokio::spawn(run_connection(server, monitoring));
+        let conn = tokio::spawn(run_connection(server, monitoring, deny_all_snapshot()));
 
         write_frame(&client, "{\"kind\":\"authz\" this is invalid\n").await;
 
@@ -476,7 +495,7 @@ mod tests {
     async fn connection_invalid_utf8_closes_socket_without_echo() {
         let (client, server) = UnixStream::pair().expect("socket pair");
         let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
-        let conn = tokio::spawn(run_connection(server, monitoring));
+        let conn = tokio::spawn(run_connection(server, monitoring, deny_all_snapshot()));
 
         write_all_nonblocking(&client, b"\xff\n")
             .await

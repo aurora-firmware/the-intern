@@ -299,6 +299,7 @@ dependencies = [
  "async-trait",
  "bob-core",
  "nix",
+ "policy-control",
  "serde",
  "serde_json",
  "tempfile",
