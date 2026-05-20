@@ -605,6 +605,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bob-core",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]
