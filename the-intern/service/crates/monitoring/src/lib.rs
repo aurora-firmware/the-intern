@@ -378,4 +378,58 @@ mod tests {
             serde_json::from_str(lines[0]).expect("line must deserialize as AuditRecord");
         assert_eq!(restored.kind, AuditRecordKind::Verdict);
     }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn append_record_returns_typed_error_when_audit_file_cannot_be_opened() {
+        let temp = tempfile::tempdir().expect("tempdir must be created");
+        let directory_path = temp.path().to_path_buf();
+        let (handle, task) = start(Config {
+            command_buffer: 1,
+            audit_log_path: directory_path,
+        });
+
+        let result = handle.append_record(test_record()).await;
+
+        assert!(
+            matches!(result, Err(ServiceError::Persistence { .. })),
+            "failed open should return typed persistence error, got: {result:?}"
+        );
+
+        drop(handle);
+        task.await.expect("actor task should exit cleanly");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn actor_flushes_buffered_audit_records_on_shutdown() {
+        let temp = tempfile::tempdir().expect("tempdir must be created");
+        let log_path = temp.path().join("audit.jsonl");
+        let (handle, task) = start(Config {
+            command_buffer: 1,
+            audit_log_path: log_path.clone(),
+        });
+
+        handle
+            .append_record(test_record())
+            .await
+            .expect("append should succeed");
+
+        let before_shutdown = tokio::fs::read_to_string(&log_path)
+            .await
+            .expect("audit file must be readable before shutdown");
+        assert!(
+            before_shutdown.is_empty(),
+            "record should still be buffered before actor shutdown"
+        );
+
+        drop(handle);
+        task.await.expect("actor task should exit cleanly");
+
+        let after_shutdown = tokio::fs::read_to_string(&log_path)
+            .await
+            .expect("audit file must be readable after shutdown");
+        assert!(
+            !after_shutdown.is_empty(),
+            "buffered record should be flushed during shutdown"
+        );
+    }
 }
