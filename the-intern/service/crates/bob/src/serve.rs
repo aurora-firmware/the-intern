@@ -46,6 +46,10 @@ struct Runtime {
     // Paths to remove on shutdown.
     admin_sock_path: PathBuf,
     extension_sock_path: PathBuf,
+
+    // Snapshot handle for the active policy ruleset; wired to gate crates
+    // in T-054 / T-056.
+    policy_snapshot: policy_control::SnapshotHandle,
 }
 
 /// Constructs every subsystem actor, binds the two Unix domain socket paths
@@ -102,8 +106,21 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     info!("persistence actor started");
 
     info!("starting policy-control actor");
-    let (policy_control_handle, policy_control_join, _policy_snapshot) =
-        policy_control::start(policy_control::Config::default());
+    // Build the initial ruleset snapshot from the policy config.  An empty
+    // (deny-all) config is always valid; a structurally invalid config (e.g.
+    // an ArgMatcher with empty fields) fails startup here rather than at
+    // policy check time.
+    let initial_snapshot =
+        policy_control::RulesetSnapshot::from_config(cfg.policy.clone()).map_err(|e| {
+            format!("invalid policy config: {e}")
+        })?;
+    let policy_cfg = policy_control::Config {
+        initial_snapshot,
+        config_path: cfg.config_path.clone(),
+        command_buffer: 16,
+    };
+    let (policy_control_handle, policy_control_join, policy_snapshot) =
+        policy_control::start(policy_cfg);
     info!("policy-control actor started");
 
     info!("starting pi-agent-supervisor actor");
@@ -114,11 +131,19 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
 
     info!("starting requests-handler actor");
     let (rh_cancel_tx, rh_cancel_rx) = watch::channel(false);
+    // Admission users now come from the [policy] section.  T-054 will replace
+    // this PreflightConfig path entirely; until then, source the list from
+    // the policy config so PreflightConfig keeps compiling.
+    let admitted_user_ids: Vec<bob_core::types::UserId> = cfg
+        .policy
+        .admitted_users
+        .iter()
+        .filter_map(|s| s.parse().ok())
+        .collect();
     let preflight_cfg = requests_handler::PreflightConfig {
-        allowed_user_ids: cfg.allowed_user_ids.clone(),
+        allowed_user_ids: admitted_user_ids.clone(),
     };
-    let default_context = cfg
-        .allowed_user_ids
+    let default_context = admitted_user_ids
         .first()
         .copied()
         .map(|sender| RequestContext {
@@ -221,6 +246,7 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         supervisor_join: pi_agent_supervisor_join,
         admin_sock_path: cfg.admin_sock_path.clone(),
         extension_sock_path: cfg.extension_sock_path.clone(),
+        policy_snapshot,
     })
 }
 
@@ -288,6 +314,9 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
         supervisor_join,
         admin_sock_path,
         extension_sock_path,
+        // policy_snapshot is dropped here; gate crates will hold their own
+        // clones until T-054 / T-056 wire them in.
+        policy_snapshot: _policy_snapshot,
     } = runtime;
 
     // Phase 1: Stop accepting new connections by dropping handles (channels close).
@@ -502,7 +531,8 @@ pub mod tests {
     async fn permitted_event_is_persisted_via_wired_requests_handler_and_persistence() {
         let tmp = tempfile::tempdir().expect("temp dir");
         let mut cfg = test_cfg_with_sockets(&tmp);
-        cfg.allowed_user_ids = vec![UserId::new()];
+        let user_id = UserId::new();
+        cfg.policy.admitted_users = vec![user_id.to_string()];
         let runtime = start_subsystems(&cfg).expect("subsystems must start");
 
         let event = InternalEvent::ChatMessage {
@@ -774,5 +804,38 @@ pub mod tests {
         // does not implement MonitoringHandle the line above will not compile.
         // A non-empty Arc is sufficient evidence.
         assert!(Arc::strong_count(&cfg.monitoring_handle) >= 1);
+    }
+
+    // ── AC-4 (T-053): policy-control actor is started with real Config ────────
+    //
+    // When start_subsystems is called with a BobConfig whose policy section
+    // carries admitted users, the runtime's policy snapshot handle must reflect
+    // those users immediately after startup — proving the real Config (not
+    // Config::default()) was used to start the actor.
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn policy_snapshot_handle_reflects_admitted_users_from_config_on_startup() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let user_id = UserId::new();
+        let mut cfg = test_cfg_with_sockets(&tmp);
+        cfg.policy.admitted_users = vec![user_id.to_string()];
+
+        let runtime = start_subsystems(&cfg).expect("subsystems must start");
+
+        // The snapshot handle stored in the runtime must already reflect the
+        // admitted user sourced from cfg.policy — this proves the actor was
+        // started with the initial snapshot built from config, not the deny-all
+        // Config::default().
+        let snapshot = runtime.policy_snapshot.load();
+        assert_eq!(
+            snapshot.admitted_users().len(),
+            1,
+            "policy snapshot must contain the admitted user from cfg.policy"
+        );
+        assert_eq!(
+            snapshot.admitted_users()[0],
+            user_id,
+            "admitted user in snapshot must match the one in cfg.policy"
+        );
     }
 }
