@@ -1,7 +1,7 @@
 ---
 id: T-050
 title: Implement the policy argument matcher with glob and field-path matching
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-20'
