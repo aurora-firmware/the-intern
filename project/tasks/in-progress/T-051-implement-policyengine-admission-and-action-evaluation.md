@@ -101,3 +101,26 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+
+PASS
+
+Stage 1 (spec compliance): All five acceptance criteria are met.
+
+- AC-1: `evaluate_admission` returns allow when the user is in the snapshot's admission list. Confirmed in code and covered by test `evaluate_admission_returns_allow_when_user_is_in_admission_list`.
+- AC-2: `evaluate_admission` returns deny with a non-empty reason when the user is absent. Covered by two tests (absent user, empty list).
+- AC-3: `evaluate_action` returns allow when a rule names the tool and all arg matchers pass (including the zero-matcher vacuous case). Covered by two tests.
+- AC-4: `evaluate_action` returns deny with a non-empty reason when no rule matches (absent tool, empty rules, one matcher failing). Covered by three tests.
+- AC-5: Both functions are pure, synchronous, and take the snapshot by reference. `PolicyEngine` is a unit struct with no stored state, and no I/O is performed.
+
+Only the two files specified in the task were modified (`engine.rs` created, `lib.rs` extended with `mod engine;` and `pub use engine::PolicyEngine`).
+
+Stage 2 (code quality): All checks pass.
+
+- Correctness: `rule_matches` correctly short-circuits on tool name mismatch before checking matchers; `any()`/`all()` composition is sound for any-rule/all-matchers semantics. Edge cases (empty rules, empty matchers, empty admission list) all behave correctly.
+- Tests: 9 independent unit tests, all passing (`cargo test -p policy-control` — 37 tests total, 0 failed). Both success and failure paths are covered for each gate. Tests build isolated snapshots with no shared mutable state.
+- Clippy: `cargo clippy -p policy-control --all-targets` produces no warnings.
+- Security: No hardcoded secrets, no I/O, no external input beyond function parameters.
+- Readability: Names are descriptive, `rule_matches` is a well-named private helper, `#[must_use]` is applied to both public functions, and no dead code or debugging artifacts are present.
+- Performance: Single-pass `any()` with short-circuit evaluation; allocations only on the deny path for the reason string.
