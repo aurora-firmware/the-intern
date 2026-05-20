@@ -1,7 +1,7 @@
 ---
 id: T-065
 title: Record extension events and policy verdicts in Monitoring
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-20'
