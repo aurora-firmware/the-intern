@@ -6,8 +6,10 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1", features = ["rt", "sync", "net", "signal", "macros"] }
 bob-core = { path = "../bob-core" }
+monitoring = { path = "../monitoring" }
 policy-control = { path = "../policy-control" }
 tracing = "0.1"
+chrono = "0.4"
 serde = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
