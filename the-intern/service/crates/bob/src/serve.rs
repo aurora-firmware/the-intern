@@ -180,6 +180,7 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     info!("starting extension-ipc actor");
     let (extension_ipc_handle, extension_ipc_join) = extension_ipc::start(extension_ipc::Config {
         monitoring_handle: Arc::new(extension_ipc::TracingMonitoringHandle),
+        policy_snapshot: policy_snapshot.clone(),
         ..extension_ipc::Config::default()
     });
     info!("extension-ipc actor started");
@@ -791,8 +792,12 @@ pub mod tests {
     // MonitoringHandle for the extension-ipc actor.  Constructing the config here
     // (the same expression used in try_start_subsystems) guarantees at compile time
     // that TracingMonitoringHandle is reachable and satisfies MonitoringHandle.
-    #[test]
-    fn extension_ipc_config_accepts_tracing_monitoring_handle() {
+    //
+    // Must be an async test because extension_ipc::Config::default() initialises
+    // the policy_snapshot field via policy_control::start(), which requires a
+    // Tokio runtime.
+    #[tokio::test(flavor = "current_thread")]
+    async fn extension_ipc_config_accepts_tracing_monitoring_handle() {
         let cfg = extension_ipc::Config {
             monitoring_handle: Arc::new(extension_ipc::TracingMonitoringHandle),
             ..extension_ipc::Config::default()
