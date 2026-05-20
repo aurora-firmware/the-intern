@@ -62,7 +62,10 @@ mod tests {
     use futures::executor::block_on;
 
     use crate::error::ServiceResult;
-    use crate::types::{AuditKind, AuditRecord, InternalEvent, PolicyVerdict, SessionId};
+    use crate::types::{
+        AuditRecord, AuditRecordKind, AuditRecordPayload, ExternalReportAuditPayload,
+        InternalEvent, PolicyVerdict, ReportOutcome, SessionId,
+    };
 
     use super::{
         AuditSink, EventBus, PersistenceStore, PolicyEngine, Receiver, RequestsHandler,
@@ -188,9 +191,16 @@ mod tests {
     fn audit_sink_append_returns_service_result() {
         let sink = StubAuditSink;
         let record = AuditRecord {
+            id: "audit_stub_001".to_owned(),
             timestamp: "2026-05-17T00:00:00Z".to_owned(),
-            kind: AuditKind::RequestReceived,
-            description: "event".to_owned(),
+            kind: AuditRecordKind::Report,
+            session_id: None,
+            payload: AuditRecordPayload::Report(ExternalReportAuditPayload {
+                action: "stub.action".to_owned(),
+                outcome: ReportOutcome::Success,
+                session_id: None,
+                summary: Some("stub".to_owned()),
+            }),
         };
         let result: ServiceResult<()> = block_on(sink.append(record));
         assert!(result.is_ok());
