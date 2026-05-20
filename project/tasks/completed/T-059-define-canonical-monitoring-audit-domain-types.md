@@ -1,7 +1,7 @@
 ---
 id: T-059
 title: Define canonical monitoring audit domain types
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-20'
