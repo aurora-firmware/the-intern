@@ -2,27 +2,20 @@
 //!
 //! # Design
 //!
-//! A [`SubscriptionBus`] is shared between the monitoring actor (producer) and
-//! each admin-rpc connection (consumer). Producers call
-//! [`SubscriptionBus::publish`] to fan an [`AuditRecord`] out to every open
-//! subscriber. Consumers register via [`SubscriptionBus::subscribe`] and
-//! receive a [`AdminSubscriptionId`] together with a bounded
-//! `tokio::sync::mpsc::Receiver<AuditRecord>`.
+//! Audit tail subscriptions are backed by the `monitoring` crate's
+//! `subscribe_tail` API.  The [`ConnectionRegistry`] tracks active audit
+//! subscription ids and holds a cancellation sender for each one.  Dropping
+//! or cancelling the cancellation sender signals the associated forwarder task
+//! (in `lib.rs`) to exit cleanly.
 //!
-//! # Slow subscribers (AC-4)
-//!
-//! The per-subscriber channel is bounded. When a send cannot complete within
-//! [`SubscriptionBus::slow_subscriber_deadline`] the subscription is silently
-//! dropped from the registry so that slow clients do not block the bus.
-//! The connection-side code is responsible for detecting the dropped sender
-//! and closing the connection (see `lib.rs`).
+//! Chat subscriptions still use the local [`SubscriptionBus`] fan-out bus
+//! (Phase 2 work that remains unchanged).
 //!
 //! # Connection-level cleanup (AC-5)
 //!
-//! Each connection holds a [`ConnectionRegistry`] that tracks every
-//! [`AdminSubscriptionId`] opened on that connection. When the registry is dropped
-//! (connection ends) it calls [`SubscriptionBus::remove`] for every remaining
-//! id, preventing leaks.
+//! Each connection holds a [`ConnectionRegistry`].  When the registry is
+//! dropped (connection ends) it cancels every audit subscription and removes
+//! every chat subscription from the bus, preventing leaks.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -33,7 +26,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 /// An opaque, unique identifier for a subscription within the admin-rpc bus.
 ///
@@ -209,21 +202,32 @@ pub enum SubscriptionKind {
 /// Per-connection registry of subscription ids.
 ///
 /// When the connection task exits and this value is dropped, every remaining
-/// subscription is removed from the bus (AC-5).
+/// subscription is cleaned up:
+/// - Audit subscriptions: their cancellation sender is dropped, signalling the
+///   associated forwarder task to exit.
+/// - Chat subscriptions: removed from the local [`SubscriptionBus`].
 ///
-/// # Write-task integration
+/// # Audit subscription lifecycle
 ///
-/// The write half of each connection calls [`ConnectionRegistry::take_audit_receiver`]
-/// immediately after a successful `subscribe_audit` to obtain the `Receiver`
-/// it will drain into outbound notifications. The registry does not hold the
-/// `Receiver` after the write task takes it — it only tracks the id for
-/// cleanup.
+/// 1. The dispatcher calls [`ConnectionRegistry::register_audit_subscription`]
+///    to allocate a fresh id and receive a cancellation receiver.
+/// 2. The dispatcher returns `DispatchOutcome::Subscribed` carrying both the
+///    monitoring `UnboundedReceiver` and the cancellation receiver.
+/// 3. `lib.rs` spawns an `audit_forwarder` task that drives both.
+/// 4. On `audit.tail.unsubscribe`, the dispatcher calls
+///    [`ConnectionRegistry::unsubscribe`] which drops the cancellation sender,
+///    signalling the forwarder to stop.
 pub struct ConnectionRegistry {
+    /// Local fan-out bus — used by chat subscriptions (Phase 2).
     bus: SubscriptionBus,
-    /// All open subscription ids, regardless of kind.
+    /// All open subscription ids and their kinds.
     ids: Vec<(AdminSubscriptionId, SubscriptionKind)>,
-    /// Audit receivers waiting to be claimed by the write task.
-    pending_audit_receivers: HashMap<AdminSubscriptionId, mpsc::Receiver<AuditRecord>>,
+    /// Cancellation senders for active audit subscriptions.
+    ///
+    /// Dropping an entry signals the forwarder task to exit.
+    audit_cancel_txs: HashMap<AdminSubscriptionId, oneshot::Sender<()>>,
+    /// Monotonically increasing id counter for audit subscriptions.
+    next_audit_id: u64,
 }
 
 impl ConnectionRegistry {
@@ -232,24 +236,32 @@ impl ConnectionRegistry {
         Self {
             bus,
             ids: Vec::new(),
-            pending_audit_receivers: HashMap::new(),
+            audit_cancel_txs: HashMap::new(),
+            next_audit_id: 1,
         }
     }
 
-    /// Subscribe to the audit bus.
+    /// Register a new Monitoring-backed audit subscription.
     ///
-    /// The returned `AdminSubscriptionId` is registered for cleanup. The caller
-    /// must retrieve the corresponding `Receiver` with
-    /// [`Self::take_audit_receiver`] before it can be drained.
-    pub fn subscribe_audit(&mut self) -> (AdminSubscriptionId, mpsc::Receiver<AuditRecord>) {
-        let (id, rx) = self.bus.subscribe();
+    /// Allocates a fresh [`AdminSubscriptionId`] and creates a cancellation
+    /// pair.  The returned `oneshot::Receiver<()>` should be passed to the
+    /// audit forwarder task so it can stop cleanly when `unsubscribe` is called
+    /// or the connection closes.
+    pub fn register_audit_subscription(
+        &mut self,
+    ) -> (AdminSubscriptionId, oneshot::Receiver<()>) {
+        let id = AdminSubscriptionId(self.next_audit_id);
+        self.next_audit_id = self.next_audit_id.saturating_add(1);
+        let (cancel_tx, cancel_rx) = oneshot::channel();
         self.ids.push((id, SubscriptionKind::Audit));
-        (id, rx)
+        self.audit_cancel_txs.insert(id, cancel_tx);
+        (id, cancel_rx)
     }
 
     /// Remove an audit subscription explicitly (e.g. on `audit.tail.unsubscribe`).
     ///
-    /// Returns `true` when the id existed and was removed.
+    /// Drops the cancellation sender, which signals the associated forwarder
+    /// task to exit.  Returns `true` when the id existed and was removed.
     pub fn unsubscribe(&mut self, id: AdminSubscriptionId) -> bool {
         if let Some(pos) = self
             .ids
@@ -257,8 +269,9 @@ impl ConnectionRegistry {
             .position(|&(i, k)| i == id && k == SubscriptionKind::Audit)
         {
             self.ids.swap_remove(pos);
-            self.pending_audit_receivers.remove(&id);
-            self.bus.remove(id)
+            // Dropping the sender signals the forwarder to exit.
+            self.audit_cancel_txs.remove(&id);
+            true
         } else {
             false
         }
@@ -309,11 +322,20 @@ impl ConnectionRegistry {
 
 impl Drop for ConnectionRegistry {
     fn drop(&mut self) {
-        // AC-5: remove every remaining subscription from the bus.
-        for (id, _kind) in self.ids.drain(..) {
-            self.bus.remove(id);
+        // AC-5: clean up every remaining subscription.
+        for (id, kind) in self.ids.drain(..) {
+            match kind {
+                SubscriptionKind::Audit => {
+                    // Dropping the cancellation sender signals the forwarder task to exit.
+                    // The monitoring actor removes the subscriber when its receiver is dropped.
+                    self.audit_cancel_txs.remove(&id);
+                }
+                SubscriptionKind::Chat => {
+                    self.bus.remove(id);
+                }
+            }
         }
-        // Pending receivers are dropped here automatically.
+        // Any remaining cancel senders are dropped here automatically.
     }
 }
 
@@ -446,23 +468,29 @@ mod tests {
         assert_eq!(bus.subscriber_count(), 0);
     }
 
-    // AC-5: ConnectionRegistry removes all subscriptions when dropped.
+    // AC-5: ConnectionRegistry drop cancels all audit subscriptions (cancel senders are dropped).
     #[test]
-    fn connection_registry_drop_removes_all_subscriptions() {
+    fn connection_registry_drop_cancels_all_audit_subscriptions() {
         let bus = make_bus();
-        {
+        let (cancel_rx1, cancel_rx2) = {
             let mut registry = ConnectionRegistry::new(bus.clone());
-            let (_id1, _rx1) = registry.subscribe_audit();
-            let (_id2, _rx2) = registry.subscribe_audit();
-
-            assert_eq!(bus.subscriber_count(), 2);
-            // registry drops here
-        }
-        assert_eq!(
-            bus.subscriber_count(),
-            0,
-            "all subscriptions must be removed when the connection registry is dropped"
+            let (_id1, cancel_rx1) = registry.register_audit_subscription();
+            let (_id2, cancel_rx2) = registry.register_audit_subscription();
+            assert_eq!(registry.len(), 2);
+            (cancel_rx1, cancel_rx2)
+            // registry drops here — cancel senders are dropped
+        };
+        // Both cancel receivers should now see the sender was dropped (i.e., cancelled).
+        assert!(
+            cancel_rx1.blocking_recv().is_err(),
+            "cancel_rx1 should be cancelled when registry drops"
         );
+        assert!(
+            cancel_rx2.blocking_recv().is_err(),
+            "cancel_rx2 should be cancelled when registry drops"
+        );
+        // Chat bus is unchanged — no audit subscriptions registered on the bus.
+        assert_eq!(bus.subscriber_count(), 0);
     }
 
     // AC-5: ConnectionRegistry::unsubscribe removes a single audit subscription.
@@ -470,17 +498,19 @@ mod tests {
     fn connection_registry_unsubscribe_removes_single_subscription() {
         let bus = make_bus();
         let mut registry = ConnectionRegistry::new(bus.clone());
-        let (id1, _rx1) = registry.subscribe_audit();
-        let (_id2, _rx2) = registry.subscribe_audit();
+        let (id1, _cancel_rx1) = registry.register_audit_subscription();
+        let (_id2, _cancel_rx2) = registry.register_audit_subscription();
 
         let removed = registry.unsubscribe(id1);
 
         assert!(removed, "unsubscribe of a known id must return true");
         assert_eq!(
-            bus.subscriber_count(),
+            registry.len(),
             1,
-            "only the unsubscribed subscription should be gone"
+            "only the unsubscribed subscription should be gone from the registry"
         );
+        // Audit subscriptions are not on the bus.
+        assert_eq!(bus.subscriber_count(), 0);
     }
 
     // AC-5: unsubscribe returns false for an id not in the registry.
@@ -493,6 +523,22 @@ mod tests {
         let removed = registry.unsubscribe(ghost_id);
 
         assert!(!removed, "unsubscribing an unknown id must return false");
+    }
+
+    // AC-5 (T-063): unsubscribe drops the cancellation sender, signalling the forwarder.
+    #[test]
+    fn connection_registry_unsubscribe_signals_cancellation_to_forwarder() {
+        let bus = make_bus();
+        let mut registry = ConnectionRegistry::new(bus.clone());
+        let (id, cancel_rx) = registry.register_audit_subscription();
+
+        // Explicit unsubscribe should cancel the forwarder.
+        registry.unsubscribe(id);
+
+        assert!(
+            cancel_rx.blocking_recv().is_err(),
+            "cancel_rx must be signalled (sender dropped) after unsubscribe"
+        );
     }
 
     // chat.open / chat.close round-trip removes the chat subscription.
@@ -525,7 +571,7 @@ mod tests {
         let bus = make_bus();
         let mut registry = ConnectionRegistry::new(bus.clone());
         assert!(registry.is_empty());
-        let (_id, _rx) = registry.subscribe_audit();
+        let (_id, _cancel_rx) = registry.register_audit_subscription();
         assert_eq!(registry.len(), 1);
         assert!(!registry.is_empty());
     }

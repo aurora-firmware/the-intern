@@ -24,19 +24,20 @@ use std::time::Instant;
 
 use bob_core::error::ServiceError;
 use bob_core::types::{
-    AuditRecord as MonitoringAuditRecord, AuditRecordKind, AuditRecordPayload,
+    AuditFilterKind, AuditRecord as MonitoringAuditRecord, AuditRecordKind, AuditRecordPayload,
     ExternalReportAuditPayload,
 };
 use serde_json::{json, Value};
+use std::str::FromStr;
 use uuid::Uuid;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     protocol::{
         ErrorResponse, Request, Response, CODE_INVALID_REQUEST, CODE_METHOD_NOT_FOUND, CODE_TIMEOUT,
     },
-    subscriptions::{AdminSubscriptionId, AuditRecord, ConnectionRegistry},
+    subscriptions::{AdminSubscriptionId, ConnectionRegistry},
 };
 
 /// Context provided to the dispatcher at construction time.
@@ -58,14 +59,16 @@ pub enum DispatchOutcome {
     Ok(Response),
     /// A JSON-RPC 2.0 error response.
     Err(ErrorResponse),
-    /// A new audit subscription was created.
+    /// A new Monitoring-backed audit subscription was created.
     ///
-    /// The caller must forward the receiver to the write task so it can fan
-    /// audit records out as JSON-RPC notifications.
+    /// The caller must spawn a forwarder task that drives `rx` (the monitoring
+    /// tail receiver) and `cancel_rx` (signals when the subscription is
+    /// cancelled by `audit.tail.unsubscribe` or connection close).
     Subscribed {
         response: Response,
         id: AdminSubscriptionId,
-        rx: mpsc::Receiver<AuditRecord>,
+        rx: mpsc::UnboundedReceiver<MonitoringAuditRecord>,
+        cancel_rx: oneshot::Receiver<()>,
     },
     /// An audit subscription was removed.
     Unsubscribed {
@@ -113,7 +116,10 @@ impl Dispatcher {
             "sessions.list" => self.handle_sessions_list(id).await,
             "sessions.kill" => self.handle_sessions_kill(id, &request.params).await,
             "policy.reload" => self.handle_policy_reload(id).await,
-            "audit.tail.subscribe" => self.handle_audit_tail_subscribe(id, registry).await,
+            "audit.tail.subscribe" => {
+                self.handle_audit_tail_subscribe(id, &request.params, registry)
+                    .await
+            }
             "audit.tail.unsubscribe" => {
                 self.handle_audit_tail_unsubscribe(id, &request.params, registry)
                     .await
@@ -141,15 +147,53 @@ impl Dispatcher {
     async fn handle_audit_tail_subscribe(
         &self,
         id: Value,
+        params: &Option<Value>,
         registry: &mut ConnectionRegistry,
     ) -> DispatchOutcome {
-        let (sub_id, rx) = registry.subscribe_audit();
+        // Require a monitoring handle — audit tails are backed by monitoring.
+        let Some(ref monitoring) = self.monitoring else {
+            return DispatchOutcome::Err(ErrorResponse::error(
+                id,
+                CODE_METHOD_NOT_FOUND,
+                "audit.tail.subscribe is not available: no monitoring handle",
+                Some(json!({ "method": "audit.tail.subscribe" })),
+            ));
+        };
+
+        // Parse optional filters from params.filters (an array of strings).
+        let filters = match parse_audit_filters(params) {
+            Ok(f) => f,
+            Err(unknown) => {
+                return DispatchOutcome::Err(ErrorResponse::error(
+                    id,
+                    CODE_INVALID_REQUEST,
+                    format!(
+                        "audit.tail.subscribe: unknown filter \"{unknown}\"; \
+                         expected one of: events, reports, verdicts"
+                    ),
+                    Some(json!({ "category": "invalid_request", "unknown_filter": unknown })),
+                ));
+            }
+        };
+
+        // Subscribe to the monitoring tail — this is a future-only tail,
+        // no historical replay.
+        let monitoring_rx = match monitoring.subscribe_tail(filters).await {
+            Ok(rx) => rx,
+            Err(e) => return DispatchOutcome::Err(map_service_error(id, &e)),
+        };
+
+        // Register in the per-connection registry and obtain a cancellation
+        // receiver for the forwarder task.
+        let (sub_id, cancel_rx) = registry.register_audit_subscription();
+
         tracing::debug!(subscription_id = %sub_id, "audit.tail.subscribe: registered");
         let response = Response::ok(id, json!({ "id": sub_id.to_string() }));
         DispatchOutcome::Subscribed {
             response,
             id: sub_id,
-            rx,
+            rx: monitoring_rx,
+            cancel_rx,
         }
     }
 
@@ -421,6 +465,40 @@ impl Dispatcher {
     }
 }
 
+/// Parse an optional `filters` array from JSON-RPC params.
+///
+/// Returns `Ok(Vec<AuditFilterKind>)` — empty when no `filters` key is present
+/// (which means subscribe to all default-visible kinds).
+///
+/// Returns `Err(unknown_value)` when any element in the array is not a
+/// recognised filter kind.
+fn parse_audit_filters(params: &Option<Value>) -> Result<Vec<AuditFilterKind>, String> {
+    let Some(params) = params else {
+        return Ok(Vec::new());
+    };
+
+    let Some(filters_value) = params.get("filters") else {
+        return Ok(Vec::new());
+    };
+
+    let Some(arr) = filters_value.as_array() else {
+        return Err(filters_value.to_string());
+    };
+
+    let mut filters = Vec::with_capacity(arr.len());
+    for item in arr {
+        let Some(s) = item.as_str() else {
+            return Err(item.to_string());
+        };
+        match AuditFilterKind::from_str(s) {
+            Ok(f) => filters.push(f),
+            Err(_) => return Err(s.to_owned()),
+        }
+    }
+
+    Ok(filters)
+}
+
 /// Map a [`ServiceError`] to a JSON-RPC error response.
 ///
 /// The `data` field carries only non-sensitive metadata: operation names,
@@ -637,20 +715,223 @@ mod tests {
         }
     }
 
-    // AC-1 (subscription): audit.tail.subscribe returns a fresh subscription id.
+    // AC-1 (T-063): audit.tail.subscribe with no filters and a monitoring handle
+    // returns a Subscribed outcome backed by monitoring.
     #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_audit_tail_subscribe_returns_subscription_id() {
-        let dispatcher = make_dispatcher_no_handles();
+    async fn audit_tail_subscribe_with_no_filters_returns_monitoring_backed_subscription() {
+        let (dispatcher, task) = make_dispatcher_with_monitoring();
         let req = make_request("audit.tail.subscribe", json!(10));
         let mut registry = make_registry();
 
         let outcome = dispatcher.dispatch(req, &mut registry).await;
 
+        task.abort();
+        match outcome {
+            DispatchOutcome::Subscribed { response, id, .. } => {
+                assert_eq!(response.jsonrpc, "2.0");
+                assert_eq!(response.id, json!(10));
+                assert!(
+                    response.result["id"].is_string(),
+                    "result.id must be a string subscription id"
+                );
+                let sub_id_str = response.result["id"].as_str().unwrap();
+                assert_eq!(
+                    id.to_string(),
+                    sub_id_str,
+                    "DispatchOutcome id must match result.id"
+                );
+            }
+            DispatchOutcome::Err(e) => {
+                panic!("expected Subscribed, got error: {}", e.error.message)
+            }
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-2 (T-063): audit.tail.subscribe with valid filters subscribes only those kinds.
+    #[tokio::test(flavor = "current_thread")]
+    async fn audit_tail_subscribe_with_valid_filters_returns_monitoring_backed_subscription() {
+        let (dispatcher, task) = make_dispatcher_with_monitoring();
+        let req = make_request_with_params(
+            "audit.tail.subscribe",
+            json!(11),
+            json!({ "filters": ["events"] }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        task.abort();
+        match outcome {
+            DispatchOutcome::Subscribed { response, .. } => {
+                assert_eq!(response.id, json!(11));
+                assert!(response.result["id"].is_string());
+            }
+            DispatchOutcome::Err(e) => {
+                panic!("expected Subscribed, got error: {}", e.error.message)
+            }
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-3 (T-063): audit.tail.subscribe with an unknown filter returns invalid-request error.
+    #[tokio::test(flavor = "current_thread")]
+    async fn audit_tail_subscribe_with_unknown_filter_returns_invalid_request() {
+        let (dispatcher, task) = make_dispatcher_with_monitoring();
+        let req = make_request_with_params(
+            "audit.tail.subscribe",
+            json!(12),
+            json!({ "filters": ["unknown_kind"] }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        task.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(12));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+            }
+            DispatchOutcome::Subscribed { .. } => {
+                panic!("expected error for unknown filter, got Subscribed")
+            }
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-3 (T-063): audit.tail.subscribe with an unknown filter creates no subscription.
+    #[tokio::test(flavor = "current_thread")]
+    async fn audit_tail_subscribe_with_unknown_filter_creates_no_subscription() {
+        let (dispatcher, task) = make_dispatcher_with_monitoring();
+        let req = make_request_with_params(
+            "audit.tail.subscribe",
+            json!(13),
+            json!({ "filters": ["invalid"] }),
+        );
+        let mut registry = make_registry();
+
+        let _ = dispatcher.dispatch(req, &mut registry).await;
+
+        task.abort();
+        assert_eq!(
+            registry.len(),
+            0,
+            "no subscription should be registered when filter is unknown"
+        );
+    }
+
+    // AC-1 (T-063): audit.tail.subscribe without a monitoring handle returns NotImplemented.
+    #[tokio::test(flavor = "current_thread")]
+    async fn audit_tail_subscribe_without_monitoring_handle_returns_not_implemented() {
+        let dispatcher = make_dispatcher_no_handles();
+        let req = make_request("audit.tail.subscribe", json!(14));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(14));
+                assert_eq!(resp.error.code, CODE_METHOD_NOT_FOUND);
+            }
+            DispatchOutcome::Subscribed { .. } => {
+                panic!("expected error without monitoring, got Subscribed")
+            }
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // Two subscribes on the same connection yield distinct subscription ids.
+    #[tokio::test(flavor = "current_thread")]
+    async fn audit_tail_subscribe_twice_yields_distinct_ids() {
+        let (dispatcher, task) = make_dispatcher_with_monitoring();
+        let mut registry = make_registry();
+
+        let outcome1 = dispatcher
+            .dispatch(
+                make_request("audit.tail.subscribe", json!(20)),
+                &mut registry,
+            )
+            .await;
+        let outcome2 = dispatcher
+            .dispatch(
+                make_request("audit.tail.subscribe", json!(21)),
+                &mut registry,
+            )
+            .await;
+
+        task.abort();
+        let id1 = match outcome1 {
+            DispatchOutcome::Subscribed { response, .. } => {
+                response.result["id"].as_str().unwrap().to_string()
+            }
+            _ => panic!("expected Subscribed"),
+        };
+        let id2 = match outcome2 {
+            DispatchOutcome::Subscribed { response, .. } => {
+                response.result["id"].as_str().unwrap().to_string()
+            }
+            _ => panic!("expected Subscribed"),
+        };
+        assert_ne!(id1, id2, "each subscribe must return a distinct id");
+    }
+
+    // AC-5 (T-063): audit.tail.unsubscribe with a valid id removes the subscription.
+    #[tokio::test(flavor = "current_thread")]
+    async fn audit_tail_unsubscribe_valid_id_returns_ok() {
+        let (dispatcher, task) = make_dispatcher_with_monitoring();
+        let mut registry = make_registry();
+
+        let sub_outcome = dispatcher
+            .dispatch(
+                make_request("audit.tail.subscribe", json!(30)),
+                &mut registry,
+            )
+            .await;
+        let sub_id_str = match sub_outcome {
+            DispatchOutcome::Subscribed { response, .. } => {
+                response.result["id"].as_str().unwrap().to_string()
+            }
+            _ => panic!("expected Subscribed"),
+        };
+
+        let unsub_req = make_request_with_params(
+            "audit.tail.unsubscribe",
+            json!(31),
+            json!({ "id": sub_id_str }),
+        );
+        let unsub_outcome = dispatcher.dispatch(unsub_req, &mut registry).await;
+
+        task.abort();
+        match unsub_outcome {
+            DispatchOutcome::Unsubscribed { response, .. } => {
+                assert_eq!(response.result["ok"], json!(true));
+            }
+            DispatchOutcome::Err(e) => {
+                panic!("expected Unsubscribed, got error: {}", e.error.message)
+            }
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // Legacy: audit.tail.subscribe returns a fresh subscription id.
+    // Kept to document that a monitoring handle is now required.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_audit_tail_subscribe_returns_subscription_id() {
+        // With monitoring handle — previously this worked without any handle.
+        let (dispatcher, task) = make_dispatcher_with_monitoring();
+        let req = make_request("audit.tail.subscribe", json!(10));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        task.abort();
         match outcome {
             DispatchOutcome::Subscribed {
                 response,
                 id,
-                rx: _,
+                ..
             } => {
                 assert_eq!(response.jsonrpc, "2.0");
                 assert_eq!(response.id, json!(10));
@@ -672,10 +953,10 @@ mod tests {
         }
     }
 
-    // AC-1 (subscription): two subscribes register two distinct ids.
+    // Legacy: two subscribes register two distinct ids.
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_audit_tail_subscribe_twice_yields_distinct_ids() {
-        let dispatcher = make_dispatcher_no_handles();
+        let (dispatcher, task) = make_dispatcher_with_monitoring();
         let mut registry = make_registry();
 
         let outcome1 = dispatcher
@@ -691,6 +972,7 @@ mod tests {
             )
             .await;
 
+        task.abort();
         let id1 = match outcome1 {
             DispatchOutcome::Subscribed { response, .. } => {
                 response.result["id"].as_str().unwrap().to_string()
@@ -706,10 +988,10 @@ mod tests {
         assert_ne!(id1, id2, "each subscribe must return a distinct id");
     }
 
-    // AC-3: audit.tail.unsubscribe with a valid id removes the subscription.
+    // AC-3 (legacy): audit.tail.unsubscribe with a valid id removes the subscription.
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_audit_tail_unsubscribe_valid_id_returns_ok() {
-        let dispatcher = make_dispatcher_no_handles();
+        let (dispatcher, task) = make_dispatcher_with_monitoring();
         let mut registry = make_registry();
 
         // Subscribe first.
@@ -734,6 +1016,7 @@ mod tests {
         );
         let unsub_outcome = dispatcher.dispatch(unsub_req, &mut registry).await;
 
+        task.abort();
         match unsub_outcome {
             DispatchOutcome::Unsubscribed { response, .. } => {
                 assert_eq!(response.result["ok"], json!(true));
