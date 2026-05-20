@@ -529,10 +529,12 @@ mod tests {
     use std::{
         fs,
         io::{self, Write},
+        path::Path,
         sync::{Arc, Mutex},
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    use bob_core::types::AuditFilterKind;
     use tracing::subscriber::with_default;
     use tracing_subscriber::fmt::MakeWriter;
 
@@ -908,6 +910,146 @@ tool = "bash"
             config.policy.action_rules.is_empty(),
             "absent [policy] must yield empty action_rules"
         );
+    }
+
+    #[test]
+    fn loads_monitoring_section_with_audit_path_and_default_tail_filters() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let audit_log_path = temp.path().join("monitoring").join("audit.jsonl");
+        let config_file = write_temp_config(&format!(
+            r#"
+[monitoring]
+audit_log_path = "{}"
+default_tail_filters = ["events", "verdicts"]
+"#,
+            audit_log_path.display()
+        ));
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("config with [monitoring] section should parse");
+
+        assert_eq!(config.monitoring.audit_log_path, audit_log_path);
+        assert_eq!(
+            config.monitoring.default_tail_filters,
+            vec![AuditFilterKind::Events, AuditFilterKind::Verdicts]
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    #[test]
+    fn resolves_default_monitoring_audit_path_when_not_configured() {
+        let config = load_with_env_overrides([]).expect("config should load");
+
+        assert!(
+            !config.monitoring.audit_log_path.as_os_str().is_empty(),
+            "default monitoring audit path must be non-empty"
+        );
+    }
+
+    #[test]
+    fn returns_configuration_error_when_monitoring_audit_path_is_not_appendable() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let config_file = write_temp_config(&format!(
+            r#"
+[monitoring]
+audit_log_path = "{}"
+"#,
+            temp.path().display()
+        ));
+
+        let result = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        });
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("monitoring.audit_log_path")),
+            "expected configuration error for non-appendable monitoring path, got {result:?}"
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    #[test]
+    fn creates_missing_monitoring_parent_directories_with_owner_only_permissions() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let state_home = temp.path().join("state-home");
+        fs::create_dir_all(&state_home).expect("state home should be created");
+        env.insert("XDG_STATE_HOME".to_string(), state_home.display().to_string());
+        env.insert("HOME".to_string(), temp.path().display().to_string());
+
+        let audit_log_path = state_home.join("bob").join("private").join("audit.jsonl");
+        let parent = audit_log_path
+            .parent()
+            .expect("audit path should have a parent")
+            .to_path_buf();
+        let config_file = write_temp_config(&format!(
+            r#"
+[monitoring]
+audit_log_path = "{}"
+"#,
+            audit_log_path.display()
+        ));
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("monitoring path with missing parents should be created");
+
+        assert_eq!(config.monitoring.audit_log_path, audit_log_path);
+        assert!(
+            parent.exists(),
+            "parent directories for monitoring audit path must be created"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mode = fs::metadata(&parent)
+                .expect("parent metadata should be available")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(
+                mode, 0o700,
+                "created monitoring parent directory must be owner-only on unix"
+            );
+        }
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
     }
 
     // ── AC-3 (T-053): legacy top-level allowed_user_ids field is removed ──────
