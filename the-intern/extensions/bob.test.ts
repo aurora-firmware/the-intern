@@ -1016,6 +1016,41 @@ describe("T-057 AC-3d: transport failure fails closed", () => {
 });
 
 // ---------------------------------------------------------------------------
+// AC-3e: connect-time transport failure (no verdict) emits one warning.
+// ---------------------------------------------------------------------------
+
+describe("T-057 AC-3e: connect-time failure without verdict", () => {
+  it("returns block:true and logs exactly one warning when the UDS connect fails before any verdict arrives", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = path.join(tmpDir, "not-listening.sock");
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "120";
+
+    const pi = makeStubPi();
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("tool_call") ?? [];
+    const result = await handlers[0]!(
+      {
+        type: "tool_call",
+        toolCallId: "call-006b",
+        toolName: "bash",
+        input: { command: "whoami" },
+      },
+      {} as ExtensionContext,
+    );
+
+    expect((result as any)?.block).toBe(true);
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+  });
+});
+
+// ---------------------------------------------------------------------------
 // AC-4: BOB_AUTHZ_TIMEOUT_MS is respected; built-in default is used when absent.
 // ---------------------------------------------------------------------------
 

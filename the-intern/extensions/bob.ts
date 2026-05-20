@@ -125,7 +125,8 @@ export default function bobFactory(pi: ExtensionAPI): void {
   // Each entry corresponds to one outstanding Authz frame awaiting a verdict.
   // Resolved in FIFO order as AuthzVerdict frames arrive.
   // ---------------------------------------------------------------------------
-  type VerdictResolver = (verdict: "allow" | "block" | "error") => void;
+  type VerdictOutcome = "allow" | "block" | "error" | "transport_error_logged";
+  type VerdictResolver = (verdict: VerdictOutcome) => void;
   const pendingVerdicts: VerdictResolver[] = [];
 
   // Buffer for inbound NDJSON lines from the socket (verdict frames).
@@ -176,10 +177,20 @@ export default function bobFactory(pi: ExtensionAPI): void {
     });
   }
 
+  function resolvePendingVerdicts(outcome: VerdictOutcome): void {
+    for (const resolve of pendingVerdicts) {
+      resolve(outcome);
+    }
+    pendingVerdicts.length = 0;
+  }
+
   function markDead(reason: string, ctx?: ExtensionContext): void {
     transportDead = true;
     socket?.destroy();
     socket = null;
+    // Any in-flight tool_call authz must fail closed immediately and must not
+    // emit a second warning in handleToolCall (this warning is the canonical one).
+    resolvePendingVerdicts("transport_error_logged");
     warn(`transport error — event forwarding disabled for this session: ${reason}`, ctx);
   }
 
@@ -311,7 +322,7 @@ export default function bobFactory(pi: ExtensionAPI): void {
     // Enqueue a verdict promise before sending the frame so the resolver is
     // in place when the reply arrives.
     let verdictResolve!: VerdictResolver;
-    const verdictPromise = new Promise<"allow" | "block" | "error">((resolve) => {
+    const verdictPromise = new Promise<VerdictOutcome>((resolve) => {
       verdictResolve = resolve;
     });
     pendingVerdicts.push(verdictResolve);
@@ -343,6 +354,10 @@ export default function bobFactory(pi: ExtensionAPI): void {
     if (outcome === "error") {
       warn(`authz: unparseable or transport-error verdict — blocking tool call`, ctx);
       return { block: true, reason: "authz verdict error" };
+    }
+
+    if (outcome === "transport_error_logged") {
+      return { block: true, reason: "transport error" };
     }
 
     // outcome === "allow"
