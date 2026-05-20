@@ -110,6 +110,19 @@ Nothing remains; all five ACs are covered by passing tests.
 Obstacles Encountered:
 - The existing `lib.rs` integration tests injected audit records via `bus_clone.publish(AuditRecord { payload })`; since the local bus is no longer the audit fan-out path, these were rewritten to use `monitoring.append_record()` and to check for `audit.tail` notifications. A `make_dispatcher_with_monitoring` test helper was added.
 
+### Session 2 — 2026-05-20
+
+Addressed the two code-quality failures from Review Verdict 2026-05-20 (cycle 1). Both changes are comment-only; no production logic was altered.
+
+The "Connection concurrency model" block comment in `lib.rs` (lines ~132–150) described the architecture that existed before this task: a bounded `mpsc::Receiver<AuditRecord>`, `AddAuditRx`/`RemoveAuditRx` control messages sent over `out_tx`, and a `NotifMsg::Dropped` sentinel that caused the write task to close the connection on slow-subscriber eviction. None of that code exists anymore. The comment was rewritten to describe what is actually there: each forwarder task receives from an `mpsc::UnboundedReceiver<AuditRecord>` supplied by the monitoring actor and races it against a `oneshot` cancel receiver via `tokio::select!`, exiting cleanly when the cancel sender is dropped (explicit unsubscribe or connection close) or when monitoring closes the channel.
+
+The `AuditRecord` doc comment in `subscriptions.rs` previously read "A record published by the monitoring actor and forwarded to audit subscribers." After the Session 1 refactor, that struct is no longer on the audit path — it exists only as the payload type for the local `SubscriptionBus` used by chat subscriptions. The doc comment was corrected accordingly.
+
+Verification (run from `the-intern/service`): `cargo test -p admin-rpc audit_tail` — 14 tests, all pass; `cargo clippy -p admin-rpc --all-targets` — clean, zero warnings. Changes committed as `f0a6fe8 docs(admin-rpc): update stale concurrency model and AuditRecord comments`.
+
+Obstacles Encountered:
+- None. The changes were comment-only; no compilation or logic issues.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
