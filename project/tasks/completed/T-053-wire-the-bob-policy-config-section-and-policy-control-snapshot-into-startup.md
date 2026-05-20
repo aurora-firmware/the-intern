@@ -2,7 +2,7 @@
 id: T-053
 title: Wire the bob policy config section and policy-control snapshot into 
   startup
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-20'
