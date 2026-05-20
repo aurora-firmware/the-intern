@@ -131,3 +131,12 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+FAIL
+
+- **File and location**: `the-intern/service/crates/bob/src/config.rs:554`, `the-intern/service/crates/bob/src/config.rs:555`, `the-intern/service/crates/bob/src/config.rs:152`.
+- **What is wrong**: AC-2 is not fully met. When `monitoring.audit_log_path` is omitted, defaults are seeded with `default_monitoring_audit_log_path_for_env(&BTreeMap::new(), uid)`, which ignores runtime environment state-path variables (`XDG_STATE_HOME`, `HOME`). Because that default is already `Some(...)`, the later fallback at `raw.monitoring.audit_log_path.unwrap_or_else(...)` never executes, so resolution does not use an OS state directory when available.
+- **What should change**: Leave `monitoring.audit_log_path` unset in defaults (or compute it from `sources.env` before extraction) so omitted config resolves through the environment-aware path logic. Add/adjust a test that asserts the resolved default uses `XDG_STATE_HOME` (or `HOME` fallback) when provided.
+
+Stage 2 was not executed because Stage 1 failed.
