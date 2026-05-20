@@ -9,7 +9,9 @@ bob-core = { path = "../bob-core" }
 tracing = "0.1"
 async-trait = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+wildmatch = "2"
 
 [dev-dependencies]
 toml = "0.8"

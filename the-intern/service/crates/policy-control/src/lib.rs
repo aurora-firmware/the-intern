@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 #![doc = "scaffold — see project/docs/roadmap.md phase 4"]
 
+pub mod matcher;
 pub mod ruleset;
 
 pub use ruleset::{ActionRule, ArgMatcher, PolicyConfig, RulesetError, RulesetSnapshot};
