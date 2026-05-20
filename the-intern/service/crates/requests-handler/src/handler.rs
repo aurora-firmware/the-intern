@@ -2,40 +2,36 @@
 
 use bob_core::{
     ports::{AuditSink, PersistenceStore},
-    types::{AuditKind, AuditRecord, InternalEvent, RequestContext, UserId},
+    types::{AuditKind, AuditRecord, InternalEvent, RequestContext},
 };
-
-/// Configuration for the pre-flight identity and access check.
-#[derive(Debug, Clone)]
-pub struct PreflightConfig {
-    /// User identifiers that are permitted to submit requests.
-    ///
-    /// An empty list means all requests are denied.
-    pub allowed_user_ids: Vec<UserId>,
-}
+use policy_control::{PolicyEngine, SnapshotHandle};
 
 /// Run the pre-flight identity and access check for one dequeued event.
 ///
 /// # Behaviour
 ///
-/// - If `context` is `Some` and its `sender` is in `cfg.allowed_user_ids`, the
-///   event is forwarded to `store` via `PersistenceStore::enqueue`.
-/// - In all other cases (absent context, or sender not in the allowed list), the
-///   event is silently dropped, a `tracing::warn!` is emitted **without** the
-///   raw event payload, and a `PreflightDenied` `AuditRecord` is appended to
-///   `audit`.
+/// - If `context` is `Some` and its `sender` is admitted by the current
+///   snapshot, the event is forwarded to `store` via
+///   `PersistenceStore::enqueue`.
+/// - In all other cases (absent context, or sender denied by the snapshot),
+///   the event is silently dropped, a `tracing::warn!` is emitted **without**
+///   the raw event payload, and a `PreflightDenied` `AuditRecord` is appended
+///   to `audit`.
 ///
 /// Errors from `store.enqueue` or `audit.append` are logged but do not panic.
 pub async fn run_preflight(
     event: InternalEvent,
     context: Option<&RequestContext>,
-    cfg: &PreflightConfig,
+    snapshot: &SnapshotHandle,
     store: &dyn PersistenceStore,
     audit: &dyn AuditSink,
 ) {
-    let allowed = context
-        .map(|ctx| cfg.allowed_user_ids.contains(&ctx.sender))
-        .unwrap_or(false);
+    let verdict = context.map(|ctx| {
+        let snap = snapshot.load();
+        PolicyEngine::evaluate_admission(&snap, ctx.sender)
+    });
+
+    let allowed = verdict.as_ref().map(|v| v.allow).unwrap_or(false);
 
     if allowed {
         if let Err(err) = store.enqueue(event).await {
@@ -45,10 +41,10 @@ pub async fn run_preflight(
         let reason = if context.is_none() {
             "missing request context"
         } else {
-            "user id not in allowed list"
+            "user not admitted by policy"
         };
 
-        // AC-4: warn without the raw event payload — only safe metadata.
+        // Warn without the raw event payload — only safe metadata.
         tracing::warn!(reason, "preflight: event denied");
 
         let timestamp = chrono::Utc::now().to_rfc3339();
@@ -76,8 +72,9 @@ mod tests {
             AuditKind, AuditRecord, ChannelId, InternalEvent, RequestContext, SessionId, UserId,
         },
     };
+    use policy_control::{PolicyConfig, RulesetSnapshot};
 
-    use super::{run_preflight, PreflightConfig};
+    use super::run_preflight;
 
     // --- Test doubles ---
 
@@ -137,69 +134,77 @@ mod tests {
         }
     }
 
-    // AC-1: event with user_id in allowed list is forwarded to PersistenceStore::enqueue
-    #[tokio::test]
-    async fn allowed_user_id_causes_event_to_be_enqueued_in_persistence_store() {
-        let user_id = UserId::new();
-        let cfg = PreflightConfig {
-            allowed_user_ids: vec![user_id],
+    fn make_snapshot(user_ids: Vec<UserId>) -> policy_control::SnapshotHandle {
+        let cfg = PolicyConfig {
+            admitted_users: user_ids.iter().map(|u| u.to_string()).collect(),
+            action_rules: vec![],
         };
+        let snapshot = RulesetSnapshot::from_config(cfg).expect("valid config");
+        let policy_cfg = policy_control::Config {
+            initial_snapshot: snapshot,
+            config_path: std::path::PathBuf::new(),
+            command_buffer: 1,
+        };
+        let (_, join, snapshot_handle) = policy_control::start(policy_cfg);
+        join.abort();
+        snapshot_handle
+    }
+
+    // AC-1: admitted user causes event to be enqueued in persistence store.
+    #[tokio::test]
+    async fn admitted_user_in_snapshot_causes_event_to_be_enqueued_in_persistence_store() {
+        let user_id = UserId::new();
+        let snapshot = make_snapshot(vec![user_id]);
         let store = RecordingStore::default();
         let audit = RecordingAudit::default();
         let event = chat_event("hello");
         let ctx = make_context(user_id);
 
-        run_preflight(event.clone(), Some(&ctx), &cfg, &store, &audit).await;
+        run_preflight(event.clone(), Some(&ctx), &snapshot, &store, &audit).await;
 
         let enqueued = store.enqueued.lock().unwrap();
         assert_eq!(enqueued.len(), 1, "expected exactly one event enqueued");
         assert_eq!(enqueued[0], event);
-
-        let audit_records = audit.records.lock().unwrap();
         assert!(
-            audit_records.is_empty(),
+            audit.records.lock().unwrap().is_empty(),
             "no audit record should be written on allow"
         );
     }
 
-    // AC-1: multiple allowed user ids — the matching one passes
+    // AC-1: multiple admitted user IDs — the matching one passes.
     #[tokio::test]
-    async fn event_is_enqueued_when_user_id_matches_one_of_multiple_allowed_ids() {
+    async fn event_is_enqueued_when_user_id_matches_one_of_multiple_admitted_ids() {
         let user_a = UserId::new();
         let user_b = UserId::new();
-        let cfg = PreflightConfig {
-            allowed_user_ids: vec![user_a, user_b],
-        };
+        let snapshot = make_snapshot(vec![user_a, user_b]);
         let store = RecordingStore::default();
         let audit = RecordingAudit::default();
         let event = chat_event("msg");
         let ctx = make_context(user_b);
 
-        run_preflight(event.clone(), Some(&ctx), &cfg, &store, &audit).await;
+        run_preflight(event.clone(), Some(&ctx), &snapshot, &store, &audit).await;
 
         let enqueued = store.enqueued.lock().unwrap();
         assert_eq!(enqueued.len(), 1);
         assert!(audit.records.lock().unwrap().is_empty());
     }
 
-    // AC-2: user_id NOT in allowed list → drop, warn, PreflightDenied audit record
+    // AC-2: non-admitted user causes denial and PreflightDenied audit record.
     #[tokio::test]
-    async fn user_id_not_in_allowed_list_drops_event_and_emits_preflight_denied_audit_record() {
-        let allowed = UserId::new();
-        let denied_user = UserId::new();
-        let cfg = PreflightConfig {
-            allowed_user_ids: vec![allowed],
-        };
+    async fn non_admitted_user_in_snapshot_drops_event_and_emits_preflight_denied_audit_record() {
+        let admitted = UserId::new();
+        let intruder = UserId::new();
+        let snapshot = make_snapshot(vec![admitted]);
         let store = RecordingStore::default();
         let audit = RecordingAudit::default();
-        let event = chat_event("secret payload");
-        let ctx = make_context(denied_user);
+        let ctx = make_context(intruder);
 
-        run_preflight(event, Some(&ctx), &cfg, &store, &audit).await;
+        run_preflight(chat_event("secret payload"), Some(&ctx), &snapshot, &store, &audit).await;
 
-        let enqueued = store.enqueued.lock().unwrap();
-        assert!(enqueued.is_empty(), "event must not be enqueued on denial");
-
+        assert!(
+            store.enqueued.lock().unwrap().is_empty(),
+            "event must not be enqueued on denial"
+        );
         let records = audit.records.lock().unwrap();
         assert_eq!(records.len(), 1, "exactly one audit record expected");
         assert!(
@@ -209,17 +214,15 @@ mod tests {
         );
     }
 
-    // AC-2: empty allowed list → every event is denied
+    // AC-2: empty admission list denies all events.
     #[tokio::test]
-    async fn empty_allowed_list_denies_all_events() {
-        let cfg = PreflightConfig {
-            allowed_user_ids: vec![],
-        };
+    async fn empty_admission_list_in_snapshot_denies_all_events() {
+        let snapshot = make_snapshot(vec![]);
         let store = RecordingStore::default();
         let audit = RecordingAudit::default();
         let ctx = make_context(UserId::new());
 
-        run_preflight(chat_event("anything"), Some(&ctx), &cfg, &store, &audit).await;
+        run_preflight(chat_event("anything"), Some(&ctx), &snapshot, &store, &audit).await;
 
         assert!(store.enqueued.lock().unwrap().is_empty());
         let records = audit.records.lock().unwrap();
@@ -227,16 +230,14 @@ mod tests {
         assert!(matches!(records[0].kind, AuditKind::PreflightDenied));
     }
 
-    // AC-3: absent RequestContext is treated as denied with PreflightDenied audit record
+    // AC-2: absent RequestContext is treated as denied with PreflightDenied audit record.
     #[tokio::test]
     async fn missing_request_context_is_treated_as_denied_with_preflight_denied_audit_record() {
-        let cfg = PreflightConfig {
-            allowed_user_ids: vec![UserId::new()],
-        };
+        let snapshot = make_snapshot(vec![UserId::new()]);
         let store = RecordingStore::default();
         let audit = RecordingAudit::default();
 
-        run_preflight(chat_event("no context"), None, &cfg, &store, &audit).await;
+        run_preflight(chat_event("no context"), None, &snapshot, &store, &audit).await;
 
         assert!(
             store.enqueued.lock().unwrap().is_empty(),
@@ -251,12 +252,10 @@ mod tests {
         );
     }
 
-    // AC-4: the audit record description does not contain the raw event payload
+    // AC-2: audit record description does not contain the raw event payload.
     #[tokio::test]
     async fn audit_record_description_does_not_contain_raw_event_payload() {
-        let cfg = PreflightConfig {
-            allowed_user_ids: vec![],
-        };
+        let snapshot = make_snapshot(vec![]);
         let store = RecordingStore::default();
         let audit = RecordingAudit::default();
         let secret = "super-secret-payload-12345";
@@ -267,7 +266,7 @@ mod tests {
                 content: secret.to_owned(),
             },
             Some(&ctx),
-            &cfg,
+            &snapshot,
             &store,
             &audit,
         )
@@ -281,12 +280,10 @@ mod tests {
         );
     }
 
-    // AC-3 + AC-4: missing context audit record description does not contain event payload
+    // AC-2: missing context audit record description does not contain event payload.
     #[tokio::test]
     async fn missing_context_audit_record_description_does_not_contain_event_payload() {
-        let cfg = PreflightConfig {
-            allowed_user_ids: vec![],
-        };
+        let snapshot = make_snapshot(vec![]);
         let store = RecordingStore::default();
         let audit = RecordingAudit::default();
         let secret = "very-sensitive-data-9999";
@@ -296,7 +293,7 @@ mod tests {
                 content: secret.to_owned(),
             },
             None,
-            &cfg,
+            &snapshot,
             &store,
             &audit,
         )
