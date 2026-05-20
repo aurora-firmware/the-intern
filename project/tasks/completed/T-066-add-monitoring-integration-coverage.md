@@ -1,7 +1,7 @@
 ---
 id: T-066
 title: Add Monitoring integration coverage
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-20'
