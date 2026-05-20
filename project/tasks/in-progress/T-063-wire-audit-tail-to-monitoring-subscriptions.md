@@ -163,3 +163,24 @@ Scope: only `dispatch.rs`, `lib.rs`, and `subscriptions.rs` were modified. `prot
 - **File and location:** `the-intern/service/crates/admin-rpc/src/subscriptions.rs`, line 56.
 - **What is wrong:** The doc comment reads "A record published by the monitoring actor and forwarded to audit subscribers." This struct is no longer used for audit subscriptions; it is only used internally by `SubscriptionBus` for the Phase 2 chat subscription fan-out bus.
 - **What should change:** Update the doc comment to accurately describe the current role: "A record published on the local fan-out bus, used by chat subscriptions." (or similar wording that does not imply audit usage).
+
+### Review Verdict — 2026-05-20 (cycle 2)
+
+PASS
+
+**Stage 1 — Spec compliance: PASS** (confirmed from cycle 1; no AC-relevant code changed in cycle 2)
+
+Full diff against `dev-agent` touches only `dispatch.rs`, `lib.rs`, `subscriptions.rs`, and the task file — within declared scope.
+
+**Stage 2 — Code quality: PASS**
+
+Both cycle-1 failures were remediated in commit `f0a6fe8`:
+
+- `lib.rs` "Connection concurrency model" block comment: stale references to `AddAuditRx`/`RemoveAuditRx`, the bounded `mpsc::Receiver<AuditRecord>`, and the `NotifMsg::Dropped` sentinel-driven close path are gone. The comment now accurately describes the current design: an `mpsc::UnboundedReceiver<AuditRecord>` from the monitoring actor, raced against a `oneshot` cancel receiver via `tokio::select!`, exiting on cancel-sender drop or channel close.
+- `subscriptions.rs` `AuditRecord` doc comment: now reads "A record published on the local fan-out bus, used by chat subscriptions." — no longer implies audit usage.
+
+The commit is comment-only; no production logic changed.
+
+Verification (run locally against the implementation branch):
+- `cargo test -p admin-rpc audit_tail` — 14 passed, 0 failed.
+- `cargo clippy -p admin-rpc --all-targets` — clean, zero warnings.
