@@ -120,6 +120,23 @@ Obstacles Encountered:
 - `serve::tests` could not run in sandbox due Unix socket bind permission errors (`Operation not permitted`); resolved by rerunning the same command with escalated permissions.
 - No code-level blockers after `B-007` resolution.
 
+### Session 3 — 2026-05-20
+
+I resumed to address Review Verdict #1 (FAIL), which found AC-2 only partially met: omitted `monitoring.audit_log_path` was seeded in the raw defaults via `default_monitoring_audit_log_path_for_env(&BTreeMap::new(), uid)`, so the environment-aware resolution (`XDG_STATE_HOME`, then `HOME` fallback) never ran — the already-`Some(...)` default short-circuited the later `unwrap_or_else` fallback.
+
+I fixed this by threading `&sources.env` through `defaults_with_runtime_root`, so the default audit path is now computed from the real runtime environment instead of an empty map. I replaced the weak `resolves_default_monitoring_audit_path_when_not_configured` test (which only asserted non-emptiness) with two targeted tests: `resolves_default_monitoring_audit_path_from_xdg_state_home_when_not_configured` asserts the resolved default is `$XDG_STATE_HOME/bob/audit.jsonl`, and `resolves_default_monitoring_audit_path_from_home_fallback_when_xdg_state_home_missing` asserts the OS-appropriate `HOME`-based fallback when `XDG_STATE_HOME` is absent. I committed this as `d87cc2d fix(config): resolve monitoring audit default from env`.
+
+Verification (run from `the-intern/service`, outside sandbox):
+- `cargo test -p bob --lib config` — 29 passed, 0 failed (includes both new env-aware tests).
+- `cargo test -p bob` — full suite 65 + integration tests passed, 0 failed.
+- `cargo build -p bob` — clean.
+- `cargo clippy -p bob` — the 4 reported clippy errors are all in `cli/commands/chat.rs` and `cli/commands.rs`; confirmed pre-existing on `dev-agent` and outside T-061's files-to-touch.
+
+Remaining work on this branch: none. All five ACs are implemented and verified; ready for re-review.
+
+Obstacles Encountered:
+- None.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
