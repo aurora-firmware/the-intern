@@ -80,6 +80,16 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+Implemented `ArgMatcher::matches` for the `policy-control` crate as specified by T-050. The implementation was completed in a single TDD cycle covering all four acceptance criteria.
+
+**What was done.** Added `wildmatch = "2"` and `serde_json` (from workspace) to `policy-control/Cargo.toml`, declared `mod matcher;` in `lib.rs`, and created `src/matcher.rs`. The new module implements `ArgMatcher::matches(&self, arguments: &Value) -> bool` as a pure, sync function. It delegates field-path traversal to a private `resolve_field_path` helper that splits the path on `.` and walks through `Value::Object` maps, returning `None` on any absent key, non-object intermediate node, or non-string terminal value. When the helper returns `Some(&str)`, the string is matched against `self.pattern` using `WildMatch::new(&self.pattern).matches(s)` from the `wildmatch` crate, which treats `*` as any run of characters (including empty) and `?` as exactly one character. Ten matcher tests cover AC-1 through AC-3 in detail — literal match, `*`/`?` semantics, nested dot paths, absent paths, non-object intermediate nodes (string, array), and non-string terminal values (number, boolean, null, object). AC-4 (pure, no I/O, no async) is enforced structurally: the function signature is `&self, &Value -> bool` with no async or I/O imports.
+
+**What was tried and rejected.** No alternative approaches were considered; the `wildmatch` crate was specified in the task and behaves exactly as the contract requires.
+
+**What remains.** Nothing for this task. All four ACs are covered with passing tests and clean clippy output.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
