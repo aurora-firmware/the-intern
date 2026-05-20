@@ -2,7 +2,7 @@
 id: T-052
 title: Add the lock-free ruleset snapshot handle and reload-capable 
   policy-control actor
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-20'
