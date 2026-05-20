@@ -1,11 +1,13 @@
 use std::{
     collections::BTreeMap,
     env,
+    fs::OpenOptions,
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use bob_core::error::{ServiceError, ServiceResult};
+use bob_core::types::AuditFilterKind;
 use figment::{
     providers::{Format, Serialized, Toml},
     Figment,
@@ -34,11 +36,19 @@ pub struct BobConfig {
     ///
     /// An absent `[policy]` section yields an empty (deny-all) config.
     pub policy: PolicyConfig,
+    /// Monitoring configuration sourced from the `[monitoring]` TOML section.
+    pub monitoring: MonitoringConfig,
     /// Resolved path to the TOML config file used to load this config.
     ///
     /// An empty path means no config file was loaded (defaults only).
     /// Used by the policy-control actor for hot-reload.
     pub config_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct MonitoringConfig {
+    pub audit_log_path: PathBuf,
+    pub default_tail_filters: Vec<AuditFilterKind>,
 }
 
 // `Default` is intentionally not implemented for `BobConfig`.
@@ -77,6 +87,10 @@ impl BobConfig {
             tracing_level: "info".to_string(),
             tracing_format: "pretty".to_string(),
             policy: PolicyConfig::default(),
+            monitoring: MonitoringConfig {
+                audit_log_path: PathBuf::new(),
+                default_tail_filters: default_tail_filters(),
+            },
             config_path: PathBuf::new(),
         }
     }
@@ -134,6 +148,16 @@ impl BobConfig {
             tracing_level: raw.tracing_level,
             tracing_format: raw.tracing_format,
             policy: raw.policy,
+            monitoring: MonitoringConfig {
+                audit_log_path: raw
+                    .monitoring
+                    .audit_log_path
+                    .unwrap_or_else(|| default_monitoring_audit_log_path(&sources)),
+                default_tail_filters: raw
+                    .monitoring
+                    .default_tail_filters
+                    .unwrap_or_else(default_tail_filters),
+            },
             // Carry the resolved config file path so the policy-control actor
             // can hot-reload from the same file on Handle::reload().
             config_path: config_path.clone(),
@@ -178,6 +202,8 @@ impl BobConfig {
                 "pi_agent_warm_pool_size cannot exceed pi_agent_max_processes",
             ));
         }
+
+        ensure_monitoring_audit_log_path(&self.monitoring.audit_log_path)?;
 
         Ok(self)
     }
@@ -242,6 +268,16 @@ struct RawBobConfig {
     /// `Default` when the `[policy]` section is absent.
     #[serde(default, skip_serializing)]
     policy: PolicyConfig,
+    #[serde(default)]
+    monitoring: RawMonitoringConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+struct RawMonitoringConfig {
+    #[serde(default)]
+    audit_log_path: Option<PathBuf>,
+    #[serde(default)]
+    default_tail_filters: Option<Vec<AuditFilterKind>>,
 }
 
 fn parse_cli_overrides<I>(args: I) -> ServiceResult<BTreeMap<String, String>>
@@ -435,6 +471,66 @@ fn parse_csv(value: &str) -> Vec<String> {
         .collect()
 }
 
+fn ensure_monitoring_audit_log_path(path: &Path) -> ServiceResult<()> {
+    if path.as_os_str().is_empty() {
+        return Err(configuration_error(
+            "monitoring.audit_log_path must not be empty",
+        ));
+    }
+
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            create_monitoring_parent_dirs(parent)?;
+        }
+    }
+
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| {
+            configuration_error(format!(
+                "monitoring.audit_log_path at {} is not appendable ({error})",
+                path.display()
+            ))
+        })?;
+
+    Ok(())
+}
+
+fn create_monitoring_parent_dirs(parent: &Path) -> ServiceResult<()> {
+    let parent_missing = !parent.exists();
+    std::fs::create_dir_all(parent).map_err(|error| {
+        configuration_error(format!(
+            "failed to create monitoring audit parent directories at {} ({error})",
+            parent.display()
+        ))
+    })?;
+
+    if parent_missing {
+        set_owner_only_permissions(parent)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_owner_only_permissions(path: &Path) -> ServiceResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(|error| {
+        configuration_error(format!(
+            "failed to set owner-only permissions on {} ({error})",
+            path.display()
+        ))
+    })
+}
+
+#[cfg(not(unix))]
+fn set_owner_only_permissions(_path: &Path) -> ServiceResult<()> {
+    Ok(())
+}
+
 fn resolve_runtime_root(sources: &ConfigSources) -> ServiceResult<PathBuf> {
     if cfg!(target_os = "macos") {
         let tmpdir = sources
@@ -456,6 +552,8 @@ fn resolve_runtime_root(sources: &ConfigSources) -> ServiceResult<PathBuf> {
 }
 
 fn defaults_with_runtime_root(runtime_root: PathBuf, uid: u32) -> RawBobConfig {
+    let monitoring_audit_log_path = default_monitoring_audit_log_path_for_env(&BTreeMap::new(), uid);
+
     RawBobConfig {
         admin_sock_path: runtime_root.join("admin.sock"),
         extension_sock_path: runtime_root.join("extension.sock"),
@@ -473,7 +571,45 @@ fn defaults_with_runtime_root(runtime_root: PathBuf, uid: u32) -> RawBobConfig {
         tracing_level: "info".to_string(),
         tracing_format: "pretty".to_string(),
         policy: PolicyConfig::default(),
+        monitoring: RawMonitoringConfig {
+            audit_log_path: Some(monitoring_audit_log_path),
+            default_tail_filters: Some(default_tail_filters()),
+        },
     }
+}
+
+fn default_tail_filters() -> Vec<AuditFilterKind> {
+    vec![
+        AuditFilterKind::Events,
+        AuditFilterKind::Reports,
+        AuditFilterKind::Verdicts,
+    ]
+}
+
+fn default_monitoring_audit_log_path(sources: &ConfigSources) -> PathBuf {
+    default_monitoring_audit_log_path_for_env(&sources.env, sources.uid)
+}
+
+fn default_monitoring_audit_log_path_for_env(env: &BTreeMap<String, String>, uid: u32) -> PathBuf {
+    let state_root = if cfg!(target_os = "macos") {
+        env.get("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                env.get("HOME")
+                    .map(|home| Path::new(home).join("Library").join("Application Support"))
+            })
+            .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-state-{uid}")))
+    } else {
+        env.get("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                env.get("HOME")
+                    .map(|home| Path::new(home).join(".local").join("state"))
+            })
+            .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-state-{uid}")))
+    };
+
+    state_root.join("bob").join("audit.jsonl")
 }
 
 fn default_config_path(sources: &ConfigSources) -> PathBuf {
@@ -529,7 +665,6 @@ mod tests {
     use std::{
         fs,
         io::{self, Write},
-        path::Path,
         sync::{Arc, Mutex},
         time::{SystemTime, UNIX_EPOCH},
     };
