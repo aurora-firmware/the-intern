@@ -103,3 +103,39 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+PASS
+
+Result: PASS
+
+Summary:
+- Reviewed T-058 implementation at commit `f8713a0` on `task/T-058-implement-the-policy-reload-admin-rpc-method`; all acceptance criteria and Stage 2 quality checks passed.
+
+Artifacts:
+- Canonical task file updated: `project/tasks/in-progress/T-058-implement-the-policy-reload-admin-rpc-method.md` (this section).
+- Diff reviewed from source branch/commit: `the-intern/service/crates/admin-rpc/src/dispatch.rs`, `the-intern/service/crates/admin-rpc/src/lib.rs`.
+- Primary files inspected: `the-intern/service/crates/admin-rpc/src/dispatch.rs`, `the-intern/service/crates/admin-rpc/src/lib.rs`, canonical task definition.
+
+Evidence:
+- Stage 1 acceptance checks:
+- AC-1 satisfied: `policy.reload` dispatch arm now calls `handle_policy_reload`, which invokes `policy.reload().await` and returns JSON-RPC success on `Ok(())` with `{ "ok": true, "reloaded": true }`.
+- AC-2 satisfied: reload rejection path returns JSON-RPC error with rejection `reason` in error `data`.
+- AC-3 satisfied: `policy: None` path still returns `NotImplemented` (`-32601`) for `policy.reload`.
+- Expected commit scope validated via `git show --name-only f8713a0` (only the two expected implementation files changed in the Developer commit).
+- Stage 2 checks:
+- Correctness/readability: helper `handle_policy_reload` isolates behavior and preserves existing no-handle fallback semantics.
+- Tests: new unit tests cover no-handle, success, and failure-with-reason flows.
+- Verification commands run:
+- `cargo test -p admin-rpc dispatch_policy_reload` (pass, 3 tests on source branch).
+- `cargo clippy -p admin-rpc --all-targets` (pass).
+- `cargo test -p admin-rpc` initially failed in sandbox with Unix-socket permission errors, then passed unsandboxed (82 passed, 0 failed) after escalation.
+
+Obstacles Encountered:
+- Sandbox restrictions caused expected Unix-socket `Operation not permitted` failures in full `cargo test -p admin-rpc`; resolved by rerunning verification with escalation outside sandbox.
+
+Next Owner:
+- Development Loop
+
+Next Action:
+- none
