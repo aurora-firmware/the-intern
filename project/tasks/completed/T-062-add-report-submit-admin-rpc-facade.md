@@ -1,7 +1,7 @@
 ---
 id: T-062
 title: Add report.submit admin-RPC facade
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-20'
