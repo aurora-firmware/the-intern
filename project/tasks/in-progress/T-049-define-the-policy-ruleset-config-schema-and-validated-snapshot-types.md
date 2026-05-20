@@ -81,6 +81,36 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+Picked up T-049 with an empty Work Log (first session). The `policy-control` crate was a scaffold actor with a single `lib.rs` containing no ruleset logic. This session delivered the complete data layer described by all five acceptance criteria.
+
+**What was done:**
+
+Created `/the-intern/service/crates/policy-control/src/ruleset.rs` with:
+- `ArgMatcher` — a `field_path` + `pattern` struct, both plain `String`s, serde `Deserialize`.
+- `ActionRule` — a `tool` name plus an optional `arg_matchers: Vec<ArgMatcher>` (defaults to empty via `#[serde(default)]`).
+- `PolicyConfig` — the `[policy]` TOML section shape: `admitted_users: Vec<String>` and `action_rules: Vec<ActionRule>`, both defaulting to empty.
+- `RulesetError` — a `thiserror`-derived error enum with a single `EmptyArgMatcher` variant for structural invalidity.
+- `RulesetSnapshot` — holds `Arc<Vec<UserId>>` and `Arc<Vec<ActionRule>>` so clone is O(1) reference-count increment.
+- `RulesetSnapshot::from_config` — parses admitted user UUIDs (silently ignoring unparseable strings, which keeps the config liberal), validates that every `ArgMatcher.field_path` and `ArgMatcher.pattern` is non-empty, then constructs the snapshot.
+
+`lib.rs` was updated with `pub mod ruleset;` and re-exports of all public types; the scaffold actor was not touched. `Cargo.toml` gained `serde` and `thiserror` from workspace deps and `toml = "0.8"` as a dev-dependency (tests deserialise TOML strings directly).
+
+**Decisions and trade-offs:**
+
+- `admitted_users` in `PolicyConfig` is `Vec<String>` rather than `Vec<UserId>` because `UserId` wraps a UUID and TOML does not know how to deserialize UUIDs natively through serde without a custom deserializer already wired in `bob_core`. Storing strings in the config and converting in `from_config` keeps the config type simple and avoids coupling serde format assumptions into the snapshot. Any string that doesn't parse as a UUID is silently dropped rather than raising an error, because the task description does not specify how to handle malformed user IDs in the config and there is no matching AC that requires an error for them.
+- AC-5 was interpreted as "structurally invalid config must not panic". The only structural invalidity modelled here is empty `field_path` / `pattern` in an `ArgMatcher`, since those fields have no useful meaning when blank and would cause incorrect behaviour downstream in T-050's matcher.
+- `toml` was added as a dev-dependency only; the production crate has no obligation to parse TOML itself (that responsibility belongs to the host binary).
+
+**What was tried and rejected:**
+
+- Initially considered using `Vec<UserId>` directly in `PolicyConfig` with a custom serde deserializer. Rejected to keep AC-1's deserialization test straightforward and the config shape simple.
+
+**What remains:**
+
+Nothing — all five acceptance criteria are implemented, tested (10 tests, all passing), and the crate is clippy-clean. The task is ready for review.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
