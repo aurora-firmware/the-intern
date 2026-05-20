@@ -86,6 +86,25 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+Picked up T-057 fresh — Work Log was empty. Read the task file, all four source files, and the `@earendil-works/pi-coding-agent` type definitions.
+
+**Key pre-implementation finding:** The standing S-004 open question — "can the `tool_call` hook return/await an asynchronous allow/block verdict?" — is confirmed YES. The installed types define `ExtensionHandler<E, R>` as returning `Promise<R | void> | R | void`, and the `tool_call` overload uses `ToolCallEventResult` which has `block?: boolean`. No escalation needed.
+
+**What was done:** One TDD cycle covering all four ACs.
+
+- Wrote 8 failing tests first (red phase): `createAuthzServer` helper (bidirectional UDS with `sendVerdict` and `sendRaw`), AC-1 through AC-4. Confirmed 6 tests fail — 2 accidentally passed because existing code returns `undefined`, which is falsy.
+- Implemented the hook: removed `tool_call` from the fire-and-forget `PI_EVENTS` list; added `attachVerdictReader` (NDJSON reader on socket `data`/`close` events); added `pendingVerdicts` FIFO queue; added `handleToolCall` async function that sends an `Authz` frame, races `verdictPromise` vs a `setTimeout`, and returns `{block: true}` on any failure path.
+- Fixed one TypeScript error: the overloaded `on()` signature for `"tool_call"` can't be satisfied via generic `Parameters<>` — used a simple object cast instead (same pattern as the existing event loop).
+- Refactored: removed an unused `timedOut` variable.
+- Updated `env.d.ts` (added `BOB_AUTHZ_TIMEOUT_MS`) and `README.md` (new "Policy-Control" section and env var entry).
+- All 24 tests pass; `tsc --noEmit` clean.
+
+**What was tried and rejected:** Initially considered keeping `tool_call` in the fire-and-forget list for observation and adding the blocking hook on top, but the AC-1 test expects the frame to be `kind:"authz"` not `kind:"event"`, so `tool_call` must be handled exclusively by the blocking hook.
+
+**What remains:** Nothing. All four ACs are implemented and tested. Ready for reviewer.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
