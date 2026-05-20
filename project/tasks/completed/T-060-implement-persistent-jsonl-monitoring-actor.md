@@ -1,7 +1,7 @@
 ---
 id: T-060
 title: Implement persistent JSONL monitoring actor
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-20'
