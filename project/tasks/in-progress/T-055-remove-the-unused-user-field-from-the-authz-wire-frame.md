@@ -75,6 +75,16 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+Implemented T-055 in a single TDD cycle. The work was pure wire-schema cleanup with no design decisions required.
+
+The RED state was established by removing `user: String` from `InboundFrame::Authz` in `framing.rs`; the compiler immediately surfaced eight call sites across three files that constructed or destructured the field. All eight were updated to drop the field: four in `multiplex.rs` test bodies, one in the `lib.rs` integration test JSON literal, and the `framing.rs` test match pattern. The existing `parses_authz_frame_with_session_tag` test was updated to omit `user` from both the raw JSON and the destructure. A new test `parses_authz_frame_without_user_field` was added to satisfy AC-2 explicitly — it asserts that an `authz` JSON frame without any `user` key parses successfully.
+
+`multiplex::handle_frame` already used `..` to ignore extra fields in its `InboundFrame::Authz` match arm (T-056 context), so it required no change.
+
+The GREEN state: 32 tests pass, `cargo clippy -p extension-ipc --all-targets` clean. One commit made on the task branch. Nothing remains.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
