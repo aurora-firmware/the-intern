@@ -3,19 +3,31 @@
  *
  * Forwards every documented pi event to the bob service's extension.sock
  * Unix domain socket, tagged with the session id allocated by the bob
- * service supervisor.
+ * service supervisor.  Also registers a blocking `tool_call` hook that
+ * sends an Authz frame and awaits a matching AuthzVerdict before letting
+ * the tool call proceed.
  *
- * Wire contract: InboundFrame::Event from extension-ipc/src/framing.rs
- *   {"kind":"event","session":"<BOB_SESSION_ID>","payload":{"event":"<name>","data":<object>}}\n
+ * Wire contract (outbound frames):
+ *   InboundFrame::Event — for all non-tool_call events:
+ *     {"kind":"event","session":"<BOB_SESSION_ID>","payload":{"event":"<name>","data":<object>}}\n
+ *   InboundFrame::Authz — for tool_call events:
+ *     {"kind":"authz","session":"<BOB_SESSION_ID>","tool":"<name>","arguments":<object>}\n
+ *
+ * Wire contract (inbound frames, received from the bob service):
+ *   OutboundFrame::AuthzVerdict:
+ *     {"kind":"authz_verdict","session":"<BOB_SESSION_ID>","verdict":"allow"|"block"}\n
  *
  * Failure behaviour (one warning, then silent no-op for the session):
  *   - Missing BOB_SESSION_ID or BOB_EXTENSION_SOCK_PATH at load time.
  *   - UDS connect failure on first event.
  *   - Write failure mid-session.
+ *
+ * Authz failure behaviour (fail-closed):
+ *   - Transport failure, unparseable verdict, or timeout → block + one warning.
  */
 
 import * as net from "node:net";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolCallEventResult } from "@earendil-works/pi-coding-agent";
 
 // ---------------------------------------------------------------------------
 // Canonical list of events documented by pi at implementation time.
@@ -24,6 +36,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 // The live docs at https://pi.dev/docs/latest/extensions are accessible
 // but return a client-rendered SPA; the type definitions from the installed
 // package are the authoritative machine-readable source.
+//
+// `tool_call` is intentionally excluded: it is handled by the blocking
+// authz hook (see below) rather than the fire-and-forget event loop.
 // ---------------------------------------------------------------------------
 const PI_EVENTS = [
   "resources_discover",
@@ -51,11 +66,16 @@ const PI_EVENTS = [
   "tool_execution_end",
   "model_select",
   "thinking_level_select",
-  "tool_call",
   "tool_result",
   "user_bash",
   "input",
 ] as const;
+
+// ---------------------------------------------------------------------------
+// Default authz verdict timeout in milliseconds.
+// Overridden by BOB_AUTHZ_TIMEOUT_MS if set.
+// ---------------------------------------------------------------------------
+const DEFAULT_AUTHZ_TIMEOUT_MS = 5000;
 
 // ---------------------------------------------------------------------------
 // Warning helper — uses ctx.ui when available, otherwise stderr.
@@ -100,10 +120,77 @@ export default function bobFactory(pi: ExtensionAPI): void {
   // Frames queued while the connect is in progress.
   const pendingFrames: string[] = [];
 
+  // ---------------------------------------------------------------------------
+  // Pending authz verdict resolvers.
+  // Each entry corresponds to one outstanding Authz frame awaiting a verdict.
+  // Resolved in FIFO order as AuthzVerdict frames arrive.
+  // ---------------------------------------------------------------------------
+  type VerdictOutcome = "allow" | "block" | "error" | "transport_error_logged";
+  type VerdictResolver = (verdict: VerdictOutcome) => void;
+  const pendingVerdicts: VerdictResolver[] = [];
+
+  // Buffer for inbound NDJSON lines from the socket (verdict frames).
+  let inboundBuffer = "";
+
+  function handleInboundLine(line: string): void {
+    // Each line must be a valid JSON AuthzVerdict frame.
+    // If it is not, the oldest pending resolver is fail-closed.
+    if (pendingVerdicts.length === 0) return;
+    const resolve = pendingVerdicts.shift()!;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      resolve("error");
+      return;
+    }
+    const frame = parsed as Record<string, unknown>;
+    if (
+      frame.kind === "authz_verdict" &&
+      frame.session === sessionId &&
+      (frame.verdict === "allow" || frame.verdict === "block")
+    ) {
+      resolve(frame.verdict as "allow" | "block");
+    } else {
+      resolve("error");
+    }
+  }
+
+  function attachVerdictReader(sock: net.Socket): void {
+    sock.setEncoding("utf8");
+    sock.on("data", (chunk: string) => {
+      inboundBuffer += chunk;
+      const lines = inboundBuffer.split("\n");
+      // All but the last part are complete lines.
+      for (let i = 0; i < lines.length - 1; i++) {
+        if (lines[i]!.length > 0) handleInboundLine(lines[i]!);
+      }
+      inboundBuffer = lines[lines.length - 1]!;
+    });
+
+    sock.on("close", () => {
+      // Fail-close all pending verdict waiters with "error".
+      for (const resolve of pendingVerdicts) {
+        resolve("error");
+      }
+      pendingVerdicts.length = 0;
+    });
+  }
+
+  function resolvePendingVerdicts(outcome: VerdictOutcome): void {
+    for (const resolve of pendingVerdicts) {
+      resolve(outcome);
+    }
+    pendingVerdicts.length = 0;
+  }
+
   function markDead(reason: string, ctx?: ExtensionContext): void {
     transportDead = true;
     socket?.destroy();
     socket = null;
+    // Any in-flight tool_call authz must fail closed immediately and must not
+    // emit a second warning in handleToolCall (this warning is the canonical one).
+    resolvePendingVerdicts("transport_error_logged");
     warn(`transport error — event forwarding disabled for this session: ${reason}`, ctx);
   }
 
@@ -151,9 +238,10 @@ export default function bobFactory(pi: ExtensionAPI): void {
 
     connecting = true;
     const sock = net.createConnection(sockPath!, () => {
-      // Connected.
+      // Connected — set up the inbound reader before flushing outbound frames.
       connecting = false;
       socket = sock;
+      attachVerdictReader(sock);
       flushPending(ctx);
     });
 
@@ -189,13 +277,112 @@ export default function bobFactory(pi: ExtensionAPI): void {
     };
   }
 
-  // Register a handler for every documented pi event.
+  // ---------------------------------------------------------------------------
+  // Blocking tool_call authz hook.
+  //
+  // Sends an Authz frame to the bob service and awaits a matching
+  // AuthzVerdict.  Fails closed (block + one warning) on timeout,
+  // transport failure, or unparseable verdict.
+  // ---------------------------------------------------------------------------
+  function resolveAuthzTimeout(): number {
+    const raw = process.env.BOB_AUTHZ_TIMEOUT_MS;
+    if (raw !== undefined && raw !== "") {
+      const parsed = parseInt(raw, 10);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+    return DEFAULT_AUTHZ_TIMEOUT_MS;
+  }
+
+  function buildAuthzFrame(toolName: string, args: unknown): string {
+    return (
+      JSON.stringify({
+        kind: "authz",
+        session: sessionId,
+        tool: toolName,
+        arguments: args,
+      }) + "\n"
+    );
+  }
+
+  async function handleToolCall(
+    event: unknown,
+    ctx: ExtensionContext
+  ): Promise<ToolCallEventResult> {
+    const ev = event as { toolName?: string; input?: unknown };
+    const toolName = ev.toolName ?? "unknown";
+    const args = ev.input ?? {};
+
+    if (transportDead) {
+      warn(`authz: tool call blocked — transport is dead`, ctx);
+      return { block: true, reason: "transport is dead" };
+    }
+
+    const frame = buildAuthzFrame(toolName, args);
+
+    // Enqueue a verdict promise before sending the frame so the resolver is
+    // in place when the reply arrives.
+    let verdictResolve!: VerdictResolver;
+    const verdictPromise = new Promise<VerdictOutcome>((resolve) => {
+      verdictResolve = resolve;
+    });
+    pendingVerdicts.push(verdictResolve);
+
+    // Send the authz frame (this may trigger a lazy connect).
+    ensureConnected(frame, ctx);
+
+    // Await the verdict with a bounded timeout.
+    const timeoutMs = resolveAuthzTimeout();
+    const timeoutPromise = new Promise<"timeout">((resolve) => {
+      setTimeout(() => resolve("timeout"), timeoutMs);
+    });
+
+    const outcome = await Promise.race([verdictPromise, timeoutPromise]);
+
+    if (outcome === "timeout") {
+      // Remove the resolver from the queue so it doesn't get invoked later.
+      const idx = pendingVerdicts.indexOf(verdictResolve);
+      if (idx !== -1) pendingVerdicts.splice(idx, 1);
+      warn(`authz: verdict timeout after ${timeoutMs}ms — blocking tool call`, ctx);
+      return { block: true, reason: "authz verdict timeout" };
+    }
+
+    if (outcome === "block") {
+      warn(`authz: tool call blocked by policy`, ctx);
+      return { block: true, reason: "blocked by policy" };
+    }
+
+    if (outcome === "error") {
+      warn(`authz: unparseable or transport-error verdict — blocking tool call`, ctx);
+      return { block: true, reason: "authz verdict error" };
+    }
+
+    if (outcome === "transport_error_logged") {
+      return { block: true, reason: "transport error" };
+    }
+
+    // outcome === "allow"
+    return { block: false };
+  }
+
+  // Register a handler for every documented pi event (excluding tool_call,
+  // which uses the blocking authz hook registered separately below).
   // Cast is required because ExtensionAPI.on() uses individual overloads per
   // event name rather than a general string → handler signature.
   const piGeneric = pi as unknown as {
-    on(event: string, handler: (event: unknown, ctx: ExtensionContext) => void): void;
+    on(event: string, handler: (event: unknown, ctx: ExtensionContext) => void | Promise<unknown>): void;
   };
   for (const name of PI_EVENTS) {
     piGeneric.on(name, handleEvent(name));
   }
+
+  // Register the blocking tool_call authz hook.
+  // Cast is required: the overloaded on() signature for "tool_call" expects
+  // ExtensionHandler<ToolCallEvent, ToolCallEventResult>, but handleToolCall
+  // uses a looser event type to avoid importing the full ToolCallEvent union.
+  (pi as unknown as {
+    on(
+      event: "tool_call",
+      handler: (event: unknown, ctx: ExtensionContext) => Promise<ToolCallEventResult>
+    ): void;
+  }).on("tool_call", handleToolCall);
 }

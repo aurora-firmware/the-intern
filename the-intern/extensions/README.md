@@ -53,6 +53,17 @@ communication channel between the two components at startup.
   event it intercepts.
 - **Absence behaviour:** Same as `BOB_SESSION_ID` — one warning, then no-op.
 
+### `BOB_AUTHZ_TIMEOUT_MS`
+
+- **Type:** string (positive integer), OPTIONAL
+- **Format:** Decimal integer representing milliseconds, e.g. `"3000"`.
+- **Purpose:** Configures the maximum time the blocking `tool_call` authz hook
+  waits for a `AuthzVerdict` frame from the bob service before failing closed.
+  When absent, the built-in default of **5000 ms** is used.
+- **Fail-closed behaviour:** If no verdict arrives within the timeout, the tool
+  call is blocked (not allowed to proceed) and one warning is logged.  The
+  session continues; subsequent tool calls each get their own fresh timeout.
+
 An operator can verify the contract by inspecting the environment of any running
 `pi` process that was spawned by `bob serve`:
 
@@ -99,6 +110,39 @@ discovery directory, `bob serve` runs unchanged: prompts reach pi over
 `runRpcMode()`, tool calls execute, and no event-forwarding observability is
 added. The bob service emits no error and behaves identically to a pre-Phase-3
 deployment.
+
+---
+
+## Policy-Control: Blocking tool_call Authorization Hook
+
+The bob extension registers a **blocking** `tool_call` handler with pi-agent.
+Before any tool executes, the handler:
+
+1. Sends an `Authz` frame to the bob service over `extension.sock`:
+   ```json
+   {"kind":"authz","session":"<BOB_SESSION_ID>","tool":"<tool-name>","arguments":{...}}
+   ```
+2. Awaits a matching `AuthzVerdict` frame on the same socket:
+   ```json
+   {"kind":"authz_verdict","session":"<BOB_SESSION_ID>","verdict":"allow"}
+   ```
+   or
+   ```json
+   {"kind":"authz_verdict","session":"<BOB_SESSION_ID>","verdict":"block"}
+   ```
+3. Returns the verdict to pi: `allow` permits the call, `block` denies it.
+
+### Fail-closed semantics
+
+If any of the following occur, the tool call is **blocked** and one warning is
+logged.  The pi session continues; the tool simply does not run.
+
+| Failure condition | Result |
+|---|---|
+| No verdict within `BOB_AUTHZ_TIMEOUT_MS` (default 5 000 ms) | block + warn |
+| Verdict frame is not valid JSON | block + warn |
+| Verdict field is neither `"allow"` nor `"block"` | block + warn |
+| UDS transport error or connection closed | block + warn |
 
 ---
 

@@ -696,3 +696,426 @@ describe("T-044 AC-2: ctx.ui absent — socket.write false falls back to stderr"
     await server.close();
   });
 });
+
+// ---------------------------------------------------------------------------
+// T-057: Blocking tool_call authorization hook.
+//
+// Helper: createAuthzServer — a bidirectional UDS server that:
+//   - Collects inbound NDJSON lines (same as createTestServer)
+//   - Allows the test to push AuthzVerdict frames back to the connected client
+// ---------------------------------------------------------------------------
+
+async function createAuthzServer(serverSockPath: string): Promise<{
+  close(): Promise<void>;
+  lines(): string[];
+  sendVerdict(verdict: { kind: "authz_verdict"; session: string; verdict: string }): void;
+  sendRaw(data: string): void;
+}> {
+  const received: string[] = [];
+  let buffer = "";
+  const connections = new Set<net.Socket>();
+  let activeConn: net.Socket | null = null;
+
+  const server = net.createServer((conn) => {
+    connections.add(conn);
+    activeConn = conn;
+    conn.once("close", () => {
+      connections.delete(conn);
+      if (activeConn === conn) activeConn = null;
+    });
+    conn.setEncoding("utf8");
+    conn.on("data", (chunk: string) => {
+      buffer += chunk;
+      const parts = buffer.split("\n");
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (parts[i]!.length > 0) received.push(parts[i]!);
+      }
+      buffer = parts[parts.length - 1]!;
+    });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(serverSockPath, resolve);
+  });
+
+  return {
+    close(): Promise<void> {
+      for (const conn of connections) conn.destroy();
+      connections.clear();
+      return new Promise((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    },
+    lines() {
+      return received;
+    },
+    sendVerdict(verdict) {
+      if (activeConn && !activeConn.destroyed) {
+        activeConn.write(JSON.stringify(verdict) + "\n");
+      }
+    },
+    sendRaw(data: string) {
+      if (activeConn && !activeConn.destroyed) {
+        activeConn.write(data);
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// AC-1: tool_call hook sends Authz frame with correct shape.
+// ---------------------------------------------------------------------------
+
+describe("T-057 AC-1: tool_call hook sends Authz frame", () => {
+  it("sends an authz frame carrying session, tool, and arguments when tool_call fires", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+
+    const server = await createAuthzServer(sockPath);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    // Fire the tool_call event without awaiting the handler fully (the handler
+    // blocks on a verdict).  We set a fast timeout so it resolves quickly.
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "200";
+
+    const handlerPromise = pi.emit("tool_call", {
+      type: "tool_call",
+      toolCallId: "call-001",
+      toolName: "bash",
+      input: { command: "echo hello" },
+    });
+
+    // Wait for the authz frame to arrive on the server side.
+    await waitUntil(() => server.lines().length >= 1);
+
+    const frame = JSON.parse(server.lines()[0]!);
+    expect(frame.kind).toBe("authz");
+    expect(frame.session).toBe(SESSION_ID);
+    expect(frame.tool).toBe("bash");
+    expect(frame.arguments).toEqual({ command: "echo hello" });
+
+    // Let the handler resolve via timeout (fail-closed is fine for this test).
+    await handlerPromise;
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+
+    await server.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC-2: allow verdict lets the call proceed.
+// ---------------------------------------------------------------------------
+
+describe("T-057 AC-2: allow verdict permits tool call", () => {
+  it("returns block:false when AuthzVerdict with allow:true arrives within timeout", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "500";
+
+    const server = await createAuthzServer(sockPath);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    // Capture handler return value via a custom emit that returns the result.
+    let handlerResult: unknown = undefined;
+    const handlers = pi.handlers.get("tool_call") ?? [];
+    expect(handlers.length).toBe(1);
+
+    const toolCallEvent = {
+      type: "tool_call",
+      toolCallId: "call-002",
+      toolName: "read",
+      input: { file_path: "/etc/hosts" },
+    };
+
+    // Start the handler but don't await it yet.
+    const handlerPromise = handlers[0]!(toolCallEvent, {} as ExtensionContext);
+
+    // Wait for the authz frame, then send back an allow verdict.
+    await waitUntil(() => server.lines().length >= 1);
+    server.sendVerdict({ kind: "authz_verdict", session: SESSION_ID, verdict: "allow" });
+
+    handlerResult = await handlerPromise;
+
+    // allow verdict → block should be false (or absent / falsy).
+    expect((handlerResult as any)?.block).toBeFalsy();
+
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+    await server.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC-3a: block verdict denies the call.
+// ---------------------------------------------------------------------------
+
+describe("T-057 AC-3a: block verdict denies tool call", () => {
+  it("returns block:true and logs one warning when AuthzVerdict has allow:false", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "500";
+
+    const server = await createAuthzServer(sockPath);
+    const pi = makeStubPi();
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("tool_call") ?? [];
+    const toolCallEvent = {
+      type: "tool_call",
+      toolCallId: "call-003",
+      toolName: "write",
+      input: { file_path: "/etc/passwd", content: "evil" },
+    };
+
+    const handlerPromise = handlers[0]!(toolCallEvent, {} as ExtensionContext);
+
+    await waitUntil(() => server.lines().length >= 1);
+    server.sendVerdict({ kind: "authz_verdict", session: SESSION_ID, verdict: "block" });
+
+    const result = await handlerPromise;
+
+    expect((result as any)?.block).toBe(true);
+    // One warning logged for the block verdict.
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+    await server.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC-3b: timeout fails closed (block + one warning).
+// ---------------------------------------------------------------------------
+
+describe("T-057 AC-3b: timeout fails closed", () => {
+  it("returns block:true and logs one warning when no verdict arrives within the timeout", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "100";
+
+    const server = await createAuthzServer(sockPath);
+    const pi = makeStubPi();
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("tool_call") ?? [];
+    const toolCallEvent = {
+      type: "tool_call",
+      toolCallId: "call-004",
+      toolName: "bash",
+      input: { command: "rm -rf /" },
+    };
+
+    // Do NOT send a verdict — let the timeout fire.
+    const result = await handlers[0]!(toolCallEvent, {} as ExtensionContext);
+
+    expect((result as any)?.block).toBe(true);
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+    await server.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC-3c: unparseable verdict fails closed.
+// ---------------------------------------------------------------------------
+
+describe("T-057 AC-3c: unparseable verdict fails closed", () => {
+  it("returns block:true and logs one warning when the verdict frame is not valid JSON", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "500";
+
+    const server = await createAuthzServer(sockPath);
+    const pi = makeStubPi();
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("tool_call") ?? [];
+    const toolCallEvent = {
+      type: "tool_call",
+      toolCallId: "call-005",
+      toolName: "grep",
+      input: { pattern: "secret", path: "." },
+    };
+
+    const handlerPromise = handlers[0]!(toolCallEvent, {} as ExtensionContext);
+
+    // Wait for the authz frame, then send back garbage (not valid JSON).
+    await waitUntil(() => server.lines().length >= 1);
+    server.sendRaw("this is not json\n");
+
+    const result = await handlerPromise;
+
+    expect((result as any)?.block).toBe(true);
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+    await server.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC-3d: transport failure fails closed (block + one warning).
+// ---------------------------------------------------------------------------
+
+describe("T-057 AC-3d: transport failure fails closed", () => {
+  it("returns block:true and logs one warning when the server closes the connection without a verdict", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "500";
+
+    const server = await createAuthzServer(sockPath);
+    const pi = makeStubPi();
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("tool_call") ?? [];
+    const toolCallEvent = {
+      type: "tool_call",
+      toolCallId: "call-006",
+      toolName: "bash",
+      input: { command: "cat /etc/shadow" },
+    };
+
+    const handlerPromise = handlers[0]!(toolCallEvent, {} as ExtensionContext);
+
+    // Wait for the authz frame, then close the server (transport failure).
+    await waitUntil(() => server.lines().length >= 1);
+    await server.close();
+
+    const result = await handlerPromise;
+
+    expect((result as any)?.block).toBe(true);
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC-3e: connect-time transport failure (no verdict) emits one warning.
+// ---------------------------------------------------------------------------
+
+describe("T-057 AC-3e: connect-time failure without verdict", () => {
+  it("returns block:true and logs exactly one warning when the UDS connect fails before any verdict arrives", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = path.join(tmpDir, "not-listening.sock");
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "120";
+
+    const pi = makeStubPi();
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("tool_call") ?? [];
+    const result = await handlers[0]!(
+      {
+        type: "tool_call",
+        toolCallId: "call-006b",
+        toolName: "bash",
+        input: { command: "whoami" },
+      },
+      {} as ExtensionContext,
+    );
+
+    expect((result as any)?.block).toBe(true);
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC-4: BOB_AUTHZ_TIMEOUT_MS is respected; built-in default is used when absent.
+// ---------------------------------------------------------------------------
+
+describe("T-057 AC-4: BOB_AUTHZ_TIMEOUT_MS controls verdict timeout", () => {
+  it("uses BOB_AUTHZ_TIMEOUT_MS when set, making the hook resolve after that many ms", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "150";
+
+    const server = await createAuthzServer(sockPath);
+    const pi = makeStubPi();
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("tool_call") ?? [];
+
+    const before = Date.now();
+    const result = await handlers[0]!(
+      { type: "tool_call", toolCallId: "call-007", toolName: "bash", input: { command: "ls" } },
+      {} as ExtensionContext,
+    );
+    const elapsed = Date.now() - before;
+
+    // Should have timed out around 150 ms (give ±100 ms margin).
+    expect(elapsed).toBeGreaterThanOrEqual(100);
+    expect(elapsed).toBeLessThan(500);
+    expect((result as any)?.block).toBe(true);
+
+    stderrSpy.mockRestore();
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+    await server.close();
+  });
+
+  it("applies the built-in default timeout when BOB_AUTHZ_TIMEOUT_MS is not set", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+
+    const server = await createAuthzServer(sockPath);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    // Send an allow verdict immediately — if the default timeout is applied
+    // (not zero), the handler should still resolve to allow within a reasonable
+    // time once the verdict arrives.
+    const handlers = pi.handlers.get("tool_call") ?? [];
+    const toolCallEvent = {
+      type: "tool_call",
+      toolCallId: "call-008",
+      toolName: "read",
+      input: { file_path: "/tmp/test" },
+    };
+
+    const handlerPromise = handlers[0]!(toolCallEvent, {} as ExtensionContext);
+
+    await waitUntil(() => server.lines().length >= 1);
+    server.sendVerdict({ kind: "authz_verdict", session: SESSION_ID, verdict: "allow" });
+
+    const result = await handlerPromise;
+    // Allow verdict with default timeout → should NOT block.
+    expect((result as any)?.block).toBeFalsy();
+
+    await server.close();
+  });
+});
