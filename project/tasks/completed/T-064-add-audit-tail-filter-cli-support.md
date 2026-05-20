@@ -1,7 +1,7 @@
 ---
 id: T-064
 title: Add audit tail filter CLI support
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-20'
