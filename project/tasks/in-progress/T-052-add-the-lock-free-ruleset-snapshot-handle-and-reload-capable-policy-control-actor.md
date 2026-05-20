@@ -109,3 +109,25 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Acceptance criteria:**
+
+- AC-1: `SnapshotHandle` is backed by `ArcSwap<RulesetSnapshot>` wrapped in an `Arc` so clones share the same allocation. `load()` calls `load_full()` which is lock-free. Test `snapshot_handle_clone_shares_same_arc_swap_allocation` confirms pointer equality. Criterion met.
+- AC-2: `Config::default()` constructs a deny-all snapshot (empty `admitted_users`, empty `action_rules`) and an empty `config_path`. Tests `config_default_initial_snapshot_is_deny_all` and `config_default_config_path_is_empty` confirm. Criterion met.
+- AC-3: `Handle::reload()` sends a `Reload` command to the actor, which calls `reload_snapshot`. On successful parse and validation, `handle.store(snapshot)` atomically swaps the `ArcSwap`. Test `handle_reload_swaps_snapshot_when_config_file_parses_and_validates` confirms the swap. Criterion met.
+- AC-4: On TOML parse failure or empty path, `reload_snapshot` returns early with an error and does not call `handle.store`, leaving the previous snapshot in force. Two tests confirm both failure modes. Criterion met.
+- AC-5: `start()` creates the `SnapshotHandle` from `cfg.initial_snapshot` before spawning the actor and returns it as the third element of the tuple. The snapshot is immediately visible before any command is processed. Test `start_snapshot_handle_serves_initial_snapshot_from_config` confirms. Criterion met.
+
+**Out-of-scope file (`bob/src/serve.rs`):** The single-line change from a 2-tuple to a 3-tuple destructuring of `start()`'s return value is unavoidable — `start()` now returns three values and the verification command requires `cargo build -p bob` to pass. The change introduces no logic and is fully documented in the Work Log. This is acceptable.
+
+**Stage 2 — Code quality:**
+
+Correctness, tests, security, and readability all pass. 10 tests cover every AC, including both success and failure paths for reload; each test constructs its own fixtures (no shared mutable state). No hardcoded secrets, no panicking paths on runtime values. Names are descriptive and follow project conventions.
+
+Minor observation (non-blocking): `reload_snapshot` and `load_policy_config_from_file` accept `&PathBuf` instead of `&Path`. The coding guidelines prefer preferring the most general type in function signatures, and the Rust community convention (enforced by `clippy::ptr_arg`) is to accept `&Path`. The Developer states clippy passes cleanly on this branch, so this is either not triggered by the toolchain version in use or was silently accepted. No `#[allow]` attribute is present. A future cleanup pass could change these to `&Path` without breaking callers.
