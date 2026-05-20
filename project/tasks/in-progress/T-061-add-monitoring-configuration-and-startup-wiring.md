@@ -85,6 +85,18 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+I started T-061 by reading the canonical task file from `dev-agent` and confirmed there were no prior Work Log entries. I then mapped the existing `bob` config/startup and `monitoring` contract and added red tests in `crates/bob/src/config.rs` covering: loading a `[monitoring]` section with audit path and default tail filters, resolving a non-empty default audit path when omitted, failing config load when the audit path is not appendable, and creating missing parent directories with owner-only permissions where applicable.
+
+I ran `cargo test -p bob config::tests` for the red step, but compilation failed before reaching new tests due pre-existing errors in `crates/requests-handler/src/handler.rs` (`AuditKind` no longer exists in `bob_core::types`, and `AuditRecord` is instantiated with a removed `description` field). This is outside T-061 files-to-touch and prevents any `bob` test execution, so I stopped implementation per boundary/escalation rules.
+
+I attempted to file a blocker bug via the documented `new-bug` skill command and rejected that command form because the CLI does not support the documented `--title/--description` flags. I then used the actual CLI signature and created `B-007`. I also logged both CLI/skill issues in `ai-process-cli-reported-issues.md` as required by repository instructions.
+
+Architect consultation classified the blocker as an execution issue but directed that T-061 must not absorb the `requests-handler` fix as a scope exception. T-061 is blocked by `B-007`; resume this branch only after `B-007` lands, then refresh from `dev-agent` and rerun `cd the-intern/service && cargo test -p bob config::tests && cargo test -p bob serve::tests`.
+
+Remaining work after blocker resolution: implement minimal production changes for monitoring config loading/path preparation/startup wiring, run red→green→refactor cycles with commits, and finish verification commands for `config::tests` and `serve::tests`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
