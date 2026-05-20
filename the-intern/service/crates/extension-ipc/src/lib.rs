@@ -415,7 +415,7 @@ mod tests {
 
         let session = bob_core::types::SessionId::new();
         let authz = format!(
-            "{{\"kind\":\"authz\",\"session\":\"{session}\",\"tool\":\"bash\",\"arguments\":{{\"cmd\":\"ls\"}},\"user\":\"alice\"}}\n"
+            "{{\"kind\":\"authz\",\"session\":\"{session}\",\"tool\":\"bash\",\"arguments\":{{\"cmd\":\"ls\"}}}}\n"
         );
 
         write_frame(&client, &authz).await;
