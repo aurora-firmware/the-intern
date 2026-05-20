@@ -120,3 +120,30 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+
+PASS
+
+Stage 1 (spec compliance) and Stage 2 (code quality) both pass.
+
+**AC-1** — `handle_report_submit` deserializes `ExternalReportAuditPayload`, constructs an `AuditRecord` envelope with a fresh UUID and RFC 3339 timestamp, and delegates to `monitoring::Handle::append_record`, returning `{ ok: true }` on success. Test `dispatch_report_submit_with_monitoring_handle_returns_ok` confirms the path. Pass.
+
+**AC-2** — Unknown fields are rejected by `#[serde(deny_unknown_fields)]` on `ExternalReportAuditPayload` at the type level (not re-declared in the facade), which is the correct locus. Missing required fields and absent params are handled explicitly with -32602. Three tests cover each variant. Pass.
+
+**AC-3** — The monitoring `None` guard returns -32601 (`CODE_METHOD_NOT_FOUND`) before any params inspection. Test `dispatch_report_submit_without_monitoring_handle_returns_not_implemented` confirms this. Pass.
+
+**AC-4** — The module-level method table in `dispatch.rs` was extended with an "Auth gate" column; every row (including `report.submit`) reads "admin socket peer gate". Pass.
+
+**Scope** — Changed files are exactly the four files specified in the task plus `Cargo.lock` (automatically regenerated). No out-of-scope modifications.
+
+**Aliasing decision** (`MonitoringAuditRecord`) — Two distinct `AuditRecord` types coexist: `crate::subscriptions::AuditRecord` (fan-out struct) and `bob_core::types::AuditRecord` (monitoring envelope). Aliasing the bob_core type at the import site is clean, non-functional, and avoids a genuine name collision. Correct approach.
+
+**`session_id` promotion decision** — The facade promotes the caller-supplied `session_id` to the `AuditRecord` envelope and sets the inner payload's `session_id` to `None`. This matches the established convention in `bob-core/src/ports.rs` and `monitoring/src/lib.rs` test fixtures. Correct approach.
+
+**Verification** — All three commands run cleanly in-sandbox:
+- `cargo test -p admin-rpc report_submit` — 5 passed, 0 failed.
+- `cargo test -p bob serve::tests` — 18 passed, 0 failed.
+- `cargo clippy -p admin-rpc --all-targets` — clean, no warnings.
+
+No minor observations.
