@@ -699,7 +699,10 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bob-core",
+ "serde",
+ "thiserror",
  "tokio",
+ "toml",
  "tracing",
 ]
 
