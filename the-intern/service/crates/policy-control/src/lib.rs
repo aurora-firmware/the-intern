@@ -1,6 +1,10 @@
 #![forbid(unsafe_code)]
 #![doc = "scaffold — see project/docs/roadmap.md phase 4"]
 
+pub mod ruleset;
+
+pub use ruleset::{ActionRule, ArgMatcher, PolicyConfig, RulesetError, RulesetSnapshot};
+
 use bob_core::error::{ServiceError, ServiceResult};
 use tokio::{sync::mpsc, task::JoinHandle};
 
