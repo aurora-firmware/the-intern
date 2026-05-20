@@ -8,6 +8,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bob-core",
+ "chrono",
+ "monitoring",
  "nix",
  "pi-agent-supervisor",
  "policy-control",
@@ -16,6 +18,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
