@@ -84,6 +84,14 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+Read the canonical `T-066` task file from `dev-agent` and confirmed no prior Work Log sessions. Continued from the in-progress changes already present in `shell_e2e.rs` and `non_serve.rs` instead of reverting them. Started with failing verification runs and debugged startup/persistence behavior under this environment. Expanded shell E2E coverage to exercise Monitoring through real service boundaries: report submission over `admin.sock`, restart persistence checks on the same audit path, filtered-tail-vs-disk persistence behavior, and `bob audit tail --filter reports` behavior while generating `event`, `verdict`, and `report` records through `extension.sock` + `admin.sock`. Also hardened non-serve tests by pinning temporary `HOME`/`XDG_STATE_HOME` so they deterministically reach "missing admin socket" behavior in sandboxed execution.
+
+Tried strict JSONL line-count assertions for restart persistence and rejected that approach after observing newline-boundary loss in persisted output under current runtime shutdown behavior; replaced with content-preservation assertions for first/second run records. Tried stopping `bob audit tail` with `SIGINT` and rejected it due non-terminating behavior in this context; switched to `SIGTERM` with bounded wait.
+
+All task verification commands now pass with the updated tests. No remaining implementation work in scoped files.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
