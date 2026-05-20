@@ -106,3 +106,20 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+PASS
+
+Stage 1 (acceptance criteria and scope): PASS.
+- AC-1 met: accepted records are serialized and written as one JSON line per append path in `monitoring::Actor::append_record`, and covered by `append_record_writes_one_json_object_line_to_audit_file`.
+- AC-2 met: filtered live subscriptions receive only future matching records and suppress non-matching records, covered by `subscribe_tail_delivers_only_future_matching_records`.
+- AC-3 met: filtered-out kinds are still persisted to JSONL before fan-out filtering, covered by `filtered_out_records_are_still_appended_to_jsonl`.
+- AC-4 met: file open/append failures return typed `ServiceError::Persistence`, covered by `append_record_returns_typed_error_when_audit_file_cannot_be_opened`.
+- AC-5 met: actor flushes the buffered writer on shutdown in `Actor::run`, covered by `actor_flushes_buffered_audit_records_on_shutdown`.
+- Scope check: expected files were updated in the monitoring crate; `the-intern/service/Cargo.lock` changed as dependency lockfile churn.
+
+Stage 2 (code quality): PASS.
+- Correctness, tests, security, readability, and performance checks passed for task scope.
+- Verification rerun by reviewer on `task/T-060-implement-persistent-jsonl-monitoring-actor`:
+  - `cargo test -p monitoring`
+  - `cargo clippy -p monitoring --all-targets`
