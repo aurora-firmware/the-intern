@@ -123,3 +123,28 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Spec compliance**
+
+- AC-1: `MonitoringBackedHandle::record_event` constructs an `AuditRecord` of kind `Event` with the session id from the `MonitoringEvent` and appends it via `monitoring::Handle::append_record`. Confirmed by `event_frame_submits_event_audit_record_to_monitoring_with_session_id` (35/35 pass).
+- AC-2 (tool-call): In `SessionMultiplexer::handle_frame`, `PolicyEngine::evaluate_action` is called first; only then is `record_verdict` called with a clone of the reason — the `verdict` binding itself is passed unmodified to `OutboundFrame::AuthzVerdict`. The allow/deny outcome is unchanged. Confirmed by `authz_frame_submits_verdict_audit_record_to_monitoring_with_session_id`.
+- AC-2 (pre-flight): `run_preflight` in `handler.rs` now emits an allow-verdict `AuditRecord` in the `if allowed` branch after `store.enqueue`; the deny branch is untouched. Two updated tests and one new test cover both paths.
+- AC-3: Both `record_event` and `record_verdict` in `MonitoringBackedHandle` wrap `append_record` in `if let Err(err) = ...` with `tracing::warn!`; the error is never propagated. The `event_frame_monitoring_rejection_logs_failure_and_preserves_control_flow` test passes a directory path as the audit log (which causes `append_record` to fail) and asserts `handle_frame` returns `Ok(())`.
+- AC-4: `try_start_subsystems` in `serve.rs` now passes `Arc::new(extension_ipc::MonitoringBackedHandle::new(monitoring_handle.clone()))` instead of `TracingMonitoringHandle`. The new test `extension_ipc_is_wired_with_monitoring_backed_handle_not_tracing_placeholder` verifies the shared monitoring handle is functional end-to-end.
+- Scope: changed files are exactly those specified (`extension-ipc/Cargo.toml`, `extension-ipc/src/lib.rs`, `extension-ipc/src/multiplex.rs`, `requests-handler/src/handler.rs`, `bob/src/serve.rs`, `Cargo.lock`). `monitoring/src/lib.rs` was correctly omitted per the Work Log decision.
+
+**Stage 2 — Code quality**
+
+- Correctness: Policy allow/deny semantics are byte-for-byte preserved. Monitoring failures cannot alter control flow (verified at code and test level). `verdict.reason.clone()` is used for the monitoring call; the original `verdict` is sent on the wire.
+- Tests: 35 extension-ipc tests, 14 requests-handler tests, 21 bob serve tests — all pass. New tests cover AC-1, AC-2 (both paths), AC-3, and AC-4. Test doubles (`CapturingMonitoringHandle`) correctly updated with the new `record_verdict` method.
+- Security: No hardcoded credentials. The `AuditRecord` id uses a timestamp; no external input flows into record construction without extraction via `.get("event").and_then(|v| v.as_str())`.
+- Readability: Names are clear and follow project conventions. `MonitoringBackedHandle` is well-documented. Comments in `handle_frame` and `run_preflight` correctly describe the failure-tolerance intent.
+- Performance: No unnecessary loops. `chrono::Utc::now()` is called twice per record (id and timestamp); this is a minor observation, not a blocking concern.
+
+Minor observation (non-blocking): `chrono::Utc::now()` is called twice when constructing each `AuditRecord` (once for the id, once for the timestamp). This is harmless but could theoretically produce an id and a timestamp that differ by a millisecond boundary. No impact on correctness or audit semantics.
