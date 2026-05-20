@@ -1,7 +1,7 @@
 ---
 id: T-057
 title: Add the blocking tool_call authorization hook to the bob extension
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-20'
