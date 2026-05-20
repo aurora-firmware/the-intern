@@ -1,7 +1,7 @@
 ---
 id: T-055
 title: Remove the unused user field from the Authz wire frame
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-20'
