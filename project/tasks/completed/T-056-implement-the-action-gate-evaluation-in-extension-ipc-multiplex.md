@@ -1,7 +1,7 @@
 ---
 id: T-056
 title: Implement the action gate evaluation in extension-ipc multiplex
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-20'
