@@ -116,3 +116,36 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+FAIL
+
+Result: FAIL
+
+Summary:
+- Reviewed `task/T-057-add-the-blocking-tool-call-authorization-hook-to-the-bob-extension` against AC-1..AC-4 and Stage 2 quality checks.
+- Stage 1 failed on AC-3 fail-closed warning semantics for one transport-failure path.
+- Failed check:
+  - File and location: `the-intern/extensions/bob.ts` (`markDead` at line 179 and `handleToolCall` timeout path at lines 330-335).
+  - What is wrong: on connect-time transport failure (`sock.on("error")` -> `markDead`), the same `tool_call` can emit two warnings: one from `markDead(...)` and a second when the unresolved verdict later times out in `handleToolCall`.
+  - What should change: ensure a transport failure resolves the pending verdict for that call immediately to the hook's fail-closed path (single warning), or otherwise suppress the timeout warning for calls already failed by transport error. The AC requires one warning on this failure mode.
+
+Artifacts:
+- Updated canonical task file: `project/tasks/in-progress/T-057-add-the-blocking-tool-call-authorization-hook-to-the-bob-extension.md` (this verdict entry).
+- Diff reviewed: `the-intern/extensions/bob.ts`, `the-intern/extensions/bob.test.ts`, `the-intern/extensions/env.d.ts`, `the-intern/extensions/README.md`.
+
+Evidence:
+- Inspected task requirements and acceptance criteria from the canonical file on `dev-agent`.
+- Ran `git diff --name-status dev-agent..task/T-057-add-the-blocking-tool-call-authorization-hook-to-the-bob-extension`.
+- Reviewed implementation/test diffs for all expected changed files.
+- Verified developer-reported checks on the task branch: `cd the-intern/extensions && npx vitest run && npx tsc --noEmit` (24 tests passed; typecheck clean).
+- Confirmed hook return contract from installed types: `ToolCallEventResult { block?: boolean; reason?: string; }`.
+
+Obstacles Encountered:
+- Initial sandbox restriction when switching branches (`.git/index.lock: Read-only file system`); resolved by rerunning checkout/test commands with escalated permissions.
+
+Next Owner:
+- Developer
+
+Next Action:
+- Update transport-failure handling so one failed `tool_call` emits exactly one warning while still failing closed, add regression coverage for connect-time failure without verdict, and resubmit for review.
