@@ -1,7 +1,7 @@
 ---
 id: T-061
 title: Add monitoring configuration and startup wiring
-status: blocked
+status: pending
 priority: high
 assigned-role: unassigned
 created: '2026-05-20'
