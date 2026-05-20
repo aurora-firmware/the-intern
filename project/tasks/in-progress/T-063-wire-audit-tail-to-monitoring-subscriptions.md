@@ -121,3 +121,32 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-20
+
+FAIL
+
+**Stage 1 — Spec compliance: PASS**
+
+All five acceptance criteria are met:
+- AC-1: `parse_audit_filters` returns an empty `Vec` when no filters are present; an empty Vec is passed to `monitoring.subscribe_tail`, which the monitoring actor interprets as "all kinds". Confirmed by `audit_tail_subscribe_with_no_filters_returns_monitoring_backed_subscription`.
+- AC-2: Valid filter strings are parsed through `AuditFilterKind::from_str` and forwarded to `monitoring.subscribe_tail`. Confirmed by `audit_tail_subscribe_with_valid_filters_returns_monitoring_backed_subscription`. Filtering correctness is owned by the monitoring crate (covered by its own tests).
+- AC-3: Unknown filter strings return `CODE_INVALID_REQUEST` and no subscription is registered. Confirmed by two dedicated tests.
+- AC-4: A monitoring `append_record` call delivers an `audit.tail` notification with `method: "audit.tail"` to the subscriber. Confirmed by `run_connection_audit_tail_subscribe_delivers_audit_tail_notification`.
+- AC-5: `audit.tail.unsubscribe` drops the cancellation sender, the forwarder exits, and subsequent records are not delivered. Connection-close drops the `ConnectionRegistry` which drops all cancellation senders. Confirmed by `run_connection_audit_tail_unsubscribe_stops_notifications` and `run_connection_close_cancels_all_audit_subscriptions`.
+
+Scope: only `dispatch.rs`, `lib.rs`, and `subscriptions.rs` were modified. `protocol.rs` was not touched, consistent with the work log.
+
+**Stage 2 — Code quality: FAIL**
+
+**Readability — stale module-level comment block**
+
+- **File and location:** `the-intern/service/crates/admin-rpc/src/lib.rs`, lines 132–150 (the "Connection concurrency model" block comment).
+- **What is wrong:** The comment describes the old bounded-mpsc + `AddAuditRx`/`RemoveAuditRx` control-message + `NotifMsg::Dropped` sentinel architecture that this task explicitly removed. It says the forwarder reads from "the bounded `mpsc::Receiver<AuditRecord>`" and that "when the sender is dropped by the bus (AC-4 slow-subscriber), the forwarder detects it and sends a sentinel that causes the write task to close the connection." None of this is true anymore. The comment contradicts the actual code and will mislead future readers about how cancellation and back-pressure work.
+- **What should change:** Update the block comment to describe the current architecture: the forwarder receives from an unbounded `mpsc::UnboundedReceiver<AuditRecord>` (from monitoring), uses `tokio::select!` against a `oneshot` cancel receiver, and exits cleanly on cancellation or when the monitoring actor closes the channel. Remove the stale references to `AddAuditRx`, `RemoveAuditRx`, and the sentinel-driven connection-close path.
+
+**Readability — stale doc comment on local `AuditRecord`**
+
+- **File and location:** `the-intern/service/crates/admin-rpc/src/subscriptions.rs`, line 56.
+- **What is wrong:** The doc comment reads "A record published by the monitoring actor and forwarded to audit subscribers." This struct is no longer used for audit subscriptions; it is only used internally by `SubscriptionBus` for the Phase 2 chat subscription fan-out bus.
+- **What should change:** Update the doc comment to accurately describe the current role: "A record published on the local fan-out bus, used by chat subscriptions." (or similar wording that does not imply audit usage).
