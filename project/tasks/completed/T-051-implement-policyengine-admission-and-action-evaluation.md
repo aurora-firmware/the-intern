@@ -1,7 +1,7 @@
 ---
 id: T-051
 title: Implement PolicyEngine admission and action evaluation
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-20'
