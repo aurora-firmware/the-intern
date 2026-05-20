@@ -154,10 +154,26 @@ mod tests {
     }
 
     #[test]
-    fn audit_record_envelope_supports_kind_specific_payloads() {
+    fn audit_record_event_payload_supports_serde_json_round_trip() {
         let record = AuditRecord {
             id: "audit_001".to_owned(),
             timestamp: "2026-05-20T10:00:00Z".to_owned(),
+            kind: AuditRecordKind::Event,
+            session_id: Some(SessionId::new()),
+            payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
+                name: "extension.tool.called".to_owned(),
+                summary: Some("tool invoked".to_owned()),
+            }),
+        };
+
+        assert_audit_record_round_trip(record);
+    }
+
+    #[test]
+    fn audit_record_report_payload_supports_serde_json_round_trip() {
+        let record = AuditRecord {
+            id: "audit_002".to_owned(),
+            timestamp: "2026-05-20T10:01:00Z".to_owned(),
             kind: AuditRecordKind::Report,
             session_id: Some(SessionId::new()),
             payload: AuditRecordPayload::Report(ExternalReportAuditPayload {
@@ -168,22 +184,35 @@ mod tests {
             }),
         };
 
+        assert_audit_record_round_trip(record);
+    }
+
+    #[test]
+    fn audit_record_verdict_payload_supports_serde_json_round_trip() {
+        let record = AuditRecord {
+            id: "audit_003".to_owned(),
+            timestamp: "2026-05-20T10:02:00Z".to_owned(),
+            kind: AuditRecordKind::Verdict,
+            session_id: Some(SessionId::new()),
+            payload: AuditRecordPayload::Verdict(PolicyVerdictAuditPayload {
+                allow: false,
+                reason: Some("policy denied tool call".to_owned()),
+            }),
+        };
+
+        assert_audit_record_round_trip(record);
+    }
+
+    fn assert_audit_record_round_trip(record: AuditRecord) {
         let json = serde_json::to_string(&record).expect("serialization must succeed");
         let restored: AuditRecord =
             serde_json::from_str(&json).expect("deserialization must succeed");
 
         assert_eq!(record.id, restored.id);
         assert_eq!(record.timestamp, restored.timestamp);
-        assert!(matches!(restored.kind, AuditRecordKind::Report));
-        assert!(matches!(
-            restored.payload,
-            AuditRecordPayload::Report(ExternalReportAuditPayload {
-                action,
-                outcome: ReportOutcome::Success,
-                session_id: None,
-                summary: Some(summary),
-            }) if action == "tool.fs.read" && summary == "read complete"
-        ));
+        assert_eq!(record.kind, restored.kind);
+        assert_eq!(record.session_id, restored.session_id);
+        assert_eq!(record.payload, restored.payload);
     }
 
     #[test]
