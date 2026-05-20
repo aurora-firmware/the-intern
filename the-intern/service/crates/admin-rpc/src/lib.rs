@@ -134,20 +134,18 @@ impl Actor {
 // Each connection runs two cooperating halves:
 //
 //   Read half  — runs in the calling task; reads frames, dispatches them, and
-//                sends outbound messages via `out_tx`:
-//                  · serialised JSON frames (responses)
-//                  · subscription control (AddAuditRx / RemoveAuditRx)
+//                sends outbound messages via `out_tx` (serialised JSON frames).
 //
 //   Write half — runs in a spawned task; it `select!`s between:
-//                  · `out_rx`    — response frames and control messages
-//                  · `notif_rx`  — notification bytes from subscription
-//                                  forwarder sub-tasks
+//                  · `out_rx`   — response frames from the read half
+//                  · `notif_rx` — notification bytes from subscription
+//                                 forwarder sub-tasks
 //
 //   For each active audit subscription, a lightweight forwarder task reads
-//   from the bounded mpsc::Receiver<AuditRecord> and pushes serialised
-//   notification bytes onto `notif_rx`.  When the sender is dropped by the
-//   bus (AC-4 slow-subscriber), the forwarder detects it and sends a sentinel
-//   that causes the write task to close the connection.
+//   from an unbounded mpsc::UnboundedReceiver<AuditRecord> supplied by the
+//   monitoring actor, using `tokio::select!` against a oneshot cancel receiver.
+//   The forwarder exits when the cancel sender is dropped (explicit unsubscribe
+//   or connection close) or when the monitoring actor closes the channel.
 
 /// A frame sent from the read task to the write task.
 enum OutboundMsg {

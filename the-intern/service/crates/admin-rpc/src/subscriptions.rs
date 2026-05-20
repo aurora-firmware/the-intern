@@ -53,7 +53,7 @@ impl AdminSubscriptionId {
     }
 }
 
-/// A record published by the monitoring actor and forwarded to audit subscribers.
+/// A record published on the local fan-out bus, used by chat subscriptions.
 #[derive(Debug, Clone)]
 pub struct AuditRecord {
     /// Opaque payload — the JSON representation of the event.
