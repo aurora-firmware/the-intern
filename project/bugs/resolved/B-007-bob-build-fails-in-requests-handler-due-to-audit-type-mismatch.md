@@ -2,7 +2,7 @@
 id: B-007
 title: bob build fails in requests-handler due to audit type mismatch
 severity: high
-status: in-progress
+status: resolved
 created: '2026-05-20'
 task: T-061
 ---
