@@ -1,0 +1,101 @@
+---
+id: T-065
+title: Record extension events and policy verdicts in Monitoring
+status: pending
+priority: high
+assigned-role: unassigned
+created: '2026-05-20'
+spec: S-005
+---
+
+# Record extension events and policy verdicts in Monitoring
+
+<!--
+Task Quality Rules (see the new-task skill for full details):
+  - Atomic — one clear outcome.
+  - One-shottable — ≤ 3–4 files touched, ≤ 5 ACs, Description ≈ 20 lines.
+  - Verifiable — concrete Verification command or explicit manual steps.
+  - Self-contained — Description is enough to start without follow-up questions.
+  - EARS — every AC matches one of the five EARS patterns below.
+  - Dependency-honest — list every prior task this one reads from or modifies.
+-->
+
+## Description
+
+Phase 4 of S-005. Route existing runtime producers into the real Monitoring
+subsystem.
+
+Phase 3 currently wires extension events to `TracingMonitoringHandle`; S-005
+requires those events to become persistent audit records. S-004 policy paths
+must also emit verdict audit records. The pre-flight verdict path is in
+`requests-handler`, while tool-call verdicts flow through `extension-ipc`.
+Replace tracing-only event recording with Monitoring-backed recording while
+keeping useful tracing as secondary observability. Policy semantics must not
+change: this task records verdicts; it does not alter allow/deny decisions.
+
+## Acceptance Criteria
+
+<!-- EARS pattern reference. Every criterion must match one pattern:
+  1. Ubiquitous            — The system shall [outcome]
+  2. Event-driven          — WHEN [trigger] THE SYSTEM SHALL [outcome]
+  3. Unwanted-behaviour    — IF [fault] THEN THE SYSTEM SHALL [outcome]
+  4. State-driven          — WHILE [state] THE SYSTEM SHALL [outcome]
+  5. Optional              — WHERE [feature included] THE SYSTEM SHALL [outcome]
+
+Examples:
+  AC-1: WHEN the user submits valid credentials THE SYSTEM SHALL
+        redirect to /dashboard within 200ms.
+  AC-2: IF the password is incorrect THEN THE SYSTEM SHALL return 401
+        and display "Invalid credentials".
+  AC-3: The system shall log every authentication attempt with user id
+        and outcome.
+-->
+
+AC-1: WHEN extension-ipc receives an `InboundFrame::Event` THE SYSTEM SHALL submit an `event` audit record to Monitoring with the session id and payload.
+AC-2: WHEN the pre-flight or tool-call authorization path produces a verdict THE SYSTEM SHALL submit a `verdict` audit record to Monitoring without changing the verdict result.
+AC-3: IF Monitoring rejects a runtime audit record THEN THE SYSTEM SHALL log the failure and preserve the existing request/tool-call control-flow outcome.
+AC-4: WHEN `bob serve` starts extension-ipc and requests-handler integrations THE SYSTEM SHALL wire the real Monitoring handle instead of the tracing-only placeholder.
+
+## Dependencies
+
+- `T-060` — also modifies `monitoring/src/lib.rs`; this task extends the Monitoring API with producer-facing helpers after the actor/store exists.
+- `T-061` — wires the real Monitoring actor into `bob serve`.
+- `T-062` — also touches `bob/src/serve.rs`; sequencing after it avoids a runtime-wiring merge conflict.
+
+## Files to Touch
+
+- `the-intern/service/crates/extension-ipc/src/multiplex.rs` — record forwarded extension events through the Monitoring handle and update tests.
+- `the-intern/service/crates/requests-handler/src/handler.rs` — emit pre-flight verdict audit records without changing admission behaviour.
+- `the-intern/service/crates/bob/src/serve.rs` — pass the real Monitoring handle into extension and policy integrations.
+- `the-intern/service/crates/monitoring/src/lib.rs` — add small helper methods only if the producer-specific record helpers belong in Monitoring.
+
+## Verification
+
+```bash
+cd the-intern/service
+cargo test -p extension-ipc
+cargo test -p requests-handler
+cargo test -p bob serve::tests
+```
+
+## Work Log
+
+<!-- Mandatory. Append one entry per session boundary. Format:
+### Session N — YYYY-MM-DD
+Free-prose body: what was done this session, what was tried and
+rejected, decisions made, what remains for next session.
+
+Start every session by reading the entries below.
+The final entry serves as the handoff to the reviewer. -->
+
+## Review
+
+<!-- Reviewer: append verdict here after each review cycle.
+
+### Review Verdict — YYYY-MM-DD
+PASS | FAIL | ESCALATE
+
+- For FAIL: file, location, what is wrong, what should change.
+- For PASS: brief confirmation that both stages passed.
+- For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
+-->
