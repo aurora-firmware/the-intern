@@ -12,7 +12,7 @@
 //! | `service.status` | Returns `{ ok, version, uptime_seconds }` |
 //! | `sessions.list` | Invokes `pi_agent_supervisor::Handle::list_sessions` |
 //! | `sessions.kill` | Not yet implemented (NotImplemented) |
-//! | `policy.reload` | Not yet implemented (NotImplemented) |
+//! | `policy.reload` | Invokes `policy_control::Handle::reload`; returns success on reload or an error with rejection reason |
 //! | `audit.tail.subscribe` | Registers a new audit subscription; returns `{ id }` |
 //! | `audit.tail.unsubscribe` | Removes an audit subscription; returns `{ ok: true }` |
 //! | `chat.open` | Opens a chat subscription; returns `{ id }` |
@@ -40,7 +40,7 @@ use crate::{
 #[derive(Clone)]
 pub struct Dispatcher {
     supervisor: Option<pi_agent_supervisor::Handle>,
-    _policy: Option<policy_control::Handle>,
+    policy: Option<policy_control::Handle>,
     started_at: Instant,
     version: &'static str,
 }
@@ -79,7 +79,7 @@ impl Dispatcher {
     ) -> Self {
         Self {
             supervisor,
-            _policy: policy,
+            policy,
             started_at: Instant::now(),
             version,
         }
@@ -103,12 +103,7 @@ impl Dispatcher {
             "service.status" => self.handle_service_status(id).await,
             "sessions.list" => self.handle_sessions_list(id).await,
             "sessions.kill" => self.handle_sessions_kill(id, &request.params).await,
-            "policy.reload" => DispatchOutcome::Err(ErrorResponse::error(
-                id,
-                CODE_METHOD_NOT_FOUND,
-                "policy.reload is not yet implemented",
-                Some(json!({ "method": "policy.reload" })),
-            )),
+            "policy.reload" => self.handle_policy_reload(id).await,
             "audit.tail.subscribe" => self.handle_audit_tail_subscribe(id, registry).await,
             "audit.tail.unsubscribe" => {
                 self.handle_audit_tail_unsubscribe(id, &request.params, registry)
@@ -319,6 +314,33 @@ impl Dispatcher {
         match supervisor.kill_session(session_id).await {
             Ok(()) => DispatchOutcome::Ok(Response::ok(id, json!({ "ok": true }))),
             Err(e) => DispatchOutcome::Err(map_service_error(id, &e)),
+        }
+    }
+
+    async fn handle_policy_reload(&self, id: Value) -> DispatchOutcome {
+        let Some(ref policy) = self.policy else {
+            return DispatchOutcome::Err(ErrorResponse::error(
+                id,
+                CODE_METHOD_NOT_FOUND,
+                "policy.reload is not yet implemented",
+                Some(json!({ "method": "policy.reload" })),
+            ));
+        };
+
+        match policy.reload().await {
+            Ok(()) => DispatchOutcome::Ok(Response::ok(
+                id,
+                json!({ "ok": true, "reloaded": true }),
+            )),
+            Err(error) => DispatchOutcome::Err(ErrorResponse::error(
+                id,
+                CODE_INVALID_REQUEST,
+                "Policy reload rejected",
+                Some(json!({
+                    "category": "invalid_request",
+                    "reason": error.to_string(),
+                })),
+            )),
         }
     }
 }
@@ -974,13 +996,84 @@ mod tests {
 
     // policy.reload returns NotImplemented (-32601).
     #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_policy_reload_returns_not_implemented() {
+    async fn dispatch_policy_reload_without_handle_returns_not_implemented() {
         let dispatcher = make_dispatcher_no_handles();
         let req = make_request("policy.reload", json!(9));
         let mut registry = make_registry();
 
         match dispatcher.dispatch(req, &mut registry).await {
             DispatchOutcome::Err(resp) => assert_eq!(resp.error.code, CODE_METHOD_NOT_FOUND),
+            DispatchOutcome::Ok(_) => panic!("expected error"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_policy_reload_with_handle_returns_ok_when_reload_succeeds() {
+        let tmp = tempfile::NamedTempFile::new().expect("temp file");
+        std::fs::write(
+            tmp.path(),
+            "[policy]\nadmitted_users = [\"00000000-0000-0000-0000-0000000000aa\"]\n",
+        )
+        .expect("write config");
+
+        let cfg = policy_control::Config {
+            config_path: tmp.path().to_path_buf(),
+            ..policy_control::Config::default()
+        };
+        let (policy_handle, policy_task, _snapshot) = policy_control::start(cfg);
+        let dispatcher = Dispatcher::new(None, Some(policy_handle), "0.1.0-test");
+        let req = make_request("policy.reload", json!(35));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        policy_task.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => {
+                assert_eq!(resp.id, json!(35));
+                assert_eq!(resp.result["ok"], json!(true));
+                assert_eq!(resp.result["reloaded"], json!(true));
+            }
+            DispatchOutcome::Err(e) => panic!("expected Ok, got error: {}", e.error.message),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_policy_reload_with_handle_returns_error_with_reason_when_reload_fails() {
+        let tmp = tempfile::NamedTempFile::new().expect("temp file");
+        std::fs::write(tmp.path(), "[policy]\nnot valid = { toml\n").expect("write config");
+
+        let cfg = policy_control::Config {
+            config_path: tmp.path().to_path_buf(),
+            ..policy_control::Config::default()
+        };
+        let (policy_handle, policy_task, _snapshot) = policy_control::start(cfg);
+        let dispatcher = Dispatcher::new(None, Some(policy_handle), "0.1.0-test");
+        let req = make_request("policy.reload", json!(36));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        policy_task.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(36));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+                let data = resp.error.data.expect("error data must be present");
+                assert!(
+                    data["reason"].is_string(),
+                    "reason must be present in error data"
+                );
+                assert!(
+                    !data["reason"]
+                        .as_str()
+                        .expect("reason must be string")
+                        .is_empty(),
+                    "reason must be non-empty"
+                );
+            }
             DispatchOutcome::Ok(_) => panic!("expected error"),
             _ => panic!("unexpected dispatch outcome variant"),
         }

@@ -47,8 +47,9 @@ pub struct Config {
     /// Optional handle to the pi-agent supervisor.  When `None`, the
     /// `sessions.list` method returns `NotImplemented`.
     pub supervisor: Option<pi_agent_supervisor::Handle>,
-    /// Optional handle to the policy-control actor.  When `None`, the
-    /// `policy.reload` method returns `NotImplemented`.
+    /// Optional handle to the policy-control actor.  When set,
+    /// `policy.reload` calls `Handle::reload`; when `None`, the method returns
+    /// `NotImplemented`.
     pub policy: Option<policy_control::Handle>,
     /// Optional audit subscription bus.  When `None`, `audit.tail.subscribe`
     /// still registers subscriptions but no audit events will be delivered.
