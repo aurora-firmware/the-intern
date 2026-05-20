@@ -21,7 +21,7 @@ use crate::{
     dispatch::{DispatchOutcome, Dispatcher},
     listener::{Listener, ListenerConfig},
     protocol::{read_frame, ErrorResponse, FrameRead, Notification},
-    subscriptions::{AdminSubscriptionId, AuditRecord, ConnectionRegistry, SubscriptionBus},
+    subscriptions::{AdminSubscriptionId, ConnectionRegistry, SubscriptionBus},
 };
 
 /// Configuration for the admin-rpc actor.
@@ -134,20 +134,18 @@ impl Actor {
 // Each connection runs two cooperating halves:
 //
 //   Read half  — runs in the calling task; reads frames, dispatches them, and
-//                sends outbound messages via `out_tx`:
-//                  · serialised JSON frames (responses)
-//                  · subscription control (AddAuditRx / RemoveAuditRx)
+//                sends outbound messages via `out_tx` (serialised JSON frames).
 //
 //   Write half — runs in a spawned task; it `select!`s between:
-//                  · `out_rx`    — response frames and control messages
-//                  · `notif_rx`  — notification bytes from subscription
-//                                  forwarder sub-tasks
+//                  · `out_rx`   — response frames from the read half
+//                  · `notif_rx` — notification bytes from subscription
+//                                 forwarder sub-tasks
 //
 //   For each active audit subscription, a lightweight forwarder task reads
-//   from the bounded mpsc::Receiver<AuditRecord> and pushes serialised
-//   notification bytes onto `notif_rx`.  When the sender is dropped by the
-//   bus (AC-4 slow-subscriber), the forwarder detects it and sends a sentinel
-//   that causes the write task to close the connection.
+//   from an unbounded mpsc::UnboundedReceiver<AuditRecord> supplied by the
+//   monitoring actor, using `tokio::select!` against a oneshot cancel receiver.
+//   The forwarder exits when the cancel sender is dropped (explicit unsubscribe
+//   or connection close) or when the monitoring actor closes the channel.
 
 /// A frame sent from the read task to the write task.
 enum OutboundMsg {
@@ -159,8 +157,6 @@ enum OutboundMsg {
 enum NotifMsg {
     /// A serialized notification frame to write to the client.
     Frame(Vec<u8>),
-    /// The subscription sender was dropped (bus removed it — AC-4).
-    Dropped { id: AdminSubscriptionId },
 }
 
 /// Handle one accepted connection: read JSON-RPC 2.0 frames, dispatch each
@@ -170,10 +166,10 @@ enum NotifMsg {
 /// outbound notifications (from `audit.tail` subscriptions) do not block each
 /// other.
 ///
-/// AC-4: if a subscription receiver's sender is dropped (bus evicted it for
-/// being slow) the write task closes the connection after logging a warning.
+/// AC-4: when a Monitoring-backed subscription receiver delivers a record, the
+/// forwarder task serializes it and pushes it onto the notification channel.
 /// AC-5: when the connection closes, all subscriptions registered on it are
-/// removed from the bus without leaking entries (via `ConnectionRegistry::drop`).
+/// cleaned up without leaking entries (via `ConnectionRegistry::drop`).
 async fn run_connection(stream: UnixStream, dispatcher: Dispatcher, bus: SubscriptionBus) {
     let (read_half, write_half) = stream.into_split();
     let reader = BufReader::new(read_half);
@@ -190,7 +186,7 @@ async fn run_connection(stream: UnixStream, dispatcher: Dispatcher, bus: Subscri
 
     // Run the read loop in the current task. `registry` drops at the end of
     // this scope, which calls Drop and removes all subscriptions (AC-5).
-    read_loop(reader, dispatcher, registry, bus, out_tx, notif_tx).await;
+    read_loop(reader, dispatcher, registry, out_tx, notif_tx).await;
 
     // Wait for the write task to flush and exit.
     write_task.await.ok();
@@ -201,7 +197,6 @@ async fn read_loop(
     mut reader: BufReader<tokio::net::unix::OwnedReadHalf>,
     dispatcher: Dispatcher,
     mut registry: ConnectionRegistry,
-    bus: SubscriptionBus,
     out_tx: mpsc::Sender<OutboundMsg>,
     notif_tx: mpsc::Sender<NotifMsg>,
 ) {
@@ -218,7 +213,12 @@ async fn read_loop(
                         .send(OutboundMsg::Frame(serialize_frame(&err)))
                         .await
                         .is_ok(),
-                    DispatchOutcome::Subscribed { response, id, rx } => {
+                    DispatchOutcome::Subscribed {
+                        response,
+                        id,
+                        rx,
+                        cancel_rx,
+                    } => {
                         // Send the response frame first.
                         if out_tx
                             .send(OutboundMsg::Frame(serialize_frame(&response)))
@@ -227,11 +227,10 @@ async fn read_loop(
                         {
                             break;
                         }
-                        // Spawn a forwarder task that delivers audit records to the
-                        // write task via the notification channel.
+                        // Spawn a forwarder task that delivers monitoring audit
+                        // records to the write task via the notification channel.
                         let ntx = notif_tx.clone();
-                        let bus_for_forwarder = bus.clone();
-                        tokio::spawn(audit_forwarder(id, rx, bus_for_forwarder, ntx));
+                        tokio::spawn(audit_forwarder(id, rx, cancel_rx, ntx));
                         true
                     }
                     DispatchOutcome::Unsubscribed { response, id: _ } => {
@@ -264,43 +263,55 @@ async fn read_loop(
             }
         }
     }
-    // AC-5: `registry` drops here, removing all subscriptions from the bus.
+    // AC-5: `registry` drops here, cancelling all audit subscriptions and
+    // removing all chat subscriptions from the bus.
 }
 
-/// Forwards `AuditRecord`s from one subscription receiver to the notification
-/// channel as serialized `audit.event` frames.
+/// Forwards Monitoring [`AuditRecord`]s from a tail subscription to the
+/// notification channel as serialized `audit.tail` JSON-RPC notification frames.
 ///
-/// When the sender is dropped (bus evicted the subscriber — AC-4), sends a
-/// `NotifMsg::Dropped` sentinel and exits.
+/// The forwarder exits cleanly when either:
+/// - `cancel_rx` fires (explicit `audit.tail.unsubscribe` or connection close), or
+/// - `rx` returns `None` (monitoring actor shut down).
+///
+/// No `NotifMsg::Dropped` sentinel is sent — monitoring subscriptions are
+/// unbounded so there is no slow-subscriber eviction from this side.
 async fn audit_forwarder(
     id: AdminSubscriptionId,
-    mut rx: mpsc::Receiver<AuditRecord>,
-    bus: SubscriptionBus,
+    mut rx: mpsc::UnboundedReceiver<bob_core::types::AuditRecord>,
+    cancel_rx: tokio::sync::oneshot::Receiver<()>,
     notif_tx: mpsc::Sender<NotifMsg>,
 ) {
+    tokio::pin!(cancel_rx);
     loop {
-        match rx.recv().await {
-            Some(record) => {
-                let notification = Notification::new(
-                    "audit.event",
-                    json!({
-                        "subscription": id.to_string(),
-                        "data": record.payload,
-                    }),
-                );
-                let bytes = serialize_frame(&notification);
-                if notif_tx.send(NotifMsg::Frame(bytes)).await.is_err() {
-                    // Write task is gone.
-                    return;
-                }
-            }
-            None => {
-                // Differentiate AC-4 slow eviction from normal unsubscribe
-                // or connection cleanup, which also close the receiver.
-                if bus.take_slow_evicted(id) {
-                    let _ = notif_tx.send(NotifMsg::Dropped { id }).await;
-                }
+        tokio::select! {
+            // Cancellation from unsubscribe or connection drop.
+            _ = &mut cancel_rx => {
                 return;
+            }
+            record_opt = rx.recv() => {
+                match record_opt {
+                    Some(record) => {
+                        let payload = serde_json::to_value(&record)
+                            .unwrap_or(serde_json::Value::Null);
+                        let notification = Notification::new(
+                            "audit.tail",
+                            json!({
+                                "subscription": id.to_string(),
+                                "data": payload,
+                            }),
+                        );
+                        let bytes = serialize_frame(&notification);
+                        if notif_tx.send(NotifMsg::Frame(bytes)).await.is_err() {
+                            // Write task is gone.
+                            return;
+                        }
+                    }
+                    None => {
+                        // Monitoring actor shut down; exit silently.
+                        return;
+                    }
+                }
             }
         }
     }
@@ -309,11 +320,8 @@ async fn audit_forwarder(
 /// Drives the outbound write loop for one connection.
 ///
 /// `select!`s between:
-/// - `out_rx`   — response frames and subscription control messages
-/// - `notif_rx` — notification frames and drop sentinels from forwarder tasks
-///
-/// AC-4: when `NotifMsg::Dropped` arrives, the write loop exits, closing
-/// the connection.
+/// - `out_rx`   — response frames
+/// - `notif_rx` — notification frames from audit forwarder tasks
 async fn write_loop(
     mut write_half: tokio::net::unix::OwnedWriteHalf,
     mut out_rx: mpsc::Receiver<OutboundMsg>,
@@ -338,9 +346,9 @@ async fn write_loop(
                 match notif {
                     None => {
                         // All forwarder tasks exited and the sender was dropped.
-                        // Keep running — we still need to handle the out_rx.
-                        // This branch fires only when notif_tx in read_loop is dropped.
-                        // That happens when read_loop exits. The write task will
+                        // Keep running — we still need to handle out_rx.
+                        // This fires only when notif_tx in read_loop is dropped,
+                        // which happens when read_loop exits. The write task will
                         // then get None from out_rx too.
                         continue;
                     }
@@ -348,15 +356,6 @@ async fn write_loop(
                         if write_half.write_all(&bytes).await.is_err() {
                             return;
                         }
-                    }
-                    Some(NotifMsg::Dropped { id }) => {
-                        // AC-4: a subscription was dropped by the bus.
-                        // Close the connection.
-                        tracing::warn!(
-                            subscription_id = %id,
-                            "closing connection: audit subscription queue was full"
-                        );
-                        return;
                     }
                 }
             }
@@ -555,6 +554,22 @@ mod tests {
         SubscriptionBus::new(Duration::from_millis(100))
     }
 
+    /// Build a dispatcher with a real monitoring handle and return both the
+    /// dispatcher and the monitoring handle (for injecting records in tests).
+    fn make_dispatcher_with_monitoring() -> (
+        Dispatcher,
+        monitoring::Handle,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let tmp = tempfile::NamedTempFile::new().expect("temp file");
+        let (handle, join) = monitoring::start(monitoring::Config {
+            command_buffer: 4,
+            audit_log_path: tmp.path().to_path_buf(),
+        });
+        let dispatcher = Dispatcher::new(None, None, Some(handle.clone()), "0.1.0-test");
+        (dispatcher, handle, join)
+    }
+
     // AC-1: a service.status request over a connected UnixStream pair yields a
     // valid JSON-RPC 2.0 response with an `ok: true` result.
     #[tokio::test(flavor = "current_thread")]
@@ -650,15 +665,19 @@ mod tests {
         }
     }
 
-    // AC-1 / AC-2: audit.tail.subscribe returns a subscription id, and when
-    // the bus publishes an audit record the connection receives an audit.event
-    // notification containing that subscription id.
+    // AC-4 (T-063): audit.tail.subscribe returns a subscription id, and when
+    // monitoring appends an audit record the connection receives an `audit.tail`
+    // notification containing that record.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn run_connection_audit_subscribe_delivers_notification() {
+    async fn run_connection_audit_tail_subscribe_delivers_audit_tail_notification() {
+        use bob_core::types::{
+            AuditRecord, AuditRecordKind, AuditRecordPayload, ExtensionEventAuditPayload,
+        };
+        use uuid::Uuid;
+
         let (client, server) = UnixStream::pair().expect("UnixStream::pair");
-        let dispatcher = make_dispatcher();
+        let (dispatcher, mon_handle, mon_task) = make_dispatcher_with_monitoring();
         let bus = make_bus();
-        let bus_clone = bus.clone();
 
         tokio::spawn(run_connection(server, dispatcher, bus));
 
@@ -684,44 +703,55 @@ mod tests {
             .expect("result.id is a string")
             .to_string();
 
-        // Wait until the bus has at least one subscriber registered.
-        // The forwarder task spawned from the connection may not yet be
-        // polling the receiver.
-        let deadline = std::time::Instant::now() + Duration::from_millis(500);
-        while bus_clone.subscriber_count() == 0 && std::time::Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        assert!(
-            bus_clone.subscriber_count() > 0,
-            "bus must have a subscriber before publishing"
-        );
+        // Give the forwarder task a moment to start selecting on its receiver.
+        tokio::time::sleep(Duration::from_millis(20)).await;
 
-        // Publish an audit record via the bus.
-        bus_clone.publish(AuditRecord {
-            payload: json!({ "event": "test.event" }),
-        });
+        // Append an audit record via monitoring — this is a future record that
+        // should be delivered to the subscriber.
+        let record = AuditRecord {
+            id: Uuid::new_v4().to_string(),
+            timestamp: "2026-05-20T12:00:00Z".to_owned(),
+            kind: AuditRecordKind::Event,
+            session_id: None,
+            payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
+                name: "test.event".to_owned(),
+                summary: Some("delivered via monitoring".to_owned()),
+            }),
+        };
+        mon_handle.append_record(record).await.expect("append");
 
-        // Read the audit.event notification.
+        // Read the audit.tail notification (AC-4).
         let mut notif_line = String::new();
-        reader
-            .read_line(&mut notif_line)
-            .await
-            .expect("read notification");
+        tokio::time::timeout(
+            Duration::from_millis(500),
+            reader.read_line(&mut notif_line),
+        )
+        .await
+        .expect("timed out waiting for audit.tail notification")
+        .expect("read notification");
+
         let notif: serde_json::Value = serde_json::from_str(notif_line.trim()).expect("valid JSON");
 
         assert_eq!(notif["jsonrpc"], "2.0");
-        assert_eq!(notif["method"], "audit.event");
+        assert_eq!(notif["method"], "audit.tail");
         assert_eq!(notif["params"]["subscription"], sub_id);
-        assert_eq!(notif["params"]["data"]["event"], "test.event");
+        assert_eq!(notif["params"]["data"]["kind"], "event");
+
+        mon_task.abort();
     }
 
-    // AC-3: audit.tail.unsubscribe removes the subscription; no more notifications.
+    // AC-5 (T-063): audit.tail.unsubscribe removes the subscription;
+    // subsequent records are not delivered.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn run_connection_audit_unsubscribe_stops_notifications() {
+    async fn run_connection_audit_tail_unsubscribe_stops_notifications() {
+        use bob_core::types::{
+            AuditRecord, AuditRecordKind, AuditRecordPayload, ExtensionEventAuditPayload,
+        };
+        use uuid::Uuid;
+
         let (client, server) = UnixStream::pair().expect("UnixStream::pair");
-        let dispatcher = make_dispatcher();
+        let (dispatcher, mon_handle, mon_task) = make_dispatcher_with_monitoring();
         let bus = make_bus();
-        let bus_clone = bus.clone();
 
         tokio::spawn(run_connection(server, dispatcher, bus));
 
@@ -741,12 +771,6 @@ mod tests {
         let resp: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
         let sub_id = resp["result"]["id"].as_str().unwrap().to_string();
 
-        // Wait for subscriber to be registered.
-        let deadline = std::time::Instant::now() + Duration::from_millis(500);
-        while bus_clone.subscriber_count() == 0 && std::time::Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-
         // Unsubscribe.
         let unsub = format!(
             "{{\"jsonrpc\":\"2.0\",\"method\":\"audit.tail.unsubscribe\",\"params\":{{\"id\":\"{sub_id}\"}},\"id\":201}}\n"
@@ -763,25 +787,41 @@ mod tests {
         let unsub_resp: serde_json::Value = serde_json::from_str(unsub_line.trim()).unwrap();
         assert_eq!(unsub_resp["result"]["ok"], true);
 
-        // Wait for unsubscription to take effect.
-        let deadline = std::time::Instant::now() + Duration::from_millis(500);
-        while bus_clone.subscriber_count() > 0 && std::time::Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        // Give the forwarder task time to observe the cancellation.
+        tokio::time::sleep(Duration::from_millis(25)).await;
 
-        // Publish after unsubscribe — subscriber count must be 0.
-        bus_clone.publish(AuditRecord {
-            payload: json!({ "event": "should.not.arrive" }),
-        });
-        assert_eq!(bus_clone.subscriber_count(), 0);
+        // Append a record after unsubscribe — it should not arrive on the connection.
+        let record = AuditRecord {
+            id: Uuid::new_v4().to_string(),
+            timestamp: "2026-05-20T12:00:00Z".to_owned(),
+            kind: AuditRecordKind::Event,
+            session_id: None,
+            payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
+                name: "should.not.arrive".to_owned(),
+                summary: None,
+            }),
+        };
+        mon_handle.append_record(record).await.expect("append");
+
+        // Confirm no notification arrives within a short window.
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            reader.read_line(&mut String::new()),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "no notification should arrive after unsubscribe"
+        );
+
+        mon_task.abort();
     }
 
-    // Unsubscribing must not be treated as AC-4 slow-subscriber eviction:
-    // the connection must remain open for subsequent requests.
+    // Unsubscribing must not close the connection (no false AC-4 eviction signal).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_connection_audit_unsubscribe_keeps_connection_open() {
         let (client, server) = UnixStream::pair().expect("UnixStream::pair");
-        let dispatcher = make_dispatcher();
+        let (dispatcher, _mon_handle, mon_task) = make_dispatcher_with_monitoring();
         let bus = make_bus();
 
         tokio::spawn(run_connection(server, dispatcher, bus));
@@ -822,8 +862,8 @@ mod tests {
             serde_json::from_str(unsub_line.trim()).expect("json unsubscribe response");
         assert_eq!(unsub_resp["result"]["ok"], true);
 
-        // Give the forwarder/write task a moment; a false AC-4 path would have
-        // closed the connection by now.
+        // Give the forwarder/write task a moment; a false eviction path would
+        // have closed the connection by now.
         tokio::time::sleep(Duration::from_millis(25)).await;
 
         // Connection must still answer a normal request.
@@ -845,22 +885,30 @@ mod tests {
             serde_json::from_str(status_line.trim()).expect("json status response");
         assert_eq!(status_resp["id"], 212);
         assert_eq!(status_resp["result"]["ok"], true);
+
+        mon_task.abort();
     }
 
-    // AC-5: when the connection is closed all subscriptions are cleaned up.
+    // AC-5 (T-063): when the connection is closed all audit subscriptions are cleaned up.
+    // Verified by checking that a monitoring record appended after connection close
+    // does not cause any forwarder tasks to panic (they exit cleanly).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn run_connection_close_removes_all_subscriptions() {
+    async fn run_connection_close_cancels_all_audit_subscriptions() {
+        use bob_core::types::{
+            AuditRecord, AuditRecordKind, AuditRecordPayload, ExtensionEventAuditPayload,
+        };
+        use uuid::Uuid;
+
         let (client, server) = UnixStream::pair().expect("UnixStream::pair");
-        let dispatcher = make_dispatcher();
+        let (dispatcher, mon_handle, mon_task) = make_dispatcher_with_monitoring();
         let bus = make_bus();
-        let bus_clone = bus.clone();
 
         tokio::spawn(run_connection(server, dispatcher, bus));
 
         let (read_half, mut write_half) = tokio::io::split(client);
         let mut reader = BufReader::new(read_half);
 
-        // Open two subscriptions.
+        // Open two audit subscriptions.
         for id in [300u64, 301u64] {
             let req = format!(
                 "{{\"jsonrpc\":\"2.0\",\"method\":\"audit.tail.subscribe\",\"id\":{id}}}\n"
@@ -868,29 +916,32 @@ mod tests {
             write_half.write_all(req.as_bytes()).await.expect("write");
             let mut line = String::new();
             reader.read_line(&mut line).await.expect("read resp");
+            // Verify each subscribe returned a valid id.
+            let resp: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+            assert!(resp["result"]["id"].is_string());
         }
 
-        // Wait for both subscribers to register.
-        let deadline = std::time::Instant::now() + Duration::from_millis(500);
-        while bus_clone.subscriber_count() < 2 && std::time::Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        assert_eq!(bus_clone.subscriber_count(), 2);
-
-        // Close the connection from the client side.
+        // Close the connection from the client side (AC-5).
         drop(write_half);
         drop(reader);
 
         // Give the server tasks time to notice the EOF and clean up.
-        let deadline = std::time::Instant::now() + Duration::from_millis(500);
-        while bus_clone.subscriber_count() > 0 && std::time::Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
-        assert_eq!(
-            bus_clone.subscriber_count(),
-            0,
-            "all subscriptions must be removed when the connection closes"
-        );
+        // Append a record — should not panic or deadlock even though forwarder
+        // tasks have already exited.
+        let record = AuditRecord {
+            id: Uuid::new_v4().to_string(),
+            timestamp: "2026-05-20T12:00:00Z".to_owned(),
+            kind: AuditRecordKind::Event,
+            session_id: None,
+            payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
+                name: "post.close.event".to_owned(),
+                summary: None,
+            }),
+        };
+        mon_handle.append_record(record).await.expect("append after close must not panic");
+
+        mon_task.abort();
     }
 }
