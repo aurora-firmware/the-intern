@@ -121,6 +121,28 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-20
+
+Implemented B-007 from the recorded Diagnosis Log by aligning `requests-handler` preflight denial auditing with the canonical `bob-core` envelope/payload model. I first executed a red phase by updating handler tests to assert verdict-style audit records (`AuditRecordKind::Verdict` and `AuditRecordPayload::Verdict` with denied `allow=false`) and reason-based secret-safety checks, then confirmed failure with the diagnosed compile errors (`AuditKind` import missing and removed `description` field). I then applied the minimal production fix: replaced legacy audit imports, constructed `AuditRecord` with `id`, `timestamp`, `kind`, `session_id`, and typed verdict payload, and preserved denial reason text without including raw event payload. Verified green with `cargo test -p requests-handler`, then ran bug verification commands for `bob` config and serve tests. One attempt to run serve tests inside sandbox failed with Unix socket `PermissionDenied`; rerun outside sandbox passed. I briefly tried `cargo fmt --all -- <file>` for local formatting and rejected keeping the unrelated formatting output, restoring those files so only the intended handler fix remained. Remaining work: reviewer validation and integration by the loop on `dev-agent`.
+
+Evidence:
+- Red phase failure:
+  - `cd the-intern/service && cargo test -p requests-handler`
+  - Failed with:
+    - `E0432`: unresolved import `bob_core::types::AuditKind`
+    - `E0560`: `AuditRecord` has no field `description`
+- Green regression + package tests:
+  - `cd the-intern/service && cargo test -p requests-handler` (passed, 13 tests)
+- Bug file verification commands:
+  - `cd the-intern/service && cargo test -p bob config::tests` (passed)
+  - `cd the-intern/service && cargo test -p bob serve::tests` (passed when rerun outside sandbox due socket bind permissions in sandbox)
+- Branch state:
+  - Clean working tree after commit; no bug lifecycle file edits on this branch.
+
+Obstacles Encountered:
+- `cargo test -p bob serve::tests` failed in sandbox with `PermissionDenied` on Unix socket bind; resolved by rerunning with escalation.
+- `cargo fmt --all -- crates/requests-handler/src/handler.rs` unexpectedly touched unrelated files; discarded those unrelated changes and kept only the B-007 fix.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
