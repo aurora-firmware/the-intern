@@ -1,7 +1,7 @@
 ---
 id: T-049
 title: Define the policy ruleset config schema and validated snapshot types
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-20'
