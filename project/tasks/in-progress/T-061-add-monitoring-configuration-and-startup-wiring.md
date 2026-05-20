@@ -97,6 +97,29 @@ Architect consultation classified the blocker as an execution issue but directed
 
 Remaining work after blocker resolution: implement minimal production changes for monitoring config loading/path preparation/startup wiring, run red→green→refactor cycles with commits, and finish verification commands for `config::tests` and `serve::tests`.
 
+### Session 2 — 2026-05-20
+
+I resumed after the blocker refresh and continued from the existing red tests in `config.rs`. I implemented a new `MonitoringConfig` on `BobConfig`, added `[monitoring]` extraction from layered TOML, and resolved defaults so omitted `monitoring.audit_log_path` now maps to an OS-appropriate state location while omitted tail filters default to all supported kinds (`events`, `reports`, `verdicts`). I added startup-time validation that prepares parent directories, applies owner-only permissions on newly created parent directories where applicable (Unix), and verifies the audit file is appendable. This turned the pre-existing red `config::tests` green and I committed that cycle as `feat(bob): add monitoring config loading and path checks`.
+
+For AC-4, I added a focused red test in `serve::tests` asserting monitoring startup config is derived from `BobConfig` rather than defaults, initially failing on a missing helper. I then implemented `build_monitoring_config` and changed `try_start_subsystems` to call `monitoring::start(build_monitoring_config(cfg))`, which made the test pass; I committed this second cycle as `feat(bob): wire monitoring startup from loaded config`.
+
+I tried running full `serve::tests` inside the sandbox and rejected that path after repeated `Operation not permitted` errors on Unix socket binds; I reran the verification command outside sandbox permissions, where the suite passed. Remaining work on this branch: none for T-061 implementation; ready for reviewer handoff.
+
+Evidence:
+- Red step observed:
+  - `cargo test -p bob config::tests -- --nocapture` failed initially with `no field monitoring on type BobConfig`.
+  - `cargo test -p bob serve::tests::monitoring_config_maps_audit_log_path_from_bob_config -- --nocapture` failed with missing `build_monitoring_config`.
+- Green/verification:
+  - `cd the-intern/service && cargo test -p bob config::tests` passed (18/18).
+  - `cd the-intern/service && cargo test -p bob serve::tests -- --nocapture` passed outside sandbox (18/18).
+- Git evidence:
+  - `7e393c2 feat(bob): add monitoring config loading and path checks`
+  - `3173d41 feat(bob): wire monitoring startup from loaded config`
+
+Obstacles Encountered:
+- `serve::tests` could not run in sandbox due Unix socket bind permission errors (`Operation not permitted`); resolved by rerunning the same command with escalated permissions.
+- No code-level blockers after `B-007` resolution.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
