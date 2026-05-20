@@ -1,6 +1,7 @@
 use std::{future::Future, io::Write, path::PathBuf};
 
 use bob_core::error::{ServiceError, ServiceResult};
+use bob_core::types::AuditFilterKind;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -24,8 +25,8 @@ pub fn sessions_kill(json: bool, id: &str) -> ServiceResult<()> {
     sessions::run_kill(json, id)
 }
 
-pub fn audit_tail(json: bool) -> ServiceResult<()> {
-    audit::run(json)
+pub fn audit_tail(json: bool, filters: Vec<AuditFilterKind>) -> ServiceResult<()> {
+    audit::run(json, filters)
 }
 
 pub fn policy_reload(json: bool) -> ServiceResult<()> {

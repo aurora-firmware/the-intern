@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use bob_core::error::ServiceResult;
+use bob_core::types::AuditFilterKind;
 
 pub mod cli;
 pub mod client;
@@ -20,7 +21,7 @@ pub trait DispatchRuntime {
     fn status(&self, json: bool) -> ServiceResult<()>;
     fn sessions_list(&self, json: bool) -> ServiceResult<()>;
     fn sessions_kill(&self, json: bool, id: &str) -> ServiceResult<()>;
-    fn audit_tail(&self, json: bool) -> ServiceResult<()>;
+    fn audit_tail(&self, json: bool, filters: Vec<AuditFilterKind>) -> ServiceResult<()>;
     fn policy_reload(&self, json: bool) -> ServiceResult<()>;
     fn chat(&self, json: bool, session: Option<&str>) -> ServiceResult<()>;
 }
@@ -53,8 +54,8 @@ impl DispatchRuntime for ProductionRuntime {
         cli::commands::sessions_kill(json, id)
     }
 
-    fn audit_tail(&self, json: bool) -> ServiceResult<()> {
-        cli::commands::audit_tail(json)
+    fn audit_tail(&self, json: bool, filters: Vec<AuditFilterKind>) -> ServiceResult<()> {
+        cli::commands::audit_tail(json, filters)
     }
 
     fn policy_reload(&self, json: bool) -> ServiceResult<()> {
@@ -82,7 +83,7 @@ pub async fn run_cli_with_runtime(runtime: &impl DispatchRuntime, cli: Cli) -> S
             SessionsCommand::Kill { id } => runtime.sessions_kill(cli.json, &id),
         },
         Command::Audit { command } => match command {
-            AuditCommand::Tail => runtime.audit_tail(cli.json),
+            AuditCommand::Tail { filters } => runtime.audit_tail(cli.json, filters),
         },
         Command::Policy { command } => match command {
             PolicyCommand::Reload => runtime.policy_reload(cli.json),
@@ -97,6 +98,7 @@ mod tests {
 
     use async_trait::async_trait;
     use bob_core::error::{ServiceError, ServiceResult};
+    use bob_core::types::AuditFilterKind;
 
     use crate::{
         cli::{Cli, Command},
@@ -146,7 +148,7 @@ mod tests {
             Err(ServiceError::NotImplemented)
         }
 
-        fn audit_tail(&self, _json: bool) -> ServiceResult<()> {
+        fn audit_tail(&self, _json: bool, _filters: Vec<AuditFilterKind>) -> ServiceResult<()> {
             Err(ServiceError::NotImplemented)
         }
 

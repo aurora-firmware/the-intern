@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use bob_core::types::AuditFilterKind;
 
 pub mod commands;
 
@@ -42,7 +43,12 @@ pub enum SessionsCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum AuditCommand {
-    Tail,
+    Tail {
+        /// Filter audit notifications by kind. Accepted values: events, reports, verdicts.
+        /// May be repeated to include multiple kinds. Omit to receive all kinds.
+        #[arg(long = "filter", value_name = "KIND")]
+        filters: Vec<AuditFilterKind>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -54,7 +60,8 @@ pub enum PolicyCommand {
 mod tests {
     use clap::{CommandFactory, Parser};
 
-    use super::{Cli, Command, SessionsCommand};
+    use super::{AuditCommand, Cli, Command, SessionsCommand};
+    use bob_core::types::AuditFilterKind;
 
     #[test]
     fn help_lists_global_json_flag_and_all_subcommands() {
@@ -93,5 +100,40 @@ mod tests {
                 session: Some(ref session)
             } if session == "abc"
         ));
+    }
+
+    #[test]
+    fn audit_tail_without_filter_parses_with_empty_filters() {
+        let cli = Cli::parse_from(["bob", "audit", "tail"]);
+
+        assert!(matches!(
+            cli.command,
+            Command::Audit {
+                command: AuditCommand::Tail { ref filters }
+            } if filters.is_empty()
+        ));
+    }
+
+    #[test]
+    fn audit_tail_with_multiple_filters_parses_all_values() {
+        let cli = Cli::parse_from(["bob", "audit", "tail", "--filter", "events", "--filter", "verdicts"]);
+
+        let filters = match cli.command {
+            Command::Audit {
+                command: AuditCommand::Tail { filters },
+            } => filters,
+            other => panic!("expected audit tail, got {other:?}"),
+        };
+
+        assert_eq!(filters, vec![AuditFilterKind::Events, AuditFilterKind::Verdicts]);
+    }
+
+    #[test]
+    fn audit_tail_with_misspelled_filter_veredicts_is_rejected_by_clap() {
+        let result = Cli::try_parse_from(["bob", "audit", "tail", "--filter", "veredicts"]);
+        assert!(
+            result.is_err(),
+            "clap should reject the misspelled filter 'veredicts'"
+        );
     }
 }
