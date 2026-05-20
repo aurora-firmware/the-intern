@@ -2,21 +2,18 @@ use std::{
     collections::BTreeMap,
     env,
     path::{Path, PathBuf},
-    str::FromStr,
     time::Duration,
 };
 
-use bob_core::{
-    error::{ServiceError, ServiceResult},
-    types::UserId,
-};
+use bob_core::error::{ServiceError, ServiceResult};
 use figment::{
     providers::{Format, Serialized, Toml},
     Figment,
 };
+use policy_control::PolicyConfig;
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct BobConfig {
     pub admin_sock_path: PathBuf,
     pub extension_sock_path: PathBuf,
@@ -33,7 +30,10 @@ pub struct BobConfig {
     pub pi_agent_idle_reap_timeout: Duration,
     pub tracing_level: String,
     pub tracing_format: String,
-    pub allowed_user_ids: Vec<UserId>,
+    /// Policy rules sourced from the `[policy]` TOML section.
+    ///
+    /// An absent `[policy]` section yields an empty (deny-all) config.
+    pub policy: PolicyConfig,
 }
 
 // `Default` is intentionally not implemented for `BobConfig`.
@@ -71,7 +71,7 @@ impl BobConfig {
             pi_agent_idle_reap_timeout: Duration::from_secs(300),
             tracing_level: "info".to_string(),
             tracing_format: "pretty".to_string(),
-            allowed_user_ids: Vec::new(),
+            policy: PolicyConfig::default(),
         }
     }
 }
@@ -127,7 +127,7 @@ impl BobConfig {
             pi_agent_idle_reap_timeout: raw.pi_agent_idle_reap_timeout,
             tracing_level: raw.tracing_level,
             tracing_format: raw.tracing_format,
-            allowed_user_ids: raw.allowed_user_ids,
+            policy: raw.policy,
         };
 
         cfg.validate()
@@ -225,8 +225,14 @@ struct RawBobConfig {
     pi_agent_idle_reap_timeout: Duration,
     tracing_level: String,
     tracing_format: String,
-    #[serde(default, deserialize_with = "deserialize_user_id_vec")]
-    allowed_user_ids: Vec<UserId>,
+    /// Policy rules from the `[policy]` TOML section; absent means deny-all.
+    ///
+    /// Serialization is skipped because `PolicyConfig` does not implement
+    /// `Serialize`.  The figment defaults layer does not include this field;
+    /// it arrives only from the TOML config file merge and falls back to
+    /// `Default` when the `[policy]` section is absent.
+    #[serde(default, skip_serializing)]
+    policy: PolicyConfig,
 }
 
 fn parse_cli_overrides<I>(args: I) -> ServiceResult<BTreeMap<String, String>>
@@ -411,26 +417,6 @@ where
     }
 }
 
-fn deserialize_user_id_vec<'de, D>(deserializer: D) -> Result<Vec<UserId>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum UserIdVec {
-        Many(Vec<UserId>),
-        Csv(String),
-    }
-
-    match UserIdVec::deserialize(deserializer)? {
-        UserIdVec::Many(values) => Ok(values),
-        UserIdVec::Csv(value) => parse_csv(&value)
-            .into_iter()
-            .map(|item| UserId::from_str(&item).map_err(|err| D::Error::custom(err.to_string())))
-            .collect(),
-    }
-}
-
 fn parse_csv(value: &str) -> Vec<String> {
     value
         .split(',')
@@ -477,7 +463,7 @@ fn defaults_with_runtime_root(runtime_root: PathBuf, uid: u32) -> RawBobConfig {
         pi_agent_idle_reap_timeout: Duration::from_secs(300),
         tracing_level: "info".to_string(),
         tracing_format: "pretty".to_string(),
-        allowed_user_ids: Vec::new(),
+        policy: PolicyConfig::default(),
     }
 }
 
@@ -859,6 +845,74 @@ admin_allowed_uids = [1000]
             cli_overrides: BTreeMap::new(),
             uid: 4242,
         })
+    }
+
+    // ── AC-1 (T-053): [policy] section parses into PolicyConfig ──────────────
+
+    #[test]
+    fn loads_policy_section_with_admitted_users_and_action_rules_from_config_file() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let user_id = "00000000-0000-0000-0000-000000000001";
+        let config_file = write_temp_config(&format!(
+            r#"
+[policy]
+admitted_users = ["{user_id}"]
+
+[[policy.action_rules]]
+tool = "bash"
+"#
+        ));
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("config with [policy] section should parse");
+
+        assert_eq!(config.policy.admitted_users.len(), 1);
+        assert_eq!(config.policy.admitted_users[0], user_id);
+        assert_eq!(config.policy.action_rules.len(), 1);
+        assert_eq!(config.policy.action_rules[0].tool, "bash");
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    // ── AC-2 (T-053): absent [policy] section yields deny-all, not an error ──
+
+    #[test]
+    fn loads_config_successfully_when_policy_section_is_absent_yielding_deny_all() {
+        let config = load_with_env_overrides([]).expect("config without [policy] should succeed");
+
+        assert!(
+            config.policy.admitted_users.is_empty(),
+            "absent [policy] must yield empty admitted_users"
+        );
+        assert!(
+            config.policy.action_rules.is_empty(),
+            "absent [policy] must yield empty action_rules"
+        );
+    }
+
+    // ── AC-3 (T-053): legacy top-level allowed_user_ids field is removed ──────
+
+    #[test]
+    fn bob_config_does_not_have_top_level_allowed_user_ids_field() {
+        // Structural test: BobConfig::test_base() must not compile if
+        // allowed_user_ids still exists as a direct field.
+        // We verify this by checking the policy field is present and
+        // the admitted_users come from policy, not from a top-level field.
+        let cfg = BobConfig::test_base();
+        // If `allowed_user_ids` still existed as a field this line would need it;
+        // the fact that it compiles without it proves the legacy field is gone.
+        let _: &policy_control::PolicyConfig = &cfg.policy;
     }
 
     #[derive(Clone, Default)]

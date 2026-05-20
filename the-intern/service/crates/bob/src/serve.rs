@@ -114,11 +114,19 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
 
     info!("starting requests-handler actor");
     let (rh_cancel_tx, rh_cancel_rx) = watch::channel(false);
+    // Admission users now come from the [policy] section.  T-054 will replace
+    // this PreflightConfig path entirely; until then, source the list from
+    // the policy config so PreflightConfig keeps compiling.
+    let admitted_user_ids: Vec<bob_core::types::UserId> = cfg
+        .policy
+        .admitted_users
+        .iter()
+        .filter_map(|s| s.parse().ok())
+        .collect();
     let preflight_cfg = requests_handler::PreflightConfig {
-        allowed_user_ids: cfg.allowed_user_ids.clone(),
+        allowed_user_ids: admitted_user_ids.clone(),
     };
-    let default_context = cfg
-        .allowed_user_ids
+    let default_context = admitted_user_ids
         .first()
         .copied()
         .map(|sender| RequestContext {
@@ -502,7 +510,8 @@ pub mod tests {
     async fn permitted_event_is_persisted_via_wired_requests_handler_and_persistence() {
         let tmp = tempfile::tempdir().expect("temp dir");
         let mut cfg = test_cfg_with_sockets(&tmp);
-        cfg.allowed_user_ids = vec![UserId::new()];
+        let user_id = UserId::new();
+        cfg.policy.admitted_users = vec![user_id.to_string()];
         let runtime = start_subsystems(&cfg).expect("subsystems must start");
 
         let event = InternalEvent::ChatMessage {
