@@ -57,7 +57,10 @@ What this specification explicitly does NOT cover:
 - **Thin in-agent surface.** The only component running inside the agent process
   is a forwarder with no policy logic.
 - **Event-driven uniformity.** Every channel — synchronous or asynchronous —
-  normalizes into the same internal event and follows the same path.
+  normalizes into the same internal request and follows the same path. The
+  core request interface is typed by *delivery kind* (`sync`, `async`,
+  `periodic`) — never by channel. Channel identity is confined to the adapters;
+  the deterministic core never enumerates channel types. See ADR-004.
 - **Unix-likes (Linux and macOS).** The long-lived service and all components
   run on Linux and macOS. Windows support is explicitly out of scope; see
   S-002 (Bob Service Shell Architecture), which fixes the shell on Unix-only
@@ -91,7 +94,7 @@ What this specification explicitly does NOT cover:
 | Component | Responsibility | Notes |
 |---|---|---|
 | Rust service | Hosts the deterministic components; owns the inbound queue, identity, persistence, and supervision of pi-agent processes | Single long-lived binary on Linux + macOS; shell defined in S-002 |
-| Channel adapters | Accept inbound traffic from chat, email, webhooks, scheduler; normalize each into a common internal event | Part of the Rust service |
+| Channel adapters | Accept inbound traffic from chat, email, webhooks, scheduler; normalize each into a common internal request, classified by delivery kind (`sync`/`async`/`periodic`) per ADR-004 | Part of the Rust service; the only components that know channel specifics |
 | Requests Handler | Consume the inbound queue, attach user/channel identity, run pre-flight identity/access checks | Part of the Rust service |
 | Policy Control | Decide per-user authorization for actions raised mid-run by the agent | Part of the Rust service; never inside the agent |
 | Monitoring | Maintain an append-only audit log; expose an inbound interface for external tools to report actions | Part of the Rust service |
@@ -109,7 +112,8 @@ supervises the pi-agent process pool.
 **Estimated size:** Large — the bulk of the system.
 **Interfaces:**
 - *Inbound:* channel-specific endpoints (chat, webhook HTTP, email retrieval,
-  scheduled triggers), each normalized onto an internal event queue.
+  scheduled triggers), each normalized by its adapter onto the internal event
+  queue as a delivery-kind-typed request (`sync`/`async`/`periodic`, ADR-004).
 - *To pi-agent processes:* delivers prompts over pi-agent's `runRpcMode()`
   JSON-RPC channel; spawns, supervises, and reaps the processes.
 - *Extension channel (single Unix socket):* one socket shared by every
@@ -192,6 +196,11 @@ Response returned through the originating channel; audit log updated
 A pre-flight denial stops the request before any agent work begins. A
 per-action denial stops the side effect while the session continues.
 
+What returns to the caller depends on the request's delivery kind (ADR-004): a
+`sync` request gets an immediate acknowledgement-or-error receipt and, later,
+the agent's answer routed back over the originating connection; an `async`
+request gets only the receipt; a `periodic` trigger gets nothing back.
+
 ## Configuration
 
 Configuration is described here as behaviour; concrete formats and keys are
@@ -239,3 +248,4 @@ configurable:
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-05-16 | OS scope narrowed from "OS-agnostic" to "Unix-likes (Linux + macOS)" in Design Principles and Component 1; extension-side Unix socket bullets merged into a single "Extension channel (single Unix socket)" description; Monitoring report interface transport candidates narrowed to UDS-only (extend `admin.sock` or dedicated `report.sock`); Implementation Order Phase 1 split into 1a (shell per S-002) and 1b (queue/handler/persistence), with downstream Depends-On cells updated accordingly; chat channel adapter clarified as consuming `admin.sock` chat subscriptions. | S-002 (Bob Service Shell Architecture) approved 2026-05-16; the shell decision fixes Unix-only primitives (UDS, peer-credentials, POSIX perms) and reshapes how Phase 1 is delivered. | None (no tasks in flight against S-001 yet). |
+| 2026-05-21 | Event-driven-uniformity principle, Channel adapters responsibility row, Component 1 inbound interface, and Workflow response paragraph clarified: the core request interface is typed by delivery kind (`sync`/`async`/`periodic`), never by channel; channel identity is confined to adapters; per-kind response semantics stated. | ADR-004 accepted 2026-05-21. The shipped `InternalEvent` enum (per-channel variants from T-008) hardcoded channel identity the core should not know; this contradicted the spec's intent and is being corrected. | Corrective tasks to reshape `InternalEvent` and its `requests-handler`/`persistence` consumers (to be planned separately); Phase 6 channel-adapter design unaffected in scope but now builds on the corrected core type. |
