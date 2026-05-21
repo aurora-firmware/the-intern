@@ -117,6 +117,66 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-21
+
+Implemented T-067 in a single TDD cycle spanning all 9 listed files.
+
+**What was done:**
+
+Started by confirming the workspace baseline — all 95+ tests across the
+workspace passed before any changes. Read all 9 target files to understand the
+constructor-site landscape.
+
+Rewrote `crates/bob-core/src/types/event.rs` to replace the `InternalEvent`
+enum (with `ChatMessage`, `EmailReceived`, `Webhook`, `Scheduled` variants)
+with a `{ kind: DeliveryKind, payload: String }` struct, and added the
+`DeliveryKind` enum (`Sync`, `Async`, `Periodic`) with the required derives.
+Updated the tests to cover three new serde round-trips (one per `DeliveryKind`
+variant) and removed the four old per-channel round-trip tests. The
+`RequestContext` type was left untouched.
+
+Updated `crates/bob-core/src/types/mod.rs` to re-export `DeliveryKind`
+alongside `InternalEvent`.
+
+Updated all 7 remaining constructor sites: `ports.rs` (3 inline constructions
+in tests; changed `ChatMessage`→`Sync`, `Scheduled`→`Periodic`),
+`persistence/src/inbound.rs` (helper `chat` function), `persistence/src/lib.rs`
+(5 constructions across 3 tests; `ChatMessage`→`Sync`, `Scheduled`→`Periodic`),
+`requests-handler/src/queue.rs` (helper `chat_event`),
+`requests-handler/src/handler.rs` (helper `chat_event` and 2 inline
+constructions), `bob/src/serve.rs` (2 inline constructions),
+`bob/tests/queue_load.rs` (helper + 2 inline constructions).
+
+The channel-to-kind mapping used throughout: `ChatMessage` → `Sync`,
+`EmailReceived`/`Webhook` → `Async`, `Scheduled` → `Periodic`, consistent with
+the task description.
+
+**What was tried and rejected:**
+
+No alternative approaches were considered — the task fully specified the target
+shape and the mapping. The breaking change compiled as a unit: `bob-core`
+compiled immediately after the type change, and the workspace build succeeded
+because all old variant usages were confined to `#[cfg(test)]` blocks (not in
+production code paths), which are excluded from the regular `cargo build`.
+
+**Observations:**
+
+The discovery that production code already used `InternalEvent` opaquely (only
+tests constructed variants) meant `cargo build --workspace` succeeded without
+errors immediately after the type change. The test compilation failures
+(`E0223: ambiguous associated type`) only appeared under `cargo test
+--workspace`, confirming the task's description that "all sites that
+*construct* the old variants are test code."
+
+Final verification: `cargo test --workspace` passes (all suites green, test
+count increased by 1 in `bob-core` from 79 to 80 due to the new
+`delivery_kind_has_sync_async_periodic_variants` test). The grep check confirms
+zero remaining references to
+`InternalEvent::{ChatMessage,EmailReceived,Webhook,Scheduled}`.
+
+**What remains:** Nothing — all acceptance criteria are met and verified.
+Commit `5c2143e` on `task/T-067-reshape-internalevent`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
