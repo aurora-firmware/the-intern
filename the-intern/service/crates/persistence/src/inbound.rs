@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 
 use bob_core::error::{ServiceError, ServiceResult};
-use bob_core::types::InternalEvent;
+use bob_core::types::{DeliveryKind, InternalEvent};
 
 /// Fixed-capacity in-memory ring buffer for inbound events.
 ///
@@ -71,8 +71,9 @@ mod tests {
     use super::*;
 
     fn chat(content: &str) -> InternalEvent {
-        InternalEvent::ChatMessage {
-            content: content.to_owned(),
+        InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: content.to_owned(),
         }
     }
 

@@ -63,7 +63,7 @@ mod tests {
 
     use crate::error::ServiceResult;
     use crate::types::{
-        AuditRecord, AuditRecordKind, AuditRecordPayload, ExternalReportAuditPayload,
+        AuditRecord, AuditRecordKind, AuditRecordPayload, DeliveryKind, ExternalReportAuditPayload,
         InternalEvent, PolicyVerdict, ReportOutcome, SessionId,
     };
 
@@ -168,8 +168,9 @@ mod tests {
     #[test]
     fn requests_handler_submit_returns_service_result() {
         let handler = StubRequestsHandler;
-        let event = InternalEvent::ChatMessage {
-            content: "hello".to_owned(),
+        let event = InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "hello".to_owned(),
         };
         let result: ServiceResult<()> = block_on(handler.submit(event));
         assert!(result.is_ok());
@@ -209,8 +210,9 @@ mod tests {
     #[test]
     fn event_bus_publish_returns_service_result() {
         let bus = StubEventBus;
-        let event = InternalEvent::ChatMessage {
-            content: "msg".to_owned(),
+        let event = InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "msg".to_owned(),
         };
         let result: ServiceResult<()> = block_on(bus.publish(event));
         assert!(result.is_ok());
@@ -251,8 +253,9 @@ mod tests {
     #[test]
     fn persistence_store_enqueue_returns_service_result() {
         let store = StubPersistenceStore;
-        let event = InternalEvent::Scheduled {
-            cron: "0 * * * *".to_owned(),
+        let event = InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "0 * * * *".to_owned(),
         };
         let result: ServiceResult<()> = block_on(store.enqueue(event));
         assert!(result.is_ok());

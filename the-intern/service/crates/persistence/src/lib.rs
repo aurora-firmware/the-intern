@@ -6,7 +6,7 @@ mod session_state;
 use async_trait::async_trait;
 use bob_core::error::{ServiceError, ServiceResult};
 use bob_core::ports::{PersistenceStore, SessionState};
-use bob_core::types::{InternalEvent, SessionId};
+use bob_core::types::{DeliveryKind, InternalEvent, SessionId};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -214,8 +214,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn enqueue_returns_ok_when_queue_has_capacity() {
         let (handle, task) = start(small_cfg());
-        let event = InternalEvent::ChatMessage {
-            content: "hello".to_owned(),
+        let event = InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "hello".to_owned(),
         };
 
         let result = handle.enqueue(event).await;
@@ -228,11 +229,13 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn dequeue_next_returns_events_in_fifo_order() {
         let (handle, task) = start(small_cfg());
-        let first = InternalEvent::ChatMessage {
-            content: "first".to_owned(),
+        let first = InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "first".to_owned(),
         };
-        let second = InternalEvent::ChatMessage {
-            content: "second".to_owned(),
+        let second = InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "second".to_owned(),
         };
         handle.enqueue(first.clone()).await.unwrap();
         handle.enqueue(second.clone()).await.unwrap();
@@ -256,8 +259,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn enqueue_at_capacity_returns_persistence_error() {
         let (handle, task) = start(small_cfg()); // capacity = 3
-        let event = || InternalEvent::Scheduled {
-            cron: "* * * * *".to_owned(),
+        let event = || InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "* * * * *".to_owned(),
         };
         handle.enqueue(event()).await.unwrap();
         handle.enqueue(event()).await.unwrap();
@@ -272,11 +276,13 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn enqueue_at_capacity_does_not_drop_existing_entries() {
         let (handle, task) = start(small_cfg()); // capacity = 3
-        let first = InternalEvent::ChatMessage {
-            content: "keep_me".to_owned(),
+        let first = InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "keep_me".to_owned(),
         };
-        let filler = || InternalEvent::Scheduled {
-            cron: "* * * * *".to_owned(),
+        let filler = || InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "* * * * *".to_owned(),
         };
         handle.enqueue(first.clone()).await.unwrap();
         handle.enqueue(filler()).await.unwrap();

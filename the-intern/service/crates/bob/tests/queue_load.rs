@@ -9,7 +9,7 @@ use std::{
 use bob_core::{
     error::ServiceError,
     ports::{PersistenceStore, RequestsHandler},
-    types::InternalEvent,
+    types::{DeliveryKind, InternalEvent},
 };
 use tokio::{
     sync::{oneshot, watch, Notify},
@@ -17,8 +17,9 @@ use tokio::{
 };
 
 fn chat_event(index: usize) -> InternalEvent {
-    InternalEvent::ChatMessage {
-        content: format!("queue-load-{index}"),
+    InternalEvent {
+        kind: DeliveryKind::Sync,
+        payload: format!("queue-load-{index}"),
     }
 }
 
@@ -73,8 +74,9 @@ async fn overload_submissions_admit_exact_capacity_and_preserve_order() {
     );
 
     requests_handle
-        .submit(InternalEvent::ChatMessage {
-            content: "warmup".to_owned(),
+        .submit(InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "warmup".to_owned(),
         })
         .await
         .expect("warmup event should be admitted");
@@ -117,8 +119,9 @@ async fn overload_submissions_admit_exact_capacity_and_preserve_order() {
         .expect("warmup event should be persisted");
     assert_eq!(
         warmup,
-        InternalEvent::ChatMessage {
-            content: "warmup".to_owned(),
+        InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "warmup".to_owned(),
         }
     );
 

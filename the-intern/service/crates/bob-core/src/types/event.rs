@@ -2,18 +2,26 @@ use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, UserId};
 
-/// Normalized event from any inbound channel, ready for internal routing.
+/// Delivery semantics of an inbound request.
+///
+/// - `Sync` — the sender is waiting for a reply (e.g. a chat message).
+/// - `Async` — fire-and-forget delivery (e.g. email, webhook).
+/// - `Periodic` — a time-triggered event (e.g. a cron schedule).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeliveryKind {
+    Sync,
+    Async,
+    Periodic,
+}
+
+/// Normalized inbound request, ready for internal routing.
+///
+/// `kind` captures the delivery semantics; `payload` carries the
+/// normalized request content produced by the originating adapter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum InternalEvent {
-    /// A chat message received from a messaging channel.
-    ChatMessage { content: String },
-    /// An email received by a monitored mailbox.
-    EmailReceived { subject: String, body: String },
-    /// An HTTP webhook payload from an external system.
-    Webhook { source: String, payload: String },
-    /// A time-triggered event defined by a cron expression.
-    Scheduled { cron: String },
+pub struct InternalEvent {
+    pub kind: DeliveryKind,
+    pub payload: String,
 }
 
 /// The context attached to every inbound request: who sent it and from where.
@@ -33,10 +41,38 @@ mod tests {
 
     use super::*;
 
+    // AC-1 / AC-2: InternalEvent is a struct with kind and payload fields.
+    // AC-2: DeliveryKind has exactly Sync, Async, Periodic variants.
     #[test]
-    fn internal_event_chat_message_serde_json_round_trip() {
-        let original = InternalEvent::ChatMessage {
-            content: "hello world".to_owned(),
+    fn delivery_kind_has_sync_async_periodic_variants() {
+        let sync = DeliveryKind::Sync;
+        let async_ = DeliveryKind::Async;
+        let periodic = DeliveryKind::Periodic;
+
+        // All three variants are distinct.
+        assert_ne!(sync, async_);
+        assert_ne!(sync, periodic);
+        assert_ne!(async_, periodic);
+    }
+
+    // AC-2: DeliveryKind derives Copy, Clone, Debug, PartialEq, Eq.
+    #[test]
+    fn delivery_kind_derives_copy_clone_debug_partialeq_eq() {
+        let k = DeliveryKind::Sync;
+        let copied = k; // Copy
+        let cloned = k.clone(); // Clone
+        let debug_str = format!("{k:?}"); // Debug
+        assert_eq!(k, copied); // PartialEq / Eq
+        assert_eq!(k, cloned);
+        assert!(debug_str.contains("Sync"));
+    }
+
+    // AC-3: InternalEvent with DeliveryKind::Sync survives a JSON round-trip.
+    #[test]
+    fn internal_event_with_sync_kind_serde_json_round_trip() {
+        let original = InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "hello world".to_owned(),
         };
         let json = serde_json::to_string(&original).expect("serialization must succeed");
         let restored: InternalEvent =
@@ -44,11 +80,12 @@ mod tests {
         assert_eq!(original, restored);
     }
 
+    // AC-3: InternalEvent with DeliveryKind::Async survives a JSON round-trip.
     #[test]
-    fn internal_event_email_received_serde_json_round_trip() {
-        let original = InternalEvent::EmailReceived {
-            subject: "test subject".to_owned(),
-            body: "test body".to_owned(),
+    fn internal_event_with_async_kind_serde_json_round_trip() {
+        let original = InternalEvent {
+            kind: DeliveryKind::Async,
+            payload: r#"{"subject":"test","body":"hello"}"#.to_owned(),
         };
         let json = serde_json::to_string(&original).expect("serialization must succeed");
         let restored: InternalEvent =
@@ -56,22 +93,12 @@ mod tests {
         assert_eq!(original, restored);
     }
 
+    // AC-3: InternalEvent with DeliveryKind::Periodic survives a JSON round-trip.
     #[test]
-    fn internal_event_webhook_serde_json_round_trip() {
-        let original = InternalEvent::Webhook {
-            source: "github".to_owned(),
-            payload: r#"{"action":"push"}"#.to_owned(),
-        };
-        let json = serde_json::to_string(&original).expect("serialization must succeed");
-        let restored: InternalEvent =
-            serde_json::from_str(&json).expect("deserialization must succeed");
-        assert_eq!(original, restored);
-    }
-
-    #[test]
-    fn internal_event_scheduled_serde_json_round_trip() {
-        let original = InternalEvent::Scheduled {
-            cron: "0 9 * * 1".to_owned(),
+    fn internal_event_with_periodic_kind_serde_json_round_trip() {
+        let original = InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "0 9 * * 1".to_owned(),
         };
         let json = serde_json::to_string(&original).expect("serialization must succeed");
         let restored: InternalEvent =
@@ -109,14 +136,16 @@ mod tests {
         assert_eq!(ctx.context_id, restored.context_id);
     }
 
+    // AC-1: InternalEvent implements Clone and Debug.
     #[test]
     fn internal_event_implements_clone_and_debug() {
-        let event = InternalEvent::ChatMessage {
-            content: "hi".to_owned(),
+        let event = InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "hi".to_owned(),
         };
         let cloned = event.clone();
         let debug_str = format!("{cloned:?}");
-        assert!(debug_str.contains("ChatMessage"));
+        assert!(debug_str.contains("InternalEvent"));
     }
 
     #[test]
