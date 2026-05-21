@@ -2,7 +2,7 @@
 id: T-067
 title: Reshape InternalEvent from per-channel variants to delivery-kind-typed 
   requests
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-21'
