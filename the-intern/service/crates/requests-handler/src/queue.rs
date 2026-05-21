@@ -178,7 +178,7 @@ mod tests {
     use std::time::Duration;
 
     use bob_core::ports::RequestsHandler;
-    use bob_core::types::InternalEvent;
+    use bob_core::types::{DeliveryKind, InternalEvent};
     use tokio::sync::watch;
 
     use super::{start_with, Config};
@@ -196,8 +196,9 @@ mod tests {
     }
 
     fn chat_event(content: &str) -> InternalEvent {
-        InternalEvent::ChatMessage {
-            content: content.to_owned(),
+        InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: content.to_owned(),
         }
     }
 

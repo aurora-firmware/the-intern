@@ -420,7 +420,7 @@ pub mod tests {
     use bob_core::error::ServiceError;
     use bob_core::{
         ports::PersistenceStore,
-        types::{InternalEvent, UserId},
+        types::{DeliveryKind, InternalEvent, UserId},
     };
 
     use crate::config::BobConfig;
@@ -562,8 +562,9 @@ pub mod tests {
         cfg.policy.admitted_users = vec![user_id.to_string()];
         let runtime = start_subsystems(&cfg).expect("subsystems must start");
 
-        let event = InternalEvent::ChatMessage {
-            content: "persist me".to_owned(),
+        let event = InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "persist me".to_owned(),
         };
         runtime
             ._requests_handler
@@ -948,8 +949,9 @@ pub mod tests {
 
         let runtime = start_subsystems(&cfg).expect("subsystems must start");
 
-        let event = InternalEvent::ChatMessage {
-            content: "should be denied".to_owned(),
+        let event = InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "should be denied".to_owned(),
         };
         runtime
             ._requests_handler

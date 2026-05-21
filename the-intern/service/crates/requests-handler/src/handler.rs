@@ -101,8 +101,8 @@ mod tests {
         error::ServiceResult,
         ports::{AuditSink, PersistenceStore, SessionState},
         types::{
-            AuditRecord, AuditRecordKind, AuditRecordPayload, ChannelId, InternalEvent,
-            RequestContext, SessionId, UserId,
+            AuditRecord, AuditRecordKind, AuditRecordPayload, ChannelId, DeliveryKind,
+            InternalEvent, RequestContext, SessionId, UserId,
         },
     };
     use policy_control::{PolicyConfig, RulesetSnapshot};
@@ -162,8 +162,9 @@ mod tests {
     }
 
     fn chat_event(content: &str) -> InternalEvent {
-        InternalEvent::ChatMessage {
-            content: content.to_owned(),
+        InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: content.to_owned(),
         }
     }
 
@@ -358,8 +359,9 @@ mod tests {
         let ctx = make_context(UserId::new());
 
         run_preflight(
-            InternalEvent::ChatMessage {
-                content: secret.to_owned(),
+            InternalEvent {
+                kind: DeliveryKind::Sync,
+                payload: secret.to_owned(),
             },
             Some(&ctx),
             &snapshot,
@@ -392,8 +394,9 @@ mod tests {
         let secret = "very-sensitive-data-9999";
 
         run_preflight(
-            InternalEvent::ChatMessage {
-                content: secret.to_owned(),
+            InternalEvent {
+                kind: DeliveryKind::Sync,
+                payload: secret.to_owned(),
             },
             None,
             &snapshot,
