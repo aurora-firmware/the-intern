@@ -3,6 +3,23 @@
 Running log of bugs and friction observed while using the `ai-team` CLI and the
 slash-skills that wrap it. New entries at the top.
 
+## 2026-05-21 — `new-spec` skill uses CLI flags `ai-team spec new` does not accept
+
+**Symptom.** The `new-spec` skill instructs callers to run
+`ai-team spec new --json --title "<title>" --description "<description>"`.
+`ai-team spec new` rejects `--title` (`No such option '--title'`) — `title` is a
+positional argument — and has no `--description` option at all (only `--author`,
+`--status`, `--json`).
+
+**Impact.** Spec creation fails on first attempt; the caller must check `--help`
+and rewrite the command, and any spec `description` text has nowhere to go via
+the CLI (it must be written into the file body afterward).
+
+**Suggested fix.** Update `.claude/skills/new-spec/SKILL.md` to use positional
+`TITLE` and drop `--description` from the command, or add a `--description`
+option to `ai-team spec new`. This mirrors the already-logged `ai-team bug new`
+flag mismatch — the same fix pattern applies.
+
 ## 2026-05-20 — Reviewer committed a review verdict onto the task branch
 
 **Symptom.** During `dev-loop` processing of T-063, the cycle-1 Reviewer
