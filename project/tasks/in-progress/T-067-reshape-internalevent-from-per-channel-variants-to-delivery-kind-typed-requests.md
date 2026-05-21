@@ -188,3 +188,45 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-21
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Spec compliance**
+
+- AC-1: `InternalEvent` is a public struct with `kind: DeliveryKind` and `payload: String` fields,
+  re-exported from `bob_core::types`. No channel-named variants remain. Confirmed.
+- AC-2: `DeliveryKind` is a public enum re-exported from `bob_core::types`, with exactly the unit
+  variants `Sync`, `Async`, `Periodic`, and the required derives (`Debug, Clone, Copy, PartialEq,
+  Eq, Serialize, Deserialize`). Confirmed by reading `event.rs` and `mod.rs`.
+- AC-3: Three serde round-trip tests cover every `DeliveryKind` variant
+  (`internal_event_with_sync_kind_serde_json_round_trip`, `...async...`, `...periodic...`).
+  All passed under `cargo test --workspace`. Confirmed.
+- AC-4: `grep -rnE 'InternalEvent::(ChatMessage|EmailReceived|Webhook|Scheduled)' crates` returns
+  zero matches on the implementation branch. Confirmed.
+- AC-5: `cargo test --workspace` passes — all suites green (420+ tests, 0 failures). Confirmed by
+  live run on the checked-out implementation files.
+- File scope: exactly the 9 files listed in "Files to Touch" were modified; no files outside scope
+  were touched. Confirmed via `git diff --name-only` against merge-base.
+
+**Stage 2 — Code quality**
+
+- Correctness: `DeliveryKind` struct shape and derives match the spec precisely. Channel-to-kind
+  mapping is consistent with the task description throughout all 9 files. `RequestContext`
+  unchanged.
+- Tests: New tests (`delivery_kind_has_sync_async_periodic_variants`,
+  `delivery_kind_derives_copy_clone_debug_partialeq_eq`, three serde round-trips) cover AC-1
+  through AC-3 explicitly. All pre-existing tests updated and passing.
+- Security: No secrets; no external input paths affected; no new permissions.
+- Readability: Names are descriptive and follow project conventions. Comments on tests cross-
+  reference acceptance criteria numbers. No dead code or debugging artifacts.
+- Performance: No new loops, blocking calls, or resource leaks introduced.
+
+Minor observation (non-blocking): the `delivery_kind_has_sync_async_periodic_variants` test
+verifies distinctness via `assert_ne!` but does not explicitly enumerate all three variants by
+name in a way a linter could enforce exhaustiveness. This is adequate for the current spec — the
+compiler enforces exhaustive matching wherever `DeliveryKind` is matched, so no coverage gap
+exists in practice.
