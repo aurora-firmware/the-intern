@@ -57,6 +57,19 @@ Directory *is* status for tasks and bugs — moving a file is how state changes.
   credentials, which can fail under restrictive sandboxes with
   `Operation not permitted`.
 
+## JS Extension — pi-agent Package Compatibility
+
+The bob extension (`the-intern/extensions/bob.ts`) has been tested against
+`@earendil-works/pi-coding-agent` **version 0.75.3** only. This is the only
+supported pi-agent API version for the bob extension until a future task
+updates the compatibility record.
+
+If a different version of `@earendil-works/pi-coding-agent` is installed,
+`npm test` in `the-intern/extensions` will fail with a clear incompatibility
+error. Other installed versions are **unsupported** until both the
+compatibility test (`pi-agent-compat.test.ts`) and this documentation are
+updated to reflect the new tested version.
+
 ## Build
 
 From the Rust workspace:

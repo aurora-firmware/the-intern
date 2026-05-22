@@ -188,6 +188,40 @@ event rate.
 
 ---
 
+## pi-agent Package Compatibility
+
+The bob extension is tested against `@earendil-works/pi-coding-agent`
+**version 0.75.3** only. This is the only supported pi-agent API version
+until a future task updates the compatibility record.
+
+### Incompatibility signal
+
+Running `npm test` in this directory will fail immediately with a descriptive
+error if a version other than **0.75.3** is installed:
+
+```
+INCOMPATIBLE pi-agent version detected.
+  Installed:  <detected version>
+  Supported:  0.75.3
+```
+
+This check lives in `pi-agent-compat.test.ts`. Other installed versions are
+**unsupported** until both the test and this documentation are updated to
+reflect the new tested version.
+
+### Updating the compatibility record
+
+When a new pi-agent version is to be adopted:
+
+1. Install the new version: `npm install @earendil-works/pi-coding-agent@<new-version>`.
+2. Run `npm test` and check whether any events are missing from or extra in
+   `PI_EVENTS` in `bob.ts`. The AC-3 test will report the exact discrepancies.
+3. Update `PI_EVENTS` and the handler registrations in `bob.ts` as needed.
+4. Update `SUPPORTED_PI_AGENT_VERSION` in `pi-agent-compat.test.ts`.
+5. Update the version references in this file and in the root `README.md`.
+
+---
+
 ## Development
 
 This is a pure TypeScript package with no runtime dependencies. Everything

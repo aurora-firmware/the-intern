@@ -40,7 +40,7 @@ import type { ExtensionAPI, ExtensionContext, ToolCallEventResult } from "@earen
 // `tool_call` is intentionally excluded: it is handled by the blocking
 // authz hook (see below) rather than the fire-and-forget event loop.
 // ---------------------------------------------------------------------------
-const PI_EVENTS = [
+export const PI_EVENTS = [
   "resources_discover",
   "session_start",
   "session_before_switch",
