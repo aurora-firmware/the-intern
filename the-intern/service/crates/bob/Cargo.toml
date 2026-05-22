@@ -21,6 +21,7 @@ monitoring = { path = "../monitoring" }
 persistence = { path = "../persistence" }
 policy-control = { path = "../policy-control" }
 pi-agent-supervisor = { path = "../pi-agent-supervisor" }
+chat-adapter = { path = "../chat-adapter" }
 
 [lints]
 workspace = true

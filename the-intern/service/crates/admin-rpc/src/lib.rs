@@ -61,6 +61,12 @@ pub struct Config {
     /// Maximum time the write task waits for a slow subscriber's send before
     /// dropping its subscription.
     pub slow_subscriber_deadline: Duration,
+    /// Optional chat-adapter frame-delivery handle.
+    ///
+    /// When `Some`, `chat.send` requests are forwarded to the chat adapter.
+    /// When `None` (the default), `chat.send` returns a JSON-RPC error
+    /// indicating that the chat channel is not available.
+    pub chat_adapter: Option<chat_adapter::FrameHandle>,
 }
 
 impl Default for Config {
@@ -75,6 +81,7 @@ impl Default for Config {
             monitoring: None,
             audit_bus: None,
             slow_subscriber_deadline: Duration::from_secs(5),
+            chat_adapter: None,
         }
     }
 }
@@ -408,12 +415,16 @@ pub fn start(cfg: Config) -> Result<(Handle, JoinHandle<()>), std::io::Error> {
     let (tx, rx) = mpsc::channel(buffer);
 
     // Build the dispatcher from the optional handles in the config.
-    let dispatcher = Dispatcher::new(
+    let mut dispatcher = Dispatcher::new(
         cfg.supervisor.clone(),
         cfg.policy.clone(),
         cfg.monitoring.clone(),
         env!("CARGO_PKG_VERSION"),
     );
+    // Inject the chat-adapter handle when provided (AC-1 of T-072).
+    if let Some(chat_handle) = cfg.chat_adapter.clone() {
+        dispatcher = dispatcher.with_chat_handle(chat_handle);
+    }
 
     // Use the configured audit bus or create an internal one.
     let bus = cfg
