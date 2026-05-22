@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bob::config::{BobConfig, MonitoringConfig};
+use bob::config::{BobConfig, ChannelsConfig, ChatChannelConfig, MonitoringConfig};
 use bob_core::types::SessionId;
 use policy_control::PolicyConfig;
 use serde_json::{json, Value};
@@ -730,6 +730,9 @@ fn client_cfg(admin_sock_path: PathBuf) -> BobConfig {
         monitoring: MonitoringConfig {
             audit_log_path: PathBuf::new(),
             default_tail_filters: vec![],
+        },
+        channels: ChannelsConfig {
+            chat: ChatChannelConfig { enabled: true },
         },
         config_path: PathBuf::new(),
     }
