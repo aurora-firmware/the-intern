@@ -82,6 +82,32 @@ cargo test --test shell_e2e -- --nocapture
 
 <!-- Mandatory. Append one entry per session boundary. -->
 
+### Session 1 — 2026-05-22
+
+Implemented T-072 in a single TDD cycle covering all four acceptance criteria.
+
+**What was done**
+
+Wrote four failing tests in `bob::serve::tests` before touching any production code:
+- `start_subsystems_with_chat_enabled_creates_chat_adapter_join_handle` (AC-1)
+- `start_subsystems_with_chat_disabled_has_no_chat_adapter_join_handle` (AC-2)
+- `shutdown_protocol_with_chat_enabled_completes_without_hanging` (AC-3)
+- `shutdown_protocol_with_chat_disabled_completes_without_hanging` (AC-3)
+
+**Implementation** — three files changed:
+
+1. `crates/bob/Cargo.toml` — added `chat-adapter = { path = "../chat-adapter" }` dependency.
+
+2. `crates/admin-rpc/src/lib.rs` — added `chat_adapter: Option<chat_adapter::FrameHandle>` to `Config` (with `None` default), and wired it into `start` by calling `dispatcher.with_chat_handle(handle)` when `Some`. Outside the listed Files to Touch but unavoidable: `Dispatcher::with_chat_handle` (from T-071) can only be called by the code that constructs the Dispatcher, inside `admin_rpc::start`.
+
+3. `crates/bob/src/serve.rs` — the main wiring: added `_chat_adapter` and `chat_adapter_join` fields to `Runtime`; in `try_start_subsystems`, conditionally call `chat_adapter::start(requests_handler_handle.clone(), ChannelId::new(), cfg.request_queue_capacity)` when `cfg.channels.chat.enabled`, passing the `FrameHandle` clone into `admin_rpc::Config.chat_adapter`; in `run_shutdown_protocol`, `drop(_chat_adapter)` in phase 1 and append `chat_adapter_join` to the phase-3 drain vec under the existing `shutdown_drain_deadline`.
+
+**What was tried and rejected** — initially attempted an `admin_rpc::start_with_chat` variant function, but that duplicated the entire start body. The Config-field approach is cleaner and consistent with how supervisor/policy/monitoring are already injected.
+
+**SO_PEERCRED peer identity (deferred)** — wiring real peer identity requires (a) `Listener::accept` returning `PeerCred` alongside the `UnixStream`, and (b) a UID-to-`UserId` mapping that does not exist in the system. Both are out of scope for this wiring task and would require separate tasks. Chat frames currently carry an anonymous `UserId` as sender — policy will deny them until proper identity wiring is added.
+
+**Verification** — `cargo test --workspace`: all suites pass (83 bob tests including 4 new, 99 admin-rpc tests, 5 shell_e2e tests). Zero failures. Commit `3dd0262`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
