@@ -2,7 +2,7 @@
 id: T-073
 title: Carry self-asserted application identity through the chat.send intake 
   path per ADR-005
-status: in-progress
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-22'
