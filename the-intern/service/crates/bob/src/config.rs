@@ -38,6 +38,10 @@ pub struct BobConfig {
     pub policy: PolicyConfig,
     /// Monitoring configuration sourced from the `[monitoring]` TOML section.
     pub monitoring: MonitoringConfig,
+    /// Channel configuration sourced from the `[channels]` TOML section.
+    ///
+    /// An absent `[channels]` section yields the default-enabled chat channel.
+    pub channels: ChannelsConfig,
     /// Resolved path to the TOML config file used to load this config.
     ///
     /// An empty path means no config file was loaded (defaults only).
@@ -49,6 +53,25 @@ pub struct BobConfig {
 pub struct MonitoringConfig {
     pub audit_log_path: PathBuf,
     pub default_tail_filters: Vec<AuditFilterKind>,
+}
+
+/// Top-level channels configuration section from the `[channels]` TOML block.
+///
+/// Each field is a channel-specific sub-section. Adding a new channel is a
+/// field addition here and in `RawChannelsConfig` — no reshape required.
+#[derive(Debug, Clone)]
+pub struct ChannelsConfig {
+    pub chat: ChatChannelConfig,
+}
+
+/// Configuration for the interactive-chat channel.
+#[derive(Debug, Clone)]
+pub struct ChatChannelConfig {
+    /// When `true` the chat adapter is started at `bob serve` startup.
+    ///
+    /// Defaults to `true`: chat is the primary interactive channel and rides
+    /// the always-on `admin.sock`.
+    pub enabled: bool,
 }
 
 // `Default` is intentionally not implemented for `BobConfig`.
@@ -90,6 +113,9 @@ impl BobConfig {
             monitoring: MonitoringConfig {
                 audit_log_path: PathBuf::new(),
                 default_tail_filters: default_tail_filters(),
+            },
+            channels: ChannelsConfig {
+                chat: ChatChannelConfig { enabled: true },
             },
             config_path: PathBuf::new(),
         }
@@ -157,6 +183,11 @@ impl BobConfig {
                     .monitoring
                     .default_tail_filters
                     .unwrap_or_else(default_tail_filters),
+            },
+            channels: ChannelsConfig {
+                chat: ChatChannelConfig {
+                    enabled: raw.channels.chat.enabled,
+                },
             },
             // Carry the resolved config file path so the policy-control actor
             // can hot-reload from the same file on Handle::reload().
@@ -270,6 +301,8 @@ struct RawBobConfig {
     policy: PolicyConfig,
     #[serde(default)]
     monitoring: RawMonitoringConfig,
+    #[serde(default)]
+    channels: RawChannelsConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -278,6 +311,38 @@ struct RawMonitoringConfig {
     audit_log_path: Option<PathBuf>,
     #[serde(default)]
     default_tail_filters: Option<Vec<AuditFilterKind>>,
+}
+
+/// Raw deserialization form of the `[channels]` TOML section.
+///
+/// Each sub-section is optional; absent means use channel-specific defaults.
+/// Adding a new channel is a field addition here — no reshape required.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+struct RawChannelsConfig {
+    #[serde(default)]
+    chat: RawChatChannelConfig,
+}
+
+/// Raw deserialization form of the `[channels.chat]` TOML sub-section.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct RawChatChannelConfig {
+    /// Whether the chat adapter is started at `bob serve` startup.
+    ///
+    /// Defaults to `true` — chat is the primary interactive channel.
+    #[serde(default = "default_chat_enabled")]
+    enabled: bool,
+}
+
+impl Default for RawChatChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_chat_enabled(),
+        }
+    }
+}
+
+fn default_chat_enabled() -> bool {
+    true
 }
 
 fn parse_cli_overrides<I>(args: I) -> ServiceResult<BTreeMap<String, String>>
@@ -579,6 +644,7 @@ fn defaults_with_runtime_root(
             audit_log_path: Some(monitoring_audit_log_path),
             default_tail_filters: Some(default_tail_filters()),
         },
+        channels: RawChannelsConfig::default(),
     }
 }
 
@@ -1103,7 +1169,10 @@ default_tail_filters = ["events", "verdicts"]
         } else {
             env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
         }
-        env.insert("XDG_STATE_HOME".to_string(), state_home.display().to_string());
+        env.insert(
+            "XDG_STATE_HOME".to_string(),
+            state_home.display().to_string(),
+        );
         env.insert("HOME".to_string(), home.display().to_string());
 
         let config = BobConfig::load_with_sources(ConfigSources {
@@ -1207,7 +1276,10 @@ audit_log_path = "{}"
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let state_home = temp.path().join("state-home");
         fs::create_dir_all(&state_home).expect("state home should be created");
-        env.insert("XDG_STATE_HOME".to_string(), state_home.display().to_string());
+        env.insert(
+            "XDG_STATE_HOME".to_string(),
+            state_home.display().to_string(),
+        );
         env.insert("HOME".to_string(), temp.path().display().to_string());
 
         let audit_log_path = state_home.join("bob").join("private").join("audit.jsonl");
@@ -1253,6 +1325,25 @@ audit_log_path = "{}"
         }
 
         fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    // ── AC-1, AC-2 (T-069): channels config section, chat defaults to enabled ──
+
+    #[test]
+    fn bob_config_exposes_channels_field_with_chat_channel_config() {
+        let config = BobConfig::test_base();
+        // The channels field must be present and carry a chat sub-field.
+        let _: &ChannelsConfig = &config.channels;
+        let _: &ChatChannelConfig = &config.channels.chat;
+    }
+
+    #[test]
+    fn chat_channel_is_enabled_by_default_when_no_channels_config_is_supplied() {
+        let config = load_with_env_overrides([]).expect("config without [channels] should succeed");
+        assert!(
+            config.channels.chat.enabled,
+            "chat channel must be enabled when no [channels] config is present"
+        );
     }
 
     // ── AC-3 (T-053): legacy top-level allowed_user_ids field is removed ──────
