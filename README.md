@@ -134,12 +134,11 @@ Available subcommands: `serve`, `status`, `sessions`, `audit`, `policy`, `chat`.
 Add `--help` to any of them for the full surface.
 
 `bob chat` opens a chat subscription and sends each stdin line as a `chat.send`
-call; the interactive-chat adapter normalizes it into the request queue and the
-requests-handler runs pre-flight admission. One known limitation: the admin
-connection's peer identity is not yet wired from `SO_PEERCRED`, so chat frames
-are submitted with an anonymous identity and pre-flight admits or denies them
-according to the configured policy ruleset. The chat channel is enabled by
-default and can be disabled via the `[channels.chat]` config section.
+call; each request includes a self-asserted application identity from
+`chat_application_identity`, and the interactive-chat adapter normalizes that
+identity into the request queue where the requests-handler runs pre-flight
+admission. The chat channel is enabled by default and can be disabled via the
+`[channels.chat]` config section.
 
 Stop the service with Ctrl-C (SIGTERM); the supervisor reaps pi-agent
 children during shutdown phase 4 and the sockets are removed on exit.

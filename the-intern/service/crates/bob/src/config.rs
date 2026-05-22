@@ -3,11 +3,12 @@ use std::{
     env,
     fs::OpenOptions,
     path::{Path, PathBuf},
+    str::FromStr,
     time::Duration,
 };
 
 use bob_core::error::{ServiceError, ServiceResult};
-use bob_core::types::AuditFilterKind;
+use bob_core::types::{AuditFilterKind, UserId};
 use figment::{
     providers::{Format, Serialized, Toml},
     Figment,
@@ -42,6 +43,8 @@ pub struct BobConfig {
     ///
     /// An absent `[channels]` section yields the default-enabled chat channel.
     pub channels: ChannelsConfig,
+    /// Stable application-level identity asserted by `bob chat`.
+    pub chat_application_identity: UserId,
     /// Resolved path to the TOML config file used to load this config.
     ///
     /// An empty path means no config file was loaded (defaults only).
@@ -117,6 +120,7 @@ impl BobConfig {
             channels: ChannelsConfig {
                 chat: ChatChannelConfig { enabled: true },
             },
+            chat_application_identity: default_chat_application_identity(),
             config_path: PathBuf::new(),
         }
     }
@@ -189,6 +193,7 @@ impl BobConfig {
                     enabled: raw.channels.chat.enabled,
                 },
             },
+            chat_application_identity: raw.chat_application_identity,
             // Carry the resolved config file path so the policy-control actor
             // can hot-reload from the same file on Handle::reload().
             config_path: config_path.clone(),
@@ -303,6 +308,7 @@ struct RawBobConfig {
     monitoring: RawMonitoringConfig,
     #[serde(default)]
     channels: RawChannelsConfig,
+    chat_application_identity: UserId,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -645,7 +651,13 @@ fn defaults_with_runtime_root(
             default_tail_filters: Some(default_tail_filters()),
         },
         channels: RawChannelsConfig::default(),
+        chat_application_identity: default_chat_application_identity(),
     }
+}
+
+fn default_chat_application_identity() -> UserId {
+    UserId::from_str("00000000-0000-0000-0000-000000000001")
+        .expect("default chat application identity must be a valid UUID")
 }
 
 fn default_tail_filters() -> Vec<AuditFilterKind> {
@@ -844,6 +856,16 @@ mod tests {
     }
 
     #[test]
+    fn loads_defaults_with_stable_chat_application_identity() {
+        let config = load_with_env_overrides([]).expect("defaults should load");
+        assert_eq!(
+            config.chat_application_identity.to_string(),
+            "00000000-0000-0000-0000-000000000001",
+            "default chat application identity must be stable"
+        );
+    }
+
+    #[test]
     fn test_base_has_pi_agent_rpc_worker_and_positive_pool_limits() {
         let config = BobConfig::test_base();
 
@@ -981,6 +1003,26 @@ admin_allowed_uids = [1000]
 
         assert!(
             matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("pi_agent_max_processes must be positive")),
+            "expected configuration error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn returns_configuration_error_when_chat_application_identity_is_empty() {
+        let result = load_with_env_overrides([("BOB_CHAT_APPLICATION_IDENTITY", "")]);
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("chat_application_identity")),
+            "expected configuration error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn returns_configuration_error_when_chat_application_identity_is_not_a_uuid() {
+        let result = load_with_env_overrides([("BOB_CHAT_APPLICATION_IDENTITY", "not-a-uuid")]);
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("chat_application_identity")),
             "expected configuration error, got {result:?}"
         );
     }

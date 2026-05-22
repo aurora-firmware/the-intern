@@ -26,7 +26,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bob_core::types::UserId;
 use tokio::sync::{mpsc, oneshot};
 
 /// An opaque, unique identifier for a subscription within the admin-rpc bus.
@@ -229,36 +228,17 @@ pub struct ConnectionRegistry {
     audit_cancel_txs: HashMap<AdminSubscriptionId, oneshot::Sender<()>>,
     /// Monotonically increasing id counter for audit subscriptions.
     next_audit_id: u64,
-    /// The peer identity associated with this connection, derived from
-    /// `SO_PEERCRED` at accept time. Used when forwarding chat frames.
-    peer_id: UserId,
 }
 
 impl ConnectionRegistry {
     /// Create a new, empty registry tied to `bus`.
-    ///
-    /// The peer identity defaults to a newly-generated anonymous `UserId`.
-    /// Use [`Self::new_with_peer`] when the actual peer identity is known.
     pub fn new(bus: SubscriptionBus) -> Self {
-        Self::new_with_peer(bus, UserId::new())
-    }
-
-    /// Create a new, empty registry tied to `bus` with an explicit `peer_id`.
-    ///
-    /// `peer_id` is included in every chat frame forwarded from this connection.
-    pub fn new_with_peer(bus: SubscriptionBus, peer_id: UserId) -> Self {
         Self {
             bus,
             ids: Vec::new(),
             audit_cancel_txs: HashMap::new(),
             next_audit_id: 1,
-            peer_id,
         }
-    }
-
-    /// The peer identity for this connection.
-    pub fn peer_id(&self) -> UserId {
-        self.peer_id
     }
 
     /// Returns `true` when `id` is an open chat subscription on this connection.
