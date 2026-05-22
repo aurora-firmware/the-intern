@@ -14,13 +14,13 @@ flowchart TB
         Config["BobConfig\nsocket paths, pool sizes, policy, audit log"]
 
         subgraph AdminRpc["crates/admin-rpc"]
-            AdminSock["admin.sock\nUnix socket + peer UID gate"]
+            AdminSock["admin.sock\nUnix socket + filesystem permission gate"]
             AdminProtocol["JSON-RPC 2.0 framing"]
             Dispatcher["Dispatcher\nmethod routing"]
         end
 
         subgraph ExtensionIpc["crates/extension-ipc"]
-            ExtSock["extension.sock\nUnix socket + peer UID gate"]
+            ExtSock["extension.sock\nUnix socket + filesystem permission gate"]
             ExtFrames["newline JSON frames\nkind=authz | event"]
             Multiplexer["SessionMultiplexer\npolicy verdict routing + event audit"]
         end

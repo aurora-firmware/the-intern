@@ -2,19 +2,16 @@ use std::{os::unix::fs::PermissionsExt, path::PathBuf};
 
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::peer_cred::{is_allowed, peer_cred_from_fd};
+use crate::peer_cred::peer_cred_from_fd;
 
 #[derive(Debug, Clone)]
 pub struct ListenerConfig {
     pub extension_sock_path: PathBuf,
-    pub extension_allowed_uids: Vec<u32>,
-    pub service_uid: u32,
 }
 
 #[derive(Debug)]
 pub struct Listener {
     inner: UnixListener,
-    config: ListenerConfig,
 }
 
 impl Listener {
@@ -36,49 +33,30 @@ impl Listener {
         std::fs::set_permissions(sock_path, std::fs::Permissions::from_mode(0o660))?;
 
         tracing::info!(path = %sock_path.display(), "extension socket bound");
-        Ok(Self {
-            inner: listener,
-            config: cfg,
-        })
+        Ok(Self { inner: listener })
     }
 
     pub async fn accept(&self) -> std::io::Result<Option<UnixStream>> {
         let (stream, _addr) = self.inner.accept().await?;
+
         match peer_cred_from_fd(&stream) {
             Ok(cred) => {
-                if is_allowed(
-                    cred.uid,
-                    &self.config.extension_allowed_uids,
-                    self.config.service_uid,
-                ) {
-                    Ok(Some(stream))
-                } else {
-                    tracing::warn!(
-                        rejected_uid = cred.uid,
-                        "extension socket: rejected connection from unauthorized peer"
-                    );
-                    drop(stream);
-                    Ok(None)
-                }
+                tracing::debug!(peer_uid = cred.uid, "extension socket: accepted peer");
             }
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    "extension socket: could not read peer credentials; closing connection"
+                    "extension socket: could not read peer credentials"
                 );
-                drop(stream);
-                Ok(None)
             }
         }
+
+        Ok(Some(stream))
     }
 
     pub fn listener(&self) -> &UnixListener {
         &self.inner
     }
-}
-
-pub fn gate_peer(peer_uid: u32, cfg: &ListenerConfig) -> bool {
-    is_allowed(peer_uid, &cfg.extension_allowed_uids, cfg.service_uid)
 }
 
 #[cfg(test)]
@@ -97,8 +75,6 @@ mod tests {
     fn make_cfg(tmp: &tempfile::TempDir) -> ListenerConfig {
         ListenerConfig {
             extension_sock_path: tmp.path().join("extension.sock"),
-            extension_allowed_uids: vec![],
-            service_uid: nix::unistd::Uid::current().as_raw(),
         }
     }
 
@@ -123,8 +99,6 @@ mod tests {
         let sock_path = tmp.path().join("nested").join("dir").join("extension.sock");
         let cfg = ListenerConfig {
             extension_sock_path: sock_path.clone(),
-            extension_allowed_uids: vec![],
-            service_uid: nix::unistd::Uid::current().as_raw(),
         };
 
         let Some(_listener) = bind_or_skip(cfg) else {
@@ -171,36 +145,19 @@ mod tests {
         );
     }
 
-    #[test]
-    fn gate_peer_rejects_uid_not_in_allowed_set() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn accept_returns_stream_for_connected_peer() {
         let tmp = tempdir().expect("temp dir");
-        let cfg = ListenerConfig {
-            extension_sock_path: tmp.path().join("extension.sock"),
-            extension_allowed_uids: vec![100, 200],
-            service_uid: 1000,
-        };
-        assert!(!gate_peer(999, &cfg));
-    }
+        let cfg = make_cfg(&tmp);
 
-    #[test]
-    fn gate_peer_accepts_uid_in_allowed_uids() {
-        let tmp = tempdir().expect("temp dir");
-        let cfg = ListenerConfig {
-            extension_sock_path: tmp.path().join("extension.sock"),
-            extension_allowed_uids: vec![100, 200],
-            service_uid: 1000,
+        let Some(listener) = bind_or_skip(cfg.clone()) else {
+            return;
         };
-        assert!(gate_peer(100, &cfg));
-    }
+        let _client = tokio::net::UnixStream::connect(&cfg.extension_sock_path)
+            .await
+            .expect("connect");
 
-    #[test]
-    fn gate_peer_accepts_service_uid() {
-        let tmp = tempdir().expect("temp dir");
-        let cfg = ListenerConfig {
-            extension_sock_path: tmp.path().join("extension.sock"),
-            extension_allowed_uids: vec![],
-            service_uid: 1000,
-        };
-        assert!(gate_peer(1000, &cfg));
+        let result = listener.accept().await.expect("accept");
+        assert!(result.is_some(), "connected peer should yield Some(stream)");
     }
 }

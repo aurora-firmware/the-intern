@@ -20,8 +20,6 @@ use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 pub struct BobConfig {
     pub admin_sock_path: PathBuf,
     pub extension_sock_path: PathBuf,
-    pub admin_allowed_uids: Vec<u32>,
-    pub admin_allowed_gid: Option<u32>,
     pub request_queue_capacity: usize,
     pub request_submit_timeout: Duration,
     pub shutdown_drain_deadline: Duration,
@@ -99,8 +97,6 @@ impl BobConfig {
         Self {
             admin_sock_path: PathBuf::new(),
             extension_sock_path: PathBuf::new(),
-            admin_allowed_uids: Vec::new(),
-            admin_allowed_gid: None,
             request_queue_capacity: 1024,
             request_submit_timeout: Duration::from_secs(5),
             shutdown_drain_deadline: Duration::from_secs(30),
@@ -164,8 +160,6 @@ impl BobConfig {
         let cfg = BobConfig {
             admin_sock_path: raw.admin_sock_path,
             extension_sock_path: raw.extension_sock_path,
-            admin_allowed_uids: raw.admin_allowed_uids,
-            admin_allowed_gid: raw.admin_allowed_gid,
             request_queue_capacity: raw.request_queue_capacity,
             request_submit_timeout: raw.request_submit_timeout,
             shutdown_drain_deadline: raw.shutdown_drain_deadline,
@@ -273,10 +267,6 @@ impl ConfigSources {
 struct RawBobConfig {
     admin_sock_path: PathBuf,
     extension_sock_path: PathBuf,
-    #[serde(default, deserialize_with = "deserialize_u32_vec")]
-    admin_allowed_uids: Vec<u32>,
-    #[serde(default, deserialize_with = "deserialize_optional_u32")]
-    admin_allowed_gid: Option<u32>,
     #[serde(deserialize_with = "deserialize_usize")]
     request_queue_capacity: usize,
     #[serde(deserialize_with = "deserialize_duration")]
@@ -449,28 +439,6 @@ where
     }
 }
 
-fn deserialize_optional_u32<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum U32Value {
-        Number(u32),
-        String(String),
-    }
-
-    match Option::<U32Value>::deserialize(deserializer)? {
-        None => Ok(None),
-        Some(U32Value::Number(value)) => Ok(Some(value)),
-        Some(U32Value::String(value)) => value
-            .trim()
-            .parse::<u32>()
-            .map(Some)
-            .map_err(|err| D::Error::custom(format!("invalid u32 '{value}': {err}"))),
-    }
-}
-
 fn parse_duration(value: &str) -> Result<Duration, String> {
     let value = value.trim();
     if let Some(raw_ms) = value.strip_suffix("ms") {
@@ -491,29 +459,6 @@ fn parse_duration(value: &str) -> Result<Duration, String> {
         .parse::<u64>()
         .map(Duration::from_secs)
         .map_err(|err| format!("invalid duration '{value}': {err}"))
-}
-
-fn deserialize_u32_vec<'de, D>(deserializer: D) -> Result<Vec<u32>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum U32Vec {
-        Many(Vec<u32>),
-        Csv(String),
-    }
-
-    match U32Vec::deserialize(deserializer)? {
-        U32Vec::Many(values) => Ok(values),
-        U32Vec::Csv(value) => parse_csv(&value)
-            .into_iter()
-            .map(|item| {
-                item.parse::<u32>()
-                    .map_err(|err| D::Error::custom(format!("invalid uid '{item}': {err}")))
-            })
-            .collect(),
-    }
 }
 
 fn deserialize_string_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -632,8 +577,6 @@ fn defaults_with_runtime_root(
     RawBobConfig {
         admin_sock_path: runtime_root.join("admin.sock"),
         extension_sock_path: runtime_root.join("extension.sock"),
-        admin_allowed_uids: vec![uid],
-        admin_allowed_gid: None,
         request_queue_capacity: 1024,
         request_submit_timeout: Duration::from_secs(5),
         shutdown_drain_deadline: Duration::from_secs(30),
@@ -932,16 +875,11 @@ pi_agent_idle_reap_timeout = "45s"
         }
         env.insert("BOB_REQUEST_QUEUE_CAPACITY".to_string(), "32".to_string());
         env.insert("BOB_TRACING_LEVEL".to_string(), "debug".to_string());
-        env.insert(
-            "BOB_ADMIN_ALLOWED_UIDS".to_string(),
-            "2000,2001".to_string(),
-        );
 
         let config_file = write_temp_config(
             r#"
 request_queue_capacity = 16
 tracing_level = "warn"
-admin_allowed_uids = [1000]
 "#,
         );
 
@@ -959,7 +897,6 @@ admin_allowed_uids = [1000]
 
         assert_eq!(config.request_queue_capacity, 64);
         assert_eq!(config.tracing_level, "error");
-        assert_eq!(config.admin_allowed_uids, vec![2000, 2001]);
 
         fs::remove_file(config_file).expect("temp config file should be removable");
     }

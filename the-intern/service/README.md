@@ -7,7 +7,7 @@ This directory is the Rust service workspace for the Intern.
 - `Cargo.toml` — workspace manifest.
 - `crates/bob-core` — runtime-agnostic domain types, errors, and port traits.
 - `crates/bob` — the `bob` binary: `bob serve` plus admin client subcommands.
-- `crates/admin-rpc` — `admin.sock` listener, peer-credential gate, JSON-RPC
+- `crates/admin-rpc` — `admin.sock` listener, socket-permission gate, JSON-RPC
   framing/dispatch, and subscriptions.
 - `crates/extension-ipc` — `extension.sock` listener, framing, and session
   multiplex scaffold.

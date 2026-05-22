@@ -3,31 +3,11 @@
 //! Re-exports the canonical [`bob_core::auth`] items so that callers within
 //! this crate continue to import from `crate::peer_cred` without change.
 
-pub use bob_core::auth::{is_allowed, peer_cred_from_fd, PeerCred};
+pub use bob_core::auth::{peer_cred_from_fd, PeerCred};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn is_allowed_returns_true_when_peer_uid_equals_service_uid() {
-        assert!(is_allowed(1000, &[], 1000));
-    }
-
-    #[test]
-    fn is_allowed_returns_true_when_peer_uid_is_in_allowed_uids() {
-        assert!(is_allowed(500, &[100, 500, 900], 1000));
-    }
-
-    #[test]
-    fn is_allowed_returns_false_when_peer_uid_not_in_allowed_set() {
-        assert!(!is_allowed(999, &[100, 200], 1000));
-    }
-
-    #[test]
-    fn is_allowed_returns_false_with_empty_allowed_uids_and_different_service_uid() {
-        assert!(!is_allowed(0, &[], 1000));
-    }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
@@ -52,5 +32,11 @@ mod tests {
 
         let client_cred = peer_cred_from_fd(&client).expect("client peer cred");
         assert_eq!(client_cred.uid, expected_uid);
+    }
+
+    #[test]
+    fn peer_cred_type_is_exported() {
+        let cred = PeerCred { uid: 42 };
+        assert_eq!(cred.uid, 42);
     }
 }

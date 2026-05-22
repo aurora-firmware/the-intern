@@ -205,7 +205,6 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     info!("starting admin-rpc actor");
     let admin_rpc_cfg = admin_rpc::Config {
         admin_sock_path: cfg.admin_sock_path.clone(),
-        admin_allowed_uids: cfg.admin_allowed_uids.clone(),
         supervisor: Some(pi_agent_supervisor_handle.clone()),
         policy: Some(policy_control_handle.clone()),
         monitoring: Some(monitoring_handle.clone()),

@@ -713,8 +713,6 @@ fn client_cfg(admin_sock_path: PathBuf) -> BobConfig {
     BobConfig {
         admin_sock_path,
         extension_sock_path: PathBuf::new(),
-        admin_allowed_uids: vec![],
-        admin_allowed_gid: None,
         request_queue_capacity: 1024,
         request_submit_timeout: Duration::from_secs(5),
         shutdown_drain_deadline: Duration::from_secs(30),
