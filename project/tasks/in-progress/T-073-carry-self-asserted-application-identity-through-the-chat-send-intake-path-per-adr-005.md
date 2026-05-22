@@ -141,3 +141,10 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-22
+PASS
+
+- Stage 1 (acceptance): AC-1 through AC-5 are satisfied. `chat.send` now requires and validates `params.application_identity`, forwards that `UserId` into the chat frame sender, rejects missing/empty/malformed identity with JSON-RPC invalid-request errors and no forwarding, removes peer-identity state from `ConnectionRegistry`, updates `bob chat` to send configured identity, and updates `README.md` plus `user_diagrams.md` to remove anonymous-identity claims.
+- Stage 2 (quality): correctness, test coverage for new validation paths, readability, and security/performance impact are acceptable for scope. No blocking regressions found in reviewed files.
+- Verification evidence (reviewer run): `cargo test -p admin-rpc chat_send`, `cargo test -p bob chat_application_identity`, `cargo test -p bob config::tests`, and `cargo test -p bob cli::commands::chat::tests` all passed on branch `task/T-073-carry-self-asserted-application-identity-through-chat-send`.
