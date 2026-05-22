@@ -4,12 +4,23 @@ The Intern is an AI office-assistant project. This repository contains the
 product design, the lifecycle workflow that drives the work, and the Rust
 service (`bob`) that implements it.
 
-The service currently runs through Phase 2: a `bob serve` binary with a Unix
-admin socket, a Unix extension socket, an in-process request queue, in-memory
-persistence, graceful shutdown, and a pi-agent supervisor that owns the
-lifecycle of `pi` child processes (spawn, warm pool, prompt routing, idle
-reaping, kill). Phase 3 (JS extension) and Phase 4 (policy authorization,
-`chat.send` wiring) are not yet implemented.
+The service currently runs through Phase 6 (chat channel). `bob serve` is a
+binary with a Unix admin socket, a Unix extension socket, an in-process request
+queue, in-memory persistence, graceful shutdown, and a pi-agent supervisor that
+owns the lifecycle of `pi` child processes (spawn, warm pool, prompt routing,
+idle reaping, kill). On top of that foundation it also runs:
+
+- **Policy Control (Phase 4)** — deterministic pre-flight admission checks plus
+  the blocking `tool_call` authorization gate.
+- **Monitoring (Phase 5)** — an append-only JSONL audit log with live
+  `audit.tail` subscriptions and a `report.submit` intake.
+- **JS extension (Phase 3)** — `extensions/bob.ts`, which forwards pi-agent
+  runtime events into `extension.sock`.
+- **Interactive-chat adapter (Phase 6)** — a channel adapter that normalizes
+  `chat.send` traffic into the request queue via the requests-handler.
+
+Phase 6's chat channel is wired end to end; the remaining channel adapters
+(email, webhook, scheduler) and Phase 7 (actions) are not yet implemented.
 
 ## Repository structure
 
@@ -24,7 +35,7 @@ reaping, kill). Phase 3 (JS extension) and Phase 4 (policy authorization,
 ├── .codex/agents/                # Mirror role definitions for codex
 ├── the-intern/
 │   ├── service/                  # Rust workspace — the `bob` binary lives here
-│   └── extensions/               # Future JS extension area (empty)
+│   └── extensions/               # JS extension for pi-agent (bob.ts)
 └── project/                      # Source of truth for product lifecycle
     ├── docs/                     # Architecture, roadmap, coding guidelines
     ├── specs/                    # Approved specifications
@@ -120,9 +131,15 @@ cargo run -p bob -- sessions kill <session-id>
 ```
 
 Available subcommands: `serve`, `status`, `sessions`, `audit`, `policy`, `chat`.
-Add `--help` to any of them for the full surface. Not every subcommand is
-fully wired — `chat.send` in particular is not yet routed through the
-channel-adapter / requests-handler path and is out of scope until Phase 4.
+Add `--help` to any of them for the full surface.
+
+`bob chat` opens a chat subscription and sends each stdin line as a `chat.send`
+call; the interactive-chat adapter normalizes it into the request queue and the
+requests-handler runs pre-flight admission. One known limitation: the admin
+connection's peer identity is not yet wired from `SO_PEERCRED`, so chat frames
+are submitted with an anonymous identity and pre-flight admits or denies them
+according to the configured policy ruleset. The chat channel is enabled by
+default and can be disabled via the `[channels.chat]` config section.
 
 Stop the service with Ctrl-C (SIGTERM); the supervisor reaps pi-agent
 children during shutdown phase 4 and the sockets are removed on exit.

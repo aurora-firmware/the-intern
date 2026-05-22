@@ -14,8 +14,15 @@ This directory is the Rust service workspace for the Intern.
 - `crates/requests-handler` — bounded internal event queue and pre-flight
   identity/access check.
 - `crates/persistence` — in-memory inbound event queue and session-state store.
-- `crates/monitoring`, `crates/policy-control`, `crates/pi-agent-supervisor` —
-  Phase 1 scaffolds for later subsystem work.
+- `crates/policy-control` — deterministic policy engine: pre-flight admission
+  and the blocking `tool_call` action gate over a reloadable ruleset snapshot.
+- `crates/monitoring` — append-only JSONL audit log with `audit.tail`
+  subscriptions and a `report.submit` intake.
+- `crates/pi-agent-supervisor` — per-session `pi` child process lifecycle:
+  spawn, warm pool, prompt routing, idle reaping, kill.
+- `crates/chat-adapter` — interactive-chat channel adapter: normalizes chat
+  user-input frames into `InternalEvent`s and submits them to the
+  requests-handler.
 
 ## Build
 
@@ -31,11 +38,12 @@ Run the full Rust workspace test suite:
 cargo test --workspace
 ```
 
-Focused Phase 1 checks:
+Focused subsystem checks:
 
 ```bash
 cargo test -p bob serve::tests
 cargo test -p admin-rpc
+cargo test -p chat-adapter
 cargo test --test shell_e2e -- --nocapture
 cargo test --test queue_load
 cargo test --test session_state_roundtrip
