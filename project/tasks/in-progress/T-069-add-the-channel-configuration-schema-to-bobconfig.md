@@ -71,6 +71,24 @@ cargo test --workspace
 
 <!-- Mandatory. Append one entry per session boundary. -->
 
+### Session 1 — 2026-05-22
+
+Implemented T-069 (add the channel configuration schema to `BobConfig`) in two TDD cycles on branch `task/T-069-add-channel-configuration-schema`.
+
+**What was done.**
+
+Cycle 1 (AC-1 + AC-2): Added two new public structs — `ChannelsConfig` (top-level, one field per channel) and `ChatChannelConfig` (just `enabled: bool`) — to `config.rs`. Added `channels: ChannelsConfig` to `BobConfig` and its `test_base()` helper. Added `RawChannelsConfig` and `RawChatChannelConfig` with serde attributes: `RawChatChannelConfig` uses `#[serde(default = "default_chat_enabled")]` so that an absent `[channels.chat]` section produces `enabled = true`. Both raw structs implement `Default`. `defaults_with_runtime_root` was updated to include `channels: RawChannelsConfig::default()`. `load_with_sources` maps raw to public config. Tests `bob_config_exposes_channels_field_with_chat_channel_config` (AC-1 structural) and `chat_channel_is_enabled_by_default_when_no_channels_config_is_supplied` (AC-2) were added.
+
+Cycle 2 (AC-3 + AC-4): Added `chat_channel_is_disabled_when_config_source_sets_enabled_to_false` (sets `[channels.chat] enabled = false` in a temp TOML file and asserts the field reads back false) and `channels_section_loads_through_figment_layered_source_with_default_then_file_override` (exercises the full figment layered path: no file → default `true`, then file → overridden `false`). Both passed immediately, confirming the implementation from cycle 1 already handled these cases.
+
+**Files outside `Files to Touch`:** `shell_e2e.rs` constructs `BobConfig` using a struct literal; adding `channels` to `BobConfig` required updating that literal. The change was purely mechanical (one new field) and was included in cycle 1's commit.
+
+**Rejected approaches:** A `Default` impl on `BobConfig` was not added (empty socket paths would create a non-bootable runtime). The `channels` field uses the same raw/public split pattern as `MonitoringConfig`.
+
+**What remains:** Nothing for this task. AC-1 through AC-5 are all covered. The flag is readable via `config.channels.chat.enabled`.
+
+Commits: `9dd2f3c` (cycle 1), `b4e9676` (cycle 2). `cargo test --workspace` — all suites green, 0 failures.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
