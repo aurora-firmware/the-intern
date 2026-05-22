@@ -89,6 +89,26 @@ cargo test --workspace
 
 <!-- Mandatory. Append one entry per session boundary. -->
 
+### Session 1 — 2026-05-22
+
+**What was done**
+
+Implemented all four acceptance criteria for T-068 in three red→green→refactor→commit TDD cycles.
+
+**Cycle 1 — AC-1 (bob-core port trait).** Added `RequestContext` as a second parameter to `RequestsHandler::submit`. Wrote a failing test in `ports.rs` proving the old single-argument call site would not compile, updated the trait definition, updated the `StubRequestsHandler` in the test module, and ensured all 80 bob-core tests continued to pass.
+
+**Cycle 2 — AC-2 (requests-handler queue payload).** Changed the `mpsc` channel payload from `InternalEvent` to `(InternalEvent, RequestContext)` throughout `queue.rs`. Updated `Handle` (field type), `submit_event` (signature), the `RequestsHandler` trait impl, and the `Actor` generic bounds. Wrote a new test (`submit_event_with_context_delivers_both_event_and_context_to_downstream`) that verified the downstream closure receives both the event and the context with the correct sender. Updated the four pre-existing queue tests to supply a context on every `submit`/`submit_event` call and to use `|_pair|` / `|(ev, _ctx)|` closures. All 15 requests-handler tests pass.
+
+**Cycle 3+4 — AC-3/AC-4 (serve.rs wiring and placeholder removal).** Removed the `default_context` block from `try_start_subsystems` that constructed a synthetic `RequestContext` from the first admitted user. Changed the `start_with` downstream closure to destructure `(event, context)` and pass the per-request `context` as `Some(&context)` to `run_preflight`. Updated the existing `permitted_event_is_persisted` integration test to supply an explicit context carrying the admitted user's ID. Added two new tests: `deny_all_policy_snapshot_causes_all_events_to_be_denied_and_not_persisted` (updated to pass an explicit context) and `preflight_uses_per_request_context_not_shared_startup_context` (submits one event with an admitted user's context and one with a non-admitted user's context; verifies only the former is persisted, proving per-request dispatch). Also updated `queue_load.rs` integration test to match the new `submit` signature. All 75+ bob tests pass.
+
+**Workspace result.** `cargo test --workspace` passes with 0 failures across all crates.
+
+**Nothing rejected or deferred.** The implementation followed the task description exactly. The two pre-existing `unused import: DeliveryKind` warnings in the `persistence` crate were present before this task and were left untouched.
+
+**What remains.** Nothing for this task. The task branch is ready for review.
+
+Three implementation commits on `task/T-068-carry-requestcontext-through-intake-path`: `8e7f64b`, `b9ed729`, `505d2e2`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
