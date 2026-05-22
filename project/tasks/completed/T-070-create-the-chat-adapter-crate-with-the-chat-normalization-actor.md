@@ -1,7 +1,7 @@
 ---
 id: T-070
 title: Create the chat-adapter crate with the chat-normalization actor
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-21'
