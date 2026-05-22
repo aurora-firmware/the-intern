@@ -1,7 +1,7 @@
 ---
 id: T-072
 title: Wire the chat adapter into bob serve with supervision and shutdown
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-21'
