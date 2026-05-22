@@ -1,27 +1,30 @@
-name: Deploy
+name: Release
 
 on:
   push:
     tags:
-      - 'v*'
+      - '*'
 
 permissions:
-  contents: read
+  contents: write
+
+env:
+  SERVICE_DIR: the-intern/service
 
 jobs:
-  deploy:
+  release:
     runs-on: self-hosted
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Build release binary
-        working-directory: the-intern/service
+        working-directory: ${{ env.SERVICE_DIR }}
         run: cargo build --release -p bob
 
-      - name: Upload release binary
-        uses: actions/upload-artifact@v4
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: bob-${{ github.ref_name }}
-          path: the-intern/service/target/release/bob
-          if-no-files-found: error
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: ${{ env.SERVICE_DIR }}/target/release/bob

@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 pub mod commands;
 
 #[derive(Debug, Parser)]
-#[command(name = "bob", version, about = "Bob service CLI")]
+#[command(name = "bob", version = env!("APP_VERSION"), about = "Bob service CLI")]
 pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
