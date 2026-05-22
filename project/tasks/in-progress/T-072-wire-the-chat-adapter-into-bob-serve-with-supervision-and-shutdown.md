@@ -111,3 +111,71 @@ Wrote four failing tests in `bob::serve::tests` before touching any production c
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
+
+### Review Verdict — 2026-05-22
+
+PASS
+
+**Stage 1 — Spec compliance**
+
+AC-1 met: When `cfg.channels.chat.enabled = true`, `chat_adapter::start` is called,
+the resulting `FrameHandle` is cloned into `admin_rpc::Config.chat_adapter`, and
+`admin_rpc::start` calls `dispatcher.with_chat_handle(handle)`. Test
+`start_subsystems_with_chat_enabled_creates_chat_adapter_join_handle` covers this path.
+
+AC-2 met: When `cfg.channels.chat.enabled = false`, both handles are `None`; the
+dispatcher receives no chat handle. Test
+`start_subsystems_with_chat_disabled_has_no_chat_adapter_join_handle` covers this path.
+
+AC-3 met: On shutdown, `drop(_chat_adapter)` fires in phase 1 (closing the frame
+channel), and `chat_adapter_join` is appended to the drain vec for the phase-3
+timeout. Both the enabled and disabled variants are tested.
+
+AC-4 met per Work Log: `cargo test --workspace` passed — 83 bob tests (4 new), 99
+admin-rpc tests, 5 shell_e2e tests. Zero failures. Commit `3dd0262`.
+
+**Out-of-scope file — `crates/admin-rpc/src/lib.rs`**
+
+Adding `chat_adapter: Option<chat_adapter::FrameHandle>` (with `None` default) to
+`admin_rpc::Config` is accepted as justified. `Dispatcher::with_chat_handle` (added
+in T-071) can only be invoked by the code that constructs the `Dispatcher` — that
+code lives inside `admin_rpc::start`, not in `bob serve`. The `Config` field is the
+only non-invasive injection point and is consistent with how every other optional
+handle (`supervisor`, `policy`, `monitoring`) is already passed to the dispatcher.
+No existing callers are broken; the field defaults to `None`.
+
+**Deferred `SO_PEERCRED` peer identity**
+
+The anonymous `UserId` per connection is not a gap against this task's acceptance
+criteria. T-072 is "wiring only" with no AC requiring real peer identity. The spec
+does not list `SO_PEERCRED` wiring as in-scope for Component 3; the Requests Handler
+pre-flight identity check is a downstream concern. The anonymous identity was already
+the behavior introduced by T-071 (`ConnectionRegistry::new` calls `UserId::new()`).
+The deferral is clearly documented in the Work Log. A future task will need to wire
+`SO_PEERCRED` → UID → `UserId` through `Listener::accept` and `ConnectionRegistry`.
+
+**Stage 2 — Code quality**
+
+Correctness: conditional branching, clone placement (`maybe_chat_handle.clone()`
+feeds `admin_rpc::Config.chat_adapter`; the original moves into `Runtime::_chat_adapter`),
+and shutdown drop ordering are all correct.
+
+Tests: four new unit tests, one per branch of AC-1/AC-2 and two for AC-3. Tests are
+independent (each creates its own `tempdir` and runtime). Both enabled and disabled
+paths are covered.
+
+Security: no hardcoded credentials; no new permissions; input passes through existing
+paths without validation bypass.
+
+Readability: field and variable names follow project conventions; comments explain
+why (not what); no dead code or debug artifacts.
+
+Performance: no unnecessary loops or blocking operations; the drain timeout bounds
+shutdown duration correctly.
+
+Minor observation (non-blocking): `cfg.chat_adapter.clone()` inside `admin_rpc::start`
+could be replaced with `cfg.chat_adapter.take()` if `cfg` were taken by value, but
+the current `Config`-by-value parameter signature already owns the value — an
+`if let Some(h) = cfg.chat_adapter` without `.clone()` would be slightly cleaner.
+This is a cosmetic nit consistent with how other optional handles are cloned in the
+same function and does not warrant a fail cycle.
