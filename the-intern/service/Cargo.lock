@@ -8,11 +8,13 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bob-core",
+ "chat-adapter",
  "chrono",
  "monitoring",
  "nix",
  "pi-agent-supervisor",
  "policy-control",
+ "requests-handler",
  "serde",
  "serde_json",
  "tempfile",
