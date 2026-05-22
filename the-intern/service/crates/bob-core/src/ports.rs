@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use crate::error::ServiceResult;
-use crate::types::{AuditRecord, InternalEvent, PolicyVerdict, SessionId};
+use crate::types::{AuditRecord, InternalEvent, PolicyVerdict, RequestContext, SessionId};
 
 /// Minimal request payload for policy decisions.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,7 +23,12 @@ pub trait Receiver {
 
 #[async_trait]
 pub trait RequestsHandler: Send + Sync {
-    async fn submit(&self, event: InternalEvent) -> ServiceResult<()>;
+    /// Submit an event together with the per-request context that identifies
+    /// the sender and originating channel.
+    ///
+    /// Returns `Ok(())` when the event is accepted, `Err` when rejected
+    /// (queue full / timeout, or shutdown).
+    async fn submit(&self, event: InternalEvent, context: RequestContext) -> ServiceResult<()>;
 }
 
 #[async_trait]
@@ -63,8 +68,9 @@ mod tests {
 
     use crate::error::ServiceResult;
     use crate::types::{
-        AuditRecord, AuditRecordKind, AuditRecordPayload, DeliveryKind, ExternalReportAuditPayload,
-        InternalEvent, PolicyVerdict, ReportOutcome, SessionId,
+        AuditRecord, AuditRecordKind, AuditRecordPayload, ChannelId, DeliveryKind,
+        ExternalReportAuditPayload, InternalEvent, PolicyVerdict, RequestContext, ReportOutcome,
+        SessionId, UserId,
     };
 
     use super::{
@@ -76,7 +82,7 @@ mod tests {
 
     #[async_trait]
     impl RequestsHandler for StubRequestsHandler {
-        async fn submit(&self, _event: InternalEvent) -> ServiceResult<()> {
+        async fn submit(&self, _event: InternalEvent, _context: RequestContext) -> ServiceResult<()> {
             Ok(())
         }
     }
@@ -166,13 +172,18 @@ mod tests {
     }
 
     #[test]
-    fn requests_handler_submit_returns_service_result() {
+    fn requests_handler_submit_takes_event_and_context_and_returns_service_result() {
         let handler = StubRequestsHandler;
         let event = InternalEvent {
             kind: DeliveryKind::Sync,
             payload: "hello".to_owned(),
         };
-        let result: ServiceResult<()> = block_on(handler.submit(event));
+        let ctx = RequestContext {
+            sender: UserId::new(),
+            source: ChannelId::new(),
+            context_id: None,
+        };
+        let result: ServiceResult<()> = block_on(handler.submit(event, ctx));
         assert!(result.is_ok());
     }
 
