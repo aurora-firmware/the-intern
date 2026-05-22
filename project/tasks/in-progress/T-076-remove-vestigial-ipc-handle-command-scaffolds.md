@@ -108,6 +108,25 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-22
+
+Read the task file (Work Log was empty — first session). Examined both target files to understand the dead surfaces before touching anything.
+
+Baseline verification. Ran `cargo test -p admin-rpc` (95 tests, all green) and `cargo test -p extension-ipc` (30 tests, all green) to confirm the starting state.
+
+admin-rpc removal. Deleted `enum Command { Ping }`, the `Handle::ping` method, and the corresponding actor `match` branch. The actor's run loop became trivially `while self.rx.recv().await.is_some() {}`. Replaced the channel type with `mpsc::Sender/Receiver<std::convert::Infallible>` — no real commands exist, and using `Infallible` makes that explicit to the compiler. Added an `#[allow(dead_code)]` annotation on `Handle::tx` with a comment explaining it is kept solely to control the actor channel's lifetime (when all Handle clones drop, the channel closes and the actor exits cleanly). Removed the `ServiceError`/`ServiceResult` import from the crate root, and deleted the `handle_ping_returns_not_implemented` test.
+
+extension-ipc removal. Same pattern: deleted `enum Command { SendMessage(String) }`, `Handle::send_message`, the actor match branch, and swapped to `Infallible` channel types. Removed the `bob_core::error::{ServiceError, ServiceResult}` import and deleted the `handle_send_message_returns_not_implemented` test.
+
+What was considered and rejected. Considered leaving the private `Command` enum as an empty enum instead of replacing it with `Infallible`. Chose `Infallible` because it makes the "no commands can ever be sent" invariant machine-checked rather than relying on a naming convention.
+
+Verification. After the changes: `cargo test -p admin-rpc` passes 94 tests (one removed), `cargo test -p extension-ipc` passes 29 tests (one removed), `cargo test --workspace` passes all tests with zero failures. No warnings on the two modified crates.
+
+What remains. Nothing — all four acceptance criteria are satisfied. AC-1 and AC-2: dead surfaces gone. AC-3: `start(cfg) -> (Handle, JoinHandle<()>)` shape and `bob::serve` wiring are untouched. AC-4: unrelated JSON-RPC `NotImplemented` responses (e.g., `sessions.kill`) are unmodified.
+
+Commit on `task/T-076-remove-vestigial-ipc-handle-command-scaffolds`:
+- `3d2927e` removal of both vestigial command surfaces.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
