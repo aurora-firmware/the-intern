@@ -112,3 +112,29 @@ Nothing — all five acceptance criteria are met. `cargo test -p chat-adapter` (
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
+
+### Review Verdict — 2026-05-22
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Spec compliance**
+
+- AC-1: `chat-adapter` crate directory created under `crates/`; the workspace uses a `members = ["crates/*"]` glob so registration is automatic. Confirmed present in workspace build.
+- AC-2: `Actor::run` constructs `InternalEvent { kind: DeliveryKind::Sync, payload: frame.message }` and `RequestContext { sender: frame.peer_id, source: channel_id, context_id: frame.context_id }` unconditionally for every received frame, then calls `intake.submit_event(event, context)`. All three frame fields map to exactly the fields specified.
+- AC-3: `FrameHandle` derives `Clone`. `start()` returns `(FrameHandle, JoinHandle<()>)`. `deliver()` and `channel_id()` accessors are present and documented.
+- AC-4: The actor loop contains no branching on peer identity, message content, or any policy-relevant field. Every frame is forwarded.
+- AC-5: `cargo test -p chat-adapter` — 8 passed, 0 failed. `cargo build --workspace` — finished cleanly with no errors.
+
+No files modified outside the stated scope. `Cargo.lock` is the only additional changed file (expected for a new crate).
+
+**Stage 2 — Code quality**
+
+- Correctness: `frame_buffer.max(1)` correctly guards against zero-capacity channels. Submit errors are logged at `WARN` and do not panic; appropriate for an adapter that must not crash the caller. No off-by-one or null-reference issues.
+- Tests: 8 tests cover all five acceptance criteria — including the `None` context_id path, multi-frame ordering, cloned-handle delivery, and the post-shutdown error path. Tests are independent; each constructs its own fixtures.
+- Security: `#![forbid(unsafe_code)]` present. No hardcoded secrets. The `WARN` log on submit failure records the error category only, not frame content.
+- Readability: Names follow project conventions (`UpperCamelCase` types, `snake_case` functions). `Actor`, `FrameHandle`, and `ChatFrame` each have a single responsibility. Comments explain purpose. No dead code or commented-out blocks.
+- Performance: Bounded `mpsc` channel; `ChannelId` is `Copy` so `channel_id()` is a register copy. No unnecessary allocations in the hot path.
+
+Minor observation (non-blocking): `start` is annotated `#[must_use]` at the function level rather than on the return type. Both forms are accepted by the compiler and produce the same caller-side warning; this is idiomatic for functions where the entire return value should not be discarded.
