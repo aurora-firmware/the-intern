@@ -84,6 +84,31 @@ cargo build --workspace
 
 <!-- Mandatory. Append one entry per session boundary. -->
 
+### Session 1 — 2026-05-22
+
+Created the `chat-adapter` workspace crate from scratch following the existing actor pattern (matches `persistence` and `requests-handler`).
+
+**What was done:**
+
+AC-1 was satisfied automatically by the workspace's `members = ["crates/*"]` glob — creating the directory and `Cargo.toml` was all that was needed.
+
+The crate defines three public items in a single `lib.rs` file (under 300 lines):
+- `ChatFrame` — the inbound frame type carrying `message`, `peer_id`, and `context_id`.
+- `FrameHandle` — a cheaply cloneable handle backed by an `mpsc::Sender<ChatFrame>`; exposes `deliver()` and `channel_id()`.
+- `start(intake, channel_id, frame_buffer)` — spawns the actor and returns `(FrameHandle, JoinHandle<()>)`.
+
+The `Actor` struct receives frames from the channel, constructs `InternalEvent { kind: DeliveryKind::Sync, payload: frame.message }` and `RequestContext { sender: frame.peer_id, source: channel_id, context_id: frame.context_id }`, then calls `intake.submit_event()`. No branching on peer identity or any other policy decision is present.
+
+Eight tests cover: full normalisation round-trip (AC-2), `context_id: None` forwarding (AC-2), multiple frames in order (AC-2), `FrameHandle` clone (AC-3), two clones reaching the same actor (AC-3), `channel_id()` accessor (AC-3), all-peer-identities forwarded without filtering (AC-4), and `deliver()` returning an error after the actor stops (AC-3 shutdown path).
+
+**What was tried and rejected:**
+
+Considered placing the test helper `make_intake` outside the `#[cfg(test)]` block as a public test-helper module, but kept it inside the test module. Considered using `tokio::time::sleep` in tests to wait for the actor instead of `yield_now()`, but `yield_now()` is sufficient for `current_thread` flavour tests.
+
+**What remains:**
+
+Nothing — all five acceptance criteria are met. `cargo test -p chat-adapter` (8 passed) and `cargo build --workspace` both pass cleanly. Commit `6cd0bdb` on `task/T-070-create-chat-adapter-crate`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
