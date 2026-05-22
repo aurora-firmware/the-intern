@@ -9,7 +9,7 @@ use std::{
 use bob_core::{
     error::ServiceError,
     ports::{PersistenceStore, RequestsHandler},
-    types::{DeliveryKind, InternalEvent},
+    types::{ChannelId, DeliveryKind, InternalEvent, RequestContext, UserId},
 };
 use tokio::{
     sync::{oneshot, watch, Notify},
@@ -49,7 +49,7 @@ async fn overload_submissions_admit_exact_capacity_and_preserve_order() {
             let gate = Arc::clone(&gate);
             let is_first_event = Arc::clone(&is_first_event);
             let blocked_tx = Arc::clone(&blocked_tx);
-            move |event| {
+            move |(event, _ctx)| {
                 let persistence = persistence_for_downstream.clone();
                 let gate = Arc::clone(&gate);
                 let is_first_event = Arc::clone(&is_first_event);
@@ -73,11 +73,20 @@ async fn overload_submissions_admit_exact_capacity_and_preserve_order() {
         cancel_rx,
     );
 
+    let make_ctx = || RequestContext {
+        sender: UserId::new(),
+        source: ChannelId::new(),
+        context_id: None,
+    };
+
     requests_handle
-        .submit(InternalEvent {
-            kind: DeliveryKind::Sync,
-            payload: "warmup".to_owned(),
-        })
+        .submit(
+            InternalEvent {
+                kind: DeliveryKind::Sync,
+                payload: "warmup".to_owned(),
+            },
+            make_ctx(),
+        )
         .await
         .expect("warmup event should be admitted");
     blocked_rx
@@ -89,7 +98,7 @@ async fn overload_submissions_admit_exact_capacity_and_preserve_order() {
     let mut timed_out = 0;
 
     for event in &submitted {
-        match requests_handle.submit(event.clone()).await {
+        match requests_handle.submit(event.clone(), make_ctx()).await {
             Ok(()) => admitted.push(event.clone()),
             Err(ServiceError::Timeout {
                 operation: "requests-handler.submit",
