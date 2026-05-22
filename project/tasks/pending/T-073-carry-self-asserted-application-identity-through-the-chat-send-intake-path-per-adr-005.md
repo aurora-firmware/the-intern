@@ -49,6 +49,10 @@ Close the gap per ADR-005:
 - The `bob chat` CLI shall send the identity it asserts: add an
   application-identity field to `BobConfig` for the chat client and include it
   in every `chat.send` request.
+- The configured chat application identity must be stable and operator-visible.
+  It must not be generated implicitly with `UserId::new()`, `UserId::default()`,
+  or any other per-process/per-request random fallback, because that would
+  preserve the current anonymous-identity bug under a new name.
 - Update the user-facing documentation that describes chat identity as
   anonymous: the `bob chat` section of the root `README.md` and the chat note
   in `user_diagrams.md`.
@@ -72,8 +76,8 @@ AC-3: The chat user-input frame's identity shall originate solely from the
       shall no longer hold or supply a peer identity.
 
 AC-4: WHEN the `bob chat` CLI issues a `chat.send` request THE SYSTEM SHALL
-      include the operator-configured application identity in the request's
-      arguments.
+      include the operator-configured, stable application identity in the
+      request's arguments.
 
 AC-5: The `bob chat` section of the root `README.md` and the chat note in
       `user_diagrams.md` shall describe chat as carrying a self-asserted
@@ -95,7 +99,8 @@ AC-5: The `bob chat` section of the root `README.md` and the chat note in
   now-unused OS-oriented `ConnectionRegistry` peer-identity field, constructor,
   and accessor (`peer_id`, `new_with_peer`, `peer_id()`).
 - `the-intern/service/crates/bob/src/config.rs` — add the chat client's
-  application-identity field to `BobConfig` and its raw/defaults counterparts.
+  application-identity field to `BobConfig` and its raw/defaults counterparts;
+  reject absent or empty configuration rather than generating a random fallback.
 - `the-intern/service/crates/bob/src/cli/commands/chat.rs` — include the
   configured application identity in every `chat.send` request's params.
 - `README.md` — update the `bob chat` section so it no longer states that

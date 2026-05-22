@@ -45,11 +45,11 @@ chat channel landed.
 ### Partially addressed
 
 - **F4 (fragmented identity model).** Improved but not closed. `PeerCred` is now
-  a single definition (T-041), and `RequestContext` is the per-request inbound
-  identity surface (T-068). Still open: the admin connection's `SO_PEERCRED` uid
-  is not wired into `RequestContext` — chat frames carry an anonymous `UserId`
-  (deferred explicitly by T-071/T-072) — and `extension-ipc`'s `Authz.user:
-  String` is still a third identity representation. No unifying ADR exists yet.
+  a single definition (T-041), `extension-ipc`'s obsolete `Authz.user` field was
+  removed (T-055), and `RequestContext` is the per-request inbound identity
+  surface (T-068). Still open: chat frames currently carry an anonymous
+  `UserId`, which is now planned as T-073 under ADR-005, and the redundant
+  in-service uid allow-list is planned for removal as T-074.
 
 ### Still pending (architectural debt — not tracked by any task/ADR)
 

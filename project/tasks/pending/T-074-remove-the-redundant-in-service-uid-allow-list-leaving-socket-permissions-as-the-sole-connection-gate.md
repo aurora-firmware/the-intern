@@ -45,9 +45,9 @@ connection gate:
 - In both the `admin-rpc` and `extension-ipc` listeners, drop the allow-list
   check from `accept()` and the `gate_peer` test helper; a connection the OS
   allowed through is accepted.
-- Remove every `allowed_uids` / `service_uid` field and its plumbing from the
-  listener configs, the `admin-rpc` / `extension-ipc` `Config` types,
-  `BobConfig` (raw, public, defaults), and `bob serve`.
+- Remove every `allowed_uids`, `allowed_gid`, and `service_uid` field and its
+  plumbing from the listener configs, the `admin-rpc` / `extension-ipc`
+  `Config` types, `BobConfig` (raw, public, defaults), and `bob serve`.
 - Update the documentation that describes the removed gate: the
   `crates/admin-rpc` line in `the-intern/service/README.md` and the
   socket-node labels in `user_diagrams.md`, so they describe the
@@ -85,7 +85,7 @@ AC-2: WHEN the admin or extension listener accepts a connection THE SYSTEM
       SHALL admit it without consulting any in-service uid allow-list.
 
 AC-3: The `BobConfig`, the `admin-rpc` / `extension-ipc` `Config` types, and
-      both listener configs shall no longer carry uid allow-list or
+      both listener configs shall no longer carry uid/gid allow-list or
       service-uid fields.
 
 AC-4: The admin and extension listeners shall continue to create the socket
@@ -117,9 +117,9 @@ AC-5: The `crates/admin-rpc` entry in `the-intern/service/README.md` and the
 - `the-intern/service/crates/extension-ipc/src/listener.rs`,
   `.../src/peer_cred.rs`, `.../src/lib.rs` — the same removals for the
   extension listener.
-- `the-intern/service/crates/bob/src/config.rs` — remove the `admin_allowed_uids`
-  (and any `service_uid`) fields from `BobConfig`, its raw counterpart, and the
-  defaults; update config tests.
+- `the-intern/service/crates/bob/src/config.rs` — remove the `admin_allowed_uids`,
+  `admin_allowed_gid`, and any `service_uid` fields from `BobConfig`, its raw
+  counterpart, and the defaults; update config tests.
 - `the-intern/service/crates/bob/src/serve.rs` — stop threading allow-list /
   service-uid values into the listener configs.
 - `the-intern/service/README.md` — reword the `crates/admin-rpc` description
