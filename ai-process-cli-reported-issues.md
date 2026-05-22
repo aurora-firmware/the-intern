@@ -1,0 +1,177 @@
+# ai-team CLI / skill issues
+
+Running log of bugs and friction observed while using the `ai-team` CLI and the
+slash-skills that wrap it. New entries at the top.
+
+## 2026-05-21 — `new-spec` skill uses CLI flags `ai-team spec new` does not accept
+
+**Symptom.** The `new-spec` skill instructs callers to run
+`ai-team spec new --json --title "<title>" --description "<description>"`.
+`ai-team spec new` rejects `--title` (`No such option '--title'`) — `title` is a
+positional argument — and has no `--description` option at all (only `--author`,
+`--status`, `--json`).
+
+**Impact.** Spec creation fails on first attempt; the caller must check `--help`
+and rewrite the command, and any spec `description` text has nowhere to go via
+the CLI (it must be written into the file body afterward).
+
+**Suggested fix.** Update `.claude/skills/new-spec/SKILL.md` to use positional
+`TITLE` and drop `--description` from the command, or add a `--description`
+option to `ai-team spec new`. This mirrors the already-logged `ai-team bug new`
+flag mismatch — the same fix pattern applies.
+
+## 2026-05-20 — Reviewer committed a review verdict onto the task branch
+
+**Symptom.** During `dev-loop` processing of T-063, the cycle-1 Reviewer
+(`code-review` skill) committed the review verdict to the canonical task file
+on the **task branch** (`task/T-063-...`, commit `af89483`) in addition to the
+correct commit on `dev-agent` (`1e9516c`). The Reviewer's own report stated the
+verdict was committed on `dev-agent`, so the stray task-branch commit was
+silent. It was caught by the `integrate` skill's Step 3.4 hard stop (source
+diff must not modify the canonical lifecycle file); the loop reverted it on the
+branch before merging.
+
+**Impact.** Implementation branches accumulate lifecycle-file edits that must
+not be merged into `dev-agent`. Without the `integrate` guard this would have
+double-applied work-log/verdict content or caused a merge conflict on the task
+file.
+
+**Suggested fix.** The `code-review` skill should explicitly `git checkout
+dev-agent` before staging/committing the verdict, and verify the current branch
+is the destination branch before committing. Consider adding a check that the
+verdict commit's branch is not a `task/`/`bug/` branch.
+
+## 2026-05-19 — `new-spec` skill uses unsupported CLI flags
+
+**Symptom.** The `new-spec` skill prescribes
+`ai-team spec new --json --title "<title>" --description "<description>" ...`.
+The current CLI rejects `--title` (title is positional) and has no
+`--description` option.
+
+**Reproduction.**
+```
+ai-team spec new --json --title "x" --description "y" --author planner --status draft
+# → Error: No such option: --title
+ai-team spec new --help
+# shows: ai-team spec new [OPTIONS] TITLE; options are --author, --status, --json only
+```
+
+**Impact.** Same shape as the 2026-05-18 `new-bug` issue: the skill's prescribed
+command fails on first call. The caller has to inspect `--help`, drop `--title`
+to positional, and then fill the `description` directly into the created spec
+file because the CLI does not accept it.
+
+**Suggested fix.** Update `.claude/skills/new-spec/SKILL.md` so the command
+construction uses `"<title>"` as positional and removes `--description`. Either
+have the skill seed the spec body from the description after creation (current
+workaround) or add a `--description` option to the CLI.
+
+## 2026-05-19 — `ai-team spec new` duplicate-ID bug recurs
+
+Same as the 2026-05-16 entry below; hit again today.
+
+```
+ai-team spec new --json --author planner --status draft "JS extension for pi-agent event forwarding"
+# → {"id": "S-001", "path": ".../js-extension-for-pi-agent-event-forwarding.md"}
+# project/specs/ already contains the-intern-agent-service-architecture.md (id S-001)
+# and bob-service-shell-architecture.md (id S-002).
+```
+
+Manual fix: rewrote the new file's frontmatter `id` to `S-003`. The 2026-05-16
+entry's suggested fix still stands and has not been applied.
+
+## 2026-05-18 — `new-bug` skill uses unsupported CLI flags
+
+**Symptom.** The `new-bug` skill prescribes
+`ai-team bug new --json --title "<title>" --description "<description>" ...`.
+The current CLI rejects `--title` (title is positional) and has no
+`--description` option.
+
+**Reproduction.**
+```
+ai-team bug new --json --title "x" --description "y" --severity high
+# → Error: No such option: --title
+ai-team bug new --help
+# shows: ai-team bug new [OPTIONS] TITLE
+```
+
+**Impact.** First-call bug creation fails whenever the skill is followed
+literally. Callers must inspect help output and manually adapt.
+
+**Suggested fix.** Update `.claude/skills/new-bug/SKILL.md` to use positional
+`TITLE` and remove `--description` from the command construction step.
+
+## 2026-05-16 — `ai-team spec new` assigns duplicate IDs
+
+**Symptom.** Running `ai-team spec new ...` produced a new spec with `id: S-001`
+while `project/specs/the-intern-agent-service-architecture.md` already used
+`id: S-001`. The CLI did not look at existing IDs when allocating the next one.
+
+**Reproduction.**
+```
+ai-team spec new --json --author planner --status draft "Bob Service Shell Architecture"
+# → {"id": "S-001", "path": ".../bob-service-shell-architecture.md"}
+# but project/specs/the-intern-agent-service-architecture.md already has id: S-001
+```
+
+**Impact.** Two specs with the same identifier; references like "S-001" become
+ambiguous. Required manual frontmatter fixup.
+
+**Suggested fix.** Scan `project/specs/` for the highest existing `S-NNN` in
+frontmatter and increment, the same way task IDs are allocated.
+
+## 2026-05-16 — `new-spec` skill documents an out-of-date CLI signature
+
+**Symptom.** The `new-spec` skill prescribes
+`ai-team spec new --json --title "<title>" --description "<description>" ...`.
+The current CLI rejects `--title` (the title is a positional argument) and does
+not accept `--description` at all (description content is written into the spec
+body by hand).
+
+**Reproduction.**
+```
+ai-team spec new --json --title "X" --description "Y"
+# → Error: No such option: --title
+ai-team spec new --help
+# shows: ai-team spec new [OPTIONS] TITLE  with only --author/--status/--json
+```
+
+**Impact.** The skill's first attempt always fails; the caller has to inspect
+`--help` and reconstruct the right invocation. The skill should also be told
+that `description` is purely an input to the spec body, not a CLI flag.
+
+**Suggested fix.** Update `.claude/skills/new-spec/SKILL.md` step 2 to use
+`ai-team spec new --json [--author X] [--status Y] "<title>"` and to instruct
+the caller to write the description into the spec body during step 4.
+
+## 2026-05-20 — `new-bug` skill/CLI mismatch still causes first-call failure
+
+The `new-bug` skill still documents unsupported flags (`--title`, `--description`).
+Following the skill literally failed again today before adaptation.
+
+**Reproduction.**
+```
+ai-team bug new --json --title "x" --description "y" --severity high
+# -> Error: No such option '--title'
+ai-team bug new --help
+# shows: ai-team bug new [OPTIONS] TITLE
+```
+
+**Impact.** Bug capture flow fails on first attempt unless the caller manually
+checks CLI help and rewrites the command.
+
+**Suggested fix.** Update `.claude/skills/new-bug/SKILL.md` to use positional
+`TITLE` and remove the unsupported `--description` flag from command examples.
+
+## 2026-05-20 — `ai-team bug new` fails from repo root with Cargo lookup error
+
+Running `ai-team bug new` from `/home/daneel/projects/the-intern` failed with:
+`could not find Cargo.toml in /home/daneel/projects/the-intern or any parent directory`.
+The command succeeds from `/home/daneel/projects/the-intern/the-intern/service`.
+
+**Impact.** The CLI appears sensitive to working directory in a way that is not
+explained by `--help`, causing avoidable failures during bug creation.
+
+**Suggested fix.** Either (a) make `ai-team` resolve project root from
+`.ai-team.toml` regardless of cwd, or (b) document the required cwd in CLI help
+and all relevant skills.
