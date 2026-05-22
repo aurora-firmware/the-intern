@@ -8,7 +8,7 @@ use std::{
 };
 
 use bob::config::{BobConfig, ChannelsConfig, ChatChannelConfig, MonitoringConfig};
-use bob_core::types::SessionId;
+use bob_core::types::{SessionId, UserId};
 use policy_control::PolicyConfig;
 use serde_json::{json, Value};
 
@@ -734,6 +734,9 @@ fn client_cfg(admin_sock_path: PathBuf) -> BobConfig {
         channels: ChannelsConfig {
             chat: ChatChannelConfig { enabled: true },
         },
+        chat_application_identity: "00000000-0000-0000-0000-000000000001"
+            .parse::<UserId>()
+            .expect("chat test identity should parse"),
         config_path: PathBuf::new(),
     }
 }
