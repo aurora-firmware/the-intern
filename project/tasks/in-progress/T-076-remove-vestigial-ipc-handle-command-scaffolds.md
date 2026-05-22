@@ -138,3 +138,25 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-22
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Spec compliance**
+
+- AC-1: Confirmed. `Handle::ping`, `Command::Ping`, the actor match branch, and the `handle_ping_returns_not_implemented` test are all absent from `admin-rpc/src/lib.rs`. The `ServiceError`/`ServiceResult` import was also correctly removed. The commit reduces the file by 39 lines (net).
+- AC-2: Confirmed. `Handle::send_message`, `Command::SendMessage`, the actor match branch, and the `handle_send_message_returns_not_implemented` test are all absent from `extension-ipc/src/lib.rs`. The `ServiceError`/`ServiceResult` import was also correctly removed. The commit reduces the file by 40 lines (net).
+- AC-3: Confirmed. Both `start(cfg) -> (Handle, JoinHandle<()>)` signatures are unchanged. The `bob` crate was not modified in commit `3d2927e`. The channel now carries `std::convert::Infallible`, which is a sound choice — the compiler enforces that no commands can be sent, and the `Handle::tx` field is retained with an `#[allow(dead_code)]` annotation and explanatory comment so the RAII lifetime-based shutdown mechanism is preserved exactly as before.
+- AC-4: Confirmed. Only the two files listed under "Files to Touch" were modified in commit `3d2927e`. The `admin-rpc/src/dispatch.rs` module — which contains the `sessions.kill` and other JSON-RPC `NotImplemented` responses — was not touched.
+- No unspecified behavior or files added.
+
+**Stage 2 — Code quality**
+
+- Correctness: The `Infallible` channel pattern is correct. The actor run loop `while self.rx.recv().await.is_some()` terminates cleanly when the last `Handle` clone drops, exactly preserving the prior shutdown behavior. The unreachable-branch comment is accurate.
+- Tests: `cargo test -p admin-rpc` passes 94 tests (1 removed). `cargo test -p extension-ipc` passes 29 tests (1 removed). `cargo test --workspace` passes all tests across every crate with zero failures or warnings on modified crates.
+- Security: No issues. No credentials, no new permissions, no external input.
+- Readability: The `#[allow(dead_code)]` annotation is paired with a clear comment explaining the lifetime-control intent. No dead code or debugging artifacts remain.
+- Performance: No concerns. The actor loop is minimal and correct.
