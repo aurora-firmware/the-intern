@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use bob_core::error::{ServiceError, ServiceResult};
 use bob_core::ports::{AuditSink, PersistenceStore};
-use bob_core::types::{ChannelId, RequestContext};
 use tokio::{net::UnixListener, sync::watch, task::JoinHandle, time};
 use tracing::info;
 
@@ -139,21 +138,6 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
 
     info!("starting requests-handler actor");
     let (rh_cancel_tx, rh_cancel_rx) = watch::channel(false);
-    // Build the pre-flight context from the initial snapshot.  Channel adapters
-    // will supply real RequestContexts once they are wired in; until then the
-    // first admitted user from the snapshot is used as a synthetic default so
-    // that the existing integration tests (which submit events expecting
-    // persistence) continue to work.
-    let default_context = policy_snapshot
-        .load()
-        .admitted_users()
-        .first()
-        .copied()
-        .map(|sender| RequestContext {
-            sender,
-            source: ChannelId::new(),
-            context_id: None,
-        });
     let persistence_store: Arc<dyn PersistenceStore> = Arc::new(persistence_handle.clone());
     let audit_sink: Arc<dyn AuditSink> = Arc::new(monitoring::MonitoringAuditSink::new(
         monitoring_handle.clone(),
@@ -165,15 +149,14 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
             request_queue_capacity: cfg.request_queue_capacity,
             request_submit_timeout: cfg.request_submit_timeout,
         },
-        move |event| {
+        move |(event, context)| {
             let preflight_snapshot = preflight_snapshot.clone();
             let persistence_store = Arc::clone(&persistence_store);
             let audit_sink = Arc::clone(&audit_sink);
-            let default_context = default_context.clone();
             async move {
                 requests_handler::run_preflight(
                     event,
-                    default_context.as_ref(),
+                    Some(&context),
                     &preflight_snapshot,
                     persistence_store.as_ref(),
                     audit_sink.as_ref(),
@@ -556,6 +539,8 @@ pub mod tests {
     // AC-2: permitted events submitted through requests-handler are persisted.
     #[tokio::test(flavor = "current_thread")]
     async fn permitted_event_is_persisted_via_wired_requests_handler_and_persistence() {
+        use bob_core::types::{ChannelId, RequestContext};
+
         let tmp = tempfile::tempdir().expect("temp dir");
         let mut cfg = test_cfg_with_sockets(&tmp);
         let user_id = UserId::new();
@@ -566,9 +551,14 @@ pub mod tests {
             kind: DeliveryKind::Sync,
             payload: "persist me".to_owned(),
         };
+        let ctx = RequestContext {
+            sender: user_id,
+            source: ChannelId::new(),
+            context_id: None,
+        };
         runtime
             ._requests_handler
-            .submit_event(event.clone())
+            .submit_event(event.clone(), ctx)
             .await
             .expect("submit must succeed");
 
@@ -942,6 +932,8 @@ pub mod tests {
     // static allow-list.
     #[tokio::test(flavor = "current_thread")]
     async fn deny_all_policy_snapshot_causes_all_events_to_be_denied_and_not_persisted() {
+        use bob_core::types::{ChannelId, RequestContext};
+
         let tmp = tempfile::tempdir().expect("temp dir");
         let mut cfg = test_cfg_with_sockets(&tmp);
         // No admitted users → deny-all snapshot.
@@ -953,9 +945,15 @@ pub mod tests {
             kind: DeliveryKind::Sync,
             payload: "should be denied".to_owned(),
         };
+        // Submit with any user — policy has no admitted users so it must be denied.
+        let ctx = RequestContext {
+            sender: UserId::new(),
+            source: ChannelId::new(),
+            context_id: None,
+        };
         runtime
             ._requests_handler
-            .submit_event(event)
+            .submit_event(event, ctx)
             .await
             .expect("submit must succeed");
 
@@ -971,6 +969,94 @@ pub mod tests {
         assert!(
             result.is_none(),
             "deny-all snapshot must prevent any event from reaching persistence"
+        );
+
+        run_shutdown_protocol(runtime, &cfg).await;
+    }
+
+    // AC-3 (T-068): the pre-flight check uses the per-request context, not a
+    // shared startup-time context.
+    //
+    // Set up a policy with one admitted user (alice).  Submit two events:
+    // - one with alice's context → must be persisted.
+    // - one with a non-admitted user's context → must NOT be persisted.
+    // If a shared startup context carrying alice were used for both, both events
+    // would pass; the test distinguishes per-request from shared-context behaviour.
+    #[tokio::test(flavor = "current_thread")]
+    async fn preflight_uses_per_request_context_not_shared_startup_context() {
+        use bob_core::types::{ChannelId, RequestContext};
+
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let mut cfg = test_cfg_with_sockets(&tmp);
+        let alice = UserId::new();
+        cfg.policy.admitted_users = vec![alice.to_string()];
+
+        let runtime = start_subsystems(&cfg).expect("subsystems must start");
+
+        // Event for alice — should be persisted.
+        let alice_event = InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "from alice".to_owned(),
+        };
+        let alice_ctx = RequestContext {
+            sender: alice,
+            source: ChannelId::new(),
+            context_id: None,
+        };
+        runtime
+            ._requests_handler
+            .submit_event(alice_event.clone(), alice_ctx)
+            .await
+            .expect("submit must succeed");
+
+        // Event for a non-admitted user — must be denied.
+        let intruder_event = InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "from intruder".to_owned(),
+        };
+        let intruder_ctx = RequestContext {
+            sender: UserId::new(), // not in admitted_users
+            source: ChannelId::new(),
+            context_id: None,
+        };
+        runtime
+            ._requests_handler
+            .submit_event(intruder_event, intruder_ctx)
+            .await
+            .expect("submit must succeed");
+
+        // Wait for both events to be processed.
+        let alice_persisted = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(next) = runtime
+                    ._persistence
+                    .dequeue_next()
+                    .await
+                    .expect("dequeue should not fail")
+                {
+                    break next;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("alice event should be persisted before timeout");
+
+        assert_eq!(
+            alice_persisted, alice_event,
+            "alice's event must be the one persisted"
+        );
+
+        // Give a moment for the intruder event to be processed, then confirm no second event arrives.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let second = runtime
+            ._persistence
+            .dequeue_next()
+            .await
+            .expect("dequeue should not fail");
+        assert!(
+            second.is_none(),
+            "intruder event must not reach persistence; got: {second:?}"
         );
 
         run_shutdown_protocol(runtime, &cfg).await;
