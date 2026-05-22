@@ -145,6 +145,7 @@ dependencies = [
  "admin-rpc",
  "async-trait",
  "bob-core",
+ "chat-adapter",
  "clap",
  "extension-ipc",
  "figment",
