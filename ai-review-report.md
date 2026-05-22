@@ -8,6 +8,62 @@ This is a read-only audit of the implementation that just shipped, plus a wider 
 
 ---
 
+## Status Update — 2026-05-22 (post Phase 4–6)
+
+This report is a point-in-time snapshot from 2026-05-19. Sections 1–6 below are
+preserved as the original record. The following is the current disposition of
+its findings after Phase 4 (Policy Control), Phase 5 (Monitoring), and Phase 6's
+chat channel landed.
+
+### Resolved
+
+- **All five bugs (B-002 → B-006)** — resolved 2026-05-19, as already annotated
+  inline in Section 6.
+- **All eight Section 6 "small tasks"** — filed and integrated as **T-041 → T-048**:
+  `PeerCred` deduplication (T-041), `SubscriptionId` name collision (T-042),
+  non-empty `BobConfig` socket paths (T-043), `ctx.ui.notify()` coverage (T-044),
+  the unknown-session-after-default-route-close test (T-045), the extensions
+  README connect-window note (T-046), the `#[doc = "scaffold"]` placeholder
+  markers (T-047), and the `extension-ipc::run_connection` back-pressure comment
+  (T-048).
+- **Section 6 `/new-spec` item — "where does `RequestContext` come from on the
+  inbound path?"** — addressed by **S-006** (channel adapter framework &
+  interactive chat adapter). **T-068** removed the `context = None` deny-all
+  placeholder and the shared startup-time `RequestContext`; the inbound path now
+  carries a real per-request `RequestContext` end to end.
+- **F5 (placeholder crates pretending to be functional)** — largely resolved.
+  `monitoring` and `policy-control` are now fully implemented subsystems (Phases
+  5 and 4). Only the vestigial `Handle` scaffolds remain (see Still pending).
+
+### No longer valid
+
+- **Section 4 lower-priority observation and the matching Section 5 triage row —
+  "`requests-handler::start_with_preflight` is wired with `context = None` only;
+  tests assert deny-all".** Obsolete after T-068: the inbound path now threads a
+  real per-request `RequestContext` from the submission site through pre-flight.
+
+### Partially addressed
+
+- **F4 (fragmented identity model).** Improved but not closed. `PeerCred` is now
+  a single definition (T-041), and `RequestContext` is the per-request inbound
+  identity surface (T-068). Still open: the admin connection's `SO_PEERCRED` uid
+  is not wired into `RequestContext` — chat frames carry an anonymous `UserId`
+  (deferred explicitly by T-071/T-072) — and `extension-ipc`'s `Authz.user:
+  String` is still a third identity representation. No unifying ADR exists yet.
+
+### Still pending (architectural debt — not tracked by any task/ADR)
+
+- **F1** — extract a `bob-runtime` crate for the composition root. No ADR.
+- **F2** — decompose `pi_agent_supervisor::SessionPool` into `WorkerLifecycle` /
+  `SessionRegistry` / `WorkerRpc`. No ADR.
+- **F3** — extract `subscription-bus` from `admin-rpc`. No ADR.
+- Split `ServiceError` into a domain tier and a transport tier. No ADR.
+- Keep `PI_EVENTS` in sync with `@earendil-works/pi-coding-agent` types. Not filed.
+- Remove the vestigial `Handle` scaffolds — `admin-rpc::Handle::ping` and
+  `extension-ipc::Handle::send_message` both still return `NotImplemented`. Not filed.
+
+---
+
 ## 1. Code analysis (Developer)
 
 ### High severity

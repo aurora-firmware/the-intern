@@ -5,7 +5,7 @@ flowchart TB
     subgraph ClientSide["External / Local Callers"]
         CLI["bob CLI subcommands"]
         AdminClient["Admin JSON-RPC client"]
-        FutureChannels["Future channel adapters\nchat / email / webhook / scheduler"]
+        FutureChannels["Future channel adapters\nemail / webhook / scheduler"]
         PiAgent["pi-agent child processes"]
         JsExt["JS extension inside pi-agent"]
     end
@@ -28,6 +28,10 @@ flowchart TB
         subgraph RequestPath["crates/requests-handler"]
             ReqQueue["bounded request queue"]
             Preflight["run_preflight\nidentity/policy admission"]
+        end
+
+        subgraph ChatAdapter["crates/chat-adapter"]
+            ChatActor["chat normalization actor\nframe to InternalEvent + RequestContext"]
         end
 
         subgraph Core["crates/bob-core"]
@@ -64,15 +68,17 @@ flowchart TB
     Dispatcher -->|"policy.reload"| Snapshot
     Dispatcher -->|"audit.tail.subscribe"| TailSubs
     Dispatcher -->|"report.submit"| AuditLog
-    Dispatcher -. "chat.send not implemented" .-> ReqQueue
+    Dispatcher -->|"chat.send frame"| ChatActor
 
     Config --> AdminSock
     Config --> ExtSock
     Config --> Pool
     Config --> Snapshot
     Config --> AuditLog
+    Config -->|"channels.chat.enabled"| ChatActor
 
-    FutureChannels -. "not implemented yet" .-> ReqQueue
+    ChatActor -->|"(InternalEvent, RequestContext)"| ReqQueue
+    FutureChannels -. "future per-channel adapters" .-> ReqQueue
     ReqQueue --> Preflight
     Preflight -->|"allowed"| InboundStore
     Preflight -->|"allow/deny audit"| AuditLog
@@ -102,17 +108,20 @@ flowchart TB
 
 ## Current Implementation Notes
 
-- `admin.sock` currently serves admin/reporting JSON-RPC methods such as `service.status`, `sessions.list`, `sessions.kill`, `policy.reload`, audit tail subscription, and `report.submit`.
-- `chat.send` is present as a method name but is not implemented.
+- `admin.sock` currently serves admin/reporting JSON-RPC methods such as `service.status`, `sessions.list`, `sessions.kill`, `policy.reload`, audit tail subscription, `report.submit`, and `chat.open` / `chat.send`.
+- `chat.send` is implemented: it forwards a chat user-input frame to the `chat-adapter`, which normalizes it into an `InternalEvent` (`DeliveryKind::Sync`) paired with a `RequestContext` and submits it to the `requests-handler`. The admin connection's peer identity is not yet wired from `SO_PEERCRED`, so chat frames currently carry an anonymous `UserId`.
+- `chat-adapter` is started by `bob serve` when the `[channels.chat]` config section is enabled (the default) and is torn down with the other actors on graceful shutdown.
 - `extension.sock` is intended for pi-agent extension traffic: authorization requests and extension events tagged by session.
 - `requests-handler` can queue and preflight internal events, then enqueue allowed events into persistence.
-- There is not yet a public channel-agnostic `request.submit` socket method that accepts normalized input, starts or selects a pi-agent session, sends a prompt, and optionally returns the agent response.
+- The inbound chat path stops at requests-handler pre-flight admission. There is not yet a dispatch from an admitted request to a pi-agent session, nor synchronous routing of an agent response back to the caller.
 
 # Target Input Flow Sequence Diagrams
 
-These sequence diagrams describe the intended next-phase behavior. The generic
-`request.submit` facade, channel-agnostic input envelope, request-to-pi-agent
-dispatch, and synchronous response routing are not implemented yet.
+These sequence diagrams describe the intended end-state behavior. As of Phase 6,
+the inbound chat half is implemented — `chat.send` is normalized by the
+`chat-adapter` and runs through requests-handler pre-flight admission. The
+request-to-pi-agent dispatch, the synchronous agent-response routing back to the
+caller, and the email/webhook/scheduler channel adapters are not implemented yet.
 
 ## CLI Chat With Response
 
