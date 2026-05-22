@@ -127,6 +127,9 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-22
+Implemented ADR-005 identity propagation for `chat.send` using TDD in four committed cycles. First, I wrote failing admin-rpc tests proving `chat.send` must reject missing/empty/malformed `application_identity` and must forward the request-supplied identity into `RequestContext.sender`; then I implemented parser/validation in `dispatch.rs` and removed peer identity state (`peer_id`, `new_with_peer`, `peer_id()`) from `ConnectionRegistry`. Next, I added a stable `chat_application_identity` to `BobConfig`/raw/default wiring and added tests for default stability plus invalid/empty config rejection, explicitly avoiding random identity fallback. Then I updated `bob chat` to include `application_identity` in every `chat.send` request and updated chat command tests to assert payload shape using configured identity. Finally, I updated README and `user_diagrams.md` to remove anonymous-identity claims and describe self-asserted identity flow. I considered making chat identity strictly required with no default but rejected it in this pass to avoid broad loader breakage; instead I used a stable deterministic default and explicit validation against malformed overrides. Full package/workspace verification was executed but socket-binding tests fail in this sandbox with `Operation not permitted`; targeted task-relevant tests are green. Remaining work is reviewer validation and rerunning full verification in an environment that permits Unix socket bind operations.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
