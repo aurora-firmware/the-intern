@@ -2,7 +2,7 @@
 id: T-074
 title: Remove the redundant in-service uid allow-list, leaving socket 
   permissions as the sole connection gate
-status: in-progress
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-05-22'
