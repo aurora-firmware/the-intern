@@ -102,7 +102,8 @@ impl Actor {
                     let (tx, rx) = mpsc::unbounded_channel();
                     let subscriber_id = self.next_subscriber_id;
                     self.next_subscriber_id = self.next_subscriber_id.saturating_add(1);
-                    self.subscribers.insert(subscriber_id, Subscriber { filters, tx });
+                    self.subscribers
+                        .insert(subscriber_id, Subscriber { filters, tx });
                     let _ = reply_tx.send(Ok(rx));
                 }
             }
@@ -291,7 +292,11 @@ mod tests {
             .expect("audit file must be readable");
         let lines: Vec<&str> = content.lines().collect();
 
-        assert_eq!(lines.len(), 1, "one accepted record should produce one line");
+        assert_eq!(
+            lines.len(),
+            1,
+            "one accepted record should produce one line"
+        );
         let restored: AuditRecord =
             serde_json::from_str(lines[0]).expect("line must deserialize as AuditRecord");
         assert_eq!(restored.id, "audit_001");
@@ -312,7 +317,9 @@ mod tests {
             .expect("append before subscribe should succeed");
 
         let mut subscription = handle
-            .subscribe_tail(vec![AuditFilterKind::from_str("events").expect("events parses")])
+            .subscribe_tail(vec![
+                AuditFilterKind::from_str("events").expect("events parses")
+            ])
             .await
             .expect("subscribe should succeed");
 
@@ -351,7 +358,9 @@ mod tests {
         });
 
         let mut subscription = handle
-            .subscribe_tail(vec![AuditFilterKind::from_str("events").expect("events parses")])
+            .subscribe_tail(vec![
+                AuditFilterKind::from_str("events").expect("events parses")
+            ])
             .await
             .expect("subscribe should succeed");
 

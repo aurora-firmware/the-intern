@@ -1,5 +1,5 @@
-use clap::{Parser, Subcommand};
 use bob_core::types::AuditFilterKind;
+use clap::{Parser, Subcommand};
 
 pub mod commands;
 
@@ -116,7 +116,9 @@ mod tests {
 
     #[test]
     fn audit_tail_with_multiple_filters_parses_all_values() {
-        let cli = Cli::parse_from(["bob", "audit", "tail", "--filter", "events", "--filter", "verdicts"]);
+        let cli = Cli::parse_from([
+            "bob", "audit", "tail", "--filter", "events", "--filter", "verdicts",
+        ]);
 
         let filters = match cli.command {
             Command::Audit {
@@ -125,7 +127,10 @@ mod tests {
             other => panic!("expected audit tail, got {other:?}"),
         };
 
-        assert_eq!(filters, vec![AuditFilterKind::Events, AuditFilterKind::Verdicts]);
+        assert_eq!(
+            filters,
+            vec![AuditFilterKind::Events, AuditFilterKind::Verdicts]
+        );
     }
 
     #[test]

@@ -556,11 +556,8 @@ mod tests {
 
     /// Build a dispatcher with a real monitoring handle and return both the
     /// dispatcher and the monitoring handle (for injecting records in tests).
-    fn make_dispatcher_with_monitoring() -> (
-        Dispatcher,
-        monitoring::Handle,
-        tokio::task::JoinHandle<()>,
-    ) {
+    fn make_dispatcher_with_monitoring(
+    ) -> (Dispatcher, monitoring::Handle, tokio::task::JoinHandle<()>) {
         let tmp = tempfile::NamedTempFile::new().expect("temp file");
         let (handle, join) = monitoring::start(monitoring::Config {
             command_buffer: 4,
@@ -940,7 +937,10 @@ mod tests {
                 summary: None,
             }),
         };
-        mon_handle.append_record(record).await.expect("append after close must not panic");
+        mon_handle
+            .append_record(record)
+            .await
+            .expect("append after close must not panic");
 
         mon_task.abort();
     }

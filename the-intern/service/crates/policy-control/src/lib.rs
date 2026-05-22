@@ -354,11 +354,7 @@ mod tests {
     async fn handle_reload_swaps_snapshot_when_config_file_parses_and_validates() {
         let mut tmp = tempfile::NamedTempFile::new().expect("temp file");
         let user_id = "00000000-0000-0000-0000-000000000003";
-        writeln!(
-            tmp,
-            "[policy]\nadmitted_users = [\"{user_id}\"]",
-        )
-        .expect("write");
+        writeln!(tmp, "[policy]\nadmitted_users = [\"{user_id}\"]",).expect("write");
         let path = tmp.path().to_path_buf();
 
         let cfg = Config {
@@ -415,7 +411,10 @@ mod tests {
 
         // Reload fails.
         let result = handle.reload().await;
-        assert!(result.is_err(), "reload must return an error for invalid TOML");
+        assert!(
+            result.is_err(),
+            "reload must return an error for invalid TOML"
+        );
 
         // After failed reload: initial snapshot still in place.
         assert_eq!(
@@ -444,7 +443,10 @@ mod tests {
         let (handle, join, snapshot_handle) = start(cfg);
 
         let result = handle.reload().await;
-        assert!(result.is_err(), "reload with empty path must return an error");
+        assert!(
+            result.is_err(),
+            "reload with empty path must return an error"
+        );
 
         // Snapshot unchanged.
         assert_eq!(snapshot_handle.load().admitted_users().len(), 1);

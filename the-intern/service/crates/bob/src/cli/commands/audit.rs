@@ -329,7 +329,8 @@ mod tests {
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
         let closed = Arc::new(AtomicBool::new(false));
 
-        tx.send(Ok(json!({"kind":"event","id":"a1"}))).expect("send notification");
+        tx.send(Ok(json!({"kind":"event","id":"a1"})))
+            .expect("send notification");
 
         let closed_for_connect = Arc::clone(&closed);
         let task = run_with_connector_async(
@@ -362,7 +363,11 @@ mod tests {
 
         let output = String::from_utf8(out).expect("valid utf8");
         let lines: Vec<&str> = output.lines().collect();
-        assert_eq!(lines.len(), 1, "expected exactly one JSON line, got: {output:?}");
+        assert_eq!(
+            lines.len(),
+            1,
+            "expected exactly one JSON line, got: {output:?}"
+        );
         let parsed: Value = serde_json::from_str(lines[0]).expect("output must be valid JSON");
         assert_eq!(parsed["kind"], "event");
         assert_eq!(parsed["id"], "a1");

@@ -254,9 +254,6 @@ mod tests {
         };
 
         let result = RulesetSnapshot::from_config(cfg);
-        assert!(
-            result.is_err(),
-            "empty pattern must return Err, not panic"
-        );
+        assert!(result.is_err(), "empty pattern must return Err, not panic");
     }
 }

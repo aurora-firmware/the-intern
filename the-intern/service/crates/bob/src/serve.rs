@@ -117,10 +117,8 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     // (deny-all) config is always valid; a structurally invalid config (e.g.
     // an ArgMatcher with empty fields) fails startup here rather than at
     // policy check time.
-    let initial_snapshot =
-        policy_control::RulesetSnapshot::from_config(cfg.policy.clone()).map_err(|e| {
-            format!("invalid policy config: {e}")
-        })?;
+    let initial_snapshot = policy_control::RulesetSnapshot::from_config(cfg.policy.clone())
+        .map_err(|e| format!("invalid policy config: {e}"))?;
     let policy_cfg = policy_control::Config {
         initial_snapshot,
         config_path: cfg.config_path.clone(),
@@ -839,8 +837,10 @@ pub mod tests {
     // extension-ipc's MonitoringBackedHandle.
     #[tokio::test(flavor = "current_thread")]
     async fn extension_ipc_is_wired_with_monitoring_backed_handle_not_tracing_placeholder() {
-        use bob_core::types::{AuditFilterKind, AuditRecord, AuditRecordKind, AuditRecordPayload,
-            ExtensionEventAuditPayload};
+        use bob_core::types::{
+            AuditFilterKind, AuditRecord, AuditRecordKind, AuditRecordPayload,
+            ExtensionEventAuditPayload,
+        };
         use std::str::FromStr;
         use std::time::Duration;
         use tokio::time::timeout;
@@ -861,7 +861,9 @@ pub mod tests {
         // Subscribe to events on the shared monitoring handle.
         let mut subscription = runtime
             ._monitoring
-            .subscribe_tail(vec![AuditFilterKind::from_str("events").expect("events parses")])
+            .subscribe_tail(vec![
+                AuditFilterKind::from_str("events").expect("events parses")
+            ])
             .await
             .expect("subscribe must succeed");
 

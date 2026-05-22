@@ -448,10 +448,9 @@ impl Dispatcher {
         };
 
         match policy.reload().await {
-            Ok(()) => DispatchOutcome::Ok(Response::ok(
-                id,
-                json!({ "ok": true, "reloaded": true }),
-            )),
+            Ok(()) => {
+                DispatchOutcome::Ok(Response::ok(id, json!({ "ok": true, "reloaded": true })))
+            }
             Err(error) => DispatchOutcome::Err(ErrorResponse::error(
                 id,
                 CODE_INVALID_REQUEST,
@@ -928,11 +927,7 @@ mod tests {
 
         task.abort();
         match outcome {
-            DispatchOutcome::Subscribed {
-                response,
-                id,
-                ..
-            } => {
+            DispatchOutcome::Subscribed { response, id, .. } => {
                 assert_eq!(response.jsonrpc, "2.0");
                 assert_eq!(response.id, json!(10));
                 assert!(

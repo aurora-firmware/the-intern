@@ -319,14 +319,18 @@ mod tests {
 
         // First submit fills the queue slot. The .await yields, letting the
         // actor consume the event and enter the downstream gate-wait.
-        let r1 = handle.submit(chat_event("fills-slot"), make_context()).await;
+        let r1 = handle
+            .submit(chat_event("fills-slot"), make_context())
+            .await;
         assert!(r1.is_ok(), "first submit should succeed: {r1:?}");
 
         // Yield once more so the actor definitively enters the downstream wait.
         tokio::task::yield_now().await;
 
         // Now send another event to fill the queue slot again.
-        let r_fill = handle.submit(chat_event("fills-queue"), make_context()).await;
+        let r_fill = handle
+            .submit(chat_event("fills-queue"), make_context())
+            .await;
         assert!(
             r_fill.is_ok(),
             "second submit should succeed (queue empty): {r_fill:?}"
@@ -334,7 +338,9 @@ mod tests {
 
         // Third submit should time out: the queue holds one event and the actor
         // is blocked on the gate, so no capacity is available.
-        let r_timeout = handle.submit(chat_event("should-timeout"), make_context()).await;
+        let r_timeout = handle
+            .submit(chat_event("should-timeout"), make_context())
+            .await;
         assert!(
             matches!(
                 r_timeout,
@@ -372,9 +378,18 @@ mod tests {
         );
 
         // Submit several events.
-        handle.submit(chat_event("a"), make_context()).await.unwrap();
-        handle.submit(chat_event("b"), make_context()).await.unwrap();
-        handle.submit(chat_event("c"), make_context()).await.unwrap();
+        handle
+            .submit(chat_event("a"), make_context())
+            .await
+            .unwrap();
+        handle
+            .submit(chat_event("b"), make_context())
+            .await
+            .unwrap();
+        handle
+            .submit(chat_event("c"), make_context())
+            .await
+            .unwrap();
 
         // Signal cancellation.
         cancel_tx.send(true).unwrap();

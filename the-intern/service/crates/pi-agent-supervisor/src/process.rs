@@ -49,14 +49,12 @@ impl RpcWorkerProcess {
             cmd.env("BOB_EXTENSION_SOCK_PATH", &cfg.extension_sock_path);
         }
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|error| ServiceError::ChildProcess {
-                detail: format!(
-                    "failed to spawn worker process for command '{}' ({error})",
-                    cfg.command
-                ),
-            })?;
+        let mut child = cmd.spawn().map_err(|error| ServiceError::ChildProcess {
+            detail: format!(
+                "failed to spawn worker process for command '{}' ({error})",
+                cfg.command
+            ),
+        })?;
 
         let stdin = child
             .stdin

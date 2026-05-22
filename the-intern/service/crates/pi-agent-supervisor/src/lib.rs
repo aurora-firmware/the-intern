@@ -599,23 +599,28 @@ mod tests {
             id_file_path
         );
 
-        let (handle, task) = start(test_config(
-            "sh",
-            &["-c", &worker_script],
-            1,
-            1,
-        ))
-        .expect("startup should succeed");
+        let (handle, task) = start(test_config("sh", &["-c", &worker_script], 1, 1))
+            .expect("startup should succeed");
 
         // Acquire a session — the warm worker is promoted.
-        let session_id = handle.acquire_session().await.expect("acquire should succeed");
+        let session_id = handle
+            .acquire_session()
+            .await
+            .expect("acquire should succeed");
 
         // Give the worker a moment to write the file.
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // sessions.list must return the same id that is set as BOB_SESSION_ID.
-        let sessions = handle.list_sessions().await.expect("list sessions should succeed");
-        assert_eq!(sessions, vec![session_id], "sessions.list should return the acquired session id");
+        let sessions = handle
+            .list_sessions()
+            .await
+            .expect("list sessions should succeed");
+        assert_eq!(
+            sessions,
+            vec![session_id],
+            "sessions.list should return the acquired session id"
+        );
 
         let written = fs::read_to_string(&id_file)
             .expect("worker should have written BOB_SESSION_ID to file");
@@ -651,7 +656,10 @@ mod tests {
         cfg.extension_sock_path = sock_path.clone();
 
         let (handle, task) = start(cfg).expect("startup should succeed");
-        handle.acquire_session().await.expect("acquire should succeed");
+        handle
+            .acquire_session()
+            .await
+            .expect("acquire should succeed");
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -689,12 +697,15 @@ mod tests {
         let cfg = test_config("sh", &["-c", &worker_script], 1, 1);
 
         let (handle, task) = start(cfg).expect("startup should succeed");
-        handle.acquire_session().await.expect("acquire should succeed");
+        handle
+            .acquire_session()
+            .await
+            .expect("acquire should succeed");
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let written = fs::read_to_string(&id_file)
-            .expect("worker should have written result to file");
+        let written =
+            fs::read_to_string(&id_file).expect("worker should have written result to file");
         let result = written.trim().to_string();
 
         assert_eq!(

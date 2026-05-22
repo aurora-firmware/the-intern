@@ -201,7 +201,11 @@ mod tests {
         assert_eq!(enqueued[0], event);
         // An allow-verdict audit record is now emitted for every admitted event.
         let records = audit.records.lock().unwrap();
-        assert_eq!(records.len(), 1, "allow-verdict audit record must be written on admit");
+        assert_eq!(
+            records.len(),
+            1,
+            "allow-verdict audit record must be written on admit"
+        );
         assert!(
             matches!(records[0].payload, AuditRecordPayload::Verdict(ref p) if p.allow),
             "audit record must be an allow verdict"
@@ -225,10 +229,12 @@ mod tests {
         assert_eq!(enqueued.len(), 1);
         // An allow-verdict audit record must still be present.
         let records = audit.records.lock().unwrap();
-        assert_eq!(records.len(), 1, "allow-verdict audit record must be written");
-        assert!(
-            matches!(records[0].payload, AuditRecordPayload::Verdict(ref p) if p.allow),
+        assert_eq!(
+            records.len(),
+            1,
+            "allow-verdict audit record must be written"
         );
+        assert!(matches!(records[0].payload, AuditRecordPayload::Verdict(ref p) if p.allow),);
     }
 
     // AC-2: non-admitted user causes denial and PreflightDenied audit record.

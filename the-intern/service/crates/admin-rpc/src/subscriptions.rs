@@ -247,9 +247,7 @@ impl ConnectionRegistry {
     /// pair.  The returned `oneshot::Receiver<()>` should be passed to the
     /// audit forwarder task so it can stop cleanly when `unsubscribe` is called
     /// or the connection closes.
-    pub fn register_audit_subscription(
-        &mut self,
-    ) -> (AdminSubscriptionId, oneshot::Receiver<()>) {
+    pub fn register_audit_subscription(&mut self) -> (AdminSubscriptionId, oneshot::Receiver<()>) {
         let id = AdminSubscriptionId(self.next_audit_id);
         self.next_audit_id = self.next_audit_id.saturating_add(1);
         let (cancel_tx, cancel_rx) = oneshot::channel();

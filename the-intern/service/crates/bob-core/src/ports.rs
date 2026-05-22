@@ -69,7 +69,7 @@ mod tests {
     use crate::error::ServiceResult;
     use crate::types::{
         AuditRecord, AuditRecordKind, AuditRecordPayload, ChannelId, DeliveryKind,
-        ExternalReportAuditPayload, InternalEvent, PolicyVerdict, RequestContext, ReportOutcome,
+        ExternalReportAuditPayload, InternalEvent, PolicyVerdict, ReportOutcome, RequestContext,
         SessionId, UserId,
     };
 
@@ -82,7 +82,11 @@ mod tests {
 
     #[async_trait]
     impl RequestsHandler for StubRequestsHandler {
-        async fn submit(&self, _event: InternalEvent, _context: RequestContext) -> ServiceResult<()> {
+        async fn submit(
+            &self,
+            _event: InternalEvent,
+            _context: RequestContext,
+        ) -> ServiceResult<()> {
             Ok(())
         }
     }

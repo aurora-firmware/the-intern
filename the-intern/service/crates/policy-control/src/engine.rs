@@ -258,11 +258,8 @@ mod tests {
             },
         ]);
 
-        let verdict = PolicyEngine::evaluate_action(
-            &snapshot,
-            "bash",
-            &json!({ "command": "ls -la" }),
-        );
+        let verdict =
+            PolicyEngine::evaluate_action(&snapshot, "bash", &json!({ "command": "ls -la" }));
 
         assert!(verdict.allow);
     }

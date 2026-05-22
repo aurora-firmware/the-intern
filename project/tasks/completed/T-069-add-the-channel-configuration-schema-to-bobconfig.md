@@ -1,7 +1,7 @@
 ---
 id: T-069
 title: Add the channel configuration schema to BobConfig
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-21'

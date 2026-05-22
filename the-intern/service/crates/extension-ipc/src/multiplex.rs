@@ -102,10 +102,7 @@ impl MonitoringHandle for MonitoringBackedHandle {
         tracing::debug!(session = %session, payload = ?event.payload, "extension event full payload");
 
         let record = AuditRecord {
-            id: format!(
-                "audit_ext_event_{}",
-                chrono::Utc::now().timestamp_millis()
-            ),
+            id: format!("audit_ext_event_{}", chrono::Utc::now().timestamp_millis()),
             timestamp: chrono::Utc::now().to_rfc3339(),
             kind: AuditRecordKind::Event,
             session_id: Some(session),
@@ -353,8 +350,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn tracing_monitoring_handle_record_event_emits_one_info_event_with_session_and_event_fields()
-    {
+    async fn tracing_monitoring_handle_record_event_emits_one_info_event_with_session_and_event_fields(
+    ) {
         let capture = TracingCapture::new();
         let handle = TracingMonitoringHandle;
         let session = SessionId::new();
@@ -585,7 +582,9 @@ mod tests {
         });
 
         let mut subscription = monitoring_handle
-            .subscribe_tail(vec![AuditFilterKind::from_str("events").expect("events parses")])
+            .subscribe_tail(vec![
+                AuditFilterKind::from_str("events").expect("events parses")
+            ])
             .await
             .expect("subscribe must succeed");
 
@@ -629,7 +628,9 @@ mod tests {
         });
 
         let mut subscription = monitoring_handle
-            .subscribe_tail(vec![AuditFilterKind::from_str("verdicts").expect("verdicts parses")])
+            .subscribe_tail(vec![
+                AuditFilterKind::from_str("verdicts").expect("verdicts parses")
+            ])
             .await
             .expect("subscribe must succeed");
 
@@ -655,7 +656,10 @@ mod tests {
                 verdict,
             } => {
                 assert_eq!(got, session);
-                assert!(!verdict.allow, "deny-all snapshot must produce deny verdict");
+                assert!(
+                    !verdict.allow,
+                    "deny-all snapshot must produce deny verdict"
+                );
             }
         }
 
@@ -734,7 +738,10 @@ mod tests {
         .await
         .expect("first frame should process");
 
-        let first_reply = rx_a.recv().await.expect("first reply must arrive on route A");
+        let first_reply = rx_a
+            .recv()
+            .await
+            .expect("first reply must arrive on route A");
         match &first_reply {
             OutboundFrame::AuthzVerdict { session, .. } => {
                 assert_eq!(*session, unknown_session, "first reply session must match");

@@ -103,7 +103,9 @@ impl SessionPool {
             self.active_workers
                 .get_mut(&session_id)
                 .ok_or_else(|| ServiceError::ChildProcess {
-                    detail: format!("no active worker for session {session_id}; call acquire_session first"),
+                    detail: format!(
+                        "no active worker for session {session_id}; call acquire_session first"
+                    ),
                 })?;
         let command = rpc::PromptCommand::new(message);
         active_worker.worker.send_json(&command.to_json()).await?;
@@ -207,7 +209,10 @@ impl SessionPool {
         Ok(WarmWorker { session_id, worker })
     }
 
-    fn worker_process_config_for_session(cfg: &Config, session_id: SessionId) -> WorkerProcessConfig {
+    fn worker_process_config_for_session(
+        cfg: &Config,
+        session_id: SessionId,
+    ) -> WorkerProcessConfig {
         WorkerProcessConfig {
             command: cfg.worker_command.clone(),
             args: cfg.worker_args.clone(),
@@ -342,12 +347,10 @@ mod tests {
         );
         let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
 
-        pool.warm_workers.push(
-            SessionPool::spawn_warm_worker(&cfg).expect("spawn should work"),
-        );
-        pool.warm_workers.push(
-            SessionPool::spawn_warm_worker(&cfg).expect("spawn should work"),
-        );
+        pool.warm_workers
+            .push(SessionPool::spawn_warm_worker(&cfg).expect("spawn should work"));
+        pool.warm_workers
+            .push(SessionPool::spawn_warm_worker(&cfg).expect("spawn should work"));
 
         let report = pool
             .reap_idle_and_surplus()
