@@ -1,7 +1,7 @@
 ---
 id: T-076
 title: Remove vestigial IPC handle command scaffolds
-status: pending
+status: completed
 priority: low
 assigned-role: unassigned
 created: '2026-05-22'
