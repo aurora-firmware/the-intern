@@ -112,3 +112,28 @@ Three implementation commits on `task/T-068-carry-requestcontext-through-intake-
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
+
+### Review Verdict — 2026-05-22
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Spec compliance**
+
+- AC-1: `RequestsHandler::submit` in `bob-core/src/ports.rs` now accepts `(InternalEvent, RequestContext)`. `StubRequestsHandler` and the compilation test updated accordingly. Confirmed in diff. PASS.
+- AC-2: `Handle::submit_event` in `requests-handler/src/queue.rs` accepts `(InternalEvent, RequestContext)` and the `RequestsHandler` trait impl delegates to it. The `mpsc` channel payload is `(InternalEvent, RequestContext)`. Backpressure and timeout logic are unchanged. PASS.
+- AC-3: The `start_with` downstream closure in `serve.rs` destructures `(event, context)` and passes `Some(&context)` to `run_preflight`, so each dequeued event is pre-flighted against the context that travelled with it. New integration test `preflight_uses_per_request_context_not_shared_startup_context` directly proves per-request dispatch. PASS.
+- AC-4: The `default_context` block that constructed a synthetic `RequestContext` from the first admitted user has been removed from `try_start_subsystems`. No shared startup context exists. PASS.
+- AC-5: `cargo test --workspace` run on the task branch. All tests pass — 0 failures across all crates (95 + 75 + 15 + 80 + others). PASS.
+- Scope: Only the four files named in the task (plus the `queue_load.rs` integration test, which is a direct call-site update required by the signature change) were modified. `handler.rs` was not modified; its existing `run_preflight(context: Option<&RequestContext>)` signature was already correct and required no change — the dispatch-path adjustment was entirely in `serve.rs`. PASS.
+
+**Stage 2 — Code quality**
+
+- Correctness: Logic is correct for all paths. The downstream closure always receives a real `RequestContext` from the submitter. The pre-flight denial path (missing context, non-admitted user) is unchanged. No off-by-one or null-reference issues.
+- Tests: New unit test in `queue.rs` covers the pair delivery. New integration test in `serve.rs` covers per-request vs. shared-context discrimination. Existing tests updated to the new signature. All tests are independent and construct their own fixtures.
+- Security: No hardcoded credentials. Raw event payload is not logged or included in audit reasons (existing constraint preserved). No new permissions.
+- Readability: Names are descriptive and follow project conventions. The `(event, context)` destructuring pattern is idiomatic. No dead code or debugging artifacts.
+- Performance: No unnecessary work introduced. The pair is moved through the bounded channel as before.
+
+**Minor observation (non-blocking):** The pre-existing `unused import: DeliveryKind` warnings in the `persistence` crate were noted in the Work Log and intentionally left — they predate this task and are out of scope.
