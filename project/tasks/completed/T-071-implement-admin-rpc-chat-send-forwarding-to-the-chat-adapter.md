@@ -1,7 +1,7 @@
 ---
 id: T-071
 title: Implement admin-rpc chat.send forwarding to the chat adapter
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-21'
