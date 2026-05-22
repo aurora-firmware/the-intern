@@ -49,6 +49,9 @@ Close the gap per ADR-005:
 - The `bob chat` CLI shall send the identity it asserts: add an
   application-identity field to `BobConfig` for the chat client and include it
   in every `chat.send` request.
+- Update the user-facing documentation that describes chat identity as
+  anonymous: the `bob chat` section of the root `README.md` and the chat note
+  in `user_diagrams.md`.
 
 Out of scope: reshaping `bob-core::UserId` to a human-readable form (a separate
 F4 concern), and process-name capture for monitoring (a separate follow-up
@@ -60,20 +63,22 @@ AC-1: WHEN a `chat.send` call includes a well-formed application-identity
       argument THE SYSTEM SHALL build the chat user-input frame with that
       identity and forward it to the chat adapter.
 
-AC-2: IF a `chat.send` call omits the application-identity argument THEN THE
-      SYSTEM SHALL return a JSON-RPC error and forward no frame.
+AC-2: IF a `chat.send` call omits the application-identity argument, or
+      supplies one that is empty or not structurally valid as a `UserId`,
+      THEN THE SYSTEM SHALL return a JSON-RPC error and forward no frame.
 
-AC-3: IF a `chat.send` call supplies an application-identity argument that is
-      empty or not structurally valid as a `UserId` THEN THE SYSTEM SHALL
-      return a JSON-RPC error and forward no frame.
-
-AC-4: The chat user-input frame's identity shall originate solely from the
+AC-3: The chat user-input frame's identity shall originate solely from the
       `chat.send` request arguments, and the admin-RPC `ConnectionRegistry`
       shall no longer hold or supply a peer identity.
 
-AC-5: WHEN the `bob chat` CLI issues a `chat.send` request THE SYSTEM SHALL
+AC-4: WHEN the `bob chat` CLI issues a `chat.send` request THE SYSTEM SHALL
       include the operator-configured application identity in the request's
       arguments.
+
+AC-5: The `bob chat` section of the root `README.md` and the chat note in
+      `user_diagrams.md` shall describe chat as carrying a self-asserted
+      application identity, with no remaining claim that chat frames use an
+      anonymous identity.
 
 ## Dependencies
 
@@ -93,6 +98,10 @@ AC-5: WHEN the `bob chat` CLI issues a `chat.send` request THE SYSTEM SHALL
   application-identity field to `BobConfig` and its raw/defaults counterparts.
 - `the-intern/service/crates/bob/src/cli/commands/chat.rs` — include the
   configured application identity in every `chat.send` request's params.
+- `README.md` — update the `bob chat` section so it no longer states that
+  chat frames carry an anonymous identity.
+- `user_diagrams.md` — update the chat note under "Current Implementation
+  Notes" to match.
 
 ## Verification
 

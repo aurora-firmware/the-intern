@@ -48,6 +48,10 @@ connection gate:
 - Remove every `allowed_uids` / `service_uid` field and its plumbing from the
   listener configs, the `admin-rpc` / `extension-ipc` `Config` types,
   `BobConfig` (raw, public, defaults), and `bob serve`.
+- Update the documentation that describes the removed gate: the
+  `crates/admin-rpc` line in `the-intern/service/README.md` and the
+  socket-node labels in `user_diagrams.md`, so they describe the
+  filesystem-permission gate rather than a peer-credential / peer-UID gate.
 
 The socket `0o700` directory and `0o660` file modes MUST remain enforced on
 every bind and stay covered by their existing permission tests — that is now
@@ -88,8 +92,10 @@ AC-4: The admin and extension listeners shall continue to create the socket
       parent directory at mode `0o700` and the socket file at mode `0o660`,
       verified by the existing permission tests.
 
-AC-5: The workspace shall build and all tests shall pass under
-      `cargo test --workspace`.
+AC-5: The `crates/admin-rpc` entry in `the-intern/service/README.md` and the
+      socket-node labels in `user_diagrams.md` shall describe the connection
+      gate as the socket's filesystem permissions, with no remaining reference
+      to a peer-credential or peer-UID gate.
 
 ## Dependencies
 
@@ -116,6 +122,10 @@ AC-5: The workspace shall build and all tests shall pass under
   defaults; update config tests.
 - `the-intern/service/crates/bob/src/serve.rs` — stop threading allow-list /
   service-uid values into the listener configs.
+- `the-intern/service/README.md` — reword the `crates/admin-rpc` description
+  so it no longer calls the listener a "peer-credential gate".
+- `user_diagrams.md` — reword the `admin.sock` / `extension.sock` node labels
+  so they no longer say "peer UID gate".
 
 ## Verification
 
