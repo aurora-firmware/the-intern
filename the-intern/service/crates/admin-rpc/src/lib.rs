@@ -38,12 +38,6 @@ pub struct Config {
     /// Path where the admin Unix domain socket should be created.
     /// Leave empty to skip listener creation.
     pub admin_sock_path: PathBuf,
-    /// UIDs that may connect to the admin socket in addition to the service's
-    /// own UID.
-    pub admin_allowed_uids: Vec<u32>,
-    /// UID of the running service process.  Defaults to the current process
-    /// UID.
-    pub service_uid: u32,
     /// Optional handle to the pi-agent supervisor.  When `None`, the
     /// `sessions.list` method returns `NotImplemented`.
     pub supervisor: Option<pi_agent_supervisor::Handle>,
@@ -74,8 +68,6 @@ impl Default for Config {
         Self {
             command_buffer: 0,
             admin_sock_path: PathBuf::new(),
-            admin_allowed_uids: Vec::new(),
-            service_uid: current_uid(),
             supervisor: None,
             policy: None,
             monitoring: None,
@@ -84,16 +76,6 @@ impl Default for Config {
             chat_adapter: None,
         }
     }
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn current_uid() -> u32 {
-    nix::unistd::Uid::current().as_raw()
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn current_uid() -> u32 {
-    0
 }
 
 #[derive(Debug)]
@@ -440,8 +422,6 @@ pub fn start(cfg: Config) -> Result<(Handle, JoinHandle<()>), std::io::Error> {
     } else {
         let listener_cfg = ListenerConfig {
             admin_sock_path: cfg.admin_sock_path.clone(),
-            admin_allowed_uids: cfg.admin_allowed_uids.clone(),
-            service_uid: cfg.service_uid,
         };
         let l = Listener::bind(listener_cfg).map_err(|e| {
             tracing::error!(
@@ -499,6 +479,16 @@ mod tests {
     async fn start_with_sock_path_creates_socket_file() {
         let tmp = tempfile::tempdir().expect("temp dir");
         let sock_path = tmp.path().join("admin.sock");
+
+        let probe = Listener::bind(ListenerConfig {
+            admin_sock_path: sock_path.clone(),
+        });
+        match probe {
+            Ok(listener) => drop(listener),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(e) => panic!("probe bind failed: {e}"),
+        }
+        let _ = std::fs::remove_file(&sock_path);
 
         let cfg = Config {
             admin_sock_path: sock_path.clone(),
