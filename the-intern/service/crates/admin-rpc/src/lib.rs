@@ -8,7 +8,6 @@ pub mod subscriptions;
 
 use std::{path::PathBuf, time::Duration};
 
-use bob_core::error::{ServiceError, ServiceResult};
 use serde_json::json;
 use tokio::{
     io::{AsyncWriteExt as _, BufReader},
@@ -78,26 +77,17 @@ impl Default for Config {
     }
 }
 
-#[derive(Debug)]
-enum Command {
-    Ping,
-}
-
 #[derive(Clone)]
 pub struct Handle {
-    tx: mpsc::Sender<Command>,
+    // Kept to control the actor channel lifetime: the actor loop exits when
+    // all Handle clones are dropped and tx is closed.
+    #[allow(dead_code)]
+    tx: mpsc::Sender<std::convert::Infallible>,
 }
 
 pub struct Actor {
     cfg: Config,
-    rx: mpsc::Receiver<Command>,
-}
-
-impl Handle {
-    pub async fn ping(&self) -> ServiceResult<()> {
-        let _ = self.tx.send(Command::Ping).await;
-        Err(ServiceError::NotImplemented)
-    }
+    rx: mpsc::Receiver<std::convert::Infallible>,
 }
 
 impl Actor {
@@ -106,13 +96,8 @@ impl Actor {
             command_buffer = self.cfg.command_buffer,
             "admin-rpc actor started"
         );
-        while let Some(command) = self.rx.recv().await {
-            match command {
-                Command::Ping => {
-                    let payload = serde_json::json!({ "command": "ping" });
-                    tracing::debug!(?payload, "admin-rpc command received");
-                }
-            }
+        while self.rx.recv().await.is_some() {
+            // No commands are defined; this branch is unreachable.
         }
         tracing::info!("admin-rpc actor stopped");
     }
@@ -454,16 +439,6 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tokio::io::AsyncBufReadExt as _;
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn handle_ping_returns_not_implemented() {
-        let (handle, task) = start(Config::default()).expect("start must succeed with empty path");
-
-        let result = handle.ping().await;
-
-        assert!(matches!(result, Err(ServiceError::NotImplemented)));
-        task.abort();
-    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn handle_is_clonable() {
