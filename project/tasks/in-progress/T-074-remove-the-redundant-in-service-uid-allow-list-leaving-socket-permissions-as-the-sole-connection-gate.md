@@ -161,3 +161,18 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-22
+PASS
+
+Stage 1 (acceptance) and Stage 2 (code quality) both pass.
+
+- AC-1 satisfied: `bob_core::auth::is_allowed` and related tests were removed; `PeerCred` and `peer_cred_from_fd` remain.
+- AC-2 satisfied: admin and extension listeners no longer consult an in-service UID allow-list on `accept()`.
+- AC-3 satisfied: allow-list/service-UID fields and plumbing were removed from `BobConfig`, admin/extension `Config`, and listener config types.
+- AC-4 satisfied: bind path still enforces `0o700` parent directory and `0o660` socket modes; existing permission tests remain.
+- AC-5 satisfied: README/admin-rpc description and socket labels in `user_diagrams.md` now describe filesystem-permission gating.
+
+Verification evidence reviewed:
+- Developer-provided package tests passed for `admin-rpc`, `extension-ipc`, `bob-core`, and `bob --no-run`.
+- Loop-provided escalated verification reported `cargo test -p admin-rpc`, `cargo test -p extension-ipc`, and `cargo test --workspace` passing outside sandbox socket restrictions.
