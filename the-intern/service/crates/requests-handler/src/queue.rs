@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use bob_core::{
     error::{ServiceError, ServiceResult},
     ports::RequestsHandler,
-    types::InternalEvent,
+    types::{InternalEvent, RequestContext},
 };
 use tokio::sync::{mpsc, watch};
 
@@ -31,7 +31,7 @@ impl Default for Config {
 /// Cloneable handle callers use to submit events.
 #[derive(Clone)]
 pub struct Handle {
-    tx: mpsc::Sender<InternalEvent>,
+    tx: mpsc::Sender<(InternalEvent, RequestContext)>,
     /// Signals whether the actor has been shut down; used to reject new
     /// submissions after cancellation.
     shutdown_rx: watch::Receiver<bool>,
@@ -39,7 +39,7 @@ pub struct Handle {
 }
 
 impl Handle {
-    /// Submit an event to the queue.
+    /// Submit an event together with its per-request context to the queue.
     ///
     /// Returns `Ok(())` when the event is accepted.
     ///
@@ -48,13 +48,17 @@ impl Handle {
     /// - `ServiceError::Shutdown` — the actor has been cancelled.
     /// - `ServiceError::Timeout { operation: "requests-handler.submit" }` — the
     ///   queue remained full beyond `cfg.request_submit_timeout`.
-    pub async fn submit_event(&self, event: InternalEvent) -> ServiceResult<()> {
+    pub async fn submit_event(
+        &self,
+        event: InternalEvent,
+        context: RequestContext,
+    ) -> ServiceResult<()> {
         // Reject immediately if the actor is already shut down.
         if *self.shutdown_rx.borrow() {
             return Err(ServiceError::Shutdown);
         }
 
-        match tokio::time::timeout(self.submit_timeout, self.tx.send(event)).await {
+        match tokio::time::timeout(self.submit_timeout, self.tx.send((event, context))).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(_)) => {
                 // Channel closed means actor shut down.
@@ -69,14 +73,14 @@ impl Handle {
 
 #[async_trait]
 impl RequestsHandler for Handle {
-    async fn submit(&self, event: InternalEvent) -> ServiceResult<()> {
-        self.submit_event(event).await
+    async fn submit(&self, event: InternalEvent, context: RequestContext) -> ServiceResult<()> {
+        self.submit_event(event, context).await
     }
 }
 
 /// Actor that drains the queue and forwards events to a downstream handler.
 struct Actor<F> {
-    rx: mpsc::Receiver<InternalEvent>,
+    rx: mpsc::Receiver<(InternalEvent, RequestContext)>,
     downstream: F,
     shutdown_tx: watch::Sender<bool>,
     /// Receives a signal to stop the actor.
@@ -85,7 +89,7 @@ struct Actor<F> {
 
 impl<F, Fut> Actor<F>
 where
-    F: Fn(InternalEvent) -> Fut + Send + 'static,
+    F: Fn((InternalEvent, RequestContext)) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
     /// Run the actor until cancellation, then drain remaining queued events.
@@ -103,9 +107,9 @@ where
                     }
                 }
 
-                event = self.rx.recv() => {
-                    match event {
-                        Some(ev) => (self.downstream)(ev).await,
+                item = self.rx.recv() => {
+                    match item {
+                        Some(pair) => (self.downstream)(pair).await,
                         None => {
                             // Sender side dropped; nothing more to receive.
                             break;
@@ -118,8 +122,8 @@ where
         // Drain remaining events before terminating.
         tracing::info!("requests-handler queue actor draining on shutdown");
         self.rx.close();
-        while let Some(ev) = self.rx.recv().await {
-            (self.downstream)(ev).await;
+        while let Some(pair) = self.rx.recv().await {
+            (self.downstream)(pair).await;
         }
 
         // Signal the handle that the actor is down so new submits are rejected.
@@ -138,7 +142,8 @@ where
 /// # Arguments
 ///
 /// - `cfg` — queue capacity and submit timeout.
-/// - `downstream` — called for each event drained from the queue.
+/// - `downstream` — called for each `(InternalEvent, RequestContext)` pair
+///   drained from the queue.
 /// - `cancel_rx` — the actor watches this; when it becomes `true` the actor
 ///   drains and exits.
 pub fn start_with<F, Fut>(
@@ -147,7 +152,7 @@ pub fn start_with<F, Fut>(
     cancel_rx: watch::Receiver<bool>,
 ) -> (Handle, tokio::task::JoinHandle<()>)
 where
-    F: Fn(InternalEvent) -> Fut + Send + 'static,
+    F: Fn((InternalEvent, RequestContext)) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
     let capacity = cfg.request_queue_capacity.max(1);
@@ -202,15 +207,69 @@ mod tests {
         }
     }
 
+    fn make_context() -> bob_core::types::RequestContext {
+        bob_core::types::RequestContext {
+            sender: bob_core::types::UserId::new(),
+            source: bob_core::types::ChannelId::new(),
+            context_id: None,
+        }
+    }
+
+    // AC-2 (T-068): submit_event accepts InternalEvent and RequestContext; downstream receives both.
+    #[tokio::test(flavor = "current_thread")]
+    async fn submit_event_with_context_delivers_both_event_and_context_to_downstream() {
+        use std::sync::{Arc, Mutex};
+
+        let received: Arc<Mutex<Vec<(InternalEvent, bob_core::types::RequestContext)>>> =
+            Arc::new(Mutex::new(vec![]));
+        let received_clone = received.clone();
+
+        let (cancel_tx, cancel_rx) = make_cancel_pair();
+        let cfg = test_config(16, Duration::from_secs(5));
+
+        let (handle, task) = start_with(
+            cfg,
+            move |(ev, ctx)| {
+                let r = received_clone.clone();
+                async move {
+                    r.lock().unwrap().push((ev, ctx));
+                }
+            },
+            cancel_rx,
+        );
+
+        let event = chat_event("hello");
+        let ctx = make_context();
+        let ctx_sender = ctx.sender;
+        handle
+            .submit_event(event.clone(), ctx)
+            .await
+            .expect("submit_event must succeed");
+
+        cancel_tx.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("actor must finish within 2 seconds")
+            .expect("actor task must not panic");
+
+        let got = received.lock().unwrap();
+        assert_eq!(got.len(), 1, "exactly one pair must be received");
+        assert_eq!(got[0].0, event, "received event must match submitted event");
+        assert_eq!(
+            got[0].1.sender, ctx_sender,
+            "received context sender must match submitted context"
+        );
+    }
+
     // AC-1: submit with available capacity enqueues and returns Ok(())
     #[tokio::test(flavor = "current_thread")]
     async fn submit_with_capacity_enqueues_and_returns_ok() {
         let (cancel_tx, cancel_rx) = make_cancel_pair();
         let cfg = test_config(16, Duration::from_secs(5));
 
-        let (handle, task) = start_with(cfg, |_ev| async {}, cancel_rx);
+        let (handle, task) = start_with(cfg, |_pair| async {}, cancel_rx);
 
-        let result = handle.submit(chat_event("hello")).await;
+        let result = handle.submit(chat_event("hello"), make_context()).await;
         assert!(result.is_ok(), "expected Ok(()), got {result:?}");
 
         cancel_tx.send(true).unwrap();
@@ -223,10 +282,10 @@ mod tests {
         let (cancel_tx, cancel_rx) = make_cancel_pair();
         let cfg = test_config(16, Duration::from_secs(5));
 
-        let (handle, task) = start_with(cfg, |_ev| async {}, cancel_rx);
+        let (handle, task) = start_with(cfg, |_pair| async {}, cancel_rx);
 
         let handler: &dyn RequestsHandler = &handle;
-        let result = handler.submit(chat_event("test")).await;
+        let result = handler.submit(chat_event("test"), make_context()).await;
         assert!(result.is_ok());
 
         cancel_tx.send(true).unwrap();
@@ -248,7 +307,7 @@ mod tests {
 
         let (handle, task) = start_with(
             cfg,
-            move |_ev| {
+            move |_pair| {
                 let g = gate_clone.clone();
                 async move {
                     // Wait until the test releases the gate.
@@ -260,14 +319,14 @@ mod tests {
 
         // First submit fills the queue slot. The .await yields, letting the
         // actor consume the event and enter the downstream gate-wait.
-        let r1 = handle.submit(chat_event("fills-slot")).await;
+        let r1 = handle.submit(chat_event("fills-slot"), make_context()).await;
         assert!(r1.is_ok(), "first submit should succeed: {r1:?}");
 
         // Yield once more so the actor definitively enters the downstream wait.
         tokio::task::yield_now().await;
 
         // Now send another event to fill the queue slot again.
-        let r_fill = handle.submit(chat_event("fills-queue")).await;
+        let r_fill = handle.submit(chat_event("fills-queue"), make_context()).await;
         assert!(
             r_fill.is_ok(),
             "second submit should succeed (queue empty): {r_fill:?}"
@@ -275,7 +334,7 @@ mod tests {
 
         // Third submit should time out: the queue holds one event and the actor
         // is blocked on the gate, so no capacity is available.
-        let r_timeout = handle.submit(chat_event("should-timeout")).await;
+        let r_timeout = handle.submit(chat_event("should-timeout"), make_context()).await;
         assert!(
             matches!(
                 r_timeout,
@@ -303,7 +362,7 @@ mod tests {
 
         let (handle, task) = start_with(
             cfg,
-            move |ev| {
+            move |(ev, _ctx)| {
                 let r = received_clone.clone();
                 async move {
                     r.lock().unwrap().push(ev);
@@ -313,9 +372,9 @@ mod tests {
         );
 
         // Submit several events.
-        handle.submit(chat_event("a")).await.unwrap();
-        handle.submit(chat_event("b")).await.unwrap();
-        handle.submit(chat_event("c")).await.unwrap();
+        handle.submit(chat_event("a"), make_context()).await.unwrap();
+        handle.submit(chat_event("b"), make_context()).await.unwrap();
+        handle.submit(chat_event("c"), make_context()).await.unwrap();
 
         // Signal cancellation.
         cancel_tx.send(true).unwrap();
@@ -336,7 +395,7 @@ mod tests {
         let (cancel_tx, cancel_rx) = make_cancel_pair();
         let cfg = test_config(16, Duration::from_millis(100));
 
-        let (handle, task) = start_with(cfg, |_ev| async {}, cancel_rx);
+        let (handle, task) = start_with(cfg, |_pair| async {}, cancel_rx);
 
         // Signal cancellation and wait for actor to finish.
         cancel_tx.send(true).unwrap();
@@ -346,7 +405,7 @@ mod tests {
             .expect("actor task must not panic");
 
         // A new submit should fail (either Shutdown or Timeout as channel is closed).
-        let result = handle.submit(chat_event("too-late")).await;
+        let result = handle.submit(chat_event("too-late"), make_context()).await;
         assert!(
             result.is_err(),
             "expected error after shutdown, got {result:?}"
@@ -359,7 +418,7 @@ mod tests {
         let (_cancel_tx, cancel_rx) = make_cancel_pair();
         let cfg = Config::default();
 
-        let (handle, task) = start_with(cfg, |_ev| async {}, cancel_rx);
+        let (handle, task) = start_with(cfg, |_pair| async {}, cancel_rx);
 
         // If this compiles, the trait is implemented.
         fn assert_requests_handler<T: bob_core::ports::RequestsHandler>(_: &T) {}
