@@ -69,7 +69,7 @@ impl ChatInputLines for StdinLines {
     fn next_line<'a>(
         &'a mut self,
     ) -> Pin<Box<dyn Future<Output = ServiceResult<Option<String>>> + 'a>> {
-        Box::pin(async move { self.receiver.recv().await.unwrap_or_else(|| Ok(None)) })
+        Box::pin(async move { self.receiver.recv().await.unwrap_or(Ok(None)) })
     }
 }
 
@@ -96,6 +96,10 @@ pub(super) fn run(json_output: bool, session: Option<&str>) -> ServiceResult<()>
     )
 }
 
+// The argument count is driven by dependency injection: the trailing
+// stop/open/send parameters are the seam that lets tests drive `chat` without
+// real sockets or stdin.
+#[allow(clippy::too_many_arguments)]
 fn run_with_parts<S, L, StopFactory, StopFuture, OpenFn, OpenFuture, SendFn, SendFuture>(
     json_output: bool,
     session: Option<&str>,
@@ -128,6 +132,7 @@ where
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_with_parts_async<
     S,
     L,

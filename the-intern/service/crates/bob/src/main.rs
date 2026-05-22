@@ -33,15 +33,12 @@ mod tests {
 
     #[test]
     fn filtering_removes_config_override_flags_and_keeps_subcommand_args() {
-        let filtered = filter_config_override_args(
-            [
-                "bob".to_string(),
-                "--config-request-queue-capacity=9".to_string(),
-                "serve".to_string(),
-                "--json".to_string(),
-            ]
-            .into_iter(),
-        );
+        let filtered = filter_config_override_args([
+            "bob".to_string(),
+            "--config-request-queue-capacity=9".to_string(),
+            "serve".to_string(),
+            "--json".to_string(),
+        ]);
 
         assert_eq!(
             filtered,

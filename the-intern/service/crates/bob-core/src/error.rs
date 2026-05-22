@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn service_result_ok_variant_holds_value() {
         let r: ServiceResult<u32> = Ok(42);
-        assert_eq!(r.unwrap(), 42);
+        assert!(matches!(r, Ok(42)));
     }
 
     #[test]

@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 
 use bob_core::error::{ServiceError, ServiceResult};
-use bob_core::types::{DeliveryKind, InternalEvent};
+use bob_core::types::InternalEvent;
 
 /// Fixed-capacity in-memory ring buffer for inbound events.
 ///
@@ -68,6 +68,8 @@ impl InboundQueue {
 
 #[cfg(test)]
 mod tests {
+    use bob_core::types::DeliveryKind;
+
     use super::*;
 
     fn chat(content: &str) -> InternalEvent {

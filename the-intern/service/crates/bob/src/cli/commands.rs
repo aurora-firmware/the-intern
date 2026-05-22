@@ -1,4 +1,4 @@
-use std::{future::Future, io::Write, path::PathBuf};
+use std::{future::Future, io::Write, path::Path};
 
 use bob_core::error::{ServiceError, ServiceResult};
 use bob_core::types::AuditFilterKind;
@@ -81,7 +81,7 @@ pub(crate) fn invalid_request_error(detail: impl Into<String>) -> ServiceError {
     }
 }
 
-fn map_service_down_to_missing_socket(error: ServiceError, path: &PathBuf) -> ServiceError {
+fn map_service_down_to_missing_socket(error: ServiceError, path: &Path) -> ServiceError {
     if matches!(error, ServiceError::ServiceDown) {
         return invalid_request_error(format!("missing admin socket at {}", path.display()));
     }

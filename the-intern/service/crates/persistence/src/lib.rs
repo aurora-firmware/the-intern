@@ -6,7 +6,7 @@ mod session_state;
 use async_trait::async_trait;
 use bob_core::error::{ServiceError, ServiceResult};
 use bob_core::ports::{PersistenceStore, SessionState};
-use bob_core::types::{DeliveryKind, InternalEvent, SessionId};
+use bob_core::types::{InternalEvent, SessionId};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -202,6 +202,7 @@ mod tests {
     use super::*;
     use bob_core::error::ServiceError;
     use bob_core::ports::PersistenceStore;
+    use bob_core::types::DeliveryKind;
 
     fn small_cfg() -> Config {
         Config {

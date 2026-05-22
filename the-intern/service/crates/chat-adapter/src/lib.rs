@@ -139,7 +139,7 @@ mod tests {
     use requests_handler::{start_with, Config as QueueConfig};
     use tokio::sync::watch;
 
-    use super::{ChatFrame, start};
+    use super::{start, ChatFrame};
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -190,7 +190,10 @@ mod tests {
             peer_id,
             context_id: Some("conv-001".to_owned()),
         };
-        frame_handle.deliver(frame).await.expect("deliver must succeed");
+        frame_handle
+            .deliver(frame)
+            .await
+            .expect("deliver must succeed");
 
         // Give the actor time to forward the event to the intake queue.
         tokio::task::yield_now().await;
@@ -206,7 +209,10 @@ mod tests {
         assert_eq!(got.len(), 1, "exactly one pair must be received");
         let (ev, ctx) = &got[0];
         assert_eq!(ev.kind, DeliveryKind::Sync, "delivery kind must be Sync");
-        assert_eq!(ev.payload, "hello world", "payload must be the message text");
+        assert_eq!(
+            ev.payload, "hello world",
+            "payload must be the message text"
+        );
         assert_eq!(ctx.sender, peer_id, "sender must be the peer UserId");
         assert_eq!(ctx.source, channel_id, "source must be the chat ChannelId");
         assert_eq!(
@@ -231,7 +237,10 @@ mod tests {
             peer_id,
             context_id: None,
         };
-        frame_handle.deliver(frame).await.expect("deliver must succeed");
+        frame_handle
+            .deliver(frame)
+            .await
+            .expect("deliver must succeed");
 
         tokio::task::yield_now().await;
 

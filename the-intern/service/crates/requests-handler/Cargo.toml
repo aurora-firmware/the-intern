@@ -10,3 +10,6 @@ policy-control = { path = "../policy-control" }
 chrono = "0.4"
 tracing = "0.1"
 async-trait = { workspace = true }
+
+[lints]
+workspace = true

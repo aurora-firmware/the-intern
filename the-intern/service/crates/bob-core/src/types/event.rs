@@ -60,7 +60,7 @@ mod tests {
     fn delivery_kind_derives_copy_clone_debug_partialeq_eq() {
         let k = DeliveryKind::Sync;
         let copied = k; // Copy
-        let cloned = k.clone(); // Clone
+        let cloned = Clone::clone(&k); // Clone
         let debug_str = format!("{k:?}"); // Debug
         assert_eq!(k, copied); // PartialEq / Eq
         assert_eq!(k, cloned);
