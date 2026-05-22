@@ -8,7 +8,6 @@ pub mod peer_cred;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use bob_core::error::{ServiceError, ServiceResult};
 use tokio::{net::UnixStream, sync::mpsc, task::JoinHandle};
 
 use crate::listener::{Listener, ListenerConfig};
@@ -47,28 +46,19 @@ impl Default for Config {
     }
 }
 
-#[derive(Debug)]
-enum Command {
-    SendMessage(String),
-}
-
 #[doc = "scaffold — see project/docs/roadmap.md phase 3"]
 #[derive(Clone)]
 pub struct Handle {
-    tx: mpsc::Sender<Command>,
+    // Kept to control the actor channel lifetime: the actor loop exits when
+    // all Handle clones are dropped and tx is closed.
+    #[allow(dead_code)]
+    tx: mpsc::Sender<std::convert::Infallible>,
 }
 
 #[doc = "scaffold — see project/docs/roadmap.md phase 3"]
 pub struct Actor {
     cfg: Config,
-    rx: mpsc::Receiver<Command>,
-}
-
-impl Handle {
-    pub async fn send_message(&self, message: impl Into<String>) -> ServiceResult<()> {
-        let _ = self.tx.send(Command::SendMessage(message.into())).await;
-        Err(ServiceError::NotImplemented)
-    }
+    rx: mpsc::Receiver<std::convert::Infallible>,
 }
 
 impl Actor {
@@ -77,14 +67,8 @@ impl Actor {
             command_buffer = self.cfg.command_buffer,
             "extension-ipc actor started"
         );
-        while let Some(command) = self.rx.recv().await {
-            match command {
-                Command::SendMessage(message) => {
-                    let payload =
-                        serde_json::json!({ "command": "send_message", "size": message.len() });
-                    tracing::debug!(?payload, "extension-ipc command received");
-                }
-            }
+        while self.rx.recv().await.is_some() {
+            // No commands are defined; this branch is unreachable.
         }
         tracing::info!("extension-ipc actor stopped");
     }
@@ -328,16 +312,6 @@ mod tests {
             }
         }
         false
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn handle_send_message_returns_not_implemented() {
-        let (handle, task) = start(Config::default());
-
-        let result = handle.send_message("hello").await;
-
-        assert!(matches!(result, Err(ServiceError::NotImplemented)));
-        task.abort();
     }
 
     #[tokio::test(flavor = "current_thread")]
