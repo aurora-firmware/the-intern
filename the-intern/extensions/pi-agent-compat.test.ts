@@ -112,6 +112,39 @@ describe("AC-2: installed pi-agent package version matches supported version", (
 });
 
 // ---------------------------------------------------------------------------
+// AC-4: README files document the supported version and incompatibility signal.
+// ---------------------------------------------------------------------------
+
+describe("AC-4: README files document supported pi-agent version and incompatibility signal", () => {
+  it("root README.md mentions the supported pi-agent version and that other versions are unsupported", () => {
+    const rootReadme = fs.readFileSync(
+      extensionsPath("..", "..", "README.md"),
+      "utf8"
+    );
+    expect(
+      rootReadme,
+      `Root README.md must mention the supported pi-agent version "${SUPPORTED_PI_AGENT_VERSION}"`
+    ).toContain(SUPPORTED_PI_AGENT_VERSION);
+    expect(
+      rootReadme,
+      "Root README.md must state that other installed versions are unsupported"
+    ).toMatch(/unsupported/i);
+  });
+
+  it("extensions README.md mentions the supported pi-agent version and incompatibility signal", () => {
+    const extReadme = fs.readFileSync(extensionsPath("README.md"), "utf8");
+    expect(
+      extReadme,
+      `extensions/README.md must mention the supported pi-agent version "${SUPPORTED_PI_AGENT_VERSION}"`
+    ).toContain(SUPPORTED_PI_AGENT_VERSION);
+    expect(
+      extReadme,
+      "extensions/README.md must describe the incompatibility signal (npm test failing)"
+    ).toMatch(/npm test|incompatib/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // AC-3: PI_EVENTS in bob.ts matches the installed package's typed event surface,
 //        excluding tool_call.
 // ---------------------------------------------------------------------------
