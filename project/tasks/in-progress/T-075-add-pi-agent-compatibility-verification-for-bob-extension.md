@@ -1,7 +1,7 @@
 ---
 id: T-075
 title: Add pi-agent compatibility verification for bob extension
-status: pending
+status: in-progress
 priority: medium
 assigned-role: unassigned
 created: '2026-05-22'
