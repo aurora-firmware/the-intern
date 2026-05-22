@@ -92,3 +92,25 @@ Commits: `9dd2f3c` (cycle 1), `b4e9676` (cycle 2). `cargo test --workspace` — 
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
+
+### Review Verdict — 2026-05-22
+
+PASS
+
+**Stage 1 — Spec compliance:** All five acceptance criteria are met.
+
+- AC-1: `BobConfig` exposes `pub channels: ChannelsConfig` with `pub chat: ChatChannelConfig { pub enabled: bool }`. Confirmed by type-annotation structural test `bob_config_exposes_channels_field_with_chat_channel_config` and the public API diff.
+- AC-2: `RawChatChannelConfig` uses `#[serde(default = "default_chat_enabled")]` (returns `true`) and `impl Default` delegates to the same function. Confirmed by `chat_channel_is_enabled_by_default_when_no_channels_config_is_supplied` using `load_with_env_overrides([])` (no file, no config source).
+- AC-3: `chat_channel_is_disabled_when_config_source_sets_enabled_to_false` writes `[channels.chat]\nenabled = false` to a temp TOML file and asserts the parsed field is `false`.
+- AC-4: `channels_section_loads_through_figment_layered_source_with_default_then_file_override` exercises the two-layer figment path — defaults produce `true`, a TOML file overrides to `false` — exactly mirroring the `[monitoring]` section test pattern.
+- AC-5: `cargo test -p bob config` on the task branch ran 33 tests (29 before the task), 0 failures. Work Log records `cargo test --workspace` all green.
+
+The `shell_e2e.rs` change (one-field struct literal update) is justified in the Work Log and is a mechanical consequence of adding the field to `BobConfig`. No unspecified behavior was added.
+
+**Stage 2 — Code quality:** No issues found.
+
+- Correctness: Raw/public split follows the established `MonitoringConfig` pattern. `defaults_with_runtime_root` includes `channels: RawChannelsConfig::default()`. Mapping in `load_with_sources` is direct and correct.
+- Tests: Four new tests, each independent (fresh state per test), descriptively named, covering all required paths including success and override.
+- Security: No credentials, no external input bypassing typed structs.
+- Readability: Naming is idiomatic (`ChannelsConfig`, `ChatChannelConfig`, `default_chat_enabled`). Each struct and function has a single responsibility. Comments explain design intent.
+- Performance: Config is loaded once at startup; no concern.
