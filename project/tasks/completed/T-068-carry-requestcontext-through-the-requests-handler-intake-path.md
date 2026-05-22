@@ -1,7 +1,7 @@
 ---
 id: T-068
 title: Carry RequestContext through the requests-handler intake path
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-05-21'
