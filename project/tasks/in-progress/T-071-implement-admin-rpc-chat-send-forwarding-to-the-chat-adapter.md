@@ -84,6 +84,30 @@ cargo test --workspace
 
 <!-- Mandatory. Append one entry per session boundary. -->
 
+### Session 1 — 2026-05-22
+
+**What was done**
+
+Implemented all four acceptance criteria for T-071 in a single TDD cycle (the work was cohesive enough that a multi-cycle split would have produced artificial commits).
+
+**AC-1 — Optional chat-adapter handle on Dispatcher.** Added `chat_adapter: Option<ChatHandle>` (where `ChatHandle` is `chat_adapter::FrameHandle`) to the `Dispatcher` struct. `Dispatcher::new` continues to take the existing three optional handles and `version`; the chat handle is attached with a builder method `Dispatcher::with_chat_handle(frame_handle) -> Self`. This follows the existing pattern for optional handles without breaking any existing call sites. Added `chat-adapter` as a path dependency in `admin-rpc/Cargo.toml`.
+
+**AC-2 — Forwarding a frame on chat.send.** Implemented `handle_chat_send` which parses `params.id` (must be an open chat subscription on this connection), `params.text`, and optional `params.context_id`, builds a `ChatFrame` with the connection's `peer_id`, and awaits `adapter.deliver(frame)`. Returns `{ ok: true }` on success.
+
+**AC-3 — Error when no chat-adapter handle is present.** When `self.chat_adapter` is `None`, `handle_chat_send` immediately returns `CODE_METHOD_NOT_FOUND` with a clear message. The existing test `dispatch_chat_send_returns_not_implemented` was renamed to `dispatch_chat_send_without_handle_returns_method_not_found`.
+
+**AC-4 — Error on unknown or wrong-kind subscription id.** `is_open_chat_subscription(id)` checks the `ConnectionRegistry`'s `ids` vector for a `Chat`-kind entry. An audit-subscription id (correct integer format but registered as `Audit`) correctly returns `CODE_INVALID_REQUEST` without forwarding any frame.
+
+**Peer identity.** The existing `Dispatcher::dispatch` signature does not carry peer credentials — they are available in `run_connection` when the connection is accepted. The in-scope solution was to add `peer_id: UserId` to `ConnectionRegistry` (per-connection state). `ConnectionRegistry::new` defaults to `UserId::new()` for backward compatibility; `ConnectionRegistry::new_with_peer` is the explicit constructor. The `run_connection` function does not yet wire in the real `PeerCred.uid` → `UserId` mapping (that requires a `lib.rs` change not in the `Files to Touch` list).
+
+**Tests written:** 5 new tests covering AC-2 (happy path, context_id forwarding), AC-3 (no handle), AC-4 (unknown subscription id, audit subscription id used in chat.send).
+
+**What was tried and rejected.** Considered adding `peer_id` directly to `Dispatcher::dispatch`'s signature, but that would have changed the signature in `lib.rs` (not in scope). Builder pattern on `Dispatcher` was chosen to keep existing call sites unchanged.
+
+**What remains.** The `run_connection` function in `lib.rs` creates `ConnectionRegistry::new(bus.clone())` without passing a real peer identity. To fully honour "peer identity from `SO_PEERCRED`", that wiring should be added when `lib.rs` is in scope — noted as a follow-on for T-072.
+
+`cargo test -p admin-rpc`: 99 passed, 0 failed. `cargo test --workspace`: all crates pass, 0 failures.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
