@@ -1,0 +1,23 @@
+[package]
+name = "extension-ipc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "sync", "net", "signal", "macros"] }
+bob-core = { path = "../bob-core" }
+monitoring = { path = "../monitoring" }
+policy-control = { path = "../policy-control" }
+tracing = "0.1"
+chrono = "0.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+nix = { version = "0.29", default-features = false, features = ["socket", "user"] }
+
+[dev-dependencies]
+tempfile = "3"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
+[lints]
+workspace = true

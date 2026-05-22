@@ -1,0 +1,182 @@
+---
+id: T-061
+title: Add monitoring configuration and startup wiring
+status: completed
+priority: high
+assigned-role: unassigned
+created: '2026-05-20'
+spec: S-005
+---
+
+# Add monitoring configuration and startup wiring
+
+<!--
+Task Quality Rules (see the new-task skill for full details):
+  - Atomic — one clear outcome.
+  - One-shottable — ≤ 3–4 files touched, ≤ 5 ACs, Description ≈ 20 lines.
+  - Verifiable — concrete Verification command or explicit manual steps.
+  - Self-contained — Description is enough to start without follow-up questions.
+  - EARS — every AC matches one of the five EARS patterns below.
+  - Dependency-honest — list every prior task this one reads from or modifies.
+-->
+
+## Description
+
+Phase 2 support for S-005. Add Monitoring configuration to bob's TOML-backed
+configuration and use it when `bob serve` starts the Monitoring actor.
+
+The config must include the JSONL audit log path and default tail visibility
+kinds. If the path is omitted, bob should resolve an OS-appropriate application
+state path. If the path is configured but unusable, startup must fail rather
+than running without durable audit. Parent directories for the audit file must
+be created with owner-only permissions where applicable. Wire
+`monitoring::start` from `bob::serve` with the loaded config and preserve
+existing shutdown behaviour.
+
+## Acceptance Criteria
+
+<!-- EARS pattern reference. Every criterion must match one pattern:
+  1. Ubiquitous            — The system shall [outcome]
+  2. Event-driven          — WHEN [trigger] THE SYSTEM SHALL [outcome]
+  3. Unwanted-behaviour    — IF [fault] THEN THE SYSTEM SHALL [outcome]
+  4. State-driven          — WHILE [state] THE SYSTEM SHALL [outcome]
+  5. Optional              — WHERE [feature included] THE SYSTEM SHALL [outcome]
+
+Examples:
+  AC-1: WHEN the user submits valid credentials THE SYSTEM SHALL
+        redirect to /dashboard within 200ms.
+  AC-2: IF the password is incorrect THEN THE SYSTEM SHALL return 401
+        and display "Invalid credentials".
+  AC-3: The system shall log every authentication attempt with user id
+        and outcome.
+-->
+
+AC-1: The system shall load a Monitoring config section containing an audit JSONL path and default tail filters from bob's layered TOML configuration.
+AC-2: WHEN no audit log path is configured THE SYSTEM SHALL resolve a non-empty OS-appropriate default path.
+AC-3: IF the configured audit log path cannot be opened for append THEN THE SYSTEM SHALL fail `bob serve` startup.
+AC-4: WHEN `bob serve` starts subsystems THE SYSTEM SHALL pass the loaded Monitoring config into `monitoring::start`.
+AC-5: WHEN Monitoring opens an audit log path with missing parent directories THE SYSTEM SHALL create the parent directories with owner-only permissions where applicable.
+
+## Dependencies
+
+- `T-060` — provides the Monitoring config and startup contract consumed by `bob serve`.
+
+## Files to Touch
+
+- `the-intern/service/crates/bob/src/config.rs` — load and validate the monitoring section and default audit log path.
+- `the-intern/service/crates/bob/src/serve.rs` — start Monitoring with the loaded config and preserve shutdown flushing.
+- `the-intern/service/crates/bob/tests/shell_e2e.rs` — extend startup coverage only if config/startup behaviour is not fully covered by unit tests.
+
+## Verification
+
+```bash
+cd the-intern/service
+cargo test -p bob config::tests
+cargo test -p bob serve::tests
+```
+
+## Work Log
+
+<!-- Mandatory. Append one entry per session boundary. Format:
+### Session N — YYYY-MM-DD
+Free-prose body: what was done this session, what was tried and
+rejected, decisions made, what remains for next session.
+
+Start every session by reading the entries below.
+The final entry serves as the handoff to the reviewer. -->
+
+### Session 1 — 2026-05-20
+
+I started T-061 by reading the canonical task file from `dev-agent` and confirmed there were no prior Work Log entries. I then mapped the existing `bob` config/startup and `monitoring` contract and added red tests in `crates/bob/src/config.rs` covering: loading a `[monitoring]` section with audit path and default tail filters, resolving a non-empty default audit path when omitted, failing config load when the audit path is not appendable, and creating missing parent directories with owner-only permissions where applicable.
+
+I ran `cargo test -p bob config::tests` for the red step, but compilation failed before reaching new tests due pre-existing errors in `crates/requests-handler/src/handler.rs` (`AuditKind` no longer exists in `bob_core::types`, and `AuditRecord` is instantiated with a removed `description` field). This is outside T-061 files-to-touch and prevents any `bob` test execution, so I stopped implementation per boundary/escalation rules.
+
+I attempted to file a blocker bug via the documented `new-bug` skill command and rejected that command form because the CLI does not support the documented `--title/--description` flags. I then used the actual CLI signature and created `B-007`. I also logged both CLI/skill issues in `ai-process-cli-reported-issues.md` as required by repository instructions.
+
+Architect consultation classified the blocker as an execution issue but directed that T-061 must not absorb the `requests-handler` fix as a scope exception. T-061 is blocked by `B-007`; resume this branch only after `B-007` lands, then refresh from `dev-agent` and rerun `cd the-intern/service && cargo test -p bob config::tests && cargo test -p bob serve::tests`.
+
+Remaining work after blocker resolution: implement minimal production changes for monitoring config loading/path preparation/startup wiring, run red→green→refactor cycles with commits, and finish verification commands for `config::tests` and `serve::tests`.
+
+### Session 2 — 2026-05-20
+
+I resumed after the blocker refresh and continued from the existing red tests in `config.rs`. I implemented a new `MonitoringConfig` on `BobConfig`, added `[monitoring]` extraction from layered TOML, and resolved defaults so omitted `monitoring.audit_log_path` now maps to an OS-appropriate state location while omitted tail filters default to all supported kinds (`events`, `reports`, `verdicts`). I added startup-time validation that prepares parent directories, applies owner-only permissions on newly created parent directories where applicable (Unix), and verifies the audit file is appendable. This turned the pre-existing red `config::tests` green and I committed that cycle as `feat(bob): add monitoring config loading and path checks`.
+
+For AC-4, I added a focused red test in `serve::tests` asserting monitoring startup config is derived from `BobConfig` rather than defaults, initially failing on a missing helper. I then implemented `build_monitoring_config` and changed `try_start_subsystems` to call `monitoring::start(build_monitoring_config(cfg))`, which made the test pass; I committed this second cycle as `feat(bob): wire monitoring startup from loaded config`.
+
+I tried running full `serve::tests` inside the sandbox and rejected that path after repeated `Operation not permitted` errors on Unix socket binds; I reran the verification command outside sandbox permissions, where the suite passed. Remaining work on this branch: none for T-061 implementation; ready for reviewer handoff.
+
+Evidence:
+- Red step observed:
+  - `cargo test -p bob config::tests -- --nocapture` failed initially with `no field monitoring on type BobConfig`.
+  - `cargo test -p bob serve::tests::monitoring_config_maps_audit_log_path_from_bob_config -- --nocapture` failed with missing `build_monitoring_config`.
+- Green/verification:
+  - `cd the-intern/service && cargo test -p bob config::tests` passed (18/18).
+  - `cd the-intern/service && cargo test -p bob serve::tests -- --nocapture` passed outside sandbox (18/18).
+- Git evidence:
+  - `7e393c2 feat(bob): add monitoring config loading and path checks`
+  - `3173d41 feat(bob): wire monitoring startup from loaded config`
+
+Obstacles Encountered:
+- `serve::tests` could not run in sandbox due Unix socket bind permission errors (`Operation not permitted`); resolved by rerunning the same command with escalated permissions.
+- No code-level blockers after `B-007` resolution.
+
+### Session 3 — 2026-05-20
+
+I resumed to address Review Verdict #1 (FAIL), which found AC-2 only partially met: omitted `monitoring.audit_log_path` was seeded in the raw defaults via `default_monitoring_audit_log_path_for_env(&BTreeMap::new(), uid)`, so the environment-aware resolution (`XDG_STATE_HOME`, then `HOME` fallback) never ran — the already-`Some(...)` default short-circuited the later `unwrap_or_else` fallback.
+
+I fixed this by threading `&sources.env` through `defaults_with_runtime_root`, so the default audit path is now computed from the real runtime environment instead of an empty map. I replaced the weak `resolves_default_monitoring_audit_path_when_not_configured` test (which only asserted non-emptiness) with two targeted tests: `resolves_default_monitoring_audit_path_from_xdg_state_home_when_not_configured` asserts the resolved default is `$XDG_STATE_HOME/bob/audit.jsonl`, and `resolves_default_monitoring_audit_path_from_home_fallback_when_xdg_state_home_missing` asserts the OS-appropriate `HOME`-based fallback when `XDG_STATE_HOME` is absent. I committed this as `d87cc2d fix(config): resolve monitoring audit default from env`.
+
+Verification (run from `the-intern/service`, outside sandbox):
+- `cargo test -p bob --lib config` — 29 passed, 0 failed (includes both new env-aware tests).
+- `cargo test -p bob` — full suite 65 + integration tests passed, 0 failed.
+- `cargo build -p bob` — clean.
+- `cargo clippy -p bob` — the 4 reported clippy errors are all in `cli/commands/chat.rs` and `cli/commands.rs`; confirmed pre-existing on `dev-agent` and outside T-061's files-to-touch.
+
+Remaining work on this branch: none. All five ACs are implemented and verified; ready for re-review.
+
+Obstacles Encountered:
+- None.
+
+## Review
+
+<!-- Reviewer: append verdict here after each review cycle.
+
+### Review Verdict — YYYY-MM-DD
+PASS | FAIL | ESCALATE
+
+- For FAIL: file, location, what is wrong, what should change.
+- For PASS: brief confirmation that both stages passed.
+- For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
+-->
+
+### Review Verdict — 2026-05-20
+FAIL
+
+- **File and location**: `the-intern/service/crates/bob/src/config.rs:554`, `the-intern/service/crates/bob/src/config.rs:555`, `the-intern/service/crates/bob/src/config.rs:152`.
+- **What is wrong**: AC-2 is not fully met. When `monitoring.audit_log_path` is omitted, defaults are seeded with `default_monitoring_audit_log_path_for_env(&BTreeMap::new(), uid)`, which ignores runtime environment state-path variables (`XDG_STATE_HOME`, `HOME`). Because that default is already `Some(...)`, the later fallback at `raw.monitoring.audit_log_path.unwrap_or_else(...)` never executes, so resolution does not use an OS state directory when available.
+- **What should change**: Leave `monitoring.audit_log_path` unset in defaults (or compute it from `sources.env` before extraction) so omitted config resolves through the environment-aware path logic. Add/adjust a test that asserts the resolved default uses `XDG_STATE_HOME` (or `HOME` fallback) when provided.
+
+Stage 2 was not executed because Stage 1 failed.
+
+### Review Verdict — 2026-05-20 (cycle 2)
+PASS
+
+Stage 1 — all five acceptance criteria met:
+
+- AC-1: `MonitoringConfig` struct with `audit_log_path` and `default_tail_filters` is loaded from the `[monitoring]` TOML section via `RawMonitoringConfig` / figment layering. Confirmed by `loads_monitoring_section_with_audit_path_and_default_tail_filters`.
+- AC-2 (FAIL remediation): `defaults_with_runtime_root` now receives `&sources.env` and calls `default_monitoring_audit_log_path_for_env(env, uid)` with the real environment, not an empty map. The resolved default correctly follows XDG_STATE_HOME → HOME fallback → tempdir. Two targeted tests confirm both the XDG and HOME-fallback paths.
+- AC-3: `ensure_monitoring_audit_log_path` is invoked from `validate()` and returns a `Configuration` error when the path cannot be opened for append. Confirmed by `returns_configuration_error_when_monitoring_audit_path_is_not_appendable`.
+- AC-4: `try_start_subsystems` calls `monitoring::start(build_monitoring_config(cfg))`, passing `audit_log_path` and `command_buffer` from `BobConfig`. Confirmed by `monitoring_config_maps_audit_log_path_from_bob_config`.
+- AC-5: `create_monitoring_parent_dirs` calls `create_dir_all` then `set_owner_only_permissions` (0o700 on unix, no-op on non-unix). Confirmed by `creates_missing_monitoring_parent_directories_with_owner_only_permissions`.
+
+Files touched: only `config.rs` and `serve.rs`, matching the declared Files to Touch scope.
+
+Stage 2 — all checks pass:
+
+- Correctness: XDG/HOME/tempdir chain is correct per platform. Empty-path guard prevents a footgun. File handle from `OpenOptions::open` in `ensure_monitoring_audit_log_path` is dropped immediately with no leak.
+- Tests: 5 new config tests and 1 new serve test cover AC-1 through AC-5 with both success and failure paths. Tests use tempfiles and explicit env maps — no shared mutable state.
+- Security: No hardcoded credentials. External paths are validated before use. No new permissions beyond what the spec requires.
+- Readability: Function names are consistent with project conventions, each function has one responsibility, no dead code or debug artifacts.
+- Performance: No unnecessary loops or blocking in hot paths; filesystem checks are expected at startup.
+
+Pre-existing clippy errors (4) are all in `cli/commands/chat.rs` and `cli/commands.rs`, outside T-061 scope, and unchanged from `dev-agent`.
