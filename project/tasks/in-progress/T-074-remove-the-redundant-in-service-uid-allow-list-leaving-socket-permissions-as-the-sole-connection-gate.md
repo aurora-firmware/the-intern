@@ -146,6 +146,10 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-22
+Implemented ADR-005-aligned removal of the in-service uid/gid allow-list gate so socket filesystem permissions remain the only admission control. I removed `bob_core::auth::is_allowed` and its tests while keeping `PeerCred` and `peer_cred_from_fd`; removed allow-list checks and `gate_peer` helpers/tests from admin and extension listeners; and removed `admin_allowed_uids`, `admin_allowed_gid`, and service-uid plumbing from listener configs, crate configs, `BobConfig` raw/public/default mappings, and `bob serve`. I updated service/user-facing docs (`the-intern/service/README.md`, `user_diagrams.md`) to describe filesystem-permission gating. Existing socket permission behavior/tests (parent `0o700`, socket `0o660`) were preserved.
+During verification I hit pre-existing environment/test constraints: many `bob` tests fail in this sandbox when binding Unix sockets with `PermissionDenied (EPERM)`. I added/kept permission-denied skip guards only where touched by this task (`admin-rpc`, `extension-ipc`, `bob-core`) and did not broaden unrelated out-of-scope `bob` test rewrites. Remaining work is to decide whether to adjust `bob` test harnesses for restricted environments or run full workspace verification in an environment that permits Unix socket binds.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
