@@ -20,8 +20,6 @@ pub use crate::multiplex::{MonitoringBackedHandle, TracingMonitoringHandle};
 pub struct Config {
     pub command_buffer: usize,
     pub extension_sock_path: PathBuf,
-    pub extension_allowed_uids: Vec<u32>,
-    pub service_uid: u32,
     pub monitoring_handle: Arc<dyn MonitoringHandle>,
     pub policy_snapshot: policy_control::SnapshotHandle,
 }
@@ -31,8 +29,6 @@ impl std::fmt::Debug for Config {
         f.debug_struct("Config")
             .field("command_buffer", &self.command_buffer)
             .field("extension_sock_path", &self.extension_sock_path)
-            .field("extension_allowed_uids", &self.extension_allowed_uids)
-            .field("service_uid", &self.service_uid)
             .field("monitoring_handle", &"<dyn MonitoringHandle>")
             .field("policy_snapshot", &"<SnapshotHandle>")
             .finish()
@@ -45,22 +41,10 @@ impl Default for Config {
         Self {
             command_buffer: 0,
             extension_sock_path: PathBuf::new(),
-            extension_allowed_uids: Vec::new(),
-            service_uid: current_uid(),
             monitoring_handle: Arc::new(NoopMonitoringHandle),
             policy_snapshot: snapshot,
         }
     }
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn current_uid() -> u32 {
-    nix::unistd::Uid::current().as_raw()
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn current_uid() -> u32 {
-    0
 }
 
 #[derive(Debug)]
@@ -245,8 +229,6 @@ pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
     } else {
         let listener_cfg = ListenerConfig {
             extension_sock_path: cfg.extension_sock_path.clone(),
-            extension_allowed_uids: cfg.extension_allowed_uids.clone(),
-            service_uid: cfg.service_uid,
         };
         match Listener::bind(listener_cfg) {
             Ok(listener) => {
@@ -374,8 +356,6 @@ mod tests {
 
         let probe = listener::Listener::bind(listener::ListenerConfig {
             extension_sock_path: sock_path.clone(),
-            extension_allowed_uids: Vec::new(),
-            service_uid: current_uid(),
         });
         match probe {
             Ok(listener) => drop(listener),
