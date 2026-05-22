@@ -160,3 +160,26 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-05-22
+
+PASS
+
+**Stage 1 — Spec compliance:** All four acceptance criteria are met.
+
+- AC-1: `the-intern/extensions/package.json` and `package-lock.json` both declare `@earendil-works/pi-coding-agent` at exact version `0.75.3` with no caret or tilde. Verified by diff and by the AC-1 test.
+- AC-2: `pi-agent-compat.test.ts` reads the installed package's `package.json` and asserts the version equals `0.75.3`, emitting a multi-line diagnostic error on mismatch. Test passes.
+- AC-3: `pi-agent-compat.test.ts` dynamically imports `PI_EVENTS` from `bob.ts` (now a named export), parses the installed package's `dist/core/extensions/types.d.ts` for `on()` overloads, excludes `tool_call`, and asserts sorted equality. `bob.ts` has only the single `export` keyword added; the event list is unchanged. Test passes.
+- AC-4: Root `README.md` and `the-intern/extensions/README.md` both document `0.75.3` as the supported version, state that other versions are unsupported, and describe the `npm test` failure signal. Two AC-4 tests confirm the content programmatically.
+
+No unspecified files were modified. All six files touched are within the task's stated scope.
+
+**Stage 2 — Code quality:**
+
+- Correctness: Test logic correctly parses the `.d.ts` format using a line-anchored regex and throws an informative error if no overloads are found (guards against silent misparse). Error messages are actionable.
+- Tests: 30 tests pass (`npm test`). The new test file covers both the passing case and the shape of failure messages. Tests are independent (no shared mutable state). `npm run typecheck` exits clean.
+- Security: No hardcoded secrets, no external I/O beyond the local filesystem. File paths are constructed from `import.meta.dirname`, not user input.
+- Readability: File is well-structured with section dividers, descriptive helper names, and a module-level doc comment. The `SUPPORTED_PI_AGENT_VERSION` constant makes the sentinel value easy to locate.
+- Performance: Only file reads; no loops over large data sets or blocking calls in hot paths.
+
+Minor observation (non-blocking): the AC-3 test describe label says "excluding tool_call" but the test body compares sorted arrays reporting both `missing` and `extra` items, which means it would also catch events added to `PI_EVENTS` that are not in the package surface. This is correct and conservative behaviour — just worth noting that the test is stricter than the AC wording alone suggests.
