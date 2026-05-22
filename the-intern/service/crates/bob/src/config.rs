@@ -1346,6 +1346,92 @@ audit_log_path = "{}"
         );
     }
 
+    // ── AC-3 (T-069): [channels.chat] enabled = false disables the chat channel ─
+
+    #[test]
+    fn chat_channel_is_disabled_when_config_source_sets_enabled_to_false() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let config_file = write_temp_config(
+            r#"
+[channels.chat]
+enabled = false
+"#,
+        );
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("config with [channels.chat] enabled = false should parse");
+
+        assert!(
+            !config.channels.chat.enabled,
+            "chat channel must be disabled when [channels.chat] enabled = false is set"
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    // ── AC-4 (T-069): channels section round-trips through the figment loader ───
+
+    #[test]
+    fn channels_section_loads_through_figment_layered_source_with_default_then_file_override() {
+        // Verify the full figment loading path:
+        //   1. Default layer: chat.enabled = true (no file).
+        //   2. TOML file layer: chat.enabled = false (file overrides default).
+        // This confirms the section is properly wired into the serialized-defaults
+        // layer and can be overridden by a TOML config file, matching the same
+        // layered-source pattern used by [policy] and [monitoring].
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        // Step 1: defaults only — chat must be enabled.
+        let config_defaults = BobConfig::load_with_sources(ConfigSources {
+            env: env.clone(),
+            config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("defaults-only load should succeed");
+        assert!(
+            config_defaults.channels.chat.enabled,
+            "default layer must produce chat.enabled = true"
+        );
+
+        // Step 2: TOML file overrides the default — chat must be disabled.
+        let config_file = write_temp_config(
+            r#"
+[channels.chat]
+enabled = false
+"#,
+        );
+        let config_file_override = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("file-overridden load should succeed");
+        assert!(
+            !config_file_override.channels.chat.enabled,
+            "TOML file layer must be able to override chat.enabled to false"
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
     // ── AC-3 (T-053): legacy top-level allowed_user_ids field is removed ──────
 
     #[test]
