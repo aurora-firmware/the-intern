@@ -116,6 +116,39 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-05-22
+
+Before writing any code, confirmed the Work Log was empty (first session). Read the task, the existing `bob.ts`, `bob.test.ts`, `package.json`, and the installed `@earendil-works/pi-coding-agent` package types to understand the full landscape.
+
+**What was done**
+
+Two TDD cycles landed:
+
+**Cycle 1 (AC-1, AC-2, AC-3):**
+
+Created `pi-agent-compat.test.ts`. The tests drove three changes:
+- AC-1 test: reads `extensions/package.json` and asserts the declared version is the bare string `0.75.3` with no `^` or `~`. This caught the existing `^0.75.3` declaration immediately. Fixed by editing both `package.json` and the root entry in `package-lock.json`.
+- AC-2 test: reads the installed package's `package.json` and fails with a multi-line diagnostic message if the version is not `0.75.3`. This passed from the start (the installed version was already 0.75.3), confirming the test is correctly checking the right thing.
+- AC-3 test: imports `PI_EVENTS` from `bob.ts` as a named export, reads the event names from the installed package's `dist/core/extensions/types.d.ts` by matching `on(event: "name", …)` lines, filters out `tool_call`, and asserts sorted equality. This drove adding `export` to the `PI_EVENTS` constant in `bob.ts`. The existing set matched exactly.
+
+**Cycle 2 (AC-4):**
+
+Added two AC-4 tests to `pi-agent-compat.test.ts` that assert the root `README.md` contains `0.75.3` and the word "unsupported", and that `the-intern/extensions/README.md` contains `0.75.3` and references `npm test` or "incompatib". Both tests failed (READMEs had no such content). Added a "JS Extension — pi-agent Package Compatibility" section to the root README and a "pi-agent Package Compatibility" section to the extensions README. The extensions README section also includes a step-by-step guide for future operators updating the compatibility record.
+
+**What was tried and rejected**
+
+Considered parsing the compiled JS instead of the `.d.ts` file to extract the event surface — rejected because the TypeScript declaration file is the canonical "typed event surface" the task AC-3 specifically references, and it is a stable text format with one overload per line.
+
+Considered deriving the event list from the TypeScript type system at build time using a custom type utility — rejected as over-engineered; reading the `.d.ts` file at test time is simple, transparent, and gives useful error messages when the format changes.
+
+**What remains**
+
+Nothing — all four acceptance criteria have tests and implementations, all 30 tests pass, typecheck is clean, and both README files carry the required documentation.
+
+Commits on `task/T-075-pi-agent-compatibility-verification`:
+- `2f65665 feat(extensions): add pi-agent compatibility verification tests`
+- `7559780 docs(extensions): document pi-agent 0.75.3 compatibility contract`
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
