@@ -174,7 +174,7 @@ where
             next_line = lines.next_line() => {
                 match next_line? {
                     Some(line) => {
-                        let params = build_chat_send_params(session, &line);
+                        let params = build_chat_send_params(cfg, session, &line);
                         send_chat(cfg.clone(), "chat.send", params).await?;
                     }
                     None => {
@@ -192,14 +192,17 @@ where
     subscription.close().await
 }
 
-fn build_chat_send_params(session: Option<&str>, line: &str) -> Value {
+fn build_chat_send_params(cfg: &BobConfig, session: Option<&str>, line: &str) -> Value {
+    let application_identity = cfg.chat_application_identity.to_string();
     match session {
         Some(id) => json!({
             "session": id,
-            "text": line
+            "text": line,
+            "application_identity": application_identity
         }),
         None => json!({
-            "text": line
+            "text": line,
+            "application_identity": application_identity
         }),
     }
 }
@@ -302,7 +305,13 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn chat_opens_with_session_and_sends_each_input_line() {
-        let cfg = BobConfig::test_base();
+        let identity = "00000000-0000-0000-0000-000000000123"
+            .parse()
+            .expect("identity should parse");
+        let cfg = BobConfig {
+            chat_application_identity: identity,
+            ..BobConfig::test_base()
+        };
         let closed = Arc::new(AtomicBool::new(false));
         let sent_params = Arc::new(Mutex::new(Vec::<Value>::new()));
         let (notif_tx, notif_rx) = mpsc::unbounded_channel();
@@ -350,8 +359,16 @@ mod tests {
         assert_eq!(
             sent,
             vec![
-                json!({"session":"session-7","text":"hello"}),
-                json!({"session":"session-7","text":"world"})
+                json!({
+                    "session":"session-7",
+                    "text":"hello",
+                    "application_identity":"00000000-0000-0000-0000-000000000123"
+                }),
+                json!({
+                    "session":"session-7",
+                    "text":"world",
+                    "application_identity":"00000000-0000-0000-0000-000000000123"
+                })
             ]
         );
     }
