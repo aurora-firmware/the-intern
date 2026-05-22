@@ -109,7 +109,7 @@ flowchart TB
 ## Current Implementation Notes
 
 - `admin.sock` currently serves admin/reporting JSON-RPC methods such as `service.status`, `sessions.list`, `sessions.kill`, `policy.reload`, audit tail subscription, `report.submit`, and `chat.open` / `chat.send`.
-- `chat.send` is implemented: it forwards a chat user-input frame to the `chat-adapter`, which normalizes it into an `InternalEvent` (`DeliveryKind::Sync`) paired with a `RequestContext` and submits it to the `requests-handler`. The admin connection's peer identity is not yet wired from `SO_PEERCRED`, so chat frames currently carry an anonymous `UserId`.
+- `chat.send` is implemented: it forwards a chat user-input frame to the `chat-adapter`, which normalizes it into an `InternalEvent` (`DeliveryKind::Sync`) paired with a `RequestContext` and submits it to the `requests-handler`. Chat frames carry a self-asserted application `UserId` from `chat.send` request arguments.
 - `chat-adapter` is started by `bob serve` when the `[channels.chat]` config section is enabled (the default) and is torn down with the other actors on graceful shutdown.
 - `extension.sock` is intended for pi-agent extension traffic: authorization requests and extension events tagged by session.
 - `requests-handler` can queue and preflight internal events, then enqueue allowed events into persistence.
