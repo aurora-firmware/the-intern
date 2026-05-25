@@ -65,15 +65,17 @@ instead.
 
 ## Files to Touch
 
-- `the-intern/docs/src/architecture.md` — replace stub with full content.
+- `the-intern/docs/src/architecture-overview/index.md` — replace stub
+  created by T-077 with full content.
 
 ## Verification
 
 ```bash
 cd the-intern/docs && mdbook build
-test -s src/architecture.md
-# at least two SVG diagrams produced from mermaid
-test "$(grep -rc '<svg' book/architecture* 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')" -ge 2
+test -s src/architecture-overview/index.md
+# at least two mermaid fenced blocks transformed into <pre class="mermaid">
+# (mdbook-mermaid renders to SVG client-side; static HTML carries <pre class="mermaid">)
+test "$(grep -rc 'class="mermaid"' book/architecture-overview* 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')" -ge 2
 ```
 
 ## Work Log

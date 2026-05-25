@@ -64,14 +64,14 @@ warnings or broken internal links.
 
 ## Files to Touch
 
-- `the-intern/docs/src/extension-author.md` — replace stub with full
-  content.
+- `the-intern/docs/src/extension-author-guide/index.md` — replace stub
+  created by T-077 with full content.
 
 ## Verification
 
 ```bash
 cd the-intern/docs && mdbook build
-test -s src/extension-author.md
+test -s src/extension-author-guide/index.md
 grep -rq "ADR-005" book/
 grep -rq "0.75.3" book/
 ```

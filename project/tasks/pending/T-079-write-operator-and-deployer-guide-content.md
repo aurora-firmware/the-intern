@@ -64,16 +64,16 @@ Overview chapter rather than restating that material.
 
 ## Files to Touch
 
-- `the-intern/docs/src/operator-guide.md` — replace stub with full
-  content.
+- `the-intern/docs/src/operator-guide/index.md` — replace stub created
+  by T-077 with full content.
 
 ## Verification
 
 ```bash
 cd the-intern/docs && mdbook build
-test -s src/operator-guide.md
+test -s src/operator-guide/index.md
 grep -rq "BOB_ADMIN_SOCK_PATH" book/
-grep -rq "pi" book/operator-guide* || grep -rq "pi binary" book/
+grep -rq "pi binary" book/
 ```
 
 ## Work Log
