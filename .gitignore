@@ -3,3 +3,6 @@
 .claude
 .pi
 .agents
+
+# mdBook rendered output
+the-intern/docs/book/
