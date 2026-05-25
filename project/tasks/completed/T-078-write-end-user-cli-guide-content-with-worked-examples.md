@@ -1,7 +1,7 @@
 ---
 id: T-078
 title: Write end-user CLI guide content with worked examples
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-05-25'
