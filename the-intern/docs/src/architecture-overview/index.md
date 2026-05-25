@@ -60,7 +60,7 @@ sequenceDiagram
     Q->>RH: dequeue
     RH->>RH: evaluate_admission(sender)
     alt sender not admitted
-        RH-->>Q: drop + write PreflightDenied audit record
+        Note over RH: drop event; write denial verdict to audit log
     else sender admitted
         RH->>SUP: route prompt to session
         SUP->>PI: send_prompt over runRpcMode JSON-RPC
@@ -159,8 +159,7 @@ against the same in-memory ruleset snapshot.
 
 **Pre-flight admission** runs in the Requests Handler, before any agent is involved.
 It answers: *is this sender allowed to submit requests at all?* The ruleset is an
-explicit allow-list of `UserId`s. A denial drops the event, emits a `PreflightDenied`
-audit record, and never touches pi-agent.
+explicit allow-list of `UserId`s. A denial drops the event, writes a denial verdict to the audit log, and never touches pi-agent.
 
 **Blocking tool-call authorization** runs when a supervised agent is about to execute
 a tool. The JS extension's `tool_call` hook intercepts every `bash` invocation and
