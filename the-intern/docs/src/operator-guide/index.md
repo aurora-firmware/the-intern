@@ -198,7 +198,7 @@ The audit log captures three kinds of records:
 The default path follows XDG state conventions:
 
 - Linux: `$XDG_STATE_HOME/bob/audit.jsonl` (falls back to `~/.local/state/bob/audit.jsonl`)
-- macOS: `~/Library/Application Support/bob/audit.jsonl`
+- macOS: `$XDG_STATE_HOME/bob/audit.jsonl` (falls back to `~/Library/Application Support/bob/audit.jsonl`)
 
 You can override the path in the `[monitoring]` section of your TOML config:
 
@@ -319,8 +319,9 @@ runs a six-phase protocol:
    In-flight requests that have been accepted are processed; new submissions
    are rejected.
 4. **Reap pi-agent children** up to `shutdown_reap_deadline` (default: 10 s).
-   The supervisor terminates idle workers first, then active workers, then sends
-   forced kills to any that have not exited.
+   The supervisor terminates active session workers first, then warm (idle)
+   workers, then sends forced kills to any that have not exited within their
+   individual termination deadline.
 5. **Flush audit records.** Any audit records queued but not yet written to disk
    are flushed to the JSONL log.
 6. **Remove socket files.** Both `admin.sock` and `extension.sock` are deleted
