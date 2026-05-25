@@ -68,4 +68,41 @@ grep -rq "bob chat" book/
 
 ## Work Log
 
+### Session 1 — 2026-05-26
+
+Read all source references before writing: the CLI source in
+`the-intern/service/crates/bob/src/cli/` (mod.rs plus each per-command
+file), the README "Run and use" section, and ADR-005. The SUMMARY.md
+confirmed the single-page structure (`end-user-guide/index.md`).
+
+Wrote the guide as a single file with H2 sections per subcommand. Each
+section has a plain-language description, a "when to use it" paragraph,
+and at least one worked example with both the invocation and the
+described output. The `bob status` and `bob sessions` sections include
+both human and `--json` variants because the source code clearly
+distinguishes the two output modes. The `bob audit` section explains
+the `--filter` flag with three examples since filter composition is the
+only non-obvious part.
+
+For `bob chat`, the implementation reads stdin line-by-line and sends
+each as `chat.send` — this is surfaced as "type a message and press
+Enter" in the narrative, and a non-interactive pipe example shows the
+stdin-close-to-exit behaviour. ADR-005's self-asserted identity is
+mentioned in one short paragraph without reproducing the architectural
+detail.
+
+Cross-links to `../operator-guide/index.md` and
+`../cli-reference/index.md` are placed at the guide introduction and
+where relevant (installation, policy file location). These link to the
+stubs that T-077 created; T-079 and T-082 will fill them in later.
+
+**Note for the Reviewer / Planner:** The task file's `Files to Touch`
+lists `the-intern/docs/src/user-guide.md` — that path does not exist in
+the scaffold. The actual file is
+`the-intern/docs/src/end-user-guide/index.md`. The task assignment text
+and SUMMARY.md both agree on the correct path; the `Files to Touch`
+entry is stale. Content was written to the correct file per the
+scaffold. The same path mismatch likely affects T-079..T-081 (the other
+content tasks).
+
 ## Review
