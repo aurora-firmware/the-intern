@@ -203,3 +203,29 @@ Two correctness issues were found by cross-checking the content against the Rust
   a denied-verdict audit record, and never touches pi-agent." Alternatively, if a
   code term is wanted, `` `verdict` `` (the actual `kind` value in the JSONL output)
   is accurate.
+
+### Review Verdict — 2026-05-26 (cycle 2)
+
+PASS
+
+Both cycle-1 findings are correctly fixed in commit `d355af8`. No regressions introduced.
+
+**Issue 1 — sequence diagram denial arrow.** The line `RH-->>Q: drop + write PreflightDenied audit record`
+is gone. It is replaced with `Note over RH: drop event; write denial verdict to audit log` —
+a self-annotation on `RH` with no arrow to `Q`. This matches the actual `run_preflight`
+behavior in `requests-handler/src/handler.rs`, where on denial the function calls
+`audit.append(record)` in place and returns; no message is dispatched back to the queue.
+
+**Issue 2 — `PreflightDenied` prose.** The backticked `PreflightDenied` identifier is gone
+from the Policy Gate section. The sentence now reads "A denial drops the event, writes a
+denial verdict to the audit log, and never touches pi-agent." — plain English. No new
+backtick-delimited identifier was introduced in the changed section. The other backticked
+identifiers in the file (`SessionId`, `InternalEvent`, `RequestContext`, `PolicyEngine`,
+`UserId`, `Authz`, `AuthzVerdict`, `AuditRecord`) all exist in the codebase under
+`the-intern/service/crates/bob-core/src/types/` and related crates.
+
+**Verification commands (run on source branch via worktree):**
+- `mdbook build` — exits 0, pre-existing version-mismatch warning only, no errors or
+  broken links.
+- `test -s src/architecture-overview/index.md` — PASS.
+- Mermaid grep count — 2, meets the `>= 2` threshold. PASS.
