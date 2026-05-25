@@ -109,3 +109,40 @@ config), `crates/bob/src/serve.rs` (shutdown phase sequence and logic),
 Nothing remains. All ACs are met and verification commands pass.
 
 ## Review
+
+### Review Verdict — 2026-05-26
+
+FAIL
+
+**Stage 1 — AC checks**
+
+All four acceptance criteria are met:
+
+- AC-1: Rendered HTML contains all seven required section headings (Prerequisites, Build and install, Runtime layout, Channel configuration, Audit log, Policy basics, Shutdown). PASS.
+- AC-2: `pi`-on-PATH precondition is stated explicitly with `which pi` verification step and a clear stop-and-escalate instruction. PASS.
+- AC-3: `mdbook build` from `the-intern/docs/` produces no broken internal links; the only warning is a pre-existing mdbook-mermaid version mismatch unrelated to this task. PASS.
+- AC-4: Policy basics section links to the Architecture Overview chapter rather than restating rationale. PASS.
+
+Scope check: only `src/operator-guide/index.md` was modified on the branch (plus the task file). PASS.
+
+Verification commands: all four passed on the task branch (`mdbook build`, `test -s`, `grep BOB_ADMIN_SOCK_PATH`, `grep "pi binary"`). PASS.
+
+**Stage 2 — Content correctness issues**
+
+Two factual errors were found by cross-checking the guide text against `crates/pi-agent-supervisor/src/pool.rs` and `crates/bob/src/config.rs`.
+
+---
+
+**Issue 1 — Shutdown phase 4: worker termination order is inverted**
+
+- **File and location:** `the-intern/docs/src/operator-guide/index.md`, Shutdown section, phase 4 description.
+- **What is wrong:** The guide states "The supervisor terminates idle workers first, then active workers, then sends forced kills to any that have not exited." The code in `pool.rs::shutdown_all` does the opposite: it iterates `self.active_workers.drain()` first, then pops from `self.warm_workers`. Active (busy session) workers are terminated before warm/idle workers.
+- **What should change:** Correct the order to: "The supervisor terminates active session workers first, then warm (idle) workers, then sends forced kills to any that have not exited within their individual termination deadline."
+
+---
+
+**Issue 2 — macOS default audit log path omits XDG_STATE_HOME precedence**
+
+- **File and location:** `the-intern/docs/src/operator-guide/index.md`, Audit log → Where the log lives section, macOS path entry.
+- **What is wrong:** The guide describes the macOS default as `~/Library/Application Support/bob/audit.jsonl` with no qualification. The code in `config.rs::default_monitoring_audit_log_path_for_env` checks `XDG_STATE_HOME` first on macOS (same as Linux) before falling back to `~/Library/Application Support`. An operator with `XDG_STATE_HOME` set on macOS will find their log at a different path than documented.
+- **What should change:** Update the macOS entry to match the Linux pattern: `$XDG_STATE_HOME/bob/audit.jsonl` (falls back to `~/Library/Application Support/bob/audit.jsonl`). This mirrors how the Linux entry is already described.
