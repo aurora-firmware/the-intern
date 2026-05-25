@@ -1,0 +1,3 @@
+# Extension & Channel-Adapter Author Guide
+
+<!-- Content for this section is owned by T-081. -->
