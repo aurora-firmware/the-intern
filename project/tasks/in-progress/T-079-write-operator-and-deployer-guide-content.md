@@ -172,3 +172,25 @@ Two factual errors were found by cross-checking the guide text against `crates/p
 - **File and location:** `the-intern/docs/src/operator-guide/index.md`, Audit log → Where the log lives section, macOS path entry.
 - **What is wrong:** The guide describes the macOS default as `~/Library/Application Support/bob/audit.jsonl` with no qualification. The code in `config.rs::default_monitoring_audit_log_path_for_env` checks `XDG_STATE_HOME` first on macOS (same as Linux) before falling back to `~/Library/Application Support`. An operator with `XDG_STATE_HOME` set on macOS will find their log at a different path than documented.
 - **What should change:** Update the macOS entry to match the Linux pattern: `$XDG_STATE_HOME/bob/audit.jsonl` (falls back to `~/Library/Application Support/bob/audit.jsonl`). This mirrors how the Linux entry is already described.
+
+### Review Verdict — 2026-05-26 (cycle 2)
+
+PASS
+
+**Cycle-2 scope:** verify only that the two cycle-1 findings are correctly fixed and that no new regressions were introduced. The rest of the chapter was already PASS in cycle 1.
+
+**Issue 1 — Shutdown phase 4 order. FIXED.**
+
+Cross-checked `pool.rs::shutdown_all` (lines 175–195): `self.active_workers.drain()` runs before `self.warm_workers.pop()`. The updated guide now reads: "The supervisor terminates active session workers first, then warm (idle) workers, then sends forced kills to any that have not exited within their individual termination deadline." This matches the code exactly.
+
+**Issue 2 — macOS audit log path. FIXED.**
+
+Cross-checked `config.rs::default_monitoring_audit_log_path_for_env` (lines 619–637): `XDG_STATE_HOME` is checked first on macOS before falling back to `~/Library/Application Support`. The updated guide now reads: `$XDG_STATE_HOME/bob/audit.jsonl` (falls back to `~/Library/Application Support/bob/audit.jsonl`). This matches the code exactly.
+
+**Regression check.** The fix commit (`218d349`) touches only `the-intern/docs/src/operator-guide/index.md`. No other file is modified. The diff is surgical: two hunks, each replacing exactly the lines identified in cycle-1 feedback with no unrelated changes.
+
+**Verification commands (re-run on source branch):**
+- `mdbook build` — clean build, only pre-existing mdbook-mermaid version warning. PASS.
+- `test -s src/operator-guide/index.md` — file is non-empty. PASS.
+- `grep -rq "BOB_ADMIN_SOCK_PATH" book/` — present in rendered HTML. PASS.
+- `grep -rq "pi binary" book/` — present in rendered HTML. PASS.
