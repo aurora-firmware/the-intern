@@ -80,4 +80,42 @@ test "$(grep -rc 'class="mermaid"' book/architecture-overview* 2>/dev/null | awk
 
 ## Work Log
 
+### Session 1 — 2026-05-26
+
+Replaced the T-077 stub at
+`the-intern/docs/src/architecture-overview/index.md` with full
+conceptual content covering all six required H2 sections: System Shape,
+Request Lifecycle, Supervision, Channel Adapters, Policy Gate, and
+Monitoring.
+
+**Sources consulted for accuracy:** All six specification documents
+(S-001 through S-006), both architecture docs
+(`system_overview.md` and `the-intern-architecture.md`), and the Rust
+source for cross-checking — specifically `pi-agent-supervisor/src/pool.rs`
+(pool states `WarmWorker` / `ActiveSessionWorker`, `last_prompt_activity`
+tracking, `reap_idle_and_surplus`, `shutdown_all`), `bob/src/serve.rs`
+(two-socket topology, subsystem actors, shutdown phases),
+`requests-handler/src/handler.rs` (`run_preflight` behaviour,
+`PreflightDenied` audit record), and the policy-control and
+extension-ipc crates.
+
+**Key content decisions:**
+- The supervisor state diagram uses the two real pool states from the
+  code (`Warm` and `Active`) rather than more abstract names; this
+  keeps the diagram honest without requiring readers to read Rust.
+- The request lifecycle uses a sequence diagram rather than a flowchart
+  because it makes the two authorization checkpoints and the actor
+  boundaries visually distinct.
+- The Policy Gate section includes a comparison table (pre-flight vs.
+  tool-call) to make the conceptual distinction concrete without
+  operational detail.
+- Out-of-tree links to `project/docs/` use `../../../` from the docs
+  source root — mdBook does not validate those paths but the rendered
+  links are correct relative to where the built HTML lives.
+
+Nothing rejected or deferred. All ACs met in a single session. No files
+other than `src/architecture-overview/index.md` were touched.
+Verification: `mdbook build` succeeds; `test -s` passes; the mermaid
+grep counts ≥ 2 `class="mermaid"` hits in the built output.
+
 ## Review
