@@ -1,7 +1,7 @@
 ---
 id: T-077
 title: Scaffold mdBook documentation project under the-intern/docs
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-05-25'
