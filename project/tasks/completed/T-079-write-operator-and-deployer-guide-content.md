@@ -1,7 +1,7 @@
 ---
 id: T-079
 title: Write operator and deployer guide content
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-05-25'
