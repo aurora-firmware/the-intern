@@ -78,4 +78,34 @@ grep -rq "pi binary" book/
 
 ## Work Log
 
+### Session 1 — 2026-05-26
+
+Wrote the full Operator & Deployer Guide for
+`the-intern/docs/src/operator-guide/index.md`, replacing the T-077 stub.
+
+**Sources consulted:** `README.md`, `the-intern/service/README.md`,
+`crates/bob/src/config.rs` (env var names, default paths, monitoring
+config), `crates/bob/src/serve.rs` (shutdown phase sequence and logic),
+`project/specs/bob-service-shell-architecture.md`,
+`project/specs/monitoring-audit-log-and-external-action-reporting.md`,
+`project/specs/policy-control-pre-flight-admission-and-the-blocking-tool-call-authorization-path.md`,
+`project/decisions/ADR-002-bob-configuration-format-toml-via-figment.md`.
+
+**Decisions:**
+- Default socket paths described per-platform (Linux XDG, macOS
+  `$TMPDIR`) directly from `config.rs::resolve_runtime_root`.
+- Default audit log paths described per-platform from
+  `config.rs::default_monitoring_audit_log_path_for_env`.
+- The six-phase shutdown sequence is taken verbatim from
+  `serve.rs::run_shutdown_protocol`, not paraphrased from the spec.
+- Policy basics stay operational (configure + reload) and link to the
+  Architecture Overview for rationale (AC-4).
+- `BOB_TEST_RUNTIME_DIR` is covered in Runtime Layout as the idiomatic
+  isolation pattern.
+- The ADR-002 link uses a relative path from the docs source root;
+  the ADR lives outside the docs source tree and mdBook does not flag
+  it as a broken internal link.
+
+Nothing remains. All ACs are met and verification commands pass.
+
 ## Review
