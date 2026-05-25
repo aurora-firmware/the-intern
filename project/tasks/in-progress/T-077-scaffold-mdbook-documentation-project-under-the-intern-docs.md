@@ -116,3 +116,28 @@ server-side/static SVG is a hard requirement, the toolchain constraint
 pinned channel in `rust-toolchain.toml`.
 
 ## Review
+
+### Review Verdict — 2026-05-26
+
+PASS
+
+**Stage 1 — Acceptance criteria**
+
+- AC-1: PASS. `mdbook build` from `the-intern/docs/` succeeds and produces `book/index.html`. Verified by running the build locally with `mdbook 0.4.52`.
+- AC-2: PASS. `src/SUMMARY.md` lists exactly five top-level entries in the required order: End-User Guide, Operator & Deployer Guide, Architecture Overview, Extension & Channel-Adapter Author Guide, CLI Reference. The rendered TOC confirms the numbering (1–5) and order.
+- AC-3: PASS (spirit interpretation accepted). `mdbook-mermaid` transforms the fenced mermaid block in `src/cli-reference/index.md` into `<pre class="mermaid">` and loads `mermaid.min.js` / `mermaid-init.js`, which render the SVG client-side when the page is opened in a browser. No static `<svg>` tag appears in the on-disk HTML. The strict reading (static `<svg>` on disk) cannot be satisfied by any `mdbook-mermaid` version compatible with the project's pinned Rust 1.85.0 toolchain — this is a known environment constraint, not a Developer error. The spec's Component 4 references `mdbook-mermaid` as the intended mechanism without requiring static SVG, and the standard behaviour of that tool is client-side rendering. AC-3 is satisfied in spirit.
+- AC-4: PASS. `git check-ignore the-intern/docs/book/` returns the path. After a clean build, `git status` reports a clean working tree (the `book/` directory is correctly gitignored and no output files are tracked).
+
+**Stage 2 — Code quality**
+
+- `book.toml`: Well-formed. Title matches the spec exactly ("The Intern — User Documentation"). Source dir `src`, build dir `book`, `[preprocessor.mermaid]` with `command = "mdbook-mermaid"`, and `[output.html]` with `additional-js` pointing at the committed JS assets. The empty `[output]` stanza is the pattern emitted by `mdbook-mermaid install` and is harmless.
+- `src/SUMMARY.md`: Minimal and correct. Flat chapter entries are the appropriate mdBook SUMMARY form for top-level chapters; part headers (`# Part Name`) are optional in mdBook and their absence does not violate the spec or the AC.
+- Five stub `index.md` files: Each contains a heading and a task-ownership comment. The CLI reference stub additionally carries a small mermaid demo block — this is scoped appropriately (the audience-part stubs that T-078..T-081 will overwrite are left clean).
+- `mermaid.min.js` / `mermaid-init.js`: Committed as required by the spec (Component 4: "assets installed under the book theme as the preprocessor requires"). Committing these assets enables an offline build. `mermaid.min.js` is ~2.4 MB; this is expected for the minified mermaid bundle and is explicitly justified by the offline-build requirement.
+- `.gitignore`: The `the-intern/docs/book/` entry is correctly placed and confirmed working. No `book/` output files are tracked on the branch.
+- Scope discipline: No files outside the "Files to Touch" list were modified. No `project/specs/`, `project/decisions/`, or implementation code was touched.
+- No hardcoded secrets, no unrelated behavior, no dead code.
+
+**Observations (non-blocking)**
+
+- The `mdbook-mermaid` version warning ("built against 0.4.36, called from 0.4.52") appears at build time. This is a cosmetic warning from a minor version mismatch that does not affect correctness, and is an unavoidable consequence of the Rust 1.85.0 toolchain constraint. No action required here; the toolchain upgrade (if/when pursued) will resolve it as a side-effect.
