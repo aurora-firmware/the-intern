@@ -118,6 +118,28 @@ other than `src/architecture-overview/index.md` were touched.
 Verification: `mdbook build` succeeds; `test -s` passes; the mermaid
 grep counts ≥ 2 `class="mermaid"` hits in the built output.
 
+### Session 2 — 2026-05-26
+
+Addressed the two factual findings from the cycle-1 Reviewer FAIL
+verdict.
+
+**Issue 1 — sequence diagram denial arrow.** Confirmed by reading
+`run_preflight` in `requests-handler/src/handler.rs`. On denial the
+function calls `audit.append(record)` in place and returns — no message
+is dispatched back to the queue. Replaced
+`RH-->>Q: drop + write PreflightDenied audit record` with
+`Note over RH: drop event; write denial verdict to audit log`.
+
+**Issue 2 — `PreflightDenied` prose.** Confirmed by reading
+`bob-core/src/types/records.rs`. `AuditRecordKind` has exactly three
+variants (`Event`, `Report`, `Verdict`); there is no `PreflightDenied`
+type or variant. The denial record uses `kind: Verdict` with
+`allow: false`. Rephrased the Policy Gate paragraph from "emits a
+`PreflightDenied` audit record" to "writes a denial verdict to the
+audit log".
+
+Nothing else in the file was changed. Verification still passes.
+
 ## Review
 
 ### Review Verdict — 2026-05-26
