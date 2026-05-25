@@ -119,3 +119,65 @@ Verification: `mdbook build` succeeds; `test -s` passes; the mermaid
 grep counts ≥ 2 `class="mermaid"` hits in the built output.
 
 ## Review
+
+### Review Verdict — 2026-05-26
+
+FAIL
+
+**Stage 1 — Acceptance Criteria**
+
+AC-1: Six H2 sections present (System Shape, Request Lifecycle, Supervision, Channel
+Adapters, Policy Gate, Monitoring). The task file's AC-1 text references
+`the-intern/docs/src/architecture.md` which is a typo — Files to Touch, Verification,
+and the Work Log all confirm the correct path is `the-intern/docs/src/architecture-overview/index.md`.
+The developer used the correct path. PASS.
+
+AC-2: Two mermaid blocks render as `<pre class="mermaid">` in the built HTML (verified:
+grep count = 2). PASS.
+
+AC-3: `mdbook build` exits 0. One version-mismatch warning (`mdbook-mermaid` was built
+against 0.4.36, running against 0.4.52) — this warning is pre-existing from the
+scaffold, not introduced by this task, and the build produces no errors and no broken
+internal links. PASS.
+
+AC-4: Intro paragraph links to `project/docs/the-intern-architecture.md` and
+`project/docs/system_overview.md`. No development-level implementation detail is
+restated in the chapter body. PASS.
+
+**Scope check:** Only `the-intern/docs/src/architecture-overview/index.md` and the task
+file were modified. PASS.
+
+**Stage 2 — Content Accuracy**
+
+Two correctness issues were found by cross-checking the content against the Rust source.
+
+**Issue 1 — Sequence diagram: misleading arrow for denied pre-flight event**
+
+- **File and location:** `the-intern/docs/src/architecture-overview/index.md`, in the
+  `sequenceDiagram` mermaid block, the line `RH-->>Q: drop + write PreflightDenied
+  audit record`.
+- **What is wrong:** A dashed return arrow from `RH` to `Q` in a sequence diagram
+  means a message is sent to `Q`. The actual behavior in
+  `requests-handler/src/handler.rs` `run_preflight` is that the event is silently
+  dropped inside `RH` and a `Verdict` audit record is written — no message is sent
+  to `Q`. The arrow misleads the reader into thinking a drop notification is returned
+  to the queue.
+- **What should change:** Remove the arrow to `Q` and replace it with an action note
+  on `RH` itself, e.g. using a `Note over RH: drop event, write denial verdict
+  to audit log` statement, or replace `RH-->>Q:` with a self-note or a note on `RH`.
+
+**Issue 2 — Policy Gate section: `PreflightDenied` in backticks does not exist in code**
+
+- **File and location:** `the-intern/docs/src/architecture-overview/index.md`, in the
+  `## Policy Gate` section, the sentence "A denial drops the event, emits a
+  `PreflightDenied` audit record, and never touches pi-agent."
+- **What is wrong:** The backtick notation implies `PreflightDenied` is a code-level
+  identifier (type, enum variant, or method name). No such type exists. The actual
+  audit record kind is `AuditRecordKind::Verdict` with `allow: false` and a reason
+  string. A non-implementer reading this will not find `PreflightDenied` anywhere if
+  they ever look at the audit log output or the audit record schema.
+- **What should change:** Replace the backtick identifier with plain English that
+  accurately describes what is written, for example: "A denial drops the event, writes
+  a denied-verdict audit record, and never touches pi-agent." Alternatively, if a
+  code term is wanted, `` `verdict` `` (the actual `kind` value in the JSONL output)
+  is accurate.
