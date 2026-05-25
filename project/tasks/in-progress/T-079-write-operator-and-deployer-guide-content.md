@@ -108,6 +108,32 @@ config), `crates/bob/src/serve.rs` (shutdown phase sequence and logic),
 
 Nothing remains. All ACs are met and verification commands pass.
 
+### Session 2 — 2026-05-26
+
+Two factual corrections applied to
+`the-intern/docs/src/operator-guide/index.md` in response to the
+cycle-1 Reviewer findings.
+
+**Shutdown phase 4 order (Issue 1).** Reading
+`crates/pi-agent-supervisor/src/pool.rs::shutdown_all` showed
+`active_workers.drain()` runs before `warm_workers.pop()` in a loop.
+Updated the description to: "active session workers first, then warm
+(idle) workers, then sends forced kills to any that have not exited
+within their individual termination deadline." The phrase "individual
+termination deadline" reflects the per-worker
+`child_termination_deadline` that `RpcWorkerProcess::terminate()` uses
+internally.
+
+**macOS audit log path (Issue 2).** Reading
+`crates/bob/src/config.rs::default_monitoring_audit_log_path_for_env`
+confirmed `XDG_STATE_HOME` is checked first on macOS before
+`~/Library/Application Support`. Updated the macOS entry to mirror the
+Linux pattern: `$XDG_STATE_HOME/bob/audit.jsonl` (falls back to
+`~/Library/Application Support/bob/audit.jsonl`).
+
+All four verification commands still pass. Changes committed as
+`docs(operator-guide): fix shutdown order and macos audit log path`.
+
 ## Review
 
 ### Review Verdict — 2026-05-26
