@@ -78,4 +78,36 @@ grep -rq "0.75.3" book/
 
 ## Work Log
 
+### Session 1 — 2026-05-26
+
+Read `the-intern/extensions/bob.ts`, `package.json`,
+`pi-agent-compat.test.ts`, `extension-ipc/src/framing.rs`,
+`extension-ipc/src/lib.rs`, `chat-adapter/src/lib.rs`, and ADR-001/004/005
+before writing a single word. All factual claims were verified against
+the source files before inclusion.
+
+Wrote `the-intern/docs/src/extension-author-guide/index.md` (188 lines)
+with four H2 sections:
+
+- **JS Extension Protocol** — the two environment variables `bob`
+  sets, the two outbound frame kinds (event and authz) with their wire
+  shapes taken directly from `bob.ts` JSDoc and `framing.rs`, the one
+  inbound frame kind (authz_verdict), the failure behaviour
+  (one-warning-then-silent), and guidance for any alternative consumer
+  of `extension.sock`.
+- **pi-agent Compatibility** — names `@earendil-works/pi-coding-agent@0.75.3`
+  exactly, describes the three checks in `pi-agent-compat.test.ts`
+  (pinned declaration, installed version, PI_EVENTS surface coverage),
+  and explains the error a maintainer sees when versions mismatch.
+- **Channel-Adapter Contract** — describes what the interactive-chat
+  adapter does (normalize to `DeliveryKind::Sync`, populate
+  `RequestContext` with the self-asserted `UserId`, submit to intake,
+  apply no policy), calls out the ADR-005 identity model, and lists the
+  contract any new adapter must satisfy.
+- **Pointers to ADRs** — one paragraph per ADR with inline links via
+  `../../../project/decisions/` relative paths.
+
+`mdbook build` completed without errors; all four verification commands
+from the task file passed.
+
 ## Review
