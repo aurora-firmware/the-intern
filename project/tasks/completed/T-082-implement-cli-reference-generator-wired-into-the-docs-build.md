@@ -1,7 +1,7 @@
 ---
 id: T-082
 title: Implement CLI reference generator wired into the docs build
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-05-25'
