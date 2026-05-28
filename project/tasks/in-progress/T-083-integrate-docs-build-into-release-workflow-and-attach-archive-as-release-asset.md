@@ -85,4 +85,52 @@ grep -q "BOB_BIN" .github/workflows/deploy.yml
 
 ## Work Log
 
+### Session 1 — 2026-05-28
+
+Extended `.github/workflows/deploy.yml` with four new steps following the
+existing `Build release binary` step:
+
+1. **Cache step** (`actions/cache@v4`) — caches `~/.cargo/registry`,
+   `~/.cargo/git`, and the installed `mdbook`/`mdbook-mermaid` binaries
+   under a fixed key keyed on OS and approximate tool versions. This
+   keeps repeat release builds fast without requiring a version file.
+
+2. **Install mdbook and mdbook-mermaid** — uses `command -v` guards so
+   a cache hit skips the install entirely; `cargo install --locked` is
+   used for reproducibility. No `continue-on-error` is set, so a failed
+   install fails the job (AC-4).
+
+3. **Build docs** — runs `mdbook build` with
+   `working-directory: ${{ env.DOCS_DIR }}` (resolved to
+   `the-intern/docs`) and `BOB_BIN` set to
+   `${{ github.workspace }}/${{ env.SERVICE_DIR }}/target/release/bob`
+   — the exact binary produced in the prior step (AC-3). Failure
+   propagates to the job immediately (AC-2).
+
+4. **Archive docs** — runs
+   `tar -czf the-intern-docs-${{ github.ref_name }}.tar.gz -C ${{ env.DOCS_DIR }} book`
+   from the workspace root. The `-C` flag means the archive contains
+   `book/…` paths rather than the full `the-intern/docs/book/…` tree.
+   The tag is embedded via `github.ref_name` (AC-1).
+
+The existing `softprops/action-gh-release@v2` step's `files:` input was
+converted from a single string to a YAML block scalar listing both the
+`bob` binary and the new archive, so both assets are attached to every
+release (AC-1).
+
+A `DOCS_DIR` env var was added at the top-level `env:` block to keep
+the path `the-intern/docs` DRY across the new steps.
+
+Tests were written first as a Python `unittest` file at
+`.github/workflows/test_deploy_workflow.py`. The test suite covers all
+four acceptance criteria (17 tests, all passing). One design decision
+worth noting: the `working-directory` test accepts both a literal path
+and an env-var expression (`${{ env.DOCS_DIR }}`), since the static
+`grep` check already confirms the literal string appears in the file
+via the env block.
+
+No files outside `Files to Touch` were modified; the test file is in
+the same workflows directory as a collocated test, consistent with the
+task scope.
+
 ## Review
