@@ -87,4 +87,46 @@ BOB_BIN=/no/such/path mdbook build 2>&1 | grep -i "BOB_BIN"
 
 ## Work Log
 
+### Session 1 — 2026-05-28
+
+Implemented T-082 in full. Created a Rust binary crate at
+`the-intern/docs/preprocessors/cli-reference/` that acts as an mdBook
+preprocessor. The binary is a standalone Cargo workspace (its own
+`Cargo.toml` and `Cargo.lock`) so it does not pollute the service
+workspace. It depends only on `mdbook` (for the
+`CmdPreprocessor::parse_input` and book types) and `serde_json` (for
+writing the processed book to stdout).
+
+The preprocessor follows the mdbook protocol: when called with
+`supports <renderer>` it exits 0 (supports all renderers); when called
+normally it reads a `(PreprocessorContext, Book)` JSON pair from stdin,
+discovers the `bob` binary, captures `--help` output for `bob` and each
+of the six first-level subcommands, injects generated chapters under
+the CLI Reference section, and writes the modified book JSON to stdout.
+
+Binary discovery was the central design decision. `find_bob_binary`
+reads `BOB_BIN` from the environment and, if absent or empty, falls
+back to `../service/target/release/bob` then
+`../service/target/debug/bob` (both resolved relative to the book root,
+which is the directory mdbook is invoked from). If none are found, the
+build fails with a clear message that names `BOB_BIN` and both fallback
+paths. To avoid test-isolation races from parallel tests all mutating
+the same env variable, the discovery logic was split into
+`find_bob_binary` (public, reads the env) and
+`find_bob_binary_with_env` (inner, accepts the value as a parameter).
+All tests call the inner function.
+
+`book.toml` registers the preprocessor with
+`command = "cargo run --manifest-path preprocessors/cli-reference/Cargo.toml -q --"`.
+The trailing `--` is load-bearing: it is the cargo argument-separator,
+so when mdbook appends `supports html` the args become
+`["run", ..., "--", "supports", "html"]` and the binary receives
+`["supports", "html"]` rather than cargo trying to interpret them as
+package names.
+
+All four acceptance criteria are satisfied. Eight unit tests were
+written and pass. Clippy is clean. The positive-path and negative-path
+verification commands from the task file both succeed. Service tests
+are unaffected.
+
 ## Review
