@@ -87,7 +87,7 @@ This version is declared as a pinned (no caret, no tilde) `devDependency` in
 
 ### How the compatibility test works
 
-`the-intern/extensions/pi-agent-compat.test.ts` runs as part of `npm test` in
+[`the-intern/extensions/pi-agent-compat.test.ts`](../../../extensions/pi-agent-compat.test.ts) runs as part of `npm test` in
 the extensions package. It checks three things:
 
 1. The declared dependency in `package.json` is exactly `0.75.3` with no
