@@ -130,3 +130,52 @@ verification commands from the task file both succeed. Service tests
 are unaffected.
 
 ## Review
+
+### Review Verdict — 2026-05-28
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Spec compliance**
+
+- AC-1 (positive path): Verified. `mdbook build` with `BOB_BIN` pointing to the release
+  binary produced `book/cli-reference/{bob,serve,status,sessions,audit,policy,chat}.html`.
+  `grep -rq "bob serve" book/` confirmed help text is present. All seven pages (root + six
+  subcommands) are present.
+- AC-2 (negative path): Verified. `BOB_BIN=/no/such/path mdbook build` exited non-zero
+  (exit code 101), printed the `BOB_BIN` value that was tried, listed both fallback paths,
+  and instructed the reader how to fix the problem.
+- AC-3 (Rust only): Verified. `Cargo.toml` lists only `mdbook` and `serde_json` as
+  production dependencies; `tempfile` is dev-only. No Node, Python, or other interpreter
+  is involved.
+- AC-4 (single command): Verified. The preprocessor is registered in `book.toml` via
+  `[preprocessor.cli-reference]`; `mdbook build` invokes it automatically with no extra
+  reader step.
+- Scope: Only `the-intern/docs/book.toml` and `the-intern/docs/preprocessors/cli-reference/`
+  were modified. Hand-written content from T-078..T-081 is untouched.
+
+**Stage 2 — Code quality**
+
+- Correctness: Binary discovery logic is correct for all three paths (BOB_BIN set/good,
+  BOB_BIN set/bad, BOB_BIN absent with release/debug fallback). All eight unit tests cover
+  the happy and failure paths for discovery, help capture, formatting, and index generation.
+- Tests: 8 tests, all pass. Tests use `find_bob_binary_with_env` to avoid env-var races.
+  Fake `bob` shell script makes tests hermetic with temp directories.
+- Security: No hardcoded secrets. No external input is used beyond the binary path and its
+  stdout output, which goes straight to the book as pre-formatted text.
+- Readability: Functions are focused and well-named. Comments explain design decisions
+  (the `--` separator, the env-var isolation split). No dead code.
+- Performance: No unnecessary loops; book sections are walked once.
+
+**Non-blocking observations (no action required)**
+
+1. `capture_help` docstring says it returns an error on non-zero exit status, but the
+   implementation does not actually check `output.status`. For clap-based CLIs `--help`
+   always exits 0, so this has no practical impact. The docstring could be corrected in a
+   future cleanup pass.
+2. In `inject_cli_reference`, after `std::mem::take(&mut chapters)` the local `chapters`
+   is always empty, making `if chapters.is_empty()` tautologically true in the recursive
+   path. The logic is safe for the actual book structure (CLI Reference is top-level), but
+   the condition could be replaced with an unconditional `found_index = true; break;` for
+   clarity.
