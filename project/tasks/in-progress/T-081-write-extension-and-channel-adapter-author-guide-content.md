@@ -157,3 +157,51 @@ Stage 2 was not applied because Stage 1 failed.
   [`the-intern/extensions/pi-agent-compat.test.ts`](../../../../the-intern/extensions/pi-agent-compat.test.ts)
   ```
   After making this change, re-run `mdbook build` to confirm no new warnings or broken-link errors are introduced, and record the result in the Work Log.
+
+### Review Verdict — 2026-05-28 (Cycle 2)
+
+PASS
+
+**Stage 1 — Spec Compliance**
+
+AC-1: Four H2 sections (JS Extension Protocol, pi-agent Compatibility, Channel-Adapter
+Contract, Pointers to ADRs) confirmed in rendered HTML at
+`the-intern/docs/book/extension-author-guide/index.html`. File at
+`the-intern/docs/src/extension-author-guide/index.md` is non-empty. PASS.
+
+AC-2: ADR-001, ADR-004, and ADR-005 each referenced by name and number with
+hyperlinks using `../../../project/decisions/` relative paths, consistent with the
+T-080 convention accepted in cycle 2 of that task. PASS.
+
+AC-3: `@earendil-works/pi-coding-agent@0.75.3` named exactly. The compat test is now
+a Markdown hyperlink at line 90 of the guide using the relative path
+`../../../extensions/pi-agent-compat.test.ts`. Verified with `realpath`: three levels
+up from `extension-author-guide/` reaches `the-intern/`, then `extensions/pi-agent-compat.test.ts`
+resolves to the existing file. The Cycle 1 suggestion of four levels was incorrect; the
+Developer's three-level path is accurate. Rendered HTML confirms `<a href="...">` tag
+is present. PASS.
+
+AC-4: `mdbook build` run directly on commit `e4c62f9` (task branch). Output: INFO
+`Book building has started` → WARN `mdbook-mermaid` not found (pre-existing from
+scaffold, not introduced by this task) → INFO `Running the html backend`. No
+broken-link warnings or errors emitted. All four verification commands from the task
+file passed: build exits 0, `test -s` passes, `grep -rq "ADR-005" book/` passes,
+`grep -rq "0.75.3" book/` passes. PASS.
+
+**Stage 1 verdict: PASS**
+
+**Stage 2 — Code Quality**
+
+Documentation file; standard Stage 2 code checks (tests, security, performance) are
+not applicable. Readability checks applied: section structure is focused, names are
+descriptive, no dead content or debugging artifacts. All factual claims were verified
+against source files in Session 1 (Work Log records). PASS.
+
+**Stage 2 verdict: PASS**
+
+**Note (non-blocking):** The `../../../project/decisions/` links in the rendered HTML
+resolve to paths outside the mdbook output directory and would not function as
+browser links. This is the same limitation accepted in T-080 and is not flagged as a
+defect — mdbook does not validate external link targets at build time and AC-4 is
+stated in terms of `mdbook build` producing no warnings or broken-link errors, which
+it does not.
