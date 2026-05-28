@@ -159,10 +159,10 @@ fn chapter_path(name: &str) -> String {
 /// # Errors
 ///
 /// Returns an error string when the bob binary cannot be found.
-fn run(_ctx: PreprocessorContext, mut book: Book) -> Result<Book, String> {
+fn run(ctx: PreprocessorContext, mut book: Book) -> Result<Book, String> {
     // The book root is where book.toml lives (the directory mdbook was invoked from).
     // PreprocessorContext gives us the book root.
-    let book_root = _ctx.root.clone();
+    let book_root = ctx.root.clone();
 
     let bob_bin = find_bob_binary(&book_root)?;
 
