@@ -2,7 +2,7 @@
 id: T-083
 title: Integrate docs build into release workflow and attach archive as release
   asset
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-05-25'
