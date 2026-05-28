@@ -8,6 +8,21 @@ build-dir = "book"
 [preprocessor.mermaid]
 command = "mdbook-mermaid"
 
+# CLI Reference generator.
+# Captures `bob --help` and `bob <subcommand> --help` at build time and
+# injects the output as CLI reference pages.
+#
+# Binary discovery order (highest priority first):
+#   1. BOB_BIN environment variable
+#   2. ../service/target/release/bob
+#   3. ../service/target/debug/bob
+#
+# The `--` separator is required so that the `supports <renderer>` probe
+# arguments mdbook appends are forwarded to the binary rather than
+# interpreted by cargo.
+[preprocessor.cli-reference]
+command = "cargo run --manifest-path preprocessors/cli-reference/Cargo.toml -q --"
+
 [output]
 
 [output.html]
