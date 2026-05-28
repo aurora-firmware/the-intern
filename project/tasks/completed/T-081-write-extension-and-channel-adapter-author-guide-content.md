@@ -1,7 +1,7 @@
 ---
 id: T-081
 title: Write extension and channel-adapter author guide content
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-05-25'
