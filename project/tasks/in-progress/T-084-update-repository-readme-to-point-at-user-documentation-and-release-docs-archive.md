@@ -111,3 +111,28 @@ All five task verification `grep` commands pass. All four new tests
 pass.
 
 ## Review
+
+### Review Verdict — 2026-05-28
+
+PASS
+
+**Stage 1 — Spec compliance**
+
+- AC-1: Met. README.md contains a dedicated "User documentation" section that names `the-intern/docs/` as the user-facing manual and includes an explicit `the-intern/docs/ vs project/docs/` contrast paragraph. The existing "Where to read more" section and all its `project/docs/` links are untouched.
+- AC-2: Met. `cargo install mdbook mdbook-mermaid` and `mdbook build` are both present as a code block, satisfying the single-command build and the named dependency requirement.
+- AC-3: Met. "Every GitHub Release attaches a rendered documentation archive as a release asset" is present verbatim, and a Markdown link to `https://github.com/jose-moreno/the-intern/releases` follows immediately.
+- AC-4: Met. `BOB_BIN` is named and both fallback paths (`target/release/bob`, `target/debug/bob`) are enumerated with priority order; the loud-failure note is included.
+
+All five task verification `grep` commands confirmed passing.
+
+Out-of-scope files noted and evaluated:
+- `tests/test_readme_docs_pointers.sh` — not listed in Files to Touch. Justified: the Developer wrote the test before touching the README (TDD), and the script tests exactly the four acceptance criteria. Adding test coverage does not introduce unspecified behavior and the Work Log documents the rationale. No objection.
+- Repository structure listing update inside `README.md` — a two-line change that corrects an already-wrong listing (the `docs/` directory existed on disk from T-077 but was missing from the listing). Within scope of touching `README.md`; corrects a factual inaccuracy rather than adding new content. No objection.
+
+**Stage 2 — Code quality**
+
+- Correctness: Each `grep` check in the test script uses `|| ok=1` to accumulate failures without aborting early; `set -euo pipefail` applies to the outer script but each function is self-contained. Logic is correct.
+- Tests: Four independent test functions, one per AC, covering all success paths. The test functions capture grep exit codes rather than relying on side effects; there is no shared mutable state between them. A failure path (all-fail initial run) was confirmed before writing the README, per the Work Log.
+- Security: No credentials, no external input, no queries.
+- Readability: Function names are descriptive and map 1:1 to acceptance criteria. The `run_test` helper is focused. No dead code.
+- Performance: No loops over large data, no blocking calls.
