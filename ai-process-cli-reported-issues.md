@@ -3,6 +3,29 @@
 Running log of bugs and friction observed while using the `ai-team` CLI and the
 slash-skills that wrap it. New entries at the top.
 
+## 2026-05-28 — `integrate` skill's "move to completed" commit did not delete the in-progress copy
+
+**Symptom.** During `dev-loop` integration of T-084, the integrator's
+`chore(tasks): move T-084 to completed` commit (`c416916`) added the task file
+to `project/tasks/completed/` but did NOT remove it from
+`project/tasks/in-progress/`. Result: HEAD contained the file in both
+locations. The working tree showed the deletion from in-progress/ as an
+unstaged change because the file was physically gone from disk, but the
+index/HEAD still tracked it. A follow-up commit
+(`chore(tasks): remove stale T-084 in-progress copy after move to completed`,
+`2a4b4c9`) was required to repair the state.
+
+**Impact.** Lifecycle state is briefly inconsistent (a task appears
+simultaneously "in-progress" and "completed" in git history), and the next
+loop iteration sees a non-empty working tree on `dev-agent`. Easy to miss if
+the orchestrator does not run `git status` after integration.
+
+**Suggested fix.** The integrate skill must use `git mv` (or
+`git rm` + `git add` of the new path) so the single commit captures both the
+deletion and the addition. A defensive check in the integrator: after the
+move commit, assert `git status --porcelain project/tasks/in-progress/` is
+empty before declaring success.
+
 ## 2026-05-21 — `new-spec` skill uses CLI flags `ai-team spec new` does not accept
 
 **Symptom.** The `new-spec` skill instructs callers to run
