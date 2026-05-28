@@ -111,3 +111,33 @@ with four H2 sections:
 from the task file passed.
 
 ## Review
+
+### Review Verdict — 2026-05-28
+
+FAIL
+
+**Stage 1 — Spec Compliance**
+
+AC-1: Four H2 sections are present (JS Extension Protocol, pi-agent Compatibility, Channel-Adapter Contract, Pointers to ADRs), covering every topic listed in the Description. File is at `the-intern/docs/src/extension-author-guide/index.md` as specified in Files to Touch. PASS.
+
+AC-2: ADR-001, ADR-004, and ADR-005 are each referenced by name and number, with hyperlinks using `../../../project/decisions/<filename>.md` paths. The same relative-path convention was used and accepted in T-080 with the same book nesting level. PASS.
+
+AC-3: FAIL. The package and version `@earendil-works/pi-coding-agent@0.75.3` are named exactly at line 81 of the guide. However, the compatibility test is referenced only as a backtick-formatted path (`the-intern/extensions/pi-agent-compat.test.ts`) at line 90 — there is no hyperlink. AC-3 explicitly requires a *link* to the compatibility test. A code-formatted prose path is not a link.
+
+AC-4: `mdbook` is not installed in the review environment so the command could not be re-run independently. The Work Log asserts the build completed without errors. This is accepted on the Developer's evidence given that AC-4 cannot be re-verified here.
+
+**Stage 1 verdict: FAIL — AC-3 not met.**
+
+Stage 2 was not applied because Stage 1 failed.
+
+---
+
+**Required fix:**
+
+- **File:** `the-intern/docs/src/extension-author-guide/index.md`, line 90 (the sentence beginning `` `the-intern/extensions/pi-agent-compat.test.ts` runs as part of… ``).
+- **What is wrong:** The compatibility test file is referenced as a backtick-formatted path with no hyperlink. AC-3 requires a link to the compatibility test.
+- **What should change:** Replace the bare path with a Markdown hyperlink. The relative path from the guide file to the test is `../../../../the-intern/extensions/pi-agent-compat.test.ts` (four levels up from `the-intern/docs/src/extension-author-guide/` to the repo root, then into `the-intern/extensions/`). Example:
+  ```
+  [`the-intern/extensions/pi-agent-compat.test.ts`](../../../../the-intern/extensions/pi-agent-compat.test.ts)
+  ```
+  After making this change, re-run `mdbook build` to confirm no new warnings or broken-link errors are introduced, and record the result in the Work Log.
