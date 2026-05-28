@@ -110,6 +110,22 @@ with four H2 sections:
 `mdbook build` completed without errors; all four verification commands
 from the task file passed.
 
+### Session 2 — 2026-05-28
+
+Fixed the single AC-3 defect raised in the cycle 1 review: the compatibility
+test file reference at line 90 of
+`the-intern/docs/src/extension-author-guide/index.md` was a bare
+backtick-formatted path with no hyperlink. Converted it to a Markdown
+hyperlink using the relative path
+`../../../extensions/pi-agent-compat.test.ts`, confirmed with `realpath`
+before committing. The reviewer's suggested path
+(`../../../../the-intern/extensions/pi-agent-compat.test.ts`) had one extra
+level that would also resolve, but the three-level path is accurate and was
+preferred. Ran `mdbook build` via its full path
+(`/home/daneel/.cargo/bin/mdbook`); build completed clean, and the rendered
+HTML confirms the `<a href>` tag is present. All four verification commands
+from the task file passed. One line changed, one commit on the task branch.
+
 ## Review
 
 ### Review Verdict — 2026-05-28
