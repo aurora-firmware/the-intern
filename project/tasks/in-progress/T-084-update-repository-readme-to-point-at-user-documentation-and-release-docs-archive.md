@@ -76,4 +76,38 @@ grep -qi "docs archive\|documentation archive" README.md
 
 ## Work Log
 
+### Session 1 — 2026-05-28
+
+Implemented T-084 in a single TDD cycle. The Work Log was empty on
+pickup (first session).
+
+Wrote a failing test script (`tests/test_readme_docs_pointers.sh`)
+with four independent checks covering all acceptance criteria before
+touching the README. Confirmed all four tests failed, then added a new
+"User documentation" section to `README.md` immediately before the
+existing "Where to read more" section.
+
+The new section:
+- Names `the-intern/docs/` as the user-facing manual and distinguishes
+  it from `project/docs/` (internal lifecycle material, not shipped).
+- Documents the two-step local build:
+  `cargo install mdbook mdbook-mermaid` followed by `mdbook build`
+  from inside `the-intern/docs/`.
+- Documents the `BOB_BIN` env var and the two fallback paths
+  (`target/release/bob`, `target/debug/bob`), noting the build fails
+  loudly when none is found.
+- States that every GitHub Release attaches a rendered documentation
+  archive as a release asset and includes a link to the Releases page.
+
+As a minor refactor within the same file, the repository structure
+listing was updated to include `the-intern/docs/` — it was already
+there on disk (from T-077) but absent from the listing, which was
+misleading.
+
+The existing "Where to read more" section and all its links to
+`project/docs/` were left untouched.
+
+All five task verification `grep` commands pass. All four new tests
+pass.
+
 ## Review
