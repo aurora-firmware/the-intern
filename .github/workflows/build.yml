@@ -13,6 +13,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   SERVICE_DIR: the-intern/service
+  DOCS_DIR: the-intern/docs
 
 jobs:
   format:
@@ -56,6 +57,49 @@ jobs:
         with:
           name: rust-docs
           path: ${{ env.SERVICE_DIR }}/target/doc
+          if-no-files-found: error
+
+  user-docs:
+    name: User Documentation
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build bob (for CLI reference preprocessor)
+        working-directory: ${{ env.SERVICE_DIR }}
+        run: cargo build -p bob
+
+      - name: Cache cargo registry for mdbook tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/mdbook
+            ~/.cargo/bin/mdbook-mermaid
+          key: mdbook-tools-${{ runner.os }}-mdbook-0.4-mermaid-0.14
+
+      - name: Install mdbook and mdbook-mermaid
+        run: |
+          if ! command -v mdbook &>/dev/null; then
+            cargo install mdbook --locked
+          fi
+          if ! command -v mdbook-mermaid &>/dev/null; then
+            cargo install mdbook-mermaid --locked
+          fi
+
+      - name: Build docs
+        working-directory: ${{ env.DOCS_DIR }}
+        env:
+          BOB_BIN: ${{ github.workspace }}/${{ env.SERVICE_DIR }}/target/debug/bob
+        run: mdbook build
+
+      - name: Upload user documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: user-docs
+          path: ${{ env.DOCS_DIR }}/book
           if-no-files-found: error
 
   tests:

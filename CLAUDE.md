@@ -22,9 +22,9 @@ Repository orchestration commands are provided by the slash-skills below, backed
 ├── .ai-team.toml                # Framework config (project.dir, version)
 ├── .github/
 │   └── workflows/
-│       ├── build.yml            # Build workflow (pull requests)
-│       ├── test.yml             # Test workflow (pull requests)
-│       └── deploy.yml           # Deploy workflow (v* tags)
+│       ├── build.yml            # CI: format, build, rust-docs, user-docs, tests (PRs + pushes to dev-agent/main)
+│       ├── deploy.yml           # Release: build release binary + mdBook docs, attach both to GitHub Release (tag pushes)
+│       └── test_deploy_workflow.py  # Static checks over deploy.yml (T-083 acceptance tests)
 ├── ai-process-cli-reported-issues.md  # Running log of ai-team CLI / skill bugs
 ├── .claude/
 │   ├── agents/                  # Role definitions: planner, architect, developer, reviewer, integrator
@@ -52,13 +52,18 @@ Directory *is* the status for tasks and bugs — moving a file is how state tran
 
 IMPORTANT: The skills used in this project, together with the ai-team CLI are under development. Please write down there every bug or problem you notice with any of them in ai-process-cli-reported-issues.md
 
-GitHub workflows are currently placeholders:
-- `build.yml` and `test.yml` trigger on pull requests and pushes to `dev-agent`/`main`,
-  but only run placeholder `echo` steps.
-- `deploy.yml` triggers on `v*` tags and only runs a placeholder `echo` step.
+GitHub workflows (self-hosted runners):
+- `build.yml` runs on pull requests and pushes to `dev-agent`/`main`. Jobs: `format`
+  (`cargo fmt --check`), `build` (`cargo build -p bob`), `documentation` (`cargo doc`,
+  uploads `rust-docs` artifact), `user-docs` (mdBook build of `the-intern/docs`,
+  uploads `user-docs` artifact), and `tests` (`cargo test --workspace`, uploads
+  `rust-test-report`).
+- `deploy.yml` runs on tag pushes. Builds the release `bob` binary and the mdBook
+  docs, archives the book as `the-intern-docs-<tag>.tar.gz`, and attaches both
+  artifacts to the GitHub Release.
 
-Use the local Rust verification commands in `the-intern/service/README.md` for
-real build/test evidence until the workflows are wired to actual commands.
+Local Rust verification commands are still documented in
+`the-intern/service/README.md` for fast feedback.
 
 ## Runtime prerequisites
 
