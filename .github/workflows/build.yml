@@ -30,6 +30,8 @@ jobs:
   build:
     name: Build
     runs-on: self-hosted
+    container:
+      image: rust-dev
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,6 +64,8 @@ jobs:
   user-docs:
     name: User Documentation
     runs-on: self-hosted
+    container:
+      image: rust-dev
     steps:
       - name: Checkout
         uses: actions/checkout@v4
