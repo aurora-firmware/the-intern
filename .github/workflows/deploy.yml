@@ -16,7 +16,7 @@ jobs:
   release:
     runs-on: self-hosted
     container:
-      image: rust-dev
+      image: localhost:5000/rust-dev:latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
