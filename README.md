@@ -173,7 +173,8 @@ and is not shipped.
 Install the required tools once:
 
 ```bash
-cargo install mdbook mdbook-mermaid
+cargo install mdbook --version 0.4.52 --locked --force
+cargo install mdbook-mermaid --version 0.14.0 --locked --force
 ```
 
 Then build from inside the docs directory:

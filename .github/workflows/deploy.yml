@@ -11,6 +11,8 @@ permissions:
 env:
   SERVICE_DIR: the-intern/service
   DOCS_DIR: the-intern/docs
+  MDBOOK_VERSION: 0.4.52
+  MDBOOK_MERMAID_VERSION: 0.14.0
 
 jobs:
   release:
@@ -21,29 +23,29 @@ jobs:
       RUSTUP_TOOLCHAIN: stable-x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build release binary
         working-directory: ${{ env.SERVICE_DIR }}
         run: cargo build --release -p bob
 
       - name: Cache cargo registry for mdbook tools
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/bin/mdbook
             ~/.cargo/bin/mdbook-mermaid
-          key: mdbook-tools-${{ runner.os }}-mdbook-0.4-mermaid-0.14
+          key: mdbook-tools-${{ runner.os }}-mdbook-${{ env.MDBOOK_VERSION }}-mermaid-${{ env.MDBOOK_MERMAID_VERSION }}
 
       - name: Install mdbook and mdbook-mermaid
         run: |
-          if ! command -v mdbook &>/dev/null; then
-            cargo install mdbook --locked
+          if ! mdbook --version 2>/dev/null | grep -q "mdbook v${MDBOOK_VERSION}"; then
+            cargo install mdbook --version "${MDBOOK_VERSION}" --locked --force
           fi
-          if ! command -v mdbook-mermaid &>/dev/null; then
-            cargo install mdbook-mermaid --locked
+          if ! mdbook-mermaid --version 2>/dev/null | grep -q "${MDBOOK_MERMAID_VERSION}"; then
+            cargo install mdbook-mermaid --version "${MDBOOK_MERMAID_VERSION}" --locked --force
           fi
 
       - name: Build docs

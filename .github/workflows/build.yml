@@ -17,6 +17,8 @@ env:
   CI_CONTAINER_IMAGE: localhost:5000/rust-dev:1.0.1
   CARGO_CACHE_DIR: .cargo-ci
   RUSTUP_TOOLCHAIN: 1.96.0-x86_64-unknown-linux-gnu
+  MDBOOK_VERSION: 0.4.52
+  MDBOOK_MERMAID_VERSION: 0.14.0
 
 jobs:
   format:
@@ -24,7 +26,7 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check Rust formatting
         run: |
@@ -46,7 +48,7 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.96.0-x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build bob
         run: |
@@ -68,7 +70,7 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.96.0-x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Generate Rust documentation
         run: |
@@ -87,7 +89,7 @@ jobs:
         run: rm -rf "${{ env.SERVICE_DIR }}/target/doc/src"
 
       - name: Upload generated documentation
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: rust-docs
           path: ${{ env.SERVICE_DIR }}/target/doc
@@ -100,7 +102,7 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.96.0-x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build bob (for CLI reference preprocessor)
         run: |
@@ -116,14 +118,14 @@ jobs:
             sh -lc 'export PATH="/ci-cargo/bin:$PATH"; cargo build -p bob'
 
       - name: Cache cargo registry for mdbook tools
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ${{ env.CARGO_CACHE_DIR }}/registry
             ${{ env.CARGO_CACHE_DIR }}/git
             ${{ env.CARGO_CACHE_DIR }}/bin/mdbook
             ${{ env.CARGO_CACHE_DIR }}/bin/mdbook-mermaid
-          key: mdbook-tools-${{ runner.os }}-mdbook-0.4-mermaid-0.14
+          key: mdbook-tools-${{ runner.os }}-mdbook-${{ env.MDBOOK_VERSION }}-mermaid-${{ env.MDBOOK_MERMAID_VERSION }}
 
       - name: Install mdbook and mdbook-mermaid
         run: |
@@ -135,14 +137,16 @@ jobs:
             -e CARGO_TERM_COLOR \
             -e RUSTUP_TOOLCHAIN \
             -e CARGO_HOME=/ci-cargo \
+            -e MDBOOK_VERSION \
+            -e MDBOOK_MERMAID_VERSION \
             "$CI_CONTAINER_IMAGE" \
             sh -lc '
               export PATH="/ci-cargo/bin:$PATH"
-              if ! command -v mdbook >/dev/null 2>&1; then
-                cargo install mdbook --locked
+              if ! mdbook --version 2>/dev/null | grep -q "mdbook v${MDBOOK_VERSION}"; then
+                cargo install mdbook --version "${MDBOOK_VERSION}" --locked --force
               fi
-              if ! command -v mdbook-mermaid >/dev/null 2>&1; then
-                cargo install mdbook-mermaid --locked
+              if ! mdbook-mermaid --version 2>/dev/null | grep -q "${MDBOOK_MERMAID_VERSION}"; then
+                cargo install mdbook-mermaid --version "${MDBOOK_MERMAID_VERSION}" --locked --force
               fi
             '
 
@@ -160,7 +164,7 @@ jobs:
             sh -lc 'export PATH="/ci-cargo/bin:$PATH"; mdbook build'
 
       - name: Upload user documentation
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: user-docs
           path: ${{ env.DOCS_DIR }}/book
@@ -173,7 +177,7 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.96.0-x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Run Rust tests
         id: cargo-test
@@ -212,7 +216,7 @@ jobs:
 
       - name: Upload Rust test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: rust-test-report
           path: ${{ runner.temp }}/cargo-test.log

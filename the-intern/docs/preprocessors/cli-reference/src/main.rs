@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use mdbook::book::{Book, BookItem, Chapter};
-use mdbook::preprocess::{CmdPreprocessor, PreprocessorContext};
 
 /// Subcommands to document, in display order.
 const SUBCOMMANDS: &[&str] = &["serve", "status", "sessions", "audit", "policy", "chat"];
@@ -16,12 +15,12 @@ fn main() {
         std::process::exit(0);
     }
 
-    // Normal preprocessing mode: read (PreprocessorContext, Book) JSON from
-    // stdin and write the modified Book JSON to stdout.
-    let (ctx, book) = CmdPreprocessor::parse_input(std::io::stdin())
+    // Normal preprocessing mode: read mdBook's [context, book] JSON from stdin
+    // and write the modified Book JSON to stdout.
+    let (book_root, book) = parse_mdbook_input(std::io::stdin())
         .expect("failed to parse mdbook preprocessor input from stdin");
 
-    match run(ctx, book) {
+    match run(book_root, book) {
         Ok(processed) => {
             serde_json::to_writer(std::io::stdout(), &processed)
                 .expect("failed to write processed book to stdout");
@@ -108,6 +107,44 @@ fn find_bob_binary_with_env(
     ))
 }
 
+/// Parse mdBook preprocessor input while avoiding full `PreprocessorContext`
+/// deserialization.
+///
+/// mdBook sends `[context, book]` as JSON. Recent mdBook versions may include
+/// JSON `null` values in the merged config inside `context`; those cannot be
+/// represented as TOML values, so deserializing the full context can fail even
+/// though this preprocessor only needs `context.root`.
+fn parse_mdbook_input<R: std::io::Read>(reader: R) -> serde_json::Result<(PathBuf, Book)> {
+    let mut input: serde_json::Value = serde_json::from_reader(reader)?;
+    let items = input.as_array_mut().ok_or_else(|| {
+        serde_json::Error::io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "expected mdBook preprocessor input array",
+        ))
+    })?;
+
+    if items.len() != 2 {
+        return Err(serde_json::Error::io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "expected mdBook preprocessor input [context, book]",
+        )));
+    }
+
+    let root = items[0]
+        .get("root")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "expected context.root string in mdBook preprocessor input",
+            ))
+        })?;
+    let book = serde_json::from_value(items.remove(1))?;
+
+    Ok((PathBuf::from(root), book))
+}
+
 /// Run `<bob_bin> [subcommand] --help` and return the captured stdout.
 ///
 /// # Errors
@@ -159,19 +196,16 @@ fn chapter_path(name: &str) -> String {
 /// # Errors
 ///
 /// Returns an error string when the bob binary cannot be found.
-fn run(ctx: PreprocessorContext, mut book: Book) -> Result<Book, String> {
-    // The book root is where book.toml lives (the directory mdbook was invoked from).
-    // PreprocessorContext gives us the book root.
-    let book_root = ctx.root.clone();
-
+fn run(book_root: PathBuf, mut book: Book) -> Result<Book, String> {
+    // The book root is where book.toml lives.
     let bob_bin = find_bob_binary(&book_root)?;
 
     // Collect (chapter_path, title, content) for the root command and each subcommand.
     let mut new_chapters: Vec<(String, String, String)> = Vec::new();
 
     // Root `bob --help`.
-    let root_help = capture_help(&bob_bin, None)
-        .map_err(|e| format!("failed to capture `bob --help`: {e}"))?;
+    let root_help =
+        capture_help(&bob_bin, None).map_err(|e| format!("failed to capture `bob --help`: {e}"))?;
     new_chapters.push((
         chapter_path("bob"),
         "bob".to_string(),
@@ -199,10 +233,7 @@ fn run(ctx: PreprocessorContext, mut book: Book) -> Result<Book, String> {
 
 /// Walk the chapter tree and either replace the CLI Reference index chapter or
 /// append the generated chapters at the top level.
-fn inject_cli_reference(
-    sections: &mut Vec<BookItem>,
-    mut chapters: Vec<(String, String, String)>,
-) {
+fn inject_cli_reference(sections: &mut Vec<BookItem>, mut chapters: Vec<(String, String, String)>) {
     // Try to find and update the existing cli-reference/index.md chapter.
     let mut found_index = false;
     for item in sections.iter_mut() {
@@ -289,7 +320,8 @@ fn inject_cli_reference(
 
 /// Build the index page content listing all CLI reference sub-pages.
 fn build_index_content(chapters: &[(String, String, String)]) -> String {
-    let mut content = "# CLI Reference\n\nReference pages generated from the live `bob` binary.\n\n".to_string();
+    let mut content =
+        "# CLI Reference\n\nReference pages generated from the live `bob` binary.\n\n".to_string();
     for (path, name, _) in chapters {
         let file_name = std::path::Path::new(path)
             .file_name()
@@ -308,10 +340,7 @@ mod tests {
 
     fn make_fake_bob(dir: &std::path::Path, subcommands: &[&str]) -> PathBuf {
         let script_path = dir.join("bob");
-        let help_lines: String = subcommands
-            .iter()
-            .map(|s| format!("  {s}\n"))
-            .collect();
+        let help_lines: String = subcommands.iter().map(|s| format!("  {s}\n")).collect();
         let script = format!(
             "#!/bin/sh\n\
              if [ \"$1\" = \"--help\" ] || [ \"$2\" = \"--help\" ]; then\n\
@@ -337,8 +366,7 @@ mod tests {
         // Use a dummy book root; BOB_BIN is an absolute path so book_root is irrelevant.
         let book_root = TempDir::new().unwrap();
 
-        let result =
-            find_bob_binary_with_env(book_root.path(), Some(bin_path.to_str().unwrap()));
+        let result = find_bob_binary_with_env(book_root.path(), Some(bin_path.to_str().unwrap()));
 
         assert_eq!(result.unwrap(), bin_path);
     }
@@ -437,7 +465,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let bin = make_fake_bob(tmp.path(), &["serve", "status"]);
         let output = capture_help(&bin, None).unwrap();
-        assert!(output.contains("bob serve"), "expected help text, got: {output}");
+        assert!(
+            output.contains("bob serve"),
+            "expected help text, got: {output}"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -474,10 +505,37 @@ mod tests {
             ),
         ];
         let content = build_index_content(&chapters);
-        assert!(content.contains("[`bob`](bob.md)"), "missing bob link: {content}");
+        assert!(
+            content.contains("[`bob`](bob.md)"),
+            "missing bob link: {content}"
+        );
         assert!(
             content.contains("[`bob serve`](serve.md)"),
             "missing serve link: {content}"
         );
+    }
+
+    #[test]
+    fn parse_mdbook_input_accepts_null_values_in_context_config() {
+        let tmp = TempDir::new().unwrap();
+        let input = serde_json::json!([
+            {
+                "root": tmp.path(),
+                "config": {
+                    "output": {
+                        "html": {
+                            "site-url": null
+                        }
+                    }
+                }
+            },
+            Book::new()
+        ]);
+
+        let serialized = serde_json::to_vec(&input).unwrap();
+        let (root, book) = parse_mdbook_input(serialized.as_slice()).unwrap();
+
+        assert_eq!(root, tmp.path());
+        assert!(book.sections.is_empty());
     }
 }
