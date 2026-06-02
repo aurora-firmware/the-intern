@@ -13,6 +13,12 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   SERVICE_DIR: the-intern/service
+  DOCS_DIR: the-intern/docs
+  CI_CONTAINER_IMAGE: localhost:5000/rust-dev:1.0.1
+  CARGO_CACHE_DIR: .cargo-ci
+  RUSTUP_TOOLCHAIN: 1.96.0-x86_64-unknown-linux-gnu
+  MDBOOK_VERSION: 0.4.52
+  MDBOOK_MERMAID_VERSION: 0.14.0
 
 jobs:
   format:
@@ -20,58 +26,175 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check Rust formatting
-        working-directory: ${{ env.SERVICE_DIR }}
-        run: cargo fmt --all -- --check
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/${{ env.CARGO_CACHE_DIR }}"
+          podman run --rm \
+            -v "$GITHUB_WORKSPACE:/work" \
+            -v "$GITHUB_WORKSPACE/${{ env.CARGO_CACHE_DIR }}:/ci-cargo" \
+            -w "/work/${{ env.SERVICE_DIR }}" \
+            -e CARGO_TERM_COLOR \
+            -e RUSTUP_TOOLCHAIN \
+            -e CARGO_HOME=/ci-cargo \
+            "$CI_CONTAINER_IMAGE" \
+            sh -lc 'export PATH="/ci-cargo/bin:$PATH"; cargo fmt --all -- --check'
 
   build:
     name: Build
     runs-on: self-hosted
+    env:
+      RUSTUP_TOOLCHAIN: 1.96.0-x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build bob
-        working-directory: ${{ env.SERVICE_DIR }}
-        run: cargo build -p bob
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/${{ env.CARGO_CACHE_DIR }}"
+          podman run --rm \
+            -v "$GITHUB_WORKSPACE:/work" \
+            -v "$GITHUB_WORKSPACE/${{ env.CARGO_CACHE_DIR }}:/ci-cargo" \
+            -w "/work/${{ env.SERVICE_DIR }}" \
+            -e CARGO_TERM_COLOR \
+            -e RUSTUP_TOOLCHAIN \
+            -e CARGO_HOME=/ci-cargo \
+            "$CI_CONTAINER_IMAGE" \
+            sh -lc 'export PATH="/ci-cargo/bin:$PATH"; cargo build -p bob'
 
   documentation:
     name: Documentation
     runs-on: self-hosted
+    env:
+      RUSTUP_TOOLCHAIN: 1.96.0-x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Generate Rust documentation
-        working-directory: ${{ env.SERVICE_DIR }}
-        run: cargo doc --workspace --no-deps
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/${{ env.CARGO_CACHE_DIR }}"
+          podman run --rm \
+            -v "$GITHUB_WORKSPACE:/work" \
+            -v "$GITHUB_WORKSPACE/${{ env.CARGO_CACHE_DIR }}:/ci-cargo" \
+            -w "/work/${{ env.SERVICE_DIR }}" \
+            -e CARGO_TERM_COLOR \
+            -e RUSTUP_TOOLCHAIN \
+            -e CARGO_HOME=/ci-cargo \
+            "$CI_CONTAINER_IMAGE" \
+            sh -lc 'export PATH="/ci-cargo/bin:$PATH"; cargo doc --workspace --no-deps'
 
       - name: Remove rendered source from documentation artifact
         run: rm -rf "${{ env.SERVICE_DIR }}/target/doc/src"
 
       - name: Upload generated documentation
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: rust-docs
           path: ${{ env.SERVICE_DIR }}/target/doc
           if-no-files-found: error
 
+  user-docs:
+    name: User Documentation
+    runs-on: self-hosted
+    env:
+      RUSTUP_TOOLCHAIN: 1.96.0-x86_64-unknown-linux-gnu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build bob (for CLI reference preprocessor)
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/${{ env.CARGO_CACHE_DIR }}"
+          podman run --rm \
+            -v "$GITHUB_WORKSPACE:/work" \
+            -v "$GITHUB_WORKSPACE/${{ env.CARGO_CACHE_DIR }}:/ci-cargo" \
+            -w "/work/${{ env.SERVICE_DIR }}" \
+            -e CARGO_TERM_COLOR \
+            -e RUSTUP_TOOLCHAIN \
+            -e CARGO_HOME=/ci-cargo \
+            "$CI_CONTAINER_IMAGE" \
+            sh -lc 'export PATH="/ci-cargo/bin:$PATH"; cargo build -p bob'
+
+      - name: Cache cargo registry for mdbook tools
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.CARGO_CACHE_DIR }}/registry
+            ${{ env.CARGO_CACHE_DIR }}/git
+            ${{ env.CARGO_CACHE_DIR }}/bin/mdbook
+            ${{ env.CARGO_CACHE_DIR }}/bin/mdbook-mermaid
+          key: mdbook-tools-${{ runner.os }}-mdbook-${{ env.MDBOOK_VERSION }}-mermaid-${{ env.MDBOOK_MERMAID_VERSION }}
+
+      - name: Install mdbook and mdbook-mermaid
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/${{ env.CARGO_CACHE_DIR }}"
+          podman run --rm \
+            -v "$GITHUB_WORKSPACE:/work" \
+            -v "$GITHUB_WORKSPACE/${{ env.CARGO_CACHE_DIR }}:/ci-cargo" \
+            -w "/work" \
+            -e CARGO_TERM_COLOR \
+            -e RUSTUP_TOOLCHAIN \
+            -e CARGO_HOME=/ci-cargo \
+            -e MDBOOK_VERSION \
+            -e MDBOOK_MERMAID_VERSION \
+            "$CI_CONTAINER_IMAGE" \
+            sh -lc '
+              export PATH="/ci-cargo/bin:$PATH"
+              if ! mdbook --version 2>/dev/null | grep -q "mdbook v${MDBOOK_VERSION}"; then
+                cargo install mdbook --version "${MDBOOK_VERSION}" --locked --force
+              fi
+              if ! mdbook-mermaid --version 2>/dev/null | grep -q "${MDBOOK_MERMAID_VERSION}"; then
+                cargo install mdbook-mermaid --version "${MDBOOK_MERMAID_VERSION}" --locked --force
+              fi
+            '
+
+      - name: Build docs
+        run: |
+          podman run --rm \
+            -v "$GITHUB_WORKSPACE:/work" \
+            -v "$GITHUB_WORKSPACE/${{ env.CARGO_CACHE_DIR }}:/ci-cargo" \
+            -w "/work/${{ env.DOCS_DIR }}" \
+            -e CARGO_TERM_COLOR \
+            -e RUSTUP_TOOLCHAIN \
+            -e CARGO_HOME=/ci-cargo \
+            -e BOB_BIN=/work/${{ env.SERVICE_DIR }}/target/debug/bob \
+            "$CI_CONTAINER_IMAGE" \
+            sh -lc 'export PATH="/ci-cargo/bin:$PATH"; mdbook build'
+
+      - name: Upload user documentation
+        uses: actions/upload-artifact@v6
+        with:
+          name: user-docs
+          path: ${{ env.DOCS_DIR }}/book
+          if-no-files-found: error
+
   tests:
     name: Tests
     runs-on: self-hosted
+    env:
+      RUSTUP_TOOLCHAIN: 1.96.0-x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Run Rust tests
         id: cargo-test
-        working-directory: ${{ env.SERVICE_DIR }}
         shell: bash
         run: |
           set +e
-          cargo test --workspace > "$RUNNER_TEMP/cargo-test.raw.log" 2>&1
+          mkdir -p "$GITHUB_WORKSPACE/${{ env.CARGO_CACHE_DIR }}"
+          podman run --rm \
+            -v "$GITHUB_WORKSPACE:/work" \
+            -v "$GITHUB_WORKSPACE/${{ env.CARGO_CACHE_DIR }}:/ci-cargo" \
+            -w "/work/${{ env.SERVICE_DIR }}" \
+            -e CARGO_TERM_COLOR \
+            -e RUSTUP_TOOLCHAIN \
+            -e CARGO_HOME=/ci-cargo \
+            "$CI_CONTAINER_IMAGE" \
+            sh -lc 'export PATH="/ci-cargo/bin:$PATH"; cargo test --workspace' \
+            > "$RUNNER_TEMP/cargo-test.raw.log" 2>&1
           test_status=$?
 
           sed \
@@ -93,7 +216,7 @@ jobs:
 
       - name: Upload Rust test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: rust-test-report
           path: ${{ runner.temp }}/cargo-test.log

@@ -10,21 +10,60 @@ permissions:
 
 env:
   SERVICE_DIR: the-intern/service
+  DOCS_DIR: the-intern/docs
+  MDBOOK_VERSION: 0.4.52
+  MDBOOK_MERMAID_VERSION: 0.14.0
 
 jobs:
   release:
     runs-on: self-hosted
+    container:
+      image: localhost:5000/rust-dev:1.0.1
+    env:
+      RUSTUP_TOOLCHAIN: stable-x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build release binary
         working-directory: ${{ env.SERVICE_DIR }}
         run: cargo build --release -p bob
+
+      - name: Cache cargo registry for mdbook tools
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/mdbook
+            ~/.cargo/bin/mdbook-mermaid
+          key: mdbook-tools-${{ runner.os }}-mdbook-${{ env.MDBOOK_VERSION }}-mermaid-${{ env.MDBOOK_MERMAID_VERSION }}
+
+      - name: Install mdbook and mdbook-mermaid
+        run: |
+          if ! mdbook --version 2>/dev/null | grep -q "mdbook v${MDBOOK_VERSION}"; then
+            cargo install mdbook --version "${MDBOOK_VERSION}" --locked --force
+          fi
+          if ! mdbook-mermaid --version 2>/dev/null | grep -q "${MDBOOK_MERMAID_VERSION}"; then
+            cargo install mdbook-mermaid --version "${MDBOOK_MERMAID_VERSION}" --locked --force
+          fi
+
+      - name: Build docs
+        working-directory: ${{ env.DOCS_DIR }}
+        env:
+          BOB_BIN: ${{ github.workspace }}/${{ env.SERVICE_DIR }}/target/release/bob
+        run: mdbook build
+
+      - name: Archive docs
+        run: |
+          tar -czf the-intern-docs-${{ github.ref_name }}.tar.gz \
+            -C ${{ env.DOCS_DIR }} book
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
           generate_release_notes: true
-          files: ${{ env.SERVICE_DIR }}/target/release/bob
+          files: |
+            ${{ env.SERVICE_DIR }}/target/release/bob
+            the-intern-docs-${{ github.ref_name }}.tar.gz

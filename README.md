@@ -35,7 +35,8 @@ Phase 6's chat channel is wired end to end; the remaining channel adapters
 ├── .codex/agents/                # Mirror role definitions for codex
 ├── the-intern/
 │   ├── service/                  # Rust workspace — the `bob` binary lives here
-│   └── extensions/               # JS extension for pi-agent (bob.ts)
+│   ├── extensions/               # JS extension for pi-agent (bob.ts)
+│   └── docs/                     # User manual (mdbook source; shipped with releases)
 └── project/                      # Source of truth for product lifecycle
     ├── docs/                     # Architecture, roadmap, coding guidelines
     ├── specs/                    # Approved specifications
@@ -155,6 +156,51 @@ admission. The chat channel is enabled by default and can be disabled via the
 
 Stop the service with Ctrl-C (SIGTERM); the supervisor reaps pi-agent
 children during shutdown phase 4 and the sockets are removed on exit.
+
+## User documentation
+
+The user-facing manual lives in `the-intern/docs/`. It covers the end-user
+guide, operator guide, extension-author guide, architecture overview, and CLI
+reference. This is the first stop for anyone using or deploying the Intern.
+
+**`the-intern/docs/` vs `project/docs/`** — `the-intern/docs/` is the user
+manual and is shipped with every release. `project/docs/` holds internal
+development-lifecycle material (architecture notes, roadmap, coding guidelines)
+and is not shipped.
+
+### Build the docs locally
+
+Install the required tools once:
+
+```bash
+cargo install mdbook --version 0.4.52 --locked --force
+cargo install mdbook-mermaid --version 0.14.0 --locked --force
+```
+
+Then build from inside the docs directory:
+
+```bash
+cd the-intern/docs
+mdbook build
+```
+
+The rendered output is written to `the-intern/docs/book/`.
+
+**CLI reference** — the CLI reference pages are generated from the live `bob`
+binary at build time. Binary discovery order (highest priority first):
+
+1. `BOB_BIN` environment variable
+2. `the-intern/service/target/release/bob`
+3. `the-intern/service/target/debug/bob`
+
+Set `BOB_BIN` to point at a specific binary if needed. The build fails loudly
+when no `bob` binary is found at any of these paths.
+
+### Pre-built docs archive
+
+Every GitHub Release attaches a rendered documentation archive as a release
+asset. You can download it without installing any tooling from the
+[Releases page](https://github.com/jose-moreno/the-intern/releases).
 
 ## Where to read more
 

@@ -1,0 +1,15 @@
+[package]
+name = "mdbook-cli-reference"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mdbook-cli-reference"
+path = "src/main.rs"
+
+[dependencies]
+mdbook = { version = "=0.4.52", default-features = false }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
