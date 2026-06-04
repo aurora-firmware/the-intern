@@ -11,6 +11,7 @@ permissions:
 env:
   SERVICE_DIR: the-intern/service
   DOCS_DIR: the-intern/docs
+  EXTENSIONS_DIR: the-intern/extensions
   MDBOOK_VERSION: 0.4.52
   MDBOOK_MERMAID_VERSION: 0.14.0
 
@@ -59,6 +60,12 @@ jobs:
           tar -czf the-intern-docs-${{ github.ref_name }}.tar.gz \
             -C ${{ env.DOCS_DIR }} book
 
+      - name: Archive bob extension
+        run: |
+          tar -czf the-intern-bob-extension-${{ github.ref_name }}.tar.gz \
+            -C ${{ env.EXTENSIONS_DIR }} \
+            bob.ts README.md package.json package-lock.json
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -67,3 +74,4 @@ jobs:
           files: |
             ${{ env.SERVICE_DIR }}/target/release/bob
             the-intern-docs-${{ github.ref_name }}.tar.gz
+            the-intern-bob-extension-${{ github.ref_name }}.tar.gz
