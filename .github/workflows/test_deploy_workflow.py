@@ -187,7 +187,7 @@ class TestArchiveStep(unittest.TestCase):
 
 
 class TestReleaseStep(unittest.TestCase):
-    """AC-1: release step must include both bob binary and docs archive."""
+    """AC-1: release step must include bob binary, docs, and extension archives."""
 
     def setUp(self):
         self.workflow = load_workflow()
@@ -225,6 +225,53 @@ class TestReleaseStep(unittest.TestCase):
             files_value,
             "release files must include the docs archive (the-intern-docs-*.tar.gz)",
         )
+
+    def test_release_files_includes_bob_extension_archive(self):
+        """Release must attach the bob extension archive."""
+        step = self._find_release_step()
+        self.assertIsNotNone(step, "softprops/action-gh-release step must exist")
+        files_value = step.get("with", {}).get("files", "")
+        self.assertIn(
+            "the-intern-bob-extension",
+            files_value,
+            "release files must include the bob extension archive",
+        )
+
+
+class TestBobExtensionArchiveStep(unittest.TestCase):
+    """The release workflow must package the source-only bob extension."""
+
+    def setUp(self):
+        self.workflow = load_workflow()
+        self.steps = self.workflow["jobs"]["release"]["steps"]
+
+    def _find_bob_extension_archive_step(self):
+        for step in self.steps:
+            name = step.get("name", "").lower()
+            run = step.get("run", "")
+            if "bob extension" in name and "tar" in run:
+                return step
+        return None
+
+    def test_bob_extension_archive_step_exists(self):
+        step = self._find_bob_extension_archive_step()
+        self.assertIsNotNone(step, "expected a bob extension archive creation step")
+
+    def test_bob_extension_archive_filename_includes_tag(self):
+        step = self._find_bob_extension_archive_step()
+        self.assertIsNotNone(step, "expected a bob extension archive creation step")
+        run_cmd = step.get("run", "")
+        self.assertIn(
+            "github.ref_name",
+            run_cmd,
+            "bob extension archive filename must incorporate the release tag",
+        )
+
+    def test_bob_extension_archive_includes_extension_source(self):
+        step = self._find_bob_extension_archive_step()
+        self.assertIsNotNone(step, "expected a bob extension archive creation step")
+        run_cmd = step.get("run", "")
+        self.assertIn("bob.ts", run_cmd, "bob extension archive must include bob.ts")
 
 
 class TestJobFailsOnDocsFailure(unittest.TestCase):
