@@ -183,3 +183,50 @@ An alternative design was briefly considered where `Subscription::call()` would 
 ### Review Verdict — YYYY-MM-DD
 PASS | FAIL | ESCALATE
 -->
+
+### Review Verdict — 2026-06-10
+
+PASS
+
+**Stage 1 — Bug Criteria**
+
+Diagnosis Log check:
+- Reproduction status: recorded — live end-to-end not attempted because the `pi` binary on PATH is an unrelated npm tool, not the pi-agent prerequisite. This is explicitly documented and acceptable given CLAUDE.md's hard rule on not substituting for the missing prerequisite. Code-inspection confirmation is unambiguous.
+- Evidence captured: five numbered evidence points covering the exact error string, the server-side validation logic, the split-connection mechanism, and the gap in the existing test.
+- Isolated fault: Fault A (missing `params.id`) and Fault B (split-connection) documented with precision.
+- Root cause: documented — `Subscription<N>` lacked any way to send requests on the subscription's own connection; `run_with_parts_async` used two independent closures with no connection sharing.
+
+Fix alignment check:
+- Fault A resolved: `build_chat_send_params` now receives and includes `subscription_id` as `params["id"]` in both the session and no-session branches (`chat.rs` lines 199–222 post-fix).
+- Fault B resolved: `send_chat` closure and `call_admin` path entirely removed; `chat.send` now dispatched via `subscription.send()`, which calls `Subscription::call()` on the subscription's own connection.
+- No unrelated behavior added: the diff is scoped to the two files identified in the Diagnosis Log; no new commands, routes, or public API surface beyond what the fix requires.
+
+Fix Verification steps:
+- `cargo test -p bob`: run on `bug/B-008-bob-chat-send-requires-params-id`; all 90 unit tests and all integration/doc tests pass (0 failures).
+- `cargo fmt --check`: clean (no output).
+- Manual end-to-end (`bob serve` / `bob chat`): not runnable — pi-agent prerequisite unavailable. The Work Log records this explicitly and the rationale is sound; the fix is fully verifiable by unit tests that use real Unix sockets.
+
+**Stage 2 — Code Quality**
+
+Correctness:
+- `next_call_id` starts at `close_request_id + 1`, preventing id collision with the pre-allocated close request id. Close request ids are stable across `call()` invocations.
+- `call()` loops until a response (non-notification) frame arrives, buffering all interleaved notifications. The `is_notification` helper correctly identifies JSON-RPC 2.0 notifications (has `method`, absent or null `id`).
+- `recv()` drains `notification_buffer` (FIFO via `VecDeque`) before reading from the wire, preserving delivery order.
+- `close()` reads directly from the wire without first draining `notification_buffer`. This is acceptable: any in-buffer frames are already off the wire and `close()` consumes the struct, so the buffer is discarded after close. The risk of `close()` encountering an unexpected notification on the wire (if the server sends one between the last `call()` response and the close response) pre-existed this fix and is not a regression introduced here.
+- `build_chat_send_params` includes `id` in both session and no-session branches — both cases covered.
+
+Tests:
+- `subscription_id_returns_the_id_from_the_subscribe_response`: covers the new accessor.
+- `subscription_call_sends_request_and_returns_result`: end-to-end with a real fake Unix socket server; verifies request framing, params contents, and result deserialization.
+- `subscription_call_buffers_interleaved_notifications`: verifies the notification-buffering contract.
+- `chat_send_params_include_subscription_id_from_chat_open`: direct regression test for B-008 — asserts `params["id"]` equals the subscription id returned by `chat.open`.
+- `chat_opens_with_session_and_sends_each_input_line`: updated to assert the `id` field in all sent params; no longer masks the bug.
+- Tests are independent (each uses a unique Unix socket path via `unique_socket_path`).
+
+Security: no secrets, no unvalidated external input, no new permissions.
+
+Readability: names are descriptive and consistent with the codebase style; `is_notification` and `parse_call_response` are private helpers with focused responsibilities; comments explain design choices (why `next_call_id` starts above `close_request_id`); no dead code.
+
+Performance: `VecDeque` for the notification buffer is appropriate; no blocking in hot paths; no resource leaks.
+
+Both stages pass. Next owner: Bug-Fix Loop.
