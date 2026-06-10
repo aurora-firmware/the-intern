@@ -3,7 +3,7 @@ id: B-008
 title: 'Invalid request when calling bob chat — chat.send requires params.id (GitHub
   issue #16)'
 severity: high
-status: in-progress
+status: resolved
 created: '2026-06-10'
 ---
 
