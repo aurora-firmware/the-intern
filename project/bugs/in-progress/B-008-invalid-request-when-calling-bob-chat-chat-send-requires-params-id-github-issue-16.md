@@ -151,6 +151,31 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-10
+
+The fix addresses both coupled client-side faults identified in the Diagnosis Log.
+
+**What was done:**
+
+Fault A (missing `params.id`) and Fault B (fresh connection per `chat.send`) were fixed together since they share the same root cause: the `Subscription<N>` API had no way to send requests on the subscription's own connection.
+
+*`Subscription<N>` in `admin_rpc.rs`*: Added two new public members. `subscription_id()` exposes the server-assigned subscription id. `call()` sends a JSON-RPC request on the subscription's connection, reads frames in a loop buffering any notification frames it encounters, and returns once a response with the matching id arrives. `recv()` was updated to drain the notification buffer before reading from the socket, ensuring buffered notifications are delivered in order. Two new private fields back this: `next_call_id` (starting at `close_request_id + 1` to avoid collision with the pre-allocated close request id) and `notification_buffer` (a `VecDeque<Value>`). A private `is_notification()` helper distinguishes notifications (frames with `method` but no `id`, or null `id`) from responses.
+
+*`chat.rs`*: The `ChatSubscription` trait gained `id()` and `send()` methods. The `send_chat` closure was removed from `run_with_parts_async` and `run_with_parts` entirely — `chat.send` is now dispatched through `subscription.send()`, which uses the subscription's own connection. `build_chat_send_params` now takes the subscription id as a parameter and includes it as `params.id`. The `run()` entry point no longer imports `call_admin`.
+
+**Tests added:**
+- `subscription_id_returns_the_id_from_the_subscribe_response` — verifies the new accessor
+- `subscription_call_sends_request_and_returns_result` — end-to-end with a real fake Unix socket server
+- `subscription_call_buffers_interleaved_notifications` — verifies a notification arriving before the `chat.send` response is buffered and retrievable via `recv()`
+- `chat_send_params_include_subscription_id_from_chat_open` — regression test directly capturing B-008: asserts `params.id` equals the id from `chat.open`
+- `chat_opens_with_session_and_sends_each_input_line` — updated to use new `FakeChatSubscription` shape with `id()` and `send()`, and to assert the `id` field in sent params
+
+**What was tried and rejected:**
+
+An alternative design was briefly considered where `Subscription::call()` would be non-blocking and use a `select!` loop shared with `recv()` — rejected because it would require restructuring `run_with_parts_async` more invasively with explicit frame-dispatch machinery. The chosen design (buffer notifications during `call()`, drain buffer on `recv()`) is simpler, correct for the sequential send→recv pattern of `bob chat`, and matches the existing architecture's style.
+
+**What remains:** None. All acceptance criteria are met and all 434 workspace tests pass (`cargo test --workspace`; `cargo fmt --check` clean). Implementation commit on the bug branch: `56549bc` — `fix(chat): route chat.send through subscription connection with params.id`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
