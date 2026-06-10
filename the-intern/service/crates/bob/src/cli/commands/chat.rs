@@ -10,18 +10,37 @@ use tokio::sync::mpsc;
 
 use crate::{client::Subscription, config::BobConfig};
 
-use super::{
-    call_admin, connect_admin, invalid_request_error, load_config, run_async, write_json_line,
-};
+use super::{connect_admin, invalid_request_error, load_config, run_async, write_json_line};
 
 trait ChatSubscription: Sized {
+    fn id(&self) -> &str;
     fn recv<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = ServiceResult<Value>> + 'a>>;
+    fn send<'a>(
+        &'a mut self,
+        method: &'static str,
+        params: Value,
+    ) -> Pin<Box<dyn Future<Output = ServiceResult<()>> + 'a>>;
     fn close(self) -> Pin<Box<dyn Future<Output = ServiceResult<()>>>>;
 }
 
 impl ChatSubscription for Subscription<Value> {
+    fn id(&self) -> &str {
+        self.subscription_id()
+    }
+
     fn recv<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = ServiceResult<Value>> + 'a>> {
         Box::pin(async move { self.recv().await })
+    }
+
+    fn send<'a>(
+        &'a mut self,
+        method: &'static str,
+        params: Value,
+    ) -> Pin<Box<dyn Future<Output = ServiceResult<()>> + 'a>> {
+        Box::pin(async move {
+            let _result: Value = self.call(method, params).await?;
+            Ok(())
+        })
     }
 
     fn close(self) -> Pin<Box<dyn Future<Output = ServiceResult<()>>>> {
@@ -92,15 +111,14 @@ pub(super) fn run(json_output: bool, session: Option<&str>) -> ServiceResult<()>
             let mut client = connect_admin(&cfg).await?;
             client.subscribe::<_, Value>(method, params).await
         },
-        |cfg, method, params| async move { call_admin(&cfg, method, params).await.map(|_| ()) },
     )
 }
 
 // The argument count is driven by dependency injection: the trailing
-// stop/open/send parameters are the seam that lets tests drive `chat` without
+// stop/open parameters are the seam that lets tests drive `chat` without
 // real sockets or stdin.
 #[allow(clippy::too_many_arguments)]
-fn run_with_parts<S, L, StopFactory, StopFuture, OpenFn, OpenFuture, SendFn, SendFuture>(
+fn run_with_parts<S, L, StopFactory, StopFuture, OpenFn, OpenFuture>(
     json_output: bool,
     session: Option<&str>,
     cfg: &BobConfig,
@@ -108,7 +126,6 @@ fn run_with_parts<S, L, StopFactory, StopFuture, OpenFn, OpenFuture, SendFn, Sen
     lines: &mut L,
     stop_factory: StopFactory,
     open_chat: OpenFn,
-    send_chat: SendFn,
 ) -> ServiceResult<()>
 where
     S: ChatSubscription,
@@ -117,8 +134,6 @@ where
     StopFuture: Future<Output = ServiceResult<()>>,
     OpenFn: FnOnce(BobConfig, &'static str, Value) -> OpenFuture,
     OpenFuture: Future<Output = ServiceResult<S>>,
-    SendFn: Fn(BobConfig, &'static str, Value) -> SendFuture,
-    SendFuture: Future<Output = ServiceResult<()>>,
 {
     run_async(run_with_parts_async(
         json_output,
@@ -128,21 +143,11 @@ where
         lines,
         stop_factory,
         open_chat,
-        send_chat,
     ))
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_with_parts_async<
-    S,
-    L,
-    StopFactory,
-    StopFuture,
-    OpenFn,
-    OpenFuture,
-    SendFn,
-    SendFuture,
->(
+async fn run_with_parts_async<S, L, StopFactory, StopFuture, OpenFn, OpenFuture>(
     json_output: bool,
     session: Option<&str>,
     cfg: &BobConfig,
@@ -150,7 +155,6 @@ async fn run_with_parts_async<
     lines: &mut L,
     stop_factory: StopFactory,
     open_chat: OpenFn,
-    send_chat: SendFn,
 ) -> ServiceResult<()>
 where
     S: ChatSubscription,
@@ -159,8 +163,6 @@ where
     StopFuture: Future<Output = ServiceResult<()>>,
     OpenFn: FnOnce(BobConfig, &'static str, Value) -> OpenFuture,
     OpenFuture: Future<Output = ServiceResult<S>>,
-    SendFn: Fn(BobConfig, &'static str, Value) -> SendFuture,
-    SendFuture: Future<Output = ServiceResult<()>>,
 {
     let open_params = match session {
         Some(id) => json!({ "session": id }),
@@ -179,8 +181,8 @@ where
             next_line = lines.next_line() => {
                 match next_line? {
                     Some(line) => {
-                        let params = build_chat_send_params(cfg, session, &line);
-                        send_chat(cfg.clone(), "chat.send", params).await?;
+                        let params = build_chat_send_params(cfg, subscription.id(), session, &line);
+                        subscription.send("chat.send", params).await?;
                     }
                     None => {
                         break;
@@ -197,15 +199,22 @@ where
     subscription.close().await
 }
 
-fn build_chat_send_params(cfg: &BobConfig, session: Option<&str>, line: &str) -> Value {
+fn build_chat_send_params(
+    cfg: &BobConfig,
+    subscription_id: &str,
+    session: Option<&str>,
+    line: &str,
+) -> Value {
     let application_identity = cfg.chat_application_identity.to_string();
     match session {
-        Some(id) => json!({
-            "session": id,
+        Some(session_id) => json!({
+            "id": subscription_id,
+            "session": session_id,
             "text": line,
             "application_identity": application_identity
         }),
         None => json!({
+            "id": subscription_id,
             "text": line,
             "application_identity": application_identity
         }),
@@ -258,17 +267,37 @@ mod tests {
     use crate::config::BobConfig;
 
     struct FakeChatSubscription {
+        subscription_id: String,
         notifications: mpsc::UnboundedReceiver<ServiceResult<Value>>,
         closed: Arc<AtomicBool>,
+        sent_params: Arc<Mutex<Vec<(String, Value)>>>,
     }
 
     impl ChatSubscription for FakeChatSubscription {
+        fn id(&self) -> &str {
+            &self.subscription_id
+        }
+
         fn recv<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = ServiceResult<Value>> + 'a>> {
             Box::pin(async move {
                 match self.notifications.recv().await {
                     Some(item) => item,
                     None => future::pending().await,
                 }
+            })
+        }
+
+        fn send<'a>(
+            &'a mut self,
+            method: &'static str,
+            params: Value,
+        ) -> Pin<Box<dyn Future<Output = ServiceResult<()>> + 'a>> {
+            Box::pin(async move {
+                self.sent_params
+                    .lock()
+                    .await
+                    .push((method.to_string(), params));
+                Ok(())
             })
         }
 
@@ -308,9 +337,11 @@ mod tests {
         }
     }
 
+    // Regression test for B-008: chat.send params must include the subscription
+    // id from chat.open so the server can validate it against the connection registry.
     #[tokio::test(flavor = "current_thread")]
-    async fn chat_opens_with_session_and_sends_each_input_line() {
-        let identity = "00000000-0000-0000-0000-000000000123"
+    async fn chat_send_params_include_subscription_id_from_chat_open() {
+        let identity = "00000000-0000-0000-0000-000000000456"
             .parse()
             .expect("identity should parse");
         let cfg = BobConfig {
@@ -318,38 +349,33 @@ mod tests {
             ..BobConfig::test_base()
         };
         let closed = Arc::new(AtomicBool::new(false));
-        let sent_params = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let sent_params = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
         let (notif_tx, notif_rx) = mpsc::unbounded_channel();
-        let mut lines = FakeLines::from([Some("hello"), Some("world"), None]);
+        let mut lines = FakeLines::from([Some("hello"), None]);
         let mut out = Vec::new();
 
         let closed_for_open = Arc::clone(&closed);
-        let sent_for_send = Arc::clone(&sent_params);
+        let sent_for_open = Arc::clone(&sent_params);
+        // The notif_tx is moved into the closure to keep the channel open until
+        // the subscription is dropped.
+        let _notif_tx = notif_tx;
         run_with_parts_async(
             false,
-            Some("session-7"),
+            None,
             &cfg,
             &mut out,
             &mut lines,
             || async { future::pending().await },
-            move |_cfg, method, params| {
+            move |_cfg, method, _params| {
                 let closed = Arc::clone(&closed_for_open);
-                let _notif_tx = notif_tx;
                 async move {
                     assert_eq!(method, "chat.open");
-                    assert_eq!(params, json!({"session":"session-7"}));
                     Ok(FakeChatSubscription {
+                        subscription_id: "sub-from-server".to_string(),
                         notifications: notif_rx,
                         closed,
+                        sent_params: sent_for_open,
                     })
-                }
-            },
-            move |_cfg, method, params| {
-                let sent_for_send = Arc::clone(&sent_for_send);
-                async move {
-                    assert_eq!(method, "chat.send");
-                    sent_for_send.lock().await.push(params);
-                    Ok(())
                 }
             },
         )
@@ -361,18 +387,82 @@ mod tests {
             "chat should close subscription"
         );
         let sent = sent_params.lock().await.clone();
+        assert_eq!(sent.len(), 1, "exactly one send for one input line");
+        let (method, params) = &sent[0];
+        assert_eq!(method, "chat.send");
         assert_eq!(
-            sent,
+            params["id"], "sub-from-server",
+            "params.id must equal the subscription id returned by chat.open"
+        );
+        assert_eq!(params["text"], "hello");
+        assert_eq!(
+            params["application_identity"],
+            "00000000-0000-0000-0000-000000000456"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn chat_opens_with_session_and_sends_each_input_line() {
+        let identity = "00000000-0000-0000-0000-000000000123"
+            .parse()
+            .expect("identity should parse");
+        let cfg = BobConfig {
+            chat_application_identity: identity,
+            ..BobConfig::test_base()
+        };
+        let closed = Arc::new(AtomicBool::new(false));
+        let sent_params = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
+        let (notif_tx, notif_rx) = mpsc::unbounded_channel();
+        let mut lines = FakeLines::from([Some("hello"), Some("world"), None]);
+        let mut out = Vec::new();
+
+        let closed_for_open = Arc::clone(&closed);
+        let sent_for_open = Arc::clone(&sent_params);
+        let _notif_tx = notif_tx;
+        run_with_parts_async(
+            false,
+            Some("session-7"),
+            &cfg,
+            &mut out,
+            &mut lines,
+            || async { future::pending().await },
+            move |_cfg, method, params| {
+                let closed = Arc::clone(&closed_for_open);
+                async move {
+                    assert_eq!(method, "chat.open");
+                    assert_eq!(params, json!({"session":"session-7"}));
+                    Ok(FakeChatSubscription {
+                        subscription_id: "sub-session-7".to_string(),
+                        notifications: notif_rx,
+                        closed,
+                        sent_params: sent_for_open,
+                    })
+                }
+            },
+        )
+        .await
+        .expect("chat succeeds");
+
+        assert!(
+            closed.load(Ordering::SeqCst),
+            "chat should close subscription"
+        );
+        let sent = sent_params.lock().await.clone();
+        let params_only: Vec<Value> = sent.into_iter().map(|(_, p)| p).collect();
+        assert_eq!(
+            params_only,
             vec![
                 json!({
-                    "session":"session-7",
-                    "text":"hello",
-                    "application_identity":"00000000-0000-0000-0000-000000000123"
+                    "id": "sub-session-7",
+                    "session": "session-7",
+                    "text": "hello",
+                    "application_identity": "00000000-0000-0000-0000-000000000123"
                 }),
                 json!({
-                    "session":"session-7",
-                    "text":"world",
-                    "application_identity":"00000000-0000-0000-0000-000000000123"
+                    "id": "sub-session-7",
+                    "session": "session-7",
+                    "text": "world",
+                    "application_identity": "00000000-0000-0000-0000-000000000123"
                 })
             ]
         );
@@ -382,6 +472,7 @@ mod tests {
     async fn chat_json_mode_prints_one_json_document_per_notification() {
         let cfg = BobConfig::test_base();
         let closed = Arc::new(AtomicBool::new(false));
+        let sent_params = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
         let (notif_tx, notif_rx) = mpsc::unbounded_channel();
         let (stop_tx, stop_rx) = oneshot::channel();
         let mut lines = FakeLines::from([]);
@@ -411,12 +502,13 @@ mod tests {
                     assert_eq!(method, "chat.open");
                     assert_eq!(params, json!({}));
                     Ok(FakeChatSubscription {
+                        subscription_id: "sub-json".to_string(),
                         notifications: notif_rx,
                         closed,
+                        sent_params,
                     })
                 }
             },
-            |_cfg, _method, _params| async move { Ok(()) },
         );
 
         task::spawn(async move {
