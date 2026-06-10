@@ -113,6 +113,34 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-06-10
+
+Reproduction status:
+Live end-to-end reproduction was not attempted because the `pi` binary at `/home/daneel/.npm-global/bin/pi` is a different tool (an npm global), not the pi-agent prerequisite required by CLAUDE.md. The defect is fully confirmed by code inspection and is unambiguous.
+
+Evidence captured:
+1. `build_chat_send_params` (`the-intern/service/crates/bob/src/cli/commands/chat.rs`, lines 200–213) builds params containing only `session`, `text`, and `application_identity`. The `id` field (the chat subscription id) is never included.
+2. `handle_chat_send` (`the-intern/service/crates/admin-rpc/src/dispatch.rs`, lines 344–352) unconditionally requires `params.id` to be present and to reference an open chat subscription in the per-connection `ConnectionRegistry`. When `params.id` is absent it returns JSON-RPC -32602 with message `"chat.send requires params.id"` — the exact error string from the bug report.
+3. `call_admin` (`the-intern/service/crates/bob/src/cli/commands.rs`, lines 62–68) creates a brand-new `AdminClient` (i.e., a new Unix socket connection) for every `chat.send` call. The `chat.open` subscription was established on a different connection (`connect_admin` at chat.rs line 92). The server's `ConnectionRegistry` is per-connection, so even if `params.id` were added, the id would reference a subscription on a different connection, causing a second error: `"params.id does not reference an open chat subscription on this connection"`.
+4. `Subscription<N>` (`the-intern/service/crates/bob/src/client/admin_rpc.rs`, lines 93–174) holds both `reader` and `writer` for the subscription's connection and exposes only `recv()` and `close()`. The `subscription_id` field is private and there is no `call()` or `send()` method on it, so there is no way to send additional requests on the subscription's own connection.
+5. The existing unit test `chat_opens_with_session_and_sends_each_input_line` uses a fake `send_chat` closure that does not validate params against the server protocol, so it passes despite the missing `id` field and the wrong-connection problem.
+
+Isolated fault:
+There are two coupled faults, both on the client side:
+- **Fault A — missing `params.id`**: `build_chat_send_params` never reads or forwards the subscription id returned by `chat.open`.
+- **Fault B — split-connection**: `chat.send` is dispatched via `call_admin`, which dials a fresh connection, while `chat.open` lives on the `Subscription`'s connection. The server validates that the subscription id belongs to the calling connection, so `chat.send` must travel over the same connection as `chat.open`.
+
+Root cause or fault hypothesis:
+The `Subscription<N>` API was built to support only streaming (recv) and teardown (close). The `chat` command needed a bidirectional use of the same connection — open, then send messages on it, then close — but no call path was implemented. `run_with_parts_async` was wired to use two independent closures (`open_chat` and `send_chat`) with no connection sharing; `send_chat` was connected to `call_admin`, which dials a new socket. As a result the subscription id is unknown to the send path and the connection check on the server is guaranteed to fail.
+
+The fix must: (1) expose the subscription id from `Subscription<N>` (or add a `call` method to send requests on the subscription's connection), and (2) rewrite the `chat.send` path to send on the subscription connection with the correct id rather than opening a new connection.
+
+Planned verification:
+- Write a unit test for `build_chat_send_params` (or the send closure in `run_with_parts`) that asserts the emitted params include `id` matching the subscription id returned by `chat.open`.
+- Write a unit test for `run_with_parts_async` where the fake `send_chat` closure asserts that `params["id"]` equals the id returned by the fake `open_chat`.
+- Optionally add an integration test using a real Unix socket fake server that exercises the full `chat.open` → `chat.send` round-trip on the same connection.
+- `cargo test -p bob` must pass with all new tests green.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
