@@ -1,11 +1,17 @@
 ---
 id: CR-001
 title: Add outbound response path for bob chat (S-006 deferred scope)
-status: pending
+status: accepted
 created: '2026-06-11'
 ---
 
 # Add outbound response path for bob chat (S-006 deferred scope)
+
+> **Resolution (2026-06-11):** accepted at Gate 1 as spec S-008
+> (`project/specs/S-008-outbound-chat-response-path-over-the-admin-socket.md`).
+> Decisions: multiplex on the subscription connection (per-service registry
+> rejected); CLI `--session` maps to `context_id` (the `session` wire field is
+> retired); delivery contract only — reply generation stays Phase 2 work.
 
 ## Desired Changes
 
