@@ -86,4 +86,39 @@ cargo test -p bob
 
 ## Work Log
 
+### Session 1 — 2026-06-12
+
+**What was done**
+
+Implemented the full T-092 acceptance criteria in a single TDD cycle.
+
+1. Added `croner = "3"` to `crates/bob/Cargo.toml`. Used `CronParser::builder().seconds(Seconds::Disallowed).build()` to enforce exactly 5 fields (croner's default parser accepts optional seconds, so the builder was necessary).
+
+2. Created `crates/bob-core/src/types/schedule.rs` with `ScheduleEntry { id, cron, prompt }` deriving `Clone`, `Debug`, `Serialize`, `Deserialize`. Re-exported it from the `types` module.
+
+3. In `crates/bob/src/config.rs`:
+   - Added `RawScheduleEntry` (serde-deserialized from TOML, all fields optional with `#[serde(default)]`).
+   - Added `ScheduleConfig { pub entries: Vec<ScheduleEntry> }` (public validated type).
+   - Extended `BobConfig` with `pub schedule: ScheduleConfig`.
+   - Added `validate_schedule_entries()` which checks for blank id/cron/prompt and invalid cron expressions, returning `ServiceError::Configuration` with a message naming the offending field.
+   - Wired validation into `load_with_sources` and updated `defaults_with_runtime_root` and `test_base()`.
+   - Added 6 tests covering AC-1 through AC-4 (including 3 blank-field sub-cases for AC-3).
+
+4. Updated `tests/chat_e2e.rs` and `tests/shell_e2e.rs` — both used literal `BobConfig { ... }` struct syntax and needed `schedule: ScheduleConfig { entries: vec![] }` added.
+
+**What was tried and rejected**
+
+- Initially drafted `RawScheduleConfig { entries: Vec<RawScheduleEntry> }` as a TOML section wrapper. Rejected because `[[schedule]]` TOML maps directly to `Vec<RawScheduleEntry>` on `RawBobConfig` without a wrapper.
+
+**What remains**
+
+Nothing. All acceptance criteria are met and all tests pass.
+
+**Obstacles Encountered**
+
+- Two integration test files (`chat_e2e.rs`, `shell_e2e.rs`) used literal `BobConfig { ... }` struct syntax and needed the `schedule` field added.
+- `croner` v3's default `CronParser` accepts optional seconds (5 or 6 fields); used `CronParser::builder().seconds(Seconds::Disallowed).build()` to enforce exactly 5-field cron expressions.
+
+**Final branch state:** committed, clean, all tests passing (117 tests, 0 failures)
+
 ## Review
