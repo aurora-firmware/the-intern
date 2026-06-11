@@ -357,7 +357,9 @@ async fn chat_forwarder(
     tokio::pin!(cancel_rx);
     loop {
         tokio::select! {
-            // Cancellation from chat.close or connection drop.
+            biased;
+            // Cancellation from chat.close or connection drop takes priority
+            // over pending messages so close is not delayed by a busy queue.
             _ = &mut cancel_rx => {
                 return;
             }

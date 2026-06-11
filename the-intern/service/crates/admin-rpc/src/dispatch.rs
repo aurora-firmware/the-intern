@@ -355,15 +355,14 @@ impl Dispatcher {
             ));
         };
 
-        if registry.close_chat(sub_id) {
-            tracing::debug!(subscription_id = %sub_id, "chat.close: removed");
-            // Deregister from the reply router so subsequent injected replies are
-            // dropped.  This must happen before the cancel sender is dropped
-            // (done inside registry.close_chat) so the forwarder cannot race a
-            // delivery after the channel closes.
+        if registry.is_chat_subscription(sub_id) {
+            // Deregister from the reply router before dropping the cancel sender
+            // so the forwarder cannot race a delivery after the channel closes.
             if let Some(ref router) = self.chat_router {
                 router.deregister(sub_id);
             }
+            registry.close_chat(sub_id);
+            tracing::debug!(subscription_id = %sub_id, "chat.close: removed");
             let response = Response::ok(id, json!({ "ok": true }));
             DispatchOutcome::ChatUnsubscribed {
                 response,

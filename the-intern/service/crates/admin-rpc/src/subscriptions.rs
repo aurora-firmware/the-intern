@@ -356,6 +356,13 @@ impl ConnectionRegistry {
         }
     }
 
+    /// Returns `true` when the given id is an open chat subscription.
+    pub fn is_chat_subscription(&self, id: AdminSubscriptionId) -> bool {
+        self.ids
+            .iter()
+            .any(|&(i, k)| i == id && k == SubscriptionKind::Chat)
+    }
+
     /// Iterate over all open subscription ids and their kinds.
     pub fn ids(&self) -> impl Iterator<Item = (AdminSubscriptionId, SubscriptionKind)> + '_ {
         self.ids.iter().copied()
