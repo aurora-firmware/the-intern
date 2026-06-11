@@ -101,3 +101,26 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-11
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1: Met. `FrameReaderTask` spawns a background Tokio task that owns the `BufReader` and forwards complete frames over a bounded `mpsc::channel(64)`. Receiving from a channel is definitionally cancellation-safe: dropping a `recv()` future leaves the frame in the channel for the next poll. Test `subscription_recv_is_cancellation_safe_when_frame_arrives_in_parts` sends a frame in two halves with a deliberate pause, cancels the first `recv()` via a 5 ms timeout, and verifies the second `recv()` returns the complete frame with no malformed-frame error.
+- AC-2: Met. Test `subscription_delivers_all_notifications_exactly_once_under_interleaving` issues 3 send/receive cycles with a notification arriving before each response; all 3 arrive in order `[0, 1, 2]` exactly once.
+- AC-3: Met. `call()` and `close()` both read from `frame_reader.next_frame()` — the same cancellation-safe channel. `close()` still skips notifications before the close response and the chat-level integration test `chat_loop_close_skips_notifications_in_flight_after_close_request` verifies the notification sent before the close response does not appear in output.
+- AC-4: Met. All 96 tests pass (`cargo test -p bob --lib`); `cargo fmt --all -- --check` is clean.
+
+Only the two specified files were modified: `admin_rpc.rs` and `chat.rs`.
+
+**Stage 2 — Code Quality**
+
+- Correctness: `FrameReaderTask` self-terminates correctly in both the error path (`is_err` guard) and the dropped-receiver path (`tx.send().is_err()`). The `notification_buffer` and all frame-dispatch logic in `call()` and `close()` are correctly unchanged; only the read source changed.
+- Tests: Four new tests. Two in `admin_rpc.rs` targeting AC-1 and AC-2 at the unit level. Two in `chat.rs` covering AC-1/AC-2 and AC-3 at the integration level using real Unix sockets. Success and failure paths are covered. Tests are independent (unique socket paths via atomic counter + PID).
+- Security: No hardcoded secrets. All external input continues to go through the existing `read_value_frame` / `parse_call_response` validation path.
+- Readability: `FrameReaderTask` is well-documented with a clear comment explaining the cancellation-safety guarantee. The `_handle` field stores the `JoinHandle` for the task's lifetime without requiring explicit await — the task self-terminates via the channel closed signal, which is the correct and idiomatic pattern for this scope.
+- Performance: The bounded channel (capacity 64) provides explicit backpressure. No unnecessary loops or blocking calls introduced.
+
+No blocking concerns.
