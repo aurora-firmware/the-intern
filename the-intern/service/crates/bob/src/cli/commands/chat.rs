@@ -242,22 +242,38 @@ mod tests {
     use std::{
         collections::VecDeque,
         future::{self, Future},
+        path::PathBuf,
         pin::Pin,
         sync::{
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicU64, Ordering},
             Arc,
         },
+        time::Duration,
     };
 
     use bob_core::error::ServiceResult;
     use serde_json::{json, Value};
     use tokio::{
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+        net::UnixListener,
         sync::{mpsc, oneshot, Mutex},
         task,
+        time::timeout,
     };
 
     use super::{run_with_parts_async, ChatInputLines, ChatSubscription};
-    use crate::config::BobConfig;
+    use crate::{client::AdminClient, config::BobConfig};
+
+    static NEXT_CHAT_SOCKET_ID: AtomicU64 = AtomicU64::new(1);
+
+    fn unique_chat_socket_path(name: &str) -> PathBuf {
+        let id = NEXT_CHAT_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
+        let dir = PathBuf::from("/tmp/bob-chat-tests");
+        std::fs::create_dir_all(&dir).expect("create test-sockets dir");
+        let path = dir.join(format!("{name}-{}-{id}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
 
     struct FakeChatSubscription {
         subscription_id: String,
@@ -585,5 +601,251 @@ mod tests {
             String::from_utf8(out).expect("utf8"),
             "{\"text\":\"first\"}\n{\"text\":\"second\"}\n"
         );
+    }
+
+    // AC-1 + AC-2 (chat loop integration): verify that notifications pushed
+    // by the server while the loop is processing stdin are delivered exactly
+    // once, in order, with no malformed-frame errors.
+    //
+    // Design: stdin provides one message then stays pending forever; a stop
+    // signal fires after the server finishes sending three notifications.
+    // This keeps stdin from racing with recv() so the recv() arm is guaranteed
+    // to drain all notifications before the stop fires.
+    #[tokio::test(flavor = "current_thread")]
+    async fn chat_loop_delivers_all_notifications_when_stdin_and_notifications_race() {
+        let sock_path = unique_chat_socket_path("chat-loop-race");
+        let listener = UnixListener::bind(&sock_path).expect("bind listener");
+        let (stop_tx, stop_rx) = oneshot::channel::<()>();
+
+        // Server: answer chat.open, answer one chat.send (with buffered
+        // notification), then push two more notifications proactively, then
+        // signal the stop channel so the loop exits cleanly.
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let (read_half, mut write_half) = tokio::io::split(stream);
+            let mut reader = BufReader::new(read_half);
+
+            // chat.open
+            let mut line = String::new();
+            reader.read_line(&mut line).await.expect("read chat.open");
+            write_half
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"result\":{\"id\":\"chat-race\"},\"id\":1}\n")
+                .await
+                .expect("write chat.open response");
+
+            // Answer the one chat.send, sending the notification BEFORE the
+            // response so it gets buffered inside call().
+            let mut req_line = String::new();
+            reader
+                .read_line(&mut req_line)
+                .await
+                .expect("read chat.send");
+            let req: Value = serde_json::from_str(req_line.trim()).expect("parse chat.send");
+            let req_id = req["id"].as_u64().expect("id");
+
+            write_half
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"chat.notification\",\"params\":{\"subscription\":\"chat-race\",\"data\":{\"text\":\"reply-0\"}}}\n")
+                .await
+                .expect("write notif-0");
+            write_half
+                .write_all(
+                    format!("{{\"jsonrpc\":\"2.0\",\"result\":{{\"ok\":true}},\"id\":{req_id}}}\n")
+                        .as_bytes(),
+                )
+                .await
+                .expect("write send response");
+
+            // Push two more notifications proactively (not in response to a send),
+            // delivered in two halves each to create a cancellation window.
+            for i in 1u32..3 {
+                let notif = format!(
+                    "{{\"jsonrpc\":\"2.0\",\"method\":\"chat.notification\",\"params\":{{\"subscription\":\"chat-race\",\"data\":{{\"text\":\"reply-{i}\"}}}}}}\n"
+                );
+                let (first, second) = notif.as_bytes().split_at(notif.len() / 2);
+                write_half
+                    .write_all(first)
+                    .await
+                    .expect("write notif first half");
+                // Brief pause to create a window where the loop may be polled.
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                write_half
+                    .write_all(second)
+                    .await
+                    .expect("write notif second half");
+            }
+
+            // Give the client time to drain the notifications, then stop it.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = stop_tx.send(());
+
+            // Read and answer chat.close.
+            let mut close_line = String::new();
+            reader
+                .read_line(&mut close_line)
+                .await
+                .expect("read chat.close");
+            let close_req: Value =
+                serde_json::from_str(close_line.trim()).expect("parse chat.close");
+            let close_id = close_req["id"].as_u64().expect("close id");
+            write_half
+                .write_all(
+                    format!(
+                        "{{\"jsonrpc\":\"2.0\",\"result\":{{\"ok\":true}},\"id\":{close_id}}}\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("write close response");
+        });
+
+        let cfg = BobConfig {
+            admin_sock_path: sock_path.clone(),
+            ..BobConfig::test_base()
+        };
+        // One stdin line then permanently pending — stop signal drives termination.
+        let mut lines = FakeLines::from([Some("msg-0")]);
+        let mut out = Vec::new();
+
+        timeout(
+            Duration::from_secs(5),
+            run_with_parts_async(
+                true,
+                None,
+                &cfg,
+                &mut out,
+                &mut lines,
+                || async {
+                    stop_rx.await.ok();
+                    Ok(())
+                },
+                |cfg, method, params| async move {
+                    let mut client = AdminClient::connect(&cfg).await?;
+                    client.subscribe::<_, Value>(method, params).await
+                },
+            ),
+        )
+        .await
+        .expect("chat loop must complete within 5s")
+        .expect("chat loop must succeed");
+
+        let rendered = String::from_utf8(out).expect("utf8 output");
+        assert!(
+            rendered.contains("\"reply-0\""),
+            "reply-0 must be rendered; got: {rendered}"
+        );
+        assert!(
+            rendered.contains("\"reply-1\""),
+            "reply-1 must be rendered; got: {rendered}"
+        );
+        assert!(
+            rendered.contains("\"reply-2\""),
+            "reply-2 must be rendered; got: {rendered}"
+        );
+        assert_eq!(
+            rendered.matches("reply-").count(),
+            3,
+            "each reply must appear exactly once; got: {rendered}"
+        );
+
+        timeout(Duration::from_secs(2), server)
+            .await
+            .expect("server completed")
+            .expect("server join");
+        let _ = std::fs::remove_file(&sock_path);
+    }
+
+    // AC-3 (chat loop integration): close() skips notifications that arrive
+    // after the close request is sent, so none of them appear in the output.
+    // Uses a real Subscription<Value> so the FrameReaderTask path is exercised.
+    #[tokio::test(flavor = "current_thread")]
+    async fn chat_loop_close_skips_notifications_in_flight_after_close_request() {
+        let sock_path = unique_chat_socket_path("chat-loop-close");
+        let listener = UnixListener::bind(&sock_path).expect("bind listener");
+        let (stop_tx, stop_rx) = oneshot::channel::<()>();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let (read_half, mut write_half) = tokio::io::split(stream);
+            let mut reader = BufReader::new(read_half);
+
+            // chat.open
+            let mut line = String::new();
+            reader.read_line(&mut line).await.expect("read chat.open");
+            write_half
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"result\":{\"id\":\"chat-close\"},\"id\":1}\n")
+                .await
+                .expect("write chat.open response");
+
+            // Trigger the stop signal so the loop exits after open.
+            let _ = stop_tx.send(());
+
+            // Read and answer chat.close — send a notification before the
+            // close response to verify AC-3 semantics.
+            let mut close_line = String::new();
+            reader
+                .read_line(&mut close_line)
+                .await
+                .expect("read chat.close");
+            let close_req: Value =
+                serde_json::from_str(close_line.trim()).expect("parse chat.close");
+            let close_id = close_req["id"].as_u64().expect("close id");
+
+            write_half
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"chat.notification\",\"params\":{\"subscription\":\"chat-close\",\"data\":{\"text\":\"skipped\"}}}\n")
+                .await
+                .expect("write notification before close");
+            write_half
+                .write_all(
+                    format!(
+                        "{{\"jsonrpc\":\"2.0\",\"result\":{{\"ok\":true}},\"id\":{close_id}}}\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("write close response");
+        });
+
+        let cfg = BobConfig {
+            admin_sock_path: sock_path.clone(),
+            ..BobConfig::test_base()
+        };
+        // No stdin lines — stop signal drives termination.
+        let mut lines = FakeLines::from([]);
+        let mut out = Vec::new();
+
+        timeout(
+            Duration::from_secs(5),
+            run_with_parts_async(
+                true,
+                None,
+                &cfg,
+                &mut out,
+                &mut lines,
+                || async {
+                    stop_rx.await.ok();
+                    Ok(())
+                },
+                |cfg, method, params| async move {
+                    let mut client = AdminClient::connect(&cfg).await?;
+                    client.subscribe::<_, Value>(method, params).await
+                },
+            ),
+        )
+        .await
+        .expect("chat loop must complete within 5s")
+        .expect("chat loop must succeed without error");
+
+        let rendered = String::from_utf8(out).expect("utf8 output");
+        // The notification that arrived after close was issued must not appear.
+        assert!(
+            !rendered.contains("\"skipped\""),
+            "notification after close must be skipped; got: {rendered}"
+        );
+
+        timeout(Duration::from_secs(2), server)
+            .await
+            .expect("server completed")
+            .expect("server join");
+        let _ = std::fs::remove_file(&sock_path);
     }
 }
