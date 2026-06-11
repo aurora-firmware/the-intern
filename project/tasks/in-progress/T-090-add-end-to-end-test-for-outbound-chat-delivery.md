@@ -107,3 +107,28 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-11
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+All three acceptance criteria are explicitly verified by passing tests:
+
+- AC-1: `injected_reply_delivers_chat_message_notification_with_matching_subscription_and_payload` — opens a subscription, injects one payload via `DeliveryHandle::deliver`, receives it via `sub.recv()`, and asserts `params.data` equals the injected value. PASS.
+- AC-2: `chat_send_response_and_injected_replies_both_delivered_without_loss` — injects 3 replies before issuing `sub.call("chat.send", ...)`, then collects all 3 notifications and asserts seq values `[0, 1, 2]` with no loss. PASS.
+- AC-3: `replies_injected_after_chat_close_produce_no_client_visible_frames` — confirms the subscription is live before close, calls `sub.close()`, injects a post-close payload, and uses a second connection's successful delivery as a synchronization point confirming the router is still functional and the post-close payload was silently dropped. PASS.
+
+Only `the-intern/service/crates/bob/tests/chat_e2e.rs` was added. No unexpected files modified.
+
+**Stage 2 — Code Quality**
+
+- Correctness: logic is sound across all three tests; `NOTIFICATION_DEADLINE` timeouts prevent hangs; the AC-3 second-connection synchronization approach is robust and avoids fragile fixed-sleep polling.
+- Tests: all three tests are independent (each creates its own `TestServer` with a fresh `tempfile::TempDir`), no shared mutable state, and each covers both a positive assertion and appropriate timeout-as-failure semantics.
+- Security: no hardcoded secrets; synthetic test payloads only.
+- Readability: descriptive test names, named constants (`SOCKET_APPEAR_DEADLINE`, `NOTIFICATION_DEADLINE`, `ADMIN_RPC_DEADLINE`), and inline comments document strategy and environment assumptions consistently with `shell_e2e.rs` conventions.
+- Performance: no unnecessary blocking or resource leaks; `_handle` and `_tmp` in `TestServer` clean up via drop.
+- Format: `cargo fmt --all -- --check` clean. `cargo test --workspace` 0 failed.
+
+Minor observations (non-blocking): `client_cfg()` fills many `BobConfig` fields with placeholder values since no `BobConfig::test_base()` helper is available in this test file; this is verbose but correct and matches the same approach used elsewhere.
