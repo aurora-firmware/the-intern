@@ -104,3 +104,26 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-11
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1: `handle_chat_send` in `admin-rpc/src/dispatch.rs` constructs `ChatFrame` with `subscription_id: sub_id.to_string()` where `sub_id` is the already-validated subscription id. Met.
+- AC-2: The chat-adapter actor's receive loop sets `reply_address: Some(frame.subscription_id)` on every `RequestContext` it builds and submits to intake. Met. Test `chat_frame_subscription_id_is_preserved_as_reply_address_on_request_context` (chat-adapter) and `dispatch_chat_send_attaches_subscription_id_as_reply_address_on_request_context` (admin-rpc full path) both cover this boundary explicitly.
+- AC-3: All `RequestContext` construction sites outside the chat-adapter supply `reply_address: None`. No existing tests were broken. Met.
+- AC-4: No changes to validation logic, acceptance, or rejection paths in `handle_chat_send`. Met.
+
+No unspecified behaviour was added. Only the three files listed in Files to Touch (plus additive `reply_address: None` updates at existing construction sites) were modified.
+
+**Stage 2 — Code Quality**
+
+- Correctness: `subscription_id` is required on `ChatFrame` (not `Option`), so the actor can unconditionally assign `reply_address: Some(...)` — correct and safe by construction.
+- Tests: new tests cover the adapter boundary (subscription_id → reply_address) and the full dispatch path; existing tests updated correctly with `reply_address: None`.
+- Security: no secrets, no unvalidated external input, no new query paths.
+- Readability: field names and doc comments are clear and consistent with the spec language.
+- Performance: no unnecessary allocations or blocking paths introduced.
+
+Full verification run confirmed: `cargo test -p chat-adapter -p admin-rpc` — 9 + 108 passed; `cargo test --workspace` — all 25 test result blocks passed, 0 failed; `cargo fmt --all -- --check` clean.
