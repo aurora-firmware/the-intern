@@ -134,3 +134,25 @@ AC-1 fails on one point: the `--json` output example in the documentation shows 
 **Stage 2 — Code Quality**
 
 Not reached due to Stage 1 failure on AC-1. mdbook build confirmed clean (no broken links, pre-existing mermaid version warning only).
+
+### Review Verdict — 2026-06-11
+
+FAIL
+
+**Stage 1 — Acceptance Criteria**
+
+AC-2 and AC-3 pass.
+
+AC-1 fails. Session 2 correctly fixed the `--json` output example (now shows `{"text":"<reply text>"}` instead of the full JSON-RPC frame). However, the fix introduced a broken cross-reference: the `--json` section now says "The full wire-level notification shape (including `params.subscription` and `params.data`) is documented in the Wire contract section below," but the Wire contract section only documents the `chat.send` params table — it contains no documentation of the `chat.message` notification shape. AC-1 requires the documentation to state the `chat.message` notification shape exactly as defined in S-008's wire contract.
+
+- **File:** `the-intern/docs/src/end-user-guide/index.md`, Wire contract section (lines 269–296 on the task branch)
+- **What is wrong:** The Wire contract section documents `chat.send` params but does not document the `chat.message` notification shape at all. The cross-reference sentence in the `--json` section promises it is there, but it is not. S-008's wire contract specifies: reply notifications use method `chat.message` with params `subscription` (the subscription id) and `data` (the reply payload), where `data` contains at least a `text` string. None of this is stated in the Wire contract section.
+- **What should change:** Add the `chat.message` notification shape to the Wire contract section. A table or equivalent prose matching S-008's definition is sufficient — for example, a `chat.message` params table listing `subscription` (subscription id, string) and `data` (reply payload object, with `data.text` being a human-readable string). The cross-reference from the `--json` section must then accurately point to real content.
+
+**Stage 2 — Code Quality**
+
+Not reached due to Stage 1 failure on AC-1. AC-3 confirmed: `mdbook build` passes cleanly (pre-existing mermaid version warning only, no broken links).
+
+**Obstacles Encountered**
+
+None. The Session 2 fix to the `--json` example is correct and was verified against `admin_rpc.rs` and `commands/chat.rs` (unit test at lines 600–603 asserts `{"text":"first"}\n{"text":"second"}\n`). The remaining issue is solely the missing `chat.message` notification shape in the Wire contract section.
