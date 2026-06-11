@@ -1,7 +1,7 @@
 ---
 id: T-095
 title: Implement cron tick loop and periodic InternalRequest firing in scheduler-adapter
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-06-12'
