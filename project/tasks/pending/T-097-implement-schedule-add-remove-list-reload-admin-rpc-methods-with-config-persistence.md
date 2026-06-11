@@ -18,30 +18,38 @@ S-009 Component 3: implement the four `schedule.*` admin-RPC methods in
 **Method contracts:**
 
 - `schedule.add { id, cron, prompt }` — validate the entry (unique id, valid
-  5-field cron, non-empty prompt); if valid, append to the `[[schedule]]`
-  section in `bob.toml` and signal the scheduler actor to reload. Return
-  `{ "ok": true }` on success or a JSON-RPC error on validation failure.
+  5-field `croner` expression, non-empty prompt); if valid: (1) read current
+  entries from `bob.toml`, (2) append the new entry, (3) write back atomically,
+  (4) send the full updated `Vec<ScheduleEntry>` over `ReloadHandle` so the
+  actor reloads in-process (per the reload design established in T-096 — the
+  actor does **not** re-read disk). Return `{ "ok": true }` on success or a
+  JSON-RPC error on validation failure.
 
-- `schedule.remove { id }` — remove the entry with the given id from
-  `bob.toml`; signal reload. Return `{ "ok": true }` if found, error if not.
+- `schedule.remove { id }` — read current entries, remove the entry with the
+  given id, write back atomically, send the updated vec over `ReloadHandle`.
+  Return `{ "ok": true }` if found, error if not.
 
-- `schedule.list` — return the current live job table as a JSON array:
-  `[{ "id": "...", "cron": "...", "prompt": "..." }, …]`. Read from the
-  scheduler actor's live state (not re-read from disk).
+- `schedule.list` — return the current live job table from the actor's
+  `watch::Receiver<Vec<ScheduleEntry>>` (set up in T-096 as part of
+  `ReloadHandle`). No disk read. Returns JSON array:
+  `[{ "id": "...", "cron": "...", "prompt": "..." }, …]`.
 
-- `schedule.reload` — signal the scheduler actor to re-read `bob.toml` and
-  rebuild its job table. Return `{ "ok": true }`.
+- `schedule.reload` — read `[[schedule]]` entries from `bob.toml` and send the
+  full `Vec<ScheduleEntry>` over `ReloadHandle`. This is the only method that
+  re-reads disk; it exists so the operator can reconcile the live table with
+  a hand-edited config file.
 
 **Config persistence:** Add a `write_schedule_entries(path, entries)` helper
 to `crates/bob/src/config.rs` (or a new `config_writer.rs` module). It must:
 1. Read the existing TOML file.
 2. Replace only the `[[schedule]]` array.
-3. Write the file atomically (write to a temp file, then rename).
+3. Write atomically (write to a temp file in the same directory, then rename).
 
-The `schedule.list` method requires the scheduler actor to expose a
-`list_jobs()` method or channel; add this to `ReloadHandle` or as a separate
-`QueryHandle`. Keep the design minimal — a `watch::Receiver<Vec<ScheduleEntry>>`
-broadcast from the actor is sufficient.
+**`ReloadHandle` extension:** T-096 created `ReloadHandle` with a
+`watch::Sender<Vec<ScheduleEntry>>`. Extend it here to also expose a
+`watch::Receiver<Vec<ScheduleEntry>>` clone for `schedule.list` to read the
+live table without an extra round-trip. Add a `subscribe()` method to
+`ReloadHandle` that returns this receiver.
 
 ## Acceptance Criteria
 

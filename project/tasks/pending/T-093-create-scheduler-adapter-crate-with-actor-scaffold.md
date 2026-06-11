@@ -24,14 +24,15 @@ down cleanly. No cron ticks fire yet — that is T-095.
 - `crates/scheduler-adapter/src/lib.rs` — public API:
   - `ReloadHandle` — cheaply cloneable; wraps a `watch::Sender<()>` (or
     equivalent) that the admin-RPC layer uses to signal a config reload.
-  - `start(intake: IntakeHandle, config: ScheduleConfig) -> (ReloadHandle, JoinHandle<()>)`
+  - `start(intake: IntakeHandle, entries: Vec<ScheduleEntry>) -> (ReloadHandle, JoinHandle<()>)`
   - Internal actor loop: initialises job table from `ScheduleConfig`, waits for
     reload signal or shutdown (all handles dropped), logs start and stop.
 
-`ScheduleConfig` / `ScheduleEntry` were defined in T-092 inside the `bob`
-crate. Because `scheduler-adapter` must not depend on `bob`, mirror the minimal
-needed types (`ScheduleEntry { id, cron, prompt }`) into `bob-core` and re-use
-them from both `bob` and `scheduler-adapter`. Record the decision in the Work Log.
+`ScheduleEntry` is defined in `bob-core::types` (placed there by T-092).
+`scheduler-adapter` imports it directly from `bob-core` — do not add a
+dependency on `bob`. `ScheduleConfig` is `bob`-crate-only; pass a
+`Vec<bob_core::types::ScheduleEntry>` into `start()` rather than the full
+`ScheduleConfig`, so the adapter crate does not need any `bob`-crate types.
 
 Register the new crate in `the-intern/service/Cargo.toml`.
 
@@ -54,18 +55,14 @@ AC-5: The system shall pass `cargo test --workspace` with no new failures.
 
 ## Dependencies
 
-- `T-092` — `ScheduleConfig` / `ScheduleEntry` types must exist before the
-  actor can consume them
+- `T-092` — `ScheduleEntry` must be defined in `bob-core::types` before the
+  actor crate can import it
 
 ## Files to Touch
 
 - `the-intern/service/Cargo.toml` — add `scheduler-adapter` to workspace members
 - `the-intern/service/crates/scheduler-adapter/Cargo.toml` — new file
 - `the-intern/service/crates/scheduler-adapter/src/lib.rs` — new file
-- `the-intern/service/crates/bob-core/src/types.rs` — add `ScheduleEntry` mirror
-  (if the decision is to define it in bob-core)
-- `the-intern/service/crates/bob/src/config.rs` — update to re-use `bob-core::ScheduleEntry`
-  instead of a local definition (if applicable)
 
 ## Verification
 

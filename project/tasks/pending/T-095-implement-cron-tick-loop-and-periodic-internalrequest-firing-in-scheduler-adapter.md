@@ -18,21 +18,28 @@ the job's prompt to the internal queue via the `IntakeHandle`.
 
 **Implementation notes:**
 
-- Add the `cron` crate (already added to `bob` in T-092) to
-  `scheduler-adapter/Cargo.toml` as well, for cron-expression scheduling.
-- Use `tokio::time::sleep_until` with the next-fire time calculated from the
-  cron expression to avoid busy-polling. Do not use an external cron-scheduler
+- Add the `croner` crate (same crate used by T-092 in `bob`) to
+  `scheduler-adapter/Cargo.toml` for computing next-fire times from cron
+  expressions. **Do not use the `cron` crate** — it defaults to 6+ fields and
+  does not match the 5-field expressions stored in config.
+- Use `tokio::time::sleep_until` with the next-fire time calculated from
+  `croner` to avoid busy-polling. Do not use an external cron-scheduler
   library that spawns its own thread pool.
+- **Fixed identities per job, not per tick.** At actor startup, for each
+  `ScheduleEntry` build a `JobState` that holds a fixed `ChannelId` (created
+  once via `ChannelId::new()`) and a fixed `UserId` (created once via
+  `UserId::new()`). Reuse these same values on every tick for that job.
+  Creating fresh random IDs per tick would break policy traceability — each
+  fire would appear to come from an unknown channel and user. The fixed IDs
+  should be logged at startup (`info!`) so operators can reference them in
+  policy rules.
 - For each tick:
   - Construct `InternalEvent { kind: DeliveryKind::Periodic, payload: job.prompt.clone() }`.
-  - Construct `RequestContext { sender: UserId::scheduler_sentinel(), source: ChannelId::new(), context_id: Some(job.id.clone()), reply_address: None }`.
+  - Construct `RequestContext { sender: job_state.user_id, source: job_state.channel_id, context_id: Some(job.id.clone()), reply_address: None }`.
   - Call `intake.submit_event(event, context).await`. If the queue is full or
     returns an error, log a warning and continue — do not crash the actor.
-- `DeliveryKind::Periodic` must exist in `bob-core`. If it does not, add it
-  (check first; ADR-004 already defines it as a valid kind).
-- A `UserId` sentinel for the scheduler (e.g. `UserId::scheduler()`) should
-  be defined or used — check what convention the codebase uses for
-  system-originated requests.
+- `DeliveryKind::Periodic` already exists in `bob-core/src/types/event.rs`
+  (confirmed); no change to that file is needed.
 
 **Testing:** Add an integration test in `scheduler-adapter/src/lib.rs` (or
 `tests/`) that:
@@ -48,7 +55,8 @@ AC-1: WHEN a scheduled job's cron expression matches the current time THE
       and `payload` equal to the job's `prompt` to the intake handle.
 
 AC-2: The system shall set `context_id` on the `RequestContext` to the job's
-      `id` string, and `reply_address` to `None`.
+      `id` string, `reply_address` to `None`, and use the same `ChannelId` and
+      `UserId` for every tick of a given job (fixed at actor startup).
 
 AC-3: IF `intake.submit_event` returns an error THEN THE SYSTEM SHALL log a
       warning and continue processing subsequent ticks without crashing.
@@ -65,12 +73,10 @@ AC-5: The system shall pass `cargo test --workspace` with no new failures.
 
 ## Files to Touch
 
-- `the-intern/service/crates/scheduler-adapter/src/lib.rs` — add tick loop
-  and `cron` integration
-- `the-intern/service/crates/scheduler-adapter/Cargo.toml` — add `cron` crate,
-  `tokio` time feature
-- `the-intern/service/crates/bob-core/src/types.rs` — confirm or add
-  `DeliveryKind::Periodic`
+- `the-intern/service/crates/scheduler-adapter/src/lib.rs` — add tick loop,
+  `JobState` struct, and `croner` integration
+- `the-intern/service/crates/scheduler-adapter/Cargo.toml` — add `croner`
+  crate and `tokio` time feature
 
 ## Verification
 
