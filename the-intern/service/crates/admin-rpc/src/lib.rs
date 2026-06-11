@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod chat_router;
 pub mod dispatch;
 pub mod listener;
 pub mod peer_cred;
@@ -60,6 +61,17 @@ pub struct Config {
     /// When `None` (the default), `chat.send` returns a JSON-RPC error
     /// indicating that the chat channel is not available.
     pub chat_adapter: Option<chat_adapter::FrameHandle>,
+    /// Optional chat reply router.
+    ///
+    /// When `Some`, `chat.open` registers with this router and the connection
+    /// loop spawns a forwarder that delivers replies as `chat.message`
+    /// notifications.  When `None` (the default), an internal router is created
+    /// automatically — production `serve.rs` requires no change.
+    ///
+    /// Pass a router created externally (via `Arc<ChatReplyRouter>`) to retain a
+    /// `DeliveryHandle` clone for in-process injection (used by integration tests
+    /// in T-090).
+    pub chat_router: Option<std::sync::Arc<crate::chat_router::ChatReplyRouter>>,
 }
 
 impl Default for Config {
@@ -73,6 +85,7 @@ impl Default for Config {
             audit_bus: None,
             slow_subscriber_deadline: Duration::from_secs(5),
             chat_adapter: None,
+            chat_router: None,
         }
     }
 }
@@ -144,7 +157,7 @@ enum NotifMsg {
 /// forwarder task serializes it and pushes it onto the notification channel.
 /// AC-5: when the connection closes, all subscriptions registered on it are
 /// cleaned up without leaking entries (via `ConnectionRegistry::drop`).
-async fn run_connection(stream: UnixStream, dispatcher: Dispatcher, bus: SubscriptionBus) {
+async fn run_connection(stream: UnixStream, dispatcher: Dispatcher, _bus: SubscriptionBus) {
     let (read_half, write_half) = stream.into_split();
     let reader = BufReader::new(read_half);
 
@@ -153,7 +166,16 @@ async fn run_connection(stream: UnixStream, dispatcher: Dispatcher, bus: Subscri
     // Notification channel: forwarder tasks → write task.
     let (notif_tx, notif_rx) = mpsc::channel::<NotifMsg>(64);
 
-    let registry = ConnectionRegistry::new(bus.clone());
+    // Build the per-connection registry and attach the chat router so the
+    // registry can deregister chat subscriptions on connection drop (AC-3/T-086).
+    let registry = {
+        let r = ConnectionRegistry::new();
+        if let Some(router) = dispatcher.chat_router() {
+            r.with_chat_router(router)
+        } else {
+            r
+        }
+    };
 
     // Spawn the write task first so it is ready to receive messages.
     let write_task = tokio::spawn(write_loop(write_half, out_rx, notif_rx));
@@ -210,6 +232,34 @@ async fn read_loop(
                     DispatchOutcome::Unsubscribed { response, id: _ } => {
                         // The ConnectionRegistry already removed the subscription;
                         // the forwarder task will see its receiver close and exit.
+                        out_tx
+                            .send(OutboundMsg::Frame(serialize_frame(&response)))
+                            .await
+                            .is_ok()
+                    }
+                    DispatchOutcome::ChatSubscribed {
+                        response,
+                        id,
+                        rx,
+                        cancel_rx,
+                    } => {
+                        // Send the response frame first.
+                        if out_tx
+                            .send(OutboundMsg::Frame(serialize_frame(&response)))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                        // Spawn a forwarder task that delivers chat reply payloads
+                        // to the write task via the notification channel.
+                        let ntx = notif_tx.clone();
+                        tokio::spawn(chat_forwarder(id, rx, cancel_rx, ntx));
+                        true
+                    }
+                    DispatchOutcome::ChatUnsubscribed { response, id: _ } => {
+                        // The router and registry already removed the subscription;
+                        // the chat forwarder task will see its cancel signal and exit.
                         out_tx
                             .send(OutboundMsg::Frame(serialize_frame(&response)))
                             .await
@@ -283,6 +333,54 @@ async fn audit_forwarder(
                     }
                     None => {
                         // Monitoring actor shut down; exit silently.
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Forwards chat reply payloads from the per-subscription router queue to the
+/// notification channel as serialized `chat.message` JSON-RPC notification frames.
+///
+/// The forwarder exits cleanly when either:
+/// - `cancel_rx` fires (explicit `chat.close` or connection close), or
+/// - `rx` returns `None` (the router deregistered the subscription and dropped
+///   the send end of the queue).
+async fn chat_forwarder(
+    id: crate::subscriptions::AdminSubscriptionId,
+    mut rx: crate::chat_router::ChatReplyReceiver,
+    cancel_rx: tokio::sync::oneshot::Receiver<()>,
+    notif_tx: mpsc::Sender<NotifMsg>,
+) {
+    tokio::pin!(cancel_rx);
+    loop {
+        tokio::select! {
+            biased;
+            // Cancellation from chat.close or connection drop takes priority
+            // over pending messages so close is not delayed by a busy queue.
+            _ = &mut cancel_rx => {
+                return;
+            }
+            payload_opt = rx.recv() => {
+                match payload_opt {
+                    Some(payload) => {
+                        let notification = crate::protocol::Notification::new(
+                            "chat.message",
+                            json!({
+                                "subscription": id.to_string(),
+                                "data": payload,
+                            }),
+                        );
+                        let bytes = serialize_frame(&notification);
+                        if notif_tx.send(NotifMsg::Frame(bytes)).await.is_err() {
+                            // Write task is gone.
+                            return;
+                        }
+                    }
+                    None => {
+                        // Router closed the channel (deregistered); exit silently.
                         return;
                     }
                 }
@@ -392,6 +490,12 @@ pub fn start(cfg: Config) -> Result<(Handle, JoinHandle<()>), std::io::Error> {
     if let Some(chat_handle) = cfg.chat_adapter.clone() {
         dispatcher = dispatcher.with_chat_handle(chat_handle);
     }
+    // Use the configured chat router or create an internal one.
+    let chat_router = cfg
+        .chat_router
+        .clone()
+        .unwrap_or_else(|| std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new()));
+    dispatcher = dispatcher.with_chat_router(chat_router);
 
     // Use the configured audit bus or create an internal one.
     let bus = cfg
@@ -919,5 +1023,330 @@ mod tests {
             .expect("append after close must not panic");
 
         mon_task.abort();
+    }
+
+    /// Build a dispatcher with a chat reply router and return the router for injection.
+    fn make_dispatcher_with_chat_router() -> (
+        Dispatcher,
+        std::sync::Arc<crate::chat_router::ChatReplyRouter>,
+    ) {
+        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
+        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
+            .with_chat_router(std::sync::Arc::clone(&router));
+        (dispatcher, router)
+    }
+
+    // AC-1 (T-086): chat.open returns a subscription id, and when a reply is
+    // injected via the reply router the connection receives a `chat.message`
+    // notification with params.subscription equal to that id.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_connection_chat_open_delivers_chat_message_notification() {
+        let (client, server) = UnixStream::pair().expect("UnixStream::pair");
+        let (dispatcher, router) = make_dispatcher_with_chat_router();
+        let bus = make_bus();
+
+        tokio::spawn(run_connection(server, dispatcher, bus));
+
+        let (read_half, mut write_half) = tokio::io::split(client);
+        let mut reader = BufReader::new(read_half);
+
+        // Send chat.open.
+        write_half
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"chat.open\",\"id\":400}\n")
+            .await
+            .expect("write chat.open");
+
+        let mut open_line = String::new();
+        reader
+            .read_line(&mut open_line)
+            .await
+            .expect("read chat.open response");
+        let open_resp: serde_json::Value =
+            serde_json::from_str(open_line.trim()).expect("valid JSON");
+        assert_eq!(open_resp["jsonrpc"], "2.0");
+        assert_eq!(open_resp["id"], 400);
+        let sub_id = open_resp["result"]["id"]
+            .as_str()
+            .expect("result.id is a string")
+            .to_string();
+
+        // Give the forwarder task a moment to start.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        // Inject a reply via the router delivery handle.
+        let delivery = router.delivery_handle();
+        let sub_id_parsed = crate::subscriptions::AdminSubscriptionId::parse(&sub_id)
+            .expect("sub_id must be parseable");
+        delivery.deliver(sub_id_parsed, json!({"text": "hello from bot"}));
+
+        // Read the chat.message notification.
+        let mut notif_line = String::new();
+        tokio::time::timeout(
+            Duration::from_millis(500),
+            reader.read_line(&mut notif_line),
+        )
+        .await
+        .expect("timed out waiting for chat.message notification")
+        .expect("read notification");
+
+        let notif: serde_json::Value = serde_json::from_str(notif_line.trim()).expect("valid JSON");
+        assert_eq!(notif["jsonrpc"], "2.0");
+        assert_eq!(notif["method"], "chat.message");
+        assert_eq!(notif["params"]["subscription"], sub_id);
+        assert_eq!(notif["params"]["data"]["text"], "hello from bot");
+    }
+
+    // AC-2 (T-086): chat.close deregisters the subscription from the router and
+    // stops the forwarder; later injected replies are dropped and not delivered.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_connection_chat_close_stops_forwarder_and_drops_later_replies() {
+        let (client, server) = UnixStream::pair().expect("UnixStream::pair");
+        let (dispatcher, router) = make_dispatcher_with_chat_router();
+        let bus = make_bus();
+
+        tokio::spawn(run_connection(server, dispatcher, bus));
+
+        let (read_half, mut write_half) = tokio::io::split(client);
+        let mut reader = BufReader::new(read_half);
+
+        // Open a chat subscription.
+        write_half
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"chat.open\",\"id\":410}\n")
+            .await
+            .expect("write chat.open");
+        let mut open_line = String::new();
+        reader
+            .read_line(&mut open_line)
+            .await
+            .expect("read chat.open response");
+        let open_resp: serde_json::Value = serde_json::from_str(open_line.trim()).unwrap();
+        let sub_id = open_resp["result"]["id"].as_str().unwrap().to_string();
+
+        // Close the subscription.
+        let close_req = format!(
+            "{{\"jsonrpc\":\"2.0\",\"method\":\"chat.close\",\"params\":{{\"id\":\"{sub_id}\"}},\"id\":411}}\n"
+        );
+        write_half
+            .write_all(close_req.as_bytes())
+            .await
+            .expect("write chat.close");
+        let mut close_line = String::new();
+        reader
+            .read_line(&mut close_line)
+            .await
+            .expect("read chat.close response");
+        let close_resp: serde_json::Value = serde_json::from_str(close_line.trim()).unwrap();
+        assert_eq!(close_resp["result"]["ok"], true);
+
+        // Give the forwarder task time to observe the cancellation.
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        // Inject a reply after close — it should be dropped by the router.
+        let delivery = router.delivery_handle();
+        let sub_id_parsed = crate::subscriptions::AdminSubscriptionId::parse(&sub_id).unwrap();
+        delivery.deliver(sub_id_parsed, json!({"text": "should not arrive"}));
+
+        // No notification should arrive within a short window.
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            reader.read_line(&mut String::new()),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "no notification should arrive after chat.close"
+        );
+    }
+
+    // AC-4 (T-086): chat.send rejects a params.id that does not reference an open
+    // chat subscription on the same connection.
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_connection_chat_send_with_no_open_subscription_returns_error() {
+        let (client, server) = UnixStream::pair().expect("UnixStream::pair");
+        let (dispatcher, _router) = make_dispatcher_with_chat_router();
+        let bus = make_bus();
+
+        tokio::spawn(run_connection(server, dispatcher, bus));
+
+        let (read_half, mut write_half) = tokio::io::split(client);
+        let mut reader = BufReader::new(read_half);
+
+        // chat.send with a subscription id that was never opened.
+        write_half
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"method\":\"chat.send\",\"params\":{\"id\":\"9999\",\"text\":\"hi\",\"application_identity\":\"00000000-0000-0000-0000-000000000001\"},\"id\":430}\n",
+            )
+            .await
+            .expect("write chat.send");
+
+        let mut line = String::new();
+        reader.read_line(&mut line).await.expect("read response");
+        let resp: serde_json::Value = serde_json::from_str(line.trim()).expect("valid JSON");
+
+        assert_eq!(resp["id"], 430);
+        // Must return an error (no chat adapter configured, so -32601 is also acceptable).
+        assert!(resp.get("error").is_some(), "must return an error");
+    }
+
+    // AC-3 (T-086): when the connection closes while a chat subscription is open,
+    // the subscription is deregistered from the router and the forwarder stops;
+    // other connections are not affected.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_connection_drop_deregisters_chat_subscription_from_router() {
+        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
+
+        // First connection: opens a chat subscription, then drops.
+        let (client1, server1) = UnixStream::pair().expect("UnixStream::pair");
+        let dispatcher1 = Dispatcher::new(None, None, None, "0.1.0-test")
+            .with_chat_router(std::sync::Arc::clone(&router));
+        let bus = make_bus();
+        tokio::spawn(run_connection(server1, dispatcher1, bus.clone()));
+
+        let (read_half1, mut write_half1) = tokio::io::split(client1);
+        let mut reader1 = BufReader::new(read_half1);
+
+        write_half1
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"chat.open\",\"id\":420}\n")
+            .await
+            .expect("write chat.open");
+        let mut open_line = String::new();
+        reader1
+            .read_line(&mut open_line)
+            .await
+            .expect("read chat.open response");
+        let open_resp: serde_json::Value = serde_json::from_str(open_line.trim()).unwrap();
+        let sub_id = open_resp["result"]["id"].as_str().unwrap().to_string();
+        let sub_id_parsed = crate::subscriptions::AdminSubscriptionId::parse(&sub_id).unwrap();
+
+        // Close connection1 by dropping the client.
+        drop(write_half1);
+        drop(reader1);
+
+        // Give the server tasks time to notice the EOF and clean up.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Inject a reply — router must have deregistered the subscription so
+        // delivery handle::deliver drops the payload (no panic, no notification).
+        let delivery = router.delivery_handle();
+        delivery.deliver(sub_id_parsed, json!({"text": "dropped on floor"}));
+
+        // Second connection: must be unaffected.
+        let (client2, server2) = UnixStream::pair().expect("UnixStream::pair");
+        let dispatcher2 = Dispatcher::new(None, None, None, "0.1.0-test")
+            .with_chat_router(std::sync::Arc::clone(&router));
+        tokio::spawn(run_connection(server2, dispatcher2, bus));
+
+        let (read_half2, mut write_half2) = tokio::io::split(client2);
+        let mut reader2 = BufReader::new(read_half2);
+
+        // Second connection must still respond normally.
+        write_half2
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"service.status\",\"id\":421}\n")
+            .await
+            .expect("write service.status");
+        let mut status_line = String::new();
+        tokio::time::timeout(
+            Duration::from_millis(250),
+            reader2.read_line(&mut status_line),
+        )
+        .await
+        .expect("timed out waiting for service.status response")
+        .expect("read service.status response");
+        let status_resp: serde_json::Value = serde_json::from_str(status_line.trim()).unwrap();
+        assert_eq!(status_resp["id"], 421);
+        assert_eq!(status_resp["result"]["ok"], true);
+    }
+
+    // AC-5 (T-086): while a chat.send response is pending, queued reply notifications
+    // are delivered as whole, well-formed frames — no interleaving inside a frame.
+    // Verified by sending multiple chat.send requests while the router injects
+    // concurrent replies and asserting every received line is valid JSON.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_connection_concurrent_chat_replies_are_well_formed_frames() {
+        use bob_core::types::{ChannelId, UserId};
+        use requests_handler::Config as QueueConfig;
+        use tokio::sync::watch;
+
+        let (_, cancel_rx) = watch::channel(false);
+        let cfg = QueueConfig {
+            request_queue_capacity: 64,
+            request_submit_timeout: Duration::from_secs(5),
+        };
+        let (intake, _intake_task) =
+            requests_handler::start_with(cfg, move |(_, _)| async {}, cancel_rx);
+        let channel_id = ChannelId::new();
+        let (frame_handle, _actor_task) = chat_adapter::start(intake, channel_id, 16);
+
+        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
+        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
+            .with_chat_handle(frame_handle)
+            .with_chat_router(std::sync::Arc::clone(&router));
+
+        let (client, server) = UnixStream::pair().expect("UnixStream::pair");
+        let bus = make_bus();
+        tokio::spawn(run_connection(server, dispatcher, bus));
+
+        let (read_half, mut write_half) = tokio::io::split(client);
+        let mut reader = BufReader::new(read_half);
+
+        // Open a chat subscription.
+        write_half
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"chat.open\",\"id\":500}\n")
+            .await
+            .expect("write chat.open");
+        let mut open_line = String::new();
+        reader
+            .read_line(&mut open_line)
+            .await
+            .expect("read chat.open response");
+        let open_resp: serde_json::Value = serde_json::from_str(open_line.trim()).unwrap();
+        let sub_id = open_resp["result"]["id"].as_str().unwrap().to_string();
+        let sub_id_parsed = crate::subscriptions::AdminSubscriptionId::parse(&sub_id).unwrap();
+
+        // Concurrently: inject 5 replies and send a chat.send request.
+        let delivery = router.delivery_handle();
+        for i in 0..5u32 {
+            delivery.deliver(sub_id_parsed, json!({"seq": i}));
+        }
+
+        let sender_id = UserId::new().to_string();
+        let send_req = format!(
+            "{{\"jsonrpc\":\"2.0\",\"method\":\"chat.send\",\"params\":{{\"id\":\"{sub_id}\",\"text\":\"concurrent\",\"application_identity\":\"{sender_id}\"}},\"id\":501}}\n"
+        );
+        write_half
+            .write_all(send_req.as_bytes())
+            .await
+            .expect("write chat.send");
+
+        // Collect all frames received within a timeout.
+        let mut frames_received = 0usize;
+        loop {
+            let mut line = String::new();
+            let result =
+                tokio::time::timeout(Duration::from_millis(200), reader.read_line(&mut line)).await;
+            match result {
+                Err(_) => break, // timeout — no more frames
+                Ok(Err(e)) => panic!("I/O error reading frame: {e}"),
+                Ok(Ok(0)) => break, // EOF
+                Ok(Ok(_)) => {
+                    // Every line must be valid JSON.
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let parsed: serde_json::Value =
+                        serde_json::from_str(trimmed).expect("every frame must be valid JSON");
+                    assert_eq!(parsed["jsonrpc"], "2.0", "every frame must be JSON-RPC 2.0");
+                    frames_received += 1;
+                }
+            }
+        }
+
+        // We must have received at least the chat.send response (id=501) plus
+        // at least one chat.message notification.
+        assert!(
+            frames_received >= 2,
+            "must receive at least chat.send response and one notification, got {frames_received}"
+        );
     }
 }

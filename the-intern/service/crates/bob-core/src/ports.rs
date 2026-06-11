@@ -186,6 +186,7 @@ mod tests {
             sender: UserId::new(),
             source: ChannelId::new(),
             context_id: None,
+            reply_address: None,
         };
         let result: ServiceResult<()> = block_on(handler.submit(event, ctx));
         assert!(result.is_ok());

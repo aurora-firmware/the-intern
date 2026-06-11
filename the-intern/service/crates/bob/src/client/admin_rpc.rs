@@ -6,6 +6,8 @@ use serde_json::{json, Value};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixStream,
+    sync::mpsc,
+    task::JoinHandle,
 };
 
 use crate::config::BobConfig;
@@ -72,8 +74,9 @@ impl AdminClient {
         let close_method = derive_close_method(method)?;
         let close_request_id = self.next_request_id();
 
+        let reader = self.reader.take().ok_or(ServiceError::ServiceDown)?;
         Ok(Subscription {
-            reader: self.reader.take().ok_or(ServiceError::ServiceDown)?,
+            frame_reader: FrameReaderTask::spawn(reader),
             writer: self.writer.take().ok_or(ServiceError::ServiceDown)?,
             subscription_id,
             close_method,
@@ -91,9 +94,58 @@ impl AdminClient {
     }
 }
 
+/// A background task that reads complete JSON-RPC frames from a `BufReader`
+/// and forwards them to a channel.  The channel receive end is cancellation-safe:
+/// dropping a `recv()` future does not consume or lose a partially-received frame
+/// because the actual `read_line` call lives entirely inside the spawned task.
+#[derive(Debug)]
+struct FrameReaderTask {
+    _handle: JoinHandle<()>,
+    receiver: mpsc::Receiver<ServiceResult<Value>>,
+}
+
+impl FrameReaderTask {
+    fn spawn(mut reader: BufReader<tokio::net::unix::OwnedReadHalf>) -> Self {
+        // Buffer up to 64 frames. The chat loop processes notifications one at a
+        // time so this is more than enough headroom for normal operation.
+        let (tx, receiver) = mpsc::channel(64);
+        let handle = tokio::spawn(async move {
+            loop {
+                let result = read_value_frame(&mut reader).await;
+                let is_err = result.is_err();
+                if tx.send(result).await.is_err() {
+                    // Receiver was dropped; the subscription has been consumed.
+                    return;
+                }
+                if is_err {
+                    // Stop after forwarding the terminal error.
+                    return;
+                }
+            }
+        });
+        Self {
+            _handle: handle,
+            receiver,
+        }
+    }
+
+    /// Receive the next complete frame.  Returns `ServiceDown` when the
+    /// background reader task has stopped (socket closed or error already sent).
+    async fn next_frame(&mut self) -> ServiceResult<Value> {
+        self.receiver
+            .recv()
+            .await
+            .unwrap_or(Err(ServiceError::ServiceDown))
+    }
+}
+
 #[derive(Debug)]
 pub struct Subscription<N> {
-    reader: BufReader<tokio::net::unix::OwnedReadHalf>,
+    /// Background task that owns the reader and sends complete frames to this channel.
+    /// Receiving from a channel is cancellation-safe: if a future that awaits
+    /// `frame_reader.next_frame()` is dropped, the frame remains in the channel
+    /// for the next `next_frame()` call.
+    frame_reader: FrameReaderTask,
     writer: tokio::net::unix::OwnedWriteHalf,
     subscription_id: String,
     close_method: String,
@@ -147,7 +199,7 @@ where
         // Any notification frames (those with a `method` field and no numeric
         // `id`) are buffered and will be returned by subsequent `recv()` calls.
         loop {
-            let frame = read_value_frame(&mut self.reader).await?;
+            let frame = self.frame_reader.next_frame().await?;
             if is_notification(&frame) {
                 self.notification_buffer.push_back(frame);
             } else {
@@ -161,7 +213,7 @@ where
         let frame = if let Some(buffered) = self.notification_buffer.pop_front() {
             buffered
         } else {
-            read_value_frame(&mut self.reader).await?
+            self.frame_reader.next_frame().await?
         };
 
         if frame.get("jsonrpc") != Some(&Value::String("2.0".to_string())) {
@@ -206,7 +258,7 @@ where
         // discarded rather than buffered because `close` consumes the
         // subscription, so no later `recv()` can observe them.
         let frame = loop {
-            let frame = read_value_frame(&mut self.reader).await?;
+            let frame = self.frame_reader.next_frame().await?;
             if !is_notification(&frame) {
                 break frame;
             }
@@ -859,6 +911,167 @@ mod tests {
         sub.close()
             .await
             .expect("close succeeds despite interleaved notifications");
+
+        timeout(Duration::from_secs(1), server)
+            .await
+            .expect("server completed")
+            .expect("server join");
+        let _ = std::fs::remove_file(&cfg.admin_sock_path);
+    }
+
+    // AC-1: recv() must be cancellation-safe.
+    // If recv() is cancelled while a notification frame is partially received,
+    // the next call to recv() must still deliver the complete frame without error.
+    #[tokio::test(flavor = "current_thread")]
+    async fn subscription_recv_is_cancellation_safe_when_frame_arrives_in_parts() {
+        let sock_path = unique_socket_path("recv-cancel-safe");
+        let listener = UnixListener::bind(&sock_path).expect("bind listener");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let (read_half, mut write_half) = tokio::io::split(stream);
+            let mut reader = BufReader::new(read_half);
+
+            // Read the subscribe request.
+            let mut line = String::new();
+            reader.read_line(&mut line).await.expect("read subscribe");
+            write_half
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"result\":{\"id\":\"sub-cs\"},\"id\":1}\n")
+                .await
+                .expect("write subscribe response");
+
+            // Send the notification frame in two halves to allow the client's
+            // first recv() to be cancelled mid-read.
+            let full_frame = b"{\"jsonrpc\":\"2.0\",\"method\":\"chat.notification\",\"params\":{\"subscription\":\"sub-cs\",\"data\":{\"msg\":\"complete\"}}}\n";
+            let (first_half, second_half) = full_frame.split_at(full_frame.len() / 2);
+            write_half
+                .write_all(first_half)
+                .await
+                .expect("write first half");
+            // Give the client just enough time to start reading but not finish.
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            write_half
+                .write_all(second_half)
+                .await
+                .expect("write second half");
+        });
+
+        let cfg = BobConfig {
+            admin_sock_path: sock_path,
+            ..BobConfig::test_base()
+        };
+        let mut client = AdminClient::connect(&cfg).await.expect("connect");
+        let mut sub = client
+            .subscribe::<_, Value>("chat.open", json!({}))
+            .await
+            .expect("subscribe");
+
+        // Cancel the first recv() after a very short timeout — it should be in the
+        // middle of reading when the timeout fires.
+        let first_attempt = tokio::time::timeout(Duration::from_millis(5), sub.recv()).await;
+        // Either it finished (if timing worked out) or it timed out — both are acceptable.
+        // The important assertion is that the *next* recv() returns the full frame without error.
+
+        let notification: Value = match first_attempt {
+            Ok(result) => result.expect("recv should succeed if not cancelled"),
+            Err(_timeout) => {
+                // First attempt was cancelled; the second must still deliver the complete frame.
+                timeout(Duration::from_secs(1), sub.recv())
+                    .await
+                    .expect("second recv must complete within 1s")
+                    .expect("second recv must succeed without malformed-frame error")
+            }
+        };
+
+        assert_eq!(
+            notification["msg"], "complete",
+            "notification payload must be intact after cancellation"
+        );
+
+        timeout(Duration::from_secs(1), server)
+            .await
+            .expect("server completed")
+            .expect("server join");
+        let _ = std::fs::remove_file(&cfg.admin_sock_path);
+    }
+
+    // AC-2: every notification is delivered exactly once, in arrival order,
+    // when notifications and send responses interleave repeatedly.
+    #[tokio::test(flavor = "current_thread")]
+    async fn subscription_delivers_all_notifications_exactly_once_under_interleaving() {
+        let sock_path = unique_socket_path("recv-exact-once");
+        let listener = UnixListener::bind(&sock_path).expect("bind listener");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let (read_half, mut write_half) = tokio::io::split(stream);
+            let mut reader = BufReader::new(read_half);
+
+            // Read subscribe
+            let mut line = String::new();
+            reader.read_line(&mut line).await.expect("read subscribe");
+            write_half
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"result\":{\"id\":\"sub-eo\"},\"id\":1}\n")
+                .await
+                .expect("write subscribe response");
+
+            // For each of 3 send requests, send a notification then the response.
+            for i in 0u32..3 {
+                let mut req_line = String::new();
+                reader.read_line(&mut req_line).await.expect("read send");
+                let req: Value = serde_json::from_str(req_line.trim()).expect("parse send");
+                let req_id = req["id"].as_u64().expect("id");
+
+                // Notification before the response.
+                let notif = format!(
+                    "{{\"jsonrpc\":\"2.0\",\"method\":\"chat.notification\",\"params\":{{\"subscription\":\"sub-eo\",\"data\":{{\"n\":{i}}}}}}}\n"
+                );
+                write_half
+                    .write_all(notif.as_bytes())
+                    .await
+                    .expect("write notification");
+                write_half
+                    .write_all(
+                        format!(
+                            "{{\"jsonrpc\":\"2.0\",\"result\":{{\"ok\":true}},\"id\":{req_id}}}\n"
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .expect("write send response");
+            }
+        });
+
+        let cfg = BobConfig {
+            admin_sock_path: sock_path,
+            ..BobConfig::test_base()
+        };
+        let mut client = AdminClient::connect(&cfg).await.expect("connect");
+        let mut sub = client
+            .subscribe::<_, Value>("chat.open", json!({}))
+            .await
+            .expect("subscribe");
+
+        let mut received: Vec<u64> = Vec::new();
+        for _ in 0u32..3 {
+            // Send a chat message.
+            let _: Value = sub
+                .call("chat.send", json!({"id": "sub-eo", "text": "hi"}))
+                .await
+                .expect("call succeeds");
+            // Receive the corresponding notification (buffered during call).
+            let notif: Value = timeout(Duration::from_secs(1), sub.recv())
+                .await
+                .expect("recv must complete")
+                .expect("recv must succeed");
+            received.push(notif["n"].as_u64().expect("n field"));
+        }
+
+        assert_eq!(
+            received,
+            vec![0, 1, 2],
+            "notifications must arrive in order, exactly once"
+        );
 
         timeout(Duration::from_secs(1), server)
             .await
