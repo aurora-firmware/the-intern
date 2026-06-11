@@ -497,6 +497,7 @@ impl Dispatcher {
             message: text.to_owned(),
             peer_id: application_identity,
             context_id,
+            subscription_id: sub_id.to_string(),
         };
 
         match adapter.deliver(frame).await {
@@ -1593,6 +1594,90 @@ mod tests {
         assert_eq!(got.len(), 1, "exactly one event must be forwarded");
         assert_eq!(got[0].0.payload, "hello chat");
         assert_eq!(got[0].1.sender, expected_sender);
+    }
+
+    // AC-1 (T-087): chat.send attaches the validated subscription id to the chat
+    // frame, which the adapter preserves as reply_address on RequestContext.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_chat_send_attaches_subscription_id_as_reply_address_on_request_context() {
+        use bob_core::types::{ChannelId, InternalEvent, RequestContext, UserId};
+        use requests_handler::Config as QueueConfig;
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+        use tokio::sync::watch;
+
+        let received: Arc<Mutex<Vec<(InternalEvent, RequestContext)>>> =
+            Arc::new(Mutex::new(vec![]));
+        let received_clone = received.clone();
+
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let cfg = QueueConfig {
+            request_queue_capacity: 64,
+            request_submit_timeout: Duration::from_secs(5),
+        };
+        let (intake, intake_task) = requests_handler::start_with(
+            cfg,
+            move |(ev, ctx)| {
+                let r = received_clone.clone();
+                async move {
+                    r.lock().unwrap().push((ev, ctx));
+                }
+            },
+            cancel_rx,
+        );
+
+        let channel_id = ChannelId::new();
+        let (frame_handle, _actor_task) = chat_adapter::start(intake, channel_id, 16);
+        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
+        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
+            .with_chat_handle(frame_handle)
+            .with_chat_router(std::sync::Arc::clone(&router));
+        let expected_sender = UserId::new();
+        let mut registry = make_registry();
+
+        // Open a chat subscription and capture the subscription id.
+        let open_outcome = dispatcher
+            .dispatch(make_request("chat.open", json!(100)), &mut registry)
+            .await;
+        let sub_id = match open_outcome {
+            DispatchOutcome::ChatSubscribed { response, .. } => {
+                response.result["id"].as_str().unwrap().to_string()
+            }
+            _ => panic!("expected ChatSubscribed for chat.open"),
+        };
+
+        // Send a message.
+        dispatcher
+            .dispatch(
+                make_request_with_params(
+                    "chat.send",
+                    json!(101),
+                    json!({
+                        "id": sub_id,
+                        "text": "hello subscription id",
+                        "application_identity": expected_sender.to_string()
+                    }),
+                ),
+                &mut registry,
+            )
+            .await;
+
+        tokio::task::yield_now().await;
+
+        cancel_tx.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), intake_task)
+            .await
+            .expect("intake task must finish")
+            .expect("intake task must not panic");
+
+        let got = received.lock().unwrap();
+        assert_eq!(got.len(), 1, "exactly one event must be forwarded");
+        let (_, ctx) = &got[0];
+        assert_eq!(
+            ctx.reply_address,
+            Some(sub_id),
+            "reply_address must equal the subscription id from params.id"
+        );
     }
 
     // AC-2 (T-071): chat.send forwards the optional context_id from params.

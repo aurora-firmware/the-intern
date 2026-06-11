@@ -23,6 +23,11 @@ pub struct ChatFrame {
     pub peer_id: UserId,
     /// Conversational context identifier, if any.
     pub context_id: Option<String>,
+    /// The string form of the originating chat subscription id.
+    ///
+    /// Carried so the reply producer can address replies without consulting
+    /// any other component.
+    pub subscription_id: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -85,7 +90,7 @@ impl Actor {
                 sender: frame.peer_id,
                 source: self.channel_id,
                 context_id: frame.context_id,
-                reply_address: None,
+                reply_address: Some(frame.subscription_id),
             };
             if let Err(err) = self.intake.submit_event(event, context).await {
                 tracing::warn!(error = %err, "chat-adapter: intake submit failed");
@@ -190,6 +195,7 @@ mod tests {
             message: "hello world".to_owned(),
             peer_id,
             context_id: Some("conv-001".to_owned()),
+            subscription_id: "sub-001".to_owned(),
         };
         frame_handle
             .deliver(frame)
@@ -237,6 +243,7 @@ mod tests {
             message: "ping".to_owned(),
             peer_id,
             context_id: None,
+            subscription_id: "sub-002".to_owned(),
         };
         frame_handle
             .deliver(frame)
@@ -276,6 +283,7 @@ mod tests {
                 message: "msg-a".to_owned(),
                 peer_id: peer_a,
                 context_id: None,
+                subscription_id: "sub-003a".to_owned(),
             })
             .await
             .unwrap();
@@ -284,6 +292,7 @@ mod tests {
                 message: "msg-b".to_owned(),
                 peer_id: peer_b,
                 context_id: Some("ctx-2".to_owned()),
+                subscription_id: "sub-003b".to_owned(),
             })
             .await
             .unwrap();
@@ -335,6 +344,7 @@ mod tests {
                 message: "from-clone-1".to_owned(),
                 peer_id: UserId::new(),
                 context_id: None,
+                subscription_id: "sub-004a".to_owned(),
             })
             .await
             .unwrap();
@@ -343,6 +353,7 @@ mod tests {
                 message: "from-clone-2".to_owned(),
                 peer_id: UserId::new(),
                 context_id: None,
+                subscription_id: "sub-004b".to_owned(),
             })
             .await
             .unwrap();
@@ -391,6 +402,7 @@ mod tests {
                     message: format!("msg-{i}"),
                     peer_id: UserId::new(),
                     context_id: None,
+                    subscription_id: format!("sub-005-{i}"),
                 })
                 .await
                 .unwrap();
@@ -409,6 +421,51 @@ mod tests {
             got.len(),
             10,
             "all 10 frames must be forwarded without filtering"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC-1 (T-087): subscription_id on ChatFrame is preserved on RequestContext.reply_address
+    // -----------------------------------------------------------------------
+
+    // AC-1 (T-087): a chat frame with a subscription_id produces a RequestContext
+    // whose reply_address equals that subscription_id string.
+    #[tokio::test(flavor = "current_thread")]
+    async fn chat_frame_subscription_id_is_preserved_as_reply_address_on_request_context() {
+        let received = Arc::new(Mutex::new(vec![]));
+        let (intake, intake_task, cancel_tx) = make_intake(received.clone());
+
+        let channel_id = ChannelId::new();
+        let (frame_handle, _actor_task) = start(intake, channel_id, 16);
+
+        let peer_id = UserId::new();
+        let sub_id = "sub-abc-def-123".to_owned();
+        let frame = ChatFrame {
+            message: "hello".to_owned(),
+            peer_id,
+            context_id: None,
+            subscription_id: sub_id.clone(),
+        };
+        frame_handle
+            .deliver(frame)
+            .await
+            .expect("deliver must succeed");
+
+        tokio::task::yield_now().await;
+
+        cancel_tx.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), intake_task)
+            .await
+            .expect("intake task must finish")
+            .expect("intake task must not panic");
+
+        let got = received.lock().unwrap();
+        assert_eq!(got.len(), 1);
+        let (_, ctx) = &got[0];
+        assert_eq!(
+            ctx.reply_address,
+            Some(sub_id),
+            "reply_address must equal the subscription_id from the frame"
         );
     }
 
@@ -435,6 +492,7 @@ mod tests {
                 message: "too late".to_owned(),
                 peer_id: UserId::new(),
                 context_id: None,
+                subscription_id: "sub-006".to_owned(),
             })
             .await;
         assert!(result.is_err(), "deliver must fail after actor stops");
