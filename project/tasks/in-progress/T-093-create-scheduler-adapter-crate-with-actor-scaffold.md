@@ -105,3 +105,36 @@ Nothing. All acceptance criteria met. T-095 will add cron tick firing using `_in
 **Final branch state:** committed, clean, all tests passing (2 scheduler-adapter tests, full workspace green)
 
 ## Review
+
+### Review Verdict — 2026-06-12
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1: `cargo build -p scheduler-adapter` completed with no errors or warnings. PASS.
+- AC-2: `start()` with empty entries returns `(ReloadHandle, JoinHandle<()>)`; actor logs
+  "scheduler-adapter actor started" at INFO. Confirmed by code reading and passing tests. PASS.
+- AC-3: Drop sentinel on `watch::Sender<()>` correctly closes the channel, causing
+  `reload_rx.changed()` to return `Err`, breaking the loop and exiting cleanly. PASS.
+- AC-4: Two tests present and passing: `start_with_empty_entries_returns_reload_handle_and_running_join_handle`
+  (AC-2) and `actor_exits_cleanly_when_all_reload_handles_are_dropped` (AC-3). PASS.
+- AC-5: `cargo test --workspace` — all tests pass, no new failures. PASS.
+
+No dependency on `bob` crate confirmed: `Cargo.toml` depends only on `bob-core`, `requests-handler`,
+`tokio`, and `tracing`. Circular-dependency constraint satisfied.
+
+Workspace membership via `members = ["crates/*"]` glob is sufficient; the `service/Cargo.toml`
+edit listed in "Files to Touch" was not required and the developer's note explains this correctly.
+
+**Stage 2 — Code Quality**
+
+- Correctness: Actor loop handles the reload signal (`Ok`) and shutdown (`Err`) paths correctly.
+  `_intake` field held for T-095 without triggering dead_code warnings (underscore prefix idiom).
+- Tests: Two independent tests; each creates its own runtime resources via `make_intake()`.
+  Success and stop-path both covered. Timeout guard (`Duration::from_secs(2)`) in the shutdown test
+  prevents hangs.
+- Security: No external input, no secrets, no unsafe code (`#![forbid(unsafe_code)]`).
+- Readability: Names are descriptive, doc-comments explain the drop-sentinel mechanism, dead-code
+  field naming follows idiomatic Rust convention.
+- Performance: No blocking calls in the async loop; no resource leaks.
