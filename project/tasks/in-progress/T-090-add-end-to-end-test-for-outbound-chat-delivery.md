@@ -71,6 +71,31 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-11
+
+This session implemented T-090 from scratch. The task required adding a new integration test file `the-intern/service/crates/bob/tests/chat_e2e.rs` that proves the S-008 delivery contract end-to-end: replies injected at the `ChatReplyRouter` via a `DeliveryHandle` must arrive at a real client connected over a real Unix domain socket.
+
+**What was done**
+
+The test file follows the same runtime-directory isolation pattern as `shell_e2e.rs`. A `TestServer` struct binds the listener in-process (via `admin_rpc::Config` with an externally-supplied `Arc<ChatReplyRouter>` — the injection seam T-086 added for this task), waits for the socket to appear, and returns a `DeliveryHandle` for injection.
+
+Three tests, one per acceptance criterion:
+- `injected_reply_delivers_chat_message_notification_with_matching_subscription_and_payload` (AC-1): opens a subscription, injects one payload, asserts `params.data` matches exactly.
+- `chat_send_response_and_injected_replies_both_delivered_without_loss` (AC-2): injects 3 replies, issues a `chat.send` (which returns a -32601 error because no chat adapter is configured), then collects all 3 reply notifications and asserts none are lost. `Subscription::call` buffers notifications that arrive before the call response, so all 3 arrive via `recv()` after the call returns.
+- `replies_injected_after_chat_close_produce_no_client_visible_frames` (AC-3): injects a pre-close reply to confirm the subscription is live, calls `sub.close()`, then injects a post-close reply. A second subscription on a second client receives a known payload — confirming the router is still functional and the post-close payload was silently dropped.
+
+**What was tried and rejected**
+
+A `NO_NOTIFICATION_WINDOW` constant was initially written for AC-3 to do an active `tokio::time::timeout` wait confirming no notification arrives. Removed in favour of the second-connection synchronisation approach, which is more reliable and avoids a fixed sleep: the second connection rules out false positives from a crashed router while the closed first subscription confirms no stray frames arrived.
+
+**Notes**
+
+All 3 tests passed immediately on first run — expected, since the implementation from T-086 through T-089 is complete and T-090's role is to add the missing E2E proof.
+
+**Nothing remains for the next session.** All 3 acceptance criteria are covered by passing tests.
+
+Evidence: `cargo test --test chat_e2e -- --nocapture` — 3 passed, 0 failed; `cargo fmt --all -- --check` clean; `cargo test --workspace` all result lines 0 failed. Commit `f09e09a` on `task/T-090-add-end-to-end-test-for-outbound-chat-delivery`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
