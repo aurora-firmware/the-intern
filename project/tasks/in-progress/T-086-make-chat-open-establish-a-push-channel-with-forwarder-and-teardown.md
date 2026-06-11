@@ -130,3 +130,31 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-11
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1: `chat.open` returns `result.id`; a reply injected via the router reaches the connection as a `chat.message` notification with `params.subscription` equal to that id. Covered end-to-end by `run_connection_chat_open_delivers_chat_message_notification`. PASS.
+- AC-2: `chat.close` deregisters from the router and stops the forwarder; injected replies after close are dropped. Covered by `run_connection_chat_close_stops_forwarder_and_drops_later_replies`. PASS.
+- AC-3: Connection close deregisters the subscription from the router and stops the forwarder without affecting other connections. Covered by `run_connection_drop_deregisters_chat_subscription_from_router`. PASS.
+- AC-4: `chat.send` rejects subscription ids not open on the same connection. Covered by `run_connection_chat_send_with_no_open_subscription_returns_error` and existing dispatch-layer tests. PASS.
+- AC-5: Concurrent reply notifications are delivered as whole, well-formed JSON-RPC frames. Covered by `run_connection_concurrent_chat_replies_are_well_formed_frames`. PASS.
+
+Only the three files listed in "Files to Touch" were modified. No unspecified behaviour was added.
+
+Verification: `cargo test -p admin-rpc` — 107 passed, 0 failed; `cargo fmt --all -- --check` — clean; `cargo test --workspace` — all suites pass.
+
+**Stage 2 — Code Quality**
+
+All five ACs have direct integration tests covering both the success path and teardown/error paths. Logic is correct. No hardcoded secrets. Names are descriptive and consistent with the existing audit pattern. No unnecessary loops or resource leaks detected.
+
+**Non-blocking observations (no action required):**
+
+1. `the-intern/service/crates/admin-rpc/src/lib.rs`, line 291: Stale comment — "removing all chat subscriptions from the bus" should say "deregistering all chat subscriptions from the reply router". The bus is no longer involved in chat teardown.
+2. `the-intern/service/crates/admin-rpc/src/dispatch.rs`, lines 360–363: Misleading comment — it says `router.deregister` "must happen before the cancel sender is dropped (done inside registry.close_chat)" but the code calls `close_chat` (which drops the cancel sender) first, then `deregister`. The actual ordering is the opposite of what the comment describes. The work log acknowledges and accepts this ordering; the comment should be corrected to match it.
+3. `the-intern/service/crates/admin-rpc/src/lib.rs`, line 160: `_bus: SubscriptionBus` parameter in `run_connection` is now unused. It is passed at the call site purely because the listener loop still constructs and clones the bus for audit subscriptions. Minor dead parameter; can be cleaned up if desired.
