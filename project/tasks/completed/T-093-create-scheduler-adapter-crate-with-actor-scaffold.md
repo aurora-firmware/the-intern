@@ -1,7 +1,7 @@
 ---
 id: T-093
 title: Create scheduler-adapter crate with actor scaffold
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-06-12'
