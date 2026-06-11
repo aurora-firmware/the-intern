@@ -212,6 +212,7 @@ mod tests {
             sender: bob_core::types::UserId::new(),
             source: bob_core::types::ChannelId::new(),
             context_id: None,
+            reply_address: None,
         }
     }
 
