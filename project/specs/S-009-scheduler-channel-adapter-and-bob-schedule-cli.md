@@ -1,7 +1,7 @@
 ---
 title: Scheduler Channel Adapter and bob schedule CLI
 version: '0.1'
-status: review  # draft | review | approved | superseded
+status: approved  # draft | review | approved | superseded
 created: '2026-06-11'
 author: planner
 id: S-009
