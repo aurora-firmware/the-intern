@@ -158,6 +158,7 @@ mod tests {
             sender: user_id,
             source: ChannelId::new(),
             context_id: None,
+            reply_address: None,
         }
     }
 

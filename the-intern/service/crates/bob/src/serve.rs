@@ -590,6 +590,7 @@ pub mod tests {
             sender: user_id,
             source: ChannelId::new(),
             context_id: None,
+            reply_address: None,
         };
         runtime
             ._requests_handler
@@ -1053,6 +1054,7 @@ pub mod tests {
             sender: UserId::new(),
             source: ChannelId::new(),
             context_id: None,
+            reply_address: None,
         };
         runtime
             ._requests_handler
@@ -1105,6 +1107,7 @@ pub mod tests {
             sender: alice,
             source: ChannelId::new(),
             context_id: None,
+            reply_address: None,
         };
         runtime
             ._requests_handler
@@ -1121,6 +1124,7 @@ pub mod tests {
             sender: UserId::new(), // not in admitted_users
             source: ChannelId::new(),
             context_id: None,
+            reply_address: None,
         };
         runtime
             ._requests_handler

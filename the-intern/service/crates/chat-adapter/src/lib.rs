@@ -85,6 +85,7 @@ impl Actor {
                 sender: frame.peer_id,
                 source: self.channel_id,
                 context_id: frame.context_id,
+                reply_address: None,
             };
             if let Err(err) = self.intake.submit_event(event, context).await {
                 tracing::warn!(error = %err, "chat-adapter: intake submit failed");
