@@ -1,7 +1,7 @@
 ---
 id: T-094
 title: Wire scheduler adapter into bob-serve supervision tree
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-06-12'
