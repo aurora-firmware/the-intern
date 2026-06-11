@@ -39,7 +39,16 @@ of `bob policy` (a thin admin-RPC client).
 3. `crates/bob/src/cli/commands.rs` — add `pub fn schedule_*` dispatch
    functions routing to `schedule::run()`.
 
-4. `crates/bob/src/main.rs` — add `Command::Schedule` arm to the match.
+4. `crates/bob/src/lib.rs` — three additions (do **not** edit `main.rs`,
+   which only calls `run_cli()` and needs no changes):
+   - Add `fn schedule_add`, `fn schedule_remove`, `fn schedule_list`,
+     `fn schedule_reload` methods to the `DispatchRuntime` trait.
+   - Add default implementations on `ProductionRuntime` that delegate to
+     the new `commands::schedule_*` functions.
+   - Add `Command::Schedule { command }` arm to `run_cli_with_runtime`,
+     matching on `ScheduleCommand::Add`, `Remove`, `List`, `Reload`.
+   - Add stub implementations to the test `MockRuntime` struct so existing
+     tests continue to compile.
 
 The `--prompt` value for `add` may contain spaces; ensure clap treats it as a
 single argument (use `#[arg(long)]` without `num_args`; quoting is the shell's
@@ -73,7 +82,9 @@ AC-5: The system shall pass `cargo test -p bob` (including the new schedule
   and `ScheduleCommand` enum
 - `the-intern/service/crates/bob/src/cli/commands/schedule.rs` — new file
 - `the-intern/service/crates/bob/src/cli/commands.rs` — add schedule dispatch
-- `the-intern/service/crates/bob/src/main.rs` — add `Command::Schedule` arm
+  functions
+- `the-intern/service/crates/bob/src/lib.rs` — add `DispatchRuntime` trait
+  methods, `ProductionRuntime` implementations, and `Command::Schedule` arm
 
 ## Verification
 
