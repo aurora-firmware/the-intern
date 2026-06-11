@@ -1,19 +1,95 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides Claude with the commands and conventions it needs to work in
+this repository (AGENTS.md is a symlink to it).
 
-## What this repository is
+## Build and Install
+
+Toolchains are managed with mise (`mise.toml`: gh, node, python 3.14, rust).
+The Rust service workspace lives in `the-intern/service/` — run all cargo
+commands from there.
+
+```bash
+cargo build -p bob
+```
+
+## Test
+
+Run the full Rust workspace test suite from `the-intern/service/`:
+
+```bash
+cargo test --workspace
+```
+
+Focused subsystem checks:
+
+```bash
+cargo test -p bob serve::tests
+cargo test -p admin-rpc
+cargo test -p chat-adapter
+cargo test --test shell_e2e -- --nocapture
+cargo test --test queue_load
+cargo test --test session_state_roundtrip
+```
+
+Some tests use Unix domain sockets and peer credentials. In a restricted
+sandbox they may fail with `Operation not permitted`; run them in a normal
+local development shell.
+
+CI (`.github/workflows/build.yml`, self-hosted runners) runs on pull requests
+and pushes to `dev-agent`/`main`: `format` (`cargo fmt --check`), `build`
+(`cargo build -p bob`), `documentation` (`cargo doc`), `user-docs` (mdBook
+build of `the-intern/docs`), and `tests` (`cargo test --workspace`).
+`deploy.yml` runs on tag pushes and attaches the release `bob` binary and the
+mdBook docs to the GitHub Release.
+
+## Run
+
+Use environment overrides to keep sockets in an isolated runtime directory:
+
+```bash
+export BOB_TEST_RUNTIME_DIR="$(mktemp -d)"
+echo "$BOB_TEST_RUNTIME_DIR"
+BOB_ADMIN_SOCK_PATH="$BOB_TEST_RUNTIME_DIR/admin.sock" \
+BOB_EXTENSION_SOCK_PATH="$BOB_TEST_RUNTIME_DIR/extension.sock" \
+cargo run -p bob -- serve
+```
+
+In another shell, set `BOB_TEST_RUNTIME_DIR` to the printed value first, then:
+
+```bash
+BOB_ADMIN_SOCK_PATH="$BOB_TEST_RUNTIME_DIR/admin.sock" cargo run -p bob -- status
+BOB_ADMIN_SOCK_PATH="$BOB_TEST_RUNTIME_DIR/admin.sock" cargo run -p bob -- sessions list --json
+```
+
+Stop the server with `SIGTERM` or `Ctrl-C`.
+
+## Lint and Format
+
+```bash
+cargo fmt --all -- --check
+```
+
+`cargo clippy --workspace -- -D warnings` is useful for auditing, but it is
+not yet a clean gate for this workspace — the `bob` crate still has existing
+pedantic/doc/style lint debt.
+
+## Key Conventions
+
+### What this repository is
 
 Two things live here, and they must not be confused:
 
-1. **The product being designed — "the Intern".** A logical architecture for an intelligent
-   office-assistant agent, with architecture in `project/docs/system_overview.md`, implementation
-   roadmap in `project/docs/roadmap.md`, and current Rust service code in `the-intern/service/`.
+1. **The product being designed — "the Intern".** A logical architecture for an
+   intelligent office-assistant agent, with architecture in
+   `project/docs/system_overview.md`, implementation roadmap in
+   `project/docs/roadmap.md`, and current Rust service code in
+   `the-intern/service/`.
+2. **The AI-team process that builds it.** Role definitions in
+   `.claude/agents/` (mirrored in `.codex/agents/`) and the slash-skills in
+   `.claude/skills/`, backed by the `ai-team` CLI.
 
-Repository orchestration commands are provided by the slash-skills below, backed by the
-`ai-team` CLI.
-
-## Folder structure
+### Folder structure
 
 ```
 .
@@ -48,24 +124,16 @@ Repository orchestration commands are provided by the slash-skills below, backed
 
 Directory *is* the status for tasks and bugs — moving a file is how state transitions.
 
-## The `ai-team` CLI
+### The `ai-team` CLI
 
-IMPORTANT: The skills used in this project, together with the ai-team CLI are under development. Please write down there every bug or problem you notice with any of them in ai-process-cli-reported-issues.md
+IMPORTANT: The skills used in this project, together with the ai-team CLI are
+under development. Please write down there every bug or problem you notice with
+any of them in `ai-process-cli-reported-issues.md`.
 
-GitHub workflows (self-hosted runners):
-- `build.yml` runs on pull requests and pushes to `dev-agent`/`main`. Jobs: `format`
-  (`cargo fmt --check`), `build` (`cargo build -p bob`), `documentation` (`cargo doc`,
-  uploads `rust-docs` artifact), `user-docs` (mdBook build of `the-intern/docs`,
-  uploads `user-docs` artifact), and `tests` (`cargo test --workspace`, uploads
-  `rust-test-report`).
-- `deploy.yml` runs on tag pushes. Builds the release `bob` binary and the mdBook
-  docs, archives the book as `the-intern-docs-<tag>.tar.gz`, and attaches both
-  artifacts to the GitHub Release.
+Repository orchestration commands are provided by the slash-skills, backed by
+the `ai-team` CLI.
 
-Local Rust verification commands are still documented in
-`the-intern/service/README.md` for fast feedback.
-
-## Runtime prerequisites
+### Runtime prerequisites
 
 - The pi-agent binary must be available as `pi` on `PATH`. This is a hard
   project precondition for Phase 2 and later work.
@@ -73,13 +141,7 @@ Local Rust verification commands are still documented in
   do not implement substitutes, mocks, or alternate process runners as a way
   around the missing prerequisite.
 
-## Pointers
-
-- Coding guidelines: `project/docs/coding-guidelines-node.md`,
-  `project/docs/coding-guidelines-rust.md`
-- Roadmap: `project/docs/roadmap.md`
-
-## Git model (authoritative: `git-conventions` skill)
+### Git model (authoritative: `git-conventions` skill)
 
 | Branch | Who touches it |
 |---|---|
@@ -92,10 +154,17 @@ imperative, lowercase, no period, ≤72 chars. Do not repeat the task/bug ID (th
 
 Hard rules: no `--no-verify`, no `--force` on `dev-agent`/`main`, no amending pushed commits.
 
-## Working in this repo
+### Working in this repo
 
 - When asked to do product work, route it through the framework (spec → tasks → loop), don't
   free-hand implementation against `project/docs/`.
 - Editing process itself (agents/skills) is direct repo work — but keep agent and skill
   definitions internally consistent (each agent's `skills:` frontmatter must match real skills).
 - Keep the `.claude/` and `.codex/` agent definitions in sync when changing roles.
+
+### Pointers
+
+- Coding guidelines: `project/docs/coding-guidelines-node.md`,
+  `project/docs/coding-guidelines-rust.md`
+- Roadmap: `project/docs/roadmap.md`
+- Local Rust verification details: `the-intern/service/README.md`
