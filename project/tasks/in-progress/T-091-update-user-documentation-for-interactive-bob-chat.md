@@ -101,6 +101,20 @@ Wrote a shell-script test with 7 assertions (3 for absent patterns, 4 for presen
 
 **What remains.** Nothing. All three acceptance criteria are met: AC-1 (correct `--json` output shape), AC-2 (`--session`/`context_id` and Phase 2 note unchanged from Session 1), AC-3 (`mdbook build` clean). Commit `2deb5fc` on the task branch.
 
+### Session 3 — 2026-06-11
+
+Addressed the sole remaining AC-1 failure from the Session 2 review: the Wire contract section documented only the `chat.send` params table but not the `chat.message` notification shape, while the `--json` section cross-referenced it as though it were present.
+
+**What was done.** First confirmed the current state on the task branch: the Wire contract section contained `chat.open` prose, the `chat.send` four-field params table, and the Phase 2 limitation note, but nothing about the `chat.message` frame shape. The cross-reference sentence was a dangling pointer.
+
+Re-read the S-008 wire contract: reply notifications use method `chat.message` with `params.subscription` (the subscription id) and `params.data` (the reply payload object), where `params.data` contains at least a `text` string for human-readable replies.
+
+Wrote a shell-script test with 8 assertions covering: `data.text` present in the file, `params.subscription` and `params.data` and `data.text` each present inside the Wire contract section specifically, and the cross-reference sentence present. The test failed on 3 counts (all inside the Wire contract section). Implemented the fix by inserting a `chat.message` params table (three rows: `params.subscription`, `params.data`, `params.data.text`) between the `chat.send` table and the Phase 2 limitation heading. All 8 test assertions then passed. `mdbook build` confirmed clean.
+
+**What was tried and rejected.** Considered using a nested table with a `data` sub-object row for `params.data.text`. Rejected in favour of a flat three-row table, which is simpler and consistent with the style of the surrounding guide pages.
+
+**What remains.** Nothing. All three acceptance criteria are met: AC-1 (Wire contract section now documents both `chat.send` params and `chat.message` notification shape matching S-008; `--json` cross-reference points to real content), AC-2 (`--session`/`context_id` and Phase 2 note unchanged), AC-3 (`mdbook build` clean). Commit `6a42947` on the task branch.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
