@@ -156,6 +156,7 @@ dependencies = [
  "pi-agent-supervisor",
  "policy-control",
  "requests-handler",
+ "scheduler-adapter",
  "serde",
  "serde_json",
  "tempfile",

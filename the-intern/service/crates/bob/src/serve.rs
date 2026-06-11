@@ -30,6 +30,10 @@ struct Runtime {
     // Optional chat-adapter handle: present when channels.chat.enabled = true.
     // Dropping it closes the frame channel so the adapter actor exits its recv loop.
     _chat_adapter: Option<chat_adapter::FrameHandle>,
+    // Scheduler-adapter reload handle.  The scheduler is always started (no
+    // enable/disable flag).  Dropping it closes the watch channel so the actor
+    // exits its recv loop.
+    _scheduler_adapter: scheduler_adapter::ReloadHandle,
 
     // Cancellation sender for the requests-handler actor.
     requests_handler_cancel_tx: watch::Sender<bool>,
@@ -49,6 +53,9 @@ struct Runtime {
     // Optional join handle for the chat-adapter actor (present when chat is enabled).
     // Awaited in shutdown phase 3 alongside the other non-supervisor actors.
     chat_adapter_join: Option<JoinHandle<()>>,
+    // Join handle for the scheduler-adapter actor (always present — no enable/disable flag).
+    // Awaited in shutdown phase 3 alongside the other non-supervisor actors.
+    scheduler_adapter_join: JoinHandle<()>,
 
     // Paths to remove on shutdown.
     admin_sock_path: PathBuf,
@@ -202,6 +209,13 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         (None, None)
     };
 
+    info!("starting scheduler-adapter actor");
+    let (scheduler_reload_handle, scheduler_join) = scheduler_adapter::start(
+        requests_handler_handle.clone(),
+        cfg.schedule.entries.clone(),
+    );
+    info!("scheduler-adapter actor started");
+
     info!("starting admin-rpc actor");
     let admin_rpc_cfg = admin_rpc::Config {
         admin_sock_path: cfg.admin_sock_path.clone(),
@@ -257,11 +271,13 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         _policy_control: policy_control_handle,
         _pi_agent_supervisor: pi_agent_supervisor_handle,
         _chat_adapter: maybe_chat_handle,
+        _scheduler_adapter: scheduler_reload_handle,
         requests_handler_cancel_tx: rh_cancel_tx,
         _extension_listener: extension_listener,
         joins,
         supervisor_join: pi_agent_supervisor_join,
         chat_adapter_join: maybe_chat_join,
+        scheduler_adapter_join: scheduler_join,
         admin_sock_path: cfg.admin_sock_path.clone(),
         extension_sock_path: cfg.extension_sock_path.clone(),
         policy_snapshot,
@@ -327,11 +343,13 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
         _policy_control,
         _pi_agent_supervisor,
         _chat_adapter,
+        _scheduler_adapter,
         requests_handler_cancel_tx,
         _extension_listener,
         joins,
         supervisor_join,
         chat_adapter_join,
+        scheduler_adapter_join,
         admin_sock_path,
         extension_sock_path,
         // policy_snapshot is dropped here; gate crates will hold their own
@@ -353,6 +371,9 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
     drop(_pi_agent_supervisor);
     // Drop the chat-adapter handle so its actor sees its frame channel close and exits.
     drop(_chat_adapter);
+    // Drop the scheduler-adapter reload handle so its actor sees the watch channel
+    // close and exits cleanly.
+    drop(_scheduler_adapter);
     // Drop listeners to release the socket file descriptors.
     drop(_extension_listener);
 
@@ -363,11 +384,13 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
         "shutdown: phase 3 — draining queues (deadline: {:?})",
         cfg.shutdown_drain_deadline
     );
-    // Collect all non-supervisor join handles including the optional chat-adapter join.
+    // Collect all non-supervisor join handles including the optional chat-adapter join
+    // and the always-present scheduler-adapter join.
     let mut all_joins = joins;
     if let Some(chat_join) = chat_adapter_join {
         all_joins.push(chat_join);
     }
+    all_joins.push(scheduler_adapter_join);
     let drain_result = time::timeout(cfg.shutdown_drain_deadline, drain_joins(all_joins)).await;
     match drain_result {
         Ok(()) => info!("shutdown: phase 3 — all queues drained"),
@@ -694,6 +717,42 @@ pub mod tests {
         )
         .await
         .expect("shutdown protocol without chat adapter must complete within deadline");
+    }
+
+    // AC-1 (T-094): start_subsystems always creates a scheduler-adapter join handle.
+    // The scheduler has no enable/disable flag — it is always started.
+    // The join handle is a plain JoinHandle<()> (not Optional) confirming it is unconditional.
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_subsystems_always_creates_scheduler_adapter_join_handle() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let cfg = test_cfg_with_sockets(&tmp);
+        let runtime = start_subsystems(&cfg).expect("subsystems must start");
+        // Confirm the scheduler actor is still running immediately after startup
+        // (the JoinHandle is not yet finished).
+        assert!(
+            !runtime.scheduler_adapter_join.is_finished(),
+            "scheduler adapter actor must be running after start_subsystems"
+        );
+        run_shutdown_protocol(runtime, &cfg).await;
+    }
+
+    // AC-2 (T-094): graceful shutdown awaits the scheduler actor's JoinHandle and
+    // completes without hanging.
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_protocol_awaits_scheduler_adapter_and_completes_without_hanging() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let mut cfg = test_cfg_with_sockets(&tmp);
+        cfg.shutdown_drain_deadline = std::time::Duration::from_millis(200);
+        cfg.shutdown_reap_deadline = std::time::Duration::from_millis(100);
+        let runtime = start_subsystems(&cfg).expect("subsystems must start");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_shutdown_protocol(runtime, &cfg),
+        )
+        .await
+        .expect(
+            "shutdown protocol must complete within deadline when scheduler adapter is running",
+        );
     }
 
     // AC-4 (T-036): shutdown phase 4 awaits supervisor child cleanup.
