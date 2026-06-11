@@ -68,6 +68,27 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-11
+
+Implemented T-091 in a single documentation cycle. The task required updating the `bob chat` section in `the-intern/docs/src/end-user-guide/index.md` to align with the S-008 wire contract as implemented by T-086 and T-088.
+
+**What was done.** Read the existing guide, the S-008 spec wire contract section, and the completed T-086 and T-088 task files to establish the authoritative facts before writing. Verified the baseline `mdbook build` passed cleanly. Then replaced the `bob chat` section with content that:
+
+- Removes the inaccurate example showing a reply from the Intern (since the Phase 2 reply pipeline has not landed, the service never produces one in production).
+- Removes the old description of chat as send-only.
+- Documents the `chat.send` params contract exactly as in S-008: `id` (subscription id), `text`, `application_identity`, optional `context_id`.
+- Documents the `chat.message` notification shape: `params.subscription` (the subscription id) and `params.data.text` (human-readable reply).
+- Describes `--session` precisely as setting `context_id` on every `chat.send` request.
+- Documents the `--json` flag and shows the notification JSON shape inline.
+- Adds an explicit "Current limitation — reply generation requires Phase 2" callout explaining that the push channel exists, messages are accepted, but no reply is produced in production until the Phase 2 pipeline lands.
+- Adds a Wire contract table listing all four `chat.send` fields with required/optional and description.
+
+**What was tried and rejected.** Considered adding a separate sub-page for the wire contract and updating `SUMMARY.md`. Rejected because the task spec says to touch `SUMMARY.md` only if a new page is added, and the wire contract fits naturally within the existing `bob chat` section at roughly the same length as comparable sections.
+
+**What remains.** Nothing. All three acceptance criteria are met and `mdbook build` is clean.
+
+Evidence: baseline and post-edit `mdbook build` both clean (INFO only; pre-existing non-fatal mermaid version warning). Commit `06816b1` on `task/T-091-update-user-documentation-for-interactive-bob-chat`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
