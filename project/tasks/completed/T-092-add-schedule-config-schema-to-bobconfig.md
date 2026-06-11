@@ -1,7 +1,7 @@
 ---
 id: T-092
 title: Add schedule config schema to BobConfig
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-06-12'
