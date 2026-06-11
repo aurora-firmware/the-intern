@@ -3,6 +3,10 @@
 .claude
 .pi
 .agents
+.ai-team.toml
+
+# Tooling
+mise.toml
 
 # mdBook rendered output
 the-intern/docs/book/

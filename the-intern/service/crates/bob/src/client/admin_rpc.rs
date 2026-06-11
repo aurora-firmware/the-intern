@@ -200,7 +200,17 @@ where
             "id": self.close_request_id,
         });
         write_frame(&mut self.writer, &request).await?;
-        let frame = read_value_frame(&mut self.reader).await?;
+
+        // Notifications may already be in flight when the close request is
+        // written; skip them until the close response arrives. They are
+        // discarded rather than buffered because `close` consumes the
+        // subscription, so no later `recv()` can observe them.
+        let frame = loop {
+            let frame = read_value_frame(&mut self.reader).await?;
+            if !is_notification(&frame) {
+                break frame;
+            }
+        };
 
         if frame.get("jsonrpc") != Some(&Value::String("2.0".to_string())) {
             return Err(invalid_request_error("close response must use jsonrpc 2.0"));
@@ -787,6 +797,68 @@ mod tests {
             .expect("subscribe");
 
         sub.close().await.expect("close succeeds");
+
+        timeout(Duration::from_secs(1), server)
+            .await
+            .expect("server completed")
+            .expect("server join");
+        let _ = std::fs::remove_file(&cfg.admin_sock_path);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn subscription_close_skips_interleaved_notifications() {
+        let sock_path = unique_socket_path("subscribe-close-interleave");
+        let listener = UnixListener::bind(&sock_path).expect("bind listener");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let (read_half, mut write_half) = tokio::io::split(stream);
+            let mut reader = BufReader::new(read_half);
+
+            let mut subscribe_line = String::new();
+            reader
+                .read_line(&mut subscribe_line)
+                .await
+                .expect("read subscribe");
+            write_half
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"result\":{\"id\":\"sub-7\"},\"id\":1}\n")
+                .await
+                .expect("write subscribe response");
+
+            let mut unsubscribe_line = String::new();
+            reader
+                .read_line(&mut unsubscribe_line)
+                .await
+                .expect("read unsubscribe");
+
+            // Two notifications race ahead of the close response.
+            write_half
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"audit.notification\",\"params\":{\"subscription\":\"sub-7\",\"data\":{\"n\":1}}}\n")
+                .await
+                .expect("write first notification");
+            write_half
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"audit.notification\",\"params\":{\"subscription\":\"sub-7\",\"data\":{\"n\":2}}}\n")
+                .await
+                .expect("write second notification");
+            write_half
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"result\":{\"ok\":true},\"id\":2}\n")
+                .await
+                .expect("write unsubscribe response");
+        });
+
+        let cfg = BobConfig {
+            admin_sock_path: sock_path,
+            ..BobConfig::test_base()
+        };
+        let mut client = AdminClient::connect(&cfg).await.expect("connect");
+        let sub = client
+            .subscribe::<_, Value>("audit.tail.subscribe", json!({}))
+            .await
+            .expect("subscribe");
+
+        sub.close()
+            .await
+            .expect("close succeeds despite interleaved notifications");
 
         timeout(Duration::from_secs(1), server)
             .await
