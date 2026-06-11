@@ -129,3 +129,29 @@ Nothing. All acceptance criteria met.
 **Final branch state:** committed, clean, 5 scheduler-adapter tests pass, full workspace green.
 
 ## Review
+
+### Review Verdict — 2026-06-12
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+AC-1: Met. `run_job_tick_loop` constructs `InternalEvent { kind: DeliveryKind::Periodic, payload: job_prompt.clone() }` on every tick and calls `intake.submit_event(event, context).await`. Test `cron_tick_submits_periodic_event_with_correct_payload_and_context` confirms kind and payload match the job's prompt.
+
+AC-2: Met. `RequestContext` is built with `context_id: Some(job_id.clone())`, `reply_address: None`, `sender: user_id`, `source: channel_id`. Both `channel_id` and `user_id` are created once per job inside `start()` in `JobState` and passed by value into `run_job_tick_loop` — reused across every tick. Fixed IDs are logged at INFO at startup. Tests `cron_tick_submits_periodic_event_with_correct_payload_and_context` and `cron_tick_reuses_same_channel_id_and_user_id_across_multiple_ticks` confirm both.
+
+AC-3: Met. `if let Err(err) = intake.submit_event(...).await` logs `WARN` and the loop `continue`s. Test `actor_continues_running_when_intake_submit_returns_error` verifies actor is still alive after failed submits.
+
+AC-4: Met. `cargo test -p scheduler-adapter` — 5 tests pass, 0 failures.
+
+AC-5: Met. `cargo test --workspace` — all crates pass, 0 new failures.
+
+**Stage 2 — Code Quality**
+
+- Correctness: Next-fire computation uses `croner` with `Seconds::Disallowed` matching 5-field expressions as specified. Duration conversion handles the edge case where `next` could be in the past (returns `Duration::ZERO` safely). Cron parse failures at startup log a warning and skip the job without crashing — appropriate defensive behaviour.
+- Tests: Three new integration tests using `tokio::time::pause()` + `advance()`. Each covers a distinct criterion (payload/context, identity reuse, error resilience). Helper functions `make_intake_with_collector` / `make_intake` keep tests independent with no shared mutable state between tests.
+- Security: No hardcoded secrets; no external input beyond configuration entries already validated upstream.
+- Readability: `JobState`, `run_job_tick_loop`, and `Actor::run` are clearly named and focused. No dead code, no commented-out blocks.
+- Performance: No busy-polling; uses `tokio::time::sleep` driven by computed duration. Actor aborts and awaits all per-job handles on shutdown, avoiding leaks.
+
+No blocking issues. Minor observation (non-blocking): The two pre-existing tests (`start_with_empty_entries_returns_reload_handle_and_running_join_handle` and `actor_exits_cleanly_when_all_reload_handles_are_dropped`) were part of the prior skeleton; they continue to pass and are unchanged.
