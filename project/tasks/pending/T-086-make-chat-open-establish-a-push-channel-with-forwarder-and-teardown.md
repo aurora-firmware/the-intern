@@ -31,6 +31,12 @@ forwarder. The per-connection authorization for `chat.send`
 per-connection bus path for chat in `subscriptions.rs` is removed or
 bypassed in favour of the router-backed channel.
 
+Architect preflight guidance: expose the reply router through
+`admin_rpc::Config` (mirroring the existing `audit_bus` / `chat_adapter`
+fields, auto-created internally when absent) so T-090's in-process test
+can retain a delivery-handle clone for injection; production `serve.rs`
+then needs no change.
+
 ## Acceptance Criteria
 
 AC-1: WHEN a client sends `chat.open` THE SYSTEM SHALL return `result.id`
