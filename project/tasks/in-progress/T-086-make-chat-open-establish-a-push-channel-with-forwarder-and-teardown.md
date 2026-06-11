@@ -89,6 +89,36 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-11
+
+**What was done:**
+
+Implemented all five acceptance criteria for T-086, wiring `chat.open` to the reply router (T-085's `ChatReplyRouter`) and connecting the forwarder in the connection loop, following the `audit.tail.subscribe` pattern.
+
+**Changes made:**
+
+`dispatch.rs` — Added two new `DispatchOutcome` variants: `ChatSubscribed` (carries response, id, router receiver, cancel receiver) and `ChatUnsubscribed`. Added `chat_router: Option<Arc<ChatReplyRouter>>` field to `Dispatcher` with a `with_chat_router()` builder and a `chat_router()` accessor. Changed `handle_chat_open` to call `registry.open_chat()` (which now returns `(id, cancel_rx)`) and register with the router via `router.register(id)`, returning `ChatSubscribed`. Changed `handle_chat_close` to call `router.deregister(id)` before returning `ChatUnsubscribed`. Updated all tests that previously matched `DispatchOutcome::Ok` for chat.open/chat.close.
+
+`lib.rs` — Added `chat_router: Option<Arc<ChatReplyRouter>>` field to `Config` (auto-created when absent so `serve.rs` requires no change). In `start()`, created or adopted the router and attached it to the dispatcher via `with_chat_router`. In `run_connection`, attached the router to the `ConnectionRegistry` via `with_chat_router` for teardown on drop. Added `chat_forwarder` function (mirrors `audit_forwarder`) that reads from the per-subscription reply queue and emits `chat.message` notifications with `{subscription, data}` params. Wired `ChatSubscribed`/`ChatUnsubscribed` in the `read_loop` match arm. Added integration tests for AC-1 through AC-5.
+
+`subscriptions.rs` — Retired the old bus-based chat path. `open_chat()` now returns `(AdminSubscriptionId, oneshot::Receiver<()>)` using the same cancel-sender pattern as audit subscriptions. Added `chat_cancel_txs` and `next_chat_id` fields. `close_chat()` drops the cancel sender (signals forwarder to exit). Added `chat_router: Option<Arc<ChatReplyRouter>>` to the registry so `Drop` can deregister remaining chat subscriptions from the router on connection close. Removed `bus` field from `ConnectionRegistry` (old bus path fully retired); updated `new()` to take no arguments. Updated all affected tests.
+
+**What was tried and rejected:**
+
+Initially considered having the `Dispatcher` hold only a `DeliveryHandle` (the write-only side of the router), but realized `handle_chat_open` needs to call `router.register(id)` to get the per-subscription receiver. Changed the field to `Option<Arc<ChatReplyRouter>>` since `Arc` is `Clone` and the router struct wraps shared state. A method `with_chat_router(Arc<ChatReplyRouter>)` makes the injection point clear.
+
+**Decisions:**
+
+- The router is auto-created inside `start()` when `Config::chat_router` is `None`, so production code (`bob::serve`) needs no change.
+- `ConnectionRegistry::new()` no longer takes a `SubscriptionBus` argument since chat subscriptions no longer use the bus. The bus infrastructure (`SubscriptionBus`, `Config::audit_bus`) is retained as a public API.
+- Chat-close ordering: `registry.close_chat(id)` is called before `router.deregister(id)` in `handle_chat_close`. This means the cancel sender is dropped first, which signals the forwarder. The forwarder may race with one final delivery from the queue, but since the router deregistration also happens before the forwarder fully exits, the router's `senders` entry is removed before any new delivery arrives. This matches the audit forwarder's cancellation semantics.
+
+**What remains:**
+
+Nothing in task scope. AC-1 through AC-5 are all covered by tests. T-090 can inject a `ChatReplyRouter` via `Config::chat_router` to obtain a `DeliveryHandle` for in-process reply injection.
+
+Evidence: `cargo test -p admin-rpc` — 107 passed, 0 failed; `cargo fmt --all -- --check` clean; `cargo test --workspace` all suites pass. Commit `9f24e46` on `task/T-086-make-chat-open-establish-a-push-channel-with-forwarder-and-teardown`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
