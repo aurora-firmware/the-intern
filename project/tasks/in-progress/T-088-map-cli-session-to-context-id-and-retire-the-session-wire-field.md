@@ -93,3 +93,25 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-11
+
+PASS
+
+Stage 1 — all four acceptance criteria met:
+
+- AC-1: `build_chat_send_params` now emits `"context_id"` (not `"session"`) when `--session` is supplied. Confirmed in diff and in the `chat_opens_with_session_and_sends_each_input_line` test assertions.
+- AC-2: The `None` branch of `build_chat_send_params` is unchanged and omits `context_id` entirely. Pinned by the new `chat_send_params_omit_context_id_when_session_not_provided` test, which asserts both `context_id` and `session` are absent.
+- AC-3: `run_with_parts_async` now unconditionally passes `json!({})` to `open_chat`; the previous session-bearing branch is gone. Pinned by the updated `chat_opens_with_session_and_sends_each_input_line` open-params assertion.
+- AC-4: `id`, `text`, and `application_identity` fields are present and unchanged in both branches of `build_chat_send_params`.
+
+Only the file specified in the task was changed (`the-intern/service/crates/bob/src/cli/commands/chat.rs`).
+
+Stage 2 — code quality:
+
+- Correctness: logic is correct; the unconditional `json!({})` correctly replaces the conditional open-params logic, and the key rename in the send-params match arm is precise.
+- Tests: 15/15 pass (`cargo test -p bob --lib chat`); both success path (session provided) and omission path (no session) are covered independently. Full workspace suite passes (all crates, no failures).
+- Security: no secrets; no external input concerns introduced.
+- Readability: variable rename from `session_id` to `context_id` in the `Some` arm improves clarity. AC-keyed comments in tests are helpful.
+- Performance: no new allocations or blocking calls beyond what already existed.
+- Format: `cargo fmt --all -- --check` clean.
