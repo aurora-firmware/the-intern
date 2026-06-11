@@ -114,10 +114,8 @@ pub(super) fn run(json_output: bool, session: Option<&str>) -> ServiceResult<()>
     )
 }
 
-// The argument count is driven by dependency injection: the trailing
-// stop/open parameters are the seam that lets tests drive `chat` without
-// real sockets or stdin.
-#[allow(clippy::too_many_arguments)]
+// The trailing stop/open parameters are a dependency-injection seam that
+// lets tests drive `chat` without real sockets or stdin.
 fn run_with_parts<S, L, StopFactory, StopFuture, OpenFn, OpenFuture>(
     json_output: bool,
     session: Option<&str>,
@@ -146,7 +144,6 @@ where
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_with_parts_async<S, L, StopFactory, StopFuture, OpenFn, OpenFuture>(
     json_output: bool,
     session: Option<&str>,
