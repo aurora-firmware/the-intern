@@ -100,3 +100,25 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-11
+
+FAIL
+
+**Stage 1 — Acceptance Criteria**
+
+AC-2 and AC-3 pass.
+
+AC-1 fails on one point: the `--json` output example in the documentation shows the full JSON-RPC notification frame, but the CLI actually prints only the `data` payload extracted from it.
+
+- **File:** `the-intern/docs/src/end-user-guide/index.md`, `--json` output section (the paragraph beginning "With `--json`, each notification from the service is printed...")
+- **What is wrong:** The documented JSON shape is:
+  ```json
+  {"jsonrpc":"2.0","method":"chat.message","params":{"subscription":"<sub-id>","data":{"text":"<reply text>"}}}
+  ```
+  This is the raw wire frame. However, `Subscription::recv()` in `the-intern/service/crates/bob/src/client/admin_rpc.rs` (line 238–241) extracts `params.data` before returning, and `write_chat_notification` in `the-intern/service/crates/bob/src/cli/commands/chat.rs` (line 222–224) calls `write_json_line` on that `data` value directly. The actual `--json` output is the data payload only, e.g. `{"text":"<reply text>"}`. This is confirmed by the unit test at line 600–603 of `commands/chat.rs`, which asserts the output is `{"text":"first"}\n{"text":"second"}\n`, not the full notification frame.
+- **What should change:** Replace the JSON shape example and the two sentences below it (`params.subscription is…` and `params.data.text carries…`) with text that correctly describes what `--json` prints. The output is the `data` object from the notification, for example `{"text":"<reply text>"}`. The Wire contract section (which already documents the full `chat.message` notification shape at the wire level) is the right place for `params.subscription` and `params.data` semantics; that section is accurate and should be kept.
+
+**Stage 2 — Code Quality**
+
+Not reached due to Stage 1 failure on AC-1. mdbook build confirmed clean (no broken links, pre-existing mermaid version warning only).
