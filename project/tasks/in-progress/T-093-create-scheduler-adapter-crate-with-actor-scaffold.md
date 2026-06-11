@@ -75,4 +75,33 @@ cargo test --workspace
 
 ## Work Log
 
+### Session 1 — 2026-06-12
+
+**What was done**
+
+Created the `scheduler-adapter` crate from scratch following the `chat-adapter` pattern:
+
+- `ReloadHandle` — a `#[derive(Clone)]` struct wrapping a `watch::Sender<()>`. Drop sentinel: when all clones are dropped, the receiver sees the channel closed and the actor exits.
+- `start(intake: IntakeHandle, entries: Vec<ScheduleEntry>) -> (ReloadHandle, JoinHandle<()>)` — spawns the actor and returns the handle pair.
+- Internal `Actor` struct holding `_intake` (for T-095), `entries` (job table), and `reload_rx`. Actor loops on `reload_rx.changed()`, logging at DEBUG on reload and breaking on `Err` (channel closed). Logs "scheduler-adapter actor started" at INFO on entry and "scheduler-adapter actor stopped" at INFO on exit.
+- Two tests: `start_with_empty_entries_returns_reload_handle_and_running_join_handle` (AC-2 + AC-4) and `actor_exits_cleanly_when_all_reload_handles_are_dropped` (AC-3 + AC-4).
+
+TDD cycle: wrote failing tests first, added implementation, confirmed green, refactored (used `_intake` field name instead of `let _ = &self.intake`), applied `cargo fmt`.
+
+**What was tried and rejected**
+
+- `let _ = &self.intake` to suppress dead_code warning — rejected in favour of `_intake` field name (idiomatic Rust).
+- Separate `tokio::select!` branch watching a `CancellationToken` — rejected as over-engineering; drop-sentinel on `watch::Sender<()>` exactly matches the spec.
+
+**What remains**
+
+Nothing. All acceptance criteria met. T-095 will add cron tick firing using `_intake`.
+
+**Obstacles Encountered**
+
+- Workspace `members = ["crates/*"]` glob picks up the new crate automatically; no edit to `service/Cargo.toml` was needed.
+- `rustfmt` reformatted multi-line `start()` signature; applied with `cargo fmt --all`.
+
+**Final branch state:** committed, clean, all tests passing (2 scheduler-adapter tests, full workspace green)
+
 ## Review
