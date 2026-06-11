@@ -14,6 +14,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 figment = { version = "0.10", features = ["toml", "env"] }
 nix = { version = "0.29", default-features = false, features = ["user"] }
+croner = "3"
 admin-rpc = { path = "../admin-rpc" }
 extension-ipc = { path = "../extension-ipc" }
 requests-handler = { path = "../requests-handler" }
