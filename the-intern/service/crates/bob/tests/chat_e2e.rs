@@ -18,7 +18,7 @@ use std::{
 use admin_rpc::chat_router::{ChatReplyRouter, DeliveryHandle};
 use admin_rpc::subscriptions::AdminSubscriptionId;
 use bob::client::AdminClient;
-use bob::config::{BobConfig, ChannelsConfig, ChatChannelConfig, MonitoringConfig};
+use bob::config::{BobConfig, ChannelsConfig, ChatChannelConfig, MonitoringConfig, ScheduleConfig};
 use bob_core::types::UserId;
 use policy_control::PolicyConfig;
 use serde_json::{json, Value};
@@ -64,6 +64,7 @@ fn client_cfg(admin_sock_path: PathBuf) -> BobConfig {
             .parse::<UserId>()
             .expect("chat test identity must parse"),
         config_path: PathBuf::new(),
+        schedule: ScheduleConfig { entries: vec![] },
     }
 }
 
