@@ -170,3 +170,23 @@ Not reached due to Stage 1 failure on AC-1. AC-3 confirmed: `mdbook build` passe
 **Obstacles Encountered**
 
 None. The Session 2 fix to the `--json` example is correct and was verified against `admin_rpc.rs` and `commands/chat.rs` (unit test at lines 600–603 asserts `{"text":"first"}\n{"text":"second"}\n`). The remaining issue is solely the missing `chat.message` notification shape in the Wire contract section.
+
+### Review Verdict — 2026-06-11
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+All three criteria pass.
+
+- AC-1: The `chat.send` params table (lines 277–282) exactly matches S-008: `id`, `text`, `application_identity` (all required), `context_id` (optional). The `chat.message` notification shape table (lines 287–291) matches S-008 exactly: `params.subscription` (subscription id), `params.data` (reply payload object), `params.data.text` (human-readable reply string). The `--json` output example (`{"text":"<reply text>"}`) is correct — `Subscription::recv()` in `admin_rpc.rs` (lines 239–242) extracts `params.data` before returning, so the CLI receives and prints only the data payload, confirmed by the unit test at `commands/chat.rs` lines 600–603. The cross-reference from the `--json` section to the Wire contract section is now valid (Session 3 added the `chat.message` params table). All 8 assertions in `the-intern/docs/test_wire_contract.sh` pass.
+- AC-2: `--session` is described as setting `context_id` on every `chat.send` request (line 238). The Phase 2 limitation note (lines 293–304) states that reply generation requires the Phase 2 pipeline, which has not yet landed.
+- AC-3: `cd the-intern/docs && mdbook build` passes cleanly — INFO output only, pre-existing mermaid version warning, no broken links.
+
+**Stage 2 — Code Quality**
+
+The only changed source file is `the-intern/docs/src/end-user-guide/index.md` (documentation). Content is accurate, well-structured, and consistent with the style of surrounding guide pages. The developer verification script `the-intern/docs/test_wire_contract.sh` is a straightforward shell assertion helper. No dead code, no hardcoded secrets, no logic errors. No issues.
+
+**Obstacles Encountered**
+
+None.
