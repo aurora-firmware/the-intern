@@ -35,6 +35,7 @@ use uuid::Uuid;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
+    chat_router::{ChatReplyReceiver, ChatReplyRouter},
     protocol::{
         ErrorResponse, Request, Response, CODE_INVALID_REQUEST, CODE_METHOD_NOT_FOUND, CODE_TIMEOUT,
     },
@@ -51,6 +52,12 @@ pub struct Dispatcher {
     policy: Option<policy_control::Handle>,
     monitoring: Option<monitoring::Handle>,
     chat_adapter: Option<ChatHandle>,
+    /// Optional chat reply router.
+    ///
+    /// When present, `chat.open` registers with the router and returns a
+    /// router-backed receiver.  The router is shared across all clones of the
+    /// dispatcher via an `Arc`.
+    chat_router: Option<std::sync::Arc<ChatReplyRouter>>,
     started_at: Instant,
     version: &'static str,
 }
@@ -77,6 +84,22 @@ pub enum DispatchOutcome {
         response: Response,
         id: AdminSubscriptionId,
     },
+    /// A new router-backed chat subscription was created.
+    ///
+    /// The caller must spawn a forwarder task that drives `rx` (the per-subscription
+    /// reply queue receiver) and `cancel_rx` (signals when the subscription is
+    /// cancelled by `chat.close` or connection close).
+    ChatSubscribed {
+        response: Response,
+        id: AdminSubscriptionId,
+        rx: ChatReplyReceiver,
+        cancel_rx: tokio::sync::oneshot::Receiver<()>,
+    },
+    /// A chat subscription was removed.
+    ChatUnsubscribed {
+        response: Response,
+        id: AdminSubscriptionId,
+    },
 }
 
 impl Dispatcher {
@@ -95,6 +118,7 @@ impl Dispatcher {
             policy,
             monitoring,
             chat_adapter: None,
+            chat_router: None,
             started_at: Instant::now(),
             version,
         }
@@ -108,6 +132,29 @@ impl Dispatcher {
     pub fn with_chat_handle(mut self, handle: ChatHandle) -> Self {
         self.chat_adapter = Some(handle);
         self
+    }
+
+    /// Attach a chat reply router.
+    ///
+    /// When present, `chat.open` registers with the router and returns a
+    /// [`DispatchOutcome::ChatSubscribed`] carrying the router-backed receiver.
+    /// `chat.close` and connection drop deregister the subscription from the
+    /// router.
+    ///
+    /// The router is wrapped in an `Arc` so all clones of the dispatcher share
+    /// the same router state.
+    #[must_use]
+    pub fn with_chat_router(mut self, router: std::sync::Arc<ChatReplyRouter>) -> Self {
+        self.chat_router = Some(router);
+        self
+    }
+
+    /// Return a clone of the chat reply router `Arc`, if one is configured.
+    ///
+    /// Used by the connection loop to attach the router to the per-connection
+    /// registry for teardown on connection drop.
+    pub fn chat_router(&self) -> Option<std::sync::Arc<ChatReplyRouter>> {
+        self.chat_router.clone()
     }
 
     /// Dispatch `request` to the appropriate method handler.
@@ -256,9 +303,27 @@ impl Dispatcher {
         id: Value,
         registry: &mut ConnectionRegistry,
     ) -> DispatchOutcome {
-        let sub_id = registry.open_chat();
+        let (sub_id, cancel_rx) = registry.open_chat();
         tracing::debug!(subscription_id = %sub_id, "chat.open: registered");
-        DispatchOutcome::Ok(Response::ok(id, json!({ "id": sub_id.to_string() })))
+        let response = Response::ok(id, json!({ "id": sub_id.to_string() }));
+
+        if let Some(ref router) = self.chat_router {
+            // Register the subscription id with the chat reply router and obtain
+            // the per-subscription reply queue receiver.
+            let rx = router.register(sub_id);
+            DispatchOutcome::ChatSubscribed {
+                response,
+                id: sub_id,
+                rx,
+                cancel_rx,
+            }
+        } else {
+            // No router configured — fall back to a plain Ok response.
+            // The cancel_rx is dropped here, which is fine; no forwarder will be
+            // spawned so the subscription drains nothing.
+            let _ = cancel_rx;
+            DispatchOutcome::Ok(response)
+        }
     }
 
     async fn handle_chat_close(
@@ -292,7 +357,18 @@ impl Dispatcher {
 
         if registry.close_chat(sub_id) {
             tracing::debug!(subscription_id = %sub_id, "chat.close: removed");
-            DispatchOutcome::Ok(Response::ok(id, json!({ "ok": true })))
+            // Deregister from the reply router so subsequent injected replies are
+            // dropped.  This must happen before the cancel sender is dropped
+            // (done inside registry.close_chat) so the forwarder cannot race a
+            // delivery after the channel closes.
+            if let Some(ref router) = self.chat_router {
+                router.deregister(sub_id);
+            }
+            let response = Response::ok(id, json!({ "ok": true }));
+            DispatchOutcome::ChatUnsubscribed {
+                response,
+                id: sub_id,
+            }
         } else {
             DispatchOutcome::Err(ErrorResponse::error(
                 id,
@@ -715,9 +791,6 @@ mod tests {
     use super::*;
     use bob_core::error::ServiceError;
     use serde_json::json;
-    use std::time::Duration;
-
-    use crate::subscriptions::SubscriptionBus;
 
     fn make_request(method: &str, id: Value) -> Request {
         Request {
@@ -754,8 +827,7 @@ mod tests {
     }
 
     fn make_registry() -> ConnectionRegistry {
-        let bus = SubscriptionBus::new(Duration::from_millis(100));
-        ConnectionRegistry::new(bus)
+        ConnectionRegistry::new()
     }
 
     // AC-1: service.status responds with a structured status object.
@@ -1200,10 +1272,10 @@ mod tests {
         }
     }
 
-    // chat.open returns a subscription id.
+    // AC-1 (T-086): chat.open returns ChatSubscribed with a router-backed receiver.
     #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_chat_open_returns_subscription_id() {
-        let dispatcher = make_dispatcher_no_handles();
+    async fn dispatch_chat_open_returns_chat_subscribed_with_receiver() {
+        let (dispatcher, _router) = make_dispatcher_with_chat_router();
         let mut registry = make_registry();
 
         let outcome = dispatcher
@@ -1211,35 +1283,59 @@ mod tests {
             .await;
 
         match outcome {
-            DispatchOutcome::Ok(resp) => {
-                assert_eq!(resp.id, json!(17));
-                assert!(resp.result["id"].is_string(), "result.id must be a string");
+            DispatchOutcome::ChatSubscribed { response, id, .. } => {
+                assert_eq!(response.id, json!(17));
+                assert!(
+                    response.result["id"].is_string(),
+                    "result.id must be a string"
+                );
+                let sub_id_str = response.result["id"].as_str().unwrap();
+                assert_eq!(
+                    id.to_string(),
+                    sub_id_str,
+                    "DispatchOutcome id must match result.id"
+                );
             }
-            _ => panic!("expected Ok for chat.open"),
+            _ => panic!("expected ChatSubscribed for chat.open"),
         }
     }
 
-    // chat.close with a valid id returns ok.
+    // AC-2 (T-086): chat.close with a valid id deregisters from the router and
+    // returns ChatUnsubscribed.
     #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_chat_close_valid_id_returns_ok() {
-        let dispatcher = make_dispatcher_no_handles();
+    async fn dispatch_chat_close_valid_id_returns_chat_unsubscribed() {
+        let (dispatcher, _router) = make_dispatcher_with_chat_router();
         let mut registry = make_registry();
 
         let open_outcome = dispatcher
             .dispatch(make_request("chat.open", json!(18)), &mut registry)
             .await;
         let chat_id = match open_outcome {
-            DispatchOutcome::Ok(resp) => resp.result["id"].as_str().unwrap().to_string(),
-            _ => panic!("expected Ok for chat.open"),
+            DispatchOutcome::ChatSubscribed { response, .. } => {
+                response.result["id"].as_str().unwrap().to_string()
+            }
+            _ => panic!("expected ChatSubscribed for chat.open"),
         };
 
         let close_req = make_request_with_params("chat.close", json!(19), json!({ "id": chat_id }));
         let close_outcome = dispatcher.dispatch(close_req, &mut registry).await;
 
         match close_outcome {
-            DispatchOutcome::Ok(resp) => assert_eq!(resp.result["ok"], json!(true)),
-            _ => panic!("expected Ok for chat.close"),
+            DispatchOutcome::ChatUnsubscribed { response, .. } => {
+                assert_eq!(response.result["ok"], json!(true))
+            }
+            _ => panic!("expected ChatUnsubscribed for chat.close"),
         }
+    }
+
+    fn make_dispatcher_with_chat_router() -> (
+        Dispatcher,
+        std::sync::Arc<crate::chat_router::ChatReplyRouter>,
+    ) {
+        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
+        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
+            .with_chat_router(std::sync::Arc::clone(&router));
+        (dispatcher, router)
     }
 
     fn make_monitoring_handle() -> (monitoring::Handle, tokio::task::JoinHandle<()>) {
@@ -1439,7 +1535,10 @@ mod tests {
 
         let channel_id = ChannelId::new();
         let (frame_handle, _actor_task) = chat_adapter::start(intake, channel_id, 16);
-        let dispatcher = make_dispatcher_with_chat_handle(frame_handle);
+        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
+        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
+            .with_chat_handle(frame_handle)
+            .with_chat_router(std::sync::Arc::clone(&router));
         let expected_sender = UserId::new();
         let mut registry = make_registry();
 
@@ -1448,8 +1547,10 @@ mod tests {
             .dispatch(make_request("chat.open", json!(70)), &mut registry)
             .await;
         let sub_id = match open_outcome {
-            DispatchOutcome::Ok(resp) => resp.result["id"].as_str().unwrap().to_string(),
-            _ => panic!("expected Ok for chat.open"),
+            DispatchOutcome::ChatSubscribed { response, .. } => {
+                response.result["id"].as_str().unwrap().to_string()
+            }
+            _ => panic!("expected ChatSubscribed for chat.open"),
         };
 
         // Send a message.
@@ -1525,7 +1626,10 @@ mod tests {
 
         let channel_id = ChannelId::new();
         let (frame_handle, _actor_task) = chat_adapter::start(intake, channel_id, 16);
-        let dispatcher = make_dispatcher_with_chat_handle(frame_handle);
+        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
+        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
+            .with_chat_handle(frame_handle)
+            .with_chat_router(std::sync::Arc::clone(&router));
         let expected_sender = UserId::new();
         let mut registry = make_registry();
 
@@ -1533,8 +1637,10 @@ mod tests {
             .dispatch(make_request("chat.open", json!(72)), &mut registry)
             .await;
         let sub_id = match open_outcome {
-            DispatchOutcome::Ok(resp) => resp.result["id"].as_str().unwrap().to_string(),
-            _ => panic!("expected Ok for chat.open"),
+            DispatchOutcome::ChatSubscribed { response, .. } => {
+                response.result["id"].as_str().unwrap().to_string()
+            }
+            _ => panic!("expected ChatSubscribed for chat.open"),
         };
 
         dispatcher
@@ -1751,15 +1857,20 @@ mod tests {
 
         let channel_id = ChannelId::new();
         let (frame_handle, _actor_task) = chat_adapter::start(intake, channel_id, 16);
-        let dispatcher = make_dispatcher_with_chat_handle(frame_handle);
+        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
+        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
+            .with_chat_handle(frame_handle)
+            .with_chat_router(std::sync::Arc::clone(&router));
         let mut registry = make_registry();
 
         let open_outcome = dispatcher
             .dispatch(make_request("chat.open", json!(90)), &mut registry)
             .await;
         let sub_id = match open_outcome {
-            DispatchOutcome::Ok(resp) => resp.result["id"].as_str().unwrap().to_string(),
-            _ => panic!("expected Ok for chat.open"),
+            DispatchOutcome::ChatSubscribed { response, .. } => {
+                response.result["id"].as_str().unwrap().to_string()
+            }
+            _ => panic!("expected ChatSubscribed for chat.open"),
         };
 
         let outcome = dispatcher
@@ -1822,15 +1933,20 @@ mod tests {
 
         let channel_id = ChannelId::new();
         let (frame_handle, _actor_task) = chat_adapter::start(intake, channel_id, 16);
-        let dispatcher = make_dispatcher_with_chat_handle(frame_handle);
+        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
+        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
+            .with_chat_handle(frame_handle)
+            .with_chat_router(std::sync::Arc::clone(&router));
         let mut registry = make_registry();
 
         let open_outcome = dispatcher
             .dispatch(make_request("chat.open", json!(92)), &mut registry)
             .await;
         let sub_id = match open_outcome {
-            DispatchOutcome::Ok(resp) => resp.result["id"].as_str().unwrap().to_string(),
-            _ => panic!("expected Ok for chat.open"),
+            DispatchOutcome::ChatSubscribed { response, .. } => {
+                response.result["id"].as_str().unwrap().to_string()
+            }
+            _ => panic!("expected ChatSubscribed for chat.open"),
         };
 
         for (id, application_identity) in [(93, ""), (94, "not-a-uuid")] {
