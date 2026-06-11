@@ -1,7 +1,7 @@
 ---
 id: T-086
 title: Make chat.open establish a push channel with forwarder and teardown
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-06-11'
