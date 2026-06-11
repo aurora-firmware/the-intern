@@ -89,3 +89,23 @@ None. The scheduler-adapter crate API from T-093 was straightforward to consume.
 **Final branch state:** committed, clean, 26 serve-layer tests pass, full workspace green.
 
 ## Review
+
+### Review Verdict — 2026-06-12
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1: Met. `serve.rs` emits `info!("scheduler-adapter actor started")` at line 217, inside `try_start_subsystems` before the admin socket is bound and before the extension socket is bound — i.e., before any request-accepting socket exists. The log message matches the criterion exactly.
+- AC-2: Met. The "scheduler-adapter actor stopped" log is emitted by the actor itself (`scheduler-adapter/src/lib.rs:62`) when its watch-channel receiver closes. The `ReloadHandle` is dropped explicitly in `run_shutdown_protocol` (phase 1), and `scheduler_adapter_join` is pushed into `all_joins` and awaited in phase 3 under `shutdown_drain_deadline`. Both the log and the JoinHandle await are confirmed present.
+- AC-3: Met. `cargo test -p bob serve::tests` — 26 tests passed, 0 failed. Both new tests (`start_subsystems_always_creates_scheduler_adapter_join_handle`, `shutdown_protocol_awaits_scheduler_adapter_and_completes_without_hanging`) pass.
+- AC-4: Met. `cargo test --workspace` — all test binaries green, 0 failures.
+
+**Stage 2 — Code Quality**
+
+- Correctness: The scheduler actor is unconditionally started; `JoinHandle<()>` is non-Optional (correct per spec). Drop ordering in `run_shutdown_protocol` follows the established pattern for `chat-adapter`. No logic errors observed.
+- Tests: Two new tests cover AC-1 (handle present and actor running after startup) and AC-2 (shutdown completes within a 5-second deadline). Both success paths are exercised. Tests use isolated temp dirs and do not share mutable state.
+- Security: No new external input surface, no secrets.
+- Readability: Code follows the existing `chat-adapter` pattern exactly; comments are accurate and aligned with the implementation.
+- Performance: No unnecessary allocations or blocking calls. `entries.clone()` passes an owned `Vec` to the actor, consistent with the T-093 API.
+- Scope: Only the three files specified in the task (`Cargo.toml`, `Cargo.lock`, `serve.rs`) were modified. No unrelated changes bundled.
