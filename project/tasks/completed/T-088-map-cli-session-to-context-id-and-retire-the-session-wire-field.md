@@ -1,7 +1,7 @@
 ---
 id: T-088
 title: Map CLI --session to context_id and retire the session wire field
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-06-11'
