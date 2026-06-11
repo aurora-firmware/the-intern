@@ -161,11 +161,7 @@ where
     OpenFn: FnOnce(BobConfig, &'static str, Value) -> OpenFuture,
     OpenFuture: Future<Output = ServiceResult<S>>,
 {
-    let open_params = match session {
-        Some(id) => json!({ "session": id }),
-        None => json!({}),
-    };
-    let mut subscription = open_chat(cfg.clone(), "chat.open", open_params).await?;
+    let mut subscription = open_chat(cfg.clone(), "chat.open", json!({})).await?;
     let stop_signal = stop_factory();
     tokio::pin!(stop_signal);
 
@@ -204,9 +200,9 @@ fn build_chat_send_params(
 ) -> Value {
     let application_identity = cfg.chat_application_identity.to_string();
     match session {
-        Some(session_id) => json!({
+        Some(context_id) => json!({
             "id": subscription_id,
-            "session": session_id,
+            "context_id": context_id,
             "text": line,
             "application_identity": application_identity
         }),
@@ -398,6 +394,8 @@ mod tests {
         );
     }
 
+    // AC-1: chat.send params use context_id (not session) when --session is supplied.
+    // AC-3: chat.open is always sent without a session key.
     #[tokio::test(flavor = "current_thread")]
     async fn chat_opens_with_session_and_sends_each_input_line() {
         let identity = "00000000-0000-0000-0000-000000000123"
@@ -427,7 +425,8 @@ mod tests {
                 let closed = Arc::clone(&closed_for_open);
                 async move {
                     assert_eq!(method, "chat.open");
-                    assert_eq!(params, json!({"session":"session-7"}));
+                    // AC-3: chat.open must not carry a session key regardless of --session.
+                    assert_eq!(params, json!({}));
                     Ok(FakeChatSubscription {
                         subscription_id: "sub-session-7".to_string(),
                         notifications: notif_rx,
@@ -449,19 +448,82 @@ mod tests {
         assert_eq!(
             params_only,
             vec![
+                // AC-1: context_id carries the --session value; no session key present.
                 json!({
                     "id": "sub-session-7",
-                    "session": "session-7",
+                    "context_id": "session-7",
                     "text": "hello",
                     "application_identity": "00000000-0000-0000-0000-000000000123"
                 }),
                 json!({
                     "id": "sub-session-7",
-                    "session": "session-7",
+                    "context_id": "session-7",
                     "text": "world",
                     "application_identity": "00000000-0000-0000-0000-000000000123"
                 })
             ]
+        );
+    }
+
+    // AC-2: when --session is absent, context_id is omitted from chat.send params.
+    #[tokio::test(flavor = "current_thread")]
+    async fn chat_send_params_omit_context_id_when_session_not_provided() {
+        let identity = "00000000-0000-0000-0000-000000000789"
+            .parse()
+            .expect("identity should parse");
+        let cfg = BobConfig {
+            chat_application_identity: identity,
+            ..BobConfig::test_base()
+        };
+        let closed = Arc::new(AtomicBool::new(false));
+        let sent_params = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
+        let (notif_tx, notif_rx) = mpsc::unbounded_channel();
+        let mut lines = FakeLines::from([Some("hi"), None]);
+        let mut out = Vec::new();
+
+        let closed_for_open = Arc::clone(&closed);
+        let sent_for_open = Arc::clone(&sent_params);
+        let _notif_tx = notif_tx;
+        run_with_parts_async(
+            false,
+            None,
+            &cfg,
+            &mut out,
+            &mut lines,
+            || async { future::pending().await },
+            move |_cfg, method, params| {
+                let closed = Arc::clone(&closed_for_open);
+                async move {
+                    assert_eq!(method, "chat.open");
+                    assert_eq!(params, json!({}));
+                    Ok(FakeChatSubscription {
+                        subscription_id: "sub-no-session".to_string(),
+                        notifications: notif_rx,
+                        closed,
+                        sent_params: sent_for_open,
+                    })
+                }
+            },
+        )
+        .await
+        .expect("chat succeeds");
+
+        let sent = sent_params.lock().await.clone();
+        assert_eq!(sent.len(), 1);
+        let (_, params) = &sent[0];
+        assert!(
+            params.get("context_id").is_none(),
+            "context_id must be absent when --session is not provided"
+        );
+        assert!(
+            params.get("session").is_none(),
+            "session key must not appear in chat.send params"
+        );
+        assert_eq!(params["id"], "sub-no-session");
+        assert_eq!(params["text"], "hi");
+        assert_eq!(
+            params["application_identity"],
+            "00000000-0000-0000-0000-000000000789"
         );
     }
 
