@@ -1,7 +1,7 @@
 ---
 id: T-089
 title: Make the CLI chat receive loop frame-safe under concurrent send and stdin
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-06-11'
