@@ -255,15 +255,16 @@ bob chat --json
 ```
 
 With `--json`, each notification from the service is printed as a single JSON
-object on its own line. Reply notifications have the shape:
+object on its own line. The output is the data payload extracted from the
+notification, for example:
 
 ```json
-{"jsonrpc":"2.0","method":"chat.message","params":{"subscription":"<sub-id>","data":{"text":"<reply text>"}}}
+{"text":"<reply text>"}
 ```
 
-`params.subscription` is the subscription id minted when `chat.open` was sent.
-`params.data.text` carries the human-readable reply text. This makes the output
-easy to parse with `jq` or a script.
+This makes the output easy to parse with `jq` or a script. The full wire-level
+notification shape (including `params.subscription` and `params.data`) is
+documented in the Wire contract section below.
 
 **Wire contract**
 
