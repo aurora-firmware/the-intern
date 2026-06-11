@@ -1,7 +1,7 @@
 ---
 id: T-085
 title: Implement chat reply router in admin-rpc
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-06-11'
