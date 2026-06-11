@@ -122,3 +122,25 @@ Nothing. All acceptance criteria are met and all tests pass.
 **Final branch state:** committed, clean, all tests passing (117 tests, 0 failures)
 
 ## Review
+
+### Review Verdict — 2026-06-12
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1: `loads_valid_schedule_entry_from_config_file` writes a valid `[[schedule]]` TOML entry and asserts one matching `ScheduleEntry` with id, cron, and prompt. Passes.
+- AC-2: `returns_configuration_error_when_schedule_entry_has_invalid_cron` uses `cron = "not-a-cron"` and asserts `ServiceError::Configuration` with "cron" in the detail. `validate_schedule_entries` calls `cron_parser.parse(&raw.cron)` with a `Seconds::Disallowed` parser. Passes.
+- AC-3: Three separate tests cover blank id, blank cron, and blank prompt. All three paths in `validate_schedule_entries` use `.trim().is_empty()` and return `ServiceError::Configuration` naming the offending field. Passes.
+- AC-4: `loads_config_with_empty_schedule_entries_when_schedule_section_is_absent` confirms that absent `[schedule]` yields an empty `entries` vec via `#[serde(default)]` on the raw field. Passes.
+- AC-5: `cargo test -p bob` — 117 tests, 0 failures. Passes.
+
+**Stage 2 — Code Quality**
+
+- `ScheduleEntry` is placed in `bob-core/src/types/schedule.rs` and re-exported from the `types` module, matching the spec's placement requirement (avoids the circular-dependency issue with the scheduler-adapter crate).
+- `ScheduleEntry` derives `Clone`, `Debug`, `Serialize`, `Deserialize` as required.
+- `RawScheduleEntry` stays in `bob/src/config.rs` with `#[serde(default)]` fields; the raw-to-validated split follows the established pattern.
+- `croner = "3"` added to `bob/Cargo.toml`; `CronParser::builder().seconds(Seconds::Disallowed).build()` correctly enforces exactly 5 fields.
+- Error messages name the offending field and the entry index or id — actionable for operators.
+- Integration tests in `chat_e2e.rs` and `shell_e2e.rs` updated correctly to include the new required struct field.
+- No dead code, no commented-out blocks, no hardcoded secrets, no unrelated changes bundled in.
