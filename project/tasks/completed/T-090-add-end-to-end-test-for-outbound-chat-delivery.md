@@ -1,7 +1,7 @@
 ---
 id: T-090
 title: Add end-to-end test for outbound chat delivery
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-06-11'
