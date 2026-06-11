@@ -89,6 +89,18 @@ Implemented T-091 in a single documentation cycle. The task required updating th
 
 Evidence: baseline and post-edit `mdbook build` both clean (INFO only; pre-existing non-fatal mermaid version warning). Commit `06816b1` on `task/T-091-update-user-documentation-for-interactive-bob-chat`.
 
+### Session 2 — 2026-06-11
+
+Addressed the single AC-1 failure identified in the Session 1 review verdict. The Reviewer correctly observed that the `--json` section showed the full JSON-RPC notification frame (`{"jsonrpc":"2.0","method":"chat.message","params":{...}}`), but the CLI actually prints only the `data` payload extracted from the notification.
+
+**What was done.** Switched to the task branch and confirmed the existing state: lines 261–266 of `the-intern/docs/src/end-user-guide/index.md` contained the wrong wire frame example and two sentences about `params.subscription` and `` `params.data.text` `` that described fields the CLI does not output. Cross-checked `admin_rpc.rs` (lines 238–241) and `commands/chat.rs` (lines 217–224 and unit test lines 600–603) to confirm the actual CLI output is the `data` value only — `{"text":"<reply text>"}` — not the full frame.
+
+Wrote a shell-script test with 7 assertions (3 for absent patterns, 4 for present patterns) before touching the file. The test failed on 4 counts: full jsonrpc frame present, two inaccurate sentences present, and the only `{"text":"..."}` occurrence was nested inside the frame. Implemented the fix by replacing the wrong JSON block and the two inaccurate sentences with a correct data-payload example and a cross-reference to the Wire contract section below. All 7 test assertions then passed. `mdbook build` confirmed clean (pre-existing mermaid version warning only).
+
+**What was tried and rejected.** Considered removing the Wire contract section's mention of `params.subscription`/`params.data` to reduce duplication. Rejected: the Wire contract section correctly documents the wire-level frame, which is accurate and precisely what the Reviewer said to keep.
+
+**What remains.** Nothing. All three acceptance criteria are met: AC-1 (correct `--json` output shape), AC-2 (`--session`/`context_id` and Phase 2 note unchanged from Session 1), AC-3 (`mdbook build` clean). Commit `2deb5fc` on the task branch.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
