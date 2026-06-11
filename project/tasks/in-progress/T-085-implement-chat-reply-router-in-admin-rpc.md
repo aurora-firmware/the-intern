@@ -77,6 +77,38 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-11
+
+Implemented Component 1 of S-008 (the chat reply router) in a single red→green→refactor→commit cycle.
+
+**What was done**
+
+Created `the-intern/service/crates/admin-rpc/src/chat_router.rs` with the full `ChatReplyRouter` + `DeliveryHandle` implementation, and added `pub mod chat_router;` to `lib.rs`. The module provides:
+
+- `ChatReplyRouter::new()` / `Default` — creates an empty service-scoped registry backed by an `Arc<Mutex<RouterState>>`.
+- `register(id)` → `ChatReplyReceiver` — allocates a bounded (`REPLY_QUEUE_CAPACITY = 64`) per-subscription mpsc channel, stores the sender, returns the receiver (AC-1, AC-5).
+- `deregister(id)` → `bool` — removes and drops the sender, causing the receiver to observe end-of-stream (AC-5).
+- `delivery_handle()` → `DeliveryHandle` — cheaply cloneable (`Clone`), `Send + Sync` handle sharing the same `Arc<Mutex<RouterState>>`.
+- `DeliveryHandle::deliver(id, payload)` — synchronous `try_send`: on unknown/deregistered id emits a WARN tracing entry and returns normally (AC-2); on full queue evicts the subscription immediately (AC-3); on success places the payload in order (AC-1).
+
+Eight unit tests cover all five acceptance criteria, including a 4-sender concurrent delivery test (AC-4) that runs on a multi-thread Tokio executor. The `delivery_handle_is_clone_send_sync` test is a compile-time proof that the type bounds hold.
+
+**What was tried and rejected**
+
+Considered adding a `slow_since` timestamp map (mirroring `SubscriptionBus`'s deadline-based eviction) to give slow chat consumers a grace window before eviction. Rejected: the task says "evict rather than block or fail the producer" and the spec says eviction is "immediate" — the deadline-based approach would require spawning a timer or a second publish call, which adds complexity that AC-3 does not ask for.
+
+**Decisions**
+
+- Used `Arc<Mutex<RouterState>>` (sync mutex) rather than `Arc<tokio::sync::Mutex<...>>` so `deliver` stays synchronous: there is no `await` point inside the lock, so a sync mutex is cheaper and avoids holding the lock across awaits.
+- `ChatReplyReceiver` is a type alias for `mpsc::Receiver<serde_json::Value>`; the payload is a raw JSON `Value` so the router has no coupling to higher-level frame types (T-086 wires the framing).
+- Capacity constant `REPLY_QUEUE_CAPACITY = 64` matches the `SUBSCRIBER_CAPACITY` in `subscriptions.rs` for consistency.
+
+**What remains**
+
+Nothing for this task. T-086 wires `chat.open` to call `register` and spawns the chat forwarder; T-087 and later tasks handle frame framing, CLI changes, and end-to-end tests.
+
+Evidence: `cargo test -p admin-rpc chat_router` — 8 tests pass; `cargo test -p admin-rpc` — 102 tests pass; `cargo fmt --all -- --check` clean. Commit `5f02ad4` on `task/T-085-implement-chat-reply-router-in-admin-rpc`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
