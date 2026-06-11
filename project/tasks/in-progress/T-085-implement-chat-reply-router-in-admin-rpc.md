@@ -120,3 +120,26 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-11
+
+PASS
+
+Stage 1 (acceptance criteria): all five ACs confirmed against the implementation and tests.
+
+- AC-1: `deliver` places payloads in FIFO order on the per-subscription `mpsc` channel; test `deliver_makes_payload_available_on_registered_receiver_in_order` asserts two payloads arrive in the delivered sequence.
+- AC-2: `deliver` emits `tracing::warn!` for both unknown ids and deregistered ids and returns normally without error; two dedicated tests cover each case.
+- AC-3: `deliver` uses `try_send` and removes the sender on `TrySendError::Full`; test `deliver_evicts_slow_subscriber_when_queue_is_full` fills the queue to capacity, sends one overflow message, and asserts the subscription is absent from the registry.
+- AC-4: test `concurrent_delivery_from_multiple_handles_delivers_all_payloads` runs four tasks each delivering eight payloads on a `multi_thread` Tokio executor with four workers, and asserts all 32 arrive without loss.
+- AC-5: `deregister` drops the sender, closing the channel; test `deregister_closes_receiver_so_consumer_observes_end_of_stream` asserts `recv().await` returns `None` immediately after deregistration.
+
+Only the two specified files were modified (`chat_router.rs` new, `lib.rs` module declaration added).
+
+Stage 2 (code quality): no issues found.
+
+- Correctness: the sender is cloned out of the lock before calling `try_send`, so the lock is not held across any blocking call. The eviction re-lock on `TrySendError::Full` is correct and the absence of the key on a second concurrent eviction is a harmless no-op.
+- Tests: eight independent unit tests with descriptive names; each constructs its own fixtures; no shared mutable state.
+- Security: no hardcoded secrets; payload type is `serde_json::Value` (already validated upstream at the wire boundary).
+- Readability: module-level doc covers design, registration lifecycle, and delivery semantics; all public items are documented with AC cross-references; naming follows project conventions.
+- Performance: sync `Mutex` is appropriate (no `await` inside the lock); `try_send` is non-blocking; `REPLY_QUEUE_CAPACITY = 64` matches `SUBSCRIBER_CAPACITY` in `subscriptions.rs`.
+- Format: `cargo fmt --all -- --check` clean.
