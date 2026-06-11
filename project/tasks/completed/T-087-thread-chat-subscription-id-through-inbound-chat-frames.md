@@ -1,7 +1,7 @@
 ---
 id: T-087
 title: Thread chat subscription id through inbound chat frames
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-06-11'
