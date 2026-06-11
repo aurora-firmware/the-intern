@@ -281,6 +281,15 @@ Each `chat.send` request carries:
 | `application_identity` | yes | UUID identifying the sending application (from `bob.toml`) |
 | `context_id` | no | Conversation context; set by `--session` |
 
+Reply notifications arrive as `chat.message` frames on the same connection. Each
+notification carries:
+
+| Field | Description |
+|---|---|
+| `params.subscription` | The subscription id that identifies the open chat session |
+| `params.data` | The reply payload object |
+| `params.data.text` | Human-readable reply string |
+
 **Current limitation — reply generation requires Phase 2**
 
 The push channel is in place: `chat.message` notifications are delivered to the
