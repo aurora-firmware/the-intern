@@ -62,4 +62,30 @@ cargo test --workspace
 
 ## Work Log
 
+### Session 1 — 2026-06-12
+
+**What was done**
+
+Wired the `scheduler-adapter` actor into the `bob serve` startup and shutdown sequence, mirroring the pattern used for `chat-adapter`.
+
+1. Added `scheduler-adapter = { path = "../scheduler-adapter" }` to `crates/bob/Cargo.toml`.
+2. Added `_scheduler_adapter: scheduler_adapter::ReloadHandle` and `scheduler_adapter_join: JoinHandle<()>` fields to the `Runtime` struct in `serve.rs`. The scheduler join handle is non-Optional since the actor is unconditionally started.
+3. Added startup call `scheduler_adapter::start(requests_handler_handle.clone(), cfg.schedule.entries.clone())` in `try_start_subsystems`, between the chat-adapter block and admin-rpc start.
+4. In `run_shutdown_protocol`, destructured and dropped `_scheduler_adapter` (closing the watch channel → actor exits), then pushed `scheduler_adapter_join` into `all_joins` for phase-3 drain.
+5. Added two new tests: `start_subsystems_always_creates_scheduler_adapter_join_handle` and `shutdown_protocol_awaits_scheduler_adapter_and_completes_without_hanging` (5-second deadline).
+
+**What was tried and rejected**
+
+- Initially typed `scheduler_adapter_join` as `Option<JoinHandle<()>>` for structural symmetry with `chat_adapter_join`, then refactored to `JoinHandle<()>` (non-optional) since the scheduler has no enable/disable flag.
+
+**What remains**
+
+Nothing. All four acceptance criteria satisfied.
+
+**Obstacles Encountered**
+
+None. The scheduler-adapter crate API from T-093 was straightforward to consume.
+
+**Final branch state:** committed, clean, 26 serve-layer tests pass, full workspace green.
+
 ## Review
