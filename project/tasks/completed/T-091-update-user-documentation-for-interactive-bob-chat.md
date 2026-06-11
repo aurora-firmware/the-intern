@@ -1,7 +1,7 @@
 ---
 id: T-091
 title: Update user documentation for interactive bob chat
-status: pending
+status: completed
 priority: low
 assigned-role: developer
 created: '2026-06-11'
