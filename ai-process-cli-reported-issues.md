@@ -3,6 +3,15 @@
 Running log of bugs and friction observed while using the `ai-team` CLI and the
 slash-skills that wrap it. New entries at the top.
 
+## 2026-06-10 — `new-bug` skill/CLI flag mismatch hit again (B-008)
+
+The `new-bug` skill still prescribes `ai-team bug new --json --title "<title>"
+--description "<description>" --severity "<severity>"`. The CLI rejects
+`--title` (title is positional) and has no `--description` option. Same defect
+as the 2026-05-18 and 2026-05-20 entries; the skill file has still not been
+updated. Worked around by using the positional title and writing the
+description into the bug file body (B-008).
+
 ## 2026-05-28 — `integrate` skill's "move to completed" commit did not delete the in-progress copy
 
 **Symptom.** During `dev-loop` integration of T-084, the integrator's

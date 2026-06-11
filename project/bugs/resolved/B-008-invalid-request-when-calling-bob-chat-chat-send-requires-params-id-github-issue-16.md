@@ -1,0 +1,232 @@
+---
+id: B-008
+title: 'Invalid request when calling bob chat — chat.send requires params.id (GitHub
+  issue #16)'
+severity: high
+status: resolved
+created: '2026-06-10'
+---
+
+# Invalid request when calling bob chat — chat.send requires params.id (GitHub issue #16)
+
+## Summary
+
+Running `bob chat` against a running `bob serve` instance fails on the first
+message with `invalid request: server returned error response: code=-32602,
+message=chat.send requires params.id`. The chat client never includes the chat
+subscription id in its `chat.send` requests, so an interactive chat session
+cannot be used at all. Reported by the user in GitHub issue #16.
+
+## Reproduction Status
+
+Status: confirmed
+
+Confirmed by the reporter's logs in GitHub issue #16 and by code inspection:
+the client-side `chat.send` parameter builder has no `id` field, while the
+server-side handler unconditionally requires one.
+
+## Evidence
+
+- Logs / stack traces / failing assertions: from issue #16 —
+  `invalid request: server returned error response: code=-32602, message=chat.send requires params.id`
+- Failing command or test: `bob chat` (with `bob serve` running and the bob
+  extension loaded in pi agent)
+- Code inspection:
+  - `the-intern/service/crates/bob/src/cli/commands/chat.rs` —
+    `build_chat_send_params` builds only `session`/`text`/`application_identity`,
+    never `id`.
+  - `the-intern/service/crates/admin-rpc/src/dispatch.rs` (`handle_chat_send`) —
+    requires `params.id` to be a valid subscription id that references an open
+    chat subscription **on the same connection** (`registry.is_open_chat_subscription`).
+  - `chat.rs` `run()` sends `chat.send` via `call_admin`, which opens a **new**
+    admin-socket connection per call, while the `chat.open` subscription lives
+    on a different connection. Even with `params.id` added, a `chat.send` on a
+    fresh connection would be rejected with "params.id does not reference an
+    open chat subscription on this connection".
+  - `the-intern/service/crates/bob/src/client/admin_rpc.rs` — `Subscription<N>`
+    consumes the connection's reader/writer and only exposes `recv()`/`close()`;
+    it keeps `subscription_id` private and offers no way to issue calls on the
+    subscription's own connection.
+
+## Reproduction Steps
+
+1. Make sure the bob extension is loaded in pi agent.
+2. Start the server: `bob serve &`
+3. Start an interactive session: `bob chat`
+4. Type any message line. The client exits with the -32602 error.
+
+## Expected Behavior
+
+`bob chat` opens a chat subscription and each typed line is delivered to the
+chat adapter via `chat.send`; responses stream back as notifications and are
+printed to stdout.
+
+## Actual Behavior
+
+The first `chat.send` is rejected by the server:
+`invalid request: server returned error response: code=-32602, message=chat.send requires params.id`
+and the chat session terminates.
+
+## Environment
+
+- OS / platform: Linux (auroralab)
+- Language / runtime version: Rust workspace in `the-intern/service`
+- Relevant dependencies: pi agent with bob extension loaded
+- Branch / commit: main @ d203e81
+
+## Related
+
+- GitHub issue: #16
+- Task: n/a
+- Specification: n/a
+
+## Suspected Area
+
+Client side of the admin RPC chat flow:
+- `the-intern/service/crates/bob/src/cli/commands/chat.rs` (missing `params.id`,
+  `chat.send` issued on a separate connection from the `chat.open` subscription)
+- `the-intern/service/crates/bob/src/client/admin_rpc.rs` (`Subscription` API has
+  no way to send requests on the subscription's connection)
+
+The server-side validation in `admin-rpc/src/dispatch.rs` appears to implement
+the intended contract; the client was never finished to match it.
+
+## Fix Verification
+
+```bash
+# Unit/integration tests for the chat client path
+cargo test -p bob
+
+# Manual end-to-end check (requires pi agent with bob extension):
+# bob serve &
+# bob chat   # type a line; expect no -32602 error and a streamed response
+```
+
+## Diagnosis Log
+
+<!-- Mandatory before implementation. Append one entry before changing production code. Format:
+### Diagnosis N — YYYY-MM-DD
+Reproduction status:
+Evidence captured:
+Isolated fault:
+Root cause or fault hypothesis:
+Planned verification:
+-->
+
+### Diagnosis 1 — 2026-06-10
+
+Reproduction status:
+Live end-to-end reproduction was not attempted because the `pi` binary at `/home/daneel/.npm-global/bin/pi` is a different tool (an npm global), not the pi-agent prerequisite required by CLAUDE.md. The defect is fully confirmed by code inspection and is unambiguous.
+
+Evidence captured:
+1. `build_chat_send_params` (`the-intern/service/crates/bob/src/cli/commands/chat.rs`, lines 200–213) builds params containing only `session`, `text`, and `application_identity`. The `id` field (the chat subscription id) is never included.
+2. `handle_chat_send` (`the-intern/service/crates/admin-rpc/src/dispatch.rs`, lines 344–352) unconditionally requires `params.id` to be present and to reference an open chat subscription in the per-connection `ConnectionRegistry`. When `params.id` is absent it returns JSON-RPC -32602 with message `"chat.send requires params.id"` — the exact error string from the bug report.
+3. `call_admin` (`the-intern/service/crates/bob/src/cli/commands.rs`, lines 62–68) creates a brand-new `AdminClient` (i.e., a new Unix socket connection) for every `chat.send` call. The `chat.open` subscription was established on a different connection (`connect_admin` at chat.rs line 92). The server's `ConnectionRegistry` is per-connection, so even if `params.id` were added, the id would reference a subscription on a different connection, causing a second error: `"params.id does not reference an open chat subscription on this connection"`.
+4. `Subscription<N>` (`the-intern/service/crates/bob/src/client/admin_rpc.rs`, lines 93–174) holds both `reader` and `writer` for the subscription's connection and exposes only `recv()` and `close()`. The `subscription_id` field is private and there is no `call()` or `send()` method on it, so there is no way to send additional requests on the subscription's own connection.
+5. The existing unit test `chat_opens_with_session_and_sends_each_input_line` uses a fake `send_chat` closure that does not validate params against the server protocol, so it passes despite the missing `id` field and the wrong-connection problem.
+
+Isolated fault:
+There are two coupled faults, both on the client side:
+- **Fault A — missing `params.id`**: `build_chat_send_params` never reads or forwards the subscription id returned by `chat.open`.
+- **Fault B — split-connection**: `chat.send` is dispatched via `call_admin`, which dials a fresh connection, while `chat.open` lives on the `Subscription`'s connection. The server validates that the subscription id belongs to the calling connection, so `chat.send` must travel over the same connection as `chat.open`.
+
+Root cause or fault hypothesis:
+The `Subscription<N>` API was built to support only streaming (recv) and teardown (close). The `chat` command needed a bidirectional use of the same connection — open, then send messages on it, then close — but no call path was implemented. `run_with_parts_async` was wired to use two independent closures (`open_chat` and `send_chat`) with no connection sharing; `send_chat` was connected to `call_admin`, which dials a new socket. As a result the subscription id is unknown to the send path and the connection check on the server is guaranteed to fail.
+
+The fix must: (1) expose the subscription id from `Subscription<N>` (or add a `call` method to send requests on the subscription's connection), and (2) rewrite the `chat.send` path to send on the subscription connection with the correct id rather than opening a new connection.
+
+Planned verification:
+- Write a unit test for `build_chat_send_params` (or the send closure in `run_with_parts`) that asserts the emitted params include `id` matching the subscription id returned by `chat.open`.
+- Write a unit test for `run_with_parts_async` where the fake `send_chat` closure asserts that `params["id"]` equals the id returned by the fake `open_chat`.
+- Optionally add an integration test using a real Unix socket fake server that exercises the full `chat.open` → `chat.send` round-trip on the same connection.
+- `cargo test -p bob` must pass with all new tests green.
+
+## Work Log
+
+<!-- Mandatory. Append one entry per session boundary. Format:
+### Session N — YYYY-MM-DD
+Free-prose body: what was done this session, what was tried and
+rejected, decisions made, what remains for next session.
+
+Start every session by reading the entries below.
+The final entry serves as the handoff to the reviewer. -->
+
+### Session 1 — 2026-06-10
+
+The fix addresses both coupled client-side faults identified in the Diagnosis Log.
+
+**What was done:**
+
+Fault A (missing `params.id`) and Fault B (fresh connection per `chat.send`) were fixed together since they share the same root cause: the `Subscription<N>` API had no way to send requests on the subscription's own connection.
+
+*`Subscription<N>` in `admin_rpc.rs`*: Added two new public members. `subscription_id()` exposes the server-assigned subscription id. `call()` sends a JSON-RPC request on the subscription's connection, reads frames in a loop buffering any notification frames it encounters, and returns once a response with the matching id arrives. `recv()` was updated to drain the notification buffer before reading from the socket, ensuring buffered notifications are delivered in order. Two new private fields back this: `next_call_id` (starting at `close_request_id + 1` to avoid collision with the pre-allocated close request id) and `notification_buffer` (a `VecDeque<Value>`). A private `is_notification()` helper distinguishes notifications (frames with `method` but no `id`, or null `id`) from responses.
+
+*`chat.rs`*: The `ChatSubscription` trait gained `id()` and `send()` methods. The `send_chat` closure was removed from `run_with_parts_async` and `run_with_parts` entirely — `chat.send` is now dispatched through `subscription.send()`, which uses the subscription's own connection. `build_chat_send_params` now takes the subscription id as a parameter and includes it as `params.id`. The `run()` entry point no longer imports `call_admin`.
+
+**Tests added:**
+- `subscription_id_returns_the_id_from_the_subscribe_response` — verifies the new accessor
+- `subscription_call_sends_request_and_returns_result` — end-to-end with a real fake Unix socket server
+- `subscription_call_buffers_interleaved_notifications` — verifies a notification arriving before the `chat.send` response is buffered and retrievable via `recv()`
+- `chat_send_params_include_subscription_id_from_chat_open` — regression test directly capturing B-008: asserts `params.id` equals the id from `chat.open`
+- `chat_opens_with_session_and_sends_each_input_line` — updated to use new `FakeChatSubscription` shape with `id()` and `send()`, and to assert the `id` field in sent params
+
+**What was tried and rejected:**
+
+An alternative design was briefly considered where `Subscription::call()` would be non-blocking and use a `select!` loop shared with `recv()` — rejected because it would require restructuring `run_with_parts_async` more invasively with explicit frame-dispatch machinery. The chosen design (buffer notifications during `call()`, drain buffer on `recv()`) is simpler, correct for the sequential send→recv pattern of `bob chat`, and matches the existing architecture's style.
+
+**What remains:** None. All acceptance criteria are met and all 434 workspace tests pass (`cargo test --workspace`; `cargo fmt --check` clean). Implementation commit on the bug branch: `56549bc` — `fix(chat): route chat.send through subscription connection with params.id`.
+
+## Review
+
+<!-- Reviewer: append verdict here after each review cycle.
+
+### Review Verdict — YYYY-MM-DD
+PASS | FAIL | ESCALATE
+-->
+
+### Review Verdict — 2026-06-10
+
+PASS
+
+**Stage 1 — Bug Criteria**
+
+Diagnosis Log check:
+- Reproduction status: recorded — live end-to-end not attempted because the `pi` binary on PATH is an unrelated npm tool, not the pi-agent prerequisite. This is explicitly documented and acceptable given CLAUDE.md's hard rule on not substituting for the missing prerequisite. Code-inspection confirmation is unambiguous.
+- Evidence captured: five numbered evidence points covering the exact error string, the server-side validation logic, the split-connection mechanism, and the gap in the existing test.
+- Isolated fault: Fault A (missing `params.id`) and Fault B (split-connection) documented with precision.
+- Root cause: documented — `Subscription<N>` lacked any way to send requests on the subscription's own connection; `run_with_parts_async` used two independent closures with no connection sharing.
+
+Fix alignment check:
+- Fault A resolved: `build_chat_send_params` now receives and includes `subscription_id` as `params["id"]` in both the session and no-session branches (`chat.rs` lines 199–222 post-fix).
+- Fault B resolved: `send_chat` closure and `call_admin` path entirely removed; `chat.send` now dispatched via `subscription.send()`, which calls `Subscription::call()` on the subscription's own connection.
+- No unrelated behavior added: the diff is scoped to the two files identified in the Diagnosis Log; no new commands, routes, or public API surface beyond what the fix requires.
+
+Fix Verification steps:
+- `cargo test -p bob`: run on `bug/B-008-bob-chat-send-requires-params-id`; all 90 unit tests and all integration/doc tests pass (0 failures).
+- `cargo fmt --check`: clean (no output).
+- Manual end-to-end (`bob serve` / `bob chat`): not runnable — pi-agent prerequisite unavailable. The Work Log records this explicitly and the rationale is sound; the fix is fully verifiable by unit tests that use real Unix sockets.
+
+**Stage 2 — Code Quality**
+
+Correctness:
+- `next_call_id` starts at `close_request_id + 1`, preventing id collision with the pre-allocated close request id. Close request ids are stable across `call()` invocations.
+- `call()` loops until a response (non-notification) frame arrives, buffering all interleaved notifications. The `is_notification` helper correctly identifies JSON-RPC 2.0 notifications (has `method`, absent or null `id`).
+- `recv()` drains `notification_buffer` (FIFO via `VecDeque`) before reading from the wire, preserving delivery order.
+- `close()` reads directly from the wire without first draining `notification_buffer`. This is acceptable: any in-buffer frames are already off the wire and `close()` consumes the struct, so the buffer is discarded after close. The risk of `close()` encountering an unexpected notification on the wire (if the server sends one between the last `call()` response and the close response) pre-existed this fix and is not a regression introduced here.
+- `build_chat_send_params` includes `id` in both session and no-session branches — both cases covered.
+
+Tests:
+- `subscription_id_returns_the_id_from_the_subscribe_response`: covers the new accessor.
+- `subscription_call_sends_request_and_returns_result`: end-to-end with a real fake Unix socket server; verifies request framing, params contents, and result deserialization.
+- `subscription_call_buffers_interleaved_notifications`: verifies the notification-buffering contract.
+- `chat_send_params_include_subscription_id_from_chat_open`: direct regression test for B-008 — asserts `params["id"]` equals the subscription id returned by `chat.open`.
+- `chat_opens_with_session_and_sends_each_input_line`: updated to assert the `id` field in all sent params; no longer masks the bug.
+- Tests are independent (each uses a unique Unix socket path via `unique_socket_path`).
+
+Security: no secrets, no unvalidated external input, no new permissions.
+
+Readability: names are descriptive and consistent with the codebase style; `is_notification` and `parse_call_response` are private helpers with focused responsibilities; comments explain design choices (why `next_call_id` starts above `close_request_id`); no dead code.
+
+Performance: `VecDeque` for the notification buffer is appropriate; no blocking in hot paths; no resource leaks.
+
+Both stages pass. Next owner: Bug-Fix Loop.
