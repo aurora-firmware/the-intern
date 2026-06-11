@@ -204,10 +204,11 @@ For details on the policy file format and where it lives, see the
 
 Open an interactive chat session with the Intern.
 
-`bob chat` subscribes to the chat channel, then reads lines from stdin and
-sends each one as a `chat.send` message. Responses from the service are printed
-to stdout as they arrive. Press Ctrl-C or close stdin (Ctrl-D) to end the
-session.
+`bob chat` opens a chat subscription and then reads lines from stdin. Each line
+is sent to the service as a `chat.send` request. Replies delivered by the
+service arrive as `chat.message` notifications and are printed to stdout as they
+come in — send and receive happen concurrently on the same connection. Press
+Ctrl-C or close stdin (Ctrl-D) to end the session.
 
 Each message you send carries a self-asserted application identity (a UUID
 configured as `chat_application_identity`). The service uses this identity for
@@ -217,8 +218,8 @@ as a user you only need to know that your `bob.toml` controls which identity
 is presented on your behalf.
 
 Use `bob chat` when you want to converse directly with the Intern from the
-command line. Use `--session` to attach to an existing named session rather
-than starting a new one.
+command line. Use `--session` to associate messages with a specific conversation
+context.
 
 **Example — start a new chat:**
 
@@ -226,22 +227,18 @@ than starting a new one.
 bob chat
 ```
 
-Type a message and press Enter. The Intern's reply appears below it. Press
-Ctrl-C to close the session.
+Type a message and press Enter. Press Ctrl-C to close the session.
 
-```
-Hello, what can you help me with today?
-I can help you review code, draft documents, answer questions, and more.
-```
-
-**Example — attach to an existing session:**
+**Example — attach to an existing conversation context:**
 
 ```bash
 bob chat --session session-abc123
 ```
 
-This resumes the conversation under `session-abc123` rather than opening a
-fresh one.
+`--session` sets the `context_id` carried by every `chat.send` request on this
+session. The service uses it to route messages to the right conversation
+context. Omitting `--session` sends messages without a context id, which is
+fine for a fresh conversation.
 
 **Example — pipe input non-interactively:**
 
@@ -249,7 +246,7 @@ fresh one.
 echo "Summarise the last three commits" | bob chat
 ```
 
-`bob chat` sends the line, prints the response, and exits when stdin closes.
+`bob chat` sends the line and exits when stdin closes.
 
 **Example — JSON output for downstream processing:**
 
@@ -258,4 +255,40 @@ bob chat --json
 ```
 
 With `--json`, each notification from the service is printed as a single JSON
-object on its own line, making the output easy to parse with `jq` or a script.
+object on its own line. Reply notifications have the shape:
+
+```json
+{"jsonrpc":"2.0","method":"chat.message","params":{"subscription":"<sub-id>","data":{"text":"<reply text>"}}}
+```
+
+`params.subscription` is the subscription id minted when `chat.open` was sent.
+`params.data.text` carries the human-readable reply text. This makes the output
+easy to parse with `jq` or a script.
+
+**Wire contract**
+
+`chat.open` is sent without parameters when the session starts. The service
+returns a subscription id that is used automatically for the rest of the
+session.
+
+Each `chat.send` request carries:
+
+| Field | Required | Description |
+|---|---|---|
+| `id` | yes | Subscription id from `chat.open` |
+| `text` | yes | The message text typed by the user |
+| `application_identity` | yes | UUID identifying the sending application (from `bob.toml`) |
+| `context_id` | no | Conversation context; set by `--session` |
+
+**Current limitation — reply generation requires Phase 2**
+
+The push channel is in place: `chat.message` notifications are delivered to the
+subscribing client whenever a reply is injected at the service's delivery
+interface. However, the component that generates replies (the pi-agent prompt
+pipeline, roadmap Phase 2) has not yet landed. In production today, `bob chat`
+sends messages successfully and the service accepts them, but no reply is
+produced and nothing is printed. Only tests exercise the full round-trip by
+injecting replies directly at the service boundary.
+
+Once the Phase 2 pipeline is integrated, replies will appear automatically
+without any change to the `bob chat` command or its flags.
