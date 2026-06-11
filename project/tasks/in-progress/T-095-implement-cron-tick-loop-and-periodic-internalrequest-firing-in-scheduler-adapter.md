@@ -88,4 +88,44 @@ cargo test --workspace
 
 ## Work Log
 
+### Session 1 — 2026-06-12
+
+**What was done**
+
+Implemented the cron tick loop in `scheduler-adapter`, satisfying all five acceptance criteria.
+
+**Cargo.toml changes:**
+- Added `croner = "3"` and `chrono = "0.4"` to dependencies
+- Added `"time"` feature to tokio dependency
+- Added `"test-util"` feature to tokio dev-dependencies (required for `tokio::time::pause()` and `advance()`)
+
+**Implementation:**
+- Added `JobState` struct holding fixed `ChannelId`, `UserId`, and `ScheduleEntry` — created once per job at actor startup. Fixed IDs logged at `INFO` at startup.
+- Updated `Actor` to hold `intake: IntakeHandle` (was `_intake`) and `jobs: Vec<JobState>` (was `entries: Vec<ScheduleEntry>`).
+- For each job: spawns a `tokio::spawn` task running `run_job_tick_loop`: parses cron with `CronParser::builder().seconds(Seconds::Disallowed).build()`, computes duration to next fire, sleeps via `tokio::time::sleep`, then submits `InternalEvent { kind: DeliveryKind::Periodic, payload: job.prompt }` with `RequestContext { sender: user_id, source: channel_id, context_id: Some(job.id), reply_address: None }`.
+- Submit errors logged as `WARN`, loop continues — actor does not crash (AC-3).
+- On shutdown, actor aborts all per-job task handles.
+
+**Tests added:**
+- `cron_tick_submits_periodic_event_with_correct_payload_and_context` (AC-1 + AC-2)
+- `cron_tick_reuses_same_channel_id_and_user_id_across_multiple_ticks` (AC-2)
+- `actor_continues_running_when_intake_submit_returns_error` (AC-3)
+
+**What was tried and rejected**
+
+- Single large `advance(130s)`: after the first tick fires and the job registers a new sleep, the advance has already passed. Switched to per-tick `advance(65s)` steps.
+- Advancing without prior yields: actor tasks hadn't registered their timers. Added pre-advance `yield_now()` calls.
+
+**What remains**
+
+Nothing. All acceptance criteria met.
+
+**Obstacles Encountered**
+
+- `tokio::time::pause()`/`advance()` require the `test-util` feature (dev-dependencies only).
+- `croner` requires `chrono` for `DateTime<Utc>`; added explicitly to bridge to `std::time::Duration`.
+- Task scheduling in `current_thread` runtime requires yielding before `advance()` so per-job tasks register their timers first.
+
+**Final branch state:** committed, clean, 5 scheduler-adapter tests pass, full workspace green.
+
 ## Review
