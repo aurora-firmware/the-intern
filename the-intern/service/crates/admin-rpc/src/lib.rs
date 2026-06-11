@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod chat_router;
 pub mod dispatch;
 pub mod listener;
 pub mod peer_cred;
