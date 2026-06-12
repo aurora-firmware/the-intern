@@ -217,6 +217,15 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     info!("scheduler-adapter actor started");
 
     info!("starting admin-rpc actor");
+    // Pass the config file path to admin-RPC so that schedule.* methods can
+    // read and write the [[schedule]] section of bob.toml (T-097).
+    // An empty path (no config file loaded) means schedule persistence is
+    // unavailable; the schedule.* methods will return -32601 in that case.
+    let maybe_config_path = if cfg.config_path.as_os_str().is_empty() {
+        None
+    } else {
+        Some(cfg.config_path.clone())
+    };
     let admin_rpc_cfg = admin_rpc::Config {
         admin_sock_path: cfg.admin_sock_path.clone(),
         supervisor: Some(pi_agent_supervisor_handle.clone()),
@@ -227,6 +236,7 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         // schedule.* methods (T-097) can push updated job tables to the actor.
         // The primary handle is retained in the Runtime for shutdown ordering.
         scheduler: Some(scheduler_reload_handle.clone()),
+        config_path: maybe_config_path,
         ..admin_rpc::Config::default()
     };
     let (admin_rpc_handle, admin_rpc_join) = admin_rpc::start(admin_rpc_cfg).map_err(|e| {
