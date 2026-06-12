@@ -126,3 +126,25 @@ None.
 **Final branch state:** 3 commits above dev-agent. `cargo test --workspace` passes with zero failures (scheduler-adapter: 6, admin-rpc: 111, bob: 104).
 
 ## Review
+
+### Review Verdict — 2026-06-12
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1: `cargo build -p admin-rpc` and `cargo build -p bob` both compile cleanly with no errors or warnings. PASS.
+- AC-2: `with_scheduler_handle` builder tested in `dispatcher_with_scheduler_handle_does_not_panic`; `start()` wires it via `if let Some(h) = cfg.scheduler.clone() { dispatcher = dispatcher.with_scheduler_handle(h); }`, consistent with the `chat_adapter` pattern. PASS.
+- AC-3: Placeholder arm `"schedule.add" | "schedule.remove" | "schedule.list" | "schedule.reload"` returns `CODE_METHOD_NOT_FOUND` (-32601). Covered by two tests (`dispatch_schedule_add_returns_method_not_found`, `dispatch_schedule_namespace_methods_all_return_method_not_found`). PASS.
+- AC-4: `cargo test --workspace` — all suites pass: admin-rpc 111, bob 104, scheduler-adapter 6. Zero failures. PASS.
+
+**Stage 2 — Code Quality**
+
+- **Correctness:** `ReloadHandle` redesign is coherent. The actor loop uses `borrow_and_update()` correctly to consume the value and prevent re-triggering on the same message. `continue` in the empty-jobs branch re-enters the outer loop cleanly. Shutdown-via-drop is preserved in both branches via `Err(_) => break`. Task abort-before-rebuild is correct in both the reload and shutdown paths.
+- **Tests:** New test in `scheduler-adapter` covers reload without dropping the actor. Three new tests in `admin-rpc` cover AC-2 and AC-3. All tests are independent with no shared mutable state.
+- **Security:** No hardcoded secrets; no external input in scope for this task.
+- **Readability:** Names are descriptive; `build_job_states` and `spawn_job_tasks` helpers are focused single-purpose functions. No dead code or commented-out blocks.
+- **Performance:** No unnecessary allocations; `borrow_and_update().clone()` is the minimal copy needed. Task abort loops are correctly structured.
+- **Files touched:** Only the four files listed in the task spec (`admin-rpc/Cargo.toml`, `admin-rpc/src/lib.rs`, `admin-rpc/src/dispatch.rs`, `bob/src/serve.rs`) plus `scheduler-adapter/src/lib.rs` for the `ReloadHandle` type change described in the task description. No unexpected files modified.
+
+Minor observation (non-blocking): `cfg.scheduler.clone()` in `admin-rpc/src/lib.rs` follows the pre-existing `cfg.chat_adapter.clone()` style immediately above it; a direct move would suffice but this is consistent with the surrounding code.
