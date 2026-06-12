@@ -72,4 +72,34 @@ mdbook build
 
 ## Work Log
 
+### Session 1 — 2026-06-12
+
+**What was done**
+
+Added a "Scheduled jobs" section to `the-intern/docs/src/operator-guide/index.md`, inserted after the policy section (operator guide uses a single `index.md`, no sub-pages).
+
+Read the schedule CLI source (`cli/mod.rs`, `commands/schedule.rs`) and `config.rs` for exact flag names. Read ADR-006 for the authoritative skip-on-down wording.
+
+Added 109 lines covering:
+- Concept introduction with ADR-006 skip-on-down statement (AC-4)
+- `[[schedule]]` TOML table format with a "check email every 15 minutes" worked example (AC-2)
+- Cron expression field-order diagram (minute / hour / day-of-month / month / day-of-week)
+- All four `bob schedule` subcommands with example invocations and flag tables (AC-3)
+
+`mdbook build` passes without errors.
+
+**What was tried and rejected**
+
+Nothing — structure was clear from the first read.
+
+**What remains**
+
+Nothing. All acceptance criteria met.
+
+**Obstacles Encountered**
+
+None.
+
+**Final branch state:** 1 commit on branch. `mdbook build` clean.
+
 ## Review
