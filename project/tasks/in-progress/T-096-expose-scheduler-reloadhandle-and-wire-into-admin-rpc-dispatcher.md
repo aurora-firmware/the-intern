@@ -95,4 +95,34 @@ cargo test --workspace
 
 ## Work Log
 
+### Session 1 — 2026-06-12
+
+**What was done**
+
+Three connected changes: redesign `ReloadHandle` in `scheduler-adapter`, add scheduler plumbing to `admin-rpc`, and clone the handle into `serve.rs`.
+
+1. **`scheduler-adapter/src/lib.rs`** — Changed `ReloadHandle` from `watch::Sender<()>` to `watch::Sender<Vec<ScheduleEntry>>`. Added `pub fn reload(&self, entries: Vec<ScheduleEntry>) -> Result<...>`. Refactored actor `run()` to `loop { spawn_job_tasks → wait_for_changed → rebuild }`, handling both reload and shutdown in both empty-job and non-empty-job cases. Added one new test (`reload_handle_reload_sends_new_entries_without_dropping_actor`). All 5 original tests still pass (6 total).
+
+2. **`admin-rpc/Cargo.toml`** — Added `scheduler-adapter = { path = "../scheduler-adapter" }`.
+
+3. **`admin-rpc/src/dispatch.rs`** — Added `scheduler: Option<scheduler_adapter::ReloadHandle>` field to `Dispatcher`, `with_scheduler_handle` builder, placeholder arm matching `"schedule.add" | "schedule.remove" | "schedule.list" | "schedule.reload"` returning `-32601 Method not found`. Added 3 tests.
+
+4. **`admin-rpc/src/lib.rs`** — Added `pub scheduler: Option<scheduler_adapter::ReloadHandle>` to `Config`, wired in `start()`.
+
+5. **`bob/src/serve.rs`** — Cloned `ReloadHandle` into `admin_rpc::Config::scheduler`; primary handle retained in `Runtime` for shutdown ordering.
+
+**What was tried and rejected**
+
+Initial `TODO(T-096+)` stub in actor reload loop discarded — task requires actor to replace job table on reload. Refactored to `loop { spawn → wait → rebuild }` to avoid duplicating reload/shutdown logic.
+
+**What remains**
+
+Nothing. T-097 will implement real `schedule.add/remove/list/reload` handlers using `ReloadHandle::reload`.
+
+**Obstacles Encountered**
+
+None.
+
+**Final branch state:** 3 commits above dev-agent. `cargo test --workspace` passes with zero failures (scheduler-adapter: 6, admin-rpc: 111, bob: 104).
+
 ## Review
