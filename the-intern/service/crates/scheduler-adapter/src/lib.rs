@@ -59,11 +59,12 @@ impl ReloadHandle {
 // Internal types
 // ---------------------------------------------------------------------------
 
-/// Per-job state created once at actor startup.
+/// Per-job state created when the job table is (re)built.
 ///
-/// The `channel_id` and `user_id` are fixed for the lifetime of the job so
-/// that every tick for a given job appears to come from the same virtual
-/// channel and user. Operators can reference these IDs in policy rules.
+/// The `channel_id` and `user_id` are derived deterministically from the job
+/// `id`, so they stay stable across reloads and process restarts. Every tick
+/// for a given job appears to come from the same virtual channel and user, and
+/// operators can reference these IDs in policy rules.
 struct JobState {
     entry: ScheduleEntry,
     channel_id: ChannelId,
@@ -212,14 +213,20 @@ async fn run_job_tick_loop(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Build per-job state from a slice of entries, assigning stable IDs.
+/// Build per-job state from a list of entries.
+///
+/// Each job's `ChannelId` and `UserId` are derived deterministically from its
+/// `id`, so rebuilding the table on reload yields the *same* identities for
+/// unchanged jobs (and the same identities across process restarts). This
+/// keeps the identity that policy rules reference stable, instead of being
+/// re-randomised every time the table is rebuilt.
 fn build_job_states(entries: Vec<ScheduleEntry>) -> Vec<JobState> {
     entries
         .into_iter()
         .map(|entry| JobState {
+            channel_id: ChannelId::from_name(&entry.id),
+            user_id: UserId::from_name(&entry.id),
             entry,
-            channel_id: ChannelId::new(),
-            user_id: UserId::new(),
         })
         .collect()
 }
@@ -280,8 +287,9 @@ fn spawn_job_tasks(intake: &IntakeHandle, jobs: &[JobState]) -> Vec<tokio::task:
 /// - A [`JoinHandle`] for the spawned actor task.  Await it after dropping
 ///   the last `ReloadHandle` to confirm clean shutdown.
 ///
-/// For each `ScheduleEntry`, a fixed `ChannelId` and `UserId` are created
-/// at startup. These IDs are reused on every tick for that job so that
+/// For each `ScheduleEntry`, a `ChannelId` and `UserId` are derived
+/// deterministically from the job `id`, so they stay stable across reloads and
+/// restarts. These IDs are reused on every tick for that job so that
 /// policy rules can reference them consistently. They are logged at `INFO`
 /// level when each job is registered.
 #[must_use]
@@ -289,10 +297,16 @@ pub fn start(intake: IntakeHandle, entries: Vec<ScheduleEntry>) -> (ReloadHandle
     // The watch channel carries the reload signal.  The receiver is held by the
     // actor; the sender is wrapped in ReloadHandle.  When the last sender clone
     // is dropped, `reload_rx.changed()` returns Err and the actor exits.
-    let (tx, rx) = watch::channel(Vec::<ScheduleEntry>::new());
+    //
+    // Seed it with the startup entries (not an empty vec) so the live job table
+    // read over admin-RPC — `schedule.list` and the `schedule.add`/`remove`
+    // pre-checks — matches the jobs actually running from the first tick,
+    // rather than only after the first reload.
+    let (tx, rx) = watch::channel(entries.clone());
     let handle = ReloadHandle { tx };
 
-    // Build per-job state with fixed, stable IDs created once at startup.
+    // Build per-job state with identities derived deterministically from each
+    // job id (see `build_job_states`).
     let jobs = build_job_states(entries);
 
     let actor = Actor {
@@ -516,6 +530,43 @@ mod tests {
         assert_eq!(
             source_0, source_1,
             "ChannelId must be the same across ticks of the same job"
+        );
+    }
+
+    // Regression: rebuilding the job table (what reload does) must yield the
+    // SAME identities for an unchanged job, instead of re-randomising them and
+    // breaking policy rules that reference a job's ChannelId/UserId.
+    #[test]
+    fn build_job_states_derives_stable_identities_across_rebuilds() {
+        let entry = ScheduleEntry {
+            id: "job-a".to_owned(),
+            cron: "* * * * *".to_owned(),
+            prompt: "a".to_owned(),
+        };
+
+        let first = super::build_job_states(vec![entry.clone()]);
+        // A reload that adds an unrelated job still rebuilds job-a's state.
+        let second = super::build_job_states(vec![
+            entry,
+            ScheduleEntry {
+                id: "job-b".to_owned(),
+                cron: "* * * * *".to_owned(),
+                prompt: "b".to_owned(),
+            },
+        ]);
+
+        assert_eq!(
+            first[0].channel_id, second[0].channel_id,
+            "ChannelId must be stable across a table rebuild"
+        );
+        assert_eq!(
+            first[0].user_id, second[0].user_id,
+            "UserId must be stable across a table rebuild"
+        );
+        // Distinct jobs must still get distinct identities.
+        assert_ne!(
+            second[0].channel_id, second[1].channel_id,
+            "different jobs must have different ChannelIds"
         );
     }
 

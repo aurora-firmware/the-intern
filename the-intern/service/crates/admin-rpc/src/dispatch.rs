@@ -70,6 +70,11 @@ pub struct Dispatcher {
     /// Required for `schedule.add`, `schedule.remove`, and `schedule.reload`
     /// to persist entries.  When absent those methods return -32601.
     config_path: Option<PathBuf>,
+    /// Serializes `schedule.add`/`schedule.remove` so concurrent admin clients
+    /// cannot interleave the load→modify→write→reload sequence and silently
+    /// drop one another's update. Shared across all per-connection clones of
+    /// the dispatcher via the `Arc`.
+    schedule_write_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     started_at: Instant,
     version: &'static str,
 }
@@ -133,6 +138,7 @@ impl Dispatcher {
             chat_router: None,
             scheduler: None,
             config_path: None,
+            schedule_write_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             started_at: Instant::now(),
             version,
         }
@@ -801,6 +807,11 @@ impl Dispatcher {
             ));
         }
 
+        // Serialize against concurrent schedule mutations so the duplicate
+        // check and the load→write→reload below cannot interleave with another
+        // add/remove and silently lose an update.
+        let _write_guard = self.schedule_write_lock.lock().await;
+
         // Check that the id is not already in the live table.
         {
             let live = handle.subscribe();
@@ -866,6 +877,11 @@ impl Dispatcher {
                 ));
             }
         };
+
+        // Serialize against concurrent schedule mutations so the existence
+        // check and the load→write→reload below cannot interleave with another
+        // add/remove and silently lose an update.
+        let _write_guard = self.schedule_write_lock.lock().await;
 
         // Verify the id exists in the live table.
         {
@@ -1050,7 +1066,7 @@ impl Dispatcher {
         entries: Vec<ScheduleEntry>,
         handle: &scheduler_adapter::ReloadHandle,
     ) -> Result<(), DispatchOutcome> {
-        write_schedule_entries_to_toml(config_path, &entries).map_err(|e| {
+        bob_core::types::schedule::write_schedule_entries(config_path, &entries).map_err(|e| {
             DispatchOutcome::Err(ErrorResponse::error(
                 Value::Null,
                 CODE_METHOD_NOT_FOUND,
@@ -1175,54 +1191,6 @@ pub fn map_service_error(id: Value, error: &ServiceError) -> ErrorResponse {
 /// Returns the current UTC time as an RFC 3339 string.
 fn chrono_timestamp() -> String {
     chrono::Utc::now().to_rfc3339()
-}
-
-/// Atomically replace the `[[schedule]]` array in the TOML file at `path`
-/// with `entries`, preserving all other config keys.
-///
-/// Writes to a temporary file in the same directory then renames, so the
-/// on-disk state is never partially written.
-fn write_schedule_entries_to_toml(
-    path: &std::path::Path,
-    entries: &[ScheduleEntry],
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let content = if path.exists() {
-        std::fs::read_to_string(path)?
-    } else {
-        String::new()
-    };
-
-    let mut doc: toml_edit::DocumentMut = content.parse()?;
-
-    // Replace the [[schedule]] array.
-    doc.remove("schedule");
-    if !entries.is_empty() {
-        let mut arr = toml_edit::ArrayOfTables::new();
-        for entry in entries {
-            let mut table = toml_edit::Table::new();
-            table.insert("id", toml_edit::value(entry.id.as_str()));
-            table.insert("cron", toml_edit::value(entry.cron.as_str()));
-            table.insert("prompt", toml_edit::value(entry.prompt.as_str()));
-            arr.push(table);
-        }
-        doc.insert("schedule", toml_edit::Item::ArrayOfTables(arr));
-    }
-
-    // Atomic write via temp-file + rename.
-    let parent = path.parent().unwrap_or(std::path::Path::new("."));
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp_path = parent.join(format!(".bob-config-tmp-{unique}"));
-
-    std::fs::write(&tmp_path, doc.to_string())?;
-    if let Err(e) = std::fs::rename(&tmp_path, path) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return Err(Box::new(e));
-    }
-
-    Ok(())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

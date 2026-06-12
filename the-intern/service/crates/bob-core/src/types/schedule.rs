@@ -1,4 +1,8 @@
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
+
+use crate::error::{ServiceError, ServiceResult};
 
 /// A validated schedule job entry sourced from the `[[schedule]]` TOML section.
 ///
@@ -10,4 +14,188 @@ pub struct ScheduleEntry {
     pub id: String,
     pub cron: String,
     pub prompt: String,
+}
+
+/// Atomically replace the `[[schedule]]` array in the TOML file at `path` with
+/// `entries`, preserving all other config keys and comments.
+///
+/// This is the single writer shared by both the `bob` config layer and the
+/// admin-RPC `schedule.*` handlers, so the persistence behaviour cannot drift
+/// between the tested path and the live path.
+///
+/// # Atomicity
+///
+/// The new document is written to a temporary file in the same directory and
+/// then renamed over `path`, so an observer never sees a partial write: either
+/// the old file or the fully written new file is visible.
+///
+/// # Permissions
+///
+/// On Unix the temporary file is set to the original file's mode before the
+/// rename, so an operator-restricted config (e.g. `0600`) is not silently
+/// widened to the process umask default when it is rewritten.
+///
+/// # Errors
+///
+/// Returns `ServiceError::Configuration` when the existing file cannot be
+/// parsed and `ServiceError::Persistence` when it cannot be read, written, or
+/// renamed.
+pub fn write_schedule_entries(path: &Path, entries: &[ScheduleEntry]) -> ServiceResult<()> {
+    // Read and parse the existing TOML, or start with an empty document.
+    let content = if path.exists() {
+        std::fs::read_to_string(path).map_err(|e| ServiceError::Persistence {
+            detail: format!("failed to read config file {}: {e}", path.display()),
+        })?
+    } else {
+        String::new()
+    };
+
+    let mut doc: toml_edit::DocumentMut =
+        content.parse().map_err(|e| ServiceError::Configuration {
+            detail: format!("failed to parse config file {}: {e}", path.display()),
+        })?;
+
+    // Remove the existing [[schedule]] array (if any) and replace it.
+    doc.remove("schedule");
+
+    if !entries.is_empty() {
+        let mut arr = toml_edit::ArrayOfTables::new();
+        for entry in entries {
+            let mut table = toml_edit::Table::new();
+            table.insert("id", toml_edit::value(entry.id.as_str()));
+            table.insert("cron", toml_edit::value(entry.cron.as_str()));
+            table.insert("prompt", toml_edit::value(entry.prompt.as_str()));
+            arr.push(table);
+        }
+        doc.insert("schedule", toml_edit::Item::ArrayOfTables(arr));
+    }
+
+    // Write to a temp file in the same directory for an atomic rename.
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp_path = parent.join(format!(".bob-config-tmp-{unique}"));
+
+    std::fs::write(&tmp_path, doc.to_string()).map_err(|e| ServiceError::Persistence {
+        detail: format!(
+            "failed to write temp config file {}: {e}",
+            tmp_path.display()
+        ),
+    })?;
+
+    // Preserve the original file's permission bits across the atomic replace.
+    // `rename` installs the temp file's inode in place of the original, so
+    // without this the mode would reset to the process umask (e.g. a 0600
+    // config would be silently widened to 0644).
+    #[cfg(unix)]
+    if let Ok(meta) = std::fs::metadata(path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = meta.permissions().mode();
+        if let Err(e) = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(mode)) {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(ServiceError::Persistence {
+                detail: format!(
+                    "failed to set permissions on temp config file {}: {e}",
+                    tmp_path.display()
+                ),
+            });
+        }
+    }
+
+    std::fs::rename(&tmp_path, path).map_err(|e| {
+        // Try to clean up the temp file; ignore errors.
+        let _ = std::fs::remove_file(&tmp_path);
+        ServiceError::Persistence {
+            detail: format!(
+                "failed to rename temp config file to {}: {e}",
+                path.display()
+            ),
+        }
+    })?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{write_schedule_entries, ScheduleEntry};
+
+    fn entry(id: &str) -> ScheduleEntry {
+        ScheduleEntry {
+            id: id.to_owned(),
+            cron: "* * * * *".to_owned(),
+            prompt: "do the thing".to_owned(),
+        }
+    }
+
+    #[test]
+    fn persists_entries_and_can_be_read_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bob.toml");
+
+        write_schedule_entries(&path, &[entry("job-1")]).expect("write must succeed");
+
+        let content = std::fs::read_to_string(&path).expect("read back");
+        assert!(content.contains("[[schedule]]"), "schedule section present");
+        assert!(content.contains("job-1"), "entry id persisted");
+    }
+
+    #[test]
+    fn preserves_other_config_keys() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bob.toml");
+        std::fs::write(
+            &path,
+            "tracing_level = \"debug\"\n\n[[schedule]]\nid = \"old\"\ncron = \"* * * * *\"\nprompt = \"old\"\n",
+        )
+        .expect("seed config");
+
+        write_schedule_entries(&path, &[entry("new")]).expect("write must succeed");
+
+        let content = std::fs::read_to_string(&path).expect("read back");
+        assert!(
+            content.contains("tracing_level = \"debug\""),
+            "non-schedule keys must be preserved"
+        );
+        assert!(content.contains("new"), "new entry present");
+        assert!(!content.contains("old"), "old entry replaced");
+    }
+
+    #[test]
+    fn empty_entries_removes_schedule_section() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bob.toml");
+        std::fs::write(
+            &path,
+            "[[schedule]]\nid = \"old\"\ncron = \"* * * * *\"\nprompt = \"old\"\n",
+        )
+        .expect("seed config");
+
+        write_schedule_entries(&path, &[]).expect("write must succeed");
+
+        let content = std::fs::read_to_string(&path).expect("read back");
+        assert!(
+            !content.contains("[[schedule]]"),
+            "schedule section must be removed when entries are empty"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preserves_restrictive_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bob.toml");
+        std::fs::write(&path, "tracing_level = \"info\"\n").expect("seed config");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict mode");
+
+        write_schedule_entries(&path, &[entry("job-1")]).expect("write must succeed");
+
+        let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "rewrite must preserve the original 0600 mode");
+    }
 }

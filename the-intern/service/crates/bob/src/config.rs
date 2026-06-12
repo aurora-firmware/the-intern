@@ -769,77 +769,12 @@ pub fn load() -> ServiceResult<BobConfig> {
     BobConfig::load()
 }
 
-/// Atomically replace the `[[schedule]]` array in the TOML config file at
-/// `path` with `entries`, preserving all other config keys.
+/// Re-export of the canonical, atomic, mode-preserving schedule writer.
 ///
-/// # Atomicity
-///
-/// The function writes a temporary file in the same directory as `path` and
-/// then renames it over `path`.  This ensures an observer never sees a partial
-/// write: either the old file or the fully written new file is visible.
-///
-/// # Errors
-///
-/// Returns `ServiceError::Configuration` when the file cannot be read,
-/// `ServiceError::Persistence` when the file cannot be written or renamed.
-pub fn write_schedule_entries(path: &Path, entries: &[ScheduleEntry]) -> ServiceResult<()> {
-    // Read and parse the existing TOML, or start with an empty document.
-    let content = if path.exists() {
-        std::fs::read_to_string(path).map_err(|e| ServiceError::Persistence {
-            detail: format!("failed to read config file {}: {e}", path.display()),
-        })?
-    } else {
-        String::new()
-    };
-
-    let mut doc: toml_edit::DocumentMut =
-        content.parse().map_err(|e| ServiceError::Configuration {
-            detail: format!("failed to parse config file {}: {e}", path.display()),
-        })?;
-
-    // Remove the existing [[schedule]] array (if any) and replace it.
-    doc.remove("schedule");
-
-    if !entries.is_empty() {
-        let mut arr = toml_edit::ArrayOfTables::new();
-        for entry in entries {
-            let mut table = toml_edit::Table::new();
-            table.insert("id", toml_edit::value(entry.id.as_str()));
-            table.insert("cron", toml_edit::value(entry.cron.as_str()));
-            table.insert("prompt", toml_edit::value(entry.prompt.as_str()));
-            arr.push(table);
-        }
-        doc.insert("schedule", toml_edit::Item::ArrayOfTables(arr));
-    }
-
-    // Write to a temp file in the same directory for atomic rename.
-    let parent = path.parent().unwrap_or(Path::new("."));
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp_path = parent.join(format!(".bob-config-tmp-{unique}"));
-
-    std::fs::write(&tmp_path, doc.to_string()).map_err(|e| ServiceError::Persistence {
-        detail: format!(
-            "failed to write temp config file {}: {e}",
-            tmp_path.display()
-        ),
-    })?;
-
-    std::fs::rename(&tmp_path, path).map_err(|e| {
-        // Try to clean up the temp file; ignore errors.
-        let _ = std::fs::remove_file(&tmp_path);
-        ServiceError::Persistence {
-            detail: format!(
-                "failed to rename temp config file to {}: {e}",
-                path.display()
-            ),
-        }
-    })?;
-
-    Ok(())
-}
+/// The implementation lives in [`bob_core::types::schedule`] so that this
+/// config layer and the admin-RPC `schedule.*` handlers share a single writer
+/// and cannot drift apart.
+pub use bob_core::types::schedule::write_schedule_entries;
 
 #[cfg(test)]
 mod tests {

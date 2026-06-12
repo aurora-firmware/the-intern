@@ -13,7 +13,6 @@ monitoring = { path = "../monitoring" }
 scheduler-adapter = { path = "../scheduler-adapter" }
 croner = "3"
 toml = "0.8"
-toml_edit = "0.22"
 chrono = "0.4"
 uuid = { workspace = true }
 tracing = "0.1"

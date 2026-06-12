@@ -32,6 +32,19 @@ macro_rules! impl_id {
             pub fn new() -> Self {
                 Self(Uuid::new_v4())
             }
+
+            /// Creates a deterministic identifier derived from `name`.
+            ///
+            /// The same `name` always maps to the same identifier (UUIDv5), so
+            /// callers that key an entity by a stable string id keep a
+            /// consistent identity across reloads and process restarts. The id
+            /// type name is folded into the seed, so the same `name` yields a
+            /// different value for each id type (e.g. `ChannelId` vs `UserId`).
+            #[must_use]
+            pub fn from_name(name: &str) -> Self {
+                let seed = format!("{}:{}", stringify!($t), name);
+                Self(Uuid::new_v5(&Uuid::NAMESPACE_OID, seed.as_bytes()))
+            }
         }
 
         impl Default for $t {
@@ -189,6 +202,26 @@ mod tests {
     fn from_str_returns_error_for_invalid_uuid() {
         let result: Result<SessionId, _> = "not-a-uuid".parse();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_name_is_deterministic_for_the_same_name() {
+        assert_eq!(ChannelId::from_name("job-1"), ChannelId::from_name("job-1"));
+        assert_eq!(UserId::from_name("job-1"), UserId::from_name("job-1"));
+    }
+
+    #[test]
+    fn from_name_differs_for_different_names() {
+        assert_ne!(ChannelId::from_name("job-1"), ChannelId::from_name("job-2"));
+    }
+
+    #[test]
+    fn from_name_is_type_scoped_so_same_name_differs_across_id_types() {
+        // A ChannelId and a UserId derived from the same name must not collide.
+        assert_ne!(
+            ChannelId::from_name("job-1").to_string(),
+            UserId::from_name("job-1").to_string()
+        );
     }
 
     #[test]
