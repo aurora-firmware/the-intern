@@ -223,6 +223,10 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         policy: Some(policy_control_handle.clone()),
         monitoring: Some(monitoring_handle.clone()),
         chat_adapter: maybe_chat_handle.clone(),
+        // Clone the scheduler reload handle into the admin-RPC dispatcher so that
+        // schedule.* methods (T-097) can push updated job tables to the actor.
+        // The primary handle is retained in the Runtime for shutdown ordering.
+        scheduler: Some(scheduler_reload_handle.clone()),
         ..admin_rpc::Config::default()
     };
     let (admin_rpc_handle, admin_rpc_join) = admin_rpc::start(admin_rpc_cfg).map_err(|e| {

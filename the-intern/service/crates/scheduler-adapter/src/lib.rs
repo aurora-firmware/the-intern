@@ -14,15 +14,28 @@ use tracing::info;
 // Public types
 // ---------------------------------------------------------------------------
 
-/// Cheaply cloneable handle that signals a configuration reload to the
+/// Cheaply cloneable handle that sends updated schedule entries to the
 /// scheduler-adapter actor.
+///
+/// Calling [`reload`][ReloadHandle::reload] replaces the actor's live job table
+/// with the supplied entries without any disk I/O.
 ///
 /// When all clones of a `ReloadHandle` are dropped, the actor exits cleanly.
 #[derive(Clone)]
 pub struct ReloadHandle {
-    /// Keeping a sender alive keeps the actor running.
-    /// Dropping every clone closes the watch channel, which the actor detects.
-    _tx: watch::Sender<()>,
+    /// Sending a new `Vec<ScheduleEntry>` triggers a job-table rebuild in the actor.
+    /// Dropping every clone closes the watch channel, which the actor detects via
+    /// `reload_rx.changed()` returning `Err`, causing the actor to exit.
+    tx: watch::Sender<Vec<ScheduleEntry>>,
+}
+
+impl ReloadHandle {
+    /// Replace the actor's live job table with `entries`.
+    ///
+    /// Returns `Err` if all actor receivers have been dropped (actor has exited).
+    pub fn reload(&self, entries: Vec<ScheduleEntry>) -> Result<(), watch::error::SendError<Vec<ScheduleEntry>>> {
+        self.tx.send(entries)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -48,8 +61,9 @@ struct Actor {
     intake: IntakeHandle,
     /// Job table initialised from the entries supplied to `start`.
     jobs: Vec<JobState>,
+    /// Receives updated `Vec<ScheduleEntry>` from `ReloadHandle::reload`.
     /// Actor exits when this receiver sees the channel closed (all senders dropped).
-    reload_rx: watch::Receiver<()>,
+    reload_rx: watch::Receiver<Vec<ScheduleEntry>>,
 }
 
 impl Actor {
@@ -61,86 +75,56 @@ impl Actor {
             "scheduler-adapter job table initialised"
         );
 
-        if self.jobs.is_empty() {
-            // No jobs: just wait for shutdown.
-            loop {
+        // Spawn per-job tick tasks from the current job table and wait for
+        // reload or shutdown.  On reload, abort all running tick tasks, rebuild
+        // the job table from the received entries, and re-spawn.
+        loop {
+            let task_handles = spawn_job_tasks(&self.intake, &self.jobs);
+
+            if task_handles.is_empty() {
+                // No jobs: just wait for reload or shutdown.
                 match self.reload_rx.changed().await {
                     Ok(()) => {
-                        tracing::debug!("scheduler-adapter received reload signal");
+                        let new_entries = self.reload_rx.borrow_and_update().clone();
+                        tracing::debug!(
+                            job_count = new_entries.len(),
+                            "scheduler-adapter received reload; rebuilding job table"
+                        );
+                        self.jobs = build_job_states(new_entries);
+                        continue;
                     }
                     Err(_) => break,
                 }
             }
-            info!("scheduler-adapter actor stopped");
-            return;
-        }
 
-        let parser = CronParser::builder().seconds(Seconds::Disallowed).build();
-
-        // Parse all cron expressions once at startup. Log fixed IDs.
-        let parsed: Vec<(croner::Cron, &JobState)> = self
-            .jobs
-            .iter()
-            .filter_map(|job| match parser.parse(&job.entry.cron) {
-                Ok(cron) => {
-                    info!(
-                        job_id = %job.entry.id,
-                        channel_id = %job.channel_id,
-                        user_id = %job.user_id,
-                        cron = %job.entry.cron,
-                        "scheduler-adapter job registered — fixed channel/user IDs for policy rules"
-                    );
-                    Some((cron, job))
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        job_id = %job.entry.id,
-                        cron = %job.entry.cron,
-                        error = %err,
-                        "scheduler-adapter failed to parse cron expression; job will not fire"
-                    );
-                    None
-                }
-            })
-            .collect();
-
-        // Spawn one task per job; each loops independently over its next-fire times.
-        let mut task_handles: Vec<tokio::task::JoinHandle<()>> = parsed
-            .into_iter()
-            .map(|(cron, job)| {
-                let intake = self.intake.clone();
-                let job_id = job.entry.id.clone();
-                let job_prompt = job.entry.prompt.clone();
-                let channel_id = job.channel_id;
-                let user_id = job.user_id;
-
-                tokio::spawn(async move {
-                    run_job_tick_loop(intake, cron, job_id, job_prompt, channel_id, user_id).await;
-                })
-            })
-            .collect();
-
-        // Wait for reload or shutdown while job tick loops run in parallel.
-        loop {
+            // Jobs are running: wait for reload or shutdown.
             match self.reload_rx.changed().await {
                 Ok(()) => {
-                    tracing::debug!("scheduler-adapter received reload signal");
-                    // TODO(T-096+): rebuild job table on reload.
+                    let new_entries = self.reload_rx.borrow_and_update().clone();
+                    tracing::debug!(
+                        job_count = new_entries.len(),
+                        "scheduler-adapter received reload; rebuilding job table"
+                    );
+                    // Abort all currently running tick tasks before rebuilding.
+                    for h in &task_handles {
+                        h.abort();
+                    }
+                    for h in task_handles {
+                        let _ = h.await;
+                    }
+                    self.jobs = build_job_states(new_entries);
                 }
                 Err(_) => {
                     // All ReloadHandle clones dropped — shut down.
+                    for h in &task_handles {
+                        h.abort();
+                    }
+                    for h in task_handles {
+                        let _ = h.await;
+                    }
                     break;
                 }
             }
-        }
-
-        // Cancel all job tick tasks.
-        for handle in &task_handles {
-            handle.abort();
-        }
-        // Await completion (aborted tasks finish quickly).
-        for handle in &mut task_handles {
-            let _ = handle.await;
         }
 
         info!("scheduler-adapter actor stopped");
@@ -208,6 +192,72 @@ async fn run_job_tick_loop(
 }
 
 // ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Build per-job state from a slice of entries, assigning stable IDs.
+fn build_job_states(entries: Vec<ScheduleEntry>) -> Vec<JobState> {
+    entries
+        .into_iter()
+        .map(|entry| JobState {
+            entry,
+            channel_id: ChannelId::new(),
+            user_id: UserId::new(),
+        })
+        .collect()
+}
+
+/// Parse cron expressions and spawn one tick task per valid job.
+///
+/// Returns the join handles for all spawned tasks.
+fn spawn_job_tasks(intake: &IntakeHandle, jobs: &[JobState]) -> Vec<tokio::task::JoinHandle<()>> {
+    if jobs.is_empty() {
+        return Vec::new();
+    }
+
+    let parser = CronParser::builder().seconds(Seconds::Disallowed).build();
+
+    jobs.iter()
+        .filter_map(|job| match parser.parse(&job.entry.cron) {
+            Ok(cron) => {
+                info!(
+                    job_id = %job.entry.id,
+                    channel_id = %job.channel_id,
+                    user_id = %job.user_id,
+                    cron = %job.entry.cron,
+                    "scheduler-adapter job registered — fixed channel/user IDs for policy rules"
+                );
+                let intake_clone = intake.clone();
+                let job_id = job.entry.id.clone();
+                let job_prompt = job.entry.prompt.clone();
+                let channel_id = job.channel_id;
+                let user_id = job.user_id;
+                Some(tokio::spawn(async move {
+                    run_job_tick_loop(
+                        intake_clone,
+                        cron,
+                        job_id,
+                        job_prompt,
+                        channel_id,
+                        user_id,
+                    )
+                    .await;
+                }))
+            }
+            Err(err) => {
+                tracing::warn!(
+                    job_id = %job.entry.id,
+                    cron = %job.entry.cron,
+                    error = %err,
+                    "scheduler-adapter failed to parse cron expression; job will not fire"
+                );
+                None
+            }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Public constructor
 // ---------------------------------------------------------------------------
 
@@ -229,18 +279,11 @@ pub fn start(intake: IntakeHandle, entries: Vec<ScheduleEntry>) -> (ReloadHandle
     // The watch channel carries the reload signal.  The receiver is held by the
     // actor; the sender is wrapped in ReloadHandle.  When the last sender clone
     // is dropped, `reload_rx.changed()` returns Err and the actor exits.
-    let (tx, rx) = watch::channel(());
-    let handle = ReloadHandle { _tx: tx };
+    let (tx, rx) = watch::channel(Vec::<ScheduleEntry>::new());
+    let handle = ReloadHandle { tx };
 
     // Build per-job state with fixed, stable IDs created once at startup.
-    let jobs = entries
-        .into_iter()
-        .map(|entry| JobState {
-            entry,
-            channel_id: ChannelId::new(),
-            user_id: UserId::new(),
-        })
-        .collect();
+    let jobs = build_job_states(entries);
 
     let actor = Actor {
         intake,
@@ -524,5 +567,29 @@ mod tests {
         cancel_tx.send(true).unwrap();
         let _ = tokio::time::timeout(Duration::from_secs(5), intake_task).await;
         scheduler_join.abort();
+    }
+
+    // AC-1 (T-096): reload() sends new entries to the actor; the actor stays
+    // alive after the reload and accepts further signals.
+    #[tokio::test(flavor = "current_thread")]
+    async fn reload_handle_reload_sends_new_entries_without_dropping_actor() {
+        let (intake, _intake_task, _cancel) = make_intake();
+        let entries: Vec<ScheduleEntry> = vec![];
+        let (reload_handle, join_handle) = crate::start(intake, entries);
+
+        // Reload with a new (still empty) entry list.
+        let new_entries: Vec<ScheduleEntry> = vec![];
+        reload_handle
+            .reload(new_entries)
+            .expect("reload must succeed while actor is running");
+
+        // Actor must still be running after reload.
+        tokio::task::yield_now().await;
+        assert!(
+            !join_handle.is_finished(),
+            "actor must still be running after reload"
+        );
+
+        join_handle.abort();
     }
 }

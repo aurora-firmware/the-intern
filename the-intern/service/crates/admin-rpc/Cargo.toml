@@ -10,6 +10,7 @@ chat-adapter = { path = "../chat-adapter" }
 pi-agent-supervisor = { path = "../pi-agent-supervisor" }
 policy-control = { path = "../policy-control" }
 monitoring = { path = "../monitoring" }
+scheduler-adapter = { path = "../scheduler-adapter" }
 chrono = "0.4"
 uuid = { workspace = true }
 tracing = "0.1"
