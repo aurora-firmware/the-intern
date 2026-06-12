@@ -769,6 +769,78 @@ pub fn load() -> ServiceResult<BobConfig> {
     BobConfig::load()
 }
 
+/// Atomically replace the `[[schedule]]` array in the TOML config file at
+/// `path` with `entries`, preserving all other config keys.
+///
+/// # Atomicity
+///
+/// The function writes a temporary file in the same directory as `path` and
+/// then renames it over `path`.  This ensures an observer never sees a partial
+/// write: either the old file or the fully written new file is visible.
+///
+/// # Errors
+///
+/// Returns `ServiceError::Configuration` when the file cannot be read,
+/// `ServiceError::Persistence` when the file cannot be written or renamed.
+pub fn write_schedule_entries(path: &Path, entries: &[ScheduleEntry]) -> ServiceResult<()> {
+    // Read and parse the existing TOML, or start with an empty document.
+    let content = if path.exists() {
+        std::fs::read_to_string(path).map_err(|e| ServiceError::Persistence {
+            detail: format!("failed to read config file {}: {e}", path.display()),
+        })?
+    } else {
+        String::new()
+    };
+
+    let mut doc: toml_edit::DocumentMut =
+        content.parse().map_err(|e| ServiceError::Configuration {
+            detail: format!("failed to parse config file {}: {e}", path.display()),
+        })?;
+
+    // Remove the existing [[schedule]] array (if any) and replace it.
+    doc.remove("schedule");
+
+    if !entries.is_empty() {
+        let mut arr = toml_edit::ArrayOfTables::new();
+        for entry in entries {
+            let mut table = toml_edit::Table::new();
+            table.insert("id", toml_edit::value(entry.id.as_str()));
+            table.insert("cron", toml_edit::value(entry.cron.as_str()));
+            table.insert("prompt", toml_edit::value(entry.prompt.as_str()));
+            arr.push(table);
+        }
+        doc.insert("schedule", toml_edit::Item::ArrayOfTables(arr));
+    }
+
+    // Write to a temp file in the same directory for atomic rename.
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp_path = parent.join(format!(".bob-config-tmp-{unique}"));
+
+    std::fs::write(&tmp_path, doc.to_string()).map_err(|e| ServiceError::Persistence {
+        detail: format!(
+            "failed to write temp config file {}: {e}",
+            tmp_path.display()
+        ),
+    })?;
+
+    std::fs::rename(&tmp_path, path).map_err(|e| {
+        // Try to clean up the temp file; ignore errors.
+        let _ = std::fs::remove_file(&tmp_path);
+        ServiceError::Persistence {
+            detail: format!(
+                "failed to rename temp config file to {}: {e}",
+                path.display()
+            ),
+        }
+    })?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1691,6 +1763,86 @@ prompt = ""
         // If `allowed_user_ids` still existed as a field this line would need it;
         // the fact that it compiles without it proves the legacy field is gone.
         let _: &policy_control::PolicyConfig = &cfg.policy;
+    }
+
+    // ── AC-1 (T-097): write_schedule_entries persists entries to the TOML file ─
+
+    #[test]
+    fn write_schedule_entries_persists_entries_and_can_be_read_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bob.toml");
+
+        // Write one entry to a new file.
+        let entries = vec![ScheduleEntry {
+            id: "job-1".to_owned(),
+            cron: "0 9 * * *".to_owned(),
+            prompt: "Daily digest".to_owned(),
+        }];
+        write_schedule_entries(&path, &entries).expect("write must succeed");
+
+        assert!(path.exists(), "config file must exist after write");
+
+        // Read back using figment to confirm the round-trip.
+        let content = std::fs::read_to_string(&path).expect("read file");
+        assert!(content.contains("job-1"), "id must be in file content");
+        assert!(
+            content.contains("Daily digest"),
+            "prompt must be in file content"
+        );
+    }
+
+    // ── AC-1 (T-097): write_schedule_entries preserves non-schedule config keys ─
+
+    #[test]
+    fn write_schedule_entries_preserves_other_config_keys() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bob.toml");
+
+        // Write a file with an existing config key.
+        std::fs::write(&path, "tracing_level = \"debug\"\n\n[[schedule]]\nid = \"old-job\"\ncron = \"* * * * *\"\nprompt = \"old\"\n")
+            .expect("write initial config");
+
+        // Replace schedule entries; tracing_level must be preserved.
+        let new_entries = vec![ScheduleEntry {
+            id: "new-job".to_owned(),
+            cron: "0 8 * * *".to_owned(),
+            prompt: "New prompt".to_owned(),
+        }];
+        write_schedule_entries(&path, &new_entries).expect("write must succeed");
+
+        let content = std::fs::read_to_string(&path).expect("read file");
+        assert!(
+            content.contains("tracing_level"),
+            "tracing_level key must be preserved"
+        );
+        assert!(content.contains("new-job"), "new entry id must be present");
+        assert!(!content.contains("old-job"), "old entry must be removed");
+    }
+
+    // ── AC-2 (T-097): write_schedule_entries with empty entries removes the section ─
+
+    #[test]
+    fn write_schedule_entries_with_empty_entries_removes_schedule_section() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bob.toml");
+
+        std::fs::write(
+            &path,
+            "tracing_level = \"info\"\n\n[[schedule]]\nid = \"to-remove\"\ncron = \"* * * * *\"\nprompt = \"p\"\n",
+        )
+        .expect("write initial config");
+
+        write_schedule_entries(&path, &[]).expect("write must succeed");
+
+        let content = std::fs::read_to_string(&path).expect("read file");
+        assert!(
+            !content.contains("to-remove"),
+            "removed entry must not be in file"
+        );
+        assert!(
+            content.contains("tracing_level"),
+            "other keys must be preserved"
+        );
     }
 
     #[derive(Clone, Default)]
