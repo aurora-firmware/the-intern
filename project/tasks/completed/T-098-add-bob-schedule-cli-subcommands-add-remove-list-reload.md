@@ -1,7 +1,7 @@
 ---
 id: T-098
 title: Add bob schedule CLI subcommands (add/remove/list/reload)
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-06-12'
