@@ -103,3 +103,22 @@ None.
 **Final branch state:** 1 commit on branch. `mdbook build` clean.
 
 ## Review
+
+### Review Verdict — 2026-06-12
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1: `mdbook build` completed without errors (only a non-fatal mdbook-mermaid version warning, no failures). PASS.
+- AC-2: `[[schedule]]` TOML example with `id`, `cron`, and `prompt` fields present at lines 333–338 of `the-intern/docs/src/operator-guide/index.md`. PASS.
+- AC-3: All four `bob schedule` subcommands (`list`, `add`, `remove`, `reload`) documented with at least one example invocation each (lines 364–414). PASS.
+- AC-4: Lines 316–319 explicitly state "If bob is stopped when a job is due to fire, that job is skipped and will not be replayed when the service restarts. This is by design (ADR-006)." PASS.
+
+**Stage 2 — Code Quality**
+
+- Only one file changed (`the-intern/docs/src/operator-guide/index.md`, +109 lines), exactly the file specified in the task.
+- No unrelated files touched, no unexpected behavior added.
+- Document structure is consistent with the rest of the operator guide: section headings, tables, and fenced code blocks follow the same conventions as adjacent sections.
+- Cron expression field-order diagram is clear and correct.
+- Flag tables for `bob schedule add` are accurate and complete.
