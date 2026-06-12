@@ -58,6 +58,11 @@ pub struct Dispatcher {
     /// router-backed receiver.  The router is shared across all clones of the
     /// dispatcher via an `Arc`.
     chat_router: Option<std::sync::Arc<ChatReplyRouter>>,
+    /// Optional scheduler-adapter reload handle.
+    ///
+    /// When present, `schedule.*` methods (T-097) push updated job tables to
+    /// the scheduler actor.  When absent, `schedule.*` methods return -32601.
+    scheduler: Option<scheduler_adapter::ReloadHandle>,
     started_at: Instant,
     version: &'static str,
 }
@@ -119,6 +124,7 @@ impl Dispatcher {
             monitoring,
             chat_adapter: None,
             chat_router: None,
+            scheduler: None,
             started_at: Instant::now(),
             version,
         }
@@ -157,6 +163,17 @@ impl Dispatcher {
         self.chat_router.clone()
     }
 
+    /// Attach a scheduler-adapter reload handle.
+    ///
+    /// When present, `schedule.*` methods can push updated job tables to the
+    /// scheduler actor.  When absent (the default), `schedule.*` methods return
+    /// `-32601 Method not found`.
+    #[must_use]
+    pub fn with_scheduler_handle(mut self, handle: scheduler_adapter::ReloadHandle) -> Self {
+        self.scheduler = Some(handle);
+        self
+    }
+
     /// Dispatch `request` to the appropriate method handler.
     ///
     /// `registry` is the per-connection subscription registry. Subscription
@@ -188,6 +205,15 @@ impl Dispatcher {
             "chat.close" => self.handle_chat_close(id, &request.params, registry).await,
             "chat.send" => self.handle_chat_send(id, &request.params, registry).await,
             "report.submit" => self.handle_report_submit(id, &request.params).await,
+            // Schedule namespace — placeholder until T-097 implements real handlers.
+            "schedule.add" | "schedule.remove" | "schedule.list" | "schedule.reload" => {
+                DispatchOutcome::Err(ErrorResponse::error(
+                    id,
+                    CODE_METHOD_NOT_FOUND,
+                    "Method not found",
+                    Some(json!({ "method": request.method })),
+                ))
+            }
             other => DispatchOutcome::Err(ErrorResponse::error(
                 id,
                 CODE_METHOD_NOT_FOUND,
@@ -2411,6 +2437,78 @@ mod tests {
             }
             DispatchOutcome::Ok(_) => panic!("expected error"),
             _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-2 (T-096): with_scheduler_handle stores the handle in the dispatcher
+    // without panicking.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatcher_with_scheduler_handle_does_not_panic() {
+        use bob_core::types::ScheduleEntry;
+        use requests_handler::Config as QueueConfig;
+        use std::time::Duration;
+        use tokio::sync::watch;
+
+        let (_, cancel_rx) = watch::channel(false);
+        let cfg = QueueConfig {
+            request_queue_capacity: 4,
+            request_submit_timeout: Duration::from_secs(1),
+        };
+        let (intake, _intake_task) =
+            requests_handler::start_with(cfg, move |_| async {}, cancel_rx);
+        let entries: Vec<ScheduleEntry> = vec![];
+        let (reload_handle, scheduler_join) = scheduler_adapter::start(intake, entries);
+
+        // Must not panic.
+        let _dispatcher = make_dispatcher_no_handles().with_scheduler_handle(reload_handle);
+
+        scheduler_join.abort();
+    }
+
+    // AC-3 (T-096): schedule.add returns -32601 Method not found (placeholder).
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_returns_method_not_found() {
+        let dispatcher = make_dispatcher_no_handles();
+        let req = make_request("schedule.add", json!(200));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(200));
+                assert_eq!(resp.error.code, CODE_METHOD_NOT_FOUND);
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error, got Ok"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-3 (T-096): schedule.remove, schedule.list, schedule.reload also return -32601.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_namespace_methods_all_return_method_not_found() {
+        let dispatcher = make_dispatcher_no_handles();
+        let mut registry = make_registry();
+
+        for (method, id) in [
+            ("schedule.remove", json!(201)),
+            ("schedule.list", json!(202)),
+            ("schedule.reload", json!(203)),
+        ] {
+            let req = make_request(method, id.clone());
+            let outcome = dispatcher.dispatch(req, &mut registry).await;
+            match outcome {
+                DispatchOutcome::Err(resp) => {
+                    assert_eq!(resp.id, id, "id must match for method {method}");
+                    assert_eq!(
+                        resp.error.code,
+                        CODE_METHOD_NOT_FOUND,
+                        "must return -32601 for {method}"
+                    );
+                }
+                DispatchOutcome::Ok(_) => panic!("expected error for {method}, got Ok"),
+                _ => panic!("unexpected dispatch outcome variant for {method}"),
+            }
         }
     }
 }
