@@ -20,6 +20,10 @@ use tracing::info;
 /// Calling [`reload`][ReloadHandle::reload] replaces the actor's live job table
 /// with the supplied entries without any disk I/O.
 ///
+/// Calling [`subscribe`][ReloadHandle::subscribe] returns a `watch::Receiver`
+/// that reflects the live job table — useful for reading the current table
+/// without a disk round-trip (e.g. `schedule.list`).
+///
 /// When all clones of a `ReloadHandle` are dropped, the actor exits cleanly.
 #[derive(Clone)]
 pub struct ReloadHandle {
@@ -35,6 +39,16 @@ impl ReloadHandle {
     /// Returns `Err` if all actor receivers have been dropped (actor has exited).
     pub fn reload(&self, entries: Vec<ScheduleEntry>) -> Result<(), watch::error::SendError<Vec<ScheduleEntry>>> {
         self.tx.send(entries)
+    }
+
+    /// Return a cloned receiver for the live job table.
+    ///
+    /// The receiver holds the most recently sent `Vec<ScheduleEntry>`.  Callers
+    /// can call `borrow()` on the receiver to read the current table without any
+    /// disk I/O.  The receiver remains valid until all `ReloadHandle` clones are
+    /// dropped.
+    pub fn subscribe(&self) -> watch::Receiver<Vec<ScheduleEntry>> {
+        self.tx.subscribe()
     }
 }
 
@@ -567,6 +581,41 @@ mod tests {
         cancel_tx.send(true).unwrap();
         let _ = tokio::time::timeout(Duration::from_secs(5), intake_task).await;
         scheduler_join.abort();
+    }
+
+    // AC-4 (T-097): subscribe() returns a receiver that reflects the live job table.
+    // After reload(), the receiver's borrow shows the updated entries.
+    #[tokio::test(flavor = "current_thread")]
+    async fn subscribe_returns_receiver_that_reflects_live_job_table_after_reload() {
+        let (intake, _intake_task, _cancel) = make_intake();
+        let initial_entries: Vec<ScheduleEntry> = vec![];
+        let (reload_handle, join_handle) = crate::start(intake, initial_entries);
+
+        // Initially the receiver holds an empty vec (the initial channel value).
+        let rx = reload_handle.subscribe();
+        assert!(
+            rx.borrow().is_empty(),
+            "initial receiver must hold an empty vec"
+        );
+
+        // After reload with one entry, the receiver must reflect the new table.
+        let new_entry = ScheduleEntry {
+            id: "job-1".to_owned(),
+            cron: "* * * * *".to_owned(),
+            prompt: "run job".to_owned(),
+        };
+        reload_handle
+            .reload(vec![new_entry.clone()])
+            .expect("reload must succeed");
+
+        // Give the watch channel a moment to propagate.
+        tokio::task::yield_now().await;
+
+        let current = rx.borrow().clone();
+        assert_eq!(current.len(), 1, "receiver must show one entry after reload");
+        assert_eq!(current[0].id, "job-1");
+
+        join_handle.abort();
     }
 
     // AC-1 (T-096): reload() sends new entries to the actor; the actor stays
