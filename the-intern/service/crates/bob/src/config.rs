@@ -792,11 +792,10 @@ pub fn write_schedule_entries(path: &Path, entries: &[ScheduleEntry]) -> Service
         String::new()
     };
 
-    let mut doc: toml_edit::DocumentMut = content.parse().map_err(|e| {
-        ServiceError::Configuration {
+    let mut doc: toml_edit::DocumentMut =
+        content.parse().map_err(|e| ServiceError::Configuration {
             detail: format!("failed to parse config file {}: {e}", path.display()),
-        }
-    })?;
+        })?;
 
     // Remove the existing [[schedule]] array (if any) and replace it.
     doc.remove("schedule");
@@ -822,7 +821,10 @@ pub fn write_schedule_entries(path: &Path, entries: &[ScheduleEntry]) -> Service
     let tmp_path = parent.join(format!(".bob-config-tmp-{unique}"));
 
     std::fs::write(&tmp_path, doc.to_string()).map_err(|e| ServiceError::Persistence {
-        detail: format!("failed to write temp config file {}: {e}", tmp_path.display()),
+        detail: format!(
+            "failed to write temp config file {}: {e}",
+            tmp_path.display()
+        ),
     })?;
 
     std::fs::rename(&tmp_path, path).map_err(|e| {
@@ -1783,7 +1785,10 @@ prompt = ""
         // Read back using figment to confirm the round-trip.
         let content = std::fs::read_to_string(&path).expect("read file");
         assert!(content.contains("job-1"), "id must be in file content");
-        assert!(content.contains("Daily digest"), "prompt must be in file content");
+        assert!(
+            content.contains("Daily digest"),
+            "prompt must be in file content"
+        );
     }
 
     // ── AC-1 (T-097): write_schedule_entries preserves non-schedule config keys ─
@@ -1810,14 +1815,8 @@ prompt = ""
             content.contains("tracing_level"),
             "tracing_level key must be preserved"
         );
-        assert!(
-            content.contains("new-job"),
-            "new entry id must be present"
-        );
-        assert!(
-            !content.contains("old-job"),
-            "old entry must be removed"
-        );
+        assert!(content.contains("new-job"), "new entry id must be present");
+        assert!(!content.contains("old-job"), "old entry must be removed");
     }
 
     // ── AC-2 (T-097): write_schedule_entries with empty entries removes the section ─

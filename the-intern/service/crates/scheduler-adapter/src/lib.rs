@@ -37,7 +37,10 @@ impl ReloadHandle {
     /// Replace the actor's live job table with `entries`.
     ///
     /// Returns `Err` if all actor receivers have been dropped (actor has exited).
-    pub fn reload(&self, entries: Vec<ScheduleEntry>) -> Result<(), watch::error::SendError<Vec<ScheduleEntry>>> {
+    pub fn reload(
+        &self,
+        entries: Vec<ScheduleEntry>,
+    ) -> Result<(), watch::error::SendError<Vec<ScheduleEntry>>> {
         self.tx.send(entries)
     }
 
@@ -247,15 +250,8 @@ fn spawn_job_tasks(intake: &IntakeHandle, jobs: &[JobState]) -> Vec<tokio::task:
                 let channel_id = job.channel_id;
                 let user_id = job.user_id;
                 Some(tokio::spawn(async move {
-                    run_job_tick_loop(
-                        intake_clone,
-                        cron,
-                        job_id,
-                        job_prompt,
-                        channel_id,
-                        user_id,
-                    )
-                    .await;
+                    run_job_tick_loop(intake_clone, cron, job_id, job_prompt, channel_id, user_id)
+                        .await;
                 }))
             }
             Err(err) => {
@@ -612,7 +608,11 @@ mod tests {
         tokio::task::yield_now().await;
 
         let current = rx.borrow().clone();
-        assert_eq!(current.len(), 1, "receiver must show one entry after reload");
+        assert_eq!(
+            current.len(),
+            1,
+            "receiver must show one entry after reload"
+        );
         assert_eq!(current[0].id, "job-1");
 
         join_handle.abort();

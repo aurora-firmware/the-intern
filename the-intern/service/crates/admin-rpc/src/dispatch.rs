@@ -889,10 +889,8 @@ impl Dispatcher {
             Ok(e) => e,
             Err(outcome) => return outcome,
         };
-        let updated: Vec<ScheduleEntry> = entries
-            .into_iter()
-            .filter(|e| e.id != entry_id)
-            .collect();
+        let updated: Vec<ScheduleEntry> =
+            entries.into_iter().filter(|e| e.id != entry_id).collect();
 
         if let Err(outcome) = self.write_and_reload(config_path, updated, handle) {
             return outcome;
@@ -2859,10 +2857,7 @@ mod tests {
 
     // ── Helpers for schedule.* tests ─────────────────────────────────────────
 
-    fn make_scheduler_handle() -> (
-        scheduler_adapter::ReloadHandle,
-        tokio::task::JoinHandle<()>,
-    ) {
+    fn make_scheduler_handle() -> (scheduler_adapter::ReloadHandle, tokio::task::JoinHandle<()>) {
         use bob_core::types::ScheduleEntry;
         use requests_handler::Config as QueueConfig;
         use std::time::Duration;
@@ -3076,7 +3071,10 @@ mod tests {
 
         // File must not have been written with invalid data.
         let content = std::fs::read_to_string(&config_path).expect("read config");
-        assert!(!content.contains("bad-job"), "invalid entry must not be persisted");
+        assert!(
+            !content.contains("bad-job"),
+            "invalid entry must not be persisted"
+        );
     }
 
     // AC-3 (T-097): schedule.remove with known id removes from config and returns ok.
@@ -3108,11 +3106,8 @@ mod tests {
             .with_scheduler_handle(reload_handle)
             .with_config_path(config_path.clone());
 
-        let req = make_request_with_params(
-            "schedule.remove",
-            json!(320),
-            json!({ "id": "to-remove" }),
-        );
+        let req =
+            make_request_with_params("schedule.remove", json!(320), json!({ "id": "to-remove" }));
         let mut registry = make_registry();
 
         let outcome = dispatcher.dispatch(req, &mut registry).await;
@@ -3130,7 +3125,10 @@ mod tests {
         }
 
         let content = std::fs::read_to_string(&config_path).expect("read config");
-        assert!(!content.contains("to-remove"), "removed entry must not be in file");
+        assert!(
+            !content.contains("to-remove"),
+            "removed entry must not be in file"
+        );
         assert!(content.contains("keep"), "other entry must remain");
     }
 
@@ -3166,8 +3164,9 @@ mod tests {
     // AC-1 (T-097): schedule.reload reads from disk and signals the actor.
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_schedule_reload_reads_from_disk_and_returns_ok() {
-        let (_dir, config_path) =
-            write_temp_bob_toml("[[schedule]]\nid = \"disk-job\"\ncron = \"0 9 * * *\"\nprompt = \"p\"\n");
+        let (_dir, config_path) = write_temp_bob_toml(
+            "[[schedule]]\nid = \"disk-job\"\ncron = \"0 9 * * *\"\nprompt = \"p\"\n",
+        );
         let (reload_handle, scheduler_join) = make_scheduler_handle();
         let rx = reload_handle.subscribe();
         let dispatcher = make_dispatcher_no_handles()
@@ -3193,7 +3192,11 @@ mod tests {
 
         // The live table should now reflect the disk entry.
         let current = rx.borrow().clone();
-        assert_eq!(current.len(), 1, "live table must have one entry after reload");
+        assert_eq!(
+            current.len(),
+            1,
+            "live table must have one entry after reload"
+        );
         assert_eq!(current[0].id, "disk-job");
     }
 
@@ -3258,8 +3261,7 @@ mod tests {
                 DispatchOutcome::Err(resp) => {
                     assert_eq!(resp.id, id, "id must match for method {method}");
                     assert_eq!(
-                        resp.error.code,
-                        CODE_METHOD_NOT_FOUND,
+                        resp.error.code, CODE_METHOD_NOT_FOUND,
                         "must return -32601 for {method}"
                     );
                 }
