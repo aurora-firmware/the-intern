@@ -92,4 +92,38 @@ cargo test --workspace
 
 ## Work Log
 
+### Session 1 — 2026-06-12
+
+**What was done**
+
+Four TDD cycles across three crates:
+
+1. **`scheduler-adapter/src/lib.rs`** — Added `subscribe()` to `ReloadHandle` returning a `watch::Receiver<Vec<ScheduleEntry>>` clone for `schedule.list`. One new test.
+
+2. **`bob/src/config.rs`** + `Cargo.toml` — Added `write_schedule_entries(path, entries)`: reads existing TOML, replaces only `[[schedule]]` via `toml_edit`, writes atomically (temp file + rename). Three new tests.
+
+3. **`admin-rpc/src/dispatch.rs`** + `Cargo.toml` — Replaced T-096 placeholder with four real handlers:
+   - `schedule.add`: validates id/cron/prompt, checks duplicates in live table, writes and reloads
+   - `schedule.remove`: checks existence, filters out, writes and reloads
+   - `schedule.list`: reads from watch receiver (no disk)
+   - `schedule.reload`: reads disk via `toml` crate, signals reload
+   Added `config_path: Option<PathBuf>` field and `with_config_path()` builder. Eight new tests.
+
+4. **`admin-rpc/src/lib.rs`** + **`bob/src/serve.rs`** — Added `config_path: Option<PathBuf>` to `admin_rpc::Config`, wired into dispatcher, passed from `serve.rs`.
+
+**What was tried and rejected**
+
+- Calling `bob::config::write_schedule_entries` from `dispatch.rs` — rejected because `admin-rpc` cannot depend on `bob` (circular). Solution: inline the same TOML-editing logic in `dispatch.rs` using `toml_edit` directly.
+- Moving `write_schedule_entries` to `bob-core` — rejected; `bob-core` is a lean types/error crate and TOML I/O would bloat it.
+
+**What remains**
+
+Nothing. All acceptance criteria met.
+
+**Obstacles Encountered**
+
+Circular dependency `admin-rpc` → `bob` required duplicating TOML write logic inline in `dispatch.rs`.
+
+**Final branch state:** 5 implementation commits + 1 fmt cleanup. `cargo test --workspace` passes with zero failures. `cargo fmt --check` clean. (admin-rpc: 119 tests, scheduler-adapter: 7 tests, workspace all green)
+
 ## Review
