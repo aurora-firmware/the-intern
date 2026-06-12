@@ -96,4 +96,32 @@ cargo run -p bob -- schedule --help
 
 ## Work Log
 
+### Session 1 — 2026-06-12
+
+**What was done**
+
+Implemented all four `bob schedule` CLI subcommands following the exact `policy.rs` / `sessions.rs` pattern.
+
+1. **`commands/schedule.rs`** — new file; `run_add`, `run_remove`, `run_list`, `run_reload` public entry points with inner `*_with_caller` layers for testability. 8 unit tests covering correct RPC method, correct params, and human/JSON output for every subcommand.
+
+2. **`commands.rs`** — added `mod schedule;` and four `pub fn schedule_*` dispatch functions.
+
+3. **`cli/mod.rs`** — added `Schedule { command: ScheduleCommand }` to `Command` enum; `ScheduleCommand` enum with `Add { id, cron, prompt }`, `Remove { id }`, `List { json }`, `Reload`, all `#[arg(long)]`.
+
+4. **`lib.rs`** — added `schedule_add/remove/list/reload` to `DispatchRuntime` trait; `ProductionRuntime` implementations delegating to `commands::schedule_*`; `Command::Schedule` arm in `run_cli_with_runtime`; `NotImplemented` stubs in `FakeRuntime`.
+
+**What was tried and rejected**
+
+Nothing. The `policy.rs` pattern was directly applicable.
+
+**What remains**
+
+Nothing. All five acceptance criteria satisfied.
+
+**Obstacles Encountered**
+
+Minor: `cargo fmt` reformatted several multi-line assertions; applied before committing.
+
+**Final branch state:** commit `86dd2fa`, 115 bob tests pass, formatting clean.
+
 ## Review
