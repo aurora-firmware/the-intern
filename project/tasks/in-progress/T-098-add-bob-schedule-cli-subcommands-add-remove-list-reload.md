@@ -125,3 +125,28 @@ Minor: `cargo fmt` reformatted several multi-line assertions; applied before com
 **Final branch state:** commit `86dd2fa`, 115 bob tests pass, formatting clean.
 
 ## Review
+
+### Review Verdict — 2026-06-12
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1: `schedule add --id foo --cron "* * * * *" --prompt "check mail"` parsed correctly (clap uses `#[arg(long)]` without `num_args`; manual test confirmed "check mail" arrives as a single string). `run_add_with_caller` sends `json!({"id": "foo", "cron": "* * * * *", "prompt": "check mail"})` to `schedule.add`. Unit test `schedule_add_calls_schedule_add_method_with_correct_params` confirms exact params. PASS.
+- AC-2: `schedule remove --id foo` dispatches `schedule.remove` with `{"id": "foo"}`. Unit test `schedule_remove_calls_schedule_remove_method_with_id_param` confirms. PASS.
+- AC-3: `schedule list` (no `--json`) calls `write_human_schedule`, which writes one `{id}  {cron}  {prompt}` line per job. Unit test `schedule_list_calls_schedule_list_method_and_prints_human_readable_lines` confirms id, cron, and prompt all appear. PASS.
+- AC-4: `schedule list --json` uses local `json: bool` field in `ScheduleCommand::List { json }`, dispatched as `runtime.schedule_list(json)`. Unit test `schedule_list_json_output_is_single_json_document` confirms raw JSON line output. PASS.
+- AC-5: `cargo test -p bob` — 115 unit tests + all integration test suites pass, 0 failures. PASS.
+
+**Stage 2 — Code Quality**
+
+- Correctness: all four subcommand entry points follow the two-layer pattern (public entry calls `_with_config`, which calls `_with_caller`). RPC method names and params match the spec exactly.
+- Tests: 8 unit tests cover both success-path output (human and JSON) and correct RPC method/params for every subcommand. Tests are independent and use `Vec<u8>` as the output sink — no shared mutable state.
+- Security: no hardcoded secrets; all inputs pass through to JSON params without further transformation.
+- Readability: names are descriptive, functions are focused. No dead code.
+- Performance: no unnecessary loops or resource leaks.
+- `main.rs` untouched (per task requirement). Only the four specified files modified (plus `Cargo.lock`).
+
+Minor observation (non-blocking): `ScheduleCommand::List { json }` stores a local `json` flag and the dispatch uses it directly rather than `cli.json`. This diverges from the `sessions list` pattern (which uses `cli.json`) but satisfies AC-4 (`bob schedule list --json` works correctly). The task description explicitly shows `[--json]` as a local flag on the `list` subcommand, so this is intentional.
