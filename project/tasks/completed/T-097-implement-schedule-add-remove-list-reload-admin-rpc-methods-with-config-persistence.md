@@ -1,7 +1,7 @@
 ---
 id: T-097
 title: Implement schedule.add/remove/list/reload admin-RPC methods with config persistence
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-06-12'
