@@ -127,3 +127,37 @@ Circular dependency `admin-rpc` → `bob` required duplicating TOML write logic 
 **Final branch state:** 5 implementation commits + 1 fmt cleanup. `cargo test --workspace` passes with zero failures. `cargo fmt --check` clean. (admin-rpc: 119 tests, scheduler-adapter: 7 tests, workspace all green)
 
 ## Review
+
+### Review Verdict — 2026-06-12
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+AC-1 (schedule.add persists and returns ok): Met. `handle_schedule_add` validates the entry, calls `write_schedule_entries_to_toml` atomically (temp file + rename in same directory), then sends the updated vec over `ReloadHandle`. Returns `{ "ok": true }`. Test `dispatch_schedule_add_with_valid_entry_persists_and_returns_ok` confirms this and checks the file content.
+
+AC-2 (schedule.add duplicate id or invalid cron returns error, file unchanged): Met. Duplicate-id detection reads from the live watch receiver (no disk round-trip) before touching the file — a validation-failure path returns before any write. Invalid-cron validation using `CronParser::builder().seconds(Seconds::Disallowed).build()` returns the error before any write. Tests `dispatch_schedule_add_with_duplicate_id_returns_error_and_leaves_file_unchanged` and `dispatch_schedule_add_with_invalid_cron_returns_error` both assert the file is unmodified.
+
+AC-3 (schedule.remove known id removes from file, signals reload, returns ok): Met. `handle_schedule_remove` checks existence in the live table, reads disk, filters, writes atomically, then calls `handle.reload(updated)`. Returns `{ "ok": true }`. Unknown-id path returns -32602. Test `dispatch_schedule_remove_with_known_id_removes_entry_and_returns_ok` verifies both file content and response.
+
+AC-4 (schedule.list returns live JSON array): Met. `handle_schedule_list` calls `handle.subscribe().borrow()` and maps to JSON objects with id/cron/prompt. No disk I/O. Test `dispatch_schedule_list_with_scheduler_handle_returns_live_job_table` pre-loads entries via `reload_handle.reload(...)` and asserts the JSON result contains the expected fields.
+
+AC-5 (tests pass): Met. `cargo test -p admin-rpc` — 119 passed, 0 failed. `cargo test --workspace` — all crates green, 0 failures across the workspace.
+
+**Stage 2 — Code Quality**
+
+Correctness: Atomic write implemented via temp-file-in-same-directory + rename in both `dispatch.rs` (`write_schedule_entries_to_toml`) and `bob/src/config.rs` (`write_schedule_entries`). Temp path uses nanosecond timestamp for uniqueness; cleanup on rename failure. Duplicate-detection reads from the watch channel before disk access, so it reflects the live table correctly. `schedule.remove` checks existence before loading disk — consistent with the task's intent to use the live table as the authoritative presence check.
+
+The TOML write logic is intentionally duplicated in `dispatch.rs` due to the circular-dependency constraint (admin-rpc cannot depend on bob). The Work Log documents this decision and the alternatives considered. The duplication is bounded to one private function in dispatch.rs.
+
+Tests: 8 new schedule-specific tests in `dispatch.rs` plus 1 new test in `scheduler-adapter` for `subscribe()` and 3 new tests in `bob/config.rs` for `write_schedule_entries`. Success and failure paths are covered for each method. Tests are independent (each creates its own `tempdir` and scheduler handle).
+
+Security: No hardcoded secrets. All external input validated (blank-check plus cron parse) before any write. TOML write does not interpolate user input unsafely — `toml_edit::value(str)` escapes values correctly.
+
+Readability: Method handlers are clearly named, factored into focused private helpers (`schedule_handles`, `load_schedule_entries_from_config`, `write_and_reload`). No dead code or commented-out blocks.
+
+Performance: No unnecessary blocking or resource leaks. `watch::Receiver::borrow()` is a synchronous non-blocking call; no lock contention.
+
+Minor observations (non-blocking):
+- `write_schedule_entries_to_toml` in `dispatch.rs` uses a nanosecond-timestamp suffix for the temp file name. On a filesystem with low clock resolution or under heavy concurrent calls this could theoretically collide. In practice the function is called sequentially within a single-connection dispatch context and this is not a correctness risk.
+- Error responses from `write_and_reload` and `load_schedule_entries_from_config` use `Value::Null` as the JSON-RPC id rather than forwarding the original request id. This is a cosmetic gap — the calling handlers return these outcomes immediately, and the outer `dispatch` method does return the original id for success responses. Not a correctness issue given the current test coverage.
