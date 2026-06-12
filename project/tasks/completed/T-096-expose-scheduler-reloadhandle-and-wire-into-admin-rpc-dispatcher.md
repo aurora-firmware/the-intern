@@ -1,7 +1,7 @@
 ---
 id: T-096
 title: Expose scheduler ReloadHandle and wire into admin-RPC dispatcher
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-06-12'
