@@ -10,7 +10,7 @@ pub mod config;
 pub mod serve;
 pub mod telemetry;
 
-use cli::{AuditCommand, Cli, Command, PolicyCommand, SessionsCommand};
+use cli::{AuditCommand, Cli, Command, PolicyCommand, ScheduleCommand, SessionsCommand};
 use config::BobConfig;
 
 #[async_trait]
@@ -23,6 +23,10 @@ pub trait DispatchRuntime {
     fn sessions_kill(&self, json: bool, id: &str) -> ServiceResult<()>;
     fn audit_tail(&self, json: bool, filters: Vec<AuditFilterKind>) -> ServiceResult<()>;
     fn policy_reload(&self, json: bool) -> ServiceResult<()>;
+    fn schedule_add(&self, json: bool, id: &str, cron: &str, prompt: &str) -> ServiceResult<()>;
+    fn schedule_remove(&self, json: bool, id: &str) -> ServiceResult<()>;
+    fn schedule_list(&self, json: bool) -> ServiceResult<()>;
+    fn schedule_reload(&self, json: bool) -> ServiceResult<()>;
     fn chat(&self, json: bool, session: Option<&str>) -> ServiceResult<()>;
 }
 
@@ -62,6 +66,22 @@ impl DispatchRuntime for ProductionRuntime {
         cli::commands::policy_reload(json)
     }
 
+    fn schedule_add(&self, json: bool, id: &str, cron: &str, prompt: &str) -> ServiceResult<()> {
+        cli::commands::schedule_add(json, id, cron, prompt)
+    }
+
+    fn schedule_remove(&self, json: bool, id: &str) -> ServiceResult<()> {
+        cli::commands::schedule_remove(json, id)
+    }
+
+    fn schedule_list(&self, json: bool) -> ServiceResult<()> {
+        cli::commands::schedule_list(json)
+    }
+
+    fn schedule_reload(&self, json: bool) -> ServiceResult<()> {
+        cli::commands::schedule_reload(json)
+    }
+
     fn chat(&self, json: bool, session: Option<&str>) -> ServiceResult<()> {
         cli::commands::chat(json, session)
     }
@@ -87,6 +107,14 @@ pub async fn run_cli_with_runtime(runtime: &impl DispatchRuntime, cli: Cli) -> S
         },
         Command::Policy { command } => match command {
             PolicyCommand::Reload => runtime.policy_reload(cli.json),
+        },
+        Command::Schedule { command } => match command {
+            ScheduleCommand::Add { id, cron, prompt } => {
+                runtime.schedule_add(cli.json, &id, &cron, &prompt)
+            }
+            ScheduleCommand::Remove { id } => runtime.schedule_remove(cli.json, &id),
+            ScheduleCommand::List { json } => runtime.schedule_list(json),
+            ScheduleCommand::Reload => runtime.schedule_reload(cli.json),
         },
         Command::Chat { session } => runtime.chat(cli.json, session.as_deref()),
     }
@@ -153,6 +181,28 @@ mod tests {
         }
 
         fn policy_reload(&self, _json: bool) -> ServiceResult<()> {
+            Err(ServiceError::NotImplemented)
+        }
+
+        fn schedule_add(
+            &self,
+            _json: bool,
+            _id: &str,
+            _cron: &str,
+            _prompt: &str,
+        ) -> ServiceResult<()> {
+            Err(ServiceError::NotImplemented)
+        }
+
+        fn schedule_remove(&self, _json: bool, _id: &str) -> ServiceResult<()> {
+            Err(ServiceError::NotImplemented)
+        }
+
+        fn schedule_list(&self, _json: bool) -> ServiceResult<()> {
+            Err(ServiceError::NotImplemented)
+        }
+
+        fn schedule_reload(&self, _json: bool) -> ServiceResult<()> {
             Err(ServiceError::NotImplemented)
         }
 
