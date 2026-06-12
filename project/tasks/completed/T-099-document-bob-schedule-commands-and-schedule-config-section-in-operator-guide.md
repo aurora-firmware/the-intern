@@ -1,7 +1,7 @@
 ---
 id: T-099
 title: Document bob schedule commands and [schedule] config section in operator guide
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-06-12'
