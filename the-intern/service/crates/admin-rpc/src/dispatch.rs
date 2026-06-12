@@ -20,14 +20,16 @@
 //! | `chat.send` | admin socket peer gate | Validates and forwards chat user-input frames |
 //! | `report.submit` | admin socket peer gate | Accepts an [`ExternalReportAuditPayload`][bob_core::types::ExternalReportAuditPayload], delegates to Monitoring, returns `{ ok: true }` |
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use bob_core::error::ServiceError;
 use bob_core::types::{
     AuditFilterKind, AuditRecord as MonitoringAuditRecord, AuditRecordKind, AuditRecordPayload,
-    ExternalReportAuditPayload, UserId,
+    ExternalReportAuditPayload, ScheduleEntry, UserId,
 };
 use chat_adapter::{ChatFrame, FrameHandle as ChatHandle};
+use croner::parser::{CronParser, Seconds};
 use serde_json::{json, Value};
 use std::str::FromStr;
 use uuid::Uuid;
@@ -63,6 +65,11 @@ pub struct Dispatcher {
     /// When present, `schedule.*` methods (T-097) push updated job tables to
     /// the scheduler actor.  When absent, `schedule.*` methods return -32601.
     scheduler: Option<scheduler_adapter::ReloadHandle>,
+    /// Path to the `bob.toml` config file.
+    ///
+    /// Required for `schedule.add`, `schedule.remove`, and `schedule.reload`
+    /// to persist entries.  When absent those methods return -32601.
+    config_path: Option<PathBuf>,
     started_at: Instant,
     version: &'static str,
 }
@@ -125,6 +132,7 @@ impl Dispatcher {
             chat_adapter: None,
             chat_router: None,
             scheduler: None,
+            config_path: None,
             started_at: Instant::now(),
             version,
         }
@@ -174,6 +182,17 @@ impl Dispatcher {
         self
     }
 
+    /// Set the path to the `bob.toml` config file.
+    ///
+    /// Required for `schedule.add`, `schedule.remove`, and `schedule.reload`
+    /// to persist and read schedule entries.  When absent those methods return
+    /// `-32601 Method not found`.
+    #[must_use]
+    pub fn with_config_path(mut self, path: PathBuf) -> Self {
+        self.config_path = Some(path);
+        self
+    }
+
     /// Dispatch `request` to the appropriate method handler.
     ///
     /// `registry` is the per-connection subscription registry. Subscription
@@ -205,15 +224,10 @@ impl Dispatcher {
             "chat.close" => self.handle_chat_close(id, &request.params, registry).await,
             "chat.send" => self.handle_chat_send(id, &request.params, registry).await,
             "report.submit" => self.handle_report_submit(id, &request.params).await,
-            // Schedule namespace — placeholder until T-097 implements real handlers.
-            "schedule.add" | "schedule.remove" | "schedule.list" | "schedule.reload" => {
-                DispatchOutcome::Err(ErrorResponse::error(
-                    id,
-                    CODE_METHOD_NOT_FOUND,
-                    "Method not found",
-                    Some(json!({ "method": request.method })),
-                ))
-            }
+            "schedule.add" => self.handle_schedule_add(id, &request.params).await,
+            "schedule.remove" => self.handle_schedule_remove(id, &request.params).await,
+            "schedule.list" => self.handle_schedule_list(id).await,
+            "schedule.reload" => self.handle_schedule_reload(id).await,
             other => DispatchOutcome::Err(ErrorResponse::error(
                 id,
                 CODE_METHOD_NOT_FOUND,
@@ -706,6 +720,361 @@ impl Dispatcher {
             )),
         }
     }
+
+    // ── Schedule method handlers ─────────────────────────────────────────────
+
+    /// Handle `schedule.add { id, cron, prompt }`.
+    ///
+    /// Validates the entry (non-blank fields, valid 5-field croner expression,
+    /// id not already in the live table), then atomically writes the updated
+    /// `[[schedule]]` array back to the config file and signals a reload.
+    async fn handle_schedule_add(&self, id: Value, params: &Option<Value>) -> DispatchOutcome {
+        let (handle, config_path) = match self.schedule_handles() {
+            Some(pair) => pair,
+            None => {
+                return DispatchOutcome::Err(ErrorResponse::error(
+                    id,
+                    CODE_METHOD_NOT_FOUND,
+                    "schedule.add is not available: no scheduler handle or config path",
+                    Some(json!({ "method": "schedule.add" })),
+                ));
+            }
+        };
+
+        // Parse params.
+        let Some(ref params_value) = params else {
+            return DispatchOutcome::Err(ErrorResponse::error(
+                id,
+                CODE_INVALID_REQUEST,
+                "schedule.add requires params",
+                Some(json!({ "category": "invalid_request" })),
+            ));
+        };
+
+        let entry_id = match params_value.get("id").and_then(|v| v.as_str()) {
+            Some(s) if !s.trim().is_empty() => s.to_owned(),
+            Some(_) | None => {
+                return DispatchOutcome::Err(ErrorResponse::error(
+                    id,
+                    CODE_INVALID_REQUEST,
+                    "schedule.add requires a non-blank params.id",
+                    Some(json!({ "category": "invalid_request" })),
+                ));
+            }
+        };
+
+        let entry_cron = match params_value.get("cron").and_then(|v| v.as_str()) {
+            Some(s) if !s.trim().is_empty() => s.to_owned(),
+            Some(_) | None => {
+                return DispatchOutcome::Err(ErrorResponse::error(
+                    id,
+                    CODE_INVALID_REQUEST,
+                    "schedule.add requires a non-blank params.cron",
+                    Some(json!({ "category": "invalid_request" })),
+                ));
+            }
+        };
+
+        let entry_prompt = match params_value.get("prompt").and_then(|v| v.as_str()) {
+            Some(s) if !s.trim().is_empty() => s.to_owned(),
+            Some(_) | None => {
+                return DispatchOutcome::Err(ErrorResponse::error(
+                    id,
+                    CODE_INVALID_REQUEST,
+                    "schedule.add requires a non-blank params.prompt",
+                    Some(json!({ "category": "invalid_request" })),
+                ));
+            }
+        };
+
+        // Validate the cron expression (must be a valid 5-field expression).
+        let parser = CronParser::builder().seconds(Seconds::Disallowed).build();
+        if let Err(err) = parser.parse(&entry_cron) {
+            return DispatchOutcome::Err(ErrorResponse::error(
+                id,
+                CODE_INVALID_REQUEST,
+                "schedule.add: invalid cron expression",
+                Some(json!({
+                    "category": "invalid_request",
+                    "reason": err.to_string(),
+                })),
+            ));
+        }
+
+        // Check that the id is not already in the live table.
+        {
+            let live = handle.subscribe();
+            let current = live.borrow();
+            if current.iter().any(|e| e.id == entry_id) {
+                return DispatchOutcome::Err(ErrorResponse::error(
+                    id,
+                    CODE_INVALID_REQUEST,
+                    "schedule.add: an entry with this id already exists",
+                    Some(json!({
+                        "category": "invalid_request",
+                        "entry_id": entry_id,
+                    })),
+                ));
+            }
+        }
+
+        // Read current entries from config, append the new one, write back.
+        let mut entries = match self.load_schedule_entries_from_config(config_path) {
+            Ok(e) => e,
+            Err(outcome) => return outcome,
+        };
+        entries.push(ScheduleEntry {
+            id: entry_id,
+            cron: entry_cron,
+            prompt: entry_prompt,
+        });
+
+        if let Err(outcome) = self.write_and_reload(config_path, entries, handle) {
+            return outcome;
+        }
+
+        DispatchOutcome::Ok(Response::ok(id, json!({ "ok": true })))
+    }
+
+    /// Handle `schedule.remove { id }`.
+    async fn handle_schedule_remove(&self, id: Value, params: &Option<Value>) -> DispatchOutcome {
+        let (handle, config_path) = match self.schedule_handles() {
+            Some(pair) => pair,
+            None => {
+                return DispatchOutcome::Err(ErrorResponse::error(
+                    id,
+                    CODE_METHOD_NOT_FOUND,
+                    "schedule.remove is not available: no scheduler handle or config path",
+                    Some(json!({ "method": "schedule.remove" })),
+                ));
+            }
+        };
+
+        // Parse params.id.
+        let entry_id = match params
+            .as_ref()
+            .and_then(|p| p.get("id"))
+            .and_then(|v| v.as_str())
+        {
+            Some(s) if !s.trim().is_empty() => s.to_owned(),
+            Some(_) | None => {
+                return DispatchOutcome::Err(ErrorResponse::error(
+                    id,
+                    CODE_INVALID_REQUEST,
+                    "schedule.remove requires a non-blank params.id",
+                    Some(json!({ "category": "invalid_request" })),
+                ));
+            }
+        };
+
+        // Verify the id exists in the live table.
+        {
+            let live = handle.subscribe();
+            let current = live.borrow();
+            if !current.iter().any(|e| e.id == entry_id) {
+                return DispatchOutcome::Err(ErrorResponse::error(
+                    id,
+                    CODE_INVALID_REQUEST,
+                    "schedule.remove: no entry found with this id",
+                    Some(json!({
+                        "category": "invalid_request",
+                        "entry_id": entry_id,
+                    })),
+                ));
+            }
+        }
+
+        // Read config, filter out the entry, write back.
+        let entries = match self.load_schedule_entries_from_config(config_path) {
+            Ok(e) => e,
+            Err(outcome) => return outcome,
+        };
+        let updated: Vec<ScheduleEntry> = entries
+            .into_iter()
+            .filter(|e| e.id != entry_id)
+            .collect();
+
+        if let Err(outcome) = self.write_and_reload(config_path, updated, handle) {
+            return outcome;
+        }
+
+        DispatchOutcome::Ok(Response::ok(id, json!({ "ok": true })))
+    }
+
+    /// Handle `schedule.list`.
+    ///
+    /// Returns the current live job table from the scheduler actor's watch
+    /// receiver. No disk read.
+    async fn handle_schedule_list(&self, id: Value) -> DispatchOutcome {
+        let Some(ref handle) = self.scheduler else {
+            return DispatchOutcome::Err(ErrorResponse::error(
+                id,
+                CODE_METHOD_NOT_FOUND,
+                "schedule.list is not available: no scheduler handle",
+                Some(json!({ "method": "schedule.list" })),
+            ));
+        };
+
+        let entries: Vec<Value> = handle
+            .subscribe()
+            .borrow()
+            .iter()
+            .map(|e| {
+                json!({
+                    "id": e.id,
+                    "cron": e.cron,
+                    "prompt": e.prompt,
+                })
+            })
+            .collect();
+
+        DispatchOutcome::Ok(Response::ok(id, json!(entries)))
+    }
+
+    /// Handle `schedule.reload`.
+    ///
+    /// Reads `[[schedule]]` entries from the config file on disk and sends the
+    /// full `Vec<ScheduleEntry>` over the reload handle.  This is the only
+    /// `schedule.*` method that re-reads disk; it allows the operator to
+    /// reconcile the live table with a hand-edited config file.
+    async fn handle_schedule_reload(&self, id: Value) -> DispatchOutcome {
+        let (handle, config_path) = match self.schedule_handles() {
+            Some(pair) => pair,
+            None => {
+                return DispatchOutcome::Err(ErrorResponse::error(
+                    id,
+                    CODE_METHOD_NOT_FOUND,
+                    "schedule.reload is not available: no scheduler handle or config path",
+                    Some(json!({ "method": "schedule.reload" })),
+                ));
+            }
+        };
+
+        let entries = match self.load_schedule_entries_from_config(config_path) {
+            Ok(e) => e,
+            Err(outcome) => return outcome,
+        };
+
+        if handle.reload(entries).is_err() {
+            return DispatchOutcome::Err(ErrorResponse::error(
+                id,
+                CODE_METHOD_NOT_FOUND,
+                "schedule.reload: scheduler actor has stopped",
+                Some(json!({ "category": "service_down" })),
+            ));
+        }
+
+        DispatchOutcome::Ok(Response::ok(id, json!({ "ok": true })))
+    }
+
+    // ── Private schedule helpers ─────────────────────────────────────────────
+
+    /// Return `(handle, config_path)` when both are configured, or `None`.
+    fn schedule_handles(&self) -> Option<(&scheduler_adapter::ReloadHandle, &std::path::Path)> {
+        match (&self.scheduler, &self.config_path) {
+            (Some(h), Some(p)) => Some((h, p.as_path())),
+            _ => None,
+        }
+    }
+
+    /// Load `[[schedule]]` entries from the config file at `path`.
+    ///
+    /// Returns `Err(DispatchOutcome::Err(...))` on read or parse failure.
+    fn load_schedule_entries_from_config(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Vec<ScheduleEntry>, DispatchOutcome> {
+        use bob_core::types::ScheduleEntry as SE;
+
+        if !path.exists() {
+            // No config file yet — treat as empty schedule.
+            return Ok(Vec::new());
+        }
+
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            DispatchOutcome::Err(ErrorResponse::error(
+                Value::Null,
+                CODE_METHOD_NOT_FOUND,
+                "schedule method: failed to read config file",
+                Some(json!({
+                    "category": "configuration",
+                    "reason": e.to_string(),
+                })),
+            ))
+        })?;
+
+        // Parse only the [[schedule]] array; other keys are irrelevant here.
+        #[derive(serde::Deserialize, Default)]
+        struct ScheduleSection {
+            #[serde(default)]
+            schedule: Vec<RawEntry>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct RawEntry {
+            #[serde(default)]
+            id: String,
+            #[serde(default)]
+            cron: String,
+            #[serde(default)]
+            prompt: String,
+        }
+
+        let parsed: ScheduleSection = toml::from_str(&content).map_err(|e| {
+            DispatchOutcome::Err(ErrorResponse::error(
+                Value::Null,
+                CODE_METHOD_NOT_FOUND,
+                "schedule method: failed to parse config file",
+                Some(json!({
+                    "category": "configuration",
+                    "reason": e.to_string(),
+                })),
+            ))
+        })?;
+
+        Ok(parsed
+            .schedule
+            .into_iter()
+            .map(|r| SE {
+                id: r.id,
+                cron: r.cron,
+                prompt: r.prompt,
+            })
+            .collect())
+    }
+
+    /// Write `entries` to `config_path` and signal the scheduler actor to reload.
+    ///
+    /// Returns `Err(DispatchOutcome::Err(...))` on write or reload failure.
+    fn write_and_reload(
+        &self,
+        config_path: &std::path::Path,
+        entries: Vec<ScheduleEntry>,
+        handle: &scheduler_adapter::ReloadHandle,
+    ) -> Result<(), DispatchOutcome> {
+        write_schedule_entries_to_toml(config_path, &entries).map_err(|e| {
+            DispatchOutcome::Err(ErrorResponse::error(
+                Value::Null,
+                CODE_METHOD_NOT_FOUND,
+                "schedule method: failed to write config file",
+                Some(json!({
+                    "category": "persistence",
+                    "reason": e.to_string(),
+                })),
+            ))
+        })?;
+
+        if handle.reload(entries).is_err() {
+            return Err(DispatchOutcome::Err(ErrorResponse::error(
+                Value::Null,
+                CODE_METHOD_NOT_FOUND,
+                "schedule method: scheduler actor has stopped",
+                Some(json!({ "category": "service_down" })),
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 /// Parse an optional `filters` array from JSON-RPC params.
@@ -808,6 +1177,54 @@ pub fn map_service_error(id: Value, error: &ServiceError) -> ErrorResponse {
 /// Returns the current UTC time as an RFC 3339 string.
 fn chrono_timestamp() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+/// Atomically replace the `[[schedule]]` array in the TOML file at `path`
+/// with `entries`, preserving all other config keys.
+///
+/// Writes to a temporary file in the same directory then renames, so the
+/// on-disk state is never partially written.
+fn write_schedule_entries_to_toml(
+    path: &std::path::Path,
+    entries: &[ScheduleEntry],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let content = if path.exists() {
+        std::fs::read_to_string(path)?
+    } else {
+        String::new()
+    };
+
+    let mut doc: toml_edit::DocumentMut = content.parse()?;
+
+    // Replace the [[schedule]] array.
+    doc.remove("schedule");
+    if !entries.is_empty() {
+        let mut arr = toml_edit::ArrayOfTables::new();
+        for entry in entries {
+            let mut table = toml_edit::Table::new();
+            table.insert("id", toml_edit::value(entry.id.as_str()));
+            table.insert("cron", toml_edit::value(entry.cron.as_str()));
+            table.insert("prompt", toml_edit::value(entry.prompt.as_str()));
+            arr.push(table);
+        }
+        doc.insert("schedule", toml_edit::Item::ArrayOfTables(arr));
+    }
+
+    // Atomic write via temp-file + rename.
+    let parent = path.parent().unwrap_or(std::path::Path::new("."));
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp_path = parent.join(format!(".bob-config-tmp-{unique}"));
+
+    std::fs::write(&tmp_path, doc.to_string())?;
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(Box::new(e));
+    }
+
+    Ok(())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -2438,6 +2855,346 @@ mod tests {
             DispatchOutcome::Ok(_) => panic!("expected error"),
             _ => panic!("unexpected dispatch outcome variant"),
         }
+    }
+
+    // ── Helpers for schedule.* tests ─────────────────────────────────────────
+
+    fn make_scheduler_handle() -> (
+        scheduler_adapter::ReloadHandle,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use bob_core::types::ScheduleEntry;
+        use requests_handler::Config as QueueConfig;
+        use std::time::Duration;
+        use tokio::sync::watch;
+
+        let (_, cancel_rx) = watch::channel(false);
+        let cfg = QueueConfig {
+            request_queue_capacity: 4,
+            request_submit_timeout: Duration::from_secs(1),
+        };
+        let (intake, _intake_task) =
+            requests_handler::start_with(cfg, move |_| async {}, cancel_rx);
+        let entries: Vec<ScheduleEntry> = vec![];
+        scheduler_adapter::start(intake, entries)
+    }
+
+    fn write_temp_bob_toml(contents: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bob.toml");
+        std::fs::write(&path, contents).expect("write temp bob.toml");
+        (dir, path)
+    }
+
+    // AC-1 (T-097): schedule.list with a scheduler handle returns the live job table.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_list_with_scheduler_handle_returns_live_job_table() {
+        use bob_core::types::ScheduleEntry;
+
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+
+        // Pre-load two entries into the watch channel.
+        reload_handle
+            .reload(vec![
+                ScheduleEntry {
+                    id: "job-a".to_owned(),
+                    cron: "0 9 * * *".to_owned(),
+                    prompt: "Morning report".to_owned(),
+                },
+                ScheduleEntry {
+                    id: "job-b".to_owned(),
+                    cron: "0 17 * * *".to_owned(),
+                    prompt: "Evening report".to_owned(),
+                },
+            ])
+            .expect("reload must succeed");
+        tokio::task::yield_now().await;
+
+        let dispatcher = make_dispatcher_no_handles().with_scheduler_handle(reload_handle);
+        let req = make_request("schedule.list", json!(300));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => {
+                assert_eq!(resp.id, json!(300));
+                let arr = resp.result.as_array().expect("result must be an array");
+                assert_eq!(arr.len(), 2, "must return two entries");
+                assert_eq!(arr[0]["id"], json!("job-a"));
+                assert_eq!(arr[0]["cron"], json!("0 9 * * *"));
+                assert_eq!(arr[0]["prompt"], json!("Morning report"));
+                assert_eq!(arr[1]["id"], json!("job-b"));
+            }
+            DispatchOutcome::Err(e) => {
+                panic!("expected Ok, got error: {}", e.error.message)
+            }
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-4 (T-097): schedule.list without a scheduler handle returns -32601.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_list_without_scheduler_handle_returns_method_not_found() {
+        let dispatcher = make_dispatcher_no_handles();
+        let req = make_request("schedule.list", json!(301));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(301));
+                assert_eq!(resp.error.code, CODE_METHOD_NOT_FOUND);
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error, got Ok"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-1 (T-097): schedule.add with valid entry writes to config and returns ok.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_with_valid_entry_persists_and_returns_ok() {
+        let (_dir, config_path) = write_temp_bob_toml("");
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_config_path(config_path.clone());
+
+        let req = make_request_with_params(
+            "schedule.add",
+            json!(310),
+            json!({
+                "id": "new-job",
+                "cron": "0 9 * * *",
+                "prompt": "Morning report"
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => {
+                assert_eq!(resp.id, json!(310));
+                assert_eq!(resp.result["ok"], json!(true));
+            }
+            DispatchOutcome::Err(e) => {
+                panic!("expected Ok, got error: {}", e.error.message)
+            }
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+
+        // Verify the entry was persisted to the config file.
+        let content = std::fs::read_to_string(&config_path).expect("read config");
+        assert!(content.contains("new-job"), "entry id must be persisted");
+    }
+
+    // AC-2 (T-097): schedule.add with duplicate id returns -32602 and leaves file unchanged.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_with_duplicate_id_returns_error_and_leaves_file_unchanged() {
+        let initial = "[[schedule]]\nid = \"existing\"\ncron = \"0 9 * * *\"\nprompt = \"p\"\n";
+        let (_dir, config_path) = write_temp_bob_toml(initial);
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+
+        // Pre-load the existing entry into the watch channel so schedule.add can
+        // detect the duplicate in the live table.
+        reload_handle
+            .reload(vec![bob_core::types::ScheduleEntry {
+                id: "existing".to_owned(),
+                cron: "0 9 * * *".to_owned(),
+                prompt: "p".to_owned(),
+            }])
+            .expect("reload");
+        tokio::task::yield_now().await;
+
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_config_path(config_path.clone());
+
+        let req = make_request_with_params(
+            "schedule.add",
+            json!(311),
+            json!({
+                "id": "existing",
+                "cron": "0 10 * * *",
+                "prompt": "duplicate"
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(311));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for duplicate id"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+
+        // File must be unchanged — still contains the original entry.
+        let content = std::fs::read_to_string(&config_path).expect("read config");
+        assert!(content.contains("existing"), "original entry must remain");
+    }
+
+    // AC-2 (T-097): schedule.add with invalid cron returns error.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_with_invalid_cron_returns_error() {
+        let (_dir, config_path) = write_temp_bob_toml("");
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_config_path(config_path.clone());
+
+        let req = make_request_with_params(
+            "schedule.add",
+            json!(312),
+            json!({
+                "id": "bad-job",
+                "cron": "not-a-cron",
+                "prompt": "something"
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(312));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for invalid cron"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+
+        // File must not have been written with invalid data.
+        let content = std::fs::read_to_string(&config_path).expect("read config");
+        assert!(!content.contains("bad-job"), "invalid entry must not be persisted");
+    }
+
+    // AC-3 (T-097): schedule.remove with known id removes from config and returns ok.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_remove_with_known_id_removes_entry_and_returns_ok() {
+        let initial =
+            "[[schedule]]\nid = \"to-remove\"\ncron = \"0 9 * * *\"\nprompt = \"p\"\n\n[[schedule]]\nid = \"keep\"\ncron = \"0 10 * * *\"\nprompt = \"q\"\n";
+        let (_dir, config_path) = write_temp_bob_toml(initial);
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+
+        // Pre-load entries into the live table.
+        reload_handle
+            .reload(vec![
+                bob_core::types::ScheduleEntry {
+                    id: "to-remove".to_owned(),
+                    cron: "0 9 * * *".to_owned(),
+                    prompt: "p".to_owned(),
+                },
+                bob_core::types::ScheduleEntry {
+                    id: "keep".to_owned(),
+                    cron: "0 10 * * *".to_owned(),
+                    prompt: "q".to_owned(),
+                },
+            ])
+            .expect("reload");
+        tokio::task::yield_now().await;
+
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_config_path(config_path.clone());
+
+        let req = make_request_with_params(
+            "schedule.remove",
+            json!(320),
+            json!({ "id": "to-remove" }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => {
+                assert_eq!(resp.id, json!(320));
+                assert_eq!(resp.result["ok"], json!(true));
+            }
+            DispatchOutcome::Err(e) => {
+                panic!("expected Ok, got error: {}", e.error.message)
+            }
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+
+        let content = std::fs::read_to_string(&config_path).expect("read config");
+        assert!(!content.contains("to-remove"), "removed entry must not be in file");
+        assert!(content.contains("keep"), "other entry must remain");
+    }
+
+    // AC-3 (T-097): schedule.remove with unknown id returns error.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_remove_with_unknown_id_returns_error() {
+        let (_dir, config_path) = write_temp_bob_toml("");
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_config_path(config_path.clone());
+
+        let req = make_request_with_params(
+            "schedule.remove",
+            json!(321),
+            json!({ "id": "does-not-exist" }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(321));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for unknown id"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-1 (T-097): schedule.reload reads from disk and signals the actor.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_reload_reads_from_disk_and_returns_ok() {
+        let (_dir, config_path) =
+            write_temp_bob_toml("[[schedule]]\nid = \"disk-job\"\ncron = \"0 9 * * *\"\nprompt = \"p\"\n");
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let rx = reload_handle.subscribe();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_config_path(config_path.clone());
+
+        let req = make_request("schedule.reload", json!(330));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => {
+                assert_eq!(resp.id, json!(330));
+                assert_eq!(resp.result["ok"], json!(true));
+            }
+            DispatchOutcome::Err(e) => {
+                panic!("expected Ok, got error: {}", e.error.message)
+            }
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+
+        // The live table should now reflect the disk entry.
+        let current = rx.borrow().clone();
+        assert_eq!(current.len(), 1, "live table must have one entry after reload");
+        assert_eq!(current[0].id, "disk-job");
     }
 
     // AC-2 (T-096): with_scheduler_handle stores the handle in the dispatcher
