@@ -152,7 +152,7 @@ shell where you run client commands too.
 ## Channel configuration
 
 `bob serve` can run multiple channel adapters. Currently the interactive-chat
-channel is the only implemented adapter; others (email, webhook, scheduler) are
+channel is the only implemented adapter; others (email, scheduler) are
 planned for later phases.
 
 The channel configuration lives in the `[channels]` section of bob's TOML config

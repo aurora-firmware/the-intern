@@ -20,7 +20,7 @@ idle reaping, kill). On top of that foundation it also runs:
   `chat.send` traffic into the request queue via the requests-handler.
 
 Phase 6's chat channel is wired end to end; the remaining channel adapters
-(email, webhook, scheduler) and Phase 7 (actions) are not yet implemented.
+(email, scheduler) and Phase 7 (actions) are not yet implemented.
 
 ## Repository structure
 

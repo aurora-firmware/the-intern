@@ -122,7 +122,8 @@ What this specification explicitly does NOT cover:
          | (UDS, JSON-RPC 2.0,   | (UDS, S-001 schema,
          |  notifications for    |  auth verdicts +
          |  subscriptions;       |  event forwarding;
-         |  perms + SO_PEERCRED) |  perms + SO_PEERCRED)
+         |  filesystem-gated,    |  filesystem-gated,
+         |  peer-cred audited)   |  peer-cred audited)
          v                       v
    bob CLI / future GUI       pi-agent JS extension
    / programmatic clients     (one connection per session,
@@ -139,7 +140,7 @@ admin actor never sees extension traffic and vice versa.
 | `bob` binary | Single executable; entry-point dispatch to `serve` or a client subcommand | One crate, one build artefact |
 | `bob serve` runtime | Owns the Tokio runtime, signal handling, configuration load, tracing init, actor construction and wiring, and the graceful-shutdown protocol from the Rust coding guidelines | Lives in the binary crate; depends on every subsystem crate |
 | `bob-core` library crate | Pure domain types (events, verdicts, audit records, identifiers) and the port traits each subsystem exposes; no Tokio | Imported by every subsystem and by the binary |
-| Admin-RPC actor | Owns `admin.sock`; accepts connections, enforces filesystem perms + `SO_PEERCRED`, frames JSON-RPC 2.0, dispatches method calls to subsystem handles, and serializes subscription notifications back to subscribers | Public surface; method catalogue evolves over time |
+| Admin-RPC actor | Owns `admin.sock`; accepts connections, enforces the filesystem-permission gate (`SO_PEERCRED` audited, not a gate — ADR-005), frames JSON-RPC 2.0, dispatches method calls to subsystem handles, and serializes subscription notifications back to subscribers | Public surface; method catalogue evolves over time |
 | Extension-IPC actor | Owns `extension.sock`; preserves the S-001 schema for auth verdicts and event forwarding; multiplexes by session id | Stable contract; do not co-mingle with admin traffic |
 | Requests Handler actor | Scaffold for S-001 Phase 1 work — owns the inbound internal-event queue and pre-flight identity attachment | Empty implementation in this spec |
 | Policy Control actor | Scaffold for S-001 Phase 4 work — accepts verdict requests over its handle, returns allow/block | Empty implementation; pre-loaded with a deny-by-default stub |
@@ -206,11 +207,13 @@ programmatic API and any later GUI.
   Linux, `$TMPDIR/bob-$UID/admin.sock` on macOS; the path is overridable in
   configuration. The directory is created with mode `0700`, the socket with
   mode `0660`.
-- *Authentication:* filesystem permissions as the outer gate; an in-process
-  `SO_PEERCRED` (`LOCAL_PEERCRED` on macOS) check on every new connection
-  enforces that the connecting process's uid matches the service's uid (or a
-  configured admin group). Connections that fail either gate are closed
-  before the JSON-RPC handshake.
+- *Authentication:* the socket's filesystem permissions are the sole connection
+  gate — an owner-only (`0700`) parent directory restricts connections to the
+  service-owner uid (ADR-005). `SO_PEERCRED` (`LOCAL_PEERCRED` on macOS) is read
+  only as an optional audit signal, not a gate; there is no in-service uid
+  allow-list. Admitting additional uids, if ever needed, is done with a Unix
+  group (`chgrp` on the socket and a correspondingly relaxed directory mode),
+  not bob configuration.
 - *Wire protocol:* JSON-RPC 2.0 with newline-delimited frames over a
   persistent connection. Standard request/response and notification forms.
 - *Subscriptions:* a method that opens a subscription returns a subscription
@@ -235,8 +238,9 @@ S-001 Phases 3 and 4 land.
 **Interfaces:**
 - *Transport:* Unix domain socket at `$XDG_RUNTIME_DIR/bob/extension.sock` on
   Linux, `$TMPDIR/bob-$UID/extension.sock` on macOS; overridable.
-- *Authentication:* same gate model as `admin.sock` (perms + peer-cred); the
-  extension always runs under the same uid as the service.
+- *Authentication:* same gate model as `admin.sock` — filesystem permissions are
+  the gate, `SO_PEERCRED` is audit-only (ADR-005); the extension always runs
+  under the same uid as the service.
 - *Schema:* preserved from S-001 unchanged. This spec does not introduce or
   change message types on the extension surface.
 - *Multiplexing:* every frame carries a session id; the actor dispatches to
@@ -297,7 +301,7 @@ Admin client call
     ↓
   resolve admin.sock path from config
     ↓
-  connect; server enforces perms + SO_PEERCRED
+  connect; server enforces the filesystem-permission gate (peer uid audited)
     ↓
   send JSON-RPC 2.0 request frame
     ↓
@@ -362,9 +366,11 @@ Behavioural — concrete keys are defined when each subsystem lands.
   `$TMPDIR/bob-$UID/admin.sock` and `…/extension.sock` on macOS. Both
   overridable; both must lie under a directory the service can create with
   mode `0700`.
-- **Peer-credentials gate.** `admin_allowed_uids` and `admin_allowed_gid`
-  default to the service's own uid and no group. Operators can grant an admin
-  group access without loosening filesystem perms.
+- **Connection gate.** Admission is by filesystem permissions only: the socket
+  lives behind an owner-only (`0700`) parent directory, so only the
+  service-owner uid can connect (ADR-005). There is no `admin_allowed_uids` /
+  `admin_allowed_gid` config; to admit additional uids, `chgrp` the socket to a
+  shared group and relax the directory mode.
 - **Queue bounds.** Every bounded mpsc has a configurable capacity, with safe
   defaults. The configuration surface names each queue explicitly so operators
   can tune backpressure per subsystem.
@@ -383,10 +389,10 @@ Behavioural — concrete keys are defined when each subsystem lands.
 | 1 | `bob-core` library crate: domain types, port traits, error taxonomy | Nothing |
 | 2 | `bob` binary skeleton: argument parsing, subcommand dispatch, config loader, tracing init | Phase 1 |
 | 3 | `bob serve` runtime wiring: Tokio runtime, signal handlers, actor construction with placeholder implementations of every port trait, graceful shutdown | Phase 2 |
-| 4 | Admin-RPC actor: `admin.sock` listener, perms + `SO_PEERCRED` gate, JSON-RPC 2.0 framing, subscription notification plumbing, error mapping | Phase 3 |
-| 5 | Extension-IPC actor: `extension.sock` listener, peer gate, S-001 framing, session-id multiplex; placeholder verdict path that returns deny-by-default | Phase 3 |
+| 4 | Admin-RPC actor: `admin.sock` listener, filesystem-permission gate (`SO_PEERCRED` audited), JSON-RPC 2.0 framing, subscription notification plumbing, error mapping | Phase 3 |
+| 5 | Extension-IPC actor: `extension.sock` listener, filesystem-permission gate, S-001 framing, session-id multiplex; placeholder verdict path that returns deny-by-default | Phase 3 |
 | 6 | `bob` client subcommands: socket discovery, `status`, `sessions list`, `audit tail` (subscription), `chat` (subscription + input), `policy reload`, `--json` rendering | Phase 4 |
-| 7 | Integration tests: end-to-end shell tests (start service → connect from `bob` client → observe shutdown), backpressure on the admin queue, peer-cred gate denial, malformed-frame rejection | Phase 4, Phase 5, Phase 6 |
+| 7 | Integration tests: end-to-end shell tests (start service → connect from `bob` client → observe shutdown), backpressure on the admin queue, filesystem-permission gate denial, malformed-frame rejection | Phase 4, Phase 5, Phase 6 |
 
 S-001's phases 1 through 7 land *into* this shell by filling in the subsystem
 actors created in phase 3 above; their port traits and seats are already
@@ -398,10 +404,10 @@ present.
   later subscription stream needs interleaved large payloads, length-prefix
   framing may be preferable. The choice does not change any external contract
   with the CLI as long as it is fixed before phase 6. `[TODO]`
-- **Admin group convention.** Whether `admin_allowed_gid` defaults to a
-  conventional group name (e.g. `bob`, `wheel`) or stays empty by default. The
-  safer default is empty (uid-only access); revisit when packaging lands.
-  `[TODO]`
+- **Admin group convention.** If multi-uid access is ever needed, which Unix
+  group to `chgrp` the socket to (e.g. `bob`, `wheel`) and how packaging sets it
+  up. Default is uid-only access via the `0700` directory; revisit when
+  packaging lands. `[TODO]`
 - **Configuration format.** TOML is the conventional Rust default and aligns
   with the project's existing `.ai-team.toml`. Confirm during phase 2.
   `[TODO]`
@@ -419,8 +425,6 @@ present.
 
 ## Amendment Log
 
-<!-- Optional. Use when an approved spec is amended after tasks are in flight.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| YYYY-MM-DD | Description of change | Reason for amendment | T-XXX, T-YYY |
--->
+| 2026-06-13 | Reconciled the connection-gate description with ADR-005: filesystem permissions are the sole admission gate, `SO_PEERCRED` is audit-only, and the in-service uid allow-list (`admin_allowed_uids`/`admin_allowed_gid`) is removed (additional uids via a Unix group instead). Updated the Responsibility table, Components 4–5 authentication, the system diagram and workflow labels, the Configuration and Open-Questions sections, and Implementation Order Phases 4/5/7. | ADR-005 (accepted 2026-05-22) removed the peer-credential gate and the uid allow-list, but S-002's gate wording was never updated; PR #22 reconciles the artifact set. | None (gate already implemented per ADR-005; documentation reconciliation only). |

@@ -18,12 +18,15 @@ owner-only directory the trust gate. This holds for `admin.sock` but **not** for
 directly with a raw `tokio::net::UnixListener::bind`, without creating/chmodding
 the parent directory or the socket file. A correctly-gated extension listener
 exists in `extension-ipc` but is not used by `bob serve`. If the configured
-`extension_sock_path` resolves under a traversable directory, the documented
-owner-only gate is absent on the channel that carries `tool_call` authorization
-verdicts and forwarded events. Practical risk is low under the single-user-local
-scope (ADR-008) — the only processes present run as the same uid — but it is a
-real divergence from the documented security invariant and an asymmetry with
-`admin.sock`.
+`extension_sock_path` resolves under a directory whose mode permits other local
+accounts (and the socket's own mode is group/other-accessible), a process under
+a *different* local uid can connect to the channel that carries `tool_call`
+authorization verdicts and forwarded events — which is exactly what the `0700`
+parent-directory gate exists to prevent. ADR-008 scopes whom bob *serves*; it
+does not guarantee the machine has no other local accounts or service uids, so
+the exposure is conditional on the actual parent/socket modes, not eliminated by
+the single-user scope. This is a real divergence from the documented security
+invariant (ADR-005) and an asymmetry with `admin.sock`.
 
 ## Reproduction Status
 
