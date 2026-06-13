@@ -70,8 +70,9 @@ What this specification explicitly does NOT cover:
 
 ### Design Principles
 
-- **Unix-likes only, by design.** The shell relies on UDS, peer-credentials,
-  and POSIX file permissions for local trust. This is a deliberate amendment to
+- **Unix-likes only, by design.** The shell relies on UDS and POSIX file
+  permissions for local trust (POSIX peer-credentials are read only as an audit
+  signal). This is a deliberate amendment to
   S-001's OS-agnostic principle — restated narrowly so future readers know it
   was a choice, not an oversight.
 - **Actor handles, not a central bus.** Each subsystem owns its state and is

@@ -212,7 +212,7 @@ actor fans out matching future records to all connected subscribers. Operators c
 narrow the stream to one or more kinds using `--filter`.
 
 **`report.submit`** lets an external action CLI register the outcome of an action it
-performed. The CLI connects to `admin.sock` (same-UID peer-credentials gate), sends
+performed. The CLI connects to `admin.sock` (same-UID filesystem-permission gate), sends
 a structured JSON report, and the Monitoring actor validates and appends it.
 
 All three sources feed through the same normalization path: the Monitoring actor
