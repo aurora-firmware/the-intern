@@ -13,8 +13,8 @@ id: S-009
 
 Bob has no way to trigger pi-agent autonomously on a recurring schedule — every
 request today originates from an interactive caller. This matters now because
-Phase 6 of S-001 calls for a scheduler channel alongside chat, email, and
-webhooks, and scheduled triggering is the prerequisite for any periodic
+Phase 6 of S-001 calls for a scheduler channel alongside chat and email, and
+scheduled triggering is the prerequisite for any periodic
 automation (such as email polling) the operator wants to configure. When this
 work is done, an operator can define named cron jobs in `bob.toml`, manage them
 at runtime with `bob schedule` subcommands, and rely on bob to fire the
@@ -29,8 +29,8 @@ What this specification explicitly does NOT cover:
 - **Email-specific logic.** Email monitoring and processing are handled by
   pi-agent invoking the himalaya skill. The scheduler delivers a verbatim prompt
   to pi-agent; what pi-agent does with that prompt is out of scope.
-- **Webhook and HTTP trigger types.** Time-based scheduling only. Event-driven
-  and HTTP-callback triggers are separate Phase 6 channel specs.
+- **Non-time-based trigger types.** Time-based scheduling only. Other trigger
+  types are out of scope for this adapter.
 - **Response routing back to the scheduler.** Scheduled jobs are
   fire-and-forget (`periodic` delivery kind per ADR-004); no response is routed
   back to the adapter.

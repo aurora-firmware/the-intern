@@ -326,7 +326,7 @@ Admin-RPC receives the chat subscription, the interactive-chat channel adapter
 consumes the chat-open call and each subsequent user-input frame, normalises
 each into the same internal event used by every other channel, and the
 resulting flow goes through Requests Handler → Policy Control → Agent Harness
-exactly as for email or webhooks. Assistant-message notifications travel back
+exactly as for email. Assistant-message notifications travel back
 out to the subscriber the same way an email reply would travel back through
 the email adapter. The admin-RPC actor never short-circuits Requests Handler
 or Policy Control for chat traffic.

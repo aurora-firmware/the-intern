@@ -12,8 +12,8 @@ id: S-001
 ## Purpose
 
 the-intern is a persistent, always-on assistant service. Users reach it through
-several channels — interactive chat and asynchronous channels such as email,
-webhooks, and scheduled tasks. Because asynchronous channels deliver events when
+several channels — interactive chat and asynchronous channels such as email and
+scheduled tasks. Because asynchronous channels deliver events when
 no user is present, the system must run as a long-lived service rather than a
 per-session program.
 
@@ -24,7 +24,7 @@ external actions are triggered and constrained.
 
 The expected outcome is an architecture that satisfies the logical model in
 `project/docs/system_overview.md` — deterministic policy first, least
-privilege, per-user data boundaries, and a complete audit trail — while running
+privilege, per-session data boundaries, and a complete audit trail — while running
 the agent on pi-agent as the Agent Harness.
 
 ## Exclusions
@@ -37,11 +37,11 @@ What this specification explicitly does NOT cover:
   generic `bash` tool. Wrapping each CLI as a typed pi tool is a possible later
   refinement, not part of this scope.
 - **Single multiplexing pi-agent process.** Running all user-sessions inside one
-  shared pi-agent process is explicitly rejected; it cannot provide a per-user
+  shared pi-agent process is explicitly rejected; it cannot provide a per-session
   data boundary.
 - **Channel-specific feature depth.** Rich behaviour within a channel (email
-  threading semantics, chat presence, webhook provider specifics) is out of
-  scope for this architecture spec and belongs to per-channel specs.
+  threading semantics, chat presence) is out of scope for this architecture spec
+  and belongs to per-channel specs.
 - **Action CLI implementations.** The external CLI tools themselves are separate
   deliverables; this spec only defines how they are invoked, authorized, and
   how they report.
@@ -52,8 +52,10 @@ What this specification explicitly does NOT cover:
 
 - **Deterministic policy outside the agent.** Identity, authorization, and
   monitoring are decided by a service the agent cannot bypass or modify.
-- **Per-user isolation.** Each active user-session runs in its own process, so a
-  data-scoping fault cannot cross users.
+- **Single-user-local scope.** the-intern runs for one user on one machine; the
+  OS account is the whole trust domain (ADR-008). Each active session still runs
+  in its own process, isolating the user's concurrent contexts rather than
+  separating different people.
 - **Thin in-agent surface.** The only component running inside the agent process
   is a forwarder with no policy logic.
 - **Event-driven uniformity.** Every channel — synchronous or asynchronous —
@@ -94,7 +96,7 @@ What this specification explicitly does NOT cover:
 | Component | Responsibility | Notes |
 |---|---|---|
 | Rust service | Hosts the deterministic components; owns the inbound queue, identity, persistence, and supervision of pi-agent processes | Single long-lived binary on Linux + macOS; shell defined in S-002 |
-| Channel adapters | Accept inbound traffic from chat, email, webhooks, scheduler; normalize each into a common internal request, classified by delivery kind (`sync`/`async`/`periodic`) per ADR-004 | Part of the Rust service; the only components that know channel specifics |
+| Channel adapters | Accept inbound traffic from chat, email, scheduler; normalize each into a common internal request, classified by delivery kind (`sync`/`async`/`periodic`) per ADR-004 | Part of the Rust service; the only components that know channel specifics |
 | Requests Handler | Consume the inbound queue, attach user/channel identity, run pre-flight identity/access checks | Part of the Rust service |
 | Policy Control | Decide per-user authorization for actions raised mid-run by the agent | Part of the Rust service; never inside the agent |
 | Monitoring | Maintain an append-only audit log; expose an inbound interface for external tools to report actions | Part of the Rust service |
@@ -111,9 +113,9 @@ Channel adapters, Requests Handler, Policy Control, and Monitoring, and
 supervises the pi-agent process pool.
 **Estimated size:** Large — the bulk of the system.
 **Interfaces:**
-- *Inbound:* channel-specific endpoints (chat, webhook HTTP, email retrieval,
-  scheduled triggers), each normalized by its adapter onto the internal event
-  queue as a delivery-kind-typed request (`sync`/`async`/`periodic`, ADR-004).
+- *Inbound:* channel-specific endpoints (chat, email retrieval, scheduled
+  triggers), each normalized by its adapter onto the internal event queue as a
+  delivery-kind-typed request (`sync`/`async`/`periodic`, ADR-004).
 - *To pi-agent processes:* delivers prompts over pi-agent's `runRpcMode()`
   JSON-RPC channel; spawns, supervises, and reaps the processes.
 - *Extension channel (single Unix socket):* one socket shared by every
@@ -228,7 +230,7 @@ configurable:
 | 3 | JS extension: event subscription and forwarding to Monitoring | Phase 2 |
 | 4 | Policy Control: pre-flight checks and the blocking `tool_call` authorization path over the Unix socket | Phase 2, Phase 3 |
 | 5 | Monitoring: append-only audit log and the inbound report interface for external tools (transport decision from S-002 must land before this phase starts) | Phase 1b, Phase 3 |
-| 6 | Channel adapters: chat (interactive chat consumes `admin.sock` chat subscriptions per S-002), email, webhooks, scheduler | Phase 1b |
+| 6 | Channel adapters: chat (interactive chat consumes `admin.sock` chat subscriptions per S-002), email, scheduler | Phase 1b |
 | 7 | Actions: skill definitions and the CLI invocation/reporting contract | Phase 4, Phase 5 |
 
 ## Open Questions
@@ -249,3 +251,4 @@ configurable:
 |------|-------------|-----|----------------|
 | 2026-05-16 | OS scope narrowed from "OS-agnostic" to "Unix-likes (Linux + macOS)" in Design Principles and Component 1; extension-side Unix socket bullets merged into a single "Extension channel (single Unix socket)" description; Monitoring report interface transport candidates narrowed to UDS-only (extend `admin.sock` or dedicated `report.sock`); Implementation Order Phase 1 split into 1a (shell per S-002) and 1b (queue/handler/persistence), with downstream Depends-On cells updated accordingly; chat channel adapter clarified as consuming `admin.sock` chat subscriptions. | S-002 (Bob Service Shell Architecture) approved 2026-05-16; the shell decision fixes Unix-only primitives (UDS, peer-credentials, POSIX perms) and reshapes how Phase 1 is delivered. | None (no tasks in flight against S-001 yet). |
 | 2026-05-21 | Event-driven-uniformity principle, Channel adapters responsibility row, Component 1 inbound interface, and Workflow response paragraph clarified: the core request interface is typed by delivery kind (`sync`/`async`/`periodic`), never by channel; channel identity is confined to adapters; per-kind response semantics stated. | ADR-004 accepted 2026-05-21. The shipped `InternalEvent` enum (per-channel variants from T-008) hardcoded channel identity the core should not know; this contradicted the spec's intent and is being corrected. | Corrective tasks to reshape `InternalEvent` and its `requests-handler`/`persistence` consumers (to be planned separately); Phase 6 channel-adapter design unaffected in scope but now builds on the corrected core type. |
+| 2026-06-13 | Deployment scope narrowed to single-user-local: the "Per-user isolation" principle reframed to single-user (one OS/trust-domain account; per-session isolation of the user's concurrent contexts, not cross-user). Webhooks removed from the committed channel set (Purpose, Channel-adapters row, Component 1 inbound, Exclusions example, Phase 6). | ADR-008 (single-user-local deployment scope) accepted 2026-06-13, reconciling S-001 with the committed product and the trust model in ADR-005/ADR-007. The core stays delivery-kind-typed (ADR-004), so the narrowed channel set does not constrain future channel additions. | None (no tasks in flight against these sections). |
