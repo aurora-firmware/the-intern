@@ -24,21 +24,19 @@ interactive-chat adapter. When the work is done, a `bob chat` client can send a
 chat message, the chat adapter normalizes it into a `Sync`-kind internal
 request with its `RequestContext`, and the request lands on the bounded queue
 and passes through the existing Requests Handler pre-flight. The remaining
-S-001 Phase 6 channels (email, webhook, scheduler) follow in their own specs,
+S-001 Phase 6 channels (email, scheduler) follow in their own specs,
 reusing the framework this spec establishes.
 
 ## Exclusions
 
 What this specification explicitly does NOT cover:
 
-- **Email, webhook, and scheduler adapters.** Only the framework and the chat
+- **Email and scheduler adapters.** Only the framework and the chat
   adapter are in scope. Each remaining channel gets its own spec, built on this
   framework.
 - **The external request-intake socket.** The intake handle is shaped so an
   external-process intake socket can wrap it later, but that socket — letting
   external programs act as adapters — is a separate future spec.
-- **Webhook HTTP/TCP transport.** The collision between webhook intake and
-  S-002's UDS-only stance is deferred to the webhook channel spec and an ADR.
 - **The outbound response path.** ADR-004 specifies that a `Sync` request
   yields a receipt and, later, the agent's answer routed back to the caller.
   This spec wires only the inbound half: the receipt is produced, but the
@@ -198,7 +196,7 @@ acknowledgement-or-error of ADR-004. The agent's answer being routed back to the
 - **A unifying `ChannelAdapter` trait (Approach A).** A `bob-core` trait every
   adapter implements, with a uniform lifecycle and an adapter registry.
   *Rejected:* it would be designed against a single concrete adapter (chat),
-  risking rework when email/webhook arrive, and no existing `bob` subsystem
+  risking rework when email/scheduler arrive, and no existing `bob` subsystem
   shares such a trait. Approach B — intake handle + config + supervision, with
   adapters as ordinary subsystem actors — matches the codebase and defers the
   polymorphic contract until two real adapters exist to generalize from.
@@ -207,8 +205,7 @@ acknowledgement-or-error of ADR-004. The agent's answer being routed back to the
   spec:* it adds a security-relevant socket surface before it is needed. The
   intake handle is instead shaped so that socket can be added later without
   reshaping the core (see Exclusions).
-- **Building all four Phase 6 channels at once.** *Rejected:* email, webhook,
-  and scheduler each carry channel-specific transport concerns (webhook in
-  particular collides with S-002's UDS-only stance). Establishing the framework
-  with chat first keeps this spec small and lets each remaining channel be
-  specified with its transport properly considered.
+- **Building the remaining Phase 6 channels at once.** *Rejected:* email and
+  scheduler each carry channel-specific transport concerns. Establishing the
+  framework with chat first keeps this spec small and lets each remaining channel
+  be specified with its transport properly considered.

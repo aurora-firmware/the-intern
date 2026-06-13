@@ -109,7 +109,7 @@ What this specification explicitly does NOT cover:
 |   +-------------------------------------------------------------------+   |
 |                                                                          |
 |   +-- extension-ipc actor (owns extension.sock) ----------------------+   |
-|   |   accepts UDS connections (perms + SO_PEERCRED)                   |   |
+|   |   accepts UDS connections (filesystem-gated)                      |   |
 |   |   parses InboundFrame::Event { session, payload }                 |   |
 |   |   routes via multiplex.rs to MonitoringHandle::record_event       |   |
 |   |   MonitoringHandle impl: TracingMonitoringHandle  <--- NEW        |   |
@@ -313,8 +313,6 @@ across the supervisor and `bob::serve`.
 
 ## Amendment Log
 
-<!-- Optional. Use when an approved spec is amended after tasks are in flight.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| YYYY-MM-DD | Description of change | Reason for amendment | T-XXX, T-YYY |
--->
+| 2026-06-13 | System diagram updated: the `extension-ipc` actor "accepts UDS connections (perms + SO_PEERCRED)" is now "accepts UDS connections (filesystem-gated)". | ADR-005 (accepted 2026-05-22) made filesystem permissions the sole connection gate and demoted `SO_PEERCRED` to audit; this diagram label was never updated. PR #22 reconciles the artifact set. | None (documentation reconciliation). |
