@@ -87,6 +87,49 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-06-14
+
+Reproduction status:
+Confirmed. Building the user docs from `the-intern/docs` and inspecting the
+generated HTML shows shipped links that point outside the mdBook artifact into
+`project/` paths that do not exist in the release docs bundle.
+
+Evidence captured:
+- `rg -n 'project/' the-intern/docs/src` found source links in the architecture
+  overview, operator guide, and extension author guide.
+- `cd the-intern/docs && mdbook build --dest-dir /tmp/b010-book` exited `0`.
+- `rg -n 'project/(decisions|docs|specs)' /tmp/b010-book` showed the rendered
+  shipped links in all three affected chapters.
+- Representative rendered targets resolve outside the book and do not exist,
+  including `/project/decisions/...`, `/project/docs/...`, and
+  `/tmp/project/decisions/...`.
+- The original spec and completed documentation tasks explicitly allowed or
+  accepted these out-of-book links, so existing verification did not reject
+  them.
+
+Isolated fault:
+The mdBook source chapters embed repository-relative Markdown links that escape
+the docs tree:
+- `the-intern/docs/src/architecture-overview/index.md:6-7`
+- `the-intern/docs/src/operator-guide/index.md:159`
+- `the-intern/docs/src/extension-author-guide/index.md:21,143,157,167,173,179,185`
+
+Root cause or fault hypothesis:
+This is a source-authoring and acceptance-criteria bug, not an mdBook rendering
+bug. mdBook preserves the escaped relative paths while only shipping the built
+book, and no existing verification check rejects out-of-tree links.
+
+Planned fix:
+Replace the `project/` links with self-contained prose and/or in-book
+cross-links. Add a regression check that fails when `the-intern/docs/src`
+contains links into `project/` paths.
+
+Planned verification:
+- `! rg -n 'project/(decisions|docs|specs)' the-intern/docs/src`
+- `cd the-intern/docs && mdbook build`
+- `! rg -n 'project/(decisions|docs|specs)' book`
+- Manually inspect the affected rendered pages.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
