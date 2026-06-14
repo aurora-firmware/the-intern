@@ -2,7 +2,7 @@
 id: B-010
 title: 'Shipped user docs link to internal project documents (GitHub issue #17)'
 severity: medium
-status: in-progress
+status: resolved
 created: '2026-06-14'
 ---
 
