@@ -156,8 +156,8 @@ channel is the only implemented adapter; others (email, scheduler) are
 planned for later phases.
 
 The channel configuration lives in the `[channels]` section of bob's TOML config
-file (see [ADR-002](../../project/decisions/ADR-002-bob-configuration-format-toml-via-figment.md)
-for the format choice). The default config file path is:
+file. `bob` uses TOML for operator-facing configuration, so all examples in this
+guide use that format. The default config file path is:
 
 - Linux: `$XDG_CONFIG_HOME/bob/config.toml` (falls back to `~/.config/bob/config.toml`)
 - macOS: `~/Library/Application Support/bob/config.toml`

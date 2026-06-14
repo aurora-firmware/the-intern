@@ -2,9 +2,9 @@
 
 This chapter is for readers who want to understand how `bob` is structured without
 reading the Rust source. It answers the question: *what is running, and how does a
-request move through it?* For the full development-level design, see
-[`project/docs/the-intern-architecture.md`](../../../project/docs/the-intern-architecture.md)
-and [`project/docs/system_overview.md`](../../../project/docs/system_overview.md).
+request move through it?* It is the shipped, user-facing summary of the service
+design; the internal architecture notes stay in the development tree and are not
+part of the release documentation bundle.
 
 Operational topics — how to install, configure, and run `bob` — are in the
 [Operator & Deployer Guide](../operator-guide/index.md). End-user topics are in the
