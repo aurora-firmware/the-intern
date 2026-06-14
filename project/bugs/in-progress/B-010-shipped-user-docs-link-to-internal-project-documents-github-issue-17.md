@@ -174,3 +174,24 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-14
+
+PASS
+
+Diagnosis Log completeness, isolated-fault alignment, and the planned
+verification chain all passed review. The implementation stays within the
+diagnosed scope by removing the shipped `project/` links from the three
+affected user-doc chapters and adding a practical regression guard in
+[`tests/test_user_docs_self_contained.sh`](/home/daneel/projects/the-intern/tests/test_user_docs_self_contained.sh:1)
+plus a pre-build CI check in
+[`build.yml`](/home/daneel/projects/the-intern/.github/workflows/build.yml:94).
+
+Stage 1 passed: the pre-fix state reproduced the documented source and rendered
+book leaks, the fixed branch removes those links from the affected chapters, no
+unrelated behavior was added, and the recorded Fix Verification steps hold when
+rerun. Stage 2 passed: the regression script covers source, rendered output,
+and workflow protection; the documentation edits are readable and minimal; no
+security or performance concerns were introduced. Non-blocking observation: the
+local `mdbook build` emits an `mdbook-mermaid`/`mdbook` version warning, but it
+did not affect this bug fix or its verification results.
