@@ -140,6 +140,29 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-14
+
+Implemented the diagnosed B-010 fix without touching the lifecycle file on the
+bug branch. First added `tests/test_user_docs_self_contained.sh` as the
+regression check and ran it red; it failed on the existing `project/` links in
+source, the rendered book, and the missing workflow guard. Then rewrote the
+affected passages in the architecture overview, operator guide, and extension
+author guide so the shipped book keeps the design context in prose and in-book
+references instead of linking into internal ADR/spec/docs files. Also converted
+the extension compatibility file mention to plain code text so that chapter no
+longer escapes the shipped book.
+
+Leaving the current links in place and only adding a build-time grep was
+rejected because it would preserve broken links in already-shipped content.
+Guarding every out-of-tree repository path in CI was also considered, but the
+automated check remains scoped to internal project documents to match the
+diagnosis contract while still removing the currently broken non-book link from
+the author guide. Added a `build.yml` step that rejects
+`project/(decisions|docs|specs)` links before the mdBook build, reran the
+regression script to green, rebuilt the book, and confirmed the rendered output
+no longer contains those internal-project links. No implementation work remains
+on this bug branch.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
