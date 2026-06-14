@@ -152,7 +152,7 @@ shell where you run client commands too.
 ## Channel configuration
 
 `bob serve` can run multiple channel adapters. Currently the interactive-chat
-channel is the only implemented adapter; others (email, webhook, scheduler) are
+channel is the only implemented adapter; others (email, scheduler) are
 planned for later phases.
 
 The channel configuration lives in the `[channels]` section of bob's TOML config
@@ -303,6 +303,115 @@ bob policy reload
 The service re-reads the config file, validates the new ruleset, and atomically
 swaps the active snapshot. If validation fails the previous snapshot stays in
 force and the command reports the reason.
+
+---
+
+## Scheduled jobs
+
+`bob` can run pi-agent prompts on a cron schedule. The scheduler runs entirely
+inside the bob process — no system cron entries (crontab, systemd timers, or
+similar) are needed or created.
+
+**If bob is stopped when a job is due to fire, that job is skipped and will not
+be replayed when the service restarts.** This is by design (ADR-006): jobs only
+fire while the service is running, so every execution has a full audit trail.
+Operators who need guaranteed delivery across restarts should keep bob running
+under a process supervisor such as systemd.
+
+### Configuring scheduled jobs in `bob.toml`
+
+Add one `[[schedule]]` table per job. Each entry requires three fields:
+
+| Field    | Type   | Description                                    |
+|----------|--------|------------------------------------------------|
+| `id`     | string | Unique identifier for the job (non-empty)      |
+| `cron`   | string | 5-field cron expression (see below)            |
+| `prompt` | string | The pi-agent prompt text to run on each tick   |
+
+Example — check email every 15 minutes:
+
+```toml
+[[schedule]]
+id     = "check-email"
+cron   = "*/15 * * * *"
+prompt = "Check the inbox and summarise any unread messages."
+```
+
+You can add multiple `[[schedule]]` blocks. An absent or empty `[[schedule]]`
+section means no jobs are scheduled (the scheduler starts but fires nothing).
+
+#### Cron expression format
+
+`bob` uses standard 5-field cron expressions:
+
+```
+┌───────────── minute        (0–59)
+│ ┌─────────── hour          (0–23)
+│ │ ┌───────── day of month  (1–31)
+│ │ │ ┌─────── month         (1–12)
+│ │ │ │ ┌───── day of week   (0–6, Sunday = 0)
+│ │ │ │ │
+* * * * *
+```
+
+Six-field expressions (with a leading seconds field) are not accepted.
+
+### Managing jobs at runtime
+
+The four `bob schedule` subcommands let you inspect and modify the active job
+list without restarting the service.
+
+#### `bob schedule list`
+
+Print all currently active scheduled jobs:
+
+```bash
+bob schedule list
+```
+
+For machine-readable output:
+
+```bash
+bob schedule list --json
+```
+
+#### `bob schedule add`
+
+Register a new job and persist it to the config file. The job becomes active
+immediately after the command succeeds:
+
+```bash
+bob schedule add \
+  --id "check-email" \
+  --cron "*/15 * * * *" \
+  --prompt "Check the inbox and summarise any unread messages."
+```
+
+Flags:
+
+| Flag       | Required | Description                        |
+|------------|----------|------------------------------------|
+| `--id`     | yes      | Unique job identifier              |
+| `--cron`   | yes      | 5-field cron expression            |
+| `--prompt` | yes      | pi-agent prompt text for each tick |
+
+#### `bob schedule remove`
+
+Remove an existing job by its ID. The removal is persisted to the config file
+and takes effect immediately:
+
+```bash
+bob schedule remove --id "check-email"
+```
+
+#### `bob schedule reload`
+
+Re-read the `[[schedule]]` section of the config file and replace the active
+job list with the updated contents. Use this after editing `bob.toml` by hand:
+
+```bash
+bob schedule reload
+```
 
 ---
 

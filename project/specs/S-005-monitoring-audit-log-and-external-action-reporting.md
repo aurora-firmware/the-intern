@@ -67,8 +67,8 @@ What this specification explicitly does NOT cover:
   appended to the persistent JSONL log or queued behind bounded, observable
   backpressure with a flush guarantee during graceful shutdown.
 - **Local trust follows admin.sock.** `report.submit` relies on the existing
-  admin socket filesystem-permission and peer-credential gate. The report body
-  carries attribution, not authentication.
+  admin socket filesystem-permission gate; `SO_PEERCRED` is read only as audit,
+  not a gate (ADR-005). The report body carries attribution, not authentication.
 - **Schema beats blobs.** External tool reports use bob-defined structured
   fields so review, rendering, and later querying can rely on stable shapes.
 
@@ -89,7 +89,7 @@ What this specification explicitly does NOT cover:
 +-------------^------------------------------+--------------------------+
               |                              |
               | admin.sock                   | JSONL audit file
-              | same-UID peer gate           v
+              | same-UID fs-perm gate        v
        external action CLI             persistent audit log
        bob audit tail
 ```
@@ -130,7 +130,7 @@ What this specification explicitly does NOT cover:
 
 **Purpose:** Add the v1 public monitoring surface on `admin.sock`.
 **Estimated size:** Small.
-**Interfaces:** Exposes `report.submit` and `audit.tail`; delegates to Monitoring after the existing admin peer gate accepts the connection.
+**Interfaces:** Exposes `report.submit` and `audit.tail`; delegates to Monitoring after the existing admin filesystem-permission gate accepts the connection.
 
 ### Component 5: `bob audit tail`
 
@@ -179,7 +179,7 @@ External action report:
 ```
 external action CLI connects to admin.sock
   ↓
-admin-rpc enforces filesystem permissions and peer credentials
+admin-rpc enforces the filesystem-permission gate (peer credentials audited)
   ↓
 CLI sends report.submit with bob-defined structured fields
   ↓
@@ -282,8 +282,6 @@ matching future records stream until disconnect or service shutdown
 
 ## Amendment Log
 
-<!-- Optional. Use when an approved spec is amended after tasks are in flight.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| YYYY-MM-DD | Description of change | Reason for amendment | T-XXX, T-YYY |
--->
+| 2026-06-13 | Reconciled `report.submit`'s admission description with ADR-005: the admin socket's filesystem-permission gate is the connection gate and `SO_PEERCRED` is audit-only (Design Principles, system diagram, Component 4, and the external-report workflow). Same-uid access remains the authentication boundary; only the "peer-credential gate" wording changed. | ADR-005 (accepted 2026-05-22) demoted `SO_PEERCRED` from gate to audit; S-005's wording was never updated. PR #22 reconciles the artifact set. | None (documentation reconciliation). |

@@ -20,7 +20,7 @@ idle reaping, kill). On top of that foundation it also runs:
   `chat.send` traffic into the request queue via the requests-handler.
 
 Phase 6's chat channel is wired end to end; the remaining channel adapters
-(email, webhook, scheduler) and Phase 7 (actions) are not yet implemented.
+(email, scheduler) and Phase 7 (actions) are not yet implemented.
 
 ## Repository structure
 
@@ -206,7 +206,7 @@ asset. You can download it without installing any tooling from the
 
 - Product overview — [project/docs/system_overview.md](project/docs/system_overview.md)
 - Delivery plan — [project/docs/roadmap.md](project/docs/roadmap.md)
-- Approved specifications — [project/specs/the-intern-agent-service-architecture.md](project/specs/the-intern-agent-service-architecture.md), [project/specs/bob-service-shell-architecture.md](project/specs/bob-service-shell-architecture.md)
+- Approved specifications — [project/specs/S-001-the-intern-agent-service-architecture.md](project/specs/S-001-the-intern-agent-service-architecture.md), [project/specs/S-002-bob-service-shell-architecture.md](project/specs/S-002-bob-service-shell-architecture.md)
 - Service-level build/test details — [the-intern/service/README.md](the-intern/service/README.md)
 - Coding guidelines — [Rust](project/docs/coding-guidelines-rust.md), [Node.js](project/docs/coding-guidelines-node.md)
 - Framework and slash-skill instructions — [CLAUDE.md](CLAUDE.md)

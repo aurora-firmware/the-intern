@@ -10,6 +10,7 @@ use crate::{client::AdminClient, config::BobConfig};
 mod audit;
 mod chat;
 mod policy;
+mod schedule;
 mod sessions;
 mod status;
 
@@ -31,6 +32,22 @@ pub fn audit_tail(json: bool, filters: Vec<AuditFilterKind>) -> ServiceResult<()
 
 pub fn policy_reload(json: bool) -> ServiceResult<()> {
     policy::run(json)
+}
+
+pub fn schedule_add(json: bool, id: &str, cron: &str, prompt: &str) -> ServiceResult<()> {
+    schedule::run_add(json, id, cron, prompt)
+}
+
+pub fn schedule_remove(json: bool, id: &str) -> ServiceResult<()> {
+    schedule::run_remove(json, id)
+}
+
+pub fn schedule_list(json: bool) -> ServiceResult<()> {
+    schedule::run_list(json)
+}
+
+pub fn schedule_reload(json: bool) -> ServiceResult<()> {
+    schedule::run_reload(json)
 }
 
 pub fn chat(json: bool, session: Option<&str>) -> ServiceResult<()> {

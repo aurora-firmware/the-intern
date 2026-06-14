@@ -136,15 +136,15 @@ is to normalize inbound traffic into a delivery-kind-typed `InternalEvent` plus 
 pair through the **channel intake handle** — the single sanctioned doorway into the
 bounded request queue.
 
-The core never enumerates channel types. An emailed request, a chat message, a webhook
-event, and a scheduled trigger all look identical once they leave the adapter.
+The core never enumerates channel types. An emailed request, a chat message, and a
+scheduled trigger all look identical once they leave the adapter.
 
 **Interactive-chat adapter** is the one implemented adapter. It consumes `admin.sock`
 chat subscriptions: when a `bob chat` client opens a chat subscription, the admin-RPC
 actor hands each user-input frame to the chat adapter, which normalizes it into a
 `Sync`-kind request and submits it through the intake handle.
 
-The following adapters are **not yet implemented**: email, webhook, and scheduler.
+The following adapters are **not yet implemented**: email and scheduler.
 Each is planned for its own specification, reusing the intake handle and configuration
 schema established by S-006. See the
 [Extension & Channel-Adapter Author Guide](../extension-author-guide/index.md) for
@@ -212,7 +212,7 @@ actor fans out matching future records to all connected subscribers. Operators c
 narrow the stream to one or more kinds using `--filter`.
 
 **`report.submit`** lets an external action CLI register the outcome of an action it
-performed. The CLI connects to `admin.sock` (same-UID peer-credentials gate), sends
+performed. The CLI connects to `admin.sock` (same-UID filesystem-permission gate), sends
 a structured JSON report, and the Monitoring actor validates and appends it.
 
 All three sources feed through the same normalization path: the Monitoring actor

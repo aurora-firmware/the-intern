@@ -8,7 +8,8 @@ use std::{
 };
 
 use bob_core::error::{ServiceError, ServiceResult};
-use bob_core::types::{AuditFilterKind, UserId};
+use bob_core::types::{AuditFilterKind, ScheduleEntry, UserId};
+use croner::parser::{CronParser, Seconds};
 use figment::{
     providers::{Format, Serialized, Toml},
     Figment,
@@ -48,6 +49,16 @@ pub struct BobConfig {
     /// An empty path means no config file was loaded (defaults only).
     /// Used by the policy-control actor for hot-reload.
     pub config_path: PathBuf,
+    /// Schedule configuration sourced from the `[[schedule]]` TOML section.
+    ///
+    /// An absent or empty section yields an empty entries vec (no jobs).
+    pub schedule: ScheduleConfig,
+}
+
+/// Validated schedule configuration — the view the rest of the service uses.
+#[derive(Debug, Clone)]
+pub struct ScheduleConfig {
+    pub entries: Vec<ScheduleEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +129,9 @@ impl BobConfig {
             },
             chat_application_identity: default_chat_application_identity(),
             config_path: PathBuf::new(),
+            schedule: ScheduleConfig {
+                entries: Vec::new(),
+            },
         }
     }
 }
@@ -157,6 +171,8 @@ impl BobConfig {
             "loaded bob configuration from layered sources"
         );
 
+        let schedule = validate_schedule_entries(raw.schedule)?;
+
         let cfg = BobConfig {
             admin_sock_path: raw.admin_sock_path,
             extension_sock_path: raw.extension_sock_path,
@@ -191,6 +207,7 @@ impl BobConfig {
             // Carry the resolved config file path so the policy-control actor
             // can hot-reload from the same file on Handle::reload().
             config_path: config_path.clone(),
+            schedule,
         };
 
         cfg.validate()
@@ -299,6 +316,23 @@ struct RawBobConfig {
     #[serde(default)]
     channels: RawChannelsConfig,
     chat_application_identity: UserId,
+    /// Raw schedule entries from `[[schedule]]` TOML; absent section → empty vec.
+    #[serde(default)]
+    schedule: Vec<RawScheduleEntry>,
+}
+
+/// Raw deserialization form of a single `[[schedule]]` TOML entry.
+///
+/// All fields are optional at the serde layer; missing or blank values are
+/// caught during validation in `load_with_sources`.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+struct RawScheduleEntry {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    cron: String,
+    #[serde(default)]
+    prompt: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -339,6 +373,55 @@ impl Default for RawChatChannelConfig {
 
 fn default_chat_enabled() -> bool {
     true
+}
+
+/// Validates raw schedule entries and converts them to typed `ScheduleEntry` values.
+///
+/// # Errors
+///
+/// Returns `ServiceError::Configuration` when any entry has a blank `id`,
+/// blank `cron`, blank `prompt`, or an invalid 5-field cron expression.
+fn validate_schedule_entries(raw_entries: Vec<RawScheduleEntry>) -> ServiceResult<ScheduleConfig> {
+    let cron_parser = CronParser::builder().seconds(Seconds::Disallowed).build();
+
+    let mut entries = Vec::with_capacity(raw_entries.len());
+
+    for (index, raw) in raw_entries.into_iter().enumerate() {
+        if raw.id.trim().is_empty() {
+            return Err(configuration_error(format!(
+                "schedule entry at index {index} has a blank id; id must be non-empty"
+            )));
+        }
+
+        if raw.cron.trim().is_empty() {
+            return Err(configuration_error(format!(
+                "schedule entry '{}' has a blank cron; cron must be a non-empty 5-field expression",
+                raw.id
+            )));
+        }
+
+        if raw.prompt.trim().is_empty() {
+            return Err(configuration_error(format!(
+                "schedule entry '{}' has a blank prompt; prompt must be non-empty",
+                raw.id
+            )));
+        }
+
+        if let Err(err) = cron_parser.parse(&raw.cron) {
+            return Err(configuration_error(format!(
+                "schedule entry '{}' has an invalid cron expression '{}': {err}",
+                raw.id, raw.cron
+            )));
+        }
+
+        entries.push(ScheduleEntry {
+            id: raw.id,
+            cron: raw.cron,
+            prompt: raw.prompt,
+        });
+    }
+
+    Ok(ScheduleConfig { entries })
 }
 
 fn parse_cli_overrides<I>(args: I) -> ServiceResult<BTreeMap<String, String>>
@@ -595,6 +678,7 @@ fn defaults_with_runtime_root(
         },
         channels: RawChannelsConfig::default(),
         chat_application_identity: default_chat_application_identity(),
+        schedule: Vec::new(),
     }
 }
 
@@ -684,6 +768,13 @@ fn current_uid() -> u32 {
 pub fn load() -> ServiceResult<BobConfig> {
     BobConfig::load()
 }
+
+/// Re-export of the canonical, atomic, mode-preserving schedule writer.
+///
+/// The implementation lives in [`bob_core::types::schedule`] so that this
+/// config layer and the admin-RPC `schedule.*` handlers share a single writer
+/// and cannot drift apart.
+pub use bob_core::types::schedule::write_schedule_entries;
 
 #[cfg(test)]
 mod tests {
@@ -1411,6 +1502,190 @@ enabled = false
         fs::remove_file(config_file).expect("temp config file should be removable");
     }
 
+    // ── AC-1 (T-092): valid [[schedule]] entry deserialises into ScheduleEntry ─
+
+    #[test]
+    fn loads_valid_schedule_entry_from_config_file() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let config_file = write_temp_config(
+            r#"
+[[schedule]]
+id = "daily-digest"
+cron = "0 9 * * *"
+prompt = "Send the daily digest"
+"#,
+        );
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("config with valid [[schedule]] entry should parse");
+
+        assert_eq!(config.schedule.entries.len(), 1);
+        assert_eq!(config.schedule.entries[0].id, "daily-digest");
+        assert_eq!(config.schedule.entries[0].cron, "0 9 * * *");
+        assert_eq!(config.schedule.entries[0].prompt, "Send the daily digest");
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    // ── AC-2 (T-092): invalid cron expression yields Configuration error ───────
+
+    #[test]
+    fn returns_configuration_error_when_schedule_entry_has_invalid_cron() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let config_file = write_temp_config(
+            r#"
+[[schedule]]
+id = "bad-cron"
+cron = "not-a-cron"
+prompt = "Something"
+"#,
+        );
+
+        let result = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        });
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("cron")),
+            "expected Configuration error mentioning cron, got {result:?}"
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    // ── AC-3 (T-092): blank id/cron/prompt yields Configuration error ─────────
+
+    #[test]
+    fn returns_configuration_error_when_schedule_entry_id_is_blank() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let config_file = write_temp_config(
+            r#"
+[[schedule]]
+id = ""
+cron = "0 9 * * *"
+prompt = "Something"
+"#,
+        );
+
+        let result = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        });
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("id")),
+            "expected Configuration error mentioning id, got {result:?}"
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    #[test]
+    fn returns_configuration_error_when_schedule_entry_cron_is_blank() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let config_file = write_temp_config(
+            r#"
+[[schedule]]
+id = "job-one"
+cron = ""
+prompt = "Something"
+"#,
+        );
+
+        let result = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        });
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("cron")),
+            "expected Configuration error mentioning cron, got {result:?}"
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    #[test]
+    fn returns_configuration_error_when_schedule_entry_prompt_is_blank() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let config_file = write_temp_config(
+            r#"
+[[schedule]]
+id = "job-one"
+cron = "0 9 * * *"
+prompt = ""
+"#,
+        );
+
+        let result = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        });
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("prompt")),
+            "expected Configuration error mentioning prompt, got {result:?}"
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    // ── AC-4 (T-092): absent [schedule] section yields empty entries vec ───────
+
+    #[test]
+    fn loads_config_with_empty_schedule_entries_when_schedule_section_is_absent() {
+        let config = load_with_env_overrides([]).expect("config without [schedule] should succeed");
+
+        assert!(
+            config.schedule.entries.is_empty(),
+            "absent [schedule] must yield empty entries vec"
+        );
+    }
+
     // ── AC-3 (T-053): legacy top-level allowed_user_ids field is removed ──────
 
     #[test]
@@ -1423,6 +1698,86 @@ enabled = false
         // If `allowed_user_ids` still existed as a field this line would need it;
         // the fact that it compiles without it proves the legacy field is gone.
         let _: &policy_control::PolicyConfig = &cfg.policy;
+    }
+
+    // ── AC-1 (T-097): write_schedule_entries persists entries to the TOML file ─
+
+    #[test]
+    fn write_schedule_entries_persists_entries_and_can_be_read_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bob.toml");
+
+        // Write one entry to a new file.
+        let entries = vec![ScheduleEntry {
+            id: "job-1".to_owned(),
+            cron: "0 9 * * *".to_owned(),
+            prompt: "Daily digest".to_owned(),
+        }];
+        write_schedule_entries(&path, &entries).expect("write must succeed");
+
+        assert!(path.exists(), "config file must exist after write");
+
+        // Read back using figment to confirm the round-trip.
+        let content = std::fs::read_to_string(&path).expect("read file");
+        assert!(content.contains("job-1"), "id must be in file content");
+        assert!(
+            content.contains("Daily digest"),
+            "prompt must be in file content"
+        );
+    }
+
+    // ── AC-1 (T-097): write_schedule_entries preserves non-schedule config keys ─
+
+    #[test]
+    fn write_schedule_entries_preserves_other_config_keys() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bob.toml");
+
+        // Write a file with an existing config key.
+        std::fs::write(&path, "tracing_level = \"debug\"\n\n[[schedule]]\nid = \"old-job\"\ncron = \"* * * * *\"\nprompt = \"old\"\n")
+            .expect("write initial config");
+
+        // Replace schedule entries; tracing_level must be preserved.
+        let new_entries = vec![ScheduleEntry {
+            id: "new-job".to_owned(),
+            cron: "0 8 * * *".to_owned(),
+            prompt: "New prompt".to_owned(),
+        }];
+        write_schedule_entries(&path, &new_entries).expect("write must succeed");
+
+        let content = std::fs::read_to_string(&path).expect("read file");
+        assert!(
+            content.contains("tracing_level"),
+            "tracing_level key must be preserved"
+        );
+        assert!(content.contains("new-job"), "new entry id must be present");
+        assert!(!content.contains("old-job"), "old entry must be removed");
+    }
+
+    // ── AC-2 (T-097): write_schedule_entries with empty entries removes the section ─
+
+    #[test]
+    fn write_schedule_entries_with_empty_entries_removes_schedule_section() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bob.toml");
+
+        std::fs::write(
+            &path,
+            "tracing_level = \"info\"\n\n[[schedule]]\nid = \"to-remove\"\ncron = \"* * * * *\"\nprompt = \"p\"\n",
+        )
+        .expect("write initial config");
+
+        write_schedule_entries(&path, &[]).expect("write must succeed");
+
+        let content = std::fs::read_to_string(&path).expect("read file");
+        assert!(
+            !content.contains("to-remove"),
+            "removed entry must not be in file"
+        );
+        assert!(
+            content.contains("tracing_level"),
+            "other keys must be preserved"
+        );
     }
 
     #[derive(Clone, Default)]

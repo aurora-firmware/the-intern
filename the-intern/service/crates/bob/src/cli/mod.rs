@@ -29,6 +29,10 @@ pub enum Command {
         #[command(subcommand)]
         command: PolicyCommand,
     },
+    Schedule {
+        #[command(subcommand)]
+        command: ScheduleCommand,
+    },
     Chat {
         #[arg(long)]
         session: Option<String>,
@@ -56,6 +60,27 @@ pub enum PolicyCommand {
     Reload,
 }
 
+#[derive(Debug, Subcommand)]
+pub enum ScheduleCommand {
+    Add {
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        cron: String,
+        #[arg(long)]
+        prompt: String,
+    },
+    Remove {
+        #[arg(long)]
+        id: String,
+    },
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Reload,
+}
+
 #[cfg(test)]
 mod tests {
     use clap::{CommandFactory, Parser};
@@ -72,7 +97,9 @@ mod tests {
         let help = String::from_utf8(output).expect("valid utf8 help");
 
         assert!(help.contains("--json"), "help text was: {help}");
-        for name in ["serve", "status", "sessions", "audit", "policy", "chat"] {
+        for name in [
+            "serve", "status", "sessions", "audit", "policy", "schedule", "chat",
+        ] {
             assert!(help.contains(name), "missing {name} in help text: {help}");
         }
     }

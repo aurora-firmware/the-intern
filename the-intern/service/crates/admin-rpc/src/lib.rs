@@ -72,6 +72,18 @@ pub struct Config {
     /// `DeliveryHandle` clone for in-process injection (used by integration tests
     /// in T-090).
     pub chat_router: Option<std::sync::Arc<crate::chat_router::ChatReplyRouter>>,
+    /// Optional scheduler-adapter reload handle.
+    ///
+    /// When `Some`, `schedule.*` methods (T-097) can push updated job tables to
+    /// the scheduler actor.  When `None` (the default), `schedule.*` methods
+    /// return `-32601 Method not found`.
+    pub scheduler: Option<scheduler_adapter::ReloadHandle>,
+    /// Optional path to the `bob.toml` config file.
+    ///
+    /// Required for `schedule.add`, `schedule.remove`, and `schedule.reload`
+    /// to persist changes.  When `None` (the default), those methods return
+    /// `-32601 Method not found`.
+    pub config_path: Option<std::path::PathBuf>,
 }
 
 impl Default for Config {
@@ -86,6 +98,8 @@ impl Default for Config {
             slow_subscriber_deadline: Duration::from_secs(5),
             chat_adapter: None,
             chat_router: None,
+            scheduler: None,
+            config_path: None,
         }
     }
 }
@@ -496,6 +510,14 @@ pub fn start(cfg: Config) -> Result<(Handle, JoinHandle<()>), std::io::Error> {
         .clone()
         .unwrap_or_else(|| std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new()));
     dispatcher = dispatcher.with_chat_router(chat_router);
+    // Inject the scheduler-adapter handle when provided (AC-2 of T-096).
+    if let Some(h) = cfg.scheduler.clone() {
+        dispatcher = dispatcher.with_scheduler_handle(h);
+    }
+    // Inject the config file path when provided (T-097).
+    if let Some(p) = cfg.config_path.clone() {
+        dispatcher = dispatcher.with_config_path(p);
+    }
 
     // Use the configured audit bus or create an internal one.
     let bus = cfg

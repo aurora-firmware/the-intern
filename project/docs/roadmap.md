@@ -32,7 +32,7 @@ Phase 4 introduces deterministic pre-flight access checks and the blocking `tool
 Phase 5 establishes append-only audit capture and the inbound reporting interface used by external tools so every authorized action and event path is observable and traceable. This implements Implementation Order Phase 5 in `project/specs/the-intern-agent-service-architecture.md`, and it follows Phase 1 service foundations while using Phase 3 extension forwarding to receive runtime events.
 
 ## Phase 6 — Channel adapters
-Phase 6 delivers channel adapter integrations for chat, email, webhooks, and scheduler inputs so heterogeneous inbound traffic is normalized into a single internal event model. This implements Implementation Order Phase 6 in `project/specs/the-intern-agent-service-architecture.md`, and it follows Phase 1 because adapter intake feeds directly into the service queue and request handling surfaces created there.
+Phase 6 delivers channel adapter integrations for chat, email, and scheduler inputs so heterogeneous inbound traffic is normalized into a single internal event model. This implements Implementation Order Phase 6 in `project/specs/the-intern-agent-service-architecture.md`, and it follows Phase 1 because adapter intake feeds directly into the service queue and request handling surfaces created there.
 
 ## Phase 7 — Actions
 Phase 7 defines action skills plus the CLI invocation and reporting contract so side-effect execution is controlled, attributable, and consistent across tools invoked through the agent harness. This implements Implementation Order Phase 7 in `project/specs/the-intern-agent-service-architecture.md`, and it depends on Phase 4 policy enforcement and Phase 5 monitoring to ensure execution is both authorized and auditable.
