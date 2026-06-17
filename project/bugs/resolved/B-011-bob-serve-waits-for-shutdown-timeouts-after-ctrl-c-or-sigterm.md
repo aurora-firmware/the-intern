@@ -2,7 +2,7 @@
 id: B-011
 title: bob serve waits for shutdown timeouts after Ctrl-C or SIGTERM
 severity: medium
-status: in-progress
+status: resolved
 created: '2026-06-17'
 ---
 
