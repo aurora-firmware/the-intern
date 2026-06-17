@@ -159,6 +159,61 @@ and asserts clean exit before consuming the configured drain/reap deadlines.
 Run `cargo test -p bob serve::tests`, `cargo test -p bob --test shell_e2e --
 --nocapture`, and `cargo test --workspace`.
 
+### Diagnosis 2 — 2026-06-17
+
+Reproduction status:
+Confirmed. On an idle `bob serve` process with `BOB_SHUTDOWN_DRAIN_DEADLINE=700ms`
+and `BOB_SHUTDOWN_REAP_DEADLINE=700ms`, both `SIGTERM` and `SIGINT` were logged
+immediately, but process exit still took about 1.4s and only completed after
+phase 3 and phase 4 timeout fallback paths fired.
+
+Evidence captured:
+- `cargo build -p bob`
+- Unsandboxed SIGTERM repro from `the-intern/service`:
+  `RUST_LOG=info BOB_ADMIN_SOCK_PATH=/tmp/bob-b011-term4-.../admin.sock BOB_EXTENSION_SOCK_PATH=/tmp/bob-b011-term4-.../extension.sock BOB_SHUTDOWN_DRAIN_DEADLINE=700ms BOB_SHUTDOWN_REAP_DEADLINE=700ms target/debug/bob serve --config-monitoring.audit_log_path=/tmp/bob-b011-term4-.../audit.jsonl`
+  then `kill -TERM <pid>`.
+  Observed `elapsed_ms=1407`, immediate `shutdown signal received, signal: "SIGTERM"`,
+  then `shutdown: phase 3 — drain deadline exceeded; proceeding`, then
+  `shutdown: phase 4 — reap deadline exceeded; proceeding`.
+- Unsandboxed SIGINT repro with the same configuration, then `kill -INT <pid>`.
+  Observed `elapsed_ms=1404`, immediate `shutdown signal received, signal: "SIGINT"`,
+  then the same phase 3 and phase 4 timeout fallback messages.
+- No admin client connected during either run, so no accepted admin connection was
+  needed to trigger the delay.
+
+Isolated fault:
+`admin_rpc::start` in `the-intern/service/crates/admin-rpc/src/lib.rs` spawns
+`run_listener(listener, dispatcher, bus)` with `tokio::spawn(...)` and returns only
+the command-actor `Handle` plus actor `JoinHandle<()>`. `bob::start_subsystems` in
+`the-intern/service/crates/bob/src/serve.rs` clones supervisor, policy, monitoring,
+chat-adapter, and scheduler handles into the admin-rpc dispatcher, but `Runtime`
+does not retain any join/cancel handle for the spawned admin listener task.
+
+Root cause:
+The shutdown protocol drops the top-level runtime handles, but the detached
+admin listener still owns a cloned `Dispatcher`, and that dispatcher still owns
+cloned subsystem handles. Because the listener is not cancelled or awaited in
+phase 1, channel-close-driven shutdown never reaches monitoring, policy-control,
+chat-adapter, scheduler-adapter, or pi-agent-supervisor promptly. Phase 3 then
+times out waiting on actor joins, and phase 4 times out waiting on the supervisor
+join. Active admin connection tasks share the same ownership flaw, but the idle
+reproduction proves the detached listener alone is sufficient to cause B-011.
+
+Planned fix:
+Make the admin listener an owned, cancellable part of runtime state instead of a
+detached task. `bob` shutdown phase 1 must explicitly stop and await the admin
+listener before draining subsystem joins, and admin-rpc should also track/cancel
+spawned connection tasks so no dispatcher clones survive shutdown.
+
+Planned verification:
+- Add a regression that starts idle `bob serve`, sends `SIGTERM` and/or `SIGINT`,
+  and asserts exit happens before consuming the configured drain/reap deadlines,
+  not merely before `drain + reap + margin`.
+- Run:
+  `cargo test -p bob serve::tests`
+  `cargo test -p bob --test shell_e2e -- --nocapture`
+  `cargo test --workspace`
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
