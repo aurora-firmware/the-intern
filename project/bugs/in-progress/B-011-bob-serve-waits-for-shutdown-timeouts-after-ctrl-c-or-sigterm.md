@@ -224,6 +224,26 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-17
+
+I implemented the diagnosed shutdown fix by moving admin-RPC listener ownership
+under a shared shutdown signal and making the listener own and drain active
+connection tasks instead of spawning detached work that `bob` could not cancel.
+In `bob` shutdown phase 1, I now request admin-RPC shutdown before dropping
+subsystem handles so the listener and any connection tasks release their
+dispatcher clones before phase 3 waits on actor joins. I added a unit-level
+regression in `serve.rs` that measures idle shutdown duration against the
+configured drain deadline, and tightened the shell E2E SIGTERM path to assert
+the spawned idle service exits before that fallback deadline is consumed. The
+first red run in the restricted sandbox was misleading because Unix-socket
+startup failed there, so I reran the shutdown regressions outside the sandbox to
+get a real reproduction; both failed on the new timing assertion before the fix
+and passed after it. I kept the public `admin_rpc::start` return shape unchanged
+and rejected a broader API redesign because the existing handle-plus-join
+contract was enough once the listener and connection lifecycle were made
+internally owned. Nothing remains on the bug branch from the implementation
+side.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
