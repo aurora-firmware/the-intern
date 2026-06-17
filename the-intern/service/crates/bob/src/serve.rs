@@ -374,6 +374,7 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
     // Phase 1: Stop accepting new connections by dropping handles (channels close).
     // Signal the requests-handler actor to drain and stop.
     let _ = requests_handler_cancel_tx.send(true);
+    _admin_rpc.begin_shutdown();
     drop(_admin_rpc);
     drop(_extension_ipc);
     drop(_requests_handler);
@@ -470,7 +471,7 @@ fn remove_socket_files_best_effort(cfg: &BobConfig) {
 
 #[cfg(test)]
 pub mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use bob_core::error::ServiceError;
     use bob_core::{
@@ -731,6 +732,24 @@ pub mod tests {
         )
         .await
         .expect("shutdown protocol without chat adapter must complete within deadline");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_protocol_for_idle_runtime_finishes_before_drain_deadline_expires() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let mut cfg = test_cfg_with_sockets(&tmp);
+        cfg.shutdown_drain_deadline = Duration::from_millis(500);
+        cfg.shutdown_reap_deadline = Duration::from_millis(250);
+
+        let runtime = start_subsystems(&cfg).expect("subsystems must start");
+        let started_at = Instant::now();
+
+        run_shutdown_protocol(runtime, &cfg).await;
+
+        assert!(
+            started_at.elapsed() < cfg.shutdown_drain_deadline,
+            "idle shutdown should finish before drain timeout fallback is consumed"
+        );
     }
 
     // AC-1 (T-094): start_subsystems always creates a scheduler-adapter join handle.

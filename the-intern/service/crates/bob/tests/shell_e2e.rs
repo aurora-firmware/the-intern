@@ -193,6 +193,7 @@ fn shell_commands_work_end_to_end_against_spawned_serve() {
         .expect("invoke kill -TERM");
     assert!(kill_status.success(), "kill -TERM should succeed");
 
+    let shutdown_started_at = Instant::now();
     // Exit deadline: phase 3 drain + phase 4 reap + safety margin.
     let shutdown_exit_deadline =
         SHUTDOWN_DRAIN_DEADLINE + SHUTDOWN_REAP_DEADLINE + SHUTDOWN_EXIT_MARGIN;
@@ -203,6 +204,10 @@ fn shell_commands_work_end_to_end_against_spawned_serve() {
         exit_status.code(),
         Some(0),
         "bob serve should exit with code 0 after SIGTERM"
+    );
+    assert!(
+        shutdown_started_at.elapsed() < SHUTDOWN_DRAIN_DEADLINE,
+        "idle bob serve should exit before consuming the drain timeout fallback"
     );
 
     assert!(
