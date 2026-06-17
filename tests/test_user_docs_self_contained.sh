@@ -8,6 +8,20 @@ DOCS_SRC="$DOCS_DIR/src"
 BUILD_WORKFLOW="$REPO_ROOT/.github/workflows/build.yml"
 INTERNAL_PROJECT_DOC_PATTERN='project/(decisions|docs|specs)'
 
+# Fail loudly if a checker tool is missing. Otherwise a non-zero exit from an
+# absent `rg` (127) is swallowed by the `if rg ...` / `! rg ...` conditions and
+# the affected AC reports PASS without having checked anything.
+require_tool() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "FATAL: required tool '$1' not found on PATH; cannot run regression checks" >&2
+    exit 2
+  fi
+}
+
+require_tool rg
+require_tool mdbook
+require_tool python3
+
 pass_count=0
 fail_count=0
 
