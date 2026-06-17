@@ -13,8 +13,8 @@ use serde_json::json;
 use tokio::{
     io::{AsyncWriteExt as _, BufReader},
     net::UnixStream,
-    sync::mpsc,
-    task::JoinHandle,
+    sync::{mpsc, watch},
+    task::{JoinHandle, JoinSet},
 };
 
 use crate::{
@@ -110,6 +110,15 @@ pub struct Handle {
     // all Handle clones are dropped and tx is closed.
     #[allow(dead_code)]
     tx: mpsc::Sender<std::convert::Infallible>,
+    shutdown_tx: watch::Sender<bool>,
+}
+
+impl Handle {
+    /// Requests listener and connection shutdown without waiting for the actor
+    /// handle itself to be dropped.
+    pub fn begin_shutdown(&self) {
+        let _ = self.shutdown_tx.send(true);
+    }
 }
 
 pub struct Actor {
@@ -171,7 +180,18 @@ enum NotifMsg {
 /// forwarder task serializes it and pushes it onto the notification channel.
 /// AC-5: when the connection closes, all subscriptions registered on it are
 /// cleaned up without leaking entries (via `ConnectionRegistry::drop`).
+#[cfg(test)]
 async fn run_connection(stream: UnixStream, dispatcher: Dispatcher, _bus: SubscriptionBus) {
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    run_connection_with_shutdown(stream, dispatcher, _bus, shutdown_rx).await;
+}
+
+async fn run_connection_with_shutdown(
+    stream: UnixStream,
+    dispatcher: Dispatcher,
+    _bus: SubscriptionBus,
+    mut shutdown_rx: watch::Receiver<bool>,
+) {
     let (read_half, write_half) = stream.into_split();
     let reader = BufReader::new(read_half);
 
@@ -196,7 +216,15 @@ async fn run_connection(stream: UnixStream, dispatcher: Dispatcher, _bus: Subscr
 
     // Run the read loop in the current task. `registry` drops at the end of
     // this scope, which calls Drop and removes all subscriptions (AC-5).
-    read_loop(reader, dispatcher, registry, out_tx, notif_tx).await;
+    read_loop(
+        &mut shutdown_rx,
+        reader,
+        dispatcher,
+        registry,
+        out_tx,
+        notif_tx,
+    )
+    .await;
 
     // Wait for the write task to flush and exit.
     write_task.await.ok();
@@ -204,6 +232,7 @@ async fn run_connection(stream: UnixStream, dispatcher: Dispatcher, _bus: Subscr
 
 /// Drives the inbound frame loop for one connection.
 async fn read_loop(
+    shutdown_rx: &mut watch::Receiver<bool>,
     mut reader: BufReader<tokio::net::unix::OwnedReadHalf>,
     dispatcher: Dispatcher,
     mut registry: ConnectionRegistry,
@@ -211,7 +240,20 @@ async fn read_loop(
     notif_tx: mpsc::Sender<NotifMsg>,
 ) {
     loop {
-        match read_frame(&mut reader).await {
+        let frame_read = tokio::select! {
+            biased;
+            shutdown_result = shutdown_rx.changed() => {
+                match shutdown_result {
+                    Ok(()) | Err(_) => {
+                        tracing::debug!("admin-rpc: connection shutdown requested");
+                        break;
+                    }
+                }
+            }
+            frame_read = read_frame(&mut reader) => frame_read,
+        };
+
+        match frame_read {
             FrameRead::Ok(req) => {
                 let outcome = dispatcher.dispatch(req, &mut registry).await;
                 let ok = match outcome {
@@ -456,22 +498,58 @@ fn serialize_frame<T: serde::Serialize>(value: &T) -> Vec<u8> {
     bytes
 }
 
-/// Runs the listener accept loop and dispatches each accepted connection to
-/// [`run_connection`] in a spawned task.
-async fn run_listener(listener: Listener, dispatcher: Dispatcher, bus: SubscriptionBus) {
+/// Runs the listener accept loop, owns accepted connection tasks, and drains
+/// them on shutdown before returning.
+async fn run_listener(
+    listener: Listener,
+    dispatcher: Dispatcher,
+    bus: SubscriptionBus,
+    mut shutdown_rx: watch::Receiver<bool>,
+) {
+    let mut connections = JoinSet::new();
+
     loop {
-        match listener.accept().await {
-            Ok(Some(stream)) => {
-                let d = dispatcher.clone();
-                let b = bus.clone();
-                tokio::spawn(run_connection(stream, d, b));
+        tokio::select! {
+            biased;
+            shutdown_result = shutdown_rx.changed() => {
+                match shutdown_result {
+                    Ok(()) | Err(_) => {
+                        tracing::info!("admin-rpc: listener shutdown requested");
+                        break;
+                    }
+                }
             }
-            Ok(None) => {
-                // Peer was rejected — already logged in `Listener::accept`.
+            connection = listener.accept() => {
+                match connection {
+                    Ok(Some(stream)) => {
+                        let d = dispatcher.clone();
+                        let b = bus.clone();
+                        connections.spawn(run_connection_with_shutdown(
+                            stream,
+                            d,
+                            b,
+                            shutdown_rx.clone(),
+                        ));
+                    }
+                    Ok(None) => {
+                        // Peer was rejected — already logged in `Listener::accept`.
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "admin-rpc: accept error; retrying");
+                    }
+                }
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "admin-rpc: accept error; retrying");
+            joined = connections.join_next(), if !connections.is_empty() => {
+                if let Some(Err(e)) = joined {
+                    tracing::warn!(error = %e, "admin-rpc: connection task panicked");
+                }
             }
+        }
+    }
+
+    while let Some(result) = connections.join_next().await {
+        if let Err(e) = result {
+            tracing::warn!(error = %e, "admin-rpc: connection task panicked");
         }
     }
 }
@@ -479,9 +557,9 @@ async fn run_listener(listener: Listener, dispatcher: Dispatcher, bus: Subscript
 /// Starts the admin-rpc actor and, when `cfg.admin_sock_path` is non-empty,
 /// binds the Unix domain socket listener and spawns an accept loop task.
 ///
-/// Both tasks are returned as a single `JoinHandle<()>` that resolves when the
-/// command actor exits.  The listener task is detached; it will be cancelled
-/// when the process exits or when the socket file is removed externally.
+/// The returned `JoinHandle<()>` resolves after both the command actor and the
+/// optional listener task have stopped. The listener owns and drains accepted
+/// connection tasks so dispatcher handle clones are dropped during shutdown.
 ///
 /// # Errors
 ///
@@ -492,6 +570,7 @@ async fn run_listener(listener: Listener, dispatcher: Dispatcher, bus: Subscript
 pub fn start(cfg: Config) -> Result<(Handle, JoinHandle<()>), std::io::Error> {
     let buffer = cfg.command_buffer.max(1);
     let (tx, rx) = mpsc::channel(buffer);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     // Build the dispatcher from the optional handles in the config.
     let mut dispatcher = Dispatcher::new(
@@ -549,15 +628,19 @@ pub fn start(cfg: Config) -> Result<(Handle, JoinHandle<()>), std::io::Error> {
         Some(l)
     };
 
-    if let Some(listener) = maybe_listener {
-        tokio::spawn(run_listener(listener, dispatcher, bus));
-    }
+    let listener_join = maybe_listener
+        .map(|listener| tokio::spawn(run_listener(listener, dispatcher, bus, shutdown_rx)));
 
     let actor = Actor { cfg, rx };
     let join = tokio::spawn(async move {
         actor.run().await;
+        if let Some(listener_join) = listener_join {
+            if let Err(e) = listener_join.await {
+                tracing::warn!(error = %e, "admin-rpc: listener task panicked");
+            }
+        }
     });
-    Ok((Handle { tx }, join))
+    Ok((Handle { tx, shutdown_tx }, join))
 }
 
 #[cfg(test)]

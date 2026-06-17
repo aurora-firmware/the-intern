@@ -3,6 +3,37 @@
 Running log of bugs and friction observed while using the `ai-team` CLI and the
 slash-skills that wrap it. New entries at the top.
 
+## 2026-06-13 — no check that accepted ADRs propagate to the specs they supersede
+
+**Symptom.** `ai-team validate` checks artifact metadata and cross-references
+(e.g. task→spec resolution), but it does not detect when an **accepted ADR has
+superseded a decision that approved specs still describe the old way**. ADR-005
+(accepted 2026-05-22) made socket filesystem permissions the sole connection
+gate and demoted `SO_PEERCRED` to an audit-only signal, removing the uid
+allow-list. For roughly three weeks the specs that define those surfaces — S-002,
+S-003, S-005 — still said the sockets enforce a `perms + SO_PEERCRED` gate and
+referenced the removed `admin_allowed_uids`/`admin_allowed_gid` config. Nothing
+flagged the contradiction; it surfaced only across three rounds of human PR
+review on PR #22.
+
+**Impact.** Accepted decisions silently fail to fan out to the artifacts that
+depend on them, so the spec/doc set drifts out of agreement with its own ADRs.
+The drift is invisible to `validate` and is caught (if at all) only by manual
+review — expensive, and easy to miss a straggler (the first reconciliation pass
+on PR #22 fixed S-002/S-005 but missed S-003 and a rendered mdBook page, needing
+a further review round). This is the same failure mode that motivated the PR #22
+work in the first place: implementation/decisions moving ahead of the documents
+that are supposed to be their source of truth.
+
+**Suggested fix.** Give ADRs a machine-readable "supersedes/amends" link to the
+specs or prior ADRs they change (frontmatter, e.g. `amends: [S-002, S-005]`, or
+a structured `supersedes:` already supported for ADR→ADR). Then `ai-team
+validate` can warn when an artifact named in an accepted ADR's `amends:` list has
+not recorded a corresponding amendment-log entry dated on/after the ADR, or — as
+a lighter heuristic — surface specs that still contain phrases an accepted ADR
+explicitly retired. Even just the "amended artifact lacks a post-ADR
+amendment-log entry" check would have caught all three stale specs here.
+
 ## 2026-06-10 — `new-bug` skill/CLI flag mismatch hit again (B-008)
 
 The `new-bug` skill still prescribes `ai-team bug new --json --title "<title>"

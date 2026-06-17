@@ -104,6 +104,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Reject internal project doc links
+        run: |
+          if grep -RInE 'project/(decisions|docs|specs)' "${{ env.DOCS_DIR }}/src"; then
+            echo "user docs must not link into internal project documents"
+            exit 1
+          fi
+
       - name: Build bob (for CLI reference preprocessor)
         run: |
           mkdir -p "$GITHUB_WORKSPACE/${{ env.CARGO_CACHE_DIR }}"

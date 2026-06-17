@@ -18,7 +18,8 @@ are set by the bob service's pi-agent supervisor before it spawns pi.
 
 All frames on `extension.sock` are **newline-delimited JSON** (one JSON
 object per line, terminated by a single `\n`). This matches the framing used
-on `admin.sock` per [ADR-001](../../../project/decisions/ADR-001-admin-rpc-framing-newline-delimited-json.md).
+on `admin.sock`: one JSON object per line with no literal newlines inside a
+frame payload.
 Inner JSON must not contain literal newlines.
 
 ### Outbound frames (extension → bob service)
@@ -87,7 +88,7 @@ This version is declared as a pinned (no caret, no tilde) `devDependency` in
 
 ### How the compatibility test works
 
-[`the-intern/extensions/pi-agent-compat.test.ts`](../../../extensions/pi-agent-compat.test.ts) runs as part of `npm test` in
+`the-intern/extensions/pi-agent-compat.test.ts` runs as part of `npm test` in
 the extensions package. It checks three things:
 
 1. The declared dependency in `package.json` is exactly `0.75.3` with no
@@ -140,8 +141,7 @@ and the policy engine.
 
 ### Application identity
 
-Per [ADR-005](../../../project/decisions/ADR-005-application-level-request-identity-is-self-asserted-within-the-local-socket-trust-boundary.md),
-each request self-asserts its application-level identity inside the request
+Each request self-asserts its application-level identity inside the request
 itself. The `UserId` placed in `RequestContext.sender` comes from the request
 data — not from the OS-level peer credentials. The socket's `0o700` parent
 directory is the transport trust gate; once a caller is inside that boundary,
@@ -154,35 +154,42 @@ Any new channel adapter must:
 
 - Translate each external input into an `InternalEvent` with the appropriate
   `DeliveryKind` (sync, async, or periodic — see
-  [ADR-004](../../../project/decisions/ADR-004-inbound-request-interface-typed-by-delivery-kind-sync-async-periodic.md)
-  for the semantics of each kind).
+  the delivery semantics summarized below for the meaning of each kind).
 - Populate `RequestContext` with an application-level `UserId` supplied by the
   request itself, a fixed `ChannelId` identifying the adapter, and any
   available context identifier.
 - Submit the normalized pair to the requests-handler via its `Handle`.
 - Apply no policy logic — that is not the adapter's job.
 
-The full specification for the channel-adapter framework and the
-interactive-chat adapter is in
-[`project/specs/channel-adapter-framework-and-interactive-chat-adapter.md`](../../../project/specs/channel-adapter-framework-and-interactive-chat-adapter.md).
+This guide intentionally summarizes the externally visible adapter contract
+without linking back into the internal project specifications.
 
 ## Pointers to ADRs
 
-These three decisions directly constrain extension and adapter authors:
+These three internal decisions directly constrain extension and adapter authors:
 
-**[ADR-001 — Admin-RPC framing: newline-delimited JSON over UDS](../../../project/decisions/ADR-001-admin-rpc-framing-newline-delimited-json.md)**
+**ADR-001 — Admin-RPC framing: newline-delimited JSON over UDS**
 The wire framing rule — one JSON object per line, `\n` terminated, no literal
 newlines inside JSON values — applies to both `admin.sock` (JSON-RPC 2.0) and
 `extension.sock`. Any new client or adapter that writes to these sockets must
 follow this framing.
 
-**[ADR-004 — Inbound request interface typed by delivery kind (sync/async/periodic)](../../../project/decisions/ADR-004-inbound-request-interface-typed-by-delivery-kind-sync-async-periodic.md)**
+**ADR-004 — Inbound request interface typed by delivery kind (sync/async/periodic)**
 The core recognizes requests by their delivery and response semantics, not by
-their channel of origin. An adapter must classify each inbound event as sync,
-async, or periodic and produce an `InternalEvent` accordingly. The core never
-enumerates channel types.
+their channel of origin. An adapter must classify each inbound event as one of
+three kinds and produce an `InternalEvent` accordingly:
 
-**[ADR-005 — Application-level request identity is self-asserted within the local-socket trust boundary](../../../project/decisions/ADR-005-application-level-request-identity-is-self-asserted-within-the-local-socket-trust-boundary.md)**
+- **sync** — the caller is waiting for an answer. The caller receives an
+  immediate acknowledgement (or error), and the agent's later answer is routed
+  back over the originating connection.
+- **async** — the caller receives only an acknowledgement (or error); no answer
+  is routed back. Any agent-side output is a separate outbound action, not a
+  response to this request.
+- **periodic** — timer-triggered with no caller to answer; nothing is returned.
+
+The core never enumerates channel types.
+
+**ADR-005 — Application-level request identity is self-asserted within the local-socket trust boundary**
 Transport trust is enforced by socket filesystem permissions (the `0o700`
 parent directory). Application-level identity is declared inside each request,
 not derived from the OS uid. Every request must carry a non-empty, structurally
