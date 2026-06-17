@@ -255,3 +255,17 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-17
+PASS
+
+- Stage 1 passed. The Diagnosis Log records reproduction status, evidence,
+  isolated fault, root cause, planned fix, and planned verification, and the
+  implementation matches that contract by making admin-rpc listener/connection
+  shutdown explicit before subsystem drain begins.
+- Stage 2 passed. The fix is minimal to the diagnosed ownership problem, adds
+  practical regression coverage in `serve.rs` and `shell_e2e.rs`, and showed no
+  correctness, security, readability, or performance issues in review.
+- Verification passed outside the restricted sandbox as expected for these
+  Unix-socket shutdown tests: `cargo test -p bob serve::tests`, `cargo test -p
+  bob --test shell_e2e -- --nocapture`, and `cargo test --workspace`.
