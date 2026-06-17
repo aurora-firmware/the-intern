@@ -176,9 +176,18 @@ follow this framing.
 
 **ADR-004 — Inbound request interface typed by delivery kind (sync/async/periodic)**
 The core recognizes requests by their delivery and response semantics, not by
-their channel of origin. An adapter must classify each inbound event as sync,
-async, or periodic and produce an `InternalEvent` accordingly. The core never
-enumerates channel types.
+their channel of origin. An adapter must classify each inbound event as one of
+three kinds and produce an `InternalEvent` accordingly:
+
+- **sync** — the caller is waiting for an answer. The caller receives an
+  immediate acknowledgement (or error), and the agent's later answer is routed
+  back over the originating connection.
+- **async** — the caller receives only an acknowledgement (or error); no answer
+  is routed back. Any agent-side output is a separate outbound action, not a
+  response to this request.
+- **periodic** — timer-triggered with no caller to answer; nothing is returned.
+
+The core never enumerates channel types.
 
 **ADR-005 — Application-level request identity is self-asserted within the local-socket trust boundary**
 Transport trust is enforced by socket filesystem permissions (the `0o700`
