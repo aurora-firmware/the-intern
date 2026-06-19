@@ -184,7 +184,13 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         policy_snapshot: policy_snapshot.clone(),
         extension_sock_path: cfg.extension_sock_path.clone(),
         ..extension_ipc::Config::default()
-    });
+    })
+    .map_err(|e| {
+        format!(
+            "failed to bind extension socket at {}: {e}",
+            cfg.extension_sock_path.display()
+        )
+    })?;
     info!("extension-ipc actor started");
 
     // Conditionally start the chat adapter when the chat channel is enabled.
@@ -891,6 +897,31 @@ pub mod tests {
         assert!(
             !cfg.extension_sock_path.exists(),
             "extension socket should not remain after failed startup"
+        );
+    }
+
+    // B-012 part 1: a non-empty extension socket path that cannot be bound must
+    // fail startup with ServiceDown, so the path is never advertised to workers
+    // while bob does not own the listener.
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_subsystems_returns_service_down_when_extension_socket_cannot_bind() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let mut cfg = test_cfg_with_sockets(&tmp);
+        // Make the extension socket's parent a regular file so the gated bind's
+        // create_dir_all fails deterministically.
+        let blocker = tmp.path().join("not-a-dir");
+        std::fs::write(&blocker, b"x").expect("write blocker file");
+        cfg.extension_sock_path = blocker.join("extension.sock");
+
+        let result = start_subsystems(&cfg);
+
+        assert!(
+            matches!(result, Err(ServiceError::ServiceDown)),
+            "expected ServiceError::ServiceDown when the extension socket cannot bind"
+        );
+        assert!(
+            !cfg.admin_sock_path.exists(),
+            "admin socket should not remain after failed startup"
         );
     }
 
