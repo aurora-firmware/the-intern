@@ -3,7 +3,7 @@ id: B-012
 title: B-009 gated extension.sock bind regressed startup failure handling and
   shutdown connection draining
 severity: medium
-status: in-progress
+status: resolved
 created: '2026-06-19'
 ---
 
