@@ -183,6 +183,70 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-19
+
+**What was done:**
+
+Started from the Diagnosis Log which identified the two-part fault in `serve.rs`:
+the `extension_ipc::start()` call used `..Config::default()` leaving
+`extension_sock_path` empty (so the gated listener was skipped), and a separate raw
+`tokio::net::UnixListener::bind` performed the actual socket binding with no
+permission gates.
+
+Followed TDD: wrote the failing regression test
+`start_subsystems_extension_socket_parent_is_0700_and_socket_is_0660` first,
+verified it failed (socket mode `0o755` instead of `0o660`, parent `0o755` instead
+of `0o700`). Then implemented the fix per the contract: forwarded
+`cfg.extension_sock_path.clone()` into `extension_ipc::Config` and removed the raw
+bind plus the `_extension_listener` Runtime field.
+
+**Obstacles and how they were resolved:**
+
+Forwarding the path to `extension_ipc::start()` caused the gated listener to be
+spawned, which exposed a pre-existing issue in `extension_ipc::run_listener`: it ran
+as a detached infinite `accept()` loop with no shutdown mechanism. This caused the
+`shutdown_protocol_for_idle_runtime_finishes_before_drain_deadline_expires` test to
+hit its 500ms drain deadline. Fixed by adding a `watch::Receiver<bool>` shutdown
+parameter to `run_listener`, wrapping `accept()` in a `biased select!` against the
+shutdown signal, retaining the listener `JoinHandle` in `start()`, and awaiting it
+inside the actor task after sending shutdown — mirroring the admin-rpc pattern.
+
+A second existing test
+(`start_subsystems_returns_service_down_when_second_bind_fails_and_cleans_up`) also
+broke: it pre-bound the extension socket and expected `start_subsystems` to fail, but
+the gated `Listener::bind()` removes stale sockets first and succeeds. Updated to
+`start_subsystems_removes_stale_extension_socket_and_succeeds`, asserting the
+corrected behaviour (stale socket cleaned up, permissions correct).
+
+**What was tried and rejected:**
+
+Investigated whether the drain timeout was caused by the tokio `current_thread`
+executor being starved by the detached accept loop. Confirmed the watch-channel
+shutdown mechanism was the correct fix, as it matches admin-rpc and ensures
+`extension_ipc_join` resolves only after the listener has actually stopped.
+
+**What remains:**
+
+Nothing. All acceptance criteria met, full workspace test suite passes,
+`cargo fmt --check` clean.
+
+Changed files:
+- `the-intern/service/crates/extension-ipc/src/lib.rs` — shutdown signal added to
+  `run_listener`; actor task awaits listener after sending shutdown.
+- `the-intern/service/crates/bob/src/serve.rs` — gated bind wired via
+  `extension_ipc::Config`, raw `UnixListener::bind` and `_extension_listener` field
+  removed, regression test added, affected test updated.
+
+Commits on branch:
+- `52f215a fix(extension-ipc): add shutdown signal to run_listener`
+- `b53fc9e fix(serve): route extension socket bind through gated extension-ipc listener`
+
+Verification:
+- `cargo test -p bob serve::tests::start_subsystems_extension_socket_parent_is_0700_and_socket_is_0660`
+  failed before fix (mode 755), passes after.
+- `cargo test --workspace` — all tests pass, 0 failures.
+- `cargo fmt --all -- --check` — clean.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
