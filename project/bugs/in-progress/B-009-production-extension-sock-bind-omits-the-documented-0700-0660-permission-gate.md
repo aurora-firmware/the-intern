@@ -258,3 +258,79 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-19
+
+PASS
+
+**Stage 1 — Bug criteria**
+
+Diagnosis Log is complete. It records reproduction status (confirmed by code
+inspection), evidence captured (six numbered items covering both the ungated
+raw bind and the correctly gated but unused extension-ipc path), isolated fault
+(two-part: empty `extension_sock_path` forwarded to `extension_ipc::start()`
+and a separate ungated raw `UnixListener::bind`), root cause (missed wiring of
+`cfg.extension_sock_path` into `extension_ipc::Config`), planned verification,
+and a planned fix that matches what was implemented.
+
+Fix addresses the isolated faults:
+- Fault A resolved: `cfg.extension_sock_path.clone()` is now forwarded into
+  `extension_ipc::Config` so the gated `Listener::bind()` (which applies
+  `0o700` on the parent and `0o660` on the socket) is invoked on the
+  production path.
+- Fault B resolved: the ungated `tokio::net::UnixListener::bind` call and the
+  `_extension_listener: UnixListener` Runtime field are removed; the
+  extension-ipc crate now holds the only bound socket.
+
+Fix Verification steps followed:
+- `cargo test -p extension-ipc` passes (29 tests, 0 failures).
+- Integration test `start_subsystems_extension_socket_parent_is_0700_and_socket_is_0660`
+  in `the-intern/service/crates/bob/src/serve.rs` mirrors the pattern at
+  `admin-rpc/src/listener.rs:161-180`: it sets the parent to `0o755` before
+  calling `start_subsystems`, then stats both the parent directory (asserts
+  `0o700`) and the socket file (asserts `0o660`). This test failed before the
+  fix (modes `0o755`) and passes after.
+- `cargo test --workspace` passes (all suites, 0 failures).
+- `cargo fmt --all -- --check` is clean.
+
+The updated test `start_subsystems_removes_stale_extension_socket_and_succeeds`
+correctly reflects the changed behaviour: the gated bind removes stale socket
+files and rebinds successfully, whereas the previous raw bind would fail.
+
+**`extension-ipc` shutdown-signal change — scope assessment**
+
+Adding `watch::Receiver<bool>` to `run_listener` and awaiting the listener
+`JoinHandle` inside the actor task is in scope. Wiring `extension_sock_path`
+into `extension_ipc::start()` caused the gated listener to actually bind and
+run for the first time in the production path. This exposed a pre-existing
+structural defect: `run_listener` was a detached task with no termination
+mechanism, so `run_shutdown_protocol` could not drain cleanly. The shutdown
+change is the minimal intervention needed to make the primary fix correct —
+without it the fix would introduce a resource leak and break the shutdown
+deadline test. It is not scope creep.
+
+**Stage 2 — Code quality**
+
+- Correctness: the `biased select!` correctly prioritises the shutdown branch
+  over new accepts, preventing starvation of the shutdown path. Error and
+  channel-closed cases on `shutdown_rx.changed()` are both handled with a
+  break (correct for a `watch::Receiver`). The `Err(_)` arm (sender dropped)
+  is a valid shutdown condition. No logic errors observed.
+- Tests: the new regression test covers the parent-directory mode and socket
+  mode; the stale-socket test covers rebind behaviour; both run under
+  `current_thread` matching the rest of the serve-tests suite. Tests are
+  independent (each creates its own `tempfile::tempdir()`).
+- Security: the fix is the security fix; no new external inputs, no hardcoded
+  secrets.
+- Readability: comment on the updated stale-socket test explains why the
+  previous assumption became invalid. Listener-join comment in `start()` is
+  clear.
+- Performance: no unnecessary blocking, no resource leaks introduced. The
+  listener join handle is properly awaited rather than detached.
+
+No blocking observations. One minor non-blocking observation: in
+`extension-ipc/src/lib.rs`, a bind failure logs at `error!` level but returns
+`None`, meaning `bob serve` continues without an extension socket and without
+propagating the bind error to the caller. This pre-existed the fix and is not
+introduced by it; it is a separate concern for a future task if silent
+degradation is undesirable.

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use bob_core::error::{ServiceError, ServiceResult};
 use bob_core::ports::{AuditSink, PersistenceStore};
 use bob_core::types::ChannelId;
-use tokio::{net::UnixListener, sync::watch, task::JoinHandle, time};
+use tokio::{sync::watch, task::JoinHandle, time};
 use tracing::info;
 
 use crate::config::BobConfig;
@@ -37,11 +37,6 @@ struct Runtime {
 
     // Cancellation sender for the requests-handler actor.
     requests_handler_cancel_tx: watch::Sender<bool>,
-
-    // Bound-but-not-yet-polled extension listener.  Dropping it removes the
-    // socket file descriptor; the shutdown protocol removes the on-disk path
-    // explicitly.
-    _extension_listener: UnixListener,
 
     // Join handles for non-supervisor actors (awaited in shutdown phase 3).
     joins: Vec<JoinHandle<()>>,
@@ -187,6 +182,7 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
             monitoring_handle.clone(),
         )),
         policy_snapshot: policy_snapshot.clone(),
+        extension_sock_path: cfg.extension_sock_path.clone(),
         ..extension_ipc::Config::default()
     });
     info!("extension-ipc actor started");
@@ -250,20 +246,6 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         "admin-rpc actor started and socket bound"
     );
 
-    // If the second bind fails, remove the first socket file explicitly before
-    // propagating — `remove_socket_files_best_effort` in `start_subsystems`
-    // will also attempt removal, but being explicit here ensures no race window.
-    info!(path = %cfg.extension_sock_path.display(), "binding extension socket");
-    let extension_listener = UnixListener::bind(&cfg.extension_sock_path).map_err(|e| {
-        // Remove the admin socket file that was already created.
-        let _ = std::fs::remove_file(&cfg.admin_sock_path);
-        format!(
-            "failed to bind extension socket at {}: {e}",
-            cfg.extension_sock_path.display()
-        )
-    })?;
-    info!(path = %cfg.extension_sock_path.display(), "extension socket bound");
-
     // The supervisor join is kept separate from `joins` so that phase 3 drains
     // the non-supervisor actors first, and phase 4 can explicitly await child
     // process reaping with its own deadline.
@@ -287,7 +269,6 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         _chat_adapter: maybe_chat_handle,
         _scheduler_adapter: scheduler_reload_handle,
         requests_handler_cancel_tx: rh_cancel_tx,
-        _extension_listener: extension_listener,
         joins,
         supervisor_join: pi_agent_supervisor_join,
         chat_adapter_join: maybe_chat_join,
@@ -359,7 +340,6 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
         _chat_adapter,
         _scheduler_adapter,
         requests_handler_cancel_tx,
-        _extension_listener,
         joins,
         supervisor_join,
         chat_adapter_join,
@@ -389,8 +369,6 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
     // Drop the scheduler-adapter reload handle so its actor sees the watch channel
     // close and exits cleanly.
     drop(_scheduler_adapter);
-    // Drop listeners to release the socket file descriptors.
-    drop(_extension_listener);
 
     info!("shutdown: phase 2 — cancelling subsystem workers");
     // Actors exit when their channel is drained and closed — no explicit cancel needed.
@@ -838,43 +816,57 @@ pub mod tests {
         drop(runtime);
     }
 
-    // AC-3: start_subsystems returns ServiceError::ServiceDown on bind failure
-    // and cleans up the first socket when the second bind fails.
-    //
-    // We simulate the second bind failing by pre-binding the extension socket
-    // path in the test process before calling start_subsystems.
+    // B-009: the gated extension-ipc listener removes a stale extension socket
+    // and rebinds successfully.  The previous raw UnixListener::bind would fail
+    // when a stale socket file existed; the gated path (which calls
+    // extension_ipc::Listener::bind) unlinks the stale file first and therefore
+    // succeeds.  start_subsystems must return Ok and the socket must be present
+    // on disk with the correct permissions.
     #[tokio::test(flavor = "current_thread")]
-    async fn start_subsystems_returns_service_down_when_second_bind_fails_and_cleans_up() {
+    async fn start_subsystems_removes_stale_extension_socket_and_succeeds() {
+        use std::os::unix::fs::PermissionsExt;
+
         let tmp = tempfile::tempdir().expect("temp dir");
         let admin_sock = tmp.path().join("admin.sock");
         let ext_sock = tmp.path().join("extension.sock");
 
-        // Pre-bind the extension socket so the second bind inside start_subsystems fails.
-        let _pre_bound = tokio::net::UnixListener::bind(&ext_sock)
-            .expect("pre-bind extension socket for test setup");
+        // Pre-bind the extension socket to create a stale socket file, then
+        // drop the listener so only the file remains on disk.
+        {
+            let _pre_bound = tokio::net::UnixListener::bind(&ext_sock)
+                .expect("pre-bind extension socket for test setup");
+        }
+        assert!(
+            ext_sock.exists(),
+            "stale socket file should exist before start"
+        );
 
         let cfg = BobConfig {
             admin_sock_path: admin_sock.clone(),
             extension_sock_path: ext_sock.clone(),
             request_queue_capacity: 16,
-            shutdown_drain_deadline: Duration::from_millis(50),
-            shutdown_reap_deadline: Duration::from_millis(25),
+            shutdown_drain_deadline: Duration::from_millis(100),
+            shutdown_reap_deadline: Duration::from_millis(50),
             ..BobConfig::test_base()
         };
 
-        let result = start_subsystems(&cfg);
+        // The gated bind removes the stale file and rebinds; start must succeed.
+        let runtime = start_subsystems(&cfg)
+            .expect("start_subsystems must succeed even when stale extension socket exists");
 
-        // Must return ServiceError::ServiceDown.
+        // Extension socket is present and has the correct permissions.
         assert!(
-            matches!(result, Err(ServiceError::ServiceDown)),
-            "expected Err(ServiceError::ServiceDown)"
+            ext_sock.exists(),
+            "extension socket must exist after successful start"
+        );
+        let meta = std::fs::metadata(&ext_sock).expect("stat extension socket");
+        let mode = meta.permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o660,
+            "extension socket mode must be 0660 after stale-socket rebind, got {mode:o}"
         );
 
-        // The admin socket file created during the partial start must be removed.
-        assert!(
-            !admin_sock.exists(),
-            "admin.sock should be cleaned up when second bind fails"
-        );
+        run_shutdown_protocol(runtime, &cfg).await;
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1086,6 +1078,56 @@ pub mod tests {
 
         assert_eq!(received.kind, AuditRecordKind::Event);
         assert_eq!(received.id, "test_wiring_001");
+
+        run_shutdown_protocol(runtime, &cfg).await;
+    }
+
+    // B-009: extension socket bind uses gated path (0700 parent + 0660 socket).
+    //
+    // The production path must call extension-ipc::Listener::bind (which enforces
+    // the ADR-005 permission gate) rather than a raw tokio::net::UnixListener::bind.
+    // Use a nested parent directory so the test can independently verify the parent
+    // mode is 0700 and the socket mode is 0660.
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_subsystems_extension_socket_parent_is_0700_and_socket_is_0660() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().expect("temp dir");
+        // Place sockets in a subdirectory so we can check that subdirectory's mode.
+        let sock_parent = tmp.path().join("socks");
+        std::fs::create_dir_all(&sock_parent).expect("create socks dir");
+        // Set the parent to a permissive mode first; the gated bind must tighten it.
+        std::fs::set_permissions(&sock_parent, std::fs::Permissions::from_mode(0o755))
+            .expect("set permissive mode");
+
+        let cfg = BobConfig {
+            admin_sock_path: sock_parent.join("admin.sock"),
+            extension_sock_path: sock_parent.join("extension.sock"),
+            pi_agent_command: "sh".to_string(),
+            pi_agent_args: vec!["-c".to_string(), "exit 0".to_string()],
+            request_queue_capacity: 16,
+            shutdown_drain_deadline: Duration::from_millis(100),
+            shutdown_reap_deadline: Duration::from_millis(50),
+            ..BobConfig::test_base()
+        };
+
+        let runtime = start_subsystems(&cfg).expect("subsystems must start");
+
+        // Verify the extension socket parent directory was chmoded to 0700.
+        let parent_meta = std::fs::metadata(&sock_parent).expect("stat socks dir");
+        let parent_mode = parent_meta.permissions().mode() & 0o777;
+        assert_eq!(
+            parent_mode, 0o700,
+            "extension socket parent directory mode must be 0700, got {parent_mode:o}"
+        );
+
+        // Verify the extension socket file itself was chmoded to 0660.
+        let sock_meta = std::fs::metadata(&cfg.extension_sock_path).expect("stat extension socket");
+        let sock_mode = sock_meta.permissions().mode() & 0o777;
+        assert_eq!(
+            sock_mode, 0o660,
+            "extension socket file mode must be 0660, got {sock_mode:o}"
+        );
 
         run_shutdown_protocol(runtime, &cfg).await;
     }
