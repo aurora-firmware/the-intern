@@ -8,7 +8,11 @@ pub mod peer_cred;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::{net::UnixStream, sync::mpsc, task::JoinHandle};
+use tokio::{
+    net::UnixStream,
+    sync::{mpsc, watch},
+    task::JoinHandle,
+};
 
 use crate::listener::{Listener, ListenerConfig};
 use crate::multiplex::{MonitoringHandle, NoopMonitoringHandle, SessionMultiplexer};
@@ -184,19 +188,33 @@ async fn run_listener(
     listener: Listener,
     monitoring_handle: Arc<dyn MonitoringHandle>,
     snapshot: policy_control::SnapshotHandle,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) {
     loop {
-        match listener.accept().await {
-            Ok(Some(stream)) => {
-                let monitoring = Arc::clone(&monitoring_handle);
-                let snapshot = snapshot.clone();
-                tokio::spawn(run_connection(stream, monitoring, snapshot));
+        tokio::select! {
+            biased;
+            shutdown = shutdown_rx.changed() => {
+                match shutdown {
+                    Ok(()) | Err(_) => {
+                        tracing::info!("extension-ipc: listener shutdown requested");
+                        break;
+                    }
+                }
             }
-            Ok(None) => {
-                // Rejected peer already logged in `Listener::accept`.
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "extension-ipc: accept error; retrying");
+            accepted = listener.accept() => {
+                match accepted {
+                    Ok(Some(stream)) => {
+                        let monitoring = Arc::clone(&monitoring_handle);
+                        let snapshot = snapshot.clone();
+                        tokio::spawn(run_connection(stream, monitoring, snapshot));
+                    }
+                    Ok(None) => {
+                        // Rejected peer already logged in `Listener::accept`.
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "extension-ipc: accept error; retrying");
+                    }
+                }
             }
         }
     }
@@ -205,6 +223,7 @@ async fn run_listener(
 pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
     let buffer = cfg.command_buffer.max(1);
     let (tx, rx) = mpsc::channel(buffer);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let monitoring_handle = Arc::clone(&cfg.monitoring_handle);
     let snapshot = cfg.policy_snapshot.clone();
 
@@ -233,13 +252,27 @@ pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
         }
     };
 
-    if let Some(listener) = maybe_listener {
-        tokio::spawn(run_listener(listener, monitoring_handle, snapshot));
-    }
+    // Spawn the listener task, retaining its join handle so the actor task can
+    // await it after sending the shutdown signal.
+    let listener_join = maybe_listener.map(|listener| {
+        tokio::spawn(run_listener(
+            listener,
+            monitoring_handle,
+            snapshot,
+            shutdown_rx,
+        ))
+    });
 
     let actor = Actor { cfg, rx };
     let join = tokio::spawn(async move {
         actor.run().await;
+        // Signal the listener to stop, then wait for it to drain and exit.
+        let _ = shutdown_tx.send(true);
+        if let Some(lj) = listener_join {
+            if let Err(e) = lj.await {
+                tracing::warn!(error = %e, "extension-ipc: listener task panicked");
+            }
+        }
     });
     (Handle { tx }, join)
 }
