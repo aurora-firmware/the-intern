@@ -3,6 +3,25 @@
 Running log of bugs and friction observed while using the `ai-team` CLI and the
 slash-skills that wrap it. New entries at the top.
 
+## 2026-06-19 — `status-report` skill is not model-invocable from `bug-loop`
+
+**Symptom.** The `bug-loop` skill's Step 8 instructs `Skill(status-report)` to
+produce the Gate 5 summary when the queue drains. The skill exists on disk
+(`.claude/skills/status-report/SKILL.md`) but is not in the session's invocable
+skill list, so the Skill tool cannot call it. Its frontmatter has
+`disable-model-invocation: true`, which is what blocks programmatic invocation.
+
+**Impact.** A loop that completes successfully cannot run its own final step as
+written; the orchestrator must fall back to reading `SKILL.md` and executing its
+procedure (`ai-team status` + `ai-team report`) by hand. Worked around this run
+with no loss of output, but the loop instruction and the skill's
+`disable-model-invocation` flag are contradictory.
+
+**Suggested fix.** Either remove `disable-model-invocation: true` from
+`status-report`'s frontmatter so loops can invoke it, or change `bug-loop` (and
+`dev-loop`) Step 8 to call `ai-team status` / `ai-team report` directly instead
+of `Skill(status-report)`.
+
 ## 2026-06-13 — no check that accepted ADRs propagate to the specs they supersede
 
 **Symptom.** `ai-team validate` checks artifact metadata and cross-references

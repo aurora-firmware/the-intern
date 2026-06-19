@@ -8,7 +8,11 @@ pub mod peer_cred;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::{net::UnixStream, sync::mpsc, task::JoinHandle};
+use tokio::{
+    net::UnixStream,
+    sync::{mpsc, watch},
+    task::JoinHandle,
+};
 
 use crate::listener::{Listener, ListenerConfig};
 use crate::multiplex::{MonitoringHandle, NoopMonitoringHandle, SessionMultiplexer};
@@ -184,64 +188,98 @@ async fn run_listener(
     listener: Listener,
     monitoring_handle: Arc<dyn MonitoringHandle>,
     snapshot: policy_control::SnapshotHandle,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) {
+    // Track accepted connection tasks so they can be torn down on shutdown.
+    // Detached connection tasks would otherwise keep their cloned subsystem
+    // handles (monitoring, policy snapshot) alive and stall the shutdown drain.
+    let mut connections = tokio::task::JoinSet::new();
     loop {
-        match listener.accept().await {
-            Ok(Some(stream)) => {
-                let monitoring = Arc::clone(&monitoring_handle);
-                let snapshot = snapshot.clone();
-                tokio::spawn(run_connection(stream, monitoring, snapshot));
+        tokio::select! {
+            biased;
+            shutdown = shutdown_rx.changed() => {
+                match shutdown {
+                    Ok(()) | Err(_) => {
+                        tracing::info!("extension-ipc: listener shutdown requested");
+                        break;
+                    }
+                }
             }
-            Ok(None) => {
-                // Rejected peer already logged in `Listener::accept`.
+            accepted = listener.accept() => {
+                match accepted {
+                    Ok(Some(stream)) => {
+                        let monitoring = Arc::clone(&monitoring_handle);
+                        let snapshot = snapshot.clone();
+                        connections.spawn(run_connection(stream, monitoring, snapshot));
+                    }
+                    Ok(None) => {
+                        // Rejected peer already logged in `Listener::accept`.
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "extension-ipc: accept error; retrying");
+                    }
+                }
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "extension-ipc: accept error; retrying");
-            }
+            // Reap finished connections so the set does not grow over the
+            // listener's lifetime. Disabled while empty so the branch does not
+            // busy-loop on an immediate `None`.
+            Some(_joined) = connections.join_next(), if !connections.is_empty() => {}
         }
     }
+
+    // Abort any in-flight connections and wait for them to unwind, dropping
+    // their subsystem-handle clones before the shutdown protocol drains actors.
+    connections.shutdown().await;
 }
 
-pub fn start(cfg: Config) -> (Handle, JoinHandle<()>) {
+pub fn start(cfg: Config) -> std::io::Result<(Handle, JoinHandle<()>)> {
     let buffer = cfg.command_buffer.max(1);
     let (tx, rx) = mpsc::channel(buffer);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let monitoring_handle = Arc::clone(&cfg.monitoring_handle);
     let snapshot = cfg.policy_snapshot.clone();
 
+    // A non-empty path must own its listener: a bind failure aborts startup so
+    // the caller refuses to serve (and never hands the path to workers as
+    // BOB_EXTENSION_SOCK_PATH) rather than running without the socket it
+    // advertised. An empty path is the scaffold/test case and binds nothing.
     let maybe_listener = if cfg.extension_sock_path.as_os_str().is_empty() {
         None
     } else {
         let listener_cfg = ListenerConfig {
             extension_sock_path: cfg.extension_sock_path.clone(),
         };
-        match Listener::bind(listener_cfg) {
-            Ok(listener) => {
-                tracing::info!(
-                    path = %cfg.extension_sock_path.display(),
-                    "extension-ipc: listener bound"
-                );
-                Some(listener)
-            }
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    path = %cfg.extension_sock_path.display(),
-                    "extension-ipc: failed to bind listener; running without socket"
-                );
-                None
-            }
-        }
+        let listener = Listener::bind(listener_cfg)?;
+        tracing::info!(
+            path = %cfg.extension_sock_path.display(),
+            "extension-ipc: listener bound"
+        );
+        Some(listener)
     };
 
-    if let Some(listener) = maybe_listener {
-        tokio::spawn(run_listener(listener, monitoring_handle, snapshot));
-    }
+    // Spawn the listener task, retaining its join handle so the actor task can
+    // await it after sending the shutdown signal.
+    let listener_join = maybe_listener.map(|listener| {
+        tokio::spawn(run_listener(
+            listener,
+            monitoring_handle,
+            snapshot,
+            shutdown_rx,
+        ))
+    });
 
     let actor = Actor { cfg, rx };
     let join = tokio::spawn(async move {
         actor.run().await;
+        // Signal the listener to stop, then wait for it to drain and exit.
+        let _ = shutdown_tx.send(true);
+        if let Some(lj) = listener_join {
+            if let Err(e) = lj.await {
+                tracing::warn!(error = %e, "extension-ipc: listener task panicked");
+            }
+        }
     });
-    (Handle { tx }, join)
+    Ok((Handle { tx }, join))
 }
 
 #[cfg(test)]
@@ -316,7 +354,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn handle_is_clonable() {
-        let (handle, task) = start(Config::default());
+        let (handle, task) = start(Config::default()).expect("start extension-ipc");
 
         let _clone = handle.clone();
 
@@ -343,7 +381,7 @@ mod tests {
             ..Config::default()
         };
 
-        let (_, task) = start(cfg);
+        let (_, task) = start(cfg).expect("start extension-ipc");
         tokio::task::yield_now().await;
 
         assert!(
@@ -359,7 +397,7 @@ mod tests {
             extension_sock_path: PathBuf::new(),
             ..Config::default()
         };
-        let (_, task) = start(cfg);
+        let (_, task) = start(cfg).expect("start extension-ipc");
         task.abort();
     }
 
@@ -463,5 +501,88 @@ mod tests {
         );
 
         conn.abort();
+    }
+
+    // B-012 part 1: a non-empty extension socket path that cannot be bound must
+    // fail `start` so `bob serve` refuses to run rather than continuing without
+    // owning the socket (and handing the path to pi-agent workers).
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_with_unbindable_path_returns_err() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        // The socket's parent is a regular file, so `Listener::bind`'s
+        // `create_dir_all` on the parent fails deterministically.
+        let blocker = tmp.path().join("not-a-dir");
+        std::fs::write(&blocker, b"x").expect("write blocker file");
+        let sock_path = blocker.join("extension.sock");
+
+        let cfg = Config {
+            extension_sock_path: sock_path,
+            ..Config::default()
+        };
+
+        assert!(
+            start(cfg).is_err(),
+            "start must return Err when a non-empty extension socket path cannot be bound"
+        );
+    }
+
+    // B-012 part 2: in-flight connections accepted by the listener must be torn
+    // down when the listener shuts down, so they release their cloned subsystem
+    // handles and do not stall shutdown until the drain deadline.
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_tears_down_in_flight_connections() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let sock_path = tmp.path().join("extension.sock");
+
+        // Skip in sandboxes where binding/peer-cred is not permitted.
+        match listener::Listener::bind(listener::ListenerConfig {
+            extension_sock_path: sock_path.clone(),
+        }) {
+            Ok(listener) => drop(listener),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(e) => panic!("probe bind failed: {e}"),
+        }
+        let _ = std::fs::remove_file(&sock_path);
+
+        let cfg = Config {
+            extension_sock_path: sock_path.clone(),
+            ..Config::default()
+        };
+        let (handle, join) = start(cfg).expect("start extension-ipc");
+
+        // Connect a peer and wait for the listener to accept it.
+        let client = loop {
+            match UnixStream::connect(&sock_path).await {
+                Ok(s) => break s,
+                Err(_) => tokio::task::yield_now().await,
+            }
+        };
+
+        // Send an authz frame and read the deny verdict. A reply proves the
+        // connection task is live and holding the monitoring/snapshot clones.
+        let session = bob_core::types::SessionId::new();
+        let authz = format!(
+            "{{\"kind\":\"authz\",\"session\":\"{session}\",\"tool\":\"bash\",\"arguments\":{{\"cmd\":\"ls\"}}}}\n"
+        );
+        write_frame(&client, &authz).await;
+        let _verdict = wait_for_line(&client, 1000)
+            .await
+            .expect("verdict proves the connection task is live");
+
+        // Drop the handle: actor stops -> listener shutdown -> connection teardown.
+        drop(handle);
+
+        // The actor join completes only after the listener has joined the
+        // aborted connection tasks.
+        tokio::time::timeout(std::time::Duration::from_secs(5), join)
+            .await
+            .expect("shutdown must complete promptly, not hang")
+            .expect("actor task must not panic");
+
+        // The server side of the connection was dropped, so the peer sees EOF.
+        assert!(
+            wait_for_eof(&client, 1000).await,
+            "connected peer should see EOF after shutdown tears down the connection"
+        );
     }
 }
