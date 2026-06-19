@@ -111,3 +111,44 @@ that function infallible (unlike `admin_rpc::start`), and added listener shutdow
 without accounting for the connection tasks the listener spawns.
 
 Planned verification: see Fix Verification.
+
+## Work Log
+
+### Session 1 — 2026-06-19
+
+Fixed both regressions on branch `bug/B-012-extension-ipc-gated-bind-regressions`
+(commit `0023026`).
+
+Part 1 — startup failure handling. Changed `extension_ipc::start` from an
+infallible `(Handle, JoinHandle)` to `std::io::Result<(Handle, JoinHandle)>`,
+mirroring `admin_rpc::start`. A non-empty `extension_sock_path` now binds eagerly
+and returns `Err` on failure (the silent `None` fallthrough is gone); an empty path
+still binds nothing for the scaffold/test case. `serve.rs` propagates the error via
+`.map_err(..)?`, so `start_subsystems` returns `ServiceError::ServiceDown` (and runs
+best-effort socket cleanup) before any pi-agent worker is launched with
+`BOB_EXTENSION_SOCK_PATH`. Updated the three in-crate `start()` call sites to
+`.expect(..)`.
+
+Part 2 — shutdown connection draining. `run_listener` now tracks accepted
+connections in a `tokio::task::JoinSet`, reaps finished ones via a guarded
+`join_next` select branch, and calls `connections.shutdown().await` after the
+shutdown signal breaks the accept loop. The aborted connection tasks drop their
+cloned monitoring/snapshot handles, so they no longer hold actor channels open past
+the drain.
+
+Regression tests added:
+- `extension-ipc`: `start_with_unbindable_path_returns_err` (parent-is-a-file →
+  `start` returns `Err`); `shutdown_tears_down_in_flight_connections` (a connected,
+  verified-live peer sees EOF after shutdown, and the actor join completes within a
+  timeout). The latter was confirmed red against the pre-fix `run_listener`.
+- `bob`: `start_subsystems_returns_service_down_when_extension_socket_cannot_bind`.
+
+Verification: `cargo test --workspace` passes (bob 118, extension-ipc 31, 0
+failures); `cargo fmt --all -- --check` clean.
+
+### Review Verdict — 2026-06-19
+
+PASS (self-verified by the orchestrator outside the multi-agent loop). Both review
+findings from PR #24 are addressed with code changes that match the documented
+`serve` contract, each backed by a regression test, with the shutdown test confirmed
+to fail against the pre-fix code. Full workspace suite and format check are green.
