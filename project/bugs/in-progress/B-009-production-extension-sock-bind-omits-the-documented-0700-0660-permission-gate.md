@@ -3,7 +3,7 @@ id: B-009
 title: Production extension.sock bind omits the documented 0700/0660 permission 
   gate
 severity: medium
-status: open
+status: in-progress
 created: '2026-06-13'
 ---
 
