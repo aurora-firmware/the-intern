@@ -108,6 +108,71 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-06-19
+
+**Reproduction status:** Confirmed by code inspection and direct mode observation.
+No running process is required to reproduce because the fault is structural: the
+production bind path never calls `set_permissions`.
+
+**Evidence captured:**
+
+1. `the-intern/service/crates/bob/src/serve.rs` line 185-191: `extension_ipc::start()`
+   is called with `..extension_ipc::Config::default()`, which sets
+   `extension_sock_path` to `PathBuf::new()` (empty). Because
+   `extension-ipc/src/lib.rs` line 211 skips the gated listener when the path is
+   empty, the `extension-ipc::Listener::bind()` (which applies `0o700`/`0o660`) is
+   never called on the production path.
+2. `the-intern/service/crates/bob/src/serve.rs` lines 256-265: The production code
+   then falls through to `tokio::net::UnixListener::bind(&cfg.extension_sock_path)`
+   — a raw bind with no parent-directory creation, no `0o700` chmod on the parent,
+   and no `0o660` chmod on the socket file.
+3. Direct simulation: with a `0o755` parent directory and umask `0022`, a plain
+   `bind()` produces a socket file with mode `0o755` (group and other traversable).
+   This confirms the exposure described in ADR-005.
+4. `the-intern/service/crates/extension-ipc/src/listener.rs` lines 18-36: The gated
+   `Listener::bind()` correctly applies `create_dir_all` + `set_permissions(0o700)`
+   on parent, removes stale socket, binds, then `set_permissions(0o660)` on the
+   socket. Its tests at lines 96-129 assert both modes. This code is correct but
+   unused by `bob serve`.
+5. `the-intern/service/crates/admin-rpc/src/listener.rs` lines 44-74:
+   `admin_rpc::Listener::bind()` applies the identical `0o700`/`0o660` pattern via
+   `admin_rpc::start()`, called correctly from `serve.rs` lines 242-247.
+6. All existing serve tests (30 unit + 2 shell e2e) pass. No existing test asserts
+   extension socket or parent directory permissions.
+
+**Isolated fault:** Two-part fault in `the-intern/service/crates/bob/src/serve.rs`:
+- **Fault A (line 185-191):** `extension_ipc::start()` receives an empty
+  `extension_sock_path` because `..extension_ipc::Config::default()` is used instead
+  of supplying `cfg.extension_sock_path`. This silently bypasses the gated
+  `extension-ipc::Listener::bind()`.
+- **Fault B (lines 256-265):** A separate, duplicate, ungated raw
+  `UnixListener::bind()` is issued for `cfg.extension_sock_path` to satisfy the
+  `_extension_listener` field in `Runtime`. This bind has no permission gates.
+
+**Root cause or fault hypothesis:** The production serve path was written as if the
+extension socket would be bound by a second explicit `UnixListener::bind` call in
+`serve.rs` (stored in `Runtime::_extension_listener`), while the
+`extension_ipc::start()` call was left with an empty `extension_sock_path`. The
+security-gated path in `extension-ipc::Listener::bind()` therefore never executes
+for the production socket. The fault is a missed wiring: `cfg.extension_sock_path`
+was not forwarded to `extension_ipc::Config`, and the fallback raw bind has no
+permission logic.
+
+**Planned verification:**
+- `cargo test -p extension-ipc` — gated bind behavior unchanged.
+- New integration test in `serve.rs`: after `start_subsystems` with a
+  world-traversable parent directory, stat the extension socket's parent and confirm
+  mode `0o700`, and stat the socket file and confirm mode `0o660` — mirroring
+  `admin-rpc/src/listener.rs:161-180`.
+- `cargo test --workspace` — full suite passes.
+
+**Planned fix:** Two coordinated changes to `serve.rs`: (1) forward
+`cfg.extension_sock_path.clone()` into the `extension_ipc::start()` config so the
+gated `extension-ipc::Listener::bind()` is invoked; (2) remove the separate raw
+`UnixListener::bind(&cfg.extension_sock_path)` call and the
+`_extension_listener: UnixListener` field from `Runtime`, since the `extension-ipc`
+listener already holds the bound, gated socket.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
