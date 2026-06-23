@@ -20,6 +20,8 @@ pub struct WorkerProcessConfig {
     /// Absolute path to the extension socket, set as `BOB_EXTENSION_SOCK_PATH`.
     /// If the path is empty, the variable is not set on the child environment.
     pub extension_sock_path: PathBuf,
+    /// Resolved path passed to pi as `--extension <path>`.
+    pub extension_path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -38,8 +40,19 @@ pub struct TerminationOutcome {
 
 impl RpcWorkerProcess {
     pub fn spawn(cfg: &WorkerProcessConfig) -> ServiceResult<Self> {
+        if !cfg.extension_path.is_file() {
+            return Err(ServiceError::ChildProcess {
+                detail: format!(
+                    "pi extension file does not exist at expected path '{}'",
+                    cfg.extension_path.display()
+                ),
+            });
+        }
+
         let mut cmd = Command::new(&cfg.command);
         cmd.args(&cfg.args)
+            .arg("--extension")
+            .arg(&cfg.extension_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -223,7 +236,47 @@ mod tests {
             child_termination_deadline: Duration::from_millis(2000),
             session_id: SessionId::new(),
             extension_sock_path: PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_passes_resolved_extension_path_on_command_line() {
+        let extension_path = std::env::current_exe().expect("current executable should exist");
+        let mut cfg = spawn_config("sh", &["-c", "printf '[\"%s\",\"%s\"]\\n' \"$0\" \"$1\""]);
+        cfg.extension_path = extension_path.clone();
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+        let value = worker
+            .read_next_stdout_json()
+            .await
+            .expect("stdout read should succeed")
+            .expect("argument record should be present");
+
+        assert_eq!(
+            value,
+            json!(["--extension", extension_path.to_string_lossy()]),
+            "spawn must append the resolved extension path to the worker command"
+        );
+    }
+
+    #[test]
+    fn spawn_refuses_missing_extension_file_and_names_expected_path() {
+        let extension_path =
+            std::env::temp_dir().join(format!("missing-bob-extension-{}.ts", SessionId::new()));
+        let mut cfg = spawn_config("sh", &["-c", "exit 0"]);
+        cfg.extension_path = extension_path.clone();
+
+        let error = RpcWorkerProcess::spawn(&cfg).expect_err("spawn should fail closed");
+
+        assert!(
+            matches!(
+                error,
+                ServiceError::ChildProcess { ref detail }
+                    if detail.contains(&extension_path.to_string_lossy().into_owned())
+            ),
+            "error must name the expected extension path, got: {error:?}"
+        );
     }
 
     // AC-1: BOB_SESSION_ID is set on the spawned child environment.
@@ -240,6 +293,7 @@ mod tests {
             child_termination_deadline: Duration::from_millis(50),
             session_id,
             extension_sock_path: PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
         };
 
         let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
@@ -272,6 +326,7 @@ mod tests {
             child_termination_deadline: Duration::from_millis(50),
             session_id,
             extension_sock_path: sock_path.clone(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
         };
 
         let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
@@ -303,6 +358,7 @@ mod tests {
             child_termination_deadline: Duration::from_millis(50),
             session_id,
             extension_sock_path: PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
         };
 
         let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
@@ -351,8 +407,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn send_json_writes_single_json_object_followed_by_lf() {
-        let mut worker =
-            RpcWorkerProcess::spawn(&spawn_config("cat", &[])).expect("spawn should succeed");
+        let mut worker = RpcWorkerProcess::spawn(&spawn_config("sh", &["-c", "cat"]))
+            .expect("spawn should succeed");
         let payload = json!({"command":"ping","seq":1});
 
         worker
@@ -448,6 +504,7 @@ mod tests {
             child_termination_deadline: Duration::from_millis(25),
             session_id: SessionId::new(),
             extension_sock_path: PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
         })
         .expect("spawn should succeed");
 
