@@ -174,6 +174,29 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-23
+
+Read the B-013 bug file and Diagnosis Log. The fault was already fully
+diagnosed: two test helpers in `crates/admin-rpc/src/dispatch.rs` —
+`make_dispatcher_with_supervisor()` and `make_supervisor_handle()` — called
+`pi_agent_supervisor::start(pi_agent_supervisor::Config::default())`. After
+T-101 merged, `Config::default()` leaves `extension_path` as an empty `PathBuf`,
+which hits the fail-closed gate at `pi-agent-supervisor/src/process.rs:43` and
+returns `Err(ChildProcess)`, causing the helpers' `.expect(...)` to panic. Five
+dispatch tests failed.
+
+Reproduced the failure deterministically with `cargo test -p admin-rpc` — 114
+passed, 5 failed, matching the bug report exactly. Applied the minimal test-only
+fix: in both helpers, mutate the `Config` returned by `Config::default()` to set
+`extension_path = std::env::current_exe()`, mirroring the pattern already used
+in `pi-agent-supervisor/src/lib.rs` `test_config()`. No production code was
+changed; `extension_path` is `pub` so no visibility workaround was needed.
+
+Verified: `cargo test -p admin-rpc` → 119 passed, 0 failed; `cargo test
+--workspace` → all crates green, 0 failures; `cargo fmt --all -- --check` →
+clean. Committed as `4bd9a05` `fix(admin-rpc): set extension_path in supervisor
+test helpers` on `bug/B-013-admin-rpc-dispatch-extension-gate`. Nothing remains.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
