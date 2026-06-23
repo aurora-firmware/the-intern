@@ -101,3 +101,34 @@ implementation work remains; review and integration are next.
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
+
+### Review Verdict — 2026-06-23
+
+FAIL
+
+Stage 1 did not pass, so Stage 2 was not used as an approval gate.
+
+- **Work Log, Session 2 / AC-1:** The manual TTY run used pi 0.65.2, while the
+  task's verified interface and ADR-011 explicitly identify pi 0.79.10 as the
+  implementation on which the downstream decision is based. The run therefore
+  demonstrates SCM_RIGHTS terminal brokering for 0.65.2, but does not confirm
+  that the stated 0.79.10 target renders correctly with the same invocation and
+  received descriptors. Rerun the spike in a real terminal with pi 0.79.10 and
+  return the observed TUI/extension/exit evidence. If 0.79.10 was recorded in
+  error, correct the canonical task and ADR through the appropriate lifecycle
+  process before resubmitting.
+- **Work Log, Session 2 / AC-2:** Because the intended-version confirming run
+  has not occurred, the condition that determines whether ADR-011 must be
+  revisited is not yet resolved for pi 0.79.10. Record that result after the
+  corrected manual run.
+
+The implementation diff is limited to the permitted throwaway spike. Its three
+automated tests pass and cover SCM_RIGHTS transfer, the default-interactive
+command shape with explicit `-e`, and rejection of non-TTY descriptors. These
+checks do not replace the version-specific manual TTY evidence required above.
+
+Obstacles Encountered: The available `pi` on the review host is
+`/usr/local/bin/pi` version 0.65.2, so the reviewer could not independently run
+the required interactive check against 0.79.10.
+
+Next owner: active Development Loop.
