@@ -2,7 +2,7 @@
 id: T-101
 title: Pass --extension to pi spawn and fail closed when the extension file is 
   missing
-status: in-progress
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-06-23'
