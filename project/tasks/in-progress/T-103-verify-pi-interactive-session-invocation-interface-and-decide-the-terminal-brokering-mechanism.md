@@ -151,3 +151,30 @@ Obstacles Encountered: The available `pi` on the review host is
 the required interactive check against 0.79.10.
 
 Next owner: active Development Loop.
+
+### Review Verdict — 2026-06-23
+
+PASS
+
+Stage 1 passed:
+
+- **AC-1:** The spike transfers stdin, stdout, and stderr over an AF_UNIX
+  socket with SCM_RIGHTS, rejects non-TTY descriptors, and spawns default-mode
+  pi with only the explicit `bob.ts` extension. Session 3 records a real-TTY
+  run using `/home/daneel/.npm-global/bin/pi`: the TUI displayed `pi v0.79.10`,
+  listed `bob.ts` under Extensions, and exited cleanly with status 0. The
+  reviewer independently confirmed that executable reports version 0.79.10.
+- **AC-2:** The corrected target-version run succeeded, so the conditional
+  requirement to revisit ADR-011 does not trigger.
+
+Stage 2 passed. The implementation remains limited to the permitted throwaway
+spike, handles missing executables, missing extensions, truncated or incorrect
+SCM_RIGHTS data, non-TTY descriptors, child exit propagation, and descriptor
+cleanup. The code is focused and readable, introduces no secrets or unvalidated
+external data flow, and adds no production performance or resource-lifetime
+risk. All four spike tests pass, covering fd transfer, command shape, non-TTY
+rejection, and explicit pi-executable selection; `git diff --check` also passes.
+
+Obstacles Encountered: None.
+
+Next owner: active Development Loop.
