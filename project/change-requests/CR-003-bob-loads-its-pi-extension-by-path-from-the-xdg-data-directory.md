@@ -58,9 +58,11 @@ home (`~/.local/share/bob/extensions/bob.ts`).
   extension" exclusion, the supervisor responsibility, and the
   operator-installs-it Configuration Requirements / install-path guidance all
   need revising to load the extension via `--extension` from the XDG `data`
-  default, including the fail-closed missing-extension behaviour. (The
-  supervisor→extension env contract — `BOB_SESSION_ID` and the extension socket
-  path — is unchanged; see ADR-009 "Negative".)
+  default, including the fail-closed missing-extension behaviour. (For the
+  **supervised** spawn path the supervisor→extension env contract —
+  `BOB_SESSION_ID` and the extension socket path — is unchanged. Wiring that
+  contract for CR-002's interactive session is owned by CR-002's process-model
+  resolution; this change request does not assume it.)
 - **S-002 — bob service shell architecture.** Not affected by this change. Its
   "extension" references describe the `extension.sock` transport and the pi-agent
   supervisor scaffold (warm pool, spawn/reap, prompt routing), not
@@ -74,6 +76,14 @@ home (`~/.local/share/bob/extensions/bob.ts`).
 
 - **ADR-009 (depends on).** Provides the XDG layout and the default extension
   path under `data` that this change request consumes.
+
+**Service code (sizes the task set):**
+
+- Neither the `extension_path` config key nor `$XDG_DATA_HOME` resolution exists in
+  `config.rs` today. This change adds the `extension_path` field to the config, adds
+  `XDG_DATA_HOME` resolution with the XDG-default fallback (mirroring the existing
+  `default_config_path` / audit-log resolution), and wires the resolved path into the
+  pi spawn as `--extension <path>` — more than just passing a flag.
 
 **At-risk / completed work (needs review):**
 
