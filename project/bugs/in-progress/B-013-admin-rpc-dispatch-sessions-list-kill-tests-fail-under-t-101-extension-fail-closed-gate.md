@@ -208,3 +208,21 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-23
+
+PASS
+
+Stage 1 (Bug Criteria):
+- Diagnosis Log is complete: reproduction status (confirmed, deterministic), evidence captured (panic output, gate location, failing test list), isolated fault (two test helpers calling `Config::default()` with empty `extension_path`), root cause (T-101 fail-closed gate made `Config::default()` unsafe in tests, verification scope for T-101 never ran `cargo test -p admin-rpc`), and planned verification (both cargo test commands) are all present.
+- Fix addresses the isolated fault exactly: both `make_dispatcher_with_supervisor()` and `make_supervisor_handle()` in `the-intern/service/crates/admin-rpc/src/dispatch.rs` now mutate `Config::default()` to set `extension_path = std::env::current_exe()`, mirroring the `pi-agent-supervisor` `test_config()` pattern.
+- No production code was changed. The fail-closed gate in `pi-agent-supervisor/src/process.rs` is untouched and remains correct.
+- Fix Verification steps were followed and confirmed (see Stage 2).
+
+Stage 2 (Code Quality):
+- Fix is minimal — only the two test helpers changed; no unrelated refactoring, cleanup, or feature code bundled in.
+- `cargo test -p admin-rpc`: 119 passed, 0 failed (up from 114 passed, 5 failed before fix).
+- `cargo test --workspace`: all crates green, 0 failures.
+- `cargo fmt --all -- --check`: clean, no output.
+- All five named regression tests pass: `dispatch_sessions_list_with_active_session_returns_that_session_id`, `dispatch_sessions_list_returns_empty_list_when_no_sessions`, `dispatch_sessions_kill_without_params_returns_invalid_request`, `dispatch_sessions_kill_with_unknown_session_id_returns_invalid_request`, `dispatch_sessions_kill_with_valid_session_id_returns_ok`. Their assertions and behaviour were not altered.
+- Names are descriptive, logic is straightforward, no dead code introduced.
