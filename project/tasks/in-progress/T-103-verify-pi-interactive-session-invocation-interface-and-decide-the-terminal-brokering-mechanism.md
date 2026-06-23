@@ -76,6 +76,28 @@ mechanism: mechanism A (SCM_RIGHTS fd-passing), recorded in ADR-011 (accepted).
 Task narrowed to the confirming spike; infeasibility-escalation reduced to the
 spike-fails case (AC-2).
 
+### Session 2 — 2026-06-23
+
+Implemented the confirming spike as a standard-library Python harness. The
+client process sends stdin, stdout, and stderr over an AF_UNIX socketpair using
+SCM_RIGHTS; the receiving process validates all three received descriptors are
+TTYs and spawns default-interactive pi with `--no-extensions -e <bob.ts>
+--no-session` on those descriptors.
+
+Used a red→green TDD cycle. The initial test failed because the spike module did
+not exist. Added coverage for transferring all three descriptors, preserving
+the default interactive command shape with the explicit extension, and
+rejecting received descriptors that are not TTYs. All three tests pass.
+
+Ran the spike in an interactive terminal. It printed the SCM_RIGHTS
+confirmation, rendered pi's full-screen TUI, showed the repository's `bob.ts`
+under Extensions, and exited cleanly via Ctrl-D. This confirms ADR-011 mechanism
+A; AC-2 does not trigger. The available executable during the confirming run
+was pi 0.65.2 rather than the 0.79.10 recorded in Session 1. The sandbox also
+rejected the deliberately absent extension-socket connection with EPERM, but
+the extension loaded and the interactive TUI behavior under test worked. No
+implementation work remains; review and integration are next.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
