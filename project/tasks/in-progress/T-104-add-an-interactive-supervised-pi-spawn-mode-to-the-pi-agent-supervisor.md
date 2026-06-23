@@ -136,3 +136,45 @@ Evidence: `cargo test -p pi-agent-supervisor` 49 passed / 0 failed (up from 42);
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
+
+### Review Verdict — 2026-06-23
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1 MET: `InteractiveProcess::spawn` appends `--extension <path>` to the
+  command line, sets `BOB_SESSION_ID` unconditionally, and sets
+  `BOB_EXTENSION_SOCK_PATH` when `extension_sock_path` is non-empty. The
+  fail-closed guard on the extension file is present. Three process-level tests
+  verify the env contract and the missing-extension error path.
+
+- AC-2 MET: `SessionPool::list_sessions` chains `active_workers` keys with
+  `interactive_sessions` keys. The actor propagates the result unchanged.
+  Tests at both pool and actor level confirm the returned session ID appears in
+  `list_sessions` immediately after `start_interactive_session`.
+
+- AC-3 MET: `SessionPool::shutdown_all` drains `interactive_sessions` and calls
+  `terminate()` on each, recording the count in
+  `ShutdownReport::interactive_sessions_terminated`. The actor's `run()` loop
+  invokes `shutdown_all()` when the command channel closes. Tests at both
+  layers verify SIGKILL-based reaping via pid-file checks.
+
+- AC-4 MET: `cargo test -p pi-agent-supervisor` on branch `task/T-104-...`
+  passes 49 tests, 0 failed (up from 42 on dev-agent). `cargo fmt --all --
+  --check` and `cargo build -p bob` both clean.
+
+**Stage 2 — Code Quality**
+
+No issues. The terminate path mirrors the existing `RpcWorkerProcess` pattern.
+The `try_wait` race guard in the deadline arm is correct. Tests are independent,
+use unique names, and cover success and failure paths. The `#[allow(clippy::too_many_arguments)]`
+annotation is explained and justified. Only the four specified files were
+modified; `OwnedFd::from_raw_fd` (unsafe) stays correctly deferred to T-105.
+
+Minor observation (non-blocking): `total_process_count()` in `pool.rs` counts
+only warm + active RPC workers, so interactive sessions do not consume
+`max_processes` quota. This appears intentional — interactive sessions use a
+separate allocation path — and is consistent with the task scope.
