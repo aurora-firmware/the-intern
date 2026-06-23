@@ -26,6 +26,16 @@ const ADMIN_RPC_DEADLINE: Duration = Duration::from_secs(2);
 const AUDIT_TAIL_DELIVERY_DEADLINE: Duration = Duration::from_secs(2);
 const LARGE_REPORT_SUMMARY_BYTES: usize = 9_000;
 
+fn extension_fixture_path() -> PathBuf {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../extensions/bob.ts");
+    assert!(
+        path.is_file(),
+        "extension fixture must exist at {}",
+        path.display()
+    );
+    path
+}
+
 struct BobServeChild {
     child: Child,
 }
@@ -36,6 +46,7 @@ impl BobServeChild {
             .arg("serve")
             .env("BOB_ADMIN_SOCK_PATH", admin_sock_path)
             .env("BOB_EXTENSION_SOCK_PATH", extension_sock_path)
+            .env("BOB_EXTENSION_PATH", extension_fixture_path())
             .env(
                 "BOB_SHUTDOWN_DRAIN_DEADLINE",
                 format!("{}ms", SHUTDOWN_DRAIN_DEADLINE.as_millis()),
@@ -67,6 +78,7 @@ impl BobServeChild {
             .arg("serve")
             .env("BOB_ADMIN_SOCK_PATH", admin_sock_path)
             .env("BOB_EXTENSION_SOCK_PATH", extension_sock_path)
+            .env("BOB_EXTENSION_PATH", extension_fixture_path())
             .env("XDG_STATE_HOME", xdg_state_home)
             .env(
                 "BOB_SHUTDOWN_DRAIN_DEADLINE",
