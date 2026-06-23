@@ -2,7 +2,7 @@
 id: T-101
 title: Pass --extension to pi spawn and fail closed when the extension file is 
   missing
-status: blocked
+status: in-progress
 priority: high
 assigned-role: developer
 created: '2026-06-23'
@@ -51,6 +51,8 @@ AC-4: The system shall pass `cargo test -p pi-agent-supervisor` and
   workers.
 - `the-intern/service/crates/bob/src/serve.rs` — pass `extension_path` into the
   supervisor config.
+- `the-intern/service/crates/bob/tests/shell_e2e.rs` — fixture-only changes to
+  create and configure an existing extension for spawned `bob serve` tests.
 
 ## Verification
 
