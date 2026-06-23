@@ -45,6 +45,10 @@ AC-4: The system shall pass `cargo test -p bob` with unit tests covering the
 
 - `the-intern/service/crates/bob/src/config.rs` — add `extension_path` to
   `BobConfig` / `RawBobConfig`, a `default_extension_path*` resolver, and tests.
+- `the-intern/service/crates/bob/tests/chat_e2e.rs` — provide the required field
+  in the existing `BobConfig` test literal without changing test behavior.
+- `the-intern/service/crates/bob/tests/shell_e2e.rs` — provide the required field
+  in the existing `BobConfig` test literal without changing test behavior.
 
 ## Verification
 
@@ -55,6 +59,17 @@ cd the-intern/service && cargo test -p bob config
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. -->
+
+### Session 1 — 2026-06-23
+
+Mapped the criteria to XDG default, HOME fallback, and TOML override tests. The
+tests initially failed because `extension_path` was absent. Minimal
+implementation then exposed compile failures in `crates/bob/tests/chat_e2e.rs`
+and `shell_e2e.rs`, whose `BobConfig` literals require the new field. Those
+files were outside the original declared scope, so no out-of-scope changes were
+made and the branch was restored clean. The Architect confirmed these edits are
+necessary compile-fix fallout within the approved specification, and the task's
+file list now includes them. Implementation remains to be completed.
 
 ## Review
 
