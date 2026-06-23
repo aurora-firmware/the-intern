@@ -12,9 +12,12 @@ spec: CR-002
 
 ## Description
 
-Per CR-002 and the T-103 brokering decision, add the admin-RPC interaction by
-which a client opens a supervised interactive pi session (T-104) and the service
-brokers that session's stdio to the client using the chosen mechanism. The
+Per CR-002 and ADR-011, add the admin-RPC interaction by which a client opens a
+supervised interactive pi session (T-104). The handler **receives the client's
+controlling-terminal fds over `admin.sock` via `SCM_RIGHTS`** (mechanism A) and
+hands them to the supervisor's interactive spawn (T-104); the admin-rpc transport
+must be extended to receive fds (ancillary data), which the current
+newline-delimited JSON-RPC framing does not yet do. The
 handler performs **no pre-flight admission** — interactive chat is exempt
 (ADR-010); socket access (the 0700 gate) is the only transport gate. On client
 disconnect or pi exit, the session is torn down.

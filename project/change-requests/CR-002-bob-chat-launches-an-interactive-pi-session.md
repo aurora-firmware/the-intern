@@ -139,4 +139,5 @@ pi-agent supervisor spawn path.
 - **S-002** — amend the `bob chat` subcommand description, including the service-required
   precondition.
 - Related: **CR-003** (extension by path), **ADR-009** (XDG layout), **ADR-010**
-  (admission exemption), **CR-001** (deferred outbound chat path).
+  (admission exemption), **ADR-011** (terminal brokering via SCM_RIGHTS),
+  **CR-001** (deferred outbound chat path).

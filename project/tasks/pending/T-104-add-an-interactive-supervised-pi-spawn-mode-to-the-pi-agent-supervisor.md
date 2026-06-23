@@ -12,11 +12,11 @@ spec: CR-002
 
 ## Description
 
-Per CR-002 and the brokering decision from T-103, add a second spawn mode to the
-pi-agent supervisor that launches an **interactive** pi session (distinct from the
-`--mode rpc` worker), using the mechanism decided in T-103, with `--extension
-<path>` (T-101) and the env contract (`BOB_SESSION_ID`, `BOB_EXTENSION_SOCK_PATH`)
-set. The interactive session is tracked in the supervisor's session table so it
+Per CR-002 and ADR-011, add a second spawn mode to the pi-agent supervisor that
+launches an **interactive** pi session (distinct from the `--mode rpc` worker)
+**on terminal fds received from the client via `SCM_RIGHTS`** (mechanism A,
+ADR-011), with `--extension <path>` (T-101) and the env contract
+(`BOB_SESSION_ID`, `BOB_EXTENSION_SOCK_PATH`) set. The interactive session is tracked in the supervisor's session table so it
 is visible to `sessions list` and is terminated on shutdown. This task is the
 supervisor-side spawn + lifecycle only; wiring it to a client is T-105.
 
@@ -44,7 +44,7 @@ AC-4: The system shall pass `cargo test -p pi-agent-supervisor`.
 - `the-intern/service/crates/pi-agent-supervisor/src/lib.rs` — interactive-mode
   entry point + session-table tracking.
 - `the-intern/service/crates/pi-agent-supervisor/src/process.rs` — interactive
-  spawn (per T-103 mechanism).
+  spawn on the received terminal fds (ADR-011).
 - `the-intern/service/crates/pi-agent-supervisor/src/pool.rs` — lifecycle/reaping.
 
 ## Verification
