@@ -123,6 +123,47 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-06-23
+
+Reproduction status: Confirmed, deterministic. `cargo test -p admin-rpc` (and
+`cargo test --workspace`) from `the-intern/service/` consistently fail with
+exactly 5 failed / 114 passed. Not environment-dependent — the gate fires before
+any process spawn, so no Unix-socket or `pi`-binary involvement.
+
+Evidence captured:
+- `cargo test -p admin-rpc`: all five `dispatch::tests::dispatch_sessions_*`
+  tests panic identically at `dispatch.rs:1228`/`1235`:
+  `supervisor start must succeed in tests: ChildProcess { detail: "pi extension
+  file does not exist at expected path ''" }`.
+- `cargo test --workspace`: only `admin-rpc` fails; all other crates green
+  (incl. `pi-agent-supervisor`: 42 passed).
+- `pi-agent-supervisor/src/process.rs:43` gate confirmed: `if
+  !cfg.extension_path.is_file()` returns `Err` for an empty path.
+- `pi-agent-supervisor/src/lib.rs:262` pattern confirmed: the supervisor's own
+  `test_config()` sets `extension_path: std::env::current_exe()`.
+
+Isolated fault: Two test-only helpers in
+`crates/admin-rpc/src/dispatch.rs` — `make_dispatcher_with_supervisor()`
+(lines 1226–1231) and `make_supervisor_handle()` (lines 1233–1236) — call
+`pi_agent_supervisor::start(pi_agent_supervisor::Config::default())`.
+`Config::default()` sets `extension_path: PathBuf::new()` (empty) and
+`warm_pool_size > 0`, so `start` eagerly prewarms via `pool::SessionPool::new`
+and hits the fail-closed gate, returning `Err`; both helpers `.expect(...)` and
+panic.
+
+Root cause or fault hypothesis: T-101's fail-closed extension guard
+(`process.rs:43`) made `Config::default()` unsafe for constructing a live
+supervisor in tests. The two admin-rpc helpers were not updated when T-101
+merged, and T-101's verification scope never ran `cargo test -p admin-rpc`, so
+the regression landed on `dev-agent` undetected. Fix is test-only.
+
+Planned verification:
+```bash
+cd the-intern/service && cargo test -p admin-rpc
+cd the-intern/service && cargo test --workspace
+```
+Both must exit 0 with 0 failures after the helper fix.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
