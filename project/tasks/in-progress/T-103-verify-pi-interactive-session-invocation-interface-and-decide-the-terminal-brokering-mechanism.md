@@ -98,6 +98,25 @@ rejected the deliberately absent extension-socket connection with EPERM, but
 the extension loaded and the interactive TUI behavior under test worked. No
 implementation work remains; review and integration are next.
 
+### Session 3 — 2026-06-23
+
+Investigated the review's version-specific evidence gap. The failure was
+reproduced and isolated to PATH ordering: `/usr/local/bin/pi` version 0.65.2
+appears before `/home/daneel/.npm-global/bin/pi`, while the latter resolves to
+the installed `@earendil-works/pi-coding-agent` version 0.79.10.
+
+Added an explicit `--pi` executable option to the throwaway spike so the target
+installation can be selected reproducibly. Under TDD, the new selector test
+first failed because `parse_args` accepted no argument vector; after the
+minimal implementation, all four spike tests pass.
+
+Ran the real-TTY spike with `--pi /home/daneel/.npm-global/bin/pi`. The
+SCM_RIGHTS confirmation appeared, the rendered TUI header showed `pi v0.79.10`,
+startup resources listed `bob.ts` under Extensions, and Ctrl-D exited cleanly
+with status 0. This supplies the version-specific AC-1 evidence requested by
+review. Mechanism A works with the stated target, so AC-2 does not trigger. No
+implementation work remains.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
