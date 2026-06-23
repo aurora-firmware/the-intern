@@ -57,6 +57,82 @@ cd the-intern/service && cargo test -p pi-agent-supervisor
 
 <!-- Mandatory. Append one entry per session boundary. -->
 
+### Session 1 — 2026-06-23
+
+Implemented the supervisor-side interactive pi spawn mode as specified by T-104,
+ADR-011 mechanism A, building on the extension-arg plumbing from T-101.
+
+**What was done:**
+
+Three complete TDD cycles were run in a single session, one per layer, then
+integrated into a single commit after all cycles were green:
+
+1. **`process.rs`** — Added `InteractiveProcessConfig` (command, args, deadline,
+   session_id, extension_sock_path, extension_path) and `InteractiveProcess`
+   which spawns the child on caller-supplied `OwnedFd` stdio fds rather than
+   piped stdio. The spawn validates the extension file exists, sets
+   `BOB_SESSION_ID` and optionally `BOB_EXTENSION_SOCK_PATH` on the environment,
+   appends `--extension <path>` to the command line, and passes the three fds as
+   stdin/stdout/stderr via `Stdio::from(OwnedFd)`. The `terminate()` method
+   mirrors the existing RPC worker's graceful-then-forced termination. Three
+   tests cover: env vars + extension arg on child, fail-closed when extension is
+   missing, graceful SIGTERM.
+
+2. **`pool.rs`** — Added `interactive_sessions: HashMap<SessionId,
+   InteractiveProcess>` to `SessionPool`. `start_interactive_session` spawns the
+   process and inserts it under its session_id. `list_sessions` was extended
+   with `.chain(self.interactive_sessions.keys().copied())` so interactive and
+   RPC sessions are reported together. `shutdown_all` drains
+   `interactive_sessions` and calls `terminate()` on each, recording a new
+   `interactive_sessions_terminated` counter added to `ShutdownReport` in
+   `reaper.rs`. Two tests cover: list_sessions includes interactive session,
+   shutdown_all terminates and counts it.
+
+3. **`lib.rs`** — Added `StartInteractiveSession` variant to the `Command` enum
+   carrying all the config fields plus the three `OwnedFd`s and a oneshot
+   response channel. `Handle::start_interactive_session` sends the command and
+   awaits the result. The actor's run loop handles it by constructing
+   `InteractiveProcessConfig` and delegating to
+   `pool.start_interactive_session`. Two tests cover: session id returned and
+   visible in `list_sessions`, actor shutdown terminates the interactive child
+   (verified via `/proc/{pid}` check).
+
+**What was tried and rejected:**
+
+- Considered using a separate `InteractiveSessionRequest` config struct for the
+  Handle method to avoid `#[allow(clippy::too_many_arguments)]`. Rejected because
+  T-105 will wrap this in a higher-level RPC handler anyway, and adding a pub
+  struct solely to appease Clippy would be premature abstraction. The allow
+  annotation explains why.
+- Considered an `impl Drop for InteractiveProcess` that would kill the child.
+  Rejected because the existing `RpcWorkerProcess` does not do this either, and
+  lifecycle management is explicit through `terminate()`. Implicit drop-kills
+  would break the graceful shutdown sequence.
+
+**What remains:**
+
+Nothing for T-104. T-105 wires the client side (SCM_RIGHTS receive over
+admin.sock → fds → `start_interactive_session`). The
+`Handle::start_interactive_session` API is ready for T-105 to call with
+`OwnedFd` values it constructs from received raw file descriptors.
+
+**Obstacles Encountered:**
+
+- `#[workspace.lints.rust] unsafe_code = "forbid"` applies crate-wide, so
+  `OwnedFd::from_raw_fd()` (unsafe) cannot be called inside the supervisor. This
+  is intentional: T-105 (the SCM_RIGHTS receive path) will call it, and T-104
+  only receives the already-constructed `OwnedFd`. `Stdio::from(OwnedFd)` is
+  safe and works correctly for setting child stdio.
+- Shell positional-arg test design: the test for `--extension` in child args
+  needed care because `sh -c script arg0 arg1` makes `$0=arg0` (not the
+  extension path). Used `$@` to print all positional args, which includes
+  `--extension` and `<path>` appended by `spawn()`.
+
+Committed as `33ac961` on branch
+`task/T-104-add-an-interactive-supervised-pi-spawn-mode-to-the-pi-agent-supervisor`.
+Evidence: `cargo test -p pi-agent-supervisor` 49 passed / 0 failed (up from 42);
+`cargo fmt --all -- --check` clean; `cargo build -p bob` clean.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
