@@ -163,7 +163,7 @@ What this specification explicitly does NOT cover:
 | Extension-IPC actor | Unchanged transport-side. The `MonitoringHandle` it dispatches events to is the only swap. | Existing actor from Phase 1a |
 | `TracingMonitoringHandle` | Implements `MonitoringHandle::record_event`; emits one `tracing::info!` per inbound event with structured `session` and `event` fields. | New, replaces `NoopMonitoringHandle` in `bob::serve` wiring |
 | `bob.ts` (the bob extension) | Reads the env vars set by the bob service; opens the UDS; subscribes to every documented pi event; writes one NDJSON frame per event. Logs one warning and degrades to no-op on any failure. | New file under `the-intern/extensions/` |
-| Operator (human) | Installs the shipped `bob.ts` into their pi extension search path. Optional — the bob service works without it. | Documented in `the-intern/extensions/README.md` |
+| Operator (human) | *(Superseded by CR-003 — see banner.)* bob ships and supplies `bob.ts` from `$XDG_DATA_HOME/bob/extensions/bob.ts` (override `extension_path`) via `pi --extension`; the operator no longer installs it into pi's search path, and it is required (fail-closed), not optional. | Documented in `the-intern/extensions/README.md` |
 
 ## Components
 
@@ -206,15 +206,17 @@ unit test asserting the log emission shape.
 
 ### Component 4: Operator-facing installation documentation
 
-**Purpose:** Give the operator a one-screen recipe for getting the
-extension into their pi setup, including the offline / no-extension case.
-**Estimated size:** Tiny — a new `the-intern/extensions/README.md`
-section.
+*(Amended by CR-003, 2026-06-23 — see banner.)* The default extension location is
+`$XDG_DATA_HOME/bob/extensions/bob.ts` (override `extension_path`), supplied to pi
+by bob via `pi --extension`; the manual install into pi's search path is removed.
+
+**Purpose:** Give the operator a one-screen recipe for the extension's default
+location and override, including the fail-closed missing-extension behaviour.
+**Estimated size:** Tiny — a new `the-intern/extensions/README.md` section.
 **Interfaces:**
 - *Consumes:* nothing.
-- *Produces:* documented install paths (`~/.pi/agent/extensions/`,
-  `.pi/extensions/`) and the env-var contract reproduced verbatim so an
-  operator can verify the extension out-of-tree.
+- *Produces:* documented default path (`~/.local/share/bob/extensions/bob.ts`), the
+  `extension_path` override, and the env-var contract reproduced verbatim.
 
 ## Workflow
 
@@ -308,15 +310,15 @@ No file output, no in-memory buffer, no admin-RPC fan-out.
 
 ### Install paths
 
-The extension is delivered as source. Installation paths it must work
-under:
+*(Amended by CR-003, 2026-06-23 — see banner.)* The extension is delivered as
+source and lives at bob's default location:
 
-- `~/.pi/agent/extensions/bob.ts` (per-user, global to all
-  projects)
-- `<project>/.pi/extensions/bob.ts` (project-local)
+- `$XDG_DATA_HOME/bob/extensions/bob.ts` (→ `~/.local/share/bob/extensions/bob.ts`),
+  overridable by the `config.toml` key `extension_path`.
 
-These are pi's own discovery directories; the bob service is not involved
-in extension delivery.
+bob supplies this path to pi via `pi --extension <path>` and fails closed if the
+file is absent. The previous pi discovery directories (`~/.pi/agent/extensions/`,
+`<project>/.pi/extensions/`) are no longer how bob locates the extension.
 
 ## Implementation Order
 

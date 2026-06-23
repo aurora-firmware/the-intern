@@ -148,7 +148,7 @@ admin actor never sees extension traffic and vice versa.
 | Monitoring actor | Scaffold for S-001 Phase 5 work — accepts events and report records, exposes a subscription stream for admin-RPC | Empty implementation; uses an in-memory ring buffer for early development |
 | Pi-agent Supervisor actor | Scaffold for S-001 Phase 2 work — owns the warm pool, spawn/reap, and prompt routing | Empty implementation; `bob sessions list` shows the (currently empty) pool |
 | Persistence actor | Scaffold for the inbound queue, audit log, and session state stores | Empty implementation; trait-only |
-| `bob` client subcommands | Thin admin-RPC clients; resolve socket path from config, open `admin.sock`, perform one call (or one subscription, for `chat` and `audit tail`), render results, exit | No business logic |
+| `bob` client subcommands | Thin admin-RPC clients; resolve socket path from config, open `admin.sock`, perform one call (or one subscription, for `audit tail`), render results, exit. (`chat` is redefined under CR-002 — a service-required launcher for a supervised direct `pi` session, not an `admin.sock` subscription; see the Workflow amendment.) | No business logic |
 
 ## Components
 
