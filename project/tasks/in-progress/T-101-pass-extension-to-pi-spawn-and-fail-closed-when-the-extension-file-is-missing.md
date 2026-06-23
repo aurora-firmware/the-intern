@@ -46,6 +46,9 @@ AC-4: The system shall pass `cargo test -p pi-agent-supervisor` and
   `extension_path` to `Config`.
 - `the-intern/service/crates/pi-agent-supervisor/src/process.rs` — add
   `--extension`, add the fail-closed existence check.
+- `the-intern/service/crates/pi-agent-supervisor/src/pool.rs` — propagate
+  `Config::extension_path` into `WorkerProcessConfig` for warm and overflow
+  workers.
 - `the-intern/service/crates/bob/src/serve.rs` — pass `extension_path` into the
   supervisor config.
 
@@ -58,6 +61,19 @@ cd the-intern/service && cargo test -p pi-agent-supervisor && cargo test -p bob 
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. -->
+
+### Session 1 — 2026-06-23
+
+Inspected the canonical task, Rust coding guidance, supervisor configuration
+flow, process spawning code, and Bob configuration mapping. Confirmed that
+`pi` is available at `/usr/local/bin/pi`. The new extension path must pass
+through `SessionPool::worker_process_config_for_session`, requiring a change to
+`the-intern/service/crates/pi-agent-supervisor/src/pool.rs`, which was omitted
+from the task's “Files to Touch.” Per the TDD scope-boundary rule,
+implementation was escalated before writing tests or production code. No files
+or branches were modified. The Architect confirmed `pool.rs` is necessary
+plumbing within CR-003 and authorized the task amendment; implementation
+remains.
 
 ## Review
 
