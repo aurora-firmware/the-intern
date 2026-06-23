@@ -2,7 +2,7 @@
 id: T-101
 title: Pass --extension to pi spawn and fail closed when the extension file is 
   missing
-status: in-progress
+status: blocked
 priority: high
 assigned-role: developer
 created: '2026-06-23'
@@ -74,6 +74,23 @@ implementation was escalated before writing tests or production code. No files
 or branches were modified. The Architect confirmed `pool.rs` is necessary
 plumbing within CR-003 and authorized the task amendment; implementation
 remains.
+
+### Session 2 — 2026-06-23
+
+Resumed after Architect approval added `pool.rs` to scope. Added red tests for
+exact `--extension <resolved path>` argv propagation, fail-closed handling of a
+missing extension file with the expected path in the error,
+supervisor-to-worker path propagation, and BobConfig-to-supervisor mapping. The
+initial focused run failed because the new config fields were absent.
+Implemented the minimal fields, propagation, pre-spawn file check, and command
+arguments; all focused tests and all 42 `pi-agent-supervisor` tests pass.
+Updated existing in-scope unit fixtures to use a valid extension file. Bob
+serve unit tests pass outside the restricted Unix-socket sandbox. Verification
+still fails because `crates/bob/tests/shell_e2e.rs` launches `bob serve` without
+installing or configuring an extension, so the new required fail-closed
+behavior exits before sockets appear. The completed core cycle is preserved in
+commit `fb0df8e`; remaining work requires authorization for a fixture-only
+change to `shell_e2e.rs`.
 
 ## Review
 
