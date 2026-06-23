@@ -1,9 +1,13 @@
-use crate::{process::WorkerProcessConfig, rpc, Config};
+use crate::{
+    process::{InteractiveProcess, InteractiveProcessConfig, WorkerProcessConfig},
+    rpc, Config,
+};
 use bob_core::{
     error::{ServiceError, ServiceResult},
     types::SessionId,
 };
 use std::collections::HashMap;
+use std::os::unix::io::OwnedFd;
 use tokio::time::Instant;
 
 #[derive(Debug)]
@@ -28,6 +32,8 @@ pub struct SessionPool {
     cfg: Config,
     warm_workers: Vec<WarmWorker>,
     active_workers: HashMap<SessionId, ActiveSessionWorker>,
+    /// Interactive sessions tracked separately from RPC workers.
+    interactive_sessions: HashMap<SessionId, InteractiveProcess>,
 }
 
 impl SessionPool {
@@ -43,6 +49,7 @@ impl SessionPool {
             cfg: cfg.clone(),
             warm_workers,
             active_workers: HashMap::new(),
+            interactive_sessions: HashMap::new(),
         })
     }
 
@@ -80,7 +87,11 @@ impl SessionPool {
     }
 
     pub fn list_sessions(&self) -> Vec<SessionId> {
-        self.active_workers.keys().copied().collect()
+        self.active_workers
+            .keys()
+            .copied()
+            .chain(self.interactive_sessions.keys().copied())
+            .collect()
     }
 
     pub async fn kill_session(&mut self, session_id: SessionId) -> ServiceResult<()> {
@@ -130,6 +141,29 @@ impl SessionPool {
                 None => {}
             }
         }
+    }
+
+    /// Starts an interactive pi session on the supplied terminal file descriptors.
+    ///
+    /// The caller must supply the three stdio fds (typically received from the
+    /// client via `SCM_RIGHTS` per ADR-011).  The session is added to the
+    /// session table and appears in `list_sessions` immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ServiceError::ChildProcess` if the extension file is missing or
+    /// if the OS rejects the spawn.
+    pub fn start_interactive_session(
+        &mut self,
+        cfg: InteractiveProcessConfig,
+        stdin: OwnedFd,
+        stdout: OwnedFd,
+        stderr: OwnedFd,
+    ) -> ServiceResult<SessionId> {
+        let session_id = cfg.session_id;
+        let process = InteractiveProcess::spawn(cfg, stdin, stdout, stderr)?;
+        self.interactive_sessions.insert(session_id, process);
+        Ok(session_id)
     }
 
     pub fn warm_worker_count(&self) -> usize {
@@ -186,6 +220,17 @@ impl SessionPool {
         while let Some(warm) = self.warm_workers.pop() {
             match warm.worker.terminate().await {
                 Ok(_) => report.warm_workers_terminated += 1,
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
+        }
+
+        for (_session_id, process) in self.interactive_sessions.drain() {
+            match process.terminate().await {
+                Ok(_) => report.interactive_sessions_terminated += 1,
                 Err(error) => {
                     if first_error.is_none() {
                         first_error = Some(error);
@@ -373,5 +418,106 @@ mod tests {
         assert_eq!(report.idle_sessions_reaped, 0);
         assert_eq!(report.warm_workers_reaped, 2);
         assert_eq!(pool.warm_worker_count(), 1);
+    }
+
+    // AC-2: list_sessions includes interactive session ids.
+    #[tokio::test(flavor = "current_thread")]
+    async fn list_sessions_includes_interactive_session_after_start() {
+        use crate::process::InteractiveProcessConfig;
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let cfg = test_config("sh", &["-c", "exit 0"], 0, 4);
+        let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
+
+        let stdin_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stdout_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stderr_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+
+        let interactive_cfg = InteractiveProcessConfig {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "trap 'exit 0' TERM; while :; do sleep 1; done".to_string(),
+            ],
+            child_termination_deadline: std::time::Duration::from_millis(2000),
+            session_id: bob_core::types::SessionId::new(),
+            extension_sock_path: std::path::PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
+        };
+
+        let session_id = pool
+            .start_interactive_session(interactive_cfg, stdin_fd, stdout_fd, stderr_fd)
+            .expect("interactive session should start");
+
+        let sessions = pool.list_sessions();
+
+        assert!(
+            sessions.contains(&session_id),
+            "list_sessions must include the interactive session id"
+        );
+    }
+
+    // AC-3: shutdown_all terminates interactive sessions.
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_all_terminates_interactive_sessions() {
+        use crate::process::InteractiveProcessConfig;
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let pid_file = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-interactive-shutdown-{}.txt",
+            bob_core::types::SessionId::new()
+        ));
+        let _ = std::fs::remove_file(&pid_file);
+        let pid_file_path = pid_file.to_string_lossy().into_owned();
+
+        let script = format!(
+            "printf '%s\\n' $$ >> \"{}\"; trap '' TERM; while :; do :; done",
+            pid_file_path
+        );
+
+        let cfg = test_config("sh", &["-c", "exit 0"], 0, 4);
+        let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
+
+        let stdin_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stdout_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stderr_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+
+        let interactive_cfg = InteractiveProcessConfig {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script],
+            child_termination_deadline: std::time::Duration::from_millis(50),
+            session_id: bob_core::types::SessionId::new(),
+            extension_sock_path: std::path::PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
+        };
+
+        pool.start_interactive_session(interactive_cfg, stdin_fd, stdout_fd, stderr_fd)
+            .expect("interactive session should start");
+
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+        let report = pool.shutdown_all().await.expect("shutdown should succeed");
+
+        assert!(
+            report.interactive_sessions_terminated >= 1,
+            "shutdown must terminate interactive sessions"
+        );
+
+        // Give child a moment to exit after force-kill, then check it is gone.
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        if let Ok(content) = std::fs::read_to_string(&pid_file) {
+            for line in content.lines() {
+                let pid: i32 = line.parse().expect("pid should be numeric");
+                let proc_path = format!("/proc/{pid}");
+                assert!(
+                    !std::path::Path::new(&proc_path).exists(),
+                    "interactive worker pid {pid} should not exist after shutdown"
+                );
+            }
+        }
+
+        let _ = std::fs::remove_file(&pid_file);
     }
 }

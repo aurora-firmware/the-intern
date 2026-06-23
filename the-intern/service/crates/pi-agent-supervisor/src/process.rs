@@ -3,6 +3,7 @@ use bob_core::{
     types::SessionId,
 };
 use serde_json::Value;
+use std::os::unix::io::OwnedFd;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -212,6 +213,167 @@ impl RpcWorkerProcess {
                     ServiceError::ChildProcess {
                         detail: format!(
                             "failed to request graceful child termination via SIGTERM ({error})"
+                        ),
+                    }
+                })?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Configuration for spawning an interactive pi session.
+///
+/// Interactive sessions differ from RPC workers in that they receive the
+/// client's terminal file descriptors (via `SCM_RIGHTS`) as their stdio and
+/// run pi in its default interactive (ink TUI) mode rather than `--mode rpc`.
+#[derive(Debug)]
+pub struct InteractiveProcessConfig {
+    pub command: String,
+    pub args: Vec<String>,
+    pub child_termination_deadline: Duration,
+    /// Session id set as `BOB_SESSION_ID` on the child environment.
+    pub session_id: SessionId,
+    /// Absolute path to the extension socket, set as `BOB_EXTENSION_SOCK_PATH`.
+    /// If the path is empty, the variable is not set on the child environment.
+    pub extension_sock_path: PathBuf,
+    /// Resolved path passed to pi as `--extension <path>`.
+    pub extension_path: PathBuf,
+}
+
+/// A supervised interactive pi child process.
+///
+/// The child is spawned on the three file descriptors supplied by the caller —
+/// typically the client's controlling-terminal fds passed via `SCM_RIGHTS`
+/// (ADR-011).  No piped stdio is used; the caller must not attempt to write to
+/// or read from the child via this handle.
+#[derive(Debug)]
+pub struct InteractiveProcess {
+    child: Child,
+    child_termination_deadline: Duration,
+}
+
+impl InteractiveProcess {
+    /// Spawns an interactive pi child on the supplied stdio file descriptors.
+    ///
+    /// The three `OwnedFd` arguments become the child's stdin, stdout, and
+    /// stderr respectively; ownership is transferred to the child so the fds
+    /// are closed in the parent after the child is started.
+    ///
+    /// Fails if the configured extension file does not exist, or if the OS
+    /// rejects the `execve` call.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ServiceError::ChildProcess` when the extension file is absent
+    /// or when the OS rejects the spawn.
+    pub fn spawn(
+        cfg: InteractiveProcessConfig,
+        stdin: OwnedFd,
+        stdout: OwnedFd,
+        stderr: OwnedFd,
+    ) -> ServiceResult<Self> {
+        if !cfg.extension_path.is_file() {
+            return Err(ServiceError::ChildProcess {
+                detail: format!(
+                    "pi extension file does not exist at expected path '{}'",
+                    cfg.extension_path.display()
+                ),
+            });
+        }
+
+        let mut cmd = Command::new(&cfg.command);
+        cmd.args(&cfg.args)
+            .arg("--extension")
+            .arg(&cfg.extension_path)
+            .stdin(Stdio::from(stdin))
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
+            .env("BOB_SESSION_ID", cfg.session_id.to_string());
+
+        if !cfg.extension_sock_path.as_os_str().is_empty() {
+            cmd.env("BOB_EXTENSION_SOCK_PATH", &cfg.extension_sock_path);
+        }
+
+        let child = cmd.spawn().map_err(|error| ServiceError::ChildProcess {
+            detail: format!(
+                "failed to spawn interactive process for command '{}' ({error})",
+                cfg.command
+            ),
+        })?;
+
+        Ok(Self {
+            child,
+            child_termination_deadline: cfg.child_termination_deadline,
+        })
+    }
+
+    /// Terminates the interactive child process.
+    ///
+    /// Sends `SIGTERM` and waits up to `child_termination_deadline`; if the
+    /// child does not exit within that window it is force-killed with `SIGKILL`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ServiceError::ChildProcess` if the OS rejects the signal or if
+    /// waiting for the child fails.
+    pub async fn terminate(mut self) -> ServiceResult<TerminationOutcome> {
+        self.request_graceful_termination()?;
+
+        let wait_result = time::timeout(self.child_termination_deadline, self.child.wait()).await;
+        match wait_result {
+            Ok(Ok(_status)) => Ok(TerminationOutcome { forced: false }),
+            Ok(Err(error)) => Err(ServiceError::ChildProcess {
+                detail: format!("failed while waiting for interactive child termination ({error})"),
+            }),
+            Err(_) => {
+                if let Some(_status) =
+                    self.child
+                        .try_wait()
+                        .map_err(|error| ServiceError::ChildProcess {
+                            detail: format!(
+                                "failed to inspect interactive child status during termination ({error})"
+                            ),
+                        })?
+                {
+                    return Ok(TerminationOutcome { forced: false });
+                }
+
+                self.child
+                    .kill()
+                    .await
+                    .map_err(|error| ServiceError::ChildProcess {
+                        detail: format!("failed to force-kill interactive child process ({error})"),
+                    })?;
+
+                self.child
+                    .wait()
+                    .await
+                    .map_err(|error| ServiceError::ChildProcess {
+                        detail: format!(
+                            "failed while waiting for force-killed interactive child ({error})"
+                        ),
+                    })?;
+
+                Ok(TerminationOutcome { forced: true })
+            }
+        }
+    }
+
+    fn request_graceful_termination(&mut self) -> ServiceResult<()> {
+        #[cfg(unix)]
+        {
+            use nix::{
+                sys::signal::{self, Signal},
+                unistd::Pid,
+            };
+
+            if let Some(pid) = self.child.id() {
+                signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM).map_err(|error| {
+                    ServiceError::ChildProcess {
+                        detail: format!(
+                            "failed to request graceful interactive child termination via SIGTERM ({error})"
                         ),
                     }
                 })?;
@@ -518,6 +680,146 @@ mod tests {
         assert!(
             elapsed >= Duration::from_millis(25),
             "terminate should wait at least until deadline before force-kill"
+        );
+    }
+
+    // AC-1: InteractiveProcess::spawn sets BOB_SESSION_ID and BOB_EXTENSION_SOCK_PATH
+    // and passes --extension <path> on the command line.
+    //
+    // The child writes its env vars and all positional args to a temp file via its
+    // stdout (which we redirect to that file via OwnedFd).
+    #[tokio::test(flavor = "current_thread")]
+    async fn interactive_spawn_sets_session_env_and_extension_arg() {
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let out_file = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-interactive-env-{}.txt",
+            SessionId::new()
+        ));
+        let _ = std::fs::remove_file(&out_file);
+
+        let session_id = SessionId::new();
+        let sock_path = PathBuf::from("/run/bob/extension-interactive.sock");
+        let extension_path = std::env::current_exe().expect("current executable should exist");
+
+        // Script outputs env vars and all positional args ($@) to stdout.
+        // spawn() appends `--extension <path>` after the user-supplied args,
+        // so $@ will contain those extra args.
+        let script = "printf 'session:%s\\next:%s\\n' \"$BOB_SESSION_ID\" \
+                      \"$BOB_EXTENSION_SOCK_PATH\"; printf 'arg:%s\\n' \"$@\"";
+
+        let stdin_fd: OwnedFd = File::open("/dev/null")
+            .expect("open /dev/null for stdin")
+            .into();
+        let stdout_fd: OwnedFd = File::create(&out_file)
+            .expect("create output file for stdout")
+            .into();
+        let stderr_fd: OwnedFd = File::open("/dev/null")
+            .expect("open /dev/null for stderr")
+            .into();
+
+        // Pass `--` as $0 so the positional params to the script start at $1 (= --extension).
+        let cfg = InteractiveProcessConfig {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string(), "--".to_string()],
+            child_termination_deadline: Duration::from_millis(2000),
+            session_id,
+            extension_sock_path: sock_path.clone(),
+            extension_path: extension_path.clone(),
+        };
+
+        let process = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
+            .expect("interactive spawn should succeed");
+
+        tokio::time::sleep(TokioDuration::from_millis(150)).await;
+        drop(process);
+
+        let written = std::fs::read_to_string(&out_file)
+            .expect("output file should have been written by child");
+
+        assert!(
+            written.contains(&format!("session:{}", session_id)),
+            "BOB_SESSION_ID should be set on interactive child; got: {written:?}"
+        );
+        assert!(
+            written.contains(&format!("ext:{}", sock_path.display())),
+            "BOB_EXTENSION_SOCK_PATH should be set on interactive child; got: {written:?}"
+        );
+        assert!(
+            written.contains(&format!("arg:{}", extension_path.display())),
+            "--extension path should appear in child positional args; got: {written:?}"
+        );
+
+        let _ = std::fs::remove_file(&out_file);
+    }
+
+    // AC-1: InteractiveProcess::spawn returns ChildProcess error when extension file is missing.
+    #[test]
+    fn interactive_spawn_refuses_missing_extension_file() {
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let missing = std::env::temp_dir().join(format!(
+            "missing-interactive-extension-{}.ts",
+            SessionId::new()
+        ));
+
+        let stdin_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stdout_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stderr_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+
+        let cfg = InteractiveProcessConfig {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), "exit 0".to_string()],
+            child_termination_deadline: Duration::from_millis(100),
+            session_id: SessionId::new(),
+            extension_sock_path: PathBuf::new(),
+            extension_path: missing.clone(),
+        };
+
+        let error = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
+            .expect_err("interactive spawn should fail when extension file is missing");
+
+        assert!(
+            matches!(
+                error,
+                ServiceError::ChildProcess { ref detail }
+                    if detail.contains(&missing.to_string_lossy().into_owned())
+            ),
+            "error must name the missing extension path; got: {error:?}"
+        );
+    }
+
+    // AC-3: InteractiveProcess::terminate sends SIGTERM and waits for exit.
+    #[tokio::test(flavor = "current_thread")]
+    async fn interactive_terminate_requests_graceful_shutdown_before_deadline() {
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let stdin_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stdout_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stderr_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+
+        let cfg = InteractiveProcessConfig {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "trap 'exit 0' TERM; while :; do sleep 1; done".to_string(),
+            ],
+            child_termination_deadline: Duration::from_millis(2000),
+            session_id: SessionId::new(),
+            extension_sock_path: PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
+        };
+
+        let process = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
+            .expect("interactive spawn should succeed");
+
+        let outcome = process.terminate().await.expect("terminate should succeed");
+        assert!(
+            !outcome.forced,
+            "cooperative interactive child should terminate without force-kill"
         );
     }
 }

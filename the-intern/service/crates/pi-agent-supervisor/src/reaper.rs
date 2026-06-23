@@ -18,6 +18,7 @@ impl ReapReport {
 pub struct ShutdownReport {
     pub active_workers_terminated: usize,
     pub warm_workers_terminated: usize,
+    pub interactive_sessions_terminated: usize,
 }
 
 pub fn select_idle_sessions<I>(
