@@ -84,3 +84,22 @@ review and integration remain.
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
+
+### Review Verdict — 2026-06-23
+
+PASS
+
+Stage 1 passed: AC-1 is covered by the XDG data-home and HOME/Application
+Support fallback resolver tests; AC-2 is covered by the TOML override test;
+AC-3 is satisfied by the resolved `BobConfig::extension_path` field; and AC-4
+passes with both the targeted and full `bob` test suites. The diff is limited
+to the three authorized files and adds no behavior beyond path resolution.
+
+Stage 2 passed: the resolver follows the established configuration-layering
+pattern, the tests independently cover the required paths, and no correctness,
+security, readability, or performance issues were found. Formatting, targeted
+config tests, and the full `cargo test -p bob` suite pass. The tests were run
+outside the restricted sandbox because its Unix-socket policy causes unrelated
+`Operation not permitted` failures.
+
+Next owner: active Development Loop.
