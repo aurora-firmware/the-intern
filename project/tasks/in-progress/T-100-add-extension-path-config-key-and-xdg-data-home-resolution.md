@@ -71,6 +71,16 @@ made and the branch was restored clean. The Architect confirmed these edits are
 necessary compile-fix fallout within the approved specification, and the task's
 file list now includes them. Implementation remains to be completed.
 
+### Session 2 — 2026-06-23
+
+Added `extension_path` to raw and resolved configuration, including XDG
+data-home resolution, Linux HOME fallback, macOS Application Support fallback,
+and TOML override support. Added tests for all required paths and stand-in
+values to the authorized E2E config literals. The sandbox test run was rejected
+as environmental because Unix sockets were denied; both targeted and full
+`bob` suites passed outside the sandbox. Implementation is complete; only
+review and integration remain.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
