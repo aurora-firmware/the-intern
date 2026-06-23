@@ -669,7 +669,7 @@ fn defaults_with_runtime_root(
         pi_agent_warm_pool_size: 1,
         pi_agent_max_processes: 8,
         pi_agent_idle_reap_timeout: Duration::from_secs(300),
-        tracing_level: "info".to_string(),
+        tracing_level: default_tracing_level().to_string(),
         tracing_format: "pretty".to_string(),
         policy: PolicyConfig::default(),
         monitoring: RawMonitoringConfig {
@@ -679,6 +679,20 @@ fn defaults_with_runtime_root(
         channels: RawChannelsConfig::default(),
         chat_application_identity: default_chat_application_identity(),
         schedule: Vec::new(),
+    }
+}
+
+/// Default tracing level, chosen by build profile.
+///
+/// Release builds default to `"warn"` so production output is limited to
+/// warnings and errors. Debug builds keep the more verbose `"info"` default.
+/// In both cases `RUST_LOG` and the `tracing_level` config key still override
+/// this value.
+fn default_tracing_level() -> &'static str {
+    if cfg!(debug_assertions) {
+        "info"
+    } else {
+        "warn"
     }
 }
 
