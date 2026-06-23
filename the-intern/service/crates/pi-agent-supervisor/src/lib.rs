@@ -29,6 +29,8 @@ pub struct Config {
     /// Absolute path to the extension socket passed to each child as
     /// `BOB_EXTENSION_SOCK_PATH`.  An empty path means the variable is not set.
     pub extension_sock_path: PathBuf,
+    /// Resolved path to the pi extension that enforces tool-call authorization.
+    pub extension_path: PathBuf,
 }
 
 impl Default for Config {
@@ -42,6 +44,7 @@ impl Default for Config {
             command_buffer: 64,
             child_termination_deadline: Duration::from_secs(10),
             extension_sock_path: PathBuf::new(),
+            extension_path: PathBuf::new(),
         }
     }
 }
@@ -256,6 +259,7 @@ mod tests {
             command_buffer: 16,
             child_termination_deadline: Duration::from_millis(2000),
             extension_sock_path: std::path::PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
         }
     }
 
@@ -542,6 +546,7 @@ mod tests {
             command_buffer: 8,
             child_termination_deadline: Duration::from_millis(25),
             extension_sock_path: std::path::PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
         };
 
         let (handle, task) = start(cfg).expect("startup should succeed");

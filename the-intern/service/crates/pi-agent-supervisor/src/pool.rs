@@ -219,6 +219,7 @@ impl SessionPool {
             child_termination_deadline: cfg.child_termination_deadline,
             session_id,
             extension_sock_path: cfg.extension_sock_path.clone(),
+            extension_path: cfg.extension_path.clone(),
         }
     }
 
@@ -247,7 +248,19 @@ mod tests {
             command_buffer: 8,
             child_termination_deadline: Duration::from_millis(2000),
             extension_sock_path: std::path::PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
         }
+    }
+
+    #[test]
+    fn worker_process_config_carries_resolved_extension_path() {
+        let extension_path = std::env::current_exe().expect("current executable should exist");
+        let mut cfg = test_config("sh", &["-c", "exit 0"], 0, 1);
+        cfg.extension_path = extension_path.clone();
+
+        let process_cfg = SessionPool::worker_process_config_for_session(&cfg, SessionId::new());
+
+        assert_eq!(process_cfg.extension_path, extension_path);
     }
 
     #[tokio::test(flavor = "current_thread")]

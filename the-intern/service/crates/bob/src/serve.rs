@@ -102,6 +102,7 @@ fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Con
         command_buffer: cfg.request_queue_capacity,
         child_termination_deadline: cfg.shutdown_reap_deadline,
         extension_sock_path: cfg.extension_sock_path.clone(),
+        extension_path: cfg.extension_path.clone(),
     }
 }
 
@@ -467,11 +468,16 @@ pub mod tests {
 
     use super::*;
 
+    fn existing_extension_path() -> std::path::PathBuf {
+        std::env::current_exe().expect("current executable should exist")
+    }
+
     fn test_cfg_no_sockets() -> BobConfig {
         BobConfig {
             // Empty paths — tests that do not bind sockets use these.
             admin_sock_path: std::path::PathBuf::new(),
             extension_sock_path: std::path::PathBuf::new(),
+            extension_path: existing_extension_path(),
             pi_agent_command: "sh".to_string(),
             pi_agent_args: vec!["-c".to_string(), "exit 0".to_string()],
             request_queue_capacity: 16,
@@ -485,6 +491,7 @@ pub mod tests {
         BobConfig {
             admin_sock_path: tmp.path().join("admin.sock"),
             extension_sock_path: tmp.path().join("extension.sock"),
+            extension_path: existing_extension_path(),
             pi_agent_command: "sh".to_string(),
             pi_agent_args: vec!["-c".to_string(), "exit 0".to_string()],
             request_queue_capacity: 16,
@@ -496,6 +503,7 @@ pub mod tests {
 
     #[test]
     fn pi_agent_supervisor_config_maps_phase2_bob_settings() {
+        let extension_path = std::path::PathBuf::from("/opt/bob/extension.ts");
         let cfg = BobConfig {
             request_queue_capacity: 33,
             shutdown_reap_deadline: Duration::from_secs(11),
@@ -508,6 +516,7 @@ pub mod tests {
             pi_agent_warm_pool_size: 3,
             pi_agent_max_processes: 9,
             pi_agent_idle_reap_timeout: Duration::from_secs(45),
+            extension_path: extension_path.clone(),
             ..BobConfig::test_base()
         };
 
@@ -530,6 +539,7 @@ pub mod tests {
             supervisor_cfg.child_termination_deadline,
             Duration::from_secs(11)
         );
+        assert_eq!(supervisor_cfg.extension_path, extension_path);
     }
 
     // AC-2 (T-039): extension_sock_path from BobConfig is plumbed into the supervisor config.
@@ -782,6 +792,7 @@ pub mod tests {
         let cfg = BobConfig {
             admin_sock_path: tmp.path().join("admin.sock"),
             extension_sock_path: tmp.path().join("extension.sock"),
+            extension_path: existing_extension_path(),
             // Use sh workers that exit immediately — they spawn, pool is warm,
             // shutdown_all terminates them.
             pi_agent_command: "sh".to_string(),
@@ -850,6 +861,7 @@ pub mod tests {
         let cfg = BobConfig {
             admin_sock_path: admin_sock.clone(),
             extension_sock_path: ext_sock.clone(),
+            extension_path: existing_extension_path(),
             request_queue_capacity: 16,
             shutdown_drain_deadline: Duration::from_millis(100),
             shutdown_reap_deadline: Duration::from_millis(50),
@@ -980,6 +992,7 @@ pub mod tests {
         let cfg = BobConfig {
             admin_sock_path: admin_sock.clone(),
             extension_sock_path: ext_sock.clone(),
+            extension_path: existing_extension_path(),
             shutdown_drain_deadline: Duration::from_millis(50),
             shutdown_reap_deadline: Duration::from_millis(25),
             ..BobConfig::test_base()
@@ -1067,6 +1080,7 @@ pub mod tests {
         let cfg = BobConfig {
             admin_sock_path: tmp.path().join("admin.sock"),
             extension_sock_path: tmp.path().join("extension.sock"),
+            extension_path: existing_extension_path(),
             monitoring: crate::config::MonitoringConfig {
                 audit_log_path: audit_log.clone(),
                 default_tail_filters: vec![],
@@ -1134,6 +1148,7 @@ pub mod tests {
         let cfg = BobConfig {
             admin_sock_path: sock_parent.join("admin.sock"),
             extension_sock_path: sock_parent.join("extension.sock"),
+            extension_path: existing_extension_path(),
             pi_agent_command: "sh".to_string(),
             pi_agent_args: vec!["-c".to_string(), "exit 0".to_string()],
             request_queue_capacity: 16,
