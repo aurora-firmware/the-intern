@@ -94,6 +94,15 @@ behavior exits before sockets appear. The completed core cycle is preserved in
 commit `fb0df8e`; remaining work requires authorization for a fixture-only
 change to `shell_e2e.rs`.
 
+### Session 3 — 2026-06-23
+
+After human approval expanded scope, configured both spawned `bob serve`
+helpers with `BOB_EXTENSION_PATH` pointing to the real repository
+`extensions/bob.ts` fixture. Reused the real extension instead of generating a
+stub so pi exercises a valid extension. The two previously failing shell E2E
+tests passed, followed by formatting and both full package suites. Committed
+the fixture cycle as `ef0a409`. Nothing remains.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
