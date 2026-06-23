@@ -13,33 +13,49 @@ spec: CR-002
 
 ## Description
 
-CR-002 requires `bob chat` to run a **supervised, directly-launched interactive**
-pi session, but today the supervisor only spawns `pi --mode rpc` (piped stdio, no
-TTY). This is a verification/design task that must complete before T-104–T-106.
+**Verification completed 2026-06-23 (findings below).** pi **does** expose a
+usable interactive-on-given-stdio interface, so the CR-002 approach is feasible.
+The infeasibility risk is closed. The remaining work is to decide and record the
+**terminal-brokering mechanism** between the `bob chat` client's terminal and the
+service-spawned pi process, in a new ADR, and prove it with a minimal spike.
 
-Verify against the actual pi CLI/source (pi is a hard prerequisite, on `PATH`):
-1. how to launch an **interactive** pi session (invocation + flags), and whether
-   `--extension <path>` (T-101) composes with interactive mode;
-2. whether/how pi can run on **caller-provided stdio** — an allocated PTY or
-   inherited file descriptors.
+### Verified pi interface (pi 0.79.10, `@earendil-works/pi-coding-agent`)
 
-Then decide and record the **terminal-brokering mechanism** between the `bob chat`
-client's terminal and the service-spawned pi process. Candidate mechanisms:
-passing the client's terminal fds to the service over `admin.sock` via
-`SCM_RIGHTS` (fd-passing), or relaying PTY bytes over the socket. Record the
-verified interface and the decision in a new ADR under `project/decisions/`.
+- **Interactive is the default mode.** `pi [options] [messages...]` runs an
+  interactive **ink-based TUI**; `--print`/`-p` is the non-interactive opt-out
+  (`--mode rpc` is the piped JSON-RPC worker bob already uses).
+- **It requires a real TTY.** pi uses `process.stdin.setRawMode` and checks
+  `process.stdin.isTTY`; on non-TTY pipes it degrades to non-interactive. The
+  interactive session must therefore be given a **terminal** (the user's TTY or
+  an allocated PTY), not plain pipes.
+- **Extension by path is confirmed:** `--extension <path>` / `-e <path>` loads an
+  extension file (repeatable); `--no-extensions`/`-ne` disables discovery while
+  keeping explicit `-e` paths — so bob can load **only** `bob.ts` by path.
+- **Version note:** installed pi is 0.79.10; `the-intern/extensions/package.json`
+  pins the type dev-dep at 0.75.3. Reconcile if the type surface differs (minor).
+
+### Remaining decision — brokering mechanism (record in an ADR)
+
+Because interactive pi needs a real TTY, plain pipe-relay over `admin.sock` will
+not work. Candidate mechanisms:
+
+- **(A, recommended) fd-passing via `SCM_RIGHTS`:** `bob chat` passes its
+  controlling-terminal fds (which are a TTY) to `bob serve` over `admin.sock`;
+  the supervisor spawns pi with those fds as stdio. pi runs on the user's real
+  terminal — no byte relay, no PTY allocation, no SIGWINCH plumbing.
+- **(B) PTY allocation + byte relay:** the supervisor allocates a PTY, spawns pi
+  on it, and relays bytes (and window-size changes) to the client over the
+  socket. More moving parts.
 
 ## Acceptance Criteria
 
-AC-1: The system shall document the verified pi interactive-session invocation
-      (command, flags, and how `--extension` composes) against the real pi CLI.
+AC-1: The system shall record, in a new ADR under `project/decisions/`, the
+      chosen terminal-brokering mechanism (A or B) and the rationale, citing the
+      verified pi interface above.
 
-AC-2: The system shall record, in a new ADR under `project/decisions/`, the
-      chosen terminal-brokering mechanism and the rationale.
-
-AC-3: IF pi exposes no usable interactive-on-given-stdio interface THEN THE
-      SYSTEM SHALL escalate that the CR-002 approach is infeasible rather than
-      proceeding to T-104.
+AC-2: The system shall prove the chosen mechanism with a minimal spike that runs
+      interactive pi (default mode, `-e <bob.ts>`) on the brokered terminal and
+      observes the TUI render.
 
 ## Dependencies
 
@@ -53,13 +69,17 @@ AC-3: IF pi exposes no usable interactive-on-given-stdio interface THEN THE
 ## Verification
 
 ```bash
-# Verification/design task: the new ADR exists and records the brokering decision.
 ls project/decisions/ | grep -iE "broker|interactive|pty|terminal"
 ```
 
 ## Work Log
 
-<!-- Mandatory. Append one entry per session boundary. -->
+### Session 1 — 2026-06-23
+Verified the pi 0.79.10 interface (see Description): interactive default mode,
+ink TUI, requires a real TTY (`setRawMode`/`isTTY`), `--extension`/`-e <path>`
+confirmed. Feasibility confirmed; infeasibility-escalation AC removed. Remaining
+work narrowed to the brokering-mechanism ADR + spike; mechanism A (SCM_RIGHTS
+fd-passing) recommended.
 
 ## Review
 
