@@ -1,7 +1,7 @@
 ---
 id: T-100
 title: Add extension_path config key and XDG_DATA_HOME resolution
-status: pending
+status: in-progress
 priority: high
 assigned-role: developer
 created: '2026-06-23'
