@@ -106,3 +106,26 @@ the fixture cycle as `ef0a409`. Nothing remains.
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
+
+### Review Verdict — 2026-06-23
+
+PASS
+
+Stage 1 passed. AC-1 is implemented by appending
+`--extension <extension_path>` to every worker command; AC-2 is implemented by
+the pre-spawn `is_file` check and path-bearing `ChildProcess` error; AC-3 is
+implemented through `BobConfig` → supervisor `Config` →
+`WorkerProcessConfig` propagation for warm and overflow workers; and AC-4
+passed with `cargo test -p pi-agent-supervisor` (42 tests) and
+`cargo test -p bob` (all unit, integration, shell E2E, and doc tests).
+
+Stage 2 passed. The fail-closed behavior is narrowly scoped, the success and
+missing-file paths have independent regression coverage, the authorized shell
+E2E fixture uses the repository extension, and no unrelated files or behavior
+were added. `cargo fmt --all -- --check` also passed.
+
+Obstacles Encountered: the restricted sandbox rejects Unix-domain socket
+binds, so the first Bob suite run failed for environment-only reasons. The same
+full suite passed outside that restriction.
+
+Next owner: active Development Loop.
