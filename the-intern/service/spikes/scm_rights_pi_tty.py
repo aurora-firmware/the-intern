@@ -127,16 +127,21 @@ def run_spike(pi_path: str, extension_path: Path) -> int:
     return os.waitstatus_to_exitcode(status)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     repository_root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--pi",
+        default="pi",
+        help="pi executable name or path (default: resolve pi from PATH)",
+    )
     parser.add_argument(
         "--extension",
         type=Path,
         default=repository_root / "extensions" / "bob.ts",
         help="path to bob.ts",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> int:
@@ -145,9 +150,9 @@ def main() -> int:
         return 1
 
     args = parse_args()
-    pi_path = shutil.which("pi")
+    pi_path = shutil.which(args.pi)
     if pi_path is None:
-        print("pi is required on PATH", file=sys.stderr)
+        print(f"pi executable not found: {args.pi}", file=sys.stderr)
         return 1
     if not args.extension.is_file():
         print(f"extension does not exist: {args.extension}", file=sys.stderr)

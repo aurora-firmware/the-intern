@@ -52,6 +52,14 @@ class ScmRightsPiTtyTests(unittest.TestCase):
             os.close(read_fd)
             os.close(write_fd)
 
+    def test_accepts_an_explicit_pi_executable(self) -> None:
+        arguments = scm_rights_pi_tty.parse_args(
+            ["--pi", "/opt/pi-0.79.10/bin/pi", "--extension", "/tmp/bob.ts"]
+        )
+
+        self.assertEqual(arguments.pi, "/opt/pi-0.79.10/bin/pi")
+        self.assertEqual(arguments.extension, Path("/tmp/bob.ts"))
+
 
 if __name__ == "__main__":
     unittest.main()
