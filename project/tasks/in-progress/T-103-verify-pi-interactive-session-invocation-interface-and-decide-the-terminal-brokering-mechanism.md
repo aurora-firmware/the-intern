@@ -2,7 +2,7 @@
 id: T-103
 title: Verify pi interactive-session invocation interface and decide the 
   terminal-brokering mechanism
-status: pending
+status: in-progress
 priority: high
 assigned-role: unassigned
 created: '2026-06-23'
