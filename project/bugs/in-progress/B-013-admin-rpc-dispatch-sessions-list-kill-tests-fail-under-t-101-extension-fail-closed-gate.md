@@ -3,7 +3,7 @@ id: B-013
 title: admin-rpc dispatch sessions.list/kill tests fail under T-101 extension 
   fail-closed gate
 severity: high
-status: open
+status: in-progress
 created: '2026-06-23'
 task: T-101
 ---
