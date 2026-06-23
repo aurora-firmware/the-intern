@@ -21,6 +21,7 @@ use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 pub struct BobConfig {
     pub admin_sock_path: PathBuf,
     pub extension_sock_path: PathBuf,
+    pub extension_path: PathBuf,
     pub request_queue_capacity: usize,
     pub request_submit_timeout: Duration,
     pub shutdown_drain_deadline: Duration,
@@ -108,6 +109,7 @@ impl BobConfig {
         Self {
             admin_sock_path: PathBuf::new(),
             extension_sock_path: PathBuf::new(),
+            extension_path: PathBuf::new(),
             request_queue_capacity: 1024,
             request_submit_timeout: Duration::from_secs(5),
             shutdown_drain_deadline: Duration::from_secs(30),
@@ -176,6 +178,7 @@ impl BobConfig {
         let cfg = BobConfig {
             admin_sock_path: raw.admin_sock_path,
             extension_sock_path: raw.extension_sock_path,
+            extension_path: raw.extension_path,
             request_queue_capacity: raw.request_queue_capacity,
             request_submit_timeout: raw.request_submit_timeout,
             shutdown_drain_deadline: raw.shutdown_drain_deadline,
@@ -284,6 +287,7 @@ impl ConfigSources {
 struct RawBobConfig {
     admin_sock_path: PathBuf,
     extension_sock_path: PathBuf,
+    extension_path: PathBuf,
     #[serde(deserialize_with = "deserialize_usize")]
     request_queue_capacity: usize,
     #[serde(deserialize_with = "deserialize_duration")]
@@ -656,10 +660,12 @@ fn defaults_with_runtime_root(
     uid: u32,
 ) -> RawBobConfig {
     let monitoring_audit_log_path = default_monitoring_audit_log_path_for_env(env, uid);
+    let extension_path = default_extension_path_for_env(env, uid);
 
     RawBobConfig {
         admin_sock_path: runtime_root.join("admin.sock"),
         extension_sock_path: runtime_root.join("extension.sock"),
+        extension_path,
         request_queue_capacity: 1024,
         request_submit_timeout: Duration::from_secs(5),
         shutdown_drain_deadline: Duration::from_secs(30),
@@ -733,6 +739,25 @@ fn default_monitoring_audit_log_path_for_env(env: &BTreeMap<String, String>, uid
     };
 
     state_root.join("bob").join("audit.jsonl")
+}
+
+fn default_extension_path_for_env(env: &BTreeMap<String, String>, uid: u32) -> PathBuf {
+    let data_root = env
+        .get("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            if cfg!(target_os = "macos") {
+                env.get("HOME")
+                    .map(|home| Path::new(home).join("Library").join("Application Support"))
+                    .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-data-{uid}")))
+            } else {
+                env.get("HOME")
+                    .map(|home| Path::new(home).join(".local").join("share"))
+                    .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-data-{uid}")))
+            }
+        });
+
+    data_root.join("bob").join("extensions").join("bob.ts")
 }
 
 fn default_config_path(sources: &ConfigSources) -> PathBuf {
@@ -901,6 +926,74 @@ mod tests {
                     .join("extension.sock")
             );
         }
+    }
+
+    #[test]
+    fn resolves_default_extension_path_from_xdg_data_home_when_not_configured() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let data_home = temp.path().join("xdg-data-home");
+
+        let config = load_with_env_overrides([(
+            "XDG_DATA_HOME",
+            data_home
+                .to_str()
+                .expect("temporary data-home path should be valid UTF-8"),
+        )])
+        .expect("config should load");
+
+        assert_eq!(
+            config.extension_path,
+            data_home.join("bob").join("extensions").join("bob.ts")
+        );
+    }
+
+    #[test]
+    fn resolves_default_extension_path_from_home_when_xdg_data_home_is_unset() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let home = temp.path().join("home");
+
+        let config = load_with_env_overrides([(
+            "HOME",
+            home.to_str()
+                .expect("temporary home path should be valid UTF-8"),
+        )])
+        .expect("config should load");
+
+        let expected = if cfg!(target_os = "macos") {
+            home.join("Library")
+                .join("Application Support")
+                .join("bob")
+                .join("extensions")
+                .join("bob.ts")
+        } else {
+            home.join(".local")
+                .join("share")
+                .join("bob")
+                .join("extensions")
+                .join("bob.ts")
+        };
+
+        assert_eq!(config.extension_path, expected);
+    }
+
+    #[test]
+    fn loads_extension_path_override_from_config_file() {
+        let config_file = write_temp_config(r#"extension_path = "/opt/bob/custom-extension.ts""#);
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env: BTreeMap::new(),
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("extension_path override should load");
+
+        assert_eq!(
+            config.extension_path,
+            PathBuf::from("/opt/bob/custom-extension.ts")
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
     }
 
     #[test]
