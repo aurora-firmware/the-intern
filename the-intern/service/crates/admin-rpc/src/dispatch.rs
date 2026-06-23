@@ -1224,15 +1224,20 @@ mod tests {
     }
 
     fn make_dispatcher_with_supervisor() -> (Dispatcher, tokio::task::JoinHandle<()>) {
-        let (handle, join) = pi_agent_supervisor::start(pi_agent_supervisor::Config::default())
-            .expect("supervisor start must succeed in tests");
+        let mut cfg = pi_agent_supervisor::Config::default();
+        cfg.extension_path =
+            std::env::current_exe().expect("current executable should exist in tests");
+        let (handle, join) =
+            pi_agent_supervisor::start(cfg).expect("supervisor start must succeed in tests");
         let dispatcher = Dispatcher::new(Some(handle), None, None, "0.1.0-test");
         (dispatcher, join)
     }
 
     fn make_supervisor_handle() -> (pi_agent_supervisor::Handle, tokio::task::JoinHandle<()>) {
-        pi_agent_supervisor::start(pi_agent_supervisor::Config::default())
-            .expect("supervisor start must succeed in tests")
+        let mut cfg = pi_agent_supervisor::Config::default();
+        cfg.extension_path =
+            std::env::current_exe().expect("current executable should exist in tests");
+        pi_agent_supervisor::start(cfg).expect("supervisor start must succeed in tests")
     }
 
     fn make_registry() -> ConnectionRegistry {
