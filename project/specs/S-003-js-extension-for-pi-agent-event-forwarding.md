@@ -35,6 +35,26 @@ a name deliberately — the extension exists only to talk to the service —
 but they are two distinct artifacts with different runtimes, lifecycles,
 and install paths.
 
+> **Amended (CR-003 / ADR-009 / ADR-010, 2026-06-23).** This spec originally kept
+> bob out of extension delivery (the operator installs `bob.ts` into pi's own
+> search path; bob never passes `-e`/`--extension`; the extension is optional).
+> **CR-003 reverses that** for the single-user local deployment — bob owns the
+> extension's location and supplies it to pi by path:
+>
+> - **Default location:** `$XDG_DATA_HOME/bob/extensions/bob.ts`
+>   (→ `~/.local/share/bob/extensions/bob.ts`), per ADR-009, overridable by the
+>   `config.toml` key `extension_path`.
+> - **Delivery to pi:** bob passes `pi --extension <resolved path>`.
+> - **Required, fail-closed:** the extension is the monitoring / `tool_call` authz
+>   membrane (S-004), so a supervised session must run with it. If no extension file
+>   exists at the resolved path, bob does **not** launch pi and fails with a clear
+>   error naming the expected path.
+>
+> The "bob runs unchanged without the extension" / "Does not pass `-e`" /
+> operator-installs-into-pi's-search-path statements below are superseded
+> accordingly. The env-var contract (`BOB_SESSION_ID`, `BOB_EXTENSION_SOCK_PATH`)
+> for the supervised spawn path is unchanged.
+
 ## Exclusions
 
 What this specification explicitly does NOT cover:
@@ -58,11 +78,12 @@ What this specification explicitly does NOT cover:
   source under `the-intern/extensions/`. Phase 3 does not publish to npm,
   does not produce a build artifact, does not invoke pi's `pi install`,
   and does not vendor the pi-agent extension typings.
-- **Bob-side discovery of the extension.** Bob does **not** pass
-  `--extension`/`-e` to `pi`. The extension is installed into the
-  operator's pi extension search path independently (see Configuration
-  Requirements). No bob service configuration key for extension discovery
-  is added.
+- **Bob-side discovery of the extension.** *(Superseded by CR-003, 2026-06-23 —
+  see amendment banner above.)* Originally bob did not pass `--extension`/`-e` and
+  the operator installed the extension into pi's search path. Under CR-003 bob owns
+  the extension location (`$XDG_DATA_HOME/bob/extensions/bob.ts`, override
+  `extension_path`) and passes `pi --extension <path>`, failing closed if the file
+  is missing.
 - **Backfilling or replaying events.** Events are forwarded only while
   the extension is connected. Lost-connection windows are dropped silently
   (after a single warning), not buffered.
@@ -71,10 +92,10 @@ What this specification explicitly does NOT cover:
 
 ### Design Principles
 
-- **The bob service runs without the bob extension.** Every Rust-side
-  component must function when no bob extension is installed in the
-  operator's pi. Phase 3 introduces no hard runtime dependency on the
-  extension being present.
+- **The bob service runs without the bob extension.** *(Amended by CR-003,
+  2026-06-23.)* True for the Phase-3 event-forwarding scope as originally written.
+  Under CR-003 a **supervised** `pi` session requires the extension (the authz
+  membrane) and fails closed if it is missing — bob owns and supplies it by path.
 - **One-way data flow in Phase 3.** Events travel pi → extension →
   service. No service → extension messaging is added in this phase; the
   `OutboundFrame` family is touched only insofar as Phase 4 will use it
@@ -138,7 +159,7 @@ What this specification explicitly does NOT cover:
 
 | Component | Responsibility | Notes |
 |---|---|---|
-| Pi-agent Supervisor actor | Sets `BOB_SESSION_ID` and `BOB_EXTENSION_SOCK_PATH` on every `pi` child. Does **not** pass `-e`. | Existing actor; small addition to `spawn` |
+| Pi-agent Supervisor actor | Sets `BOB_SESSION_ID` and `BOB_EXTENSION_SOCK_PATH` on every `pi` child; **passes `--extension <path>`** (CR-003) resolving to `$XDG_DATA_HOME/bob/extensions/bob.ts` or the `extension_path` override, failing closed if missing. | Existing actor; `spawn` addition |
 | Extension-IPC actor | Unchanged transport-side. The `MonitoringHandle` it dispatches events to is the only swap. | Existing actor from Phase 1a |
 | `TracingMonitoringHandle` | Implements `MonitoringHandle::record_event`; emits one `tracing::info!` per inbound event with structured `session` and `event` fields. | New, replaces `NoopMonitoringHandle` in `bob::serve` wiring |
 | `bob.ts` (the bob extension) | Reads the env vars set by the bob service; opens the UDS; subscribes to every documented pi event; writes one NDJSON frame per event. Logs one warning and degrades to no-op on any failure. | New file under `the-intern/extensions/` |
@@ -316,3 +337,4 @@ across the supervisor and `bob::serve`.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-06-13 | System diagram updated: the `extension-ipc` actor "accepts UDS connections (perms + SO_PEERCRED)" is now "accepts UDS connections (filesystem-gated)". | ADR-005 (accepted 2026-05-22) made filesystem permissions the sole connection gate and demoted `SO_PEERCRED` to audit; this diagram label was never updated. PR #22 reconciles the artifact set. | None (documentation reconciliation). |
+| 2026-06-23 | Bob now owns and supplies the extension by path (`pi --extension`), default `$XDG_DATA_HOME/bob/extensions/bob.ts` (override `extension_path`), required and fail-closed. Reverses the "operator installs into pi's search path / bob does not pass `-e`" exclusion and the "runs without the extension" principle. | CR-003 (depends on ADR-009 layout; the extension is the S-004 authz membrane so it must load). | TBD (CR-003 breakdown) |

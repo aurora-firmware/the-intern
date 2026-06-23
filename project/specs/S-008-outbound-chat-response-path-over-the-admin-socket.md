@@ -1,7 +1,7 @@
 ---
 title: Outbound chat response path over the admin socket
 version: '0.1'
-status: approved  # draft | review | approved | superseded
+status: superseded  # draft | review | approved | superseded
 created: '2026-06-11'
 author: planner
 id: S-008
@@ -32,6 +32,16 @@ spec is done, a chat-bound reply handed to the service's delivery interface
 is printed by the subscribed `bob chat` process, demonstrated by automated
 tests that inject replies at that interface and observe them on the client
 side of the admin socket.
+
+> **Superseded (CR-002, 2026-06-23).** This spec's purpose — delivering chat
+> replies to a subscribed `bob chat` process over `admin.sock` — is obsoleted by
+> CR-002, under which `bob chat` runs a supervised, directly-launched interactive
+> `pi` session whose output reaches the user's terminal directly, not via an
+> admin-socket reply router. The deferred reply producer this spec was designed to
+> receive from (CR-001 / roadmap Phase 2) is likewise obsoleted for interactive
+> chat. The chat reply router and `chat.message` push channel are retained in the
+> codebase only as a possible basis for a future programmatic
+> chat-over-`admin.sock` channel (none today). See ADR-010 and the amended S-006.
 
 ## Exclusions
 
@@ -198,8 +208,6 @@ No new configuration is introduced.
 
 ## Amendment Log
 
-<!-- Optional. Use when an approved spec is amended after tasks are in flight.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| YYYY-MM-DD | Description of change | Reason for amendment | T-XXX, T-YYY |
--->
+| 2026-06-23 | Spec superseded (status → superseded). | CR-002 replaces admin-socket interactive chat and its outbound reply path with a supervised direct `pi` session; the reply router has no interactive consumer. | TBD (CR-002 breakdown) |

@@ -91,6 +91,16 @@ be revisited and real end-user authentication introduced.
   well-formed identity accepted) and tighten later. This ADR requires only that
   an absent identity is an error and that the value is structurally validated.
 
+> **Amended (ADR-010, 2026-06-23).** The "request rejected at intake without an
+> asserted identity" rule above governs requests that traverse the request-intake
+> path (chat-adapter → intake → Requests-Handler queue). Under CR-002, **interactive
+> chat** runs as a supervised, directly-launched `pi` session that does **not**
+> traverse that intake path, so the intake-rejection rule does not apply to it;
+> interactive chat is gated by the socket trust boundary (Layer 1) and the
+> `tool_call` authz membrane instead (ADR-010). The session still carries an
+> application identity for attribution/audit. This narrows the rule for that one
+> channel; all other inbound paths are unchanged.
+
 ### Removed: the in-service uid allow-list
 
 The previously separate in-service gate — `bob_core::auth::is_allowed` checking
