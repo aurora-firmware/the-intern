@@ -130,6 +130,23 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-24
+
+Implemented the diagnosis contract on
+`bug/B-014-bob-serve-omits-interactive-pi-spawn-configuration`. The red test
+`interactive_session_config_maps_bob_spawn_settings_without_rpc_args` initially
+failed to compile because the diagnosed mapper did not exist. Added the minimal
+mapper and explicitly set `admin_rpc::Config::interactive_session` at the bob
+service composition root. The mapper passes the configured pi command,
+shutdown deadline, extension socket, and extension file while deliberately
+using empty arguments for interactive mode instead of the RPC worker arguments.
+
+The focused regression test passed after implementation. Initial broader test
+runs inside the restricted sandbox produced the repository's documented Unix
+socket `Operation not permitted` failures; rerunning outside the sandbox passed:
+26/26 `bob serve::tests` and 99/99 `admin-rpc` tests. `cargo fmt --all --
+--check` also passed. Implementation commit: `aa530fd`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
