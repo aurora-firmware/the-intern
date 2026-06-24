@@ -65,3 +65,28 @@ The initial content assertion failed because supervised interactive chat was und
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
+
+### Review Verdict — 2026-06-24
+
+PASS
+
+Stage 1 passed. AC-1 is met by the rewritten `bob chat` section in
+`the-intern/docs/src/end-user-guide/index.md`, which documents the supervised
+interactive pi session, terminal attachment, service precondition, session
+exit, and explicit no-service failure. AC-2 is met by the operator and
+extension-author guides, which document the XDG data default,
+`extension_path`/`BOB_EXTENSION_PATH` overrides, `pi --extension`, and the
+fail-closed missing-file behavior. AC-3 was verified with `mdbook build` against
+the submitted branch snapshot using the existing built `bob` binary; it
+completed without errors (the existing mdbook-mermaid version warning remains).
+
+Stage 2 passed. The documentation is accurate against the T-102 source of truth
+and the shipped T-106 implementation, the changes are limited to the requested
+user-documentation chapters, links and headings are consistent, and no obsolete
+`chat.open`/`chat.send` user workflow remains in the edited guide.
+
+Minor observation: a clean source archive requires a built `bob` binary (or
+`BOB_BIN`) for the CLI-reference preprocessor; this is an existing documented
+build prerequisite and is non-blocking.
+
+Next owner: active Development Loop.
