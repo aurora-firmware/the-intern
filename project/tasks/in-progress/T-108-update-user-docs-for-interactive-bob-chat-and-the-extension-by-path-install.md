@@ -90,3 +90,47 @@ Minor observation: a clean source archive requires a built `bob` binary (or
 build prerequisite and is non-blocking.
 
 Next owner: active Development Loop.
+
+### Review Verdict — 2026-06-24
+
+FAIL
+
+Stage 1 fails because the submitted mdBook remains internally contradictory
+about the shipped chat and channel-adapter behavior. A correct replacement for
+the end-user `bob chat` section is insufficient while the related operator,
+extension-author, and architecture chapters still instruct readers using the
+deleted subscription-based implementation. This is within scope: the
+Description requires the mdBook user docs to match shipped behavior, and Files
+to Touch permits the relevant content under `the-intern/docs/src/`, explicitly
+including the Extension/Operator chapters.
+
+- **`the-intern/docs/src/operator-guide/index.md`, `## Channel configuration`
+  (submitted branch lines 187–212)** — The guide says interactive chat is the
+  only implemented adapter, documents `[channels.chat] enabled`, and says
+  `bob chat` subscribes. The interactive chat adapter and subscription path were
+  removed, and the scheduler adapter is shipped. Replace this section with the
+  current adapter/configuration model and clarify that interactive `bob chat`
+  uses the supervised session RPC rather than a configurable chat adapter.
+- **`the-intern/docs/src/extension-author-guide/index.md`,
+  `## Channel-Adapter Contract` (submitted branch lines 135 onward)** — The
+  chapter names deleted `crates/chat-adapter` as the reference implementation
+  and documents its obsolete `ChatFrame`/admin-socket intake flow. Remove the
+  deleted implementation contract and describe the currently shipped adapter
+  contract using existing source (including the scheduler adapter where a
+  concrete implementation is needed).
+- **`the-intern/docs/src/architecture-overview/index.md`, System Shape line 26
+  and Channel Adapters lines 142–149 on the submitted branch** — The overview
+  still assigns chat subscriptions to `admin.sock`, calls interactive chat the
+  only implemented adapter, and says scheduler is unimplemented. Update the
+  socket purpose and adapter inventory/flow to match CR-002, T-106, and T-107.
+
+Stage 2 was skipped because Stage 1 did not pass. `mdbook build` still succeeds,
+but successful rendering does not validate the behavioral accuracy required by
+the task.
+
+**Obstacles Encountered:** The initial review checked the newly edited sections
+and build result too narrowly and missed contradictory material later in the
+same chapters. Integration inspection surfaced the broader mdBook consistency
+failure; no implementation blocker remains.
+
+Next owner: Developer via the active Development Loop.
