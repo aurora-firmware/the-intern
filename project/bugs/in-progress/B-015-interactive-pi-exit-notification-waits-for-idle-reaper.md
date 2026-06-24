@@ -84,6 +84,39 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-06-24
+
+Reproduction status: Confirmed deterministically by code-path inspection on
+`dev-agent` commit `6452d4b`. A watched child can make no notification progress
+between idle reaper ticks.
+
+Evidence captured: `pi-agent-supervisor/src/lib.rs:246-248` constructs the only
+timer from `cfg.idle_reap_timeout`; its production default is 300 seconds.
+Lines 360-364 call `poll_interactive_exits()` only from that timer branch.
+`register_interactive_exit_watcher` merely stores the sender, while the
+admin-RPC test helper reduces the idle timeout to 50 ms and therefore masks the
+production delay.
+
+Isolated fault: `Actor::run` couples non-blocking interactive child exit polling
+to the unrelated RPC-worker idle reaping schedule.
+
+Root cause or fault hypothesis: T-105 retained the interactive process in the
+pool so client disconnect can still terminate it, then reused the existing reap
+tick as a convenient poll trigger without accounting for its five-minute
+production cadence.
+
+Planned fix: Add a dedicated 50 ms interactive-exit polling interval in
+`Actor::run`. Its select branch will only call `poll_interactive_exits`; the
+existing idle timer remains responsible for RPC worker reaping. Preserve the
+pool ownership and watcher semantics.
+
+Planned verification: Add an actor-level regression test with a 60-second idle
+reap timeout and a naturally exiting interactive child, first confirming its
+watch receiver times out on current code, then confirming prompt delivery after
+the dedicated timer is added. Run `cargo test -p pi-agent-supervisor`,
+`cargo test -p admin-rpc`, and `cargo fmt --all -- --check` from
+`the-intern/service`.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
