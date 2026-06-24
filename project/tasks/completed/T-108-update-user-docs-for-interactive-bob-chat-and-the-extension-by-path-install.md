@@ -2,7 +2,7 @@
 id: T-108
 title: Update user docs for interactive bob chat and the extension by-path 
   install
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-06-23'
