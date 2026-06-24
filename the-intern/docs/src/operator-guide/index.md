@@ -346,7 +346,7 @@ fire while the service is running, so every execution has a full audit trail.
 Operators who need guaranteed delivery across restarts should keep bob running
 under a process supervisor such as systemd.
 
-### Configuring scheduled jobs in `bob.toml`
+### Configuring scheduled jobs in `config.toml`
 
 Add one `[[schedule]]` table per job. Each entry requires three fields:
 
@@ -435,7 +435,7 @@ bob schedule remove --id "check-email"
 #### `bob schedule reload`
 
 Re-read the `[[schedule]]` section of the config file and replace the active
-job list with the updated contents. Use this after editing `bob.toml` by hand:
+job list with the updated contents. Use this after editing `config.toml` by hand:
 
 ```bash
 bob schedule reload
