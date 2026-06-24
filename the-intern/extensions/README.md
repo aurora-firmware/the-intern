@@ -17,7 +17,7 @@ only to talk to the service — but they are **distinct artifacts**:
 | **Location** | `the-intern/service/` | `the-intern/extensions/` |
 | **Runtime** | Managed by the OS / systemd / docker | Loaded inside each `pi` process by pi's own extension loader |
 | **Lifecycle** | Long-running server process | One instance per `pi` session, torn down with the pi process |
-| **Install path** | System PATH or container image | pi's extension search path (see below) |
+| **Install path** | System PATH or container image | Resolved by bob at startup (see Installation below) |
 
 The bob service spawns `pi` processes and controls their environment. The bob
 extension runs *inside* those pi processes and uses the environment variables
@@ -76,40 +76,61 @@ cat /proc/<pi-pid>/environ | tr '\0' '\n' | grep -E '^BOB_'
 ## Installation
 
 The bob extension is shipped as source only. No npm publish, no build
-artifact, no `pi install` command is invoked by the bob service itself. An
-operator places the extension into one of pi's own discovery directories.
+artifact, and no `pi install` command is involved. **Bob resolves the extension
+path itself at startup and passes it to pi via `pi --extension <path>`.**
 
-### Install Paths
+### Default Extension Location
 
-| Scope | Path | When to use |
-|---|---|---|
-| Per-user (global) | `~/.pi/agent/extensions/bob.ts` | The extension should apply to all projects on this machine |
-| Per-project | `<project>/.pi/extensions/bob.ts` | The extension should apply only within one project directory |
+Bob resolves the extension from the XDG data-home directory. The default path
+on Linux and macOS is:
 
-Both paths are pi's own discovery directories; the bob service plays no role in
-extension discovery or loading.
+| Platform | Default path |
+|---|---|
+| Linux | `~/.local/share/bob/extensions/bob.ts` |
+| macOS | `~/Library/Application Support/bob/extensions/bob.ts` |
 
-**Example — per-user install:**
+When `XDG_DATA_HOME` is set, bob uses `$XDG_DATA_HOME/bob/extensions/bob.ts`
+instead of the platform-specific default.
 
-```sh
-mkdir -p ~/.pi/agent/extensions
-cp /path/to/the-intern/extensions/bob.ts ~/.pi/agent/extensions/bob.ts
-```
-
-**Example — per-project install (run from the project root):**
+Place the extension file at the resolved path before starting `bob serve`:
 
 ```sh
-mkdir -p .pi/extensions
-cp /path/to/the-intern/extensions/bob.ts .pi/extensions/bob.ts
+# Linux example (default path)
+mkdir -p ~/.local/share/bob/extensions
+cp /path/to/the-intern/extensions/bob.ts ~/.local/share/bob/extensions/bob.ts
 ```
 
-### Running Without the Extension
+### Overriding the Extension Path
 
-Installing the bob extension is **optional**. If `bob.ts` is not in any pi
-discovery directory, `bob serve` runs unchanged: prompts reach pi over
-`runRpcMode()`, tool calls execute, and no event-forwarding observability is
-added. The bob service emits no error and behaves identically to a pre-Phase-3
-deployment.
+Set `extension_path` in `config.toml` to point bob at any file you choose:
+
+```toml
+extension_path = "/opt/my-company/bob-extension.ts"
+```
+
+The `BOB_EXTENSION_PATH` environment variable is also accepted at startup and
+overrides the config-file value with the same precedence rules as other
+`BOB_*` variables.
+
+### How bob passes the extension to pi
+
+On every pi spawn, bob appends `--extension <resolved_path>` to the pi command
+line. Pi's extension loader reads this flag and loads the file before accepting
+any prompts.
+
+### Fail-closed on missing file
+
+Bob checks that the resolved extension file exists as a regular file **before**
+spawning each pi process. If the file is absent, bob refuses to spawn and
+returns an error naming the expected path:
+
+```
+pi extension file does not exist at expected path '<resolved_path>'
+```
+
+No pi session is started. This behaviour is intentional: the bob extension is
+the `tool_call` authorisation membrane (S-004), and a session must not run
+without it.
 
 ---
 
