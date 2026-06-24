@@ -158,3 +158,18 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-24
+
+PASS
+
+Stage 1 passed: the Diagnosis Log contains the full evidence chain and the
+branch fix directly addresses the omitted production mapping. Both Fix
+Verification suites passed outside the restricted Unix-socket sandbox, and the
+red/green regression test covers every mapped field plus exclusion of RPC-mode
+arguments. No unrelated implementation files changed.
+
+Stage 2 passed: the mapper is focused and readable, introduces no new input or
+security surface, and the service composition explicitly supplies the
+configuration that admin-RPC already supports. The change is minimal and
+matches the diagnosis contract.
