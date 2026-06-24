@@ -50,6 +50,18 @@ cd the-intern/docs && mdbook build
 
 <!-- Mandatory. Append one entry per session boundary. -->
 
+### Session 1 — 2026-06-24
+
+Replaced the obsolete `chat.open`/`chat.send` REPL documentation with the shipped service-required, supervised interactive pi flow. Documented terminal attachment, service ownership, extension authorization, session exit behavior, and the clear failure when `bob serve` is unreachable.
+
+Added operator installation guidance for the XDG data default, macOS path, `extension_path`/`BOB_EXTENSION_PATH` overrides, `pi --extension`, and fail-closed missing-extension behavior. Added matching extension-loading details to the extension-author guide.
+
+The initial content assertion failed because supervised interactive chat was undocumented. After the edits, all positive assertions passed and obsolete chat protocol references were absent. `mdbook build` completed successfully.
+
+**Obstacles Encountered:** None. The build emitted the existing mdbook-mermaid version mismatch warning but no errors.
+
+**What remains:** Nothing.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
