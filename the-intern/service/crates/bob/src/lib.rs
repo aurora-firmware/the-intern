@@ -1,4 +1,7 @@
-#![forbid(unsafe_code)]
+// bob allows unsafe code only in the SCM_RIGHTS fd-passing helper in
+// cli/commands/chat.rs (send_fds_via_scm_rights). All other code in this
+// crate uses no unsafe code. The workspace lint is "deny", so any unsafe
+// block outside the targeted #[allow(unsafe_code)] site still triggers an error.
 
 use async_trait::async_trait;
 use bob_core::error::ServiceResult;
