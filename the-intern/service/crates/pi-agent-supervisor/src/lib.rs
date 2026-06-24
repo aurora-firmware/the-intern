@@ -18,6 +18,8 @@ use tokio::{
     time::{self, MissedTickBehavior},
 };
 
+const INTERACTIVE_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub worker_command: String,
@@ -81,9 +83,9 @@ enum Command {
     },
     /// Subscribe to the exit event of an interactive session.
     ///
-    /// The actor removes the session from the pool, spawns a background task
-    /// that waits for the child to exit, and immediately sends the caller a
-    /// [`oneshot::Receiver`] that fires when the child exits.
+    /// The actor retains the session in the pool so it remains killable and
+    /// sends the caller a [`oneshot::Receiver`] that fires when the dedicated
+    /// interactive-exit poll detects that the child has exited.
     ///
     /// Returns `ServiceError::InvalidRequest` if no interactive session with
     /// the given id exists.
@@ -160,10 +162,10 @@ impl Handle {
 
     /// Subscribes to the exit event of a running interactive session.
     ///
-    /// The actor removes the session from the pool and spawns a background
-    /// task that calls `child.wait()`.  The caller receives a
-    /// [`oneshot::Receiver<()>`] that resolves when the child exits (either
-    /// naturally or after `kill_session`).
+    /// The actor retains the session in the pool so it remains killable. The
+    /// caller receives a [`oneshot::Receiver<()>`] that resolves when the
+    /// dedicated interactive-exit poll detects a natural exit or after
+    /// `kill_session` terminates the child.
     ///
     /// # Errors
     ///
@@ -246,6 +248,8 @@ impl Actor {
         let mut reap_tick =
             time::interval(self.cfg.idle_reap_timeout.max(Duration::from_millis(1)));
         reap_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut interactive_exit_tick = time::interval(INTERACTIVE_EXIT_POLL_INTERVAL);
+        interactive_exit_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         loop {
             tokio::select! {
@@ -304,9 +308,9 @@ impl Actor {
                             );
                             // Register a watcher WITHOUT taking the process from the pool.
                             // The process stays in `interactive_sessions` so `kill_session`
-                            // can still terminate it (AC-3).  The reap tick polls
-                            // `try_poll_exit()` and fires the sender when the child exits
-                            // naturally (AC-2).
+                            // can still terminate it (AC-3). The dedicated interactive
+                            // exit tick polls `try_poll_exit()` and fires the sender when
+                            // the child exits naturally (AC-2).
                             let (exit_tx, exit_rx) = oneshot::channel::<()>();
                             match self.pool.register_interactive_exit_watcher(session_id, exit_tx) {
                                 Ok(()) => {
@@ -357,12 +361,10 @@ impl Actor {
                         }
                     }
                 }
-                _ = reap_tick.tick() => {
-                    // Poll interactive sessions for natural exits (AC-2 / T-105).
-                    // This fires registered exit watchers for any child that has
-                    // already exited without needing a blocking wait().
+                _ = interactive_exit_tick.tick() => {
                     self.pool.poll_interactive_exits();
-
+                }
+                _ = reap_tick.tick() => {
                     match self.pool.reap_idle_and_surplus().await {
                         Ok(report) if report.total_reaped() > 0 => {
                             tracing::info!(
@@ -727,6 +729,49 @@ mod tests {
             sessions.contains(&session_id),
             "list_sessions must include the interactive session id; got {sessions:?}"
         );
+
+        task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn interactive_exit_watcher_is_not_delayed_by_idle_reap_timeout() {
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let mut cfg = test_config("sh", &["-c", "exit 0"], 0, 4);
+        cfg.idle_reap_timeout = Duration::from_secs(60);
+        let (handle, task) = start(cfg).expect("startup should succeed");
+
+        // Let the idle interval's immediate first tick complete before the
+        // interactive child starts, so this test exercises later exit polling.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let stdin_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stdout_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stderr_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let session_id = handle
+            .start_interactive_session(
+                "sh".to_string(),
+                vec!["-c".to_string(), "exit 0".to_string()],
+                Duration::from_secs(2),
+                SessionId::new(),
+                std::path::PathBuf::new(),
+                std::env::current_exe().expect("current executable should exist"),
+                stdin_fd,
+                stdout_fd,
+                stderr_fd,
+            )
+            .await
+            .expect("interactive session should start");
+        let exit_rx = handle
+            .watch_interactive_session_exit(session_id)
+            .await
+            .expect("interactive exit watcher should register");
+
+        tokio::time::timeout(Duration::from_secs(2), exit_rx)
+            .await
+            .expect("natural exit notification must not wait for idle reaping")
+            .expect("interactive exit watcher sender should fire");
 
         task.abort();
     }
