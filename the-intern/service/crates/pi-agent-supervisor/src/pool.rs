@@ -197,8 +197,8 @@ impl SessionPool {
     ///
     /// For each session whose child process has exited (detected via
     /// `try_poll_exit()`), fires the exit watcher and removes the session from
-    /// the pool.  Called from the actor's periodic reap tick so that natural
-    /// exits are detected promptly without blocking (AC-2).
+    /// the pool. Called from the actor's dedicated interactive-exit tick so
+    /// natural exits are detected promptly without blocking (AC-2).
     pub fn poll_interactive_exits(&mut self) {
         let exited: Vec<SessionId> = self
             .interactive_exit_watchers
