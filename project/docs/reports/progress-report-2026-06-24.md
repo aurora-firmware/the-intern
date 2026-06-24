@@ -8,7 +8,7 @@ created: 2026-06-24
 
 ## Summary
 
-Active specs: 9. Pending tasks: 0. In progress tasks: 0. Completed tasks: 108. Blocked tasks: 0. Open bugs: 0. Bugs in progress: 0. Resolved bugs: 13. ADRs: 11. Latest integration result: chore(tasks): merge T-108 update interactive chat docs.
+Active specs: 9. Pending tasks: 0. In progress tasks: 0. Completed tasks: 108. Blocked tasks: 0. Open bugs: 0. Bugs in progress: 0. Resolved bugs: 15. ADRs: 11. Latest integration result: chore(bugs): merge B-015 prompt exit notification.
 
 ## Specifications
 
@@ -26,7 +26,7 @@ Active specs: 9. Pending tasks: 0. In progress tasks: 0. Completed tasks: 108. B
 
 ## Integration Evidence
 
-- Latest integration-test result: chore(tasks): merge T-108 update interactive chat docs
+- Latest integration-test result: chore(bugs): merge B-015 prompt exit notification
 - Source: git log --all --grep=merge|integration|verification|test -n 1
 - Date: 2026-06-24
 
@@ -172,6 +172,8 @@ Active specs: 9. Pending tasks: 0. In progress tasks: 0. Completed tasks: 108. B
 | B-011 | bob serve waits for shutdown timeouts after Ctrl-C or SIGTERM | medium | resolved | complete |
 | B-012 | B-009 gated extension.sock bind regressed startup failure handling and shutdown connection draining | medium | resolved | complete |
 | B-013 | admin-rpc dispatch sessions.list/kill tests fail under T-101 extension fail-closed gate | high | resolved | complete |
+| B-014 | Bob serve omits interactive pi spawn configuration | medium | resolved | complete |
+| B-015 | Interactive pi exit notification waits for idle reaper | medium | resolved | complete |
 
 ## Decisions
 
