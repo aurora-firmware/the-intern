@@ -60,6 +60,53 @@ cd the-intern/service && cargo test --workspace
 
 <!-- Mandatory. Append one entry per session boundary. -->
 
+### Session 1 — 2026-06-24
+
+Retired the admin-socket interactive-chat dispatch path and removed the chat
+admission stopgap.
+
+**Key decisions and boundary notes (for the reviewer):**
+
+1. **chat-adapter crate removed entirely** — it had no callers after removing
+   admin-rpc's dependency. The workspace `members = ["crates/*"]` glob made this
+   automatic once the directory was deleted. The scheduler-adapter never depended
+   on it (confirmed by grep — the scheduler uses `requests-handler::Handle`
+   directly). The "channel-adapter framework" the task asked to preserve for the
+   scheduler is the generic intake/supervision in `requests-handler`, which is
+   untouched; the chat-adapter crate itself was interactive-chat-specific and had
+   no remaining consumer.
+
+2. **ChannelsConfig / ChatChannelConfig removed from BobConfig** — these fields
+   served only to gate chat-adapter startup in `serve.rs`. With the chat-adapter
+   gone, the config structs are dead weight. `shell_e2e.rs` was the only external
+   consumer; updated there.
+
+3. **`admitted_users` stopgap fully removed** — the `scripts/bob-dev-config/`
+   tree is gone along with the `XDG_CONFIG_HOME` override in `scripts/bob-dev.sh`.
+   Per ADR-010 the new `bob chat` is socket-gated; no pre-flight identity
+   admission is needed.
+
+4. **Preserved untouched**: `SubscriptionBus`, the `audit.tail.*` handlers and
+   tests, all `session.interactive.*` handlers and tests (the new T-104/105/106
+   path), `scheduler-adapter`, `requests-handler`, the `ConnectionRegistry` audit
+   path, and the `admin_rpc.rs` client tests.
+
+5. **Two commits as specified**: service-code retirement first
+   (`767b444 feat(admin-rpc,bob): retire admin-socket interactive-chat dispatch`,
+   13 files, -3138 lines), then scripts cleanup
+   (`305589b fix(scripts): remove chat admission stopgap from dev environment`).
+
+**Obstacles Encountered:** A previous working session had removed the production
+code but left a second batch of `chat.send` tests in `dispatch.rs` that still
+referenced deleted types; that removal was completed cleanly in this session.
+
+**What remains:** nothing for this task.
+
+Evidence: `cargo build --workspace` clean after each change set; `cargo test
+--workspace` 25 suites all `ok`, 0 failed; `cargo fmt --all -- --check` clean.
+Commits `767b444`, `305589b` on branch
+`task/T-107-retire-the-admin-socket-interactive-chat-path-and-remove-the-chat-admission-stopgap`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
