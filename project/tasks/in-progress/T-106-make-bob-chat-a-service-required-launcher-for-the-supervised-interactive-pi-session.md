@@ -138,3 +138,82 @@ clean.
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
+
+### Review Verdict — 2026-06-24
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1 (service reachable → opens supervised interactive pi session, connects
+  terminal): Met. `run_interactive_session` connects to `admin.sock`, performs
+  the four-step `session.interactive.open` handshake, and calls
+  `send_fds_via_scm_rights` with stdin/stdout/stderr fds. The
+  `opens_interactive_session_and_exits_when_session_exits` test verifies the
+  full handshake end-to-end with a fake server.
+
+- AC-2 (service not running → clear error, non-zero exit, no bare-pi fallback):
+  Met. `UnixStream::connect` failure maps to `service_not_running_error` which
+  produces a human-readable message referencing the service and socket path. No
+  `Command::new("pi")` or equivalent spawn call exists anywhere in the new
+  `chat.rs` production code. The `exits_with_clear_error_when_service_is_not_running`
+  test verifies the error message.
+
+- AC-3 (interactive session ends → `bob chat` exits): Met. `wait_for_session_exited_notification`
+  loops on frames and returns when `session.interactive.exited` is received. The
+  negative case (`returns_service_down_when_server_closes_connection_before_exited`)
+  verifies that a dropped connection before `exited` returns an error rather than
+  hanging.
+
+- AC-4 (old `chat.open`/`chat.send` REPL removed from client): Met. All of
+  `ChatSubscription`, `ChatInputLines`, `StdinLines`, `run_with_parts`,
+  `run_with_parts_async`, `build_chat_send_params`, and `write_chat_notification`
+  are gone from `chat.rs`. Remaining `chat.open`/`chat.send` references are
+  in `client/admin_rpc.rs` tests (testing the generic `Subscription<T>` transport
+  machinery, not the `bob chat` command) and `tests/chat_e2e.rs` (integration
+  tests for the server-side admin-RPC actor). Neither file was modified by this
+  task; both are out of this task's scope.
+
+- AC-5 (`cargo test -p bob` passes): Met. Confirmed locally: 119 unit tests +
+  1 main binary test + 3 chat_e2e + 3 non_serve + 1 queue_load + 2 session_state
+  + 5 shell_e2e = all passed, 0 failed.
+
+**Additional checks (flagged items)**
+
+- `bob/src/lib.rs` `#![forbid(unsafe_code)]` removal: Acceptable. The
+  crate-level `forbid` was the minimal blocker — it prevented the
+  function-level `#[allow(unsafe_code)]` from taking effect. The workspace lint
+  `unsafe_code = "deny"` remains in force for all other code in the crate.
+  This is the same pattern used in `admin-rpc/src/lib.rs` (T-105). No ADR is
+  warranted: the SCM_RIGHTS path is already covered by ADR-011 and the unsafe
+  surface is actually zero (nix's `sendmsg` is a safe Rust API; the
+  `#[allow(unsafe_code)]` annotation is a conservative measure whose scope is
+  narrowed to a single function).
+
+- `bob/Cargo.toml` `nix` feature additions (`socket`, `uio`): Minimal and
+  correct. Both features are required for `sendmsg` and `IoSlice` respectively.
+
+- Old REPL removal completeness: Confirmed complete within the `bob chat`
+  client. No dead REPL types or tests remain in `chat.rs`.
+
+- Files touched outside declared "Files to Touch": `lib.rs` and `Cargo.toml`
+  changes are necessary enablers for the implementation. No files outside the
+  `bob` crate were modified.
+
+**Stage 2 — Code Quality**
+
+- Correctness: Protocol sequencing matches ADR-011 (open → await_fds →
+  sendmsg anchor → success response → exited). Error paths for missing socket,
+  malformed frames, and early connection close are all handled.
+- Tests: Four new tests cover AC-2 (socket absent), AC-1+AC-3 (happy path),
+  AC-3 negative (early close), and AC-4 (compile-time signature check). Both
+  success and failure paths are covered.
+- Security: No hardcoded secrets. Socket path comes from config. No external
+  input is interpreted unsafely.
+- Readability: Functions are focused and well-commented. Protocol steps are
+  numbered in the module-level doc comment and inline. No dead code.
+- Performance: Single connection, no unnecessary allocations. Frame reading uses
+  `BufReader` line-at-a-time. No resource leaks visible.
+
+`cargo fmt --all -- --check` and `cargo test --workspace` both passed on
+commit `3dfa07e`.
