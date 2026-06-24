@@ -2,7 +2,7 @@
 id: T-106
 title: Make bob chat a service-required launcher for the supervised interactive 
   pi session
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-06-23'
