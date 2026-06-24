@@ -193,3 +193,37 @@ remaining issue was found by comparing terminology across the edited operator
 chapter and ADR-009.
 
 Next owner: Developer via the active Development Loop.
+
+### Review Verdict — 2026-06-24
+
+PASS
+
+Stage 1 passed. AC-1 is met by the end-user guide's supervised interactive pi
+flow, explicit running-service precondition, terminal attachment, session-exit
+behavior, and no-service error. AC-2 is met by the operator and extension-author
+guides' XDG data defaults, `extension_path`/`BOB_EXTENSION_PATH` overrides,
+`pi --extension` mechanism, and fail-closed missing-file behavior. AC-3 was
+verified on the submitted branch snapshot: `mdbook build` completed without
+errors using the existing built `bob` binary through `BOB_BIN`; only the known
+mdbook-mermaid version warning was emitted.
+
+All prior FAIL findings are resolved. The operator guide describes scheduler
+configuration and direct supervised chat without a deleted chat adapter; the
+extension-author guide uses the shipped scheduler adapter and current intake
+contract; the architecture overview describes the current admin socket,
+scheduler, queue, and direct interactive-session paths; and both scheduled-job
+filename references now use ADR-009's shipped `config.toml`. Repository-wide
+semantic searches under `the-intern/docs/src/` found no remaining stale
+chat-subscription, deleted chat-adapter, unimplemented-scheduler, or `bob.toml`
+claim.
+
+Stage 2 passed. The documentation matches the relevant shipped implementation
+and source-of-truth artifacts, the four changed mdBook chapters are necessary to
+remove the cross-chapter contradictions, headings and links remain coherent,
+and no unrelated behavior or files were added. `git diff --check` passes.
+
+**Obstacles Encountered:** None. The build required the repository's existing
+built `bob` binary for the CLI-reference preprocessor, as documented; this did
+not block verification.
+
+Next owner: active Development Loop.
