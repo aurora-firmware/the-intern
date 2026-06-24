@@ -202,24 +202,25 @@ For details on the policy file format and where it lives, see the
 
 ## `bob chat`
 
-Open an interactive chat session with the Intern.
+Open a supervised interactive pi session in your terminal.
 
-`bob chat` opens a chat subscription and then reads lines from stdin. Each line
-is sent to the service as a `chat.send` request. Replies delivered by the
-service arrive as `chat.message` notifications and are printed to stdout as they
-come in — send and receive happen concurrently on the same connection. Press
-Ctrl-C or close stdin (Ctrl-D) to end the session.
+`bob chat` is a front end to a running `bob serve` process. It asks the service
+to start an interactive `pi` child and attaches your terminal's standard input,
+output, and error streams to that child. The resulting interface is pi's own
+interactive session, not a line-oriented bob REPL.
 
-Each message you send carries a self-asserted application identity (a UUID
-configured as `chat_application_identity`). The service uses this identity for
-pre-flight admission checks and policy decisions before the message reaches the
-request queue. This design is described at the architecture level in ADR-005;
-as a user you only need to know that your `bob.toml` controls which identity
-is presented on your behalf.
+The service owns and supervises the pi process. It assigns the session id,
+configures the extension socket, loads the bob extension, exposes the session
+through `bob sessions list`, and reaps it on exit. The extension's blocking
+`tool_call` authorization hook remains active throughout the session.
 
-Use `bob chat` when you want to converse directly with the Intern from the
-command line. Use `--session` to associate messages with a specific conversation
-context.
+Before running `bob chat`:
+
+1. Install `bob.ts` at the configured extension path as described in the
+   [Operator & Deployer Guide](../operator-guide/index.md#install-the-bob-extension).
+2. Start `bob serve` and leave it running.
+3. Set `BOB_ADMIN_SOCK_PATH` in the client shell if the service uses a socket
+   override.
 
 **Example — start a new chat:**
 
@@ -227,78 +228,14 @@ context.
 bob chat
 ```
 
-Type a message and press Enter. Press Ctrl-C to close the session.
+Use pi normally. When the pi process exits, `bob chat` exits too.
 
-**Example — attach to an existing conversation context:**
+If the service is not reachable, `bob chat` exits non-zero with an error such
+as:
 
-```bash
-bob chat --session session-abc123
+```text
+bob service is not running — cannot reach admin socket at <path>
 ```
 
-`--session` sets the `context_id` carried by every `chat.send` request on this
-session. The service uses it to route messages to the right conversation
-context. Omitting `--session` sends messages without a context id, which is
-fine for a fresh conversation.
-
-**Example — pipe input non-interactively:**
-
-```bash
-echo "Summarise the last three commits" | bob chat
-```
-
-`bob chat` sends the line and exits when stdin closes.
-
-**Example — JSON output for downstream processing:**
-
-```bash
-bob chat --json
-```
-
-With `--json`, each notification from the service is printed as a single JSON
-object on its own line. The output is the data payload extracted from the
-notification, for example:
-
-```json
-{"text":"<reply text>"}
-```
-
-This makes the output easy to parse with `jq` or a script. The full wire-level
-notification shape (including `params.subscription` and `params.data`) is
-documented in the Wire contract section below.
-
-**Wire contract**
-
-`chat.open` is sent without parameters when the session starts. The service
-returns a subscription id that is used automatically for the rest of the
-session.
-
-Each `chat.send` request carries:
-
-| Field | Required | Description |
-|---|---|---|
-| `id` | yes | Subscription id from `chat.open` |
-| `text` | yes | The message text typed by the user |
-| `application_identity` | yes | UUID identifying the sending application (from `bob.toml`) |
-| `context_id` | no | Conversation context; set by `--session` |
-
-Reply notifications arrive as `chat.message` frames on the same connection. Each
-notification carries:
-
-| Field | Description |
-|---|---|
-| `params.subscription` | The subscription id that identifies the open chat session |
-| `params.data` | The reply payload object |
-| `params.data.text` | Human-readable reply string |
-
-**Current limitation — reply generation requires Phase 2**
-
-The push channel is in place: `chat.message` notifications are delivered to the
-subscribing client whenever a reply is injected at the service's delivery
-interface. However, the component that generates replies (the pi-agent prompt
-pipeline, roadmap Phase 2) has not yet landed. In production today, `bob chat`
-sends messages successfully and the service accepts them, but no reply is
-produced and nothing is printed. Only tests exercise the full round-trip by
-injecting replies directly at the service boundary.
-
-Once the Phase 2 pipeline is integrated, replies will appear automatically
-without any change to the `bob chat` command or its flags.
+It does not fall back to launching an unsupervised pi process. Check that
+`bob serve` is running and that both shells resolve the same admin socket path.

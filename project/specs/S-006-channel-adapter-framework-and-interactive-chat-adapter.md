@@ -27,6 +27,17 @@ and passes through the existing Requests Handler pre-flight. The remaining
 S-001 Phase 6 channels (email, scheduler) follow in their own specs,
 reusing the framework this spec establishes.
 
+> **Amended (CR-002, 2026-06-23).** The **channel-adapter framework** (intake
+> handle, channel configuration, supervision wiring — Components 1–3) remains in
+> force and underpins later channels (for example the scheduler adapter, S-009).
+> The **interactive-chat adapter** (Component 4 — the `admin.sock` chat
+> subscription → normalize → intake path) is **superseded for interactive chat**:
+> under CR-002, `bob chat` drives a supervised, directly-launched `pi` session
+> instead of feeding this adapter, so interactive chat no longer flows through the
+> admin-socket chat subscription. The adapter path is retained only as a possible
+> basis for a future programmatic chat-over-`admin.sock` channel (none today). See
+> also S-008 (superseded) and ADR-010 (chat admission exemption).
+
 ## Exclusions
 
 What this specification explicitly does NOT cover:
@@ -209,3 +220,9 @@ acknowledgement-or-error of ADR-004. The agent's answer being routed back to the
   scheduler each carry channel-specific transport concerns. Establishing the
   framework with chat first keeps this spec small and lets each remaining channel
   be specified with its transport properly considered.
+
+## Amendment Log
+
+| Date | What changed | Why | Affected tasks |
+|------|-------------|-----|----------------|
+| 2026-06-23 | Interactive-chat adapter (Component 4) superseded for interactive chat; channel-adapter framework (Components 1–3) retained. | CR-002 routes interactive chat through a supervised direct `pi` session, bypassing the admin-socket chat subscription. | TBD (CR-002 breakdown) |

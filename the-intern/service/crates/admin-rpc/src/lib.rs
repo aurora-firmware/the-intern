@@ -1,13 +1,21 @@
-#![forbid(unsafe_code)]
+// admin-rpc allows unsafe code in the fd-passing helper function only
+// (receive_interactive_fds). All other code in this crate uses no unsafe code.
+// The workspace lint is set to "deny" so unsafe elsewhere is still denied;
+// only the targeted #[allow(unsafe_code)] site uses it.
 
-pub mod chat_router;
 pub mod dispatch;
 pub mod listener;
 pub mod peer_cred;
 pub mod protocol;
 pub mod subscriptions;
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    io,
+    os::fd::{AsRawFd as _, FromRawFd as _, RawFd},
+    os::unix::io::OwnedFd,
+    path::PathBuf,
+    time::Duration,
+};
 
 use serde_json::json;
 use tokio::{
@@ -55,23 +63,6 @@ pub struct Config {
     /// Maximum time the write task waits for a slow subscriber's send before
     /// dropping its subscription.
     pub slow_subscriber_deadline: Duration,
-    /// Optional chat-adapter frame-delivery handle.
-    ///
-    /// When `Some`, `chat.send` requests are forwarded to the chat adapter.
-    /// When `None` (the default), `chat.send` returns a JSON-RPC error
-    /// indicating that the chat channel is not available.
-    pub chat_adapter: Option<chat_adapter::FrameHandle>,
-    /// Optional chat reply router.
-    ///
-    /// When `Some`, `chat.open` registers with this router and the connection
-    /// loop spawns a forwarder that delivers replies as `chat.message`
-    /// notifications.  When `None` (the default), an internal router is created
-    /// automatically — production `serve.rs` requires no change.
-    ///
-    /// Pass a router created externally (via `Arc<ChatReplyRouter>`) to retain a
-    /// `DeliveryHandle` clone for in-process injection (used by integration tests
-    /// in T-090).
-    pub chat_router: Option<std::sync::Arc<crate::chat_router::ChatReplyRouter>>,
     /// Optional scheduler-adapter reload handle.
     ///
     /// When `Some`, `schedule.*` methods (T-097) can push updated job tables to
@@ -84,6 +75,34 @@ pub struct Config {
     /// to persist changes.  When `None` (the default), those methods return
     /// `-32601 Method not found`.
     pub config_path: Option<std::path::PathBuf>,
+    /// Configuration for spawning interactive pi sessions (T-105 / ADR-011).
+    ///
+    /// When `Some`, `session.interactive.open` uses these values to spawn the
+    /// child process.  When `None` (the default), the built-in defaults are used:
+    /// command `"pi"`, no extra args, 10-second deadline, and the current process
+    /// executable as the extension path (the latter is overridden in production by
+    /// the real `bob.ts` extension path).
+    pub interactive_session: Option<InteractiveSessionConfig>,
+}
+
+/// Spawn parameters used by `session.interactive.open` (T-105 / ADR-011).
+///
+/// These mirror the subset of `pi_agent_supervisor::Config` that applies to
+/// interactive (non-RPC) pi sessions.  All fields are required when the struct
+/// is provided.
+#[derive(Clone, Debug)]
+pub struct InteractiveSessionConfig {
+    /// The pi command to execute (e.g. `"pi"`).
+    pub command: String,
+    /// Arguments passed to pi (empty for default interactive mode).
+    pub args: Vec<String>,
+    /// Maximum time to wait for the child to exit after SIGTERM before SIGKILL.
+    pub child_termination_deadline: Duration,
+    /// Absolute path to the extension socket set as `BOB_EXTENSION_SOCK_PATH`.
+    /// Pass an empty `PathBuf` to leave the variable unset.
+    pub extension_sock_path: PathBuf,
+    /// Resolved path to the pi extension file passed as `--extension <path>`.
+    pub extension_path: PathBuf,
 }
 
 impl Default for Config {
@@ -96,10 +115,9 @@ impl Default for Config {
             monitoring: None,
             audit_bus: None,
             slow_subscriber_deadline: Duration::from_secs(5),
-            chat_adapter: None,
-            chat_router: None,
             scheduler: None,
             config_path: None,
+            interactive_session: None,
         }
     }
 }
@@ -200,16 +218,8 @@ async fn run_connection_with_shutdown(
     // Notification channel: forwarder tasks → write task.
     let (notif_tx, notif_rx) = mpsc::channel::<NotifMsg>(64);
 
-    // Build the per-connection registry and attach the chat router so the
-    // registry can deregister chat subscriptions on connection drop (AC-3/T-086).
-    let registry = {
-        let r = ConnectionRegistry::new();
-        if let Some(router) = dispatcher.chat_router() {
-            r.with_chat_router(router)
-        } else {
-            r
-        }
-    };
+    // Build the per-connection registry.
+    let registry = ConnectionRegistry::new();
 
     // Spawn the write task first so it is ready to receive messages.
     let write_task = tokio::spawn(write_loop(write_half, out_rx, notif_rx));
@@ -231,6 +241,11 @@ async fn run_connection_with_shutdown(
 }
 
 /// Drives the inbound frame loop for one connection.
+///
+/// Tracks an optional active interactive session (`active_interactive`).
+/// When the connection closes (EOF, parse error, I/O error, or shutdown),
+/// the loop calls `supervisor.kill_session(session_id)` to terminate the
+/// pi process (AC-3).
 async fn read_loop(
     shutdown_rx: &mut watch::Receiver<bool>,
     mut reader: BufReader<tokio::net::unix::OwnedReadHalf>,
@@ -239,6 +254,11 @@ async fn read_loop(
     out_tx: mpsc::Sender<OutboundMsg>,
     notif_tx: mpsc::Sender<NotifMsg>,
 ) {
+    // AC-3: track the session_id of any active interactive session opened on
+    // this connection so it can be killed when the connection closes.
+    let mut active_interactive: Option<(bob_core::types::SessionId, pi_agent_supervisor::Handle)> =
+        None;
+
     loop {
         let frame_read = tokio::select! {
             biased;
@@ -293,33 +313,19 @@ async fn read_loop(
                             .await
                             .is_ok()
                     }
-                    DispatchOutcome::ChatSubscribed {
-                        response,
-                        id,
-                        rx,
-                        cancel_rx,
-                    } => {
-                        // Send the response frame first.
-                        if out_tx
-                            .send(OutboundMsg::Frame(serialize_frame(&response)))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                        // Spawn a forwarder task that delivers chat reply payloads
-                        // to the write task via the notification channel.
-                        let ntx = notif_tx.clone();
-                        tokio::spawn(chat_forwarder(id, rx, cancel_rx, ntx));
-                        true
-                    }
-                    DispatchOutcome::ChatUnsubscribed { response, id: _ } => {
-                        // The router and registry already removed the subscription;
-                        // the chat forwarder task will see its cancel signal and exit.
-                        out_tx
-                            .send(OutboundMsg::Frame(serialize_frame(&response)))
-                            .await
-                            .is_ok()
+                    // AC-1 / ADR-011: receive terminal fds via SCM_RIGHTS, start
+                    // interactive pi session, set up AC-2 exit watcher.
+                    DispatchOutcome::InteractiveSessionOpening { id, session_id } => {
+                        handle_interactive_session_opening(
+                            id,
+                            session_id,
+                            &reader,
+                            &dispatcher,
+                            &out_tx,
+                            &notif_tx,
+                            &mut active_interactive,
+                        )
+                        .await
                     }
                 };
                 if !ok {
@@ -343,8 +349,235 @@ async fn read_loop(
             }
         }
     }
-    // AC-5: `registry` drops here, cancelling all audit subscriptions and
+
+    // AC-3: terminate the interactive pi session when the client disconnects.
+    if let Some((session_id, supervisor)) = active_interactive.take() {
+        tracing::debug!(
+            session_id = %session_id,
+            "admin-rpc: client disconnected; terminating interactive session (AC-3)"
+        );
+        if let Err(e) = supervisor.kill_session(session_id).await {
+            tracing::debug!(
+                error = ?e,
+                session_id = %session_id,
+                "admin-rpc: kill_session on client disconnect returned error (session may have already exited)"
+            );
+        }
+    }
+
+    // `registry` drops here, cancelling all audit subscriptions and
     // removing all chat subscriptions from the bus.
+}
+
+/// Handles the `InteractiveSessionOpening` dispatch outcome.
+///
+/// 1. Reads three file descriptors from the socket via `SCM_RIGHTS` (ADR-011).
+/// 2. Calls `supervisor.start_interactive_session` with those fds (AC-1).
+/// 3. Sends a JSON-RPC success (or error) response.
+/// 4. If successful, spawns an exit-watcher task that sends a
+///    `session.interactive.exited` notification when pi exits (AC-2).
+/// 5. Records the session in `active_interactive` for cleanup on disconnect
+///    (AC-3 handled by the caller on `read_loop` exit).
+///
+/// Returns `true` to continue the connection loop, `false` to close it.
+async fn handle_interactive_session_opening(
+    id: serde_json::Value,
+    session_id: bob_core::types::SessionId,
+    reader: &BufReader<tokio::net::unix::OwnedReadHalf>,
+    dispatcher: &Dispatcher,
+    out_tx: &mpsc::Sender<OutboundMsg>,
+    notif_tx: &mpsc::Sender<NotifMsg>,
+    active_interactive: &mut Option<(bob_core::types::SessionId, pi_agent_supervisor::Handle)>,
+) -> bool {
+    use crate::dispatch::map_service_error;
+    use crate::protocol::{ErrorResponse, Response, CODE_METHOD_NOT_FOUND};
+
+    // Get supervisor handle (guaranteed present — dispatch would have returned
+    // Err(-32601) if supervisor was None).
+    let supervisor = match dispatcher.supervisor_handle() {
+        Some(h) => h,
+        None => {
+            let err = ErrorResponse::error(
+                id,
+                CODE_METHOD_NOT_FOUND,
+                "session.interactive.open: supervisor not available",
+                Some(serde_json::json!({ "method": "session.interactive.open" })),
+            );
+            return out_tx
+                .send(OutboundMsg::Frame(serialize_frame(&err)))
+                .await
+                .is_ok();
+        }
+    };
+
+    // Get the raw socket fd from the read half so we can call recvmsg on it.
+    // OwnedReadHalf implements AsRef<UnixStream>, and UnixStream implements AsRawFd.
+    let raw_fd: RawFd = reader.get_ref().as_ref().as_raw_fd();
+
+    // Send "await_fds" notification BEFORE calling recvmsg.
+    //
+    // This is a mandatory synchronisation step to prevent a BufReader
+    // read-ahead race.  BufReader uses plain `read()` (not `recvmsg`), which
+    // discards ancillary data.  If the client sends the SCM_RIGHTS message
+    // before the server calls `recvmsg`, BufReader's next internal `read()`
+    // would consume the anchor byte and silently discard the fds.
+    //
+    // By sending this notification first the server gives the client a signal
+    // to send its fds only after the server has stopped using BufReader (i.e.
+    // is blocked in `spawn_blocking`/`recvmsg`).  The client MUST read this
+    // notification before calling `sendmsg`.
+    let await_notif = crate::protocol::Notification::new(
+        "session.interactive.await_fds",
+        serde_json::json!({ "session_id": session_id.to_string() }),
+    );
+    if out_tx
+        .send(OutboundMsg::Frame(serialize_frame(&await_notif)))
+        .await
+        .is_err()
+    {
+        return false;
+    }
+
+    // Receive the 3 terminal fds via SCM_RIGHTS (ADR-011 mechanism A).
+    // `recvmsg` is a blocking syscall, so we offload it to a blocking thread
+    // pool to avoid stalling the async runtime.
+    //
+    // The client MUST read the `session.interactive.await_fds` notification
+    // above before sending the SCM_RIGHTS message to guarantee that no
+    // BufReader read() has consumed the anchor byte.
+    let fd_result = tokio::task::spawn_blocking(move || receive_interactive_fds(raw_fd))
+        .await
+        .unwrap_or_else(|e| Err(io::Error::new(io::ErrorKind::Other, e.to_string())));
+
+    let [stdin_fd, stdout_fd, stderr_fd] = match fd_result {
+        Ok(fds) => fds,
+        Err(e) => {
+            tracing::warn!(error = %e, "admin-rpc: failed to receive SCM_RIGHTS fds");
+            let err = ErrorResponse::error(
+                id,
+                crate::protocol::CODE_INVALID_REQUEST,
+                "session.interactive.open: failed to receive stdio file descriptors",
+                Some(serde_json::json!({
+                    "category": "fd_receive_error",
+                    "reason": e.to_string(),
+                })),
+            );
+            return out_tx
+                .send(OutboundMsg::Frame(serialize_frame(&err)))
+                .await
+                .is_ok();
+        }
+    };
+
+    // Retrieve spawn parameters from the dispatcher config, falling back to
+    // production defaults (command "pi", no extra args, 10-second deadline).
+    let interactive_cfg =
+        dispatcher
+            .interactive_session_config()
+            .unwrap_or_else(|| InteractiveSessionConfig {
+                command: "pi".to_string(),
+                args: Vec::new(),
+                child_termination_deadline: Duration::from_secs(10),
+                extension_sock_path: PathBuf::new(),
+                extension_path: std::env::current_exe().unwrap_or_default(),
+            });
+
+    // AC-1: start the supervised interactive pi session.
+    let result = supervisor
+        .start_interactive_session(
+            interactive_cfg.command,
+            interactive_cfg.args,
+            interactive_cfg.child_termination_deadline,
+            session_id,
+            interactive_cfg.extension_sock_path,
+            interactive_cfg.extension_path,
+            stdin_fd,
+            stdout_fd,
+            stderr_fd,
+        )
+        .await;
+
+    match result {
+        Ok(started_id) => {
+            tracing::debug!(
+                session_id = %started_id,
+                "admin-rpc: interactive pi session started (AC-1)"
+            );
+
+            // Send success response to the client.
+            let resp = Response::ok(
+                id,
+                serde_json::json!({
+                    "ok": true,
+                    "session_id": started_id.to_string(),
+                }),
+            );
+            if out_tx
+                .send(OutboundMsg::Frame(serialize_frame(&resp)))
+                .await
+                .is_err()
+            {
+                // Write task gone; kill the session we just started before exiting.
+                let _ = supervisor.kill_session(started_id).await;
+                return false;
+            }
+
+            // AC-2: subscribe to the exit event; spawn a forwarder that sends
+            // `session.interactive.exited` when pi exits.
+            match supervisor.watch_interactive_session_exit(started_id).await {
+                Ok(exit_rx) => {
+                    let ntx = notif_tx.clone();
+                    let sup_for_cleanup = supervisor.clone();
+                    tokio::spawn(async move {
+                        // Wait for the child to exit (or for the watcher to be dropped).
+                        let _ = exit_rx.await;
+                        tracing::debug!(
+                            session_id = %started_id,
+                            "admin-rpc: interactive pi session exited; sending notification (AC-2)"
+                        );
+                        let notification = crate::protocol::Notification::new(
+                            "session.interactive.exited",
+                            serde_json::json!({ "session_id": started_id.to_string() }),
+                        );
+                        let _ = ntx
+                            .send(NotifMsg::Frame(serialize_frame(&notification)))
+                            .await;
+                        // Ensure the session is removed from the pool after natural exit.
+                        let _ = sup_for_cleanup.kill_session(started_id).await;
+                    });
+                    // AC-3: track the session for cleanup on client disconnect.
+                    // Note: the watcher task moved the session out of the pool via
+                    // `take_interactive_session`; `kill_session` after natural exit
+                    // will return InvalidRequest (not an error). On client disconnect
+                    // before pi exits, `kill_session` will terminate the child.
+                    *active_interactive = Some((started_id, supervisor));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = ?e,
+                        session_id = %started_id,
+                        "admin-rpc: failed to subscribe to interactive session exit"
+                    );
+                    // Still track for AC-3 cleanup even without AC-2 watcher.
+                    *active_interactive = Some((started_id, supervisor));
+                }
+            }
+
+            true
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = ?e,
+                session_id = %session_id,
+                "admin-rpc: start_interactive_session failed"
+            );
+            let err = map_service_error(id, &e);
+            out_tx
+                .send(OutboundMsg::Frame(serialize_frame(&err)))
+                .await
+                .is_ok()
+        }
+    }
 }
 
 /// Forwards Monitoring [`AuditRecord`]s from a tail subscription to the
@@ -397,54 +630,6 @@ async fn audit_forwarder(
     }
 }
 
-/// Forwards chat reply payloads from the per-subscription router queue to the
-/// notification channel as serialized `chat.message` JSON-RPC notification frames.
-///
-/// The forwarder exits cleanly when either:
-/// - `cancel_rx` fires (explicit `chat.close` or connection close), or
-/// - `rx` returns `None` (the router deregistered the subscription and dropped
-///   the send end of the queue).
-async fn chat_forwarder(
-    id: crate::subscriptions::AdminSubscriptionId,
-    mut rx: crate::chat_router::ChatReplyReceiver,
-    cancel_rx: tokio::sync::oneshot::Receiver<()>,
-    notif_tx: mpsc::Sender<NotifMsg>,
-) {
-    tokio::pin!(cancel_rx);
-    loop {
-        tokio::select! {
-            biased;
-            // Cancellation from chat.close or connection drop takes priority
-            // over pending messages so close is not delayed by a busy queue.
-            _ = &mut cancel_rx => {
-                return;
-            }
-            payload_opt = rx.recv() => {
-                match payload_opt {
-                    Some(payload) => {
-                        let notification = crate::protocol::Notification::new(
-                            "chat.message",
-                            json!({
-                                "subscription": id.to_string(),
-                                "data": payload,
-                            }),
-                        );
-                        let bytes = serialize_frame(&notification);
-                        if notif_tx.send(NotifMsg::Frame(bytes)).await.is_err() {
-                            // Write task is gone.
-                            return;
-                        }
-                    }
-                    None => {
-                        // Router closed the channel (deregistered); exit silently.
-                        return;
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Drives the outbound write loop for one connection.
 ///
 /// `select!`s between:
@@ -489,6 +674,99 @@ async fn write_loop(
             }
         }
     }
+}
+
+/// Receive exactly three file descriptors sent by the client via `SCM_RIGHTS`
+/// ancillary data over the Unix domain socket `fd`.
+///
+/// Per ADR-011, after the JSON-RPC `session.interactive.open` frame is sent
+/// by the client, the client sends a one-data-byte `sendmsg` with three fds
+/// (stdin, stdout, stderr) in `SCM_RIGHTS` ancillary data.  The single data
+/// byte anchors the message in the byte stream (a zero-byte `sendmsg` is
+/// silently discarded by Linux when the peer has already called `read()` on
+/// the socket).  This function reads that ancillary message and returns the
+/// three received `OwnedFd`s.
+///
+/// # Safety
+///
+/// `OwnedFd::from_raw_fd(raw)` is called here because `recvmsg` can only
+/// return raw file descriptors from the kernel.  The kernel guarantees these
+/// are valid, new, open file descriptors; we take ownership immediately and
+/// close-on-drop them via `OwnedFd`.
+///
+/// # Errors
+///
+/// Returns `io::Error` if:
+/// - the `recvmsg` syscall fails (I/O error), or
+/// - the ancillary data does not carry exactly three fds (protocol violation).
+#[allow(unsafe_code)]
+fn receive_interactive_fds(fd: RawFd) -> io::Result<[OwnedFd; 3]> {
+    use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
+    use nix::sys::socket::{recvmsg, ControlMessageOwned, MsgFlags};
+    use std::io::IoSliceMut;
+
+    // The tokio socket is in non-blocking mode. Use `poll` to block until
+    // the client's SCM_RIGHTS `sendmsg` arrives before calling `recvmsg`.
+    let pfd = PollFd::new(
+        unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) },
+        PollFlags::POLLIN,
+    );
+    let n = poll(&mut [pfd], PollTimeout::from(30_000u16))
+        .map_err(|e| io::Error::from_raw_os_error(e as i32))?;
+    if n == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "session.interactive.open: timed out waiting for SCM_RIGHTS fds from client",
+        ));
+    }
+
+    // Zero-byte data buffer: we only care about ancillary data.
+    let mut buf = [0u8; 1];
+    let mut iov = [IoSliceMut::new(&mut buf)];
+    // Allocate space for 3 raw fds in the cmsg buffer.
+    let mut cmsg_buf = nix::cmsg_space!([RawFd; 3]);
+
+    let msg = recvmsg::<()>(fd, &mut iov, Some(&mut cmsg_buf), MsgFlags::empty())
+        .map_err(|e| io::Error::from_raw_os_error(e as i32))?;
+
+    // Extract ScmRights from the control messages.
+    let mut raw_fds: Vec<RawFd> = Vec::new();
+    for cmsg in msg
+        .cmsgs()
+        .map_err(|e| io::Error::from_raw_os_error(e as i32))?
+    {
+        if let ControlMessageOwned::ScmRights(fds) = cmsg {
+            raw_fds.extend_from_slice(&fds);
+        }
+    }
+
+    // Wrap every received fd in OwnedFd immediately so they are closed on drop
+    // even if the count is wrong (prevents fd leaks on protocol violation).
+    //
+    // SAFETY: `recvmsg` with `SCM_RIGHTS` transfers ownership of fresh kernel
+    // file descriptors to the receiving process.  We wrap each immediately in
+    // `OwnedFd` so they are closed on drop.
+    let mut owned_fds: Vec<OwnedFd> = raw_fds
+        .iter()
+        .map(|&raw| unsafe { OwnedFd::from_raw_fd(raw) })
+        .collect();
+
+    if owned_fds.len() != 3 {
+        // `owned_fds` drops here, closing the fds.
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "session.interactive.open: expected 3 SCM_RIGHTS fds, got {}",
+                owned_fds.len()
+            ),
+        ));
+    }
+
+    let stderr = owned_fds.pop().expect("length checked above");
+    let stdout = owned_fds.pop().expect("length checked above");
+    let stdin = owned_fds.pop().expect("length checked above");
+
+    Ok([stdin, stdout, stderr])
 }
 
 /// Serialize `value` to a newline-terminated JSON byte vector.
@@ -579,16 +857,6 @@ pub fn start(cfg: Config) -> Result<(Handle, JoinHandle<()>), std::io::Error> {
         cfg.monitoring.clone(),
         env!("CARGO_PKG_VERSION"),
     );
-    // Inject the chat-adapter handle when provided (AC-1 of T-072).
-    if let Some(chat_handle) = cfg.chat_adapter.clone() {
-        dispatcher = dispatcher.with_chat_handle(chat_handle);
-    }
-    // Use the configured chat router or create an internal one.
-    let chat_router = cfg
-        .chat_router
-        .clone()
-        .unwrap_or_else(|| std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new()));
-    dispatcher = dispatcher.with_chat_router(chat_router);
     // Inject the scheduler-adapter handle when provided (AC-2 of T-096).
     if let Some(h) = cfg.scheduler.clone() {
         dispatcher = dispatcher.with_scheduler_handle(h);
@@ -596,6 +864,10 @@ pub fn start(cfg: Config) -> Result<(Handle, JoinHandle<()>), std::io::Error> {
     // Inject the config file path when provided (T-097).
     if let Some(p) = cfg.config_path.clone() {
         dispatcher = dispatcher.with_config_path(p);
+    }
+    // Inject the interactive-session spawn config when provided (T-105).
+    if let Some(interactive_cfg) = cfg.interactive_session.clone() {
+        dispatcher = dispatcher.with_interactive_session_config(interactive_cfg);
     }
 
     // Use the configured audit bus or create an internal one.
@@ -1130,328 +1402,383 @@ mod tests {
         mon_task.abort();
     }
 
-    /// Build a dispatcher with a chat reply router and return the router for injection.
-    fn make_dispatcher_with_chat_router() -> (
+    // ── Interactive session tests (T-105) ─────────────────────────────────────
+    //
+    // These tests use a multi-thread executor because `spawn_blocking` is
+    // called inside `handle_interactive_session_opening` for the `recvmsg` call.
+
+    /// Build a supervisor and dispatcher configured for interactive session tests.
+    ///
+    /// The interactive command is `sh -c <script>` with the current executable
+    /// as the extension path (it exists on disk, satisfying the extension-file check).
+    fn make_supervisor_and_dispatcher(
+        script: &str,
+    ) -> (
+        pi_agent_supervisor::Handle,
+        tokio::task::JoinHandle<()>,
         Dispatcher,
-        std::sync::Arc<crate::chat_router::ChatReplyRouter>,
     ) {
-        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
-        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
-            .with_chat_router(std::sync::Arc::clone(&router));
-        (dispatcher, router)
+        let extension_path =
+            std::env::current_exe().expect("current executable should exist in tests");
+        let mut sup_cfg = pi_agent_supervisor::Config::default();
+        sup_cfg.extension_path = extension_path.clone();
+        // No warm pool needed for interactive-only tests.
+        sup_cfg.warm_pool_size = 0;
+        // Short reap tick so the actor polls interactive-session exits quickly
+        // (AC-2: the exit notification must arrive within the test timeout).
+        sup_cfg.idle_reap_timeout = Duration::from_millis(50);
+        let (sup_handle, sup_task) =
+            pi_agent_supervisor::start(sup_cfg).expect("supervisor start must succeed in tests");
+
+        let interactive_cfg = InteractiveSessionConfig {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            child_termination_deadline: Duration::from_millis(500),
+            extension_sock_path: PathBuf::new(),
+            extension_path,
+        };
+
+        let dispatcher = Dispatcher::new(Some(sup_handle.clone()), None, None, "0.1.0-test")
+            .with_interactive_session_config(interactive_cfg);
+
+        (sup_handle, sup_task, dispatcher)
     }
 
-    // AC-1 (T-086): chat.open returns a subscription id, and when a reply is
-    // injected via the reply router the connection receives a `chat.message`
-    // notification with params.subscription equal to that id.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn run_connection_chat_open_delivers_chat_message_notification() {
-        let (client, server) = UnixStream::pair().expect("UnixStream::pair");
-        let (dispatcher, router) = make_dispatcher_with_chat_router();
-        let bus = make_bus();
+    /// Send three file descriptors via `SCM_RIGHTS` over a Unix domain socket.
+    ///
+    /// Per ADR-011: the client sends a one-data-byte `sendmsg` after the
+    /// JSON-RPC request frame.  The single byte anchors the ancillary data in
+    /// the `SOCK_STREAM` byte stream — on Linux, a zero-byte `sendmsg` is
+    /// silently discarded when the receiver calls `recvmsg` after a prior
+    /// `read()` on the same socket (the data bytes carry ancillary data in the
+    /// kernel's stream position tracking, and a zero-length message has no
+    /// position to attach to).
+    fn send_interactive_fds(
+        socket_fd: std::os::fd::RawFd,
+        stdin: std::os::fd::RawFd,
+        stdout: std::os::fd::RawFd,
+        stderr: std::os::fd::RawFd,
+    ) -> io::Result<()> {
+        use nix::sys::socket::{sendmsg, ControlMessage, MsgFlags};
+        use std::io::IoSlice;
 
-        tokio::spawn(run_connection(server, dispatcher, bus));
+        let fds = [stdin, stdout, stderr];
+        let cmsg = [ControlMessage::ScmRights(&fds)];
+        // One sentinel byte anchors the ancillary data in the byte stream.
+        // A zero-length sendmsg does not reliably deliver SCM_RIGHTS on
+        // SOCK_STREAM when the peer has already read from the socket.
+        let anchor = [0u8; 1];
+        let iov = [IoSlice::new(&anchor)];
+        sendmsg::<()>(socket_fd, &iov, &cmsg, MsgFlags::empty(), None)
+            .map_err(|e| io::Error::from_raw_os_error(e as i32))?;
+        Ok(())
+    }
 
-        let (read_half, mut write_half) = tokio::io::split(client);
-        let mut reader = BufReader::new(read_half);
+    /// Open an interactive session using the ADR-011 two-step SCM_RIGHTS protocol:
+    ///
+    /// 1. Send the `session.interactive.open` JSON-RPC request.
+    /// 2. Wait for the `session.interactive.await_fds` notification from the server.
+    /// 3. Send the three terminal fds via SCM_RIGHTS `sendmsg`.
+    /// 4. Return the raw fd and reader so the caller can read the final response.
+    ///
+    /// Step 2 is required to avoid a BufReader read-ahead race: the server's
+    /// BufReader uses `read()` (not `recvmsg`), which discards ancillary data
+    /// when it reads the anchor byte from the SCM_RIGHTS message.  The
+    /// `await_fds` notification signals that the server has stopped using
+    /// BufReader and is blocked in `recvmsg` — safe to send now.
+    async fn open_interactive_session(
+        reader: &mut tokio::io::BufReader<tokio::io::ReadHalf<UnixStream>>,
+        write_half: &mut tokio::io::WriteHalf<UnixStream>,
+        client_raw_fd: std::os::fd::RawFd,
+        request_id: u64,
+        stdin_fd: std::os::fd::RawFd,
+        stdout_fd: std::os::fd::RawFd,
+        stderr_fd: std::os::fd::RawFd,
+    ) {
+        use tokio::io::AsyncBufReadExt as _;
 
-        // Send chat.open.
+        // Step 1: send the JSON-RPC open request.
+        let req = format!(
+            "{{\"jsonrpc\":\"2.0\",\"method\":\"session.interactive.open\",\"id\":{request_id}}}\n"
+        );
         write_half
-            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"chat.open\",\"id\":400}\n")
+            .write_all(req.as_bytes())
             .await
-            .expect("write chat.open");
+            .expect("write session.interactive.open request");
 
-        let mut open_line = String::new();
-        reader
-            .read_line(&mut open_line)
-            .await
-            .expect("read chat.open response");
-        let open_resp: serde_json::Value =
-            serde_json::from_str(open_line.trim()).expect("valid JSON");
-        assert_eq!(open_resp["jsonrpc"], "2.0");
-        assert_eq!(open_resp["id"], 400);
-        let sub_id = open_resp["result"]["id"]
-            .as_str()
-            .expect("result.id is a string")
-            .to_string();
-
-        // Give the forwarder task a moment to start.
-        tokio::time::sleep(Duration::from_millis(20)).await;
-
-        // Inject a reply via the router delivery handle.
-        let delivery = router.delivery_handle();
-        let sub_id_parsed = crate::subscriptions::AdminSubscriptionId::parse(&sub_id)
-            .expect("sub_id must be parseable");
-        delivery.deliver(sub_id_parsed, json!({"text": "hello from bot"}));
-
-        // Read the chat.message notification.
+        // Step 2: wait for the server's `session.interactive.await_fds` notification.
         let mut notif_line = String::new();
         tokio::time::timeout(
-            Duration::from_millis(500),
+            Duration::from_millis(2000),
             reader.read_line(&mut notif_line),
         )
         .await
-        .expect("timed out waiting for chat.message notification")
-        .expect("read notification");
+        .expect("timed out waiting for session.interactive.await_fds notification")
+        .expect("read await_fds notification");
 
-        let notif: serde_json::Value = serde_json::from_str(notif_line.trim()).expect("valid JSON");
-        assert_eq!(notif["jsonrpc"], "2.0");
-        assert_eq!(notif["method"], "chat.message");
-        assert_eq!(notif["params"]["subscription"], sub_id);
-        assert_eq!(notif["params"]["data"]["text"], "hello from bot");
+        let notif: serde_json::Value =
+            serde_json::from_str(notif_line.trim()).expect("valid JSON await_fds notification");
+        assert_eq!(
+            notif["method"], "session.interactive.await_fds",
+            "server must send session.interactive.await_fds before fds; got: {notif:?}"
+        );
+
+        // Step 3: send the three terminal fds via SCM_RIGHTS.
+        // This is safe now because the server is blocked in spawn_blocking/recvmsg,
+        // not in BufReader::read() — so the anchor byte won't be silently consumed.
+        send_interactive_fds(client_raw_fd, stdin_fd, stdout_fd, stderr_fd)
+            .expect("sendmsg SCM_RIGHTS must succeed");
     }
 
-    // AC-2 (T-086): chat.close deregisters the subscription from the router and
-    // stops the forwarder; later injected replies are dropped and not delivered.
+    // AC-1 (T-105): session.interactive.open with SCM_RIGHTS fds starts a
+    // supervised interactive pi session and returns a success response with
+    // a non-empty session_id.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn run_connection_chat_close_stops_forwarder_and_drops_later_replies() {
-        let (client, server) = UnixStream::pair().expect("UnixStream::pair");
-        let (dispatcher, router) = make_dispatcher_with_chat_router();
+    async fn run_connection_session_interactive_open_starts_session_and_returns_session_id() {
+        use std::fs::File;
+        use std::os::fd::{AsRawFd as _, RawFd};
+
+        // Use a script that stays alive until SIGTERM so the session exists long enough to check.
+        let (_, sup_task, dispatcher) =
+            make_supervisor_and_dispatcher("trap 'exit 0' TERM; while :; do sleep 0.1; done");
         let bus = make_bus();
 
+        let (client, server) = UnixStream::pair().expect("UnixStream::pair");
         tokio::spawn(run_connection(server, dispatcher, bus));
 
+        let client_raw_fd: RawFd = client.as_raw_fd();
         let (read_half, mut write_half) = tokio::io::split(client);
-        let mut reader = BufReader::new(read_half);
+        let mut reader = tokio::io::BufReader::new(read_half);
 
-        // Open a chat subscription.
-        write_half
-            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"chat.open\",\"id\":410}\n")
-            .await
-            .expect("write chat.open");
-        let mut open_line = String::new();
-        reader
-            .read_line(&mut open_line)
-            .await
-            .expect("read chat.open response");
-        let open_resp: serde_json::Value = serde_json::from_str(open_line.trim()).unwrap();
-        let sub_id = open_resp["result"]["id"].as_str().unwrap().to_string();
+        // Use /dev/null as placeholder terminal fds.  Keep File alive until
+        // after sendmsg; the kernel duplicates the fds on sendmsg.
+        let stdin_file = File::open("/dev/null").expect("open /dev/null for stdin");
+        let stdout_file = File::open("/dev/null").expect("open /dev/null for stdout");
+        let stderr_file = File::open("/dev/null").expect("open /dev/null for stderr");
 
-        // Close the subscription.
-        let close_req = format!(
-            "{{\"jsonrpc\":\"2.0\",\"method\":\"chat.close\",\"params\":{{\"id\":\"{sub_id}\"}},\"id\":411}}\n"
-        );
-        write_half
-            .write_all(close_req.as_bytes())
-            .await
-            .expect("write chat.close");
-        let mut close_line = String::new();
-        reader
-            .read_line(&mut close_line)
-            .await
-            .expect("read chat.close response");
-        let close_resp: serde_json::Value = serde_json::from_str(close_line.trim()).unwrap();
-        assert_eq!(close_resp["result"]["ok"], true);
-
-        // Give the forwarder task time to observe the cancellation.
-        tokio::time::sleep(Duration::from_millis(25)).await;
-
-        // Inject a reply after close — it should be dropped by the router.
-        let delivery = router.delivery_handle();
-        let sub_id_parsed = crate::subscriptions::AdminSubscriptionId::parse(&sub_id).unwrap();
-        delivery.deliver(sub_id_parsed, json!({"text": "should not arrive"}));
-
-        // No notification should arrive within a short window.
-        let result = tokio::time::timeout(
-            Duration::from_millis(100),
-            reader.read_line(&mut String::new()),
+        // Open the interactive session using the two-step protocol (see helper).
+        open_interactive_session(
+            &mut reader,
+            &mut write_half,
+            client_raw_fd,
+            700,
+            stdin_file.as_raw_fd(),
+            stdout_file.as_raw_fd(),
+            stderr_file.as_raw_fd(),
         )
         .await;
-        assert!(
-            result.is_err(),
-            "no notification should arrive after chat.close"
-        );
-    }
+        // Files drop here, closing the parent's copies (child has its own copies).
+        drop(stdin_file);
+        drop(stdout_file);
+        drop(stderr_file);
 
-    // AC-4 (T-086): chat.send rejects a params.id that does not reference an open
-    // chat subscription on the same connection.
-    #[tokio::test(flavor = "current_thread")]
-    async fn run_connection_chat_send_with_no_open_subscription_returns_error() {
-        let (client, server) = UnixStream::pair().expect("UnixStream::pair");
-        let (dispatcher, _router) = make_dispatcher_with_chat_router();
-        let bus = make_bus();
-
-        tokio::spawn(run_connection(server, dispatcher, bus));
-
-        let (read_half, mut write_half) = tokio::io::split(client);
-        let mut reader = BufReader::new(read_half);
-
-        // chat.send with a subscription id that was never opened.
-        write_half
-            .write_all(
-                b"{\"jsonrpc\":\"2.0\",\"method\":\"chat.send\",\"params\":{\"id\":\"9999\",\"text\":\"hi\",\"application_identity\":\"00000000-0000-0000-0000-000000000001\"},\"id\":430}\n",
-            )
-            .await
-            .expect("write chat.send");
-
-        let mut line = String::new();
-        reader.read_line(&mut line).await.expect("read response");
-        let resp: serde_json::Value = serde_json::from_str(line.trim()).expect("valid JSON");
-
-        assert_eq!(resp["id"], 430);
-        // Must return an error (no chat adapter configured, so -32601 is also acceptable).
-        assert!(resp.get("error").is_some(), "must return an error");
-    }
-
-    // AC-3 (T-086): when the connection closes while a chat subscription is open,
-    // the subscription is deregistered from the router and the forwarder stops;
-    // other connections are not affected.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn run_connection_drop_deregisters_chat_subscription_from_router() {
-        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
-
-        // First connection: opens a chat subscription, then drops.
-        let (client1, server1) = UnixStream::pair().expect("UnixStream::pair");
-        let dispatcher1 = Dispatcher::new(None, None, None, "0.1.0-test")
-            .with_chat_router(std::sync::Arc::clone(&router));
-        let bus = make_bus();
-        tokio::spawn(run_connection(server1, dispatcher1, bus.clone()));
-
-        let (read_half1, mut write_half1) = tokio::io::split(client1);
-        let mut reader1 = BufReader::new(read_half1);
-
-        write_half1
-            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"chat.open\",\"id\":420}\n")
-            .await
-            .expect("write chat.open");
-        let mut open_line = String::new();
-        reader1
-            .read_line(&mut open_line)
-            .await
-            .expect("read chat.open response");
-        let open_resp: serde_json::Value = serde_json::from_str(open_line.trim()).unwrap();
-        let sub_id = open_resp["result"]["id"].as_str().unwrap().to_string();
-        let sub_id_parsed = crate::subscriptions::AdminSubscriptionId::parse(&sub_id).unwrap();
-
-        // Close connection1 by dropping the client.
-        drop(write_half1);
-        drop(reader1);
-
-        // Give the server tasks time to notice the EOF and clean up.
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        // Inject a reply — router must have deregistered the subscription so
-        // delivery handle::deliver drops the payload (no panic, no notification).
-        let delivery = router.delivery_handle();
-        delivery.deliver(sub_id_parsed, json!({"text": "dropped on floor"}));
-
-        // Second connection: must be unaffected.
-        let (client2, server2) = UnixStream::pair().expect("UnixStream::pair");
-        let dispatcher2 = Dispatcher::new(None, None, None, "0.1.0-test")
-            .with_chat_router(std::sync::Arc::clone(&router));
-        tokio::spawn(run_connection(server2, dispatcher2, bus));
-
-        let (read_half2, mut write_half2) = tokio::io::split(client2);
-        let mut reader2 = BufReader::new(read_half2);
-
-        // Second connection must still respond normally.
-        write_half2
-            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"service.status\",\"id\":421}\n")
-            .await
-            .expect("write service.status");
-        let mut status_line = String::new();
+        // Read the final response (session_id + ok).
+        let mut resp_line = String::new();
         tokio::time::timeout(
-            Duration::from_millis(250),
-            reader2.read_line(&mut status_line),
+            Duration::from_millis(2000),
+            reader.read_line(&mut resp_line),
         )
         .await
-        .expect("timed out waiting for service.status response")
-        .expect("read service.status response");
-        let status_resp: serde_json::Value = serde_json::from_str(status_line.trim()).unwrap();
-        assert_eq!(status_resp["id"], 421);
-        assert_eq!(status_resp["result"]["ok"], true);
+        .expect("timed out waiting for session.interactive.open response")
+        .expect("read response line");
+
+        let resp: serde_json::Value =
+            serde_json::from_str(resp_line.trim()).expect("valid JSON response");
+
+        assert_eq!(resp["jsonrpc"], "2.0");
+        assert_eq!(resp["id"], 700);
+        assert_eq!(
+            resp["result"]["ok"], true,
+            "session.interactive.open must return ok:true"
+        );
+        let session_id_str = resp["result"]["session_id"]
+            .as_str()
+            .expect("result.session_id must be a string");
+        assert!(
+            !session_id_str.is_empty(),
+            "AC-1: session_id must be non-empty; got: {resp:?}"
+        );
+
+        sup_task.abort();
     }
 
-    // AC-5 (T-086): while a chat.send response is pending, queued reply notifications
-    // are delivered as whole, well-formed frames — no interleaving inside a frame.
-    // Verified by sending multiple chat.send requests while the router injects
-    // concurrent replies and asserting every received line is valid JSON.
+    // AC-2 (T-105): when the pi session exits, the client receives a
+    // `session.interactive.exited` notification.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn run_connection_concurrent_chat_replies_are_well_formed_frames() {
-        use bob_core::types::{ChannelId, UserId};
-        use requests_handler::Config as QueueConfig;
-        use tokio::sync::watch;
+    async fn run_connection_session_interactive_exited_notification_delivered_when_pi_exits() {
+        use std::fs::File;
+        use std::os::fd::{AsRawFd as _, RawFd};
 
-        let (_, cancel_rx) = watch::channel(false);
-        let cfg = QueueConfig {
-            request_queue_capacity: 64,
-            request_submit_timeout: Duration::from_secs(5),
-        };
-        let (intake, _intake_task) =
-            requests_handler::start_with(cfg, move |(_, _)| async {}, cancel_rx);
-        let channel_id = ChannelId::new();
-        let (frame_handle, _actor_task) = chat_adapter::start(intake, channel_id, 16);
-
-        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
-        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
-            .with_chat_handle(frame_handle)
-            .with_chat_router(std::sync::Arc::clone(&router));
+        // A script that exits quickly after a brief pause.
+        let (_, sup_task, dispatcher) = make_supervisor_and_dispatcher("sleep 0.05; exit 0");
+        let bus = make_bus();
 
         let (client, server) = UnixStream::pair().expect("UnixStream::pair");
-        let bus = make_bus();
+        let client_raw_fd: RawFd = client.as_raw_fd();
         tokio::spawn(run_connection(server, dispatcher, bus));
 
         let (read_half, mut write_half) = tokio::io::split(client);
-        let mut reader = BufReader::new(read_half);
+        let mut reader = tokio::io::BufReader::new(read_half);
 
-        // Open a chat subscription.
-        write_half
-            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"chat.open\",\"id\":500}\n")
-            .await
-            .expect("write chat.open");
+        let stdin_file = File::open("/dev/null").expect("open /dev/null for stdin");
+        let stdout_file = File::open("/dev/null").expect("open /dev/null for stdout");
+        let stderr_file = File::open("/dev/null").expect("open /dev/null for stderr");
+
+        // Step 1+2+3: send open request, wait for await_fds, send fds.
+        open_interactive_session(
+            &mut reader,
+            &mut write_half,
+            client_raw_fd,
+            800,
+            stdin_file.as_raw_fd(),
+            stdout_file.as_raw_fd(),
+            stderr_file.as_raw_fd(),
+        )
+        .await;
+        drop(stdin_file);
+        drop(stdout_file);
+        drop(stderr_file);
+
+        // Read the session.interactive.open success response.
         let mut open_line = String::new();
-        reader
-            .read_line(&mut open_line)
-            .await
-            .expect("read chat.open response");
-        let open_resp: serde_json::Value = serde_json::from_str(open_line.trim()).unwrap();
-        let sub_id = open_resp["result"]["id"].as_str().unwrap().to_string();
-        let sub_id_parsed = crate::subscriptions::AdminSubscriptionId::parse(&sub_id).unwrap();
-
-        // Concurrently: inject 5 replies and send a chat.send request.
-        let delivery = router.delivery_handle();
-        for i in 0..5u32 {
-            delivery.deliver(sub_id_parsed, json!({"seq": i}));
-        }
-
-        let sender_id = UserId::new().to_string();
-        let send_req = format!(
-            "{{\"jsonrpc\":\"2.0\",\"method\":\"chat.send\",\"params\":{{\"id\":\"{sub_id}\",\"text\":\"concurrent\",\"application_identity\":\"{sender_id}\"}},\"id\":501}}\n"
+        tokio::time::timeout(
+            Duration::from_millis(2000),
+            reader.read_line(&mut open_line),
+        )
+        .await
+        .expect("timed out waiting for open response")
+        .expect("read open response");
+        let open_resp: serde_json::Value =
+            serde_json::from_str(open_line.trim()).expect("valid JSON");
+        assert_eq!(
+            open_resp["result"]["ok"], true,
+            "open must succeed for AC-2 test"
         );
-        write_half
-            .write_all(send_req.as_bytes())
-            .await
-            .expect("write chat.send");
 
-        // Collect all frames received within a timeout.
-        let mut frames_received = 0usize;
-        loop {
-            let mut line = String::new();
-            let result =
-                tokio::time::timeout(Duration::from_millis(200), reader.read_line(&mut line)).await;
-            match result {
-                Err(_) => break, // timeout — no more frames
-                Ok(Err(e)) => panic!("I/O error reading frame: {e}"),
-                Ok(Ok(0)) => break, // EOF
-                Ok(Ok(_)) => {
-                    // Every line must be valid JSON.
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    let parsed: serde_json::Value =
-                        serde_json::from_str(trimmed).expect("every frame must be valid JSON");
-                    assert_eq!(parsed["jsonrpc"], "2.0", "every frame must be JSON-RPC 2.0");
-                    frames_received += 1;
-                }
-            }
-        }
+        // AC-2: wait for the `session.interactive.exited` notification.
+        let mut notif_line = String::new();
+        tokio::time::timeout(
+            Duration::from_millis(3000),
+            reader.read_line(&mut notif_line),
+        )
+        .await
+        .expect("timed out waiting for session.interactive.exited notification")
+        .expect("read notification");
 
-        // We must have received at least the chat.send response (id=501) plus
-        // at least one chat.message notification.
+        let notif: serde_json::Value =
+            serde_json::from_str(notif_line.trim()).expect("valid JSON notification");
+
+        assert_eq!(
+            notif["method"], "session.interactive.exited",
+            "AC-2: must receive session.interactive.exited notification when pi exits; got: {notif:?}"
+        );
         assert!(
-            frames_received >= 2,
-            "must receive at least chat.send response and one notification, got {frames_received}"
+            notif["params"]["session_id"].is_string(),
+            "AC-2: notification must carry session_id; got: {notif:?}"
         );
+
+        sup_task.abort();
+    }
+
+    // AC-3 (T-105): when the client disconnects, the interactive pi session is
+    // terminated (kill_session is called).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_connection_client_disconnect_terminates_interactive_session() {
+        use std::fs::File;
+        use std::os::fd::{AsRawFd as _, RawFd};
+
+        // A long-lived script that we expect to be killed when the client disconnects.
+        let pid_file = std::env::temp_dir().join(format!(
+            "admin-rpc-interactive-ac3-{}.txt",
+            bob_core::types::SessionId::new()
+        ));
+        let _ = std::fs::remove_file(&pid_file);
+        let pid_file_path = pid_file.to_string_lossy().into_owned();
+
+        let script = format!(
+            "printf '%s\\n' $$ >> \"{}\"; trap 'exit 0' TERM; while :; do sleep 0.1; done",
+            pid_file_path
+        );
+
+        let (sup_handle, sup_task, dispatcher) = make_supervisor_and_dispatcher(&script);
+        let bus = make_bus();
+
+        let (client, server) = UnixStream::pair().expect("UnixStream::pair");
+        let client_raw_fd: RawFd = client.as_raw_fd();
+        tokio::spawn(run_connection(server, dispatcher, bus));
+
+        let (read_half, mut write_half) = tokio::io::split(client);
+        let mut reader = tokio::io::BufReader::new(read_half);
+
+        let stdin_file = File::open("/dev/null").expect("open /dev/null for stdin");
+        let stdout_file = File::open("/dev/null").expect("open /dev/null for stdout");
+        let stderr_file = File::open("/dev/null").expect("open /dev/null for stderr");
+
+        // Step 1+2+3: send open request, wait for await_fds, send fds.
+        open_interactive_session(
+            &mut reader,
+            &mut write_half,
+            client_raw_fd,
+            900,
+            stdin_file.as_raw_fd(),
+            stdout_file.as_raw_fd(),
+            stderr_file.as_raw_fd(),
+        )
+        .await;
+        drop(stdin_file);
+        drop(stdout_file);
+        drop(stderr_file);
+
+        // Read the success response.
+        let mut open_line = String::new();
+        tokio::time::timeout(
+            Duration::from_millis(2000),
+            reader.read_line(&mut open_line),
+        )
+        .await
+        .expect("timed out waiting for open response")
+        .expect("read open response");
+        let open_resp: serde_json::Value =
+            serde_json::from_str(open_line.trim()).expect("valid JSON");
+        assert_eq!(
+            open_resp["result"]["ok"], true,
+            "open must succeed for AC-3 test"
+        );
+
+        // Give the child a moment to start and write its pid.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Verify the child pid was written.
+        let pid_content =
+            std::fs::read_to_string(&pid_file).expect("child should have written its pid to file");
+        let child_pid: i32 = pid_content.trim().parse().expect("pid must be numeric");
+
+        // AC-3: close the client connection.
+        drop(write_half);
+        drop(reader);
+
+        // Give the server time to detect EOF and call kill_session.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // The child process should no longer exist.
+        let proc_path = format!("/proc/{child_pid}");
+        assert!(
+            !std::path::Path::new(&proc_path).exists(),
+            "AC-3: interactive child process (pid {child_pid}) must not exist after client disconnect"
+        );
+
+        // list_sessions should not include the session (it was removed by kill_session
+        // or the watcher task).
+        let sessions = sup_handle
+            .list_sessions()
+            .await
+            .expect("list_sessions should succeed");
+        assert!(
+            sessions.is_empty(),
+            "AC-3: session list should be empty after client disconnect; got {sessions:?}"
+        );
+
+        let _ = std::fs::remove_file(&pid_file);
+        sup_task.abort();
     }
 }

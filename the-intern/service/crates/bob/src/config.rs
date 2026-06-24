@@ -3,12 +3,11 @@ use std::{
     env,
     fs::OpenOptions,
     path::{Path, PathBuf},
-    str::FromStr,
     time::Duration,
 };
 
 use bob_core::error::{ServiceError, ServiceResult};
-use bob_core::types::{AuditFilterKind, ScheduleEntry, UserId};
+use bob_core::types::{AuditFilterKind, ScheduleEntry};
 use croner::parser::{CronParser, Seconds};
 use figment::{
     providers::{Format, Serialized, Toml},
@@ -21,6 +20,7 @@ use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 pub struct BobConfig {
     pub admin_sock_path: PathBuf,
     pub extension_sock_path: PathBuf,
+    pub extension_path: PathBuf,
     pub request_queue_capacity: usize,
     pub request_submit_timeout: Duration,
     pub shutdown_drain_deadline: Duration,
@@ -38,12 +38,6 @@ pub struct BobConfig {
     pub policy: PolicyConfig,
     /// Monitoring configuration sourced from the `[monitoring]` TOML section.
     pub monitoring: MonitoringConfig,
-    /// Channel configuration sourced from the `[channels]` TOML section.
-    ///
-    /// An absent `[channels]` section yields the default-enabled chat channel.
-    pub channels: ChannelsConfig,
-    /// Stable application-level identity asserted by `bob chat`.
-    pub chat_application_identity: UserId,
     /// Resolved path to the TOML config file used to load this config.
     ///
     /// An empty path means no config file was loaded (defaults only).
@@ -65,25 +59,6 @@ pub struct ScheduleConfig {
 pub struct MonitoringConfig {
     pub audit_log_path: PathBuf,
     pub default_tail_filters: Vec<AuditFilterKind>,
-}
-
-/// Top-level channels configuration section from the `[channels]` TOML block.
-///
-/// Each field is a channel-specific sub-section. Adding a new channel is a
-/// field addition here and in `RawChannelsConfig` — no reshape required.
-#[derive(Debug, Clone)]
-pub struct ChannelsConfig {
-    pub chat: ChatChannelConfig,
-}
-
-/// Configuration for the interactive-chat channel.
-#[derive(Debug, Clone)]
-pub struct ChatChannelConfig {
-    /// When `true` the chat adapter is started at `bob serve` startup.
-    ///
-    /// Defaults to `true`: chat is the primary interactive channel and rides
-    /// the always-on `admin.sock`.
-    pub enabled: bool,
 }
 
 // `Default` is intentionally not implemented for `BobConfig`.
@@ -108,6 +83,7 @@ impl BobConfig {
         Self {
             admin_sock_path: PathBuf::new(),
             extension_sock_path: PathBuf::new(),
+            extension_path: PathBuf::new(),
             request_queue_capacity: 1024,
             request_submit_timeout: Duration::from_secs(5),
             shutdown_drain_deadline: Duration::from_secs(30),
@@ -124,10 +100,6 @@ impl BobConfig {
                 audit_log_path: PathBuf::new(),
                 default_tail_filters: default_tail_filters(),
             },
-            channels: ChannelsConfig {
-                chat: ChatChannelConfig { enabled: true },
-            },
-            chat_application_identity: default_chat_application_identity(),
             config_path: PathBuf::new(),
             schedule: ScheduleConfig {
                 entries: Vec::new(),
@@ -176,6 +148,7 @@ impl BobConfig {
         let cfg = BobConfig {
             admin_sock_path: raw.admin_sock_path,
             extension_sock_path: raw.extension_sock_path,
+            extension_path: raw.extension_path,
             request_queue_capacity: raw.request_queue_capacity,
             request_submit_timeout: raw.request_submit_timeout,
             shutdown_drain_deadline: raw.shutdown_drain_deadline,
@@ -198,12 +171,6 @@ impl BobConfig {
                     .default_tail_filters
                     .unwrap_or_else(default_tail_filters),
             },
-            channels: ChannelsConfig {
-                chat: ChatChannelConfig {
-                    enabled: raw.channels.chat.enabled,
-                },
-            },
-            chat_application_identity: raw.chat_application_identity,
             // Carry the resolved config file path so the policy-control actor
             // can hot-reload from the same file on Handle::reload().
             config_path: config_path.clone(),
@@ -284,6 +251,7 @@ impl ConfigSources {
 struct RawBobConfig {
     admin_sock_path: PathBuf,
     extension_sock_path: PathBuf,
+    extension_path: PathBuf,
     #[serde(deserialize_with = "deserialize_usize")]
     request_queue_capacity: usize,
     #[serde(deserialize_with = "deserialize_duration")]
@@ -313,9 +281,6 @@ struct RawBobConfig {
     policy: PolicyConfig,
     #[serde(default)]
     monitoring: RawMonitoringConfig,
-    #[serde(default)]
-    channels: RawChannelsConfig,
-    chat_application_identity: UserId,
     /// Raw schedule entries from `[[schedule]]` TOML; absent section → empty vec.
     #[serde(default)]
     schedule: Vec<RawScheduleEntry>,
@@ -341,38 +306,6 @@ struct RawMonitoringConfig {
     audit_log_path: Option<PathBuf>,
     #[serde(default)]
     default_tail_filters: Option<Vec<AuditFilterKind>>,
-}
-
-/// Raw deserialization form of the `[channels]` TOML section.
-///
-/// Each sub-section is optional; absent means use channel-specific defaults.
-/// Adding a new channel is a field addition here — no reshape required.
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-struct RawChannelsConfig {
-    #[serde(default)]
-    chat: RawChatChannelConfig,
-}
-
-/// Raw deserialization form of the `[channels.chat]` TOML sub-section.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct RawChatChannelConfig {
-    /// Whether the chat adapter is started at `bob serve` startup.
-    ///
-    /// Defaults to `true` — chat is the primary interactive channel.
-    #[serde(default = "default_chat_enabled")]
-    enabled: bool,
-}
-
-impl Default for RawChatChannelConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_chat_enabled(),
-        }
-    }
-}
-
-fn default_chat_enabled() -> bool {
-    true
 }
 
 /// Validates raw schedule entries and converts them to typed `ScheduleEntry` values.
@@ -656,10 +589,12 @@ fn defaults_with_runtime_root(
     uid: u32,
 ) -> RawBobConfig {
     let monitoring_audit_log_path = default_monitoring_audit_log_path_for_env(env, uid);
+    let extension_path = default_extension_path_for_env(env, uid);
 
     RawBobConfig {
         admin_sock_path: runtime_root.join("admin.sock"),
         extension_sock_path: runtime_root.join("extension.sock"),
+        extension_path,
         request_queue_capacity: 1024,
         request_submit_timeout: Duration::from_secs(5),
         shutdown_drain_deadline: Duration::from_secs(30),
@@ -676,8 +611,6 @@ fn defaults_with_runtime_root(
             audit_log_path: Some(monitoring_audit_log_path),
             default_tail_filters: Some(default_tail_filters()),
         },
-        channels: RawChannelsConfig::default(),
-        chat_application_identity: default_chat_application_identity(),
         schedule: Vec::new(),
     }
 }
@@ -694,11 +627,6 @@ fn default_tracing_level() -> &'static str {
     } else {
         "warn"
     }
-}
-
-fn default_chat_application_identity() -> UserId {
-    UserId::from_str("00000000-0000-0000-0000-000000000001")
-        .expect("default chat application identity must be a valid UUID")
 }
 
 fn default_tail_filters() -> Vec<AuditFilterKind> {
@@ -733,6 +661,25 @@ fn default_monitoring_audit_log_path_for_env(env: &BTreeMap<String, String>, uid
     };
 
     state_root.join("bob").join("audit.jsonl")
+}
+
+fn default_extension_path_for_env(env: &BTreeMap<String, String>, uid: u32) -> PathBuf {
+    let data_root = env
+        .get("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            if cfg!(target_os = "macos") {
+                env.get("HOME")
+                    .map(|home| Path::new(home).join("Library").join("Application Support"))
+                    .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-data-{uid}")))
+            } else {
+                env.get("HOME")
+                    .map(|home| Path::new(home).join(".local").join("share"))
+                    .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-data-{uid}")))
+            }
+        });
+
+    data_root.join("bob").join("extensions").join("bob.ts")
 }
 
 fn default_config_path(sources: &ConfigSources) -> PathBuf {
@@ -904,13 +851,71 @@ mod tests {
     }
 
     #[test]
-    fn loads_defaults_with_stable_chat_application_identity() {
-        let config = load_with_env_overrides([]).expect("defaults should load");
+    fn resolves_default_extension_path_from_xdg_data_home_when_not_configured() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let data_home = temp.path().join("xdg-data-home");
+
+        let config = load_with_env_overrides([(
+            "XDG_DATA_HOME",
+            data_home
+                .to_str()
+                .expect("temporary data-home path should be valid UTF-8"),
+        )])
+        .expect("config should load");
+
         assert_eq!(
-            config.chat_application_identity.to_string(),
-            "00000000-0000-0000-0000-000000000001",
-            "default chat application identity must be stable"
+            config.extension_path,
+            data_home.join("bob").join("extensions").join("bob.ts")
         );
+    }
+
+    #[test]
+    fn resolves_default_extension_path_from_home_when_xdg_data_home_is_unset() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let home = temp.path().join("home");
+
+        let config = load_with_env_overrides([(
+            "HOME",
+            home.to_str()
+                .expect("temporary home path should be valid UTF-8"),
+        )])
+        .expect("config should load");
+
+        let expected = if cfg!(target_os = "macos") {
+            home.join("Library")
+                .join("Application Support")
+                .join("bob")
+                .join("extensions")
+                .join("bob.ts")
+        } else {
+            home.join(".local")
+                .join("share")
+                .join("bob")
+                .join("extensions")
+                .join("bob.ts")
+        };
+
+        assert_eq!(config.extension_path, expected);
+    }
+
+    #[test]
+    fn loads_extension_path_override_from_config_file() {
+        let config_file = write_temp_config(r#"extension_path = "/opt/bob/custom-extension.ts""#);
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env: BTreeMap::new(),
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("extension_path override should load");
+
+        assert_eq!(
+            config.extension_path,
+            PathBuf::from("/opt/bob/custom-extension.ts")
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
     }
 
     #[test]
@@ -1045,26 +1050,6 @@ tracing_level = "warn"
 
         assert!(
             matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("pi_agent_max_processes must be positive")),
-            "expected configuration error, got {result:?}"
-        );
-    }
-
-    #[test]
-    fn returns_configuration_error_when_chat_application_identity_is_empty() {
-        let result = load_with_env_overrides([("BOB_CHAT_APPLICATION_IDENTITY", "")]);
-
-        assert!(
-            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("chat_application_identity")),
-            "expected configuration error, got {result:?}"
-        );
-    }
-
-    #[test]
-    fn returns_configuration_error_when_chat_application_identity_is_not_a_uuid() {
-        let result = load_with_env_overrides([("BOB_CHAT_APPLICATION_IDENTITY", "not-a-uuid")]);
-
-        assert!(
-            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("chat_application_identity")),
             "expected configuration error, got {result:?}"
         );
     }
@@ -1407,111 +1392,6 @@ audit_log_path = "{}"
                 "created monitoring parent directory must be owner-only on unix"
             );
         }
-
-        fs::remove_file(config_file).expect("temp config file should be removable");
-    }
-
-    // ── AC-1, AC-2 (T-069): channels config section, chat defaults to enabled ──
-
-    #[test]
-    fn bob_config_exposes_channels_field_with_chat_channel_config() {
-        let config = BobConfig::test_base();
-        // The channels field must be present and carry a chat sub-field.
-        let _: &ChannelsConfig = &config.channels;
-        let _: &ChatChannelConfig = &config.channels.chat;
-    }
-
-    #[test]
-    fn chat_channel_is_enabled_by_default_when_no_channels_config_is_supplied() {
-        let config = load_with_env_overrides([]).expect("config without [channels] should succeed");
-        assert!(
-            config.channels.chat.enabled,
-            "chat channel must be enabled when no [channels] config is present"
-        );
-    }
-
-    // ── AC-3 (T-069): [channels.chat] enabled = false disables the chat channel ─
-
-    #[test]
-    fn chat_channel_is_disabled_when_config_source_sets_enabled_to_false() {
-        let mut env = BTreeMap::new();
-        if cfg!(target_os = "macos") {
-            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
-        } else {
-            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
-        }
-
-        let config_file = write_temp_config(
-            r#"
-[channels.chat]
-enabled = false
-"#,
-        );
-
-        let config = BobConfig::load_with_sources(ConfigSources {
-            env,
-            config_path: Some(config_file.clone()),
-            cli_overrides: BTreeMap::new(),
-            uid: 4242,
-        })
-        .expect("config with [channels.chat] enabled = false should parse");
-
-        assert!(
-            !config.channels.chat.enabled,
-            "chat channel must be disabled when [channels.chat] enabled = false is set"
-        );
-
-        fs::remove_file(config_file).expect("temp config file should be removable");
-    }
-
-    // ── AC-4 (T-069): channels section round-trips through the figment loader ───
-
-    #[test]
-    fn channels_section_loads_through_figment_layered_source_with_default_then_file_override() {
-        // Verify the full figment loading path:
-        //   1. Default layer: chat.enabled = true (no file).
-        //   2. TOML file layer: chat.enabled = false (file overrides default).
-        // This confirms the section is properly wired into the serialized-defaults
-        // layer and can be overridden by a TOML config file, matching the same
-        // layered-source pattern used by [policy] and [monitoring].
-        let mut env = BTreeMap::new();
-        if cfg!(target_os = "macos") {
-            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
-        } else {
-            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
-        }
-
-        // Step 1: defaults only — chat must be enabled.
-        let config_defaults = BobConfig::load_with_sources(ConfigSources {
-            env: env.clone(),
-            config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
-            cli_overrides: BTreeMap::new(),
-            uid: 4242,
-        })
-        .expect("defaults-only load should succeed");
-        assert!(
-            config_defaults.channels.chat.enabled,
-            "default layer must produce chat.enabled = true"
-        );
-
-        // Step 2: TOML file overrides the default — chat must be disabled.
-        let config_file = write_temp_config(
-            r#"
-[channels.chat]
-enabled = false
-"#,
-        );
-        let config_file_override = BobConfig::load_with_sources(ConfigSources {
-            env,
-            config_path: Some(config_file.clone()),
-            cli_overrides: BTreeMap::new(),
-            uid: 4242,
-        })
-        .expect("file-overridden load should succeed");
-        assert!(
-            !config_file_override.channels.chat.enabled,
-            "TOML file layer must be able to override chat.enabled to false"
-        );
 
         fs::remove_file(config_file).expect("temp config file should be removable");
     }

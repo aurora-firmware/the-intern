@@ -15,9 +15,6 @@
 //! | `policy.reload` | admin socket peer gate | Invokes `policy_control::Handle::reload`; returns success on reload or an error with rejection reason |
 //! | `audit.tail.subscribe` | admin socket peer gate | Registers a new audit subscription; returns `{ id }` |
 //! | `audit.tail.unsubscribe` | admin socket peer gate | Removes an audit subscription; returns `{ ok: true }` |
-//! | `chat.open` | admin socket peer gate | Opens a chat subscription; returns `{ id }` |
-//! | `chat.close` | admin socket peer gate | Closes a chat subscription; returns `{ ok: true }` |
-//! | `chat.send` | admin socket peer gate | Validates and forwards chat user-input frames |
 //! | `report.submit` | admin socket peer gate | Accepts an [`ExternalReportAuditPayload`][bob_core::types::ExternalReportAuditPayload], delegates to Monitoring, returns `{ ok: true }` |
 
 use std::path::PathBuf;
@@ -26,9 +23,8 @@ use std::time::Instant;
 use bob_core::error::ServiceError;
 use bob_core::types::{
     AuditFilterKind, AuditRecord as MonitoringAuditRecord, AuditRecordKind, AuditRecordPayload,
-    ExternalReportAuditPayload, ScheduleEntry, UserId,
+    ExternalReportAuditPayload, ScheduleEntry,
 };
-use chat_adapter::{ChatFrame, FrameHandle as ChatHandle};
 use croner::parser::{CronParser, Seconds};
 use serde_json::{json, Value};
 use std::str::FromStr;
@@ -37,7 +33,6 @@ use uuid::Uuid;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    chat_router::{ChatReplyReceiver, ChatReplyRouter},
     protocol::{
         ErrorResponse, Request, Response, CODE_INVALID_REQUEST, CODE_METHOD_NOT_FOUND, CODE_TIMEOUT,
     },
@@ -53,13 +48,6 @@ pub struct Dispatcher {
     supervisor: Option<pi_agent_supervisor::Handle>,
     policy: Option<policy_control::Handle>,
     monitoring: Option<monitoring::Handle>,
-    chat_adapter: Option<ChatHandle>,
-    /// Optional chat reply router.
-    ///
-    /// When present, `chat.open` registers with the router and returns a
-    /// router-backed receiver.  The router is shared across all clones of the
-    /// dispatcher via an `Arc`.
-    chat_router: Option<std::sync::Arc<ChatReplyRouter>>,
     /// Optional scheduler-adapter reload handle.
     ///
     /// When present, `schedule.*` methods (T-097) push updated job tables to
@@ -75,6 +63,12 @@ pub struct Dispatcher {
     /// drop one another's update. Shared across all per-connection clones of
     /// the dispatcher via the `Arc`.
     schedule_write_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+    /// Configuration for spawning interactive pi sessions (T-105 / ADR-011).
+    ///
+    /// When `None`, built-in defaults are used: command `"pi"`, empty args,
+    /// 10-second deadline, and the current process executable as the extension
+    /// path (the latter is overridden in production by the real `bob.ts` path).
+    interactive_session: Option<crate::InteractiveSessionConfig>,
     started_at: Instant,
     version: &'static str,
 }
@@ -101,21 +95,20 @@ pub enum DispatchOutcome {
         response: Response,
         id: AdminSubscriptionId,
     },
-    /// A new router-backed chat subscription was created.
+    /// An interactive pi session is ready to be opened.
     ///
-    /// The caller must spawn a forwarder task that drives `rx` (the per-subscription
-    /// reply queue receiver) and `cancel_rx` (signals when the subscription is
-    /// cancelled by `chat.close` or connection close).
-    ChatSubscribed {
-        response: Response,
-        id: AdminSubscriptionId,
-        rx: ChatReplyReceiver,
-        cancel_rx: tokio::sync::oneshot::Receiver<()>,
-    },
-    /// A chat subscription was removed.
-    ChatUnsubscribed {
-        response: Response,
-        id: AdminSubscriptionId,
+    /// The connection loop must receive three file descriptors (`SCM_RIGHTS`
+    /// ancillary data) from the socket, then call
+    /// `supervisor.start_interactive_session` with those fds, and finally send a
+    /// success (or error) response back to the client.
+    ///
+    /// No pre-flight admission check is performed (ADR-010): the socket-access
+    /// gate (0700 permission) is the only transport gate for interactive sessions.
+    InteractiveSessionOpening {
+        /// The JSON-RPC request id, to be echoed in the eventual response.
+        id: serde_json::Value,
+        /// A freshly-allocated session id to use for the spawned pi process.
+        session_id: bob_core::types::SessionId,
     },
 }
 
@@ -134,47 +127,44 @@ impl Dispatcher {
             supervisor,
             policy,
             monitoring,
-            chat_adapter: None,
-            chat_router: None,
             scheduler: None,
             config_path: None,
             schedule_write_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            interactive_session: None,
             started_at: Instant::now(),
             version,
         }
     }
 
-    /// Attach an optional chat-adapter frame-delivery handle.
+    /// Attach an interactive-session spawn configuration (T-105 / ADR-011).
     ///
-    /// When present, `chat.send` forwards frames to the chat adapter.
-    /// When absent (the default), `chat.send` returns a JSON-RPC error.
+    /// When present, `session.interactive.open` uses these values to spawn the
+    /// interactive pi child process.  When absent (the default), the built-in
+    /// defaults are used (command `"pi"`, no extra args, 10-second deadline, and
+    /// the current process executable as the extension path).
     #[must_use]
-    pub fn with_chat_handle(mut self, handle: ChatHandle) -> Self {
-        self.chat_adapter = Some(handle);
+    pub fn with_interactive_session_config(
+        mut self,
+        config: crate::InteractiveSessionConfig,
+    ) -> Self {
+        self.interactive_session = Some(config);
         self
     }
 
-    /// Attach a chat reply router.
+    /// Return a clone of the interactive-session config, if one is configured.
     ///
-    /// When present, `chat.open` registers with the router and returns a
-    /// [`DispatchOutcome::ChatSubscribed`] carrying the router-backed receiver.
-    /// `chat.close` and connection drop deregister the subscription from the
-    /// router.
-    ///
-    /// The router is wrapped in an `Arc` so all clones of the dispatcher share
-    /// the same router state.
-    #[must_use]
-    pub fn with_chat_router(mut self, router: std::sync::Arc<ChatReplyRouter>) -> Self {
-        self.chat_router = Some(router);
-        self
+    /// Used by the connection loop to pass spawn parameters to
+    /// `handle_interactive_session_opening`.
+    pub fn interactive_session_config(&self) -> Option<crate::InteractiveSessionConfig> {
+        self.interactive_session.clone()
     }
 
-    /// Return a clone of the chat reply router `Arc`, if one is configured.
+    /// Return a clone of the pi-agent-supervisor handle, if one is configured.
     ///
-    /// Used by the connection loop to attach the router to the per-connection
-    /// registry for teardown on connection drop.
-    pub fn chat_router(&self) -> Option<std::sync::Arc<ChatReplyRouter>> {
-        self.chat_router.clone()
+    /// Used by the connection loop to call `start_interactive_session` and
+    /// `kill_session` when handling `InteractiveSessionOpening` outcomes.
+    pub fn supervisor_handle(&self) -> Option<pi_agent_supervisor::Handle> {
+        self.supervisor.clone()
     }
 
     /// Attach a scheduler-adapter reload handle.
@@ -226,14 +216,12 @@ impl Dispatcher {
                 self.handle_audit_tail_unsubscribe(id, &request.params, registry)
                     .await
             }
-            "chat.open" => self.handle_chat_open(id, registry).await,
-            "chat.close" => self.handle_chat_close(id, &request.params, registry).await,
-            "chat.send" => self.handle_chat_send(id, &request.params, registry).await,
             "report.submit" => self.handle_report_submit(id, &request.params).await,
             "schedule.add" => self.handle_schedule_add(id, &request.params).await,
             "schedule.remove" => self.handle_schedule_remove(id, &request.params).await,
             "schedule.list" => self.handle_schedule_list(id).await,
             "schedule.reload" => self.handle_schedule_reload(id).await,
+            "session.interactive.open" => self.handle_session_interactive_open(id).await,
             other => DispatchOutcome::Err(ErrorResponse::error(
                 id,
                 CODE_METHOD_NOT_FOUND,
@@ -344,221 +332,6 @@ impl Dispatcher {
         }
     }
 
-    async fn handle_chat_open(
-        &self,
-        id: Value,
-        registry: &mut ConnectionRegistry,
-    ) -> DispatchOutcome {
-        let (sub_id, cancel_rx) = registry.open_chat();
-        tracing::debug!(subscription_id = %sub_id, "chat.open: registered");
-        let response = Response::ok(id, json!({ "id": sub_id.to_string() }));
-
-        if let Some(ref router) = self.chat_router {
-            // Register the subscription id with the chat reply router and obtain
-            // the per-subscription reply queue receiver.
-            let rx = router.register(sub_id);
-            DispatchOutcome::ChatSubscribed {
-                response,
-                id: sub_id,
-                rx,
-                cancel_rx,
-            }
-        } else {
-            // No router configured — fall back to a plain Ok response.
-            // The cancel_rx is dropped here, which is fine; no forwarder will be
-            // spawned so the subscription drains nothing.
-            let _ = cancel_rx;
-            DispatchOutcome::Ok(response)
-        }
-    }
-
-    async fn handle_chat_close(
-        &self,
-        id: Value,
-        params: &Option<Value>,
-        registry: &mut ConnectionRegistry,
-    ) -> DispatchOutcome {
-        let sub_id_str = params
-            .as_ref()
-            .and_then(|p| p.get("id"))
-            .and_then(|v| v.as_str());
-
-        let Some(sub_id_str) = sub_id_str else {
-            return DispatchOutcome::Err(ErrorResponse::error(
-                id,
-                CODE_INVALID_REQUEST,
-                "chat.close requires params.id",
-                Some(json!({ "category": "invalid_request" })),
-            ));
-        };
-
-        let Some(sub_id) = AdminSubscriptionId::parse(sub_id_str) else {
-            return DispatchOutcome::Err(ErrorResponse::error(
-                id,
-                CODE_INVALID_REQUEST,
-                "params.id is not a valid subscription id",
-                Some(json!({ "category": "invalid_request" })),
-            ));
-        };
-
-        if registry.is_chat_subscription(sub_id) {
-            // Deregister from the reply router before dropping the cancel sender
-            // so the forwarder cannot race a delivery after the channel closes.
-            if let Some(ref router) = self.chat_router {
-                router.deregister(sub_id);
-            }
-            registry.close_chat(sub_id);
-            tracing::debug!(subscription_id = %sub_id, "chat.close: removed");
-            let response = Response::ok(id, json!({ "ok": true }));
-            DispatchOutcome::ChatUnsubscribed {
-                response,
-                id: sub_id,
-            }
-        } else {
-            DispatchOutcome::Err(ErrorResponse::error(
-                id,
-                CODE_INVALID_REQUEST,
-                "subscription id not found",
-                Some(json!({ "category": "invalid_request" })),
-            ))
-        }
-    }
-
-    /// Handle `chat.send`.
-    ///
-    /// Validates:
-    /// - A chat-adapter handle is present (AC-3: returns error when absent).
-    /// - `params.id` identifies an open chat subscription on this connection
-    ///   (AC-4: returns error when absent or the wrong kind).
-    /// - `params.text` is present (AC-2: the message text).
-    /// - `params.application_identity` is present and parses as a `UserId`.
-    ///
-    /// Builds a [`ChatFrame`] with the message text, application identity, and
-    /// optional `params.context_id`, then delivers it to the chat adapter.
-    async fn handle_chat_send(
-        &self,
-        id: Value,
-        params: &Option<Value>,
-        registry: &ConnectionRegistry,
-    ) -> DispatchOutcome {
-        // AC-3: return an error when no chat-adapter handle is configured.
-        let Some(ref adapter) = self.chat_adapter else {
-            return DispatchOutcome::Err(ErrorResponse::error(
-                id,
-                CODE_METHOD_NOT_FOUND,
-                "chat.send is not available: chat channel is not configured",
-                Some(json!({ "method": "chat.send" })),
-            ));
-        };
-
-        // Require params.
-        let Some(ref params_value) = params else {
-            return DispatchOutcome::Err(ErrorResponse::error(
-                id,
-                CODE_INVALID_REQUEST,
-                "chat.send requires params",
-                Some(json!({ "category": "invalid_request" })),
-            ));
-        };
-
-        // Parse and validate params.id (the chat subscription id).
-        let sub_id_str = params_value.get("id").and_then(|v| v.as_str());
-        let Some(sub_id_str) = sub_id_str else {
-            return DispatchOutcome::Err(ErrorResponse::error(
-                id,
-                CODE_INVALID_REQUEST,
-                "chat.send requires params.id",
-                Some(json!({ "category": "invalid_request" })),
-            ));
-        };
-        let Some(sub_id) = AdminSubscriptionId::parse(sub_id_str) else {
-            return DispatchOutcome::Err(ErrorResponse::error(
-                id,
-                CODE_INVALID_REQUEST,
-                "params.id is not a valid subscription id",
-                Some(json!({ "category": "invalid_request" })),
-            ));
-        };
-
-        // AC-4: the subscription id must be an open chat subscription on this connection.
-        if !registry.is_open_chat_subscription(sub_id) {
-            return DispatchOutcome::Err(ErrorResponse::error(
-                id,
-                CODE_INVALID_REQUEST,
-                "params.id does not reference an open chat subscription on this connection",
-                Some(json!({ "category": "invalid_request" })),
-            ));
-        }
-
-        // Parse params.text (the message body).
-        let text = params_value.get("text").and_then(|v| v.as_str());
-        let Some(text) = text else {
-            return DispatchOutcome::Err(ErrorResponse::error(
-                id,
-                CODE_INVALID_REQUEST,
-                "chat.send requires params.text",
-                Some(json!({ "category": "invalid_request" })),
-            ));
-        };
-
-        let application_identity = params_value
-            .get("application_identity")
-            .and_then(|v| v.as_str());
-        let Some(application_identity) = application_identity else {
-            return DispatchOutcome::Err(ErrorResponse::error(
-                id,
-                CODE_INVALID_REQUEST,
-                "chat.send requires params.application_identity",
-                Some(json!({ "category": "invalid_request" })),
-            ));
-        };
-        if application_identity.trim().is_empty() {
-            return DispatchOutcome::Err(ErrorResponse::error(
-                id,
-                CODE_INVALID_REQUEST,
-                "params.application_identity must not be empty",
-                Some(json!({ "category": "invalid_request" })),
-            ));
-        }
-        let application_identity = match application_identity.parse::<UserId>() {
-            Ok(user_id) => user_id,
-            Err(_) => {
-                return DispatchOutcome::Err(ErrorResponse::error(
-                    id,
-                    CODE_INVALID_REQUEST,
-                    "params.application_identity is not a valid user id",
-                    Some(json!({ "category": "invalid_request" })),
-                ));
-            }
-        };
-
-        // Parse optional params.context_id.
-        let context_id = params_value
-            .get("context_id")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned);
-
-        let frame = ChatFrame {
-            message: text.to_owned(),
-            peer_id: application_identity,
-            context_id,
-            subscription_id: sub_id.to_string(),
-        };
-
-        match adapter.deliver(frame).await {
-            Ok(()) => {
-                tracing::debug!(subscription_id = %sub_id, "chat.send: frame forwarded to adapter");
-                DispatchOutcome::Ok(Response::ok(id, json!({ "ok": true })))
-            }
-            Err(_) => DispatchOutcome::Err(ErrorResponse::error(
-                id,
-                CODE_METHOD_NOT_FOUND,
-                "chat.send failed: chat adapter is unavailable",
-                Some(json!({ "category": "service_down" })),
-            )),
-        }
-    }
-
     // ── Core handlers ────────────────────────────────────────────────────────
 
     async fn handle_service_status(&self, id: Value) -> DispatchOutcome {
@@ -633,6 +406,35 @@ impl Dispatcher {
             Ok(()) => DispatchOutcome::Ok(Response::ok(id, json!({ "ok": true }))),
             Err(e) => DispatchOutcome::Err(map_service_error(id, &e)),
         }
+    }
+
+    /// Handle `session.interactive.open`.
+    ///
+    /// Allocates a fresh `SessionId` and returns [`DispatchOutcome::InteractiveSessionOpening`]
+    /// so the connection loop can receive the three terminal file descriptors via
+    /// `SCM_RIGHTS` ancillary data and then start the supervised interactive pi
+    /// session (T-104).
+    ///
+    /// **No pre-flight admission check is performed** — interactive chat is exempt from
+    /// per-user pre-flight admission (ADR-010). The sole transport gate is the 0700
+    /// socket-access permission check performed at connection accept time.
+    ///
+    /// Returns `-32601 Method not found` when no supervisor handle is configured.
+    async fn handle_session_interactive_open(&self, id: Value) -> DispatchOutcome {
+        let Some(_) = self.supervisor else {
+            return DispatchOutcome::Err(ErrorResponse::error(
+                id,
+                CODE_METHOD_NOT_FOUND,
+                "session.interactive.open is not available: no supervisor handle",
+                Some(json!({ "method": "session.interactive.open" })),
+            ));
+        };
+        let session_id = bob_core::types::SessionId::new();
+        tracing::debug!(
+            session_id = %session_id,
+            "session.interactive.open: allocated session id, awaiting fd receive"
+        );
+        DispatchOutcome::InteractiveSessionOpening { id, session_id }
     }
 
     /// Handle `report.submit`.
@@ -1224,15 +1026,20 @@ mod tests {
     }
 
     fn make_dispatcher_with_supervisor() -> (Dispatcher, tokio::task::JoinHandle<()>) {
-        let (handle, join) = pi_agent_supervisor::start(pi_agent_supervisor::Config::default())
-            .expect("supervisor start must succeed in tests");
+        let mut cfg = pi_agent_supervisor::Config::default();
+        cfg.extension_path =
+            std::env::current_exe().expect("current executable should exist in tests");
+        let (handle, join) =
+            pi_agent_supervisor::start(cfg).expect("supervisor start must succeed in tests");
         let dispatcher = Dispatcher::new(Some(handle), None, None, "0.1.0-test");
         (dispatcher, join)
     }
 
     fn make_supervisor_handle() -> (pi_agent_supervisor::Handle, tokio::task::JoinHandle<()>) {
-        pi_agent_supervisor::start(pi_agent_supervisor::Config::default())
-            .expect("supervisor start must succeed in tests")
+        let mut cfg = pi_agent_supervisor::Config::default();
+        cfg.extension_path =
+            std::env::current_exe().expect("current executable should exist in tests");
+        pi_agent_supervisor::start(cfg).expect("supervisor start must succeed in tests")
     }
 
     fn make_registry() -> ConnectionRegistry {
@@ -1681,72 +1488,6 @@ mod tests {
         }
     }
 
-    // AC-1 (T-086): chat.open returns ChatSubscribed with a router-backed receiver.
-    #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_chat_open_returns_chat_subscribed_with_receiver() {
-        let (dispatcher, _router) = make_dispatcher_with_chat_router();
-        let mut registry = make_registry();
-
-        let outcome = dispatcher
-            .dispatch(make_request("chat.open", json!(17)), &mut registry)
-            .await;
-
-        match outcome {
-            DispatchOutcome::ChatSubscribed { response, id, .. } => {
-                assert_eq!(response.id, json!(17));
-                assert!(
-                    response.result["id"].is_string(),
-                    "result.id must be a string"
-                );
-                let sub_id_str = response.result["id"].as_str().unwrap();
-                assert_eq!(
-                    id.to_string(),
-                    sub_id_str,
-                    "DispatchOutcome id must match result.id"
-                );
-            }
-            _ => panic!("expected ChatSubscribed for chat.open"),
-        }
-    }
-
-    // AC-2 (T-086): chat.close with a valid id deregisters from the router and
-    // returns ChatUnsubscribed.
-    #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_chat_close_valid_id_returns_chat_unsubscribed() {
-        let (dispatcher, _router) = make_dispatcher_with_chat_router();
-        let mut registry = make_registry();
-
-        let open_outcome = dispatcher
-            .dispatch(make_request("chat.open", json!(18)), &mut registry)
-            .await;
-        let chat_id = match open_outcome {
-            DispatchOutcome::ChatSubscribed { response, .. } => {
-                response.result["id"].as_str().unwrap().to_string()
-            }
-            _ => panic!("expected ChatSubscribed for chat.open"),
-        };
-
-        let close_req = make_request_with_params("chat.close", json!(19), json!({ "id": chat_id }));
-        let close_outcome = dispatcher.dispatch(close_req, &mut registry).await;
-
-        match close_outcome {
-            DispatchOutcome::ChatUnsubscribed { response, .. } => {
-                assert_eq!(response.result["ok"], json!(true))
-            }
-            _ => panic!("expected ChatUnsubscribed for chat.close"),
-        }
-    }
-
-    fn make_dispatcher_with_chat_router() -> (
-        Dispatcher,
-        std::sync::Arc<crate::chat_router::ChatReplyRouter>,
-    ) {
-        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
-        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
-            .with_chat_router(std::sync::Arc::clone(&router));
-        (dispatcher, router)
-    }
-
     fn make_monitoring_handle() -> (monitoring::Handle, tokio::task::JoinHandle<()>) {
         let tmp = tempfile::NamedTempFile::new().expect("temp file");
         monitoring::start(monitoring::Config {
@@ -1893,612 +1634,6 @@ mod tests {
             DispatchOutcome::Ok(_) => panic!("expected error, got Ok"),
             _ => panic!("unexpected dispatch outcome variant"),
         }
-    }
-
-    // AC-3 (T-071): chat.send without a chat-adapter handle returns an error
-    // explaining chat is not available.
-    #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_chat_send_without_handle_returns_method_not_found() {
-        let dispatcher = make_dispatcher_no_handles();
-        let mut registry = make_registry();
-
-        let outcome = dispatcher
-            .dispatch(make_request("chat.send", json!(20)), &mut registry)
-            .await;
-
-        match outcome {
-            DispatchOutcome::Err(e) => assert_eq!(e.error.code, CODE_METHOD_NOT_FOUND),
-            _ => panic!("expected error for chat.send without handle"),
-        }
-    }
-
-    // AC-2 (T-071): chat.send with an open chat subscription and a chat-adapter
-    // handle forwards a frame and returns success.
-    #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_chat_send_with_open_subscription_and_handle_returns_ok() {
-        use bob_core::types::{ChannelId, InternalEvent, RequestContext, UserId};
-        use requests_handler::Config as QueueConfig;
-        use std::sync::{Arc, Mutex};
-        use std::time::Duration;
-        use tokio::sync::watch;
-
-        let received: Arc<Mutex<Vec<(InternalEvent, RequestContext)>>> =
-            Arc::new(Mutex::new(vec![]));
-        let received_clone = received.clone();
-
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let cfg = QueueConfig {
-            request_queue_capacity: 64,
-            request_submit_timeout: Duration::from_secs(5),
-        };
-        let (intake, intake_task) = requests_handler::start_with(
-            cfg,
-            move |(ev, ctx)| {
-                let r = received_clone.clone();
-                async move {
-                    r.lock().unwrap().push((ev, ctx));
-                }
-            },
-            cancel_rx,
-        );
-
-        let channel_id = ChannelId::new();
-        let (frame_handle, _actor_task) = chat_adapter::start(intake, channel_id, 16);
-        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
-        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
-            .with_chat_handle(frame_handle)
-            .with_chat_router(std::sync::Arc::clone(&router));
-        let expected_sender = UserId::new();
-        let mut registry = make_registry();
-
-        // Open a chat subscription.
-        let open_outcome = dispatcher
-            .dispatch(make_request("chat.open", json!(70)), &mut registry)
-            .await;
-        let sub_id = match open_outcome {
-            DispatchOutcome::ChatSubscribed { response, .. } => {
-                response.result["id"].as_str().unwrap().to_string()
-            }
-            _ => panic!("expected ChatSubscribed for chat.open"),
-        };
-
-        // Send a message.
-        let send_outcome = dispatcher
-            .dispatch(
-                make_request_with_params(
-                    "chat.send",
-                    json!(71),
-                    json!({
-                        "id": sub_id,
-                        "text": "hello chat",
-                        "application_identity": expected_sender.to_string()
-                    }),
-                ),
-                &mut registry,
-            )
-            .await;
-
-        // Give the actor time to process the frame.
-        tokio::task::yield_now().await;
-
-        cancel_tx.send(true).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), intake_task)
-            .await
-            .expect("intake task must finish")
-            .expect("intake task must not panic");
-
-        match send_outcome {
-            DispatchOutcome::Ok(resp) => {
-                assert_eq!(resp.id, json!(71));
-                assert_eq!(resp.result["ok"], json!(true));
-            }
-            DispatchOutcome::Err(e) => {
-                panic!("expected Ok for chat.send, got: {}", e.error.message)
-            }
-            _ => panic!("unexpected dispatch outcome variant"),
-        }
-
-        let got = received.lock().unwrap();
-        assert_eq!(got.len(), 1, "exactly one event must be forwarded");
-        assert_eq!(got[0].0.payload, "hello chat");
-        assert_eq!(got[0].1.sender, expected_sender);
-    }
-
-    // AC-1 (T-087): chat.send attaches the validated subscription id to the chat
-    // frame, which the adapter preserves as reply_address on RequestContext.
-    #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_chat_send_attaches_subscription_id_as_reply_address_on_request_context() {
-        use bob_core::types::{ChannelId, InternalEvent, RequestContext, UserId};
-        use requests_handler::Config as QueueConfig;
-        use std::sync::{Arc, Mutex};
-        use std::time::Duration;
-        use tokio::sync::watch;
-
-        let received: Arc<Mutex<Vec<(InternalEvent, RequestContext)>>> =
-            Arc::new(Mutex::new(vec![]));
-        let received_clone = received.clone();
-
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let cfg = QueueConfig {
-            request_queue_capacity: 64,
-            request_submit_timeout: Duration::from_secs(5),
-        };
-        let (intake, intake_task) = requests_handler::start_with(
-            cfg,
-            move |(ev, ctx)| {
-                let r = received_clone.clone();
-                async move {
-                    r.lock().unwrap().push((ev, ctx));
-                }
-            },
-            cancel_rx,
-        );
-
-        let channel_id = ChannelId::new();
-        let (frame_handle, _actor_task) = chat_adapter::start(intake, channel_id, 16);
-        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
-        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
-            .with_chat_handle(frame_handle)
-            .with_chat_router(std::sync::Arc::clone(&router));
-        let expected_sender = UserId::new();
-        let mut registry = make_registry();
-
-        // Open a chat subscription and capture the subscription id.
-        let open_outcome = dispatcher
-            .dispatch(make_request("chat.open", json!(100)), &mut registry)
-            .await;
-        let sub_id = match open_outcome {
-            DispatchOutcome::ChatSubscribed { response, .. } => {
-                response.result["id"].as_str().unwrap().to_string()
-            }
-            _ => panic!("expected ChatSubscribed for chat.open"),
-        };
-
-        // Send a message.
-        dispatcher
-            .dispatch(
-                make_request_with_params(
-                    "chat.send",
-                    json!(101),
-                    json!({
-                        "id": sub_id,
-                        "text": "hello subscription id",
-                        "application_identity": expected_sender.to_string()
-                    }),
-                ),
-                &mut registry,
-            )
-            .await;
-
-        tokio::task::yield_now().await;
-
-        cancel_tx.send(true).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), intake_task)
-            .await
-            .expect("intake task must finish")
-            .expect("intake task must not panic");
-
-        let got = received.lock().unwrap();
-        assert_eq!(got.len(), 1, "exactly one event must be forwarded");
-        let (_, ctx) = &got[0];
-        assert_eq!(
-            ctx.reply_address,
-            Some(sub_id),
-            "reply_address must equal the subscription id from params.id"
-        );
-    }
-
-    // AC-2 (T-071): chat.send forwards the optional context_id from params.
-    #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_chat_send_forwards_context_id_to_chat_adapter() {
-        use bob_core::types::{ChannelId, InternalEvent, RequestContext, UserId};
-        use requests_handler::Config as QueueConfig;
-        use std::sync::{Arc, Mutex};
-        use std::time::Duration;
-        use tokio::sync::watch;
-
-        let received: Arc<Mutex<Vec<(InternalEvent, RequestContext)>>> =
-            Arc::new(Mutex::new(vec![]));
-        let received_clone = received.clone();
-
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let cfg = QueueConfig {
-            request_queue_capacity: 64,
-            request_submit_timeout: Duration::from_secs(5),
-        };
-        let (intake, intake_task) = requests_handler::start_with(
-            cfg,
-            move |(ev, ctx)| {
-                let r = received_clone.clone();
-                async move {
-                    r.lock().unwrap().push((ev, ctx));
-                }
-            },
-            cancel_rx,
-        );
-
-        let channel_id = ChannelId::new();
-        let (frame_handle, _actor_task) = chat_adapter::start(intake, channel_id, 16);
-        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
-        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
-            .with_chat_handle(frame_handle)
-            .with_chat_router(std::sync::Arc::clone(&router));
-        let expected_sender = UserId::new();
-        let mut registry = make_registry();
-
-        let open_outcome = dispatcher
-            .dispatch(make_request("chat.open", json!(72)), &mut registry)
-            .await;
-        let sub_id = match open_outcome {
-            DispatchOutcome::ChatSubscribed { response, .. } => {
-                response.result["id"].as_str().unwrap().to_string()
-            }
-            _ => panic!("expected ChatSubscribed for chat.open"),
-        };
-
-        dispatcher
-            .dispatch(
-                make_request_with_params(
-                    "chat.send",
-                    json!(73),
-                    json!({
-                        "id": sub_id,
-                        "text": "ctx msg",
-                        "context_id": "conv-42",
-                        "application_identity": expected_sender.to_string()
-                    }),
-                ),
-                &mut registry,
-            )
-            .await;
-
-        tokio::task::yield_now().await;
-
-        cancel_tx.send(true).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), intake_task)
-            .await
-            .expect("intake task must finish")
-            .expect("intake task must not panic");
-
-        let got = received.lock().unwrap();
-        assert_eq!(got.len(), 1);
-        assert_eq!(
-            got[0].1.context_id,
-            Some("conv-42".to_owned()),
-            "context_id must be forwarded from params"
-        );
-        assert_eq!(
-            got[0].1.sender, expected_sender,
-            "sender must come from params.application_identity"
-        );
-    }
-
-    // AC-4 (T-071): chat.send with an unknown subscription id returns an error
-    // and forwards nothing.
-    #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_chat_send_with_unknown_subscription_id_returns_error_and_forwards_nothing() {
-        use bob_core::types::{ChannelId, InternalEvent, RequestContext, UserId};
-        use requests_handler::Config as QueueConfig;
-        use std::sync::{Arc, Mutex};
-        use std::time::Duration;
-        use tokio::sync::watch;
-
-        let received: Arc<Mutex<Vec<(InternalEvent, RequestContext)>>> =
-            Arc::new(Mutex::new(vec![]));
-        let received_clone = received.clone();
-
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let cfg = QueueConfig {
-            request_queue_capacity: 64,
-            request_submit_timeout: Duration::from_secs(5),
-        };
-        let (intake, intake_task) = requests_handler::start_with(
-            cfg,
-            move |(ev, ctx)| {
-                let r = received_clone.clone();
-                async move {
-                    r.lock().unwrap().push((ev, ctx));
-                }
-            },
-            cancel_rx,
-        );
-
-        let channel_id = ChannelId::new();
-        let (frame_handle, _actor_task) = chat_adapter::start(intake, channel_id, 16);
-        let dispatcher = make_dispatcher_with_chat_handle(frame_handle);
-        let mut registry = make_registry();
-
-        // Use a subscription id that was never opened on this connection.
-        let outcome = dispatcher
-            .dispatch(
-                make_request_with_params(
-                    "chat.send",
-                    json!(74),
-                    json!({
-                        "id": "9999",
-                        "text": "should not arrive",
-                        "application_identity": UserId::new().to_string()
-                    }),
-                ),
-                &mut registry,
-            )
-            .await;
-
-        tokio::task::yield_now().await;
-
-        cancel_tx.send(true).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), intake_task)
-            .await
-            .expect("intake task must finish")
-            .expect("intake task must not panic");
-
-        match outcome {
-            DispatchOutcome::Err(e) => {
-                assert_eq!(e.id, json!(74));
-                assert_eq!(e.error.code, CODE_INVALID_REQUEST);
-            }
-            DispatchOutcome::Ok(_) => panic!("expected error for unknown subscription id"),
-            _ => panic!("unexpected dispatch outcome variant"),
-        }
-
-        let got = received.lock().unwrap();
-        assert_eq!(
-            got.len(),
-            0,
-            "no frame must be forwarded when subscription id is unknown"
-        );
-    }
-
-    // AC-4 (T-071): chat.send with an audit subscription id (not a chat id)
-    // returns an error.
-    #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_chat_send_with_audit_subscription_id_returns_error() {
-        use bob_core::types::ChannelId;
-        use requests_handler::Config as QueueConfig;
-        use std::time::Duration;
-        use tokio::sync::watch;
-
-        let (_, cancel_rx) = watch::channel(false);
-        let cfg = QueueConfig {
-            request_queue_capacity: 8,
-            request_submit_timeout: Duration::from_secs(1),
-        };
-        let (intake, _intake_task) =
-            requests_handler::start_with(cfg, move |(_, _): (_, _)| async {}, cancel_rx);
-        let channel_id = ChannelId::new();
-        let (frame_handle, _actor_task) = chat_adapter::start(intake, channel_id, 8);
-
-        // Build a dispatcher with both monitoring (for audit.tail.subscribe) and
-        // a chat handle.
-        let tmp = tempfile::NamedTempFile::new().expect("temp file");
-        let (mon_handle, _mon_task) = monitoring::start(monitoring::Config {
-            command_buffer: 4,
-            audit_log_path: tmp.path().to_path_buf(),
-        });
-        let dispatcher = Dispatcher::new(None, None, Some(mon_handle), "0.1.0-test")
-            .with_chat_handle(frame_handle);
-
-        let mut registry = make_registry();
-
-        // Open an audit subscription — this is NOT a chat subscription.
-        let sub_outcome = dispatcher
-            .dispatch(
-                make_request("audit.tail.subscribe", json!(80)),
-                &mut registry,
-            )
-            .await;
-        let audit_sub_id = match sub_outcome {
-            DispatchOutcome::Subscribed { response, .. } => {
-                response.result["id"].as_str().unwrap().to_string()
-            }
-            _ => panic!("expected Subscribed"),
-        };
-
-        // Attempt to chat.send with the audit subscription id.
-        let outcome = dispatcher
-            .dispatch(
-                make_request_with_params(
-                    "chat.send",
-                    json!(81),
-                    json!({
-                        "id": audit_sub_id,
-                        "text": "wrong kind",
-                        "application_identity": bob_core::types::UserId::new().to_string()
-                    }),
-                ),
-                &mut registry,
-            )
-            .await;
-
-        match outcome {
-            DispatchOutcome::Err(e) => {
-                assert_eq!(e.id, json!(81));
-                assert_eq!(e.error.code, CODE_INVALID_REQUEST);
-            }
-            DispatchOutcome::Ok(_) => panic!("expected error for audit sub id used in chat.send"),
-            _ => panic!("unexpected dispatch outcome variant"),
-        }
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_chat_send_without_application_identity_returns_error_and_forwards_nothing() {
-        use bob_core::types::{ChannelId, InternalEvent, RequestContext};
-        use requests_handler::Config as QueueConfig;
-        use std::sync::{Arc, Mutex};
-        use std::time::Duration;
-        use tokio::sync::watch;
-
-        let received: Arc<Mutex<Vec<(InternalEvent, RequestContext)>>> =
-            Arc::new(Mutex::new(vec![]));
-        let received_clone = received.clone();
-
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let cfg = QueueConfig {
-            request_queue_capacity: 64,
-            request_submit_timeout: Duration::from_secs(5),
-        };
-        let (intake, intake_task) = requests_handler::start_with(
-            cfg,
-            move |(ev, ctx)| {
-                let r = received_clone.clone();
-                async move {
-                    r.lock().unwrap().push((ev, ctx));
-                }
-            },
-            cancel_rx,
-        );
-
-        let channel_id = ChannelId::new();
-        let (frame_handle, _actor_task) = chat_adapter::start(intake, channel_id, 16);
-        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
-        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
-            .with_chat_handle(frame_handle)
-            .with_chat_router(std::sync::Arc::clone(&router));
-        let mut registry = make_registry();
-
-        let open_outcome = dispatcher
-            .dispatch(make_request("chat.open", json!(90)), &mut registry)
-            .await;
-        let sub_id = match open_outcome {
-            DispatchOutcome::ChatSubscribed { response, .. } => {
-                response.result["id"].as_str().unwrap().to_string()
-            }
-            _ => panic!("expected ChatSubscribed for chat.open"),
-        };
-
-        let outcome = dispatcher
-            .dispatch(
-                make_request_with_params(
-                    "chat.send",
-                    json!(91),
-                    json!({ "id": sub_id, "text": "missing identity" }),
-                ),
-                &mut registry,
-            )
-            .await;
-
-        tokio::task::yield_now().await;
-        cancel_tx.send(true).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), intake_task)
-            .await
-            .expect("intake task must finish")
-            .expect("intake task must not panic");
-
-        match outcome {
-            DispatchOutcome::Err(resp) => {
-                assert_eq!(resp.id, json!(91));
-                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
-            }
-            _ => panic!("expected error for missing application_identity"),
-        }
-
-        let got = received.lock().unwrap();
-        assert_eq!(got.len(), 0, "no frame should be forwarded");
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_chat_send_with_malformed_application_identity_returns_invalid_request() {
-        use bob_core::types::{ChannelId, InternalEvent, RequestContext, UserId};
-        use requests_handler::Config as QueueConfig;
-        use std::sync::{Arc, Mutex};
-        use std::time::Duration;
-        use tokio::sync::watch;
-
-        let received: Arc<Mutex<Vec<(InternalEvent, RequestContext)>>> =
-            Arc::new(Mutex::new(vec![]));
-        let received_clone = received.clone();
-
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let cfg = QueueConfig {
-            request_queue_capacity: 64,
-            request_submit_timeout: Duration::from_secs(5),
-        };
-        let (intake, intake_task) = requests_handler::start_with(
-            cfg,
-            move |(ev, ctx)| {
-                let r = received_clone.clone();
-                async move {
-                    r.lock().unwrap().push((ev, ctx));
-                }
-            },
-            cancel_rx,
-        );
-
-        let channel_id = ChannelId::new();
-        let (frame_handle, _actor_task) = chat_adapter::start(intake, channel_id, 16);
-        let router = std::sync::Arc::new(crate::chat_router::ChatReplyRouter::new());
-        let dispatcher = Dispatcher::new(None, None, None, "0.1.0-test")
-            .with_chat_handle(frame_handle)
-            .with_chat_router(std::sync::Arc::clone(&router));
-        let mut registry = make_registry();
-
-        let open_outcome = dispatcher
-            .dispatch(make_request("chat.open", json!(92)), &mut registry)
-            .await;
-        let sub_id = match open_outcome {
-            DispatchOutcome::ChatSubscribed { response, .. } => {
-                response.result["id"].as_str().unwrap().to_string()
-            }
-            _ => panic!("expected ChatSubscribed for chat.open"),
-        };
-
-        for (id, application_identity) in [(93, ""), (94, "not-a-uuid")] {
-            let outcome = dispatcher
-                .dispatch(
-                    make_request_with_params(
-                        "chat.send",
-                        json!(id),
-                        json!({
-                            "id": sub_id,
-                            "text": "bad identity",
-                            "application_identity": application_identity
-                        }),
-                    ),
-                    &mut registry,
-                )
-                .await;
-
-            match outcome {
-                DispatchOutcome::Err(resp) => {
-                    assert_eq!(resp.id, json!(id));
-                    assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
-                }
-                _ => panic!("expected invalid-request for malformed application_identity"),
-            }
-        }
-
-        let valid_outcome = dispatcher
-            .dispatch(
-                make_request_with_params(
-                    "chat.send",
-                    json!(95),
-                    json!({
-                        "id": sub_id,
-                        "text": "ok identity",
-                        "application_identity": UserId::new().to_string()
-                    }),
-                ),
-                &mut registry,
-            )
-            .await;
-        match valid_outcome {
-            DispatchOutcome::Ok(_) => {}
-            _ => panic!("expected valid application_identity to pass"),
-        }
-
-        tokio::task::yield_now().await;
-        cancel_tx.send(true).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), intake_task)
-            .await
-            .expect("intake task must finish")
-            .expect("intake task must not panic");
-
-        let got = received.lock().unwrap();
-        assert_eq!(got.len(), 1, "only valid identity should be forwarded");
-    }
-
-    fn make_dispatcher_with_chat_handle(frame_handle: chat_adapter::FrameHandle) -> Dispatcher {
-        Dispatcher::new(None, None, None, "0.1.0-test").with_chat_handle(frame_handle)
     }
 
     // map_service_error maps NotImplemented to -32601.
@@ -3208,6 +2343,59 @@ mod tests {
                 assert_eq!(resp.error.code, CODE_METHOD_NOT_FOUND);
             }
             DispatchOutcome::Ok(_) => panic!("expected error, got Ok"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // ── session.interactive.open tests (T-105) ───────────────────────────────
+
+    // AC-4 (T-105): session.interactive.open without a supervisor handle returns
+    // -32601 Method not found.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_session_interactive_open_without_supervisor_returns_method_not_found() {
+        let dispatcher = make_dispatcher_no_handles();
+        let req = make_request("session.interactive.open", json!(600));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(600));
+                assert_eq!(resp.error.code, CODE_METHOD_NOT_FOUND);
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error without supervisor, got Ok"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-4 (T-105): session.interactive.open with a supervisor returns
+    // InteractiveSessionOpening outcome — no pre-flight admission check is
+    // performed (ADR-010).
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_session_interactive_open_with_supervisor_returns_interactive_session_opening()
+    {
+        let (dispatcher, sup_task) = make_dispatcher_with_supervisor();
+        let req = make_request("session.interactive.open", json!(601));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::InteractiveSessionOpening { id, session_id } => {
+                assert_eq!(id, json!(601));
+                // session_id must be a freshly-allocated non-nil UUID
+                assert_ne!(
+                    session_id,
+                    bob_core::types::SessionId::default(),
+                    "session_id must be freshly allocated"
+                );
+            }
+            DispatchOutcome::Err(e) => panic!(
+                "expected InteractiveSessionOpening, got error: {}",
+                e.error.message
+            ),
             _ => panic!("unexpected dispatch outcome variant"),
         }
     }

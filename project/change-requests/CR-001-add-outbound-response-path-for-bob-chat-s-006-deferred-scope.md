@@ -1,12 +1,16 @@
 ---
 id: CR-001
 title: Add outbound response path for bob chat (S-006 deferred scope)
-status: accepted
+status: superseded
 created: '2026-06-11'
 ---
 
 # Add outbound response path for bob chat (S-006 deferred scope)
 
+> **Superseded (2026-06-23):** S-008 was superseded by CR-002 (interactive chat
+> moves to a supervised direct `pi` session whose output reaches the terminal
+> directly), so this admin-socket outbound-path change request is obsolete.
+>
 > **Resolution (2026-06-11):** accepted at Gate 1 as spec S-008
 > (`project/specs/S-008-outbound-chat-response-path-over-the-admin-socket.md`).
 > Decisions: multiplex on the subscription connection (per-service registry

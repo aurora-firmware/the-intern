@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use bob_core::error::{ServiceError, ServiceResult};
 use bob_core::ports::{AuditSink, PersistenceStore};
-use bob_core::types::ChannelId;
 use tokio::{sync::watch, task::JoinHandle, time};
 use tracing::info;
 
@@ -27,9 +26,6 @@ struct Runtime {
     _persistence: persistence::Handle,
     _policy_control: policy_control::Handle,
     _pi_agent_supervisor: pi_agent_supervisor::Handle,
-    // Optional chat-adapter handle: present when channels.chat.enabled = true.
-    // Dropping it closes the frame channel so the adapter actor exits its recv loop.
-    _chat_adapter: Option<chat_adapter::FrameHandle>,
     // Scheduler-adapter reload handle.  The scheduler is always started (no
     // enable/disable flag).  Dropping it closes the watch channel so the actor
     // exits its recv loop.
@@ -45,9 +41,6 @@ struct Runtime {
     // child-process reaping is distinct from the general actor drain.
     supervisor_join: JoinHandle<()>,
 
-    // Optional join handle for the chat-adapter actor (present when chat is enabled).
-    // Awaited in shutdown phase 3 alongside the other non-supervisor actors.
-    chat_adapter_join: Option<JoinHandle<()>>,
     // Join handle for the scheduler-adapter actor (always present — no enable/disable flag).
     // Awaited in shutdown phase 3 alongside the other non-supervisor actors.
     scheduler_adapter_join: JoinHandle<()>,
@@ -102,6 +95,17 @@ fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Con
         command_buffer: cfg.request_queue_capacity,
         child_termination_deadline: cfg.shutdown_reap_deadline,
         extension_sock_path: cfg.extension_sock_path.clone(),
+        extension_path: cfg.extension_path.clone(),
+    }
+}
+
+fn build_interactive_session_config(cfg: &BobConfig) -> admin_rpc::InteractiveSessionConfig {
+    admin_rpc::InteractiveSessionConfig {
+        command: cfg.pi_agent_command.clone(),
+        args: Vec::new(),
+        child_termination_deadline: cfg.shutdown_reap_deadline,
+        extension_sock_path: cfg.extension_sock_path.clone(),
+        extension_path: cfg.extension_path.clone(),
     }
 }
 
@@ -193,24 +197,6 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     })?;
     info!("extension-ipc actor started");
 
-    // Conditionally start the chat adapter when the chat channel is enabled.
-    // The adapter receives frames from admin-RPC via its FrameHandle and forwards
-    // them to the requests-handler intake path.
-    let (maybe_chat_handle, maybe_chat_join) = if cfg.channels.chat.enabled {
-        info!("starting chat-adapter actor");
-        let chat_channel_id = ChannelId::new();
-        let (frame_handle, chat_join) = chat_adapter::start(
-            requests_handler_handle.clone(),
-            chat_channel_id,
-            cfg.request_queue_capacity,
-        );
-        info!("chat-adapter actor started");
-        (Some(frame_handle), Some(chat_join))
-    } else {
-        info!("chat channel disabled; skipping chat-adapter actor");
-        (None, None)
-    };
-
     info!("starting scheduler-adapter actor");
     let (scheduler_reload_handle, scheduler_join) = scheduler_adapter::start(
         requests_handler_handle.clone(),
@@ -233,12 +219,12 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         supervisor: Some(pi_agent_supervisor_handle.clone()),
         policy: Some(policy_control_handle.clone()),
         monitoring: Some(monitoring_handle.clone()),
-        chat_adapter: maybe_chat_handle.clone(),
         // Clone the scheduler reload handle into the admin-RPC dispatcher so that
         // schedule.* methods (T-097) can push updated job tables to the actor.
         // The primary handle is retained in the Runtime for shutdown ordering.
         scheduler: Some(scheduler_reload_handle.clone()),
         config_path: maybe_config_path,
+        interactive_session: Some(build_interactive_session_config(cfg)),
         ..admin_rpc::Config::default()
     };
     let (admin_rpc_handle, admin_rpc_join) = admin_rpc::start(admin_rpc_cfg).map_err(|e| {
@@ -272,12 +258,10 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         _persistence: persistence_handle,
         _policy_control: policy_control_handle,
         _pi_agent_supervisor: pi_agent_supervisor_handle,
-        _chat_adapter: maybe_chat_handle,
         _scheduler_adapter: scheduler_reload_handle,
         requests_handler_cancel_tx: rh_cancel_tx,
         joins,
         supervisor_join: pi_agent_supervisor_join,
-        chat_adapter_join: maybe_chat_join,
         scheduler_adapter_join: scheduler_join,
         admin_sock_path: cfg.admin_sock_path.clone(),
         extension_sock_path: cfg.extension_sock_path.clone(),
@@ -343,12 +327,10 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
         _persistence,
         _policy_control,
         _pi_agent_supervisor,
-        _chat_adapter,
         _scheduler_adapter,
         requests_handler_cancel_tx,
         joins,
         supervisor_join,
-        chat_adapter_join,
         scheduler_adapter_join,
         admin_sock_path,
         extension_sock_path,
@@ -370,8 +352,6 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
     // Drop the supervisor handle so the supervisor actor sees its channel close
     // and proceeds to call shutdown_all on its pool (terminating all children).
     drop(_pi_agent_supervisor);
-    // Drop the chat-adapter handle so its actor sees its frame channel close and exits.
-    drop(_chat_adapter);
     // Drop the scheduler-adapter reload handle so its actor sees the watch channel
     // close and exits cleanly.
     drop(_scheduler_adapter);
@@ -383,12 +363,8 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
         "shutdown: phase 3 — draining queues (deadline: {:?})",
         cfg.shutdown_drain_deadline
     );
-    // Collect all non-supervisor join handles including the optional chat-adapter join
-    // and the always-present scheduler-adapter join.
+    // Collect all non-supervisor join handles including the scheduler-adapter join.
     let mut all_joins = joins;
-    if let Some(chat_join) = chat_adapter_join {
-        all_joins.push(chat_join);
-    }
     all_joins.push(scheduler_adapter_join);
     let drain_result = time::timeout(cfg.shutdown_drain_deadline, drain_joins(all_joins)).await;
     match drain_result {
@@ -467,11 +443,16 @@ pub mod tests {
 
     use super::*;
 
+    fn existing_extension_path() -> std::path::PathBuf {
+        std::env::current_exe().expect("current executable should exist")
+    }
+
     fn test_cfg_no_sockets() -> BobConfig {
         BobConfig {
             // Empty paths — tests that do not bind sockets use these.
             admin_sock_path: std::path::PathBuf::new(),
             extension_sock_path: std::path::PathBuf::new(),
+            extension_path: existing_extension_path(),
             pi_agent_command: "sh".to_string(),
             pi_agent_args: vec!["-c".to_string(), "exit 0".to_string()],
             request_queue_capacity: 16,
@@ -485,6 +466,7 @@ pub mod tests {
         BobConfig {
             admin_sock_path: tmp.path().join("admin.sock"),
             extension_sock_path: tmp.path().join("extension.sock"),
+            extension_path: existing_extension_path(),
             pi_agent_command: "sh".to_string(),
             pi_agent_args: vec!["-c".to_string(), "exit 0".to_string()],
             request_queue_capacity: 16,
@@ -496,6 +478,7 @@ pub mod tests {
 
     #[test]
     fn pi_agent_supervisor_config_maps_phase2_bob_settings() {
+        let extension_path = std::path::PathBuf::from("/opt/bob/extension.ts");
         let cfg = BobConfig {
             request_queue_capacity: 33,
             shutdown_reap_deadline: Duration::from_secs(11),
@@ -508,6 +491,7 @@ pub mod tests {
             pi_agent_warm_pool_size: 3,
             pi_agent_max_processes: 9,
             pi_agent_idle_reap_timeout: Duration::from_secs(45),
+            extension_path: extension_path.clone(),
             ..BobConfig::test_base()
         };
 
@@ -530,6 +514,32 @@ pub mod tests {
             supervisor_cfg.child_termination_deadline,
             Duration::from_secs(11)
         );
+        assert_eq!(supervisor_cfg.extension_path, extension_path);
+    }
+
+    #[test]
+    fn interactive_session_config_maps_bob_spawn_settings_without_rpc_args() {
+        let extension_sock_path = std::path::PathBuf::from("/run/bob/extension.sock");
+        let extension_path = std::path::PathBuf::from("/opt/bob/extension.ts");
+        let cfg = BobConfig {
+            pi_agent_command: "pi-custom".to_string(),
+            pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+            shutdown_reap_deadline: Duration::from_secs(11),
+            extension_sock_path: extension_sock_path.clone(),
+            extension_path: extension_path.clone(),
+            ..BobConfig::test_base()
+        };
+
+        let interactive_cfg = build_interactive_session_config(&cfg);
+
+        assert_eq!(interactive_cfg.command, "pi-custom");
+        assert!(interactive_cfg.args.is_empty());
+        assert_eq!(
+            interactive_cfg.child_termination_deadline,
+            Duration::from_secs(11)
+        );
+        assert_eq!(interactive_cfg.extension_sock_path, extension_sock_path);
+        assert_eq!(interactive_cfg.extension_path, extension_path);
     }
 
     // AC-2 (T-039): extension_sock_path from BobConfig is plumbed into the supervisor config.
@@ -654,70 +664,6 @@ pub mod tests {
         );
     }
 
-    // AC-1 (T-072): when chat is enabled, start_subsystems constructs the chat adapter
-    // and the runtime holds its join handle.
-    #[tokio::test(flavor = "current_thread")]
-    async fn start_subsystems_with_chat_enabled_creates_chat_adapter_join_handle() {
-        let tmp = tempfile::tempdir().expect("temp dir");
-        let mut cfg = test_cfg_with_sockets(&tmp);
-        cfg.channels.chat.enabled = true;
-        let runtime = start_subsystems(&cfg).expect("subsystems must start");
-        assert!(
-            runtime.chat_adapter_join.is_some(),
-            "chat adapter join handle must be present when chat is enabled"
-        );
-        run_shutdown_protocol(runtime, &cfg).await;
-    }
-
-    // AC-2 (T-072): when chat is disabled, start_subsystems does not construct
-    // the chat adapter, and the runtime holds no chat adapter join handle.
-    #[tokio::test(flavor = "current_thread")]
-    async fn start_subsystems_with_chat_disabled_has_no_chat_adapter_join_handle() {
-        let tmp = tempfile::tempdir().expect("temp dir");
-        let mut cfg = test_cfg_with_sockets(&tmp);
-        cfg.channels.chat.enabled = false;
-        let runtime = start_subsystems(&cfg).expect("subsystems must start");
-        assert!(
-            runtime.chat_adapter_join.is_none(),
-            "chat adapter join handle must be absent when chat is disabled"
-        );
-        run_shutdown_protocol(runtime, &cfg).await;
-    }
-
-    // AC-3 (T-072): graceful shutdown with chat enabled completes without hanging.
-    #[tokio::test(flavor = "current_thread")]
-    async fn shutdown_protocol_with_chat_enabled_completes_without_hanging() {
-        let tmp = tempfile::tempdir().expect("temp dir");
-        let mut cfg = test_cfg_with_sockets(&tmp);
-        cfg.channels.chat.enabled = true;
-        cfg.shutdown_drain_deadline = std::time::Duration::from_millis(200);
-        cfg.shutdown_reap_deadline = std::time::Duration::from_millis(100);
-        let runtime = start_subsystems(&cfg).expect("subsystems must start");
-        tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            run_shutdown_protocol(runtime, &cfg),
-        )
-        .await
-        .expect("shutdown protocol with chat adapter must complete within deadline");
-    }
-
-    // AC-3 (T-072): graceful shutdown with chat disabled also completes without hanging.
-    #[tokio::test(flavor = "current_thread")]
-    async fn shutdown_protocol_with_chat_disabled_completes_without_hanging() {
-        let tmp = tempfile::tempdir().expect("temp dir");
-        let mut cfg = test_cfg_with_sockets(&tmp);
-        cfg.channels.chat.enabled = false;
-        cfg.shutdown_drain_deadline = std::time::Duration::from_millis(200);
-        cfg.shutdown_reap_deadline = std::time::Duration::from_millis(100);
-        let runtime = start_subsystems(&cfg).expect("subsystems must start");
-        tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            run_shutdown_protocol(runtime, &cfg),
-        )
-        .await
-        .expect("shutdown protocol without chat adapter must complete within deadline");
-    }
-
     #[tokio::test(flavor = "current_thread")]
     async fn shutdown_protocol_for_idle_runtime_finishes_before_drain_deadline_expires() {
         let tmp = tempfile::tempdir().expect("temp dir");
@@ -782,6 +728,7 @@ pub mod tests {
         let cfg = BobConfig {
             admin_sock_path: tmp.path().join("admin.sock"),
             extension_sock_path: tmp.path().join("extension.sock"),
+            extension_path: existing_extension_path(),
             // Use sh workers that exit immediately — they spawn, pool is warm,
             // shutdown_all terminates them.
             pi_agent_command: "sh".to_string(),
@@ -850,6 +797,7 @@ pub mod tests {
         let cfg = BobConfig {
             admin_sock_path: admin_sock.clone(),
             extension_sock_path: ext_sock.clone(),
+            extension_path: existing_extension_path(),
             request_queue_capacity: 16,
             shutdown_drain_deadline: Duration::from_millis(100),
             shutdown_reap_deadline: Duration::from_millis(50),
@@ -980,6 +928,7 @@ pub mod tests {
         let cfg = BobConfig {
             admin_sock_path: admin_sock.clone(),
             extension_sock_path: ext_sock.clone(),
+            extension_path: existing_extension_path(),
             shutdown_drain_deadline: Duration::from_millis(50),
             shutdown_reap_deadline: Duration::from_millis(25),
             ..BobConfig::test_base()
@@ -1067,6 +1016,7 @@ pub mod tests {
         let cfg = BobConfig {
             admin_sock_path: tmp.path().join("admin.sock"),
             extension_sock_path: tmp.path().join("extension.sock"),
+            extension_path: existing_extension_path(),
             monitoring: crate::config::MonitoringConfig {
                 audit_log_path: audit_log.clone(),
                 default_tail_filters: vec![],
@@ -1134,6 +1084,7 @@ pub mod tests {
         let cfg = BobConfig {
             admin_sock_path: sock_parent.join("admin.sock"),
             extension_sock_path: sock_parent.join("extension.sock"),
+            extension_path: existing_extension_path(),
             pi_agent_command: "sh".to_string(),
             pi_agent_args: vec!["-c".to_string(), "exit 0".to_string()],
             request_queue_capacity: 16,

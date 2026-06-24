@@ -7,8 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bob::config::{BobConfig, ChannelsConfig, ChatChannelConfig, MonitoringConfig, ScheduleConfig};
-use bob_core::types::{SessionId, UserId};
+use bob::config::{BobConfig, MonitoringConfig, ScheduleConfig};
+use bob_core::types::SessionId;
 use policy_control::PolicyConfig;
 use serde_json::{json, Value};
 
@@ -26,6 +26,16 @@ const ADMIN_RPC_DEADLINE: Duration = Duration::from_secs(2);
 const AUDIT_TAIL_DELIVERY_DEADLINE: Duration = Duration::from_secs(2);
 const LARGE_REPORT_SUMMARY_BYTES: usize = 9_000;
 
+fn extension_fixture_path() -> PathBuf {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../extensions/bob.ts");
+    assert!(
+        path.is_file(),
+        "extension fixture must exist at {}",
+        path.display()
+    );
+    path
+}
+
 struct BobServeChild {
     child: Child,
 }
@@ -36,6 +46,7 @@ impl BobServeChild {
             .arg("serve")
             .env("BOB_ADMIN_SOCK_PATH", admin_sock_path)
             .env("BOB_EXTENSION_SOCK_PATH", extension_sock_path)
+            .env("BOB_EXTENSION_PATH", extension_fixture_path())
             .env(
                 "BOB_SHUTDOWN_DRAIN_DEADLINE",
                 format!("{}ms", SHUTDOWN_DRAIN_DEADLINE.as_millis()),
@@ -67,6 +78,7 @@ impl BobServeChild {
             .arg("serve")
             .env("BOB_ADMIN_SOCK_PATH", admin_sock_path)
             .env("BOB_EXTENSION_SOCK_PATH", extension_sock_path)
+            .env("BOB_EXTENSION_PATH", extension_fixture_path())
             .env("XDG_STATE_HOME", xdg_state_home)
             .env(
                 "BOB_SHUTDOWN_DRAIN_DEADLINE",
@@ -718,6 +730,7 @@ fn client_cfg(admin_sock_path: PathBuf) -> BobConfig {
     BobConfig {
         admin_sock_path,
         extension_sock_path: PathBuf::new(),
+        extension_path: PathBuf::new(),
         request_queue_capacity: 1024,
         request_submit_timeout: Duration::from_secs(5),
         shutdown_drain_deadline: Duration::from_secs(30),
@@ -734,12 +747,6 @@ fn client_cfg(admin_sock_path: PathBuf) -> BobConfig {
             audit_log_path: PathBuf::new(),
             default_tail_filters: vec![],
         },
-        channels: ChannelsConfig {
-            chat: ChatChannelConfig { enabled: true },
-        },
-        chat_application_identity: "00000000-0000-0000-0000-000000000001"
-            .parse::<UserId>()
-            .expect("chat test identity should parse"),
         config_path: PathBuf::new(),
         schedule: ScheduleConfig { entries: vec![] },
     }

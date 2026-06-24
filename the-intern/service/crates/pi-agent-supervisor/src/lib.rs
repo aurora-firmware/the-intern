@@ -9,6 +9,7 @@ use bob_core::{
     error::{ServiceError, ServiceResult},
     types::SessionId,
 };
+use std::os::unix::io::OwnedFd;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::{
@@ -16,6 +17,8 @@ use tokio::{
     task::JoinHandle,
     time::{self, MissedTickBehavior},
 };
+
+const INTERACTIVE_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
@@ -29,6 +32,8 @@ pub struct Config {
     /// Absolute path to the extension socket passed to each child as
     /// `BOB_EXTENSION_SOCK_PATH`.  An empty path means the variable is not set.
     pub extension_sock_path: PathBuf,
+    /// Resolved path to the pi extension that enforces tool-call authorization.
+    pub extension_path: PathBuf,
 }
 
 impl Default for Config {
@@ -42,6 +47,7 @@ impl Default for Config {
             command_buffer: 64,
             child_termination_deadline: Duration::from_secs(10),
             extension_sock_path: PathBuf::new(),
+            extension_path: PathBuf::new(),
         }
     }
 }
@@ -62,6 +68,30 @@ enum Command {
         session_id: SessionId,
         message: String,
         response_tx: oneshot::Sender<ServiceResult<()>>,
+    },
+    StartInteractiveSession {
+        command: String,
+        args: Vec<String>,
+        child_termination_deadline: Duration,
+        session_id: SessionId,
+        extension_sock_path: PathBuf,
+        extension_path: PathBuf,
+        stdin: OwnedFd,
+        stdout: OwnedFd,
+        stderr: OwnedFd,
+        response_tx: oneshot::Sender<ServiceResult<SessionId>>,
+    },
+    /// Subscribe to the exit event of an interactive session.
+    ///
+    /// The actor retains the session in the pool so it remains killable and
+    /// sends the caller a [`oneshot::Receiver`] that fires when the dedicated
+    /// interactive-exit poll detects that the child has exited.
+    ///
+    /// Returns `ServiceError::InvalidRequest` if no interactive session with
+    /// the given id exists.
+    WatchInteractiveSessionExit {
+        session_id: SessionId,
+        response_tx: oneshot::Sender<ServiceResult<oneshot::Receiver<()>>>,
     },
 }
 
@@ -129,6 +159,78 @@ impl Handle {
 
         response_rx.await.map_err(|_| ServiceError::Shutdown)?
     }
+
+    /// Subscribes to the exit event of a running interactive session.
+    ///
+    /// The actor retains the session in the pool so it remains killable. The
+    /// caller receives a [`oneshot::Receiver<()>`] that resolves when the
+    /// dedicated interactive-exit poll detects a natural exit or after
+    /// `kill_session` terminates the child.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ServiceError::InvalidRequest` if no interactive session with
+    /// `session_id` is currently tracked, or `ServiceError::Shutdown` if the
+    /// actor has already stopped.
+    pub async fn watch_interactive_session_exit(
+        &self,
+        session_id: SessionId,
+    ) -> ServiceResult<oneshot::Receiver<()>> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.tx
+            .send(Command::WatchInteractiveSessionExit {
+                session_id,
+                response_tx,
+            })
+            .await
+            .map_err(|_| ServiceError::Shutdown)?;
+        response_rx.await.map_err(|_| ServiceError::Shutdown)?
+    }
+
+    /// Starts a supervised interactive pi session on the supplied terminal fds.
+    ///
+    /// The three `OwnedFd` arguments are the client's stdio file descriptors,
+    /// typically received via `SCM_RIGHTS` over `admin.sock` (ADR-011).
+    /// The session is tracked in the session table and appears in
+    /// `list_sessions` immediately.  It is terminated on actor shutdown.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ServiceError::ChildProcess` if the extension file is missing or
+    /// if the OS rejects the spawn, or `ServiceError::Shutdown` if the actor
+    /// has already stopped.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_interactive_session(
+        &self,
+        command: String,
+        args: Vec<String>,
+        child_termination_deadline: Duration,
+        session_id: SessionId,
+        extension_sock_path: PathBuf,
+        extension_path: PathBuf,
+        stdin: OwnedFd,
+        stdout: OwnedFd,
+        stderr: OwnedFd,
+    ) -> ServiceResult<SessionId> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.tx
+            .send(Command::StartInteractiveSession {
+                command,
+                args,
+                child_termination_deadline,
+                session_id,
+                extension_sock_path,
+                extension_path,
+                stdin,
+                stdout,
+                stderr,
+                response_tx,
+            })
+            .await
+            .map_err(|_| ServiceError::Shutdown)?;
+
+        response_rx.await.map_err(|_| ServiceError::Shutdown)?
+    }
 }
 
 impl Actor {
@@ -146,6 +248,8 @@ impl Actor {
         let mut reap_tick =
             time::interval(self.cfg.idle_reap_timeout.max(Duration::from_millis(1)));
         reap_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut interactive_exit_tick = time::interval(INTERACTIVE_EXIT_POLL_INTERVAL);
+        interactive_exit_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         loop {
             tokio::select! {
@@ -194,7 +298,71 @@ impl Actor {
                             );
                             let _ = response_tx.send(self.pool.send_prompt(session_id, message).await);
                         }
+                        Command::WatchInteractiveSessionExit {
+                            session_id,
+                            response_tx,
+                        } => {
+                            tracing::debug!(
+                                session_id = %session_id,
+                                "pi-agent-supervisor watch interactive session exit command received"
+                            );
+                            // Register a watcher WITHOUT taking the process from the pool.
+                            // The process stays in `interactive_sessions` so `kill_session`
+                            // can still terminate it (AC-3). The dedicated interactive
+                            // exit tick polls `try_poll_exit()` and fires the sender when
+                            // the child exits naturally (AC-2).
+                            let (exit_tx, exit_rx) = oneshot::channel::<()>();
+                            match self.pool.register_interactive_exit_watcher(session_id, exit_tx) {
+                                Ok(()) => {
+                                    let _ = response_tx.send(Ok(exit_rx));
+                                }
+                                Err(()) => {
+                                    let _ = response_tx.send(Err(ServiceError::InvalidRequest {
+                                        detail: format!(
+                                            "no interactive session with id {session_id}"
+                                        ),
+                                    }));
+                                }
+                            }
+                        }
+                        Command::StartInteractiveSession {
+                            command,
+                            args,
+                            child_termination_deadline,
+                            session_id,
+                            extension_sock_path,
+                            extension_path,
+                            stdin,
+                            stdout,
+                            stderr,
+                            response_tx,
+                        } => {
+                            tracing::debug!(
+                                session_id = %session_id,
+                                "pi-agent-supervisor start interactive session command received"
+                            );
+                            let cfg = process::InteractiveProcessConfig {
+                                command,
+                                args,
+                                child_termination_deadline,
+                                session_id,
+                                extension_sock_path,
+                                extension_path,
+                            };
+                            let result =
+                                self.pool.start_interactive_session(cfg, stdin, stdout, stderr);
+                            if let Ok(id) = &result {
+                                tracing::debug!(
+                                    session_id = %id,
+                                    "pi-agent-supervisor interactive session started"
+                                );
+                            }
+                            let _ = response_tx.send(result);
+                        }
                     }
+                }
+                _ = interactive_exit_tick.tick() => {
+                    self.pool.poll_interactive_exits();
                 }
                 _ = reap_tick.tick() => {
                     match self.pool.reap_idle_and_surplus().await {
@@ -256,6 +424,7 @@ mod tests {
             command_buffer: 16,
             child_termination_deadline: Duration::from_millis(2000),
             extension_sock_path: std::path::PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
         }
     }
 
@@ -520,6 +689,165 @@ mod tests {
         task.abort();
     }
 
+    // AC-1/AC-2: start_interactive_session spawns the child and exposes its id via list_sessions.
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_interactive_session_returns_session_id_visible_in_list_sessions() {
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let (handle, task) =
+            start(test_config("sh", &["-c", "exit 0"], 0, 4)).expect("startup should succeed");
+
+        let stdin_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stdout_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stderr_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+
+        let session_id = handle
+            .start_interactive_session(
+                "sh".to_string(),
+                vec![
+                    "-c".to_string(),
+                    "trap 'exit 0' TERM; while :; do sleep 1; done".to_string(),
+                ],
+                Duration::from_millis(2000),
+                SessionId::new(),
+                std::path::PathBuf::new(),
+                std::env::current_exe().expect("current executable should exist"),
+                stdin_fd,
+                stdout_fd,
+                stderr_fd,
+            )
+            .await
+            .expect("interactive session should start");
+
+        let sessions = handle
+            .list_sessions()
+            .await
+            .expect("list sessions should succeed");
+
+        assert!(
+            sessions.contains(&session_id),
+            "list_sessions must include the interactive session id; got {sessions:?}"
+        );
+
+        task.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn interactive_exit_watcher_is_not_delayed_by_idle_reap_timeout() {
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let mut cfg = test_config("sh", &["-c", "exit 0"], 0, 4);
+        cfg.idle_reap_timeout = Duration::from_secs(60);
+        let (handle, task) = start(cfg).expect("startup should succeed");
+
+        // Let the idle interval's immediate first tick complete before the
+        // interactive child starts, so this test exercises later exit polling.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let stdin_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stdout_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stderr_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let session_id = handle
+            .start_interactive_session(
+                "sh".to_string(),
+                vec!["-c".to_string(), "exit 0".to_string()],
+                Duration::from_secs(2),
+                SessionId::new(),
+                std::path::PathBuf::new(),
+                std::env::current_exe().expect("current executable should exist"),
+                stdin_fd,
+                stdout_fd,
+                stderr_fd,
+            )
+            .await
+            .expect("interactive session should start");
+        let exit_rx = handle
+            .watch_interactive_session_exit(session_id)
+            .await
+            .expect("interactive exit watcher should register");
+
+        tokio::time::timeout(Duration::from_secs(2), exit_rx)
+            .await
+            .expect("natural exit notification must not wait for idle reaping")
+            .expect("interactive exit watcher sender should fire");
+
+        task.abort();
+    }
+
+    // AC-3: actor shutdown terminates interactive sessions.
+    #[tokio::test(flavor = "current_thread")]
+    async fn actor_shutdown_terminates_interactive_sessions() {
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let pid_file = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-interactive-actor-shutdown-{}.txt",
+            SessionId::new()
+        ));
+        let _ = fs::remove_file(&pid_file);
+        let pid_file_path = pid_file.to_string_lossy().into_owned();
+
+        let script = format!(
+            "printf '%s\\n' $$ >> \"{}\"; trap '' TERM; while :; do :; done",
+            pid_file_path
+        );
+
+        let (handle, task) =
+            start(test_config("sh", &["-c", "exit 0"], 0, 4)).expect("startup should succeed");
+
+        let stdin_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stdout_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stderr_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+
+        handle
+            .start_interactive_session(
+                "sh".to_string(),
+                vec!["-c".to_string(), script],
+                Duration::from_millis(50),
+                SessionId::new(),
+                std::path::PathBuf::new(),
+                std::env::current_exe().expect("current executable should exist"),
+                stdin_fd,
+                stdout_fd,
+                stderr_fd,
+            )
+            .await
+            .expect("interactive session should start");
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        drop(handle);
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("actor should stop after handle drop")
+            .expect("actor join should succeed");
+
+        let started = fs::read_to_string(&pid_file).expect("pid file should exist");
+        let pids: Vec<i32> = started
+            .lines()
+            .map(|line| {
+                line.parse::<i32>()
+                    .expect("pid file should contain numeric pids")
+            })
+            .collect();
+
+        assert!(
+            !pids.is_empty(),
+            "interactive child should have written a pid"
+        );
+        for pid in pids {
+            let proc_path = format!("/proc/{pid}");
+            assert!(
+                !std::path::Path::new(&proc_path).exists(),
+                "interactive worker pid {pid} should not exist after actor shutdown"
+            );
+        }
+
+        let _ = fs::remove_file(&pid_file);
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn actor_shutdown_terminates_active_and_warm_worker_processes() {
         let pid_file = std::env::temp_dir().join(format!(
@@ -542,6 +870,7 @@ mod tests {
             command_buffer: 8,
             child_termination_deadline: Duration::from_millis(25),
             extension_sock_path: std::path::PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
         };
 
         let (handle, task) = start(cfg).expect("startup should succeed");

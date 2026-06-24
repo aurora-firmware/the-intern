@@ -148,7 +148,7 @@ admin actor never sees extension traffic and vice versa.
 | Monitoring actor | Scaffold for S-001 Phase 5 work — accepts events and report records, exposes a subscription stream for admin-RPC | Empty implementation; uses an in-memory ring buffer for early development |
 | Pi-agent Supervisor actor | Scaffold for S-001 Phase 2 work — owns the warm pool, spawn/reap, and prompt routing | Empty implementation; `bob sessions list` shows the (currently empty) pool |
 | Persistence actor | Scaffold for the inbound queue, audit log, and session state stores | Empty implementation; trait-only |
-| `bob` client subcommands | Thin admin-RPC clients; resolve socket path from config, open `admin.sock`, perform one call (or one subscription, for `chat` and `audit tail`), render results, exit | No business logic |
+| `bob` client subcommands | Thin admin-RPC clients; resolve socket path from config, open `admin.sock`, perform one call (or one subscription, for `audit tail`), render results, exit. (`chat` is redefined under CR-002 — a service-required launcher for a supervised direct `pi` session, not an `admin.sock` subscription; see the Workflow amendment.) | No business logic |
 
 ## Components
 
@@ -325,7 +325,20 @@ Subscription (chat / audit tail)
   client unsubscribes (or disconnects); server tears down the subscription
 ```
 
-`bob chat` is the **transport** by which messages reach the interactive-chat
+> **Amended (CR-002 / ADR-010, 2026-06-23).** The paragraph below describes the
+> original admin-socket chat path, now **superseded for interactive chat**. Under
+> CR-002, `bob chat` does **not** feed the interactive-chat channel adapter over
+> `admin.sock`; it requires the bob service to be running and launches a
+> **supervised, directly-launched interactive `pi` session** owned by `bob serve`.
+> That session is **exempt from pre-flight admission** (ADR-010) — it does not
+> traverse Requests Handler → Policy Control — and is gated instead by the socket
+> trust boundary and the `tool_call` authz membrane. The admin-socket chat
+> subscription / interactive-chat adapter (S-006) and the outbound reply router
+> (S-008, superseded) are retained only for a possible future programmatic channel.
+> The chat subscription diagram above is likewise superseded for interactive chat.
+> The original description is kept for historical context:
+
+*`bob chat` is the **transport** by which messages reach the interactive-chat
 channel adapter defined in S-001 — it is not a bypass of the channel pathway.
 Admin-RPC receives the chat subscription, the interactive-chat channel adapter
 consumes the chat-open call and each subsequent user-input frame, normalises
@@ -334,7 +347,7 @@ resulting flow goes through Requests Handler → Policy Control → Agent Harnes
 exactly as for email. Assistant-message notifications travel back
 out to the subscriber the same way an email reply would travel back through
 the email adapter. The admin-RPC actor never short-circuits Requests Handler
-or Policy Control for chat traffic.
+or Policy Control for chat traffic.*
 
 ```
 Extension verdict request (S-001 path; shell perspective only)
@@ -429,3 +442,4 @@ present.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-06-13 | Reconciled the connection-gate description with ADR-005: filesystem permissions are the sole admission gate, `SO_PEERCRED` is audit-only, and the in-service uid allow-list (`admin_allowed_uids`/`admin_allowed_gid`) is removed (additional uids via a Unix group instead). Updated the Responsibility table, Components 4–5 authentication, the system diagram and workflow labels, the Configuration and Open-Questions sections, and Implementation Order Phases 4/5/7. | ADR-005 (accepted 2026-05-22) removed the peer-credential gate and the uid allow-list, but S-002's gate wording was never updated; PR #22 reconciles the artifact set. | None (gate already implemented per ADR-005; documentation reconciliation only). |
+| 2026-06-23 | `bob chat` redefined: it requires the running service and launches a supervised, directly-launched interactive `pi` session (exempt from pre-flight admission, ADR-010) instead of feeding the admin-socket interactive-chat adapter. The "not a bypass / goes through Requests Handler → Policy Control" workflow paragraph and the chat subscription diagram are marked superseded for interactive chat. | CR-002. | TBD (CR-002 breakdown) |

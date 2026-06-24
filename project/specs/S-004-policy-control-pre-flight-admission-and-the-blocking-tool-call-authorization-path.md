@@ -227,6 +227,15 @@ PolicyEngine.evaluate_admission(context.sender) against the live snapshot
     PreflightDenied audit record appended
 ```
 
+> **Amended (ADR-010 / CR-002, 2026-06-23).** Pre-flight admission applies to
+> **queue-borne** requests — those the Requests Handler dequeues. Interactive chat
+> (CR-002) is delivered through a supervised, directly-launched `pi` session that
+> does **not** traverse the chat-adapter → intake → queue path, and is therefore
+> **exempt** from pre-flight admission: its gates are the 0700 socket trust boundary
+> (ADR-005 / ADR-007) and the `tool_call` action gate, which remains fully in force.
+> Non-interactive / programmatic intake (for example the scheduler adapter, S-009)
+> still passes through pre-flight admission unchanged.
+
 Operator reload:
 
 ```
@@ -342,8 +351,6 @@ The deliverable rests on a policy section in bob's existing TOML configuration
 
 ## Amendment Log
 
-<!-- Optional. Use when an approved spec is amended after tasks are in flight.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| YYYY-MM-DD | Description of change | Reason for amendment | T-XXX, T-YYY |
--->
+| 2026-06-23 | Interactive chat exempted from pre-flight admission; admission scoped to queue-borne requests. | CR-002 routes interactive chat through a supervised direct `pi` session that bypasses the Requests-Handler queue; gated instead by the socket trust boundary + the `tool_call` action gate (ADR-010). | TBD (CR-002 breakdown) |

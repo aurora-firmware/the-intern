@@ -3,6 +3,33 @@
 Running log of bugs and friction observed while using the `ai-team` CLI and the
 slash-skills that wrap it. New entries at the top.
 
+## 2026-06-23 — `integrate` post-merge regression check uses task-scoped verification, missing cross-crate breaks
+
+**Symptom.** B-013 was a red baseline on `dev-agent`: T-101 added a fail-closed
+extension gate in `pi-agent-supervisor` that broke 5 `admin-rpc` dispatch tests
+(they started the supervisor with `Config::default()`, whose empty
+`extension_path` now fails the gate). The break landed on `dev-agent`
+undetected even though `integrate` runs a post-merge regression check (Step 6).
+
+**Root cause.** `integrate` Step 2.7/2.8 derives its verification command from
+the *work item's* `## Verification` / `## Fix Verification` section and uses it
+for both pre- and post-merge runs. T-101's verification was
+`cargo test -p pi-agent-supervisor && cargo test -p bob` — it never ran
+`-p admin-rpc` or the workspace suite, so the cross-crate regression in
+`admin-rpc` was outside the checked scope. The project's actual baseline/CI gate
+(per `CLAUDE.md`) is `cargo test --workspace`.
+
+**Impact.** A task whose contract change affects crates outside its declared
+verification scope can merge a regression that integrate's regression check does
+not catch, leaving `dev-agent` red until the next loop hits its baseline guard.
+
+**Suggested fix.** Have `integrate` Step 6 (post-merge regression check) run the
+project-wide baseline (`cargo test --workspace`) in addition to the task-scoped
+command, or prefer the documented project baseline when the work item changes a
+shared/public interface. At minimum, document that task `## Verification`
+sections must include the workspace suite when the change alters a cross-crate
+contract.
+
 ## 2026-06-19 — `status-report` skill is not model-invocable from `bug-loop`
 
 **Symptom.** The `bug-loop` skill's Step 8 instructs `Skill(status-report)` to

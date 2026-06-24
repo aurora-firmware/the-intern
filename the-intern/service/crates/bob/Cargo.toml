@@ -13,7 +13,7 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 figment = { version = "0.10", features = ["toml", "env"] }
-nix = { version = "0.29", default-features = false, features = ["user"] }
+nix = { version = "0.29", default-features = false, features = ["user", "socket", "uio"] }
 croner = "3"
 admin-rpc = { path = "../admin-rpc" }
 extension-ipc = { path = "../extension-ipc" }
@@ -22,7 +22,6 @@ monitoring = { path = "../monitoring" }
 persistence = { path = "../persistence" }
 policy-control = { path = "../policy-control" }
 pi-agent-supervisor = { path = "../pi-agent-supervisor" }
-chat-adapter = { path = "../chat-adapter" }
 scheduler-adapter = { path = "../scheduler-adapter" }
 
 [lints]

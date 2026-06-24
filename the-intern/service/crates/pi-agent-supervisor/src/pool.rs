@@ -1,9 +1,14 @@
-use crate::{process::WorkerProcessConfig, rpc, Config};
+use crate::{
+    process::{InteractiveProcess, InteractiveProcessConfig, WorkerProcessConfig},
+    rpc, Config,
+};
 use bob_core::{
     error::{ServiceError, ServiceResult},
     types::SessionId,
 };
 use std::collections::HashMap;
+use std::os::unix::io::OwnedFd;
+use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 #[derive(Debug)]
@@ -28,6 +33,15 @@ pub struct SessionPool {
     cfg: Config,
     warm_workers: Vec<WarmWorker>,
     active_workers: HashMap<SessionId, ActiveSessionWorker>,
+    /// Interactive sessions tracked separately from RPC workers.
+    interactive_sessions: HashMap<SessionId, InteractiveProcess>,
+    /// Exit watchers registered via `watch_interactive_exit`.
+    ///
+    /// When an interactive session exits (naturally or via `kill_session`), the
+    /// corresponding sender is fired so the waiting receiver is notified (AC-2).
+    /// The process remains in `interactive_sessions` so `kill_session` can still
+    /// terminate it (AC-3).
+    interactive_exit_watchers: HashMap<SessionId, oneshot::Sender<()>>,
 }
 
 impl SessionPool {
@@ -43,6 +57,8 @@ impl SessionPool {
             cfg: cfg.clone(),
             warm_workers,
             active_workers: HashMap::new(),
+            interactive_sessions: HashMap::new(),
+            interactive_exit_watchers: HashMap::new(),
         })
     }
 
@@ -80,18 +96,32 @@ impl SessionPool {
     }
 
     pub fn list_sessions(&self) -> Vec<SessionId> {
-        self.active_workers.keys().copied().collect()
+        self.active_workers
+            .keys()
+            .copied()
+            .chain(self.interactive_sessions.keys().copied())
+            .collect()
     }
 
     pub async fn kill_session(&mut self, session_id: SessionId) -> ServiceResult<()> {
-        let worker = self.active_workers.remove(&session_id).ok_or_else(|| {
-            ServiceError::InvalidRequest {
-                detail: "session is not active".to_string(),
+        // Check active RPC workers first.
+        if let Some(worker) = self.active_workers.remove(&session_id) {
+            worker.worker.terminate().await?;
+            return Ok(());
+        }
+        // Also handle interactive sessions (needed by T-105: terminate on client disconnect).
+        if let Some(process) = self.interactive_sessions.remove(&session_id) {
+            // Fire the exit watcher (if registered) before terminating so the
+            // AC-2 notification is sent promptly, before the await below.
+            if let Some(tx) = self.interactive_exit_watchers.remove(&session_id) {
+                let _ = tx.send(());
             }
-        })?;
-
-        worker.worker.terminate().await?;
-        Ok(())
+            process.terminate().await?;
+            return Ok(());
+        }
+        Err(ServiceError::InvalidRequest {
+            detail: "session is not active".to_string(),
+        })
     }
 
     pub async fn send_prompt(
@@ -130,6 +160,93 @@ impl SessionPool {
                 None => {}
             }
         }
+    }
+
+    /// Starts an interactive pi session on the supplied terminal file descriptors.
+    ///
+    /// The caller must supply the three stdio fds (typically received from the
+    /// client via `SCM_RIGHTS` per ADR-011).  The session is added to the
+    /// session table and appears in `list_sessions` immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ServiceError::ChildProcess` if the extension file is missing or
+    /// if the OS rejects the spawn.
+    /// Registers an exit watcher for an interactive session.
+    ///
+    /// The `sender` is fired the next time the session exits (naturally or via
+    /// `kill_session`).  The process remains in the pool so `kill_session` can
+    /// still terminate it (AC-3).
+    ///
+    /// Returns `Err` when no interactive session with `session_id` is currently
+    /// tracked.
+    pub fn register_interactive_exit_watcher(
+        &mut self,
+        session_id: SessionId,
+        sender: oneshot::Sender<()>,
+    ) -> Result<(), ()> {
+        if !self.interactive_sessions.contains_key(&session_id) {
+            return Err(());
+        }
+        // Replace any previous watcher (in practice only one is ever registered).
+        self.interactive_exit_watchers.insert(session_id, sender);
+        Ok(())
+    }
+
+    /// Polls all interactive sessions that have registered exit watchers.
+    ///
+    /// For each session whose child process has exited (detected via
+    /// `try_poll_exit()`), fires the exit watcher and removes the session from
+    /// the pool. Called from the actor's dedicated interactive-exit tick so
+    /// natural exits are detected promptly without blocking (AC-2).
+    pub fn poll_interactive_exits(&mut self) {
+        let exited: Vec<SessionId> = self
+            .interactive_exit_watchers
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.interactive_sessions
+                    .get_mut(id)
+                    .map(|p| p.try_poll_exit())
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        for session_id in exited {
+            // Remove from pool first so the Drop on InteractiveProcess runs.
+            self.interactive_sessions.remove(&session_id);
+            if let Some(tx) = self.interactive_exit_watchers.remove(&session_id) {
+                let _ = tx.send(());
+            }
+        }
+    }
+
+    /// Removes an interactive session from the pool and returns it.
+    ///
+    /// Legacy method retained for tests that directly manipulate the pool.
+    /// Production code uses `register_interactive_exit_watcher` +
+    /// `poll_interactive_exits` instead.
+    ///
+    /// Returns `None` if no interactive session with the given id exists.
+    pub fn take_interactive_session(
+        &mut self,
+        session_id: SessionId,
+    ) -> Option<InteractiveProcess> {
+        self.interactive_exit_watchers.remove(&session_id);
+        self.interactive_sessions.remove(&session_id)
+    }
+
+    pub fn start_interactive_session(
+        &mut self,
+        cfg: InteractiveProcessConfig,
+        stdin: OwnedFd,
+        stdout: OwnedFd,
+        stderr: OwnedFd,
+    ) -> ServiceResult<SessionId> {
+        let session_id = cfg.session_id;
+        let process = InteractiveProcess::spawn(cfg, stdin, stdout, stderr)?;
+        self.interactive_sessions.insert(session_id, process);
+        Ok(session_id)
     }
 
     pub fn warm_worker_count(&self) -> usize {
@@ -194,6 +311,22 @@ impl SessionPool {
             }
         }
 
+        // Fire all exit watchers before terminating so receivers are notified.
+        for (_session_id, tx) in self.interactive_exit_watchers.drain() {
+            let _ = tx.send(());
+        }
+
+        for (_session_id, process) in self.interactive_sessions.drain() {
+            match process.terminate().await {
+                Ok(_) => report.interactive_sessions_terminated += 1,
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
+        }
+
         if let Some(error) = first_error {
             return Err(error);
         }
@@ -219,6 +352,7 @@ impl SessionPool {
             child_termination_deadline: cfg.child_termination_deadline,
             session_id,
             extension_sock_path: cfg.extension_sock_path.clone(),
+            extension_path: cfg.extension_path.clone(),
         }
     }
 
@@ -247,7 +381,19 @@ mod tests {
             command_buffer: 8,
             child_termination_deadline: Duration::from_millis(2000),
             extension_sock_path: std::path::PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
         }
+    }
+
+    #[test]
+    fn worker_process_config_carries_resolved_extension_path() {
+        let extension_path = std::env::current_exe().expect("current executable should exist");
+        let mut cfg = test_config("sh", &["-c", "exit 0"], 0, 1);
+        cfg.extension_path = extension_path.clone();
+
+        let process_cfg = SessionPool::worker_process_config_for_session(&cfg, SessionId::new());
+
+        assert_eq!(process_cfg.extension_path, extension_path);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -360,5 +506,106 @@ mod tests {
         assert_eq!(report.idle_sessions_reaped, 0);
         assert_eq!(report.warm_workers_reaped, 2);
         assert_eq!(pool.warm_worker_count(), 1);
+    }
+
+    // AC-2: list_sessions includes interactive session ids.
+    #[tokio::test(flavor = "current_thread")]
+    async fn list_sessions_includes_interactive_session_after_start() {
+        use crate::process::InteractiveProcessConfig;
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let cfg = test_config("sh", &["-c", "exit 0"], 0, 4);
+        let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
+
+        let stdin_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stdout_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stderr_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+
+        let interactive_cfg = InteractiveProcessConfig {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "trap 'exit 0' TERM; while :; do sleep 1; done".to_string(),
+            ],
+            child_termination_deadline: std::time::Duration::from_millis(2000),
+            session_id: bob_core::types::SessionId::new(),
+            extension_sock_path: std::path::PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
+        };
+
+        let session_id = pool
+            .start_interactive_session(interactive_cfg, stdin_fd, stdout_fd, stderr_fd)
+            .expect("interactive session should start");
+
+        let sessions = pool.list_sessions();
+
+        assert!(
+            sessions.contains(&session_id),
+            "list_sessions must include the interactive session id"
+        );
+    }
+
+    // AC-3: shutdown_all terminates interactive sessions.
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_all_terminates_interactive_sessions() {
+        use crate::process::InteractiveProcessConfig;
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let pid_file = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-interactive-shutdown-{}.txt",
+            bob_core::types::SessionId::new()
+        ));
+        let _ = std::fs::remove_file(&pid_file);
+        let pid_file_path = pid_file.to_string_lossy().into_owned();
+
+        let script = format!(
+            "printf '%s\\n' $$ >> \"{}\"; trap '' TERM; while :; do :; done",
+            pid_file_path
+        );
+
+        let cfg = test_config("sh", &["-c", "exit 0"], 0, 4);
+        let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
+
+        let stdin_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stdout_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stderr_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+
+        let interactive_cfg = InteractiveProcessConfig {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script],
+            child_termination_deadline: std::time::Duration::from_millis(50),
+            session_id: bob_core::types::SessionId::new(),
+            extension_sock_path: std::path::PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
+        };
+
+        pool.start_interactive_session(interactive_cfg, stdin_fd, stdout_fd, stderr_fd)
+            .expect("interactive session should start");
+
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+        let report = pool.shutdown_all().await.expect("shutdown should succeed");
+
+        assert!(
+            report.interactive_sessions_terminated >= 1,
+            "shutdown must terminate interactive sessions"
+        );
+
+        // Give child a moment to exit after force-kill, then check it is gone.
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        if let Ok(content) = std::fs::read_to_string(&pid_file) {
+            for line in content.lines() {
+                let pid: i32 = line.parse().expect("pid should be numeric");
+                let proc_path = format!("/proc/{pid}");
+                assert!(
+                    !std::path::Path::new(&proc_path).exists(),
+                    "interactive worker pid {pid} should not exist after shutdown"
+                );
+            }
+        }
+
+        let _ = std::fs::remove_file(&pid_file);
     }
 }
