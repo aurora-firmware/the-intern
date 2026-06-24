@@ -159,3 +159,19 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-24
+
+PASS
+
+Stage 1 passed: the Diagnosis Log is complete, the dedicated timer directly
+decouples interactive exit notification from idle worker reaping, and the
+regression test reproduces production-like idle timing. Both Fix Verification
+suites passed and the branch changes only the supervisor implementation and its
+direct documentation.
+
+Stage 2 passed: child ownership remains in `SessionPool`, so existing
+`kill_session` and shutdown behavior is preserved. The 50 ms non-blocking poll
+is bounded by the number of registered watchers, uses delayed missed-tick
+behavior, and introduces no resource or security regression. The test has a
+40x scheduling margin relative to the poll interval and failed before the fix.
