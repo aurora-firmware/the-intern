@@ -62,6 +62,20 @@ The initial content assertion failed because supervised interactive chat was und
 
 **What remains:** Nothing.
 
+### Session 2 — 2026-06-24
+
+Addressed all review findings:
+
+- Replaced operator guidance for the deleted chat adapter with the always-running scheduler adapter, `[[schedule]]` configuration, and direct supervised-session behavior for `bob chat`.
+- Replaced deleted `chat-adapter`/`ChatFrame` references with the current `InternalEvent`, `RequestContext`, and `IntakeHandle` contract, using `scheduler-adapter` as the concrete implementation.
+- Updated the architecture overview’s `admin.sock` responsibilities, queue lifecycle scope, adapter inventory, and direct `session.interactive.open` flow.
+
+The initial semantic check reproduced all obsolete claims. After editing, no stale positive claims remained. I rejected retaining generic chat-adapter language because the implementation and subscription route were deleted by T-107.
+
+**Obstacles Encountered:** None. `mdbook build` emitted the existing mdbook-mermaid version warning but completed successfully.
+
+**What remains:** Nothing.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
