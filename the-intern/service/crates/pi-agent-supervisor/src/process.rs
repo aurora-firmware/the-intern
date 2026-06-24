@@ -309,6 +309,30 @@ impl InteractiveProcess {
         })
     }
 
+    /// Waits for the interactive child to exit naturally.
+    ///
+    /// Does **not** send any signal — callers that want to kill the child should
+    /// call [`terminate`](Self::terminate) instead.  Returns `()` once the
+    /// child exits (or if the wait syscall fails), discarding the exit status.
+    pub async fn wait_for_exit(mut self) {
+        let _ = self.child.wait().await;
+    }
+
+    /// Non-blocking check: returns `true` if the child has already exited.
+    ///
+    /// Uses `try_wait()` to reap a zombie without blocking.  Returns `false`
+    /// when the child is still running or when the status cannot be retrieved.
+    ///
+    /// Idempotent: calling this multiple times after the child exits continues
+    /// to return `true` (the zombie was reaped on the first `true` return).
+    pub fn try_poll_exit(&mut self) -> bool {
+        match self.child.try_wait() {
+            Ok(Some(_status)) => true, // child exited
+            Ok(None) => false,         // still running
+            Err(_) => false,           // treat error as "still running" conservatively
+        }
+    }
+
     /// Terminates the interactive child process.
     ///
     /// Sends `SIGTERM` and waits up to `child_termination_deadline`; if the

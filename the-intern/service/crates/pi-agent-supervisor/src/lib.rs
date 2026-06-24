@@ -79,6 +79,18 @@ enum Command {
         stderr: OwnedFd,
         response_tx: oneshot::Sender<ServiceResult<SessionId>>,
     },
+    /// Subscribe to the exit event of an interactive session.
+    ///
+    /// The actor removes the session from the pool, spawns a background task
+    /// that waits for the child to exit, and immediately sends the caller a
+    /// [`oneshot::Receiver`] that fires when the child exits.
+    ///
+    /// Returns `ServiceError::InvalidRequest` if no interactive session with
+    /// the given id exists.
+    WatchInteractiveSessionExit {
+        session_id: SessionId,
+        response_tx: oneshot::Sender<ServiceResult<oneshot::Receiver<()>>>,
+    },
 }
 
 #[derive(Clone)]
@@ -143,6 +155,33 @@ impl Handle {
             .await
             .map_err(|_| ServiceError::Shutdown)?;
 
+        response_rx.await.map_err(|_| ServiceError::Shutdown)?
+    }
+
+    /// Subscribes to the exit event of a running interactive session.
+    ///
+    /// The actor removes the session from the pool and spawns a background
+    /// task that calls `child.wait()`.  The caller receives a
+    /// [`oneshot::Receiver<()>`] that resolves when the child exits (either
+    /// naturally or after `kill_session`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `ServiceError::InvalidRequest` if no interactive session with
+    /// `session_id` is currently tracked, or `ServiceError::Shutdown` if the
+    /// actor has already stopped.
+    pub async fn watch_interactive_session_exit(
+        &self,
+        session_id: SessionId,
+    ) -> ServiceResult<oneshot::Receiver<()>> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.tx
+            .send(Command::WatchInteractiveSessionExit {
+                session_id,
+                response_tx,
+            })
+            .await
+            .map_err(|_| ServiceError::Shutdown)?;
         response_rx.await.map_err(|_| ServiceError::Shutdown)?
     }
 
@@ -255,6 +294,33 @@ impl Actor {
                             );
                             let _ = response_tx.send(self.pool.send_prompt(session_id, message).await);
                         }
+                        Command::WatchInteractiveSessionExit {
+                            session_id,
+                            response_tx,
+                        } => {
+                            tracing::debug!(
+                                session_id = %session_id,
+                                "pi-agent-supervisor watch interactive session exit command received"
+                            );
+                            // Register a watcher WITHOUT taking the process from the pool.
+                            // The process stays in `interactive_sessions` so `kill_session`
+                            // can still terminate it (AC-3).  The reap tick polls
+                            // `try_poll_exit()` and fires the sender when the child exits
+                            // naturally (AC-2).
+                            let (exit_tx, exit_rx) = oneshot::channel::<()>();
+                            match self.pool.register_interactive_exit_watcher(session_id, exit_tx) {
+                                Ok(()) => {
+                                    let _ = response_tx.send(Ok(exit_rx));
+                                }
+                                Err(()) => {
+                                    let _ = response_tx.send(Err(ServiceError::InvalidRequest {
+                                        detail: format!(
+                                            "no interactive session with id {session_id}"
+                                        ),
+                                    }));
+                                }
+                            }
+                        }
                         Command::StartInteractiveSession {
                             command,
                             args,
@@ -292,6 +358,11 @@ impl Actor {
                     }
                 }
                 _ = reap_tick.tick() => {
+                    // Poll interactive sessions for natural exits (AC-2 / T-105).
+                    // This fires registered exit watchers for any child that has
+                    // already exited without needing a blocking wait().
+                    self.pool.poll_interactive_exits();
+
                     match self.pool.reap_idle_and_surplus().await {
                         Ok(report) if report.total_reaped() > 0 => {
                             tracing::info!(
