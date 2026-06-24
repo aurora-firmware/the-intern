@@ -90,3 +90,47 @@ Commit `d4293ef` on branch
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
+
+### Review Verdict — 2026-06-24
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+AC-1: PASS. The README documents the default location `~/.local/share/bob/extensions/bob.ts`
+(Linux) and `~/Library/Application Support/bob/extensions/bob.ts` (macOS), along with
+`$XDG_DATA_HOME/bob/extensions/bob.ts` when `XDG_DATA_HOME` is set. The `extension_path`
+config-file key is shown in a TOML snippet. All three paths match `default_extension_path_for_env`
+in `crates/bob/src/config.rs` exactly.
+
+AC-2: PASS. The README documents that bob appends `--extension <resolved_path>` to the pi
+command line (confirmed against `.arg("--extension").arg(&cfg.extension_path)` in
+`process.rs` lines 55-56 / 288-289 for both `RpcWorkerProcess` and `InteractiveProcess`).
+The fail-closed behaviour and the exact error message text
+`pi extension file does not exist at expected path '<resolved_path>'` match the code in
+`process.rs` lines 46-49 / 279-282.
+
+AC-3: PASS. No references to `~/.pi/agent/extensions/` or `<project>/.pi/extensions/` remain
+in the README. The `grep -n "pi/agent\|pi/extensions\|\.pi/"` check returned no results.
+
+**Verification command:** passed.
+
+**Stage 2 — Code Quality / Accuracy**
+
+This is a documentation-only change. Accuracy checks against the implementation:
+
+- Config key name `extension_path` in `config.toml`: matches `RawBobConfig.extension_path`
+  field (config.rs line 290) and the test at line 981 (`extension_path = "..."`). Correct.
+- Default path logic (XDG_DATA_HOME → platform Home fallback): matches `default_extension_path_for_env`
+  exactly (config.rs lines 744-760). Correct.
+- `BOB_EXTENSION_PATH` env-var override: the generic `env_overrides` function (config.rs lines
+  473-480) strips `BOB_` and lowercases, mapping `BOB_EXTENSION_PATH` → `extension_path`.
+  The README's statement that it "overrides the config-file value with the same precedence rules
+  as other `BOB_*` variables" is accurate (env overrides come after TOML file in the figment
+  layering at lines 157-165).
+- Env-var contract section (`BOB_SESSION_ID`, `BOB_EXTENSION_SOCK_PATH`, `BOB_AUTHZ_TIMEOUT_MS`):
+  retained untouched.
+- No stale pi-search-path install guidance anywhere in the file.
+
+No accuracy issues found. Only the one specified file (`the-intern/extensions/README.md`) was
+changed.
