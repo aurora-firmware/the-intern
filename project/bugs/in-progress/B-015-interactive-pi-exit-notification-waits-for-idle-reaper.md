@@ -2,7 +2,7 @@
 id: B-015
 title: Interactive pi exit notification waits for idle reaper
 severity: medium
-status: open
+status: in-progress
 created: '2026-06-24'
 task: T-105
 ---
