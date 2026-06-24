@@ -1,7 +1,7 @@
 ---
 id: T-105
 title: Add admin-RPC interactive-session open/attach with stdio brokering
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-06-23'
