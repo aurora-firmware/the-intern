@@ -76,6 +76,16 @@ The initial semantic check reproduced all obsolete claims. After editing, no sta
 
 **What remains:** Nothing.
 
+### Session 3 — 2026-06-24
+
+The red semantic search reproduced exactly two stale `bob.toml` references in the scheduled-jobs documentation. Replaced both with the shipped ADR-009 filename, `config.toml`.
+
+No alternative changes were attempted because the review identified a precise terminology mismatch and the two-line correction fully resolved it.
+
+**Obstacles Encountered:** None. The build emitted the existing mdbook-mermaid version warning but completed successfully.
+
+**What remains:** Nothing.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
