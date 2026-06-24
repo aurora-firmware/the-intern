@@ -1,7 +1,7 @@
 ---
 id: T-104
 title: Add an interactive supervised pi-spawn mode to the pi-agent supervisor
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-06-23'
