@@ -2,7 +2,7 @@
 id: T-107
 title: Retire the admin-socket interactive-chat path and remove the chat 
   admission stopgap
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-06-23'
