@@ -83,6 +83,41 @@ the-intern/service/target/release/bob
 Add the relevant `target/` subdirectory to your `PATH`, or copy the binary to a
 location already on `PATH`.
 
+### Install the bob extension
+
+The bob extension is a required source asset. Bob supplies it directly to every
+pi process as `pi --extension <resolved-path>`; do not copy it into pi's own
+extension search path and do not run `pi install` for it.
+
+On Linux, install `bob.ts` under the XDG data directory. The default is:
+
+```text
+~/.local/share/bob/extensions/bob.ts
+```
+
+If `XDG_DATA_HOME` is set, the path is instead
+`$XDG_DATA_HOME/bob/extensions/bob.ts`. On macOS, the default is
+`~/Library/Application Support/bob/extensions/bob.ts`.
+
+For a source checkout on Linux:
+
+```bash
+mkdir -p ~/.local/share/bob/extensions
+cp the-intern/extensions/bob.ts ~/.local/share/bob/extensions/bob.ts
+```
+
+To use another location, set the top-level `extension_path` key in
+`config.toml`:
+
+```toml
+extension_path = "/opt/bob/extensions/bob.ts"
+```
+
+`BOB_EXTENSION_PATH` provides the equivalent environment override. Bob checks
+that the resolved path is a regular file before it spawns pi. If the file is
+missing, the spawn fails closed and the error names the expected path; bob never
+starts a session without its monitoring and authorization extension.
+
 ---
 
 ## Runtime layout
@@ -149,32 +184,25 @@ shell where you run client commands too.
 
 ---
 
-## Channel configuration
+## Channel adapters and interactive chat
 
-`bob serve` can run multiple channel adapters. Currently the interactive-chat
-channel is the only implemented adapter; others (email, scheduler) are
-planned for later phases.
+The scheduler is the shipped channel adapter. It starts with `bob serve` and
+turns each due `[[schedule]]` entry into a periodic request. There is no
+adapter-level enable flag: an empty schedule means the actor remains idle, and
+one or more entries make it fire prompts at their configured times. See
+[Scheduled jobs](#scheduled-jobs) for the entry format and runtime management
+commands.
 
-The channel configuration lives in the `[channels]` section of bob's TOML config
-file. `bob` uses TOML for operator-facing configuration, so all examples in this
-guide use that format. The default config file path is:
+`bob chat` does not use a channel adapter. It connects to `admin.sock`, calls
+the supervised interactive-session RPC, and passes the terminal's standard
+file descriptors to the service. The service then starts and owns the
+interactive pi process. Interactive chat therefore has no channel-adapter
+configuration or subscription path to enable or disable.
+
+Bob's TOML configuration file is located at:
 
 - Linux: `$XDG_CONFIG_HOME/bob/config.toml` (falls back to `~/.config/bob/config.toml`)
 - macOS: `~/Library/Application Support/bob/config.toml`
-
-### Chat channel
-
-The chat channel is **enabled by default**. To disable it, add a
-`[channels.chat]` section to your TOML config:
-
-```toml
-[channels.chat]
-enabled = false
-```
-
-When `enabled = false`, `bob serve` skips starting the chat adapter at startup.
-Existing `bob chat` connections will fail to subscribe. Set `enabled = true` (or
-omit the section entirely) to restore normal operation.
 
 ---
 
@@ -318,7 +346,7 @@ fire while the service is running, so every execution has a full audit trail.
 Operators who need guaranteed delivery across restarts should keep bob running
 under a process supervisor such as systemd.
 
-### Configuring scheduled jobs in `bob.toml`
+### Configuring scheduled jobs in `config.toml`
 
 Add one `[[schedule]]` table per job. Each entry requires three fields:
 
@@ -407,7 +435,7 @@ bob schedule remove --id "check-email"
 #### `bob schedule reload`
 
 Re-read the `[[schedule]]` section of the config file and replace the active
-job list with the updated contents. Use this after editing `bob.toml` by hand:
+job list with the updated contents. Use this after editing `config.toml` by hand:
 
 ```bash
 bob schedule reload

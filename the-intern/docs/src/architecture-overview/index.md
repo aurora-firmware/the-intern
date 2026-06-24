@@ -23,7 +23,7 @@ At startup `bob serve` binds two Unix-domain sockets:
 
 | Socket | Audience | Purpose |
 |---|---|---|
-| `admin.sock` | Operators and `bob` CLI subcommands | Service control, chat subscription, audit tailing, policy reload |
+| `admin.sock` | Operators and `bob` CLI subcommands | Service control, supervised interactive-session setup, schedule management, audit tailing, policy reload |
 | `extension.sock` | The JS extension inside each pi-agent process | Authorization verdict requests and agent event forwarding |
 
 These two sockets have different trust profiles and evolve independently. `admin.sock`
@@ -41,12 +41,12 @@ log is the only durable store (an append-only JSONL file on disk).
 
 ## Request Lifecycle
 
-Every request — regardless of which channel it arrives on — follows the same path
-through `bob serve`.
+Every queue-borne request follows the same path through `bob serve`. The shipped
+scheduler adapter uses this path; future external adapters use it too.
 
 ```mermaid
 sequenceDiagram
-    actor User
+    actor Source
     participant CA as Channel Adapter
     participant Q as Request Queue
     participant RH as Requests Handler<br/>(pre-flight)
@@ -55,8 +55,8 @@ sequenceDiagram
     participant EXT as JS Extension<br/>(tool_call hook)
     participant POL as Policy Engine<br/>(action gate)
 
-    User->>CA: inbound message
-    CA->>Q: submit Sync InternalEvent + RequestContext
+    Source->>CA: inbound trigger
+    CA->>Q: submit InternalEvent + RequestContext
     Q->>RH: dequeue
     RH->>RH: evaluate_admission(sender)
     alt sender not admitted
@@ -84,6 +84,14 @@ The most important properties of this path are:
   pi-agent process is never involved.
 - **A tool-call denial stops the side effect while the session continues.** The agent
   receives a block verdict and can decide what to do next.
+
+Interactive `bob chat` deliberately takes a different front-door path. The CLI
+calls `session.interactive.open` on `admin.sock` and passes its terminal file
+descriptors to the service. `bob serve` spawns and supervises the interactive pi
+child directly, with its session id and bob extension configured. This path does
+not create a queued channel event and does not run pre-flight admission; local
+socket access and the extension's blocking tool-call authorization remain in
+force.
 
 ---
 
@@ -136,17 +144,17 @@ is to normalize inbound traffic into a delivery-kind-typed `InternalEvent` plus 
 pair through the **channel intake handle** — the single sanctioned doorway into the
 bounded request queue.
 
-The core never enumerates channel types. An emailed request, a chat message, and a
-scheduled trigger all look identical once they leave the adapter.
+The core never enumerates channel types. An emailed request and a scheduled trigger
+look identical once they leave their adapters.
 
-**Interactive-chat adapter** is the one implemented adapter. It consumes `admin.sock`
-chat subscriptions: when a `bob chat` client opens a chat subscription, the admin-RPC
-actor hands each user-input frame to the chat adapter, which normalizes it into a
-`Sync`-kind request and submits it through the intake handle.
+**Scheduler adapter** is the shipped implementation. It starts with the service,
+maintains the configured cron job table, and submits a `Periodic` event when a job
+fires. Each job has stable sender and channel identities derived from its id, so
+pre-flight policy can address scheduled work consistently across reloads and restarts.
 
-The following adapters are **not yet implemented**: email and scheduler.
-Each is planned for its own specification, reusing the intake handle and configuration
-schema established by S-006. See the
+Interactive `bob chat` is not a channel adapter: it opens the direct supervised
+session described above. Email and other external adapters are not yet implemented.
+They can reuse the same intake handle and typed event contract. See the
 [Extension & Channel-Adapter Author Guide](../extension-author-guide/index.md) for
 guidance on building adapters.
 
