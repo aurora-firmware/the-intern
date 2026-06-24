@@ -14,6 +14,23 @@ socket whose path is given in the `BOB_EXTENSION_SOCK_PATH` environment
 variable, using the session id carried in `BOB_SESSION_ID`. Both variables
 are set by the bob service's pi-agent supervisor before it spawns pi.
 
+### How bob loads the extension
+
+Bob owns extension delivery. It resolves `bob.ts` from the XDG data directory
+and passes the result to each pi process with `pi --extension <resolved-path>`.
+The Linux default is `~/.local/share/bob/extensions/bob.ts`, or
+`$XDG_DATA_HOME/bob/extensions/bob.ts` when `XDG_DATA_HOME` is set. The macOS
+default is `~/Library/Application Support/bob/extensions/bob.ts`.
+
+Operators can set the top-level `extension_path` key in `config.toml` (or the
+`BOB_EXTENSION_PATH` environment override) to select another file. Bob refuses
+to spawn pi when the resolved file is missing. Installing `bob.ts` into pi's own
+extension search path is neither required nor used by bob.
+
+See the
+[Operator & Deployer Guide](../operator-guide/index.md#install-the-bob-extension)
+for installation commands.
+
 ### Wire framing
 
 All frames on `extension.sock` are **newline-delimited JSON** (one JSON

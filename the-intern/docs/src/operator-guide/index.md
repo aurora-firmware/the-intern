@@ -83,6 +83,41 @@ the-intern/service/target/release/bob
 Add the relevant `target/` subdirectory to your `PATH`, or copy the binary to a
 location already on `PATH`.
 
+### Install the bob extension
+
+The bob extension is a required source asset. Bob supplies it directly to every
+pi process as `pi --extension <resolved-path>`; do not copy it into pi's own
+extension search path and do not run `pi install` for it.
+
+On Linux, install `bob.ts` under the XDG data directory. The default is:
+
+```text
+~/.local/share/bob/extensions/bob.ts
+```
+
+If `XDG_DATA_HOME` is set, the path is instead
+`$XDG_DATA_HOME/bob/extensions/bob.ts`. On macOS, the default is
+`~/Library/Application Support/bob/extensions/bob.ts`.
+
+For a source checkout on Linux:
+
+```bash
+mkdir -p ~/.local/share/bob/extensions
+cp the-intern/extensions/bob.ts ~/.local/share/bob/extensions/bob.ts
+```
+
+To use another location, set the top-level `extension_path` key in
+`config.toml`:
+
+```toml
+extension_path = "/opt/bob/extensions/bob.ts"
+```
+
+`BOB_EXTENSION_PATH` provides the equivalent environment override. Bob checks
+that the resolved path is a regular file before it spawns pi. If the file is
+missing, the spawn fails closed and the error names the expected path; bob never
+starts a session without its monitoring and authorization extension.
+
 ---
 
 ## Runtime layout
