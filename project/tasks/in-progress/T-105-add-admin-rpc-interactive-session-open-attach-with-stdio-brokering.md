@@ -161,3 +161,105 @@ Evidence: `cargo test -p admin-rpc` 124 passed / 0 failed; `cargo fmt --all --
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
+
+### Review Verdict — 2026-06-24
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+AC-1 (client request starts a supervised interactive pi session and brokers stdio): Met.
+`handle_session_interactive_open` in `lib.rs` receives three terminal fds via
+`SCM_RIGHTS` (`receive_interactive_fds`) and calls
+`supervisor.start_interactive_session`. The connection test
+`run_connection_session_interactive_open_starts_session_and_returns_session_id`
+verifies an `ok:true` response with a non-empty `session_id` UUID.
+
+AC-2 (pi exit notifies client and tears down session): Met. After a successful
+start, `watch_interactive_session_exit` registers a oneshot watcher. The actor's
+reap tick calls `poll_interactive_exits` (via `try_poll_exit`) to detect natural
+child exits without blocking. The exit watcher fires `session.interactive.exited`
+to the client. The connection test
+`run_connection_session_interactive_exited_notification_delivered_when_pi_exits`
+verifies delivery of this notification within the test timeout.
+
+AC-3 (client disconnect terminates interactive pi session): Met. `read_loop`
+tracks `active_interactive`; on any exit from the loop (EOF, error, shutdown) it
+calls `supervisor.kill_session(session_id)`. The process remains in the pool while
+the watcher is registered so `kill_session` can reach it. The connection test
+`run_connection_client_disconnect_terminates_interactive_session` verifies the child
+process is gone from `/proc/<pid>` after the client closes.
+
+AC-4 (no pre-flight admission on interactive-session open path): Met. The dispatch
+arm `handle_session_interactive_open` allocates a `SessionId` and returns
+`InteractiveSessionOpening`; there is no call to `evaluate_admission`,
+`admitted_users`, or any policy-control check. ADR-010 compliance confirmed by
+code inspection.
+
+AC-5 (`cargo test -p admin-rpc` passes): Met. 124 passed / 0 failed, verified
+from a worktree checkout of commit `9229060` on the task branch.
+
+**Flagged Items Assessed**
+
+1. Workspace-wide lint relaxation (`unsafe_code`: forbid → deny): Acceptable within
+   this task. The crate-level `#![forbid(unsafe_code)]` in `admin-rpc/src/lib.rs`
+   was removed; the workspace policy was relaxed from `forbid` to `deny`. The
+   `#[allow(unsafe_code)]` is scoped narrowly to the single function
+   `receive_interactive_fds`. Two unsafe blocks exist there:
+   `BorrowedFd::borrow_raw(fd)` (sound: `fd` is the raw fd of a live socket that
+   outlives this synchronous call) and `OwnedFd::from_raw_fd(raw)` (sound:
+   kernel-guaranteed valid fds from `SCM_RIGHTS` wrapped immediately). SAFETY
+   comments are present and accurate. The relaxation from `forbid` to `deny` does
+   not allow unsafe elsewhere — the workspace `deny` lint ensures any other `unsafe`
+   block still triggers a compile error. No ADR is required: the decision scope is
+   confined to this task, the rationale is fully documented in the Work Log, and the
+   T-104 Work Log anticipated the need.
+
+2. New wire-protocol step (`session.interactive.await_fds`): Acceptable and
+   technically necessary. The BufReader/recvmsg race is real and confirmed by the
+   Developer's C test: BufReader's `read()` silently discards ancillary data when it
+   consumes the anchor byte. The `await_fds` synchronisation step is the correct fix.
+   No spec change is needed — ADR-011 delegates the wire-level synchronisation detail
+   to the implementation, and the protocol is documented clearly in comments.
+
+3. Scope expansion into `pi-agent-supervisor`: Accepted as justified minimal
+   necessity. The three modifications are tightly coupled to AC-2/AC-3 correctness:
+   `try_poll_exit` (non-blocking exit check for AC-2), `register_interactive_exit_watcher`
+   and `poll_interactive_exits` (polling-based exit detection without removing the
+   process from the pool, which is the design fix that makes AC-2 and AC-3 coexist),
+   and `kill_session` extended to handle interactive sessions (AC-3). Without these
+   the exit watcher design described in the Work Log cannot function correctly. The
+   original T-104 scope listed only admin-rpc, but the T-104 implementation had a
+   design gap (taking the process out of the pool broke AC-3) that the Developer
+   correctly identified and fixed minimally.
+
+**Stage 2 — Code Quality**
+
+Correctness: Logic is sound. The two-step `await_fds` protocol correctly quiesces
+BufReader before `recvmsg`. The process stays in the pool across both the AC-2
+watcher and AC-3 kill path. `poll_interactive_exits` fires the watcher and removes
+the process atomically. `shutdown_all` fires all exit watchers before terminating to
+avoid dangling receivers. FD leak on protocol violation (wrong count) is prevented
+by wrapping all raw fds in `OwnedFd` before the count check.
+
+Tests: Success path (AC-1), exit notification (AC-2), and client-disconnect
+termination (AC-3) are each covered by an integration test. The dispatch-level
+outcome (AC-4, with and without supervisor) is covered by two unit tests.
+
+Security: No hardcoded secrets. No external input flows unvalidated into spawned
+commands — `InteractiveSessionConfig` carries server-configured values only.
+SCM_RIGHTS fds are wrapped in `OwnedFd` immediately with proper SAFETY justification.
+
+Readability: Functions are focused and documented. Minor observation (non-blocking):
+the comment at `lib.rs` inside the `Ok(exit_rx)` arm at approximately line 605 says
+"Note: the watcher task moved the session out of the pool via `take_interactive_session`"
+which is stale — the new design keeps the process in the pool. The behavior description
+on the next lines is correct, only the mechanism statement is wrong. Does not affect
+correctness; can be cleaned up in a follow-on task.
+
+Performance: `spawn_blocking` is used correctly for the blocking `recvmsg` call.
+`try_poll_exit` is non-blocking and called on the existing reap tick — no additional
+timer or busy loop is introduced.
+
+`cargo fmt --all -- --check`: clean (no output, exit 0).
+`cargo test --workspace`: all test suites passed (27 test result lines, 0 failures).
