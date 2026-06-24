@@ -127,6 +127,27 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-24
+
+Implemented the diagnosis contract on
+`bug/B-015-interactive-pi-exit-notification-waits-for-idle-reaper`. Added the
+actor-level regression test
+`interactive_exit_watcher_is_not_delayed_by_idle_reap_timeout`, which consumes
+the idle timer's immediate tick, starts a naturally exiting interactive child
+with a 60-second idle timeout, and requires notification within two seconds.
+Before implementation it failed after timing out at the original 500 ms red
+deadline, directly reproducing the coupling.
+
+Added a dedicated 50 ms interactive-exit interval in `Actor::run`; it only
+polls registered interactive children, while the existing idle timer remains
+responsible for RPC worker reaping. The process stays in the pool, preserving
+client-disconnect termination. Updated stale watcher documentation to describe
+the retained-process polling model.
+
+Verification passed: 50/50 `pi-agent-supervisor` tests, 99/99 `admin-rpc`
+tests, the focused regression test after widening its CI margin to two seconds,
+and `cargo fmt --all -- --check`. Implementation commit: `31e0863`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
