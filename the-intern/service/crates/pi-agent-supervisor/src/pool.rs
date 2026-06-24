@@ -8,6 +8,7 @@ use bob_core::{
 };
 use std::collections::HashMap;
 use std::os::unix::io::OwnedFd;
+use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 #[derive(Debug)]
@@ -34,6 +35,13 @@ pub struct SessionPool {
     active_workers: HashMap<SessionId, ActiveSessionWorker>,
     /// Interactive sessions tracked separately from RPC workers.
     interactive_sessions: HashMap<SessionId, InteractiveProcess>,
+    /// Exit watchers registered via `watch_interactive_exit`.
+    ///
+    /// When an interactive session exits (naturally or via `kill_session`), the
+    /// corresponding sender is fired so the waiting receiver is notified (AC-2).
+    /// The process remains in `interactive_sessions` so `kill_session` can still
+    /// terminate it (AC-3).
+    interactive_exit_watchers: HashMap<SessionId, oneshot::Sender<()>>,
 }
 
 impl SessionPool {
@@ -50,6 +58,7 @@ impl SessionPool {
             warm_workers,
             active_workers: HashMap::new(),
             interactive_sessions: HashMap::new(),
+            interactive_exit_watchers: HashMap::new(),
         })
     }
 
@@ -95,14 +104,24 @@ impl SessionPool {
     }
 
     pub async fn kill_session(&mut self, session_id: SessionId) -> ServiceResult<()> {
-        let worker = self.active_workers.remove(&session_id).ok_or_else(|| {
-            ServiceError::InvalidRequest {
-                detail: "session is not active".to_string(),
+        // Check active RPC workers first.
+        if let Some(worker) = self.active_workers.remove(&session_id) {
+            worker.worker.terminate().await?;
+            return Ok(());
+        }
+        // Also handle interactive sessions (needed by T-105: terminate on client disconnect).
+        if let Some(process) = self.interactive_sessions.remove(&session_id) {
+            // Fire the exit watcher (if registered) before terminating so the
+            // AC-2 notification is sent promptly, before the await below.
+            if let Some(tx) = self.interactive_exit_watchers.remove(&session_id) {
+                let _ = tx.send(());
             }
-        })?;
-
-        worker.worker.terminate().await?;
-        Ok(())
+            process.terminate().await?;
+            return Ok(());
+        }
+        Err(ServiceError::InvalidRequest {
+            detail: "session is not active".to_string(),
+        })
     }
 
     pub async fn send_prompt(
@@ -153,6 +172,70 @@ impl SessionPool {
     ///
     /// Returns `ServiceError::ChildProcess` if the extension file is missing or
     /// if the OS rejects the spawn.
+    /// Registers an exit watcher for an interactive session.
+    ///
+    /// The `sender` is fired the next time the session exits (naturally or via
+    /// `kill_session`).  The process remains in the pool so `kill_session` can
+    /// still terminate it (AC-3).
+    ///
+    /// Returns `Err` when no interactive session with `session_id` is currently
+    /// tracked.
+    pub fn register_interactive_exit_watcher(
+        &mut self,
+        session_id: SessionId,
+        sender: oneshot::Sender<()>,
+    ) -> Result<(), ()> {
+        if !self.interactive_sessions.contains_key(&session_id) {
+            return Err(());
+        }
+        // Replace any previous watcher (in practice only one is ever registered).
+        self.interactive_exit_watchers.insert(session_id, sender);
+        Ok(())
+    }
+
+    /// Polls all interactive sessions that have registered exit watchers.
+    ///
+    /// For each session whose child process has exited (detected via
+    /// `try_poll_exit()`), fires the exit watcher and removes the session from
+    /// the pool.  Called from the actor's periodic reap tick so that natural
+    /// exits are detected promptly without blocking (AC-2).
+    pub fn poll_interactive_exits(&mut self) {
+        let exited: Vec<SessionId> = self
+            .interactive_exit_watchers
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.interactive_sessions
+                    .get_mut(id)
+                    .map(|p| p.try_poll_exit())
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        for session_id in exited {
+            // Remove from pool first so the Drop on InteractiveProcess runs.
+            self.interactive_sessions.remove(&session_id);
+            if let Some(tx) = self.interactive_exit_watchers.remove(&session_id) {
+                let _ = tx.send(());
+            }
+        }
+    }
+
+    /// Removes an interactive session from the pool and returns it.
+    ///
+    /// Legacy method retained for tests that directly manipulate the pool.
+    /// Production code uses `register_interactive_exit_watcher` +
+    /// `poll_interactive_exits` instead.
+    ///
+    /// Returns `None` if no interactive session with the given id exists.
+    pub fn take_interactive_session(
+        &mut self,
+        session_id: SessionId,
+    ) -> Option<InteractiveProcess> {
+        self.interactive_exit_watchers.remove(&session_id);
+        self.interactive_sessions.remove(&session_id)
+    }
+
     pub fn start_interactive_session(
         &mut self,
         cfg: InteractiveProcessConfig,
@@ -226,6 +309,11 @@ impl SessionPool {
                     }
                 }
             }
+        }
+
+        // Fire all exit watchers before terminating so receivers are notified.
+        for (_session_id, tx) in self.interactive_exit_watchers.drain() {
+            let _ = tx.send(());
         }
 
         for (_session_id, process) in self.interactive_sessions.drain() {

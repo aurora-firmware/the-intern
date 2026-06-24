@@ -10,7 +10,7 @@ thiserror = "2"
 async-trait = "0.1"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
