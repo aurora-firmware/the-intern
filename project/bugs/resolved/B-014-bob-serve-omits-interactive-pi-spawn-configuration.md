@@ -2,7 +2,7 @@
 id: B-014
 title: Bob serve omits interactive pi spawn configuration
 severity: medium
-status: in-progress
+status: resolved
 created: '2026-06-24'
 task: T-105
 ---
