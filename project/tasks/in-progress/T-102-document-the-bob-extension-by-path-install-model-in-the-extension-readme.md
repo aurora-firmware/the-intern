@@ -52,6 +52,41 @@ grep -q "extension_path" the-intern/extensions/README.md \
 
 <!-- Mandatory. Append one entry per session boundary. -->
 
+### Session 1 — 2026-06-24
+
+Read the task file and the existing `the-intern/extensions/README.md`. Read T-100
+and T-101 completed task files for context, then read the actual source code —
+`crates/bob/src/config.rs` (for `extension_path`, `default_extension_path_for_env`,
+and the TOML key name) and `crates/pi-agent-supervisor/src/process.rs` (for the
+`--extension` argv append and the pre-spawn `is_file()` fail-closed check). Both
+`RpcWorkerProcess::spawn` and `InteractiveProcess::spawn` follow the same pattern:
+check `is_file()` first, return `ServiceError::ChildProcess` naming the expected
+path, then build the command with `.arg("--extension").arg(&cfg.extension_path)`.
+
+The README's Installation section was a complete rewrite. The table column for
+"Install path" was updated to describe the by-path model rather than "pi's
+extension search path". The old `~/.pi/agent/extensions/` and
+`<project>/.pi/extensions/` copy-paste instructions were removed. The new section
+documents: (1) the default path by platform (`~/.local/share/bob/extensions/bob.ts`
+on Linux, `~/Library/Application Support/bob/extensions/bob.ts` on macOS,
+`$XDG_DATA_HOME/bob/extensions/bob.ts` when that var is set); (2) the
+`extension_path` config-file key and `BOB_EXTENSION_PATH` env-var override; (3) how
+bob passes the resolved path to pi via `--extension`; and (4) the fail-closed
+behavior including the exact error message text from the source. The env-var
+contract section (`BOB_SESSION_ID`, `BOB_EXTENSION_SOCK_PATH`, `BOB_AUTHZ_TIMEOUT_MS`)
+was left untouched. All other sections were left untouched.
+
+Verification ran clean (the grep check passed; old pi search-path directories no
+longer present). No attempts were tried and rejected; the first draft matched all
+three ACs.
+
+**Obstacles Encountered:** none.
+
+**What remains:** nothing for this task.
+
+Commit `d4293ef` on branch
+`task/T-102-document-the-bob-extension-by-path-install-model-in-the-extension-readme`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle. -->
