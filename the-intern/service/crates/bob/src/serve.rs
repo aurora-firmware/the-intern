@@ -99,6 +99,16 @@ fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Con
     }
 }
 
+fn build_interactive_session_config(cfg: &BobConfig) -> admin_rpc::InteractiveSessionConfig {
+    admin_rpc::InteractiveSessionConfig {
+        command: cfg.pi_agent_command.clone(),
+        args: Vec::new(),
+        child_termination_deadline: cfg.shutdown_reap_deadline,
+        extension_sock_path: cfg.extension_sock_path.clone(),
+        extension_path: cfg.extension_path.clone(),
+    }
+}
+
 fn build_monitoring_config(cfg: &BobConfig) -> monitoring::Config {
     monitoring::Config {
         command_buffer: cfg.request_queue_capacity,
@@ -214,6 +224,7 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         // The primary handle is retained in the Runtime for shutdown ordering.
         scheduler: Some(scheduler_reload_handle.clone()),
         config_path: maybe_config_path,
+        interactive_session: Some(build_interactive_session_config(cfg)),
         ..admin_rpc::Config::default()
     };
     let (admin_rpc_handle, admin_rpc_join) = admin_rpc::start(admin_rpc_cfg).map_err(|e| {
@@ -504,6 +515,31 @@ pub mod tests {
             Duration::from_secs(11)
         );
         assert_eq!(supervisor_cfg.extension_path, extension_path);
+    }
+
+    #[test]
+    fn interactive_session_config_maps_bob_spawn_settings_without_rpc_args() {
+        let extension_sock_path = std::path::PathBuf::from("/run/bob/extension.sock");
+        let extension_path = std::path::PathBuf::from("/opt/bob/extension.ts");
+        let cfg = BobConfig {
+            pi_agent_command: "pi-custom".to_string(),
+            pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+            shutdown_reap_deadline: Duration::from_secs(11),
+            extension_sock_path: extension_sock_path.clone(),
+            extension_path: extension_path.clone(),
+            ..BobConfig::test_base()
+        };
+
+        let interactive_cfg = build_interactive_session_config(&cfg);
+
+        assert_eq!(interactive_cfg.command, "pi-custom");
+        assert!(interactive_cfg.args.is_empty());
+        assert_eq!(
+            interactive_cfg.child_termination_deadline,
+            Duration::from_secs(11)
+        );
+        assert_eq!(interactive_cfg.extension_sock_path, extension_sock_path);
+        assert_eq!(interactive_cfg.extension_path, extension_path);
     }
 
     // AC-2 (T-039): extension_sock_path from BobConfig is plumbed into the supervisor config.
