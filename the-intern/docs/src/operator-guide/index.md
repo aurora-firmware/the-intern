@@ -184,32 +184,25 @@ shell where you run client commands too.
 
 ---
 
-## Channel configuration
+## Channel adapters and interactive chat
 
-`bob serve` can run multiple channel adapters. Currently the interactive-chat
-channel is the only implemented adapter; others (email, scheduler) are
-planned for later phases.
+The scheduler is the shipped channel adapter. It starts with `bob serve` and
+turns each due `[[schedule]]` entry into a periodic request. There is no
+adapter-level enable flag: an empty schedule means the actor remains idle, and
+one or more entries make it fire prompts at their configured times. See
+[Scheduled jobs](#scheduled-jobs) for the entry format and runtime management
+commands.
 
-The channel configuration lives in the `[channels]` section of bob's TOML config
-file. `bob` uses TOML for operator-facing configuration, so all examples in this
-guide use that format. The default config file path is:
+`bob chat` does not use a channel adapter. It connects to `admin.sock`, calls
+the supervised interactive-session RPC, and passes the terminal's standard
+file descriptors to the service. The service then starts and owns the
+interactive pi process. Interactive chat therefore has no channel-adapter
+configuration or subscription path to enable or disable.
+
+Bob's TOML configuration file is located at:
 
 - Linux: `$XDG_CONFIG_HOME/bob/config.toml` (falls back to `~/.config/bob/config.toml`)
 - macOS: `~/Library/Application Support/bob/config.toml`
-
-### Chat channel
-
-The chat channel is **enabled by default**. To disable it, add a
-`[channels.chat]` section to your TOML config:
-
-```toml
-[channels.chat]
-enabled = false
-```
-
-When `enabled = false`, `bob serve` skips starting the chat adapter at startup.
-Existing `bob chat` connections will fail to subscribe. Set `enabled = true` (or
-omit the section entirely) to restore normal operation.
 
 ---
 

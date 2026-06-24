@@ -134,36 +134,40 @@ file.
 
 ## Channel-Adapter Contract
 
-The interactive-chat adapter (`the-intern/service/crates/chat-adapter/`) is
-the reference implementation of a channel adapter. It demonstrates the contract
-every adapter must satisfy.
+Channel adapters normalize source-specific triggers into the core request
+types. For each trigger, an adapter constructs:
 
-### What the interactive-chat adapter does
+- an `InternalEvent` containing the appropriate `DeliveryKind` and payload;
+- a `RequestContext` containing the sender `UserId`, source `ChannelId`, optional
+  context id, and optional reply address; and
+- a submission through the requests-handler `IntakeHandle`.
 
-The adapter receives a `ChatFrame` struct carrying a text message, a `UserId`
-for the peer, and an optional conversation context identifier. For each frame
-it:
+Adapters do not evaluate admission or action policy. The Requests Handler owns
+pre-flight admission for queue-borne requests, while the extension and policy
+engine enforce tool-call authorization inside supervised pi sessions.
 
-1. Normalizes the message into an `InternalEvent` with `kind = DeliveryKind::Sync`
-   and the message text as `payload`.
-2. Constructs a `RequestContext` that carries the peer's `UserId` as `sender`,
-   the adapter's fixed `ChannelId` as `source`, and the optional context
-   identifier.
-3. Submits the `(InternalEvent, RequestContext)` pair to the requests-handler
-   intake path via its `Handle`.
+### Shipped scheduler adapter
 
-The adapter applies no policy logic. Every delivered frame is forwarded
-unconditionally; admission and policy decisions belong to the requests-handler
-and the policy engine.
+`the-intern/service/crates/scheduler-adapter/` is the concrete implementation
+shipped with bob. The actor always starts with `bob serve`. It creates one task
+per configured `[[schedule]]` entry and, on each cron tick, submits:
+
+- `DeliveryKind::Periodic` with the configured prompt as its payload;
+- stable `UserId` and `ChannelId` values derived from the job id;
+- the job id as `RequestContext.context_id`; and
+- no reply address, because a periodic trigger has no waiting caller.
+
+Reloading the schedule rebuilds the live job table. A failed intake submission
+is logged and does not terminate the scheduler loop.
 
 ### Application identity
 
-Each request self-asserts its application-level identity inside the request
-itself. The `UserId` placed in `RequestContext.sender` comes from the request
-data — not from the OS-level peer credentials. The socket's `0o700` parent
-directory is the transport trust gate; once a caller is inside that boundary,
-the identity it declares is accepted as authoritative. A request that declares
-no identity is rejected at intake.
+Every queue-borne request needs a valid application-level identity. An adapter
+must obtain that identity according to its source contract: an external local
+client can self-assert it inside the request, while the scheduler derives a
+stable identity from the configured job id. OS peer credentials protect local
+socket access but do not replace `RequestContext.sender`. A request with no
+valid identity is rejected at intake.
 
 ### Contract for new adapters
 
@@ -172,9 +176,9 @@ Any new channel adapter must:
 - Translate each external input into an `InternalEvent` with the appropriate
   `DeliveryKind` (sync, async, or periodic — see
   the delivery semantics summarized below for the meaning of each kind).
-- Populate `RequestContext` with an application-level `UserId` supplied by the
-  request itself, a fixed `ChannelId` identifying the adapter, and any
-  available context identifier.
+- Populate `RequestContext` with a stable application-level `UserId`, a
+  `ChannelId` identifying the source, and any available context or reply
+  address.
 - Submit the normalized pair to the requests-handler via its `Handle`.
 - Apply no policy logic — that is not the adapter's job.
 
