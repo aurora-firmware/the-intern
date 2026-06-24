@@ -75,6 +75,12 @@ pub struct Dispatcher {
     /// drop one another's update. Shared across all per-connection clones of
     /// the dispatcher via the `Arc`.
     schedule_write_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+    /// Configuration for spawning interactive pi sessions (T-105 / ADR-011).
+    ///
+    /// When `None`, built-in defaults are used: command `"pi"`, empty args,
+    /// 10-second deadline, and the current process executable as the extension
+    /// path (the latter is overridden in production by the real `bob.ts` path).
+    interactive_session: Option<crate::InteractiveSessionConfig>,
     started_at: Instant,
     version: &'static str,
 }
@@ -117,6 +123,21 @@ pub enum DispatchOutcome {
         response: Response,
         id: AdminSubscriptionId,
     },
+    /// An interactive pi session is ready to be opened.
+    ///
+    /// The connection loop must receive three file descriptors (`SCM_RIGHTS`
+    /// ancillary data) from the socket, then call
+    /// `supervisor.start_interactive_session` with those fds, and finally send a
+    /// success (or error) response back to the client.
+    ///
+    /// No pre-flight admission check is performed (ADR-010): the socket-access
+    /// gate (0700 permission) is the only transport gate for interactive sessions.
+    InteractiveSessionOpening {
+        /// The JSON-RPC request id, to be echoed in the eventual response.
+        id: serde_json::Value,
+        /// A freshly-allocated session id to use for the spawned pi process.
+        session_id: bob_core::types::SessionId,
+    },
 }
 
 impl Dispatcher {
@@ -139,9 +160,33 @@ impl Dispatcher {
             scheduler: None,
             config_path: None,
             schedule_write_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            interactive_session: None,
             started_at: Instant::now(),
             version,
         }
+    }
+
+    /// Attach an interactive-session spawn configuration (T-105 / ADR-011).
+    ///
+    /// When present, `session.interactive.open` uses these values to spawn the
+    /// interactive pi child process.  When absent (the default), the built-in
+    /// defaults are used (command `"pi"`, no extra args, 10-second deadline, and
+    /// the current process executable as the extension path).
+    #[must_use]
+    pub fn with_interactive_session_config(
+        mut self,
+        config: crate::InteractiveSessionConfig,
+    ) -> Self {
+        self.interactive_session = Some(config);
+        self
+    }
+
+    /// Return a clone of the interactive-session config, if one is configured.
+    ///
+    /// Used by the connection loop to pass spawn parameters to
+    /// `handle_interactive_session_opening`.
+    pub fn interactive_session_config(&self) -> Option<crate::InteractiveSessionConfig> {
+        self.interactive_session.clone()
     }
 
     /// Attach an optional chat-adapter frame-delivery handle.
@@ -175,6 +220,14 @@ impl Dispatcher {
     /// registry for teardown on connection drop.
     pub fn chat_router(&self) -> Option<std::sync::Arc<ChatReplyRouter>> {
         self.chat_router.clone()
+    }
+
+    /// Return a clone of the pi-agent-supervisor handle, if one is configured.
+    ///
+    /// Used by the connection loop to call `start_interactive_session` and
+    /// `kill_session` when handling `InteractiveSessionOpening` outcomes.
+    pub fn supervisor_handle(&self) -> Option<pi_agent_supervisor::Handle> {
+        self.supervisor.clone()
     }
 
     /// Attach a scheduler-adapter reload handle.
@@ -234,6 +287,7 @@ impl Dispatcher {
             "schedule.remove" => self.handle_schedule_remove(id, &request.params).await,
             "schedule.list" => self.handle_schedule_list(id).await,
             "schedule.reload" => self.handle_schedule_reload(id).await,
+            "session.interactive.open" => self.handle_session_interactive_open(id).await,
             other => DispatchOutcome::Err(ErrorResponse::error(
                 id,
                 CODE_METHOD_NOT_FOUND,
@@ -633,6 +687,35 @@ impl Dispatcher {
             Ok(()) => DispatchOutcome::Ok(Response::ok(id, json!({ "ok": true }))),
             Err(e) => DispatchOutcome::Err(map_service_error(id, &e)),
         }
+    }
+
+    /// Handle `session.interactive.open`.
+    ///
+    /// Allocates a fresh `SessionId` and returns [`DispatchOutcome::InteractiveSessionOpening`]
+    /// so the connection loop can receive the three terminal file descriptors via
+    /// `SCM_RIGHTS` ancillary data and then start the supervised interactive pi
+    /// session (T-104).
+    ///
+    /// **No pre-flight admission check is performed** — interactive chat is exempt from
+    /// per-user pre-flight admission (ADR-010). The sole transport gate is the 0700
+    /// socket-access permission check performed at connection accept time.
+    ///
+    /// Returns `-32601 Method not found` when no supervisor handle is configured.
+    async fn handle_session_interactive_open(&self, id: Value) -> DispatchOutcome {
+        let Some(_) = self.supervisor else {
+            return DispatchOutcome::Err(ErrorResponse::error(
+                id,
+                CODE_METHOD_NOT_FOUND,
+                "session.interactive.open is not available: no supervisor handle",
+                Some(json!({ "method": "session.interactive.open" })),
+            ));
+        };
+        let session_id = bob_core::types::SessionId::new();
+        tracing::debug!(
+            session_id = %session_id,
+            "session.interactive.open: allocated session id, awaiting fd receive"
+        );
+        DispatchOutcome::InteractiveSessionOpening { id, session_id }
     }
 
     /// Handle `report.submit`.
@@ -3213,6 +3296,59 @@ mod tests {
                 assert_eq!(resp.error.code, CODE_METHOD_NOT_FOUND);
             }
             DispatchOutcome::Ok(_) => panic!("expected error, got Ok"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // ── session.interactive.open tests (T-105) ───────────────────────────────
+
+    // AC-4 (T-105): session.interactive.open without a supervisor handle returns
+    // -32601 Method not found.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_session_interactive_open_without_supervisor_returns_method_not_found() {
+        let dispatcher = make_dispatcher_no_handles();
+        let req = make_request("session.interactive.open", json!(600));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(600));
+                assert_eq!(resp.error.code, CODE_METHOD_NOT_FOUND);
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error without supervisor, got Ok"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-4 (T-105): session.interactive.open with a supervisor returns
+    // InteractiveSessionOpening outcome — no pre-flight admission check is
+    // performed (ADR-010).
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_session_interactive_open_with_supervisor_returns_interactive_session_opening()
+    {
+        let (dispatcher, sup_task) = make_dispatcher_with_supervisor();
+        let req = make_request("session.interactive.open", json!(601));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::InteractiveSessionOpening { id, session_id } => {
+                assert_eq!(id, json!(601));
+                // session_id must be a freshly-allocated non-nil UUID
+                assert_ne!(
+                    session_id,
+                    bob_core::types::SessionId::default(),
+                    "session_id must be freshly allocated"
+                );
+            }
+            DispatchOutcome::Err(e) => panic!(
+                "expected InteractiveSessionOpening, got error: {}",
+                e.error.message
+            ),
             _ => panic!("unexpected dispatch outcome variant"),
         }
     }
