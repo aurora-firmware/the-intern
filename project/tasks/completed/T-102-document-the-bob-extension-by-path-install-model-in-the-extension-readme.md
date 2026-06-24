@@ -1,7 +1,7 @@
 ---
 id: T-102
 title: Document the bob extension by-path install model in the extension README
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-06-23'
