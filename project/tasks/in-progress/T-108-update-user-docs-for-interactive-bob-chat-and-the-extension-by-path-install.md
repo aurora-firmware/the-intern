@@ -148,3 +148,38 @@ same chapters. Integration inspection surfaced the broader mdBook consistency
 failure; no implementation blocker remains.
 
 Next owner: Developer via the active Development Loop.
+
+### Review Verdict — 2026-06-24
+
+FAIL
+
+Cycle 2 resolves every finding from the previous verdict: the operator guide no
+longer configures or subscribes a chat adapter, the extension-author guide uses
+the shipped scheduler adapter and current intake types, and the architecture
+overview now describes `session.interactive.open`, the scheduler inventory, and
+the queue/direct-session split. AC-1 and AC-2 are met. The submitted snapshot
+also passes `mdbook build` with the existing built `bob` binary supplied through
+`BOB_BIN`; only the existing mdbook-mermaid version warning is emitted, so AC-3
+is met.
+
+Stage 1 nevertheless remains FAIL because one shipped filesystem-layout
+contradiction remains in the edited operator guide:
+
+- **`the-intern/docs/src/operator-guide/index.md`, `## Scheduled jobs`, lines
+  349 and 438 on the submitted branch** — The guide first identifies the actual
+  XDG configuration file as `$XDG_CONFIG_HOME/bob/config.toml` (line 204), then
+  labels the schedule section as being in `bob.toml` and tells operators to edit
+  `bob.toml` before `bob schedule reload`. The shipped resolver and ADR-009 use
+  `config.toml`; a user following these instructions could edit the wrong file.
+  Rename both remaining `bob.toml` references to `config.toml` so the scheduled
+  job instructions agree with the documented and implemented XDG layout.
+
+Stage 2 was skipped because Stage 1 did not fully pass. No other stale
+chat-subscription, deleted chat-adapter, or unimplemented-scheduler claim remains
+under `the-intern/docs/src/`, and `git diff --check` passes.
+
+**Obstacles Encountered:** None. The required build completed successfully; the
+remaining issue was found by comparing terminology across the edited operator
+chapter and ADR-009.
+
+Next owner: Developer via the active Development Loop.
