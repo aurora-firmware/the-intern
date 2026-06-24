@@ -88,6 +88,38 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-06-24
+
+Reproduction status: Confirmed deterministically by code-path inspection on
+`dev-agent` commit `4d36efe`. `try_start_subsystems` constructs
+`admin_rpc::Config` without `interactive_session`, so the field remains `None`.
+
+Evidence captured: `bob/src/serve.rs:207-218` initializes the admin-RPC config
+with `..Default::default()` and no interactive configuration. In
+`admin-rpc/src/lib.rs:474-483`, `None` selects an empty extension socket path
+and `current_exe()` as the extension file. `BobConfig` already contains the
+correct command, shutdown deadline, extension socket, and extension file path.
+
+Isolated fault: The admin-RPC configuration assembly in
+`the-intern/service/crates/bob/src/serve.rs` omits the mapping from `BobConfig`
+to `admin_rpc::InteractiveSessionConfig`.
+
+Root cause or fault hypothesis: T-105 added an optional spawn configuration to
+admin-RPC and tested it at that crate boundary, but the service composition root
+was not updated to supply the production configuration. The fallback comment
+assumed production would override it, while no override exists.
+
+Planned fix: Add a small `build_interactive_session_config` mapper in
+`bob::serve`, cover all fields with a unit test, and set
+`admin_rpc::Config::interactive_session` to `Some(...)`. Interactive arguments
+must be empty because `BobConfig::pi_agent_args` selects RPC mode and is valid
+only for worker processes.
+
+Planned verification: First add a mapper test and confirm it fails before the
+mapper exists. Then run `cargo test -p bob serve::tests`,
+`cargo test -p admin-rpc`, and `cargo fmt --all -- --check` from
+`the-intern/service`.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
