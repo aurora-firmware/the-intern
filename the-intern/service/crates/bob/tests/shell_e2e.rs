@@ -7,8 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bob::config::{BobConfig, ChannelsConfig, ChatChannelConfig, MonitoringConfig, ScheduleConfig};
-use bob_core::types::{SessionId, UserId};
+use bob::config::{BobConfig, MonitoringConfig, ScheduleConfig};
+use bob_core::types::SessionId;
 use policy_control::PolicyConfig;
 use serde_json::{json, Value};
 
@@ -747,12 +747,6 @@ fn client_cfg(admin_sock_path: PathBuf) -> BobConfig {
             audit_log_path: PathBuf::new(),
             default_tail_filters: vec![],
         },
-        channels: ChannelsConfig {
-            chat: ChatChannelConfig { enabled: true },
-        },
-        chat_application_identity: "00000000-0000-0000-0000-000000000001"
-            .parse::<UserId>()
-            .expect("chat test identity should parse"),
         config_path: PathBuf::new(),
         schedule: ScheduleConfig { entries: vec![] },
     }

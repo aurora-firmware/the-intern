@@ -22,7 +22,6 @@ monitoring = { path = "../monitoring" }
 persistence = { path = "../persistence" }
 policy-control = { path = "../policy-control" }
 pi-agent-supervisor = { path = "../pi-agent-supervisor" }
-chat-adapter = { path = "../chat-adapter" }
 scheduler-adapter = { path = "../scheduler-adapter" }
 
 [lints]

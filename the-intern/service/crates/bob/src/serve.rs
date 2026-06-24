@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use bob_core::error::{ServiceError, ServiceResult};
 use bob_core::ports::{AuditSink, PersistenceStore};
-use bob_core::types::ChannelId;
 use tokio::{sync::watch, task::JoinHandle, time};
 use tracing::info;
 
@@ -27,9 +26,6 @@ struct Runtime {
     _persistence: persistence::Handle,
     _policy_control: policy_control::Handle,
     _pi_agent_supervisor: pi_agent_supervisor::Handle,
-    // Optional chat-adapter handle: present when channels.chat.enabled = true.
-    // Dropping it closes the frame channel so the adapter actor exits its recv loop.
-    _chat_adapter: Option<chat_adapter::FrameHandle>,
     // Scheduler-adapter reload handle.  The scheduler is always started (no
     // enable/disable flag).  Dropping it closes the watch channel so the actor
     // exits its recv loop.
@@ -45,9 +41,6 @@ struct Runtime {
     // child-process reaping is distinct from the general actor drain.
     supervisor_join: JoinHandle<()>,
 
-    // Optional join handle for the chat-adapter actor (present when chat is enabled).
-    // Awaited in shutdown phase 3 alongside the other non-supervisor actors.
-    chat_adapter_join: Option<JoinHandle<()>>,
     // Join handle for the scheduler-adapter actor (always present — no enable/disable flag).
     // Awaited in shutdown phase 3 alongside the other non-supervisor actors.
     scheduler_adapter_join: JoinHandle<()>,
@@ -194,24 +187,6 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     })?;
     info!("extension-ipc actor started");
 
-    // Conditionally start the chat adapter when the chat channel is enabled.
-    // The adapter receives frames from admin-RPC via its FrameHandle and forwards
-    // them to the requests-handler intake path.
-    let (maybe_chat_handle, maybe_chat_join) = if cfg.channels.chat.enabled {
-        info!("starting chat-adapter actor");
-        let chat_channel_id = ChannelId::new();
-        let (frame_handle, chat_join) = chat_adapter::start(
-            requests_handler_handle.clone(),
-            chat_channel_id,
-            cfg.request_queue_capacity,
-        );
-        info!("chat-adapter actor started");
-        (Some(frame_handle), Some(chat_join))
-    } else {
-        info!("chat channel disabled; skipping chat-adapter actor");
-        (None, None)
-    };
-
     info!("starting scheduler-adapter actor");
     let (scheduler_reload_handle, scheduler_join) = scheduler_adapter::start(
         requests_handler_handle.clone(),
@@ -234,7 +209,6 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         supervisor: Some(pi_agent_supervisor_handle.clone()),
         policy: Some(policy_control_handle.clone()),
         monitoring: Some(monitoring_handle.clone()),
-        chat_adapter: maybe_chat_handle.clone(),
         // Clone the scheduler reload handle into the admin-RPC dispatcher so that
         // schedule.* methods (T-097) can push updated job tables to the actor.
         // The primary handle is retained in the Runtime for shutdown ordering.
@@ -273,12 +247,10 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         _persistence: persistence_handle,
         _policy_control: policy_control_handle,
         _pi_agent_supervisor: pi_agent_supervisor_handle,
-        _chat_adapter: maybe_chat_handle,
         _scheduler_adapter: scheduler_reload_handle,
         requests_handler_cancel_tx: rh_cancel_tx,
         joins,
         supervisor_join: pi_agent_supervisor_join,
-        chat_adapter_join: maybe_chat_join,
         scheduler_adapter_join: scheduler_join,
         admin_sock_path: cfg.admin_sock_path.clone(),
         extension_sock_path: cfg.extension_sock_path.clone(),
@@ -344,12 +316,10 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
         _persistence,
         _policy_control,
         _pi_agent_supervisor,
-        _chat_adapter,
         _scheduler_adapter,
         requests_handler_cancel_tx,
         joins,
         supervisor_join,
-        chat_adapter_join,
         scheduler_adapter_join,
         admin_sock_path,
         extension_sock_path,
@@ -371,8 +341,6 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
     // Drop the supervisor handle so the supervisor actor sees its channel close
     // and proceeds to call shutdown_all on its pool (terminating all children).
     drop(_pi_agent_supervisor);
-    // Drop the chat-adapter handle so its actor sees its frame channel close and exits.
-    drop(_chat_adapter);
     // Drop the scheduler-adapter reload handle so its actor sees the watch channel
     // close and exits cleanly.
     drop(_scheduler_adapter);
@@ -384,12 +352,8 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
         "shutdown: phase 3 — draining queues (deadline: {:?})",
         cfg.shutdown_drain_deadline
     );
-    // Collect all non-supervisor join handles including the optional chat-adapter join
-    // and the always-present scheduler-adapter join.
+    // Collect all non-supervisor join handles including the scheduler-adapter join.
     let mut all_joins = joins;
-    if let Some(chat_join) = chat_adapter_join {
-        all_joins.push(chat_join);
-    }
     all_joins.push(scheduler_adapter_join);
     let drain_result = time::timeout(cfg.shutdown_drain_deadline, drain_joins(all_joins)).await;
     match drain_result {
@@ -662,70 +626,6 @@ pub mod tests {
             6,
             "expected one join handle per non-supervisor actor (supervisor_join is separate)"
         );
-    }
-
-    // AC-1 (T-072): when chat is enabled, start_subsystems constructs the chat adapter
-    // and the runtime holds its join handle.
-    #[tokio::test(flavor = "current_thread")]
-    async fn start_subsystems_with_chat_enabled_creates_chat_adapter_join_handle() {
-        let tmp = tempfile::tempdir().expect("temp dir");
-        let mut cfg = test_cfg_with_sockets(&tmp);
-        cfg.channels.chat.enabled = true;
-        let runtime = start_subsystems(&cfg).expect("subsystems must start");
-        assert!(
-            runtime.chat_adapter_join.is_some(),
-            "chat adapter join handle must be present when chat is enabled"
-        );
-        run_shutdown_protocol(runtime, &cfg).await;
-    }
-
-    // AC-2 (T-072): when chat is disabled, start_subsystems does not construct
-    // the chat adapter, and the runtime holds no chat adapter join handle.
-    #[tokio::test(flavor = "current_thread")]
-    async fn start_subsystems_with_chat_disabled_has_no_chat_adapter_join_handle() {
-        let tmp = tempfile::tempdir().expect("temp dir");
-        let mut cfg = test_cfg_with_sockets(&tmp);
-        cfg.channels.chat.enabled = false;
-        let runtime = start_subsystems(&cfg).expect("subsystems must start");
-        assert!(
-            runtime.chat_adapter_join.is_none(),
-            "chat adapter join handle must be absent when chat is disabled"
-        );
-        run_shutdown_protocol(runtime, &cfg).await;
-    }
-
-    // AC-3 (T-072): graceful shutdown with chat enabled completes without hanging.
-    #[tokio::test(flavor = "current_thread")]
-    async fn shutdown_protocol_with_chat_enabled_completes_without_hanging() {
-        let tmp = tempfile::tempdir().expect("temp dir");
-        let mut cfg = test_cfg_with_sockets(&tmp);
-        cfg.channels.chat.enabled = true;
-        cfg.shutdown_drain_deadline = std::time::Duration::from_millis(200);
-        cfg.shutdown_reap_deadline = std::time::Duration::from_millis(100);
-        let runtime = start_subsystems(&cfg).expect("subsystems must start");
-        tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            run_shutdown_protocol(runtime, &cfg),
-        )
-        .await
-        .expect("shutdown protocol with chat adapter must complete within deadline");
-    }
-
-    // AC-3 (T-072): graceful shutdown with chat disabled also completes without hanging.
-    #[tokio::test(flavor = "current_thread")]
-    async fn shutdown_protocol_with_chat_disabled_completes_without_hanging() {
-        let tmp = tempfile::tempdir().expect("temp dir");
-        let mut cfg = test_cfg_with_sockets(&tmp);
-        cfg.channels.chat.enabled = false;
-        cfg.shutdown_drain_deadline = std::time::Duration::from_millis(200);
-        cfg.shutdown_reap_deadline = std::time::Duration::from_millis(100);
-        let runtime = start_subsystems(&cfg).expect("subsystems must start");
-        tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            run_shutdown_protocol(runtime, &cfg),
-        )
-        .await
-        .expect("shutdown protocol without chat adapter must complete within deadline");
     }
 
     #[tokio::test(flavor = "current_thread")]

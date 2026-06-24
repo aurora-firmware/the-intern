@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1", features = ["rt", "sync", "net", "signal", "macros", "io-util"] }
 bob-core = { path = "../bob-core" }
-chat-adapter = { path = "../chat-adapter" }
 pi-agent-supervisor = { path = "../pi-agent-supervisor" }
 policy-control = { path = "../policy-control" }
 monitoring = { path = "../monitoring" }
