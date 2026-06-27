@@ -424,52 +424,45 @@ async fn schedule_entry_prompt_is_not_delivered_when_scheduler_user_is_not_admit
     // denied verdict in monitoring.
     tokio::time::advance(Duration::from_secs(61)).await;
 
-    // Let scheduler, requests-handler, and monitoring actor process.
-    for _ in 0..30 {
+    // Give the scheduler and requests-handler task slices to begin propagating
+    // the denied event before we resume real time.
+    for _ in 0..10 {
         tokio::task::yield_now().await;
     }
 
-    // ── AC-3 assertion 1: denied verdict is recorded ──────────────────────────
-    // Drain the monitoring subscription (non-blocking) to find the denied verdict.
-    let mut found_denied_verdict = false;
-    // Try draining any already-arrived records first.
-    loop {
-        match verdict_rx.try_recv() {
-            Ok(record) => {
-                if matches!(
-                    record.payload,
-                    AuditRecordPayload::Verdict(ref p) if !p.allow
-                ) {
-                    found_denied_verdict = true;
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-    }
+    // Resume real time.  The denied-verdict chain crosses several actor message
+    // hops (scheduler → requests-handler → pre-flight → monitoring publish).
+    // With tokio time paused, a bounded yield count is not sufficient under OS
+    // load — the actor tasks may not get scheduled within that window.
+    // After resume(), tokio::time::sleep() parks the runtime so every actor in
+    // the chain is eventually scheduled, mirroring the AC-1 approach.
+    tokio::time::resume();
 
-    // If not yet delivered, give monitoring a few more cycles.
-    if !found_denied_verdict {
-        for _ in 0..20 {
-            tokio::task::yield_now().await;
-            loop {
-                match verdict_rx.try_recv() {
-                    Ok(record) => {
-                        if matches!(
-                            record.payload,
-                            AuditRecordPayload::Verdict(ref p) if !p.allow
-                        ) {
-                            found_denied_verdict = true;
-                            break;
-                        }
+    // ── AC-3 assertion 1: denied verdict is recorded ──────────────────────────
+    // Poll verdict_rx with real-time delays.  Each sleep parks the runtime so
+    // the monitoring actor can fan out the denied verdict to the subscriber.
+    let mut found_denied_verdict = false;
+    let verdict_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < verdict_deadline {
+        loop {
+            match verdict_rx.try_recv() {
+                Ok(record) => {
+                    if matches!(
+                        record.payload,
+                        AuditRecordPayload::Verdict(ref p) if !p.allow
+                    ) {
+                        found_denied_verdict = true;
+                        break;
                     }
-                    Err(_) => break,
                 }
-            }
-            if found_denied_verdict {
-                break;
+                Err(_) => break,
             }
         }
+        if found_denied_verdict {
+            break;
+        }
+        // Real 50 ms sleep: parks the runtime so actor tasks are scheduled.
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
     assert!(
@@ -478,12 +471,9 @@ async fn schedule_entry_prompt_is_not_delivered_when_scheduler_user_is_not_admit
     );
 
     // ── AC-3 assertion 2: prompt NOT delivered to fake worker ─────────────────
-    // Give the dispatcher extra time (advance 500ms + yields) to confirm it
-    // has nothing to dispatch (persistence store is empty after denial).
-    tokio::time::advance(Duration::from_millis(500)).await;
-    for _ in 0..20 {
-        tokio::task::yield_now().await;
-    }
+    // Brief real-time pause: let the dispatcher cycle through persistence (which
+    // is empty after denial) to confirm it dispatches nothing to the worker.
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     assert!(
         !record_file.exists(),
