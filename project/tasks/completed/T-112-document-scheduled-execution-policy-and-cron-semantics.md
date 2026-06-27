@@ -1,7 +1,7 @@
 ---
 id: T-112
 title: Document scheduled execution policy and cron semantics
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-06-27'
