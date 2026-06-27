@@ -1,7 +1,7 @@
 ---
 id: T-111
 title: Align scheduler cron evaluation with local wall-clock time
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-06-27'
