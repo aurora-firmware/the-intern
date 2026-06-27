@@ -1,7 +1,7 @@
 ---
 id: T-109
 title: Implement admitted periodic request dispatch to pi-agent
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-06-27'
