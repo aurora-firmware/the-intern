@@ -5,8 +5,14 @@ use std::sync::Arc;
 
 use bob_core::error::{ServiceError, ServiceResult};
 use bob_core::ports::{AuditSink, PersistenceStore};
+use bob_core::types::DeliveryKind;
 use tokio::{sync::watch, task::JoinHandle, time};
 use tracing::info;
+
+/// Polling interval for the periodic dispatcher when no Periodic event is
+/// available.  Long enough to avoid busy-spinning; short enough to keep
+/// shutdown latency well under the drain deadline.
+const PERIODIC_DISPATCH_POLL_INTERVAL: time::Duration = time::Duration::from_millis(100);
 
 use crate::config::BobConfig;
 
@@ -34,6 +40,9 @@ struct Runtime {
     // Cancellation sender for the requests-handler actor.
     requests_handler_cancel_tx: watch::Sender<bool>,
 
+    // Cancellation sender for the periodic dispatcher task.
+    dispatcher_cancel_tx: watch::Sender<bool>,
+
     // Join handles for non-supervisor actors (awaited in shutdown phase 3).
     joins: Vec<JoinHandle<()>>,
 
@@ -44,6 +53,9 @@ struct Runtime {
     // Join handle for the scheduler-adapter actor (always present — no enable/disable flag).
     // Awaited in shutdown phase 3 alongside the other non-supervisor actors.
     scheduler_adapter_join: JoinHandle<()>,
+
+    // Join handle for the periodic dispatcher task; awaited in shutdown phase 3.
+    dispatcher_join: JoinHandle<()>,
 
     // Paths to remove on shutdown.
     admin_sock_path: PathBuf,
@@ -238,6 +250,15 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         "admin-rpc actor started and socket bound"
     );
 
+    info!("starting periodic dispatcher");
+    let (dispatcher_cancel_tx, dispatcher_cancel_rx) = watch::channel(false);
+    let dispatcher_join = start_periodic_dispatcher(
+        persistence_handle.clone(),
+        pi_agent_supervisor_handle.clone(),
+        dispatcher_cancel_rx,
+    );
+    info!("periodic dispatcher started");
+
     // The supervisor join is kept separate from `joins` so that phase 3 drains
     // the non-supervisor actors first, and phase 4 can explicitly await child
     // process reaping with its own deadline.
@@ -260,9 +281,11 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         _pi_agent_supervisor: pi_agent_supervisor_handle,
         _scheduler_adapter: scheduler_reload_handle,
         requests_handler_cancel_tx: rh_cancel_tx,
+        dispatcher_cancel_tx,
         joins,
         supervisor_join: pi_agent_supervisor_join,
         scheduler_adapter_join: scheduler_join,
+        dispatcher_join,
         admin_sock_path: cfg.admin_sock_path.clone(),
         extension_sock_path: cfg.extension_sock_path.clone(),
         policy_snapshot,
@@ -329,9 +352,11 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
         _pi_agent_supervisor,
         _scheduler_adapter,
         requests_handler_cancel_tx,
+        dispatcher_cancel_tx,
         joins,
         supervisor_join,
         scheduler_adapter_join,
+        dispatcher_join,
         admin_sock_path,
         extension_sock_path,
         // policy_snapshot is dropped here; gate crates will hold their own
@@ -342,6 +367,8 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
     // Phase 1: Stop accepting new connections by dropping handles (channels close).
     // Signal the requests-handler actor to drain and stop.
     let _ = requests_handler_cancel_tx.send(true);
+    // Signal the periodic dispatcher to stop.
+    let _ = dispatcher_cancel_tx.send(true);
     _admin_rpc.begin_shutdown();
     drop(_admin_rpc);
     drop(_extension_ipc);
@@ -363,9 +390,11 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
         "shutdown: phase 3 — draining queues (deadline: {:?})",
         cfg.shutdown_drain_deadline
     );
-    // Collect all non-supervisor join handles including the scheduler-adapter join.
+    // Collect all non-supervisor join handles including the scheduler-adapter
+    // and periodic dispatcher joins.
     let mut all_joins = joins;
     all_joins.push(scheduler_adapter_join);
+    all_joins.push(dispatcher_join);
     let drain_result = time::timeout(cfg.shutdown_drain_deadline, drain_joins(all_joins)).await;
     match drain_result {
         Ok(()) => info!("shutdown: phase 3 — all queues drained"),
@@ -427,6 +456,98 @@ fn remove_socket_files(admin: &PathBuf, extension: &PathBuf) {
 /// Attempts to remove socket files during error unwind; ignores all failures.
 fn remove_socket_files_best_effort(cfg: &BobConfig) {
     remove_socket_files(&cfg.admin_sock_path, &cfg.extension_sock_path);
+}
+
+/// Starts the periodic dispatcher task and returns its join handle.
+///
+/// The dispatcher runs in a dedicated Tokio task.  On each iteration it
+/// dequeues the oldest event from `persistence`.  If the event is a
+/// `DeliveryKind::Periodic` event the dispatcher acquires a pi-agent session
+/// via `supervisor` and forwards `event.payload` verbatim.  Any error during
+/// dequeue, session acquisition, or prompt sending is logged as a warning;
+/// processing then continues from the next event so a single failure does not
+/// stall the pipeline.
+///
+/// Non-`Periodic` events are re-enqueued so they are not lost, and the
+/// dispatcher backs off for `PERIODIC_DISPATCH_POLL_INTERVAL` before the next
+/// poll.  The same back-off is applied when the queue is empty or when a
+/// dequeue error occurs.
+///
+/// The task exits when `cancel_rx` receives `true`, which is sent during
+/// shutdown phase 1.
+fn start_periodic_dispatcher(
+    persistence: persistence::Handle,
+    supervisor: pi_agent_supervisor::Handle,
+    mut cancel_rx: watch::Receiver<bool>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        info!("periodic dispatcher started");
+        loop {
+            // Check for a shutdown signal before each dequeue.
+            if *cancel_rx.borrow() {
+                break;
+            }
+
+            match persistence.dequeue_next().await {
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "periodic dispatcher: dequeue error; continuing after back-off"
+                    );
+                    tokio::select! {
+                        _ = time::sleep(PERIODIC_DISPATCH_POLL_INTERVAL) => {}
+                        _ = cancel_rx.changed() => {}
+                    }
+                }
+
+                Ok(None) => {
+                    // No event available; wait without busy-spinning.
+                    tokio::select! {
+                        _ = time::sleep(PERIODIC_DISPATCH_POLL_INTERVAL) => {}
+                        _ = cancel_rx.changed() => {}
+                    }
+                }
+
+                Ok(Some(event)) if event.kind != DeliveryKind::Periodic => {
+                    // Non-periodic events are not dispatched by this task.
+                    // Re-enqueue so they are not silently discarded.
+                    if let Err(e) = persistence.enqueue(event).await {
+                        tracing::warn!(
+                            error = %e,
+                            "periodic dispatcher: failed to return non-periodic event to queue"
+                        );
+                    }
+                    // Back off before the next poll to avoid busy-spinning on a
+                    // queue that only contains non-periodic events.
+                    tokio::select! {
+                        _ = time::sleep(PERIODIC_DISPATCH_POLL_INTERVAL) => {}
+                        _ = cancel_rx.changed() => {}
+                    }
+                }
+
+                Ok(Some(event)) => {
+                    // Admitted Periodic event — acquire a session and send the prompt.
+                    let session_id = match supervisor.acquire_session().await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "periodic dispatcher: session acquisition failed; continuing"
+                            );
+                            continue;
+                        }
+                    };
+                    if let Err(e) = supervisor.send_prompt(session_id, event.payload).await {
+                        tracing::warn!(
+                            error = %e,
+                            "periodic dispatcher: prompt send failed; continuing"
+                        );
+                    }
+                }
+            }
+        }
+        info!("periodic dispatcher stopped");
+    })
 }
 
 #[cfg(test)]
@@ -1193,6 +1314,179 @@ pub mod tests {
         );
 
         run_shutdown_protocol(runtime, &cfg).await;
+    }
+
+    // ── T-109: periodic dispatcher tests ──────────────────────────────────────
+
+    /// Tests that specifically cover the admitted periodic request dispatcher
+    /// introduced by T-109 (AC-1 through AC-5).
+    pub mod periodic {
+        use super::*;
+
+        // AC-1: periodic dispatcher task is started during bob serve startup and
+        // its join handle is distinct from the scheduler join and the six
+        // non-supervisor actor joins.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_starts_during_serve_startup() {
+            let tmp = tempfile::tempdir().expect("temp dir");
+            let cfg = test_cfg_with_sockets(&tmp);
+            let runtime = start_subsystems(&cfg).expect("subsystems must start");
+            assert!(
+                !runtime.dispatcher_join.is_finished(),
+                "periodic dispatcher task must be running after startup"
+            );
+            run_shutdown_protocol(runtime, &cfg).await;
+        }
+
+        // AC-1: graceful shutdown awaits the periodic dispatcher and completes
+        // without hanging.
+        #[tokio::test(flavor = "current_thread")]
+        async fn shutdown_protocol_awaits_periodic_dispatcher_and_completes() {
+            let tmp = tempfile::tempdir().expect("temp dir");
+            let mut cfg = test_cfg_with_sockets(&tmp);
+            cfg.shutdown_drain_deadline = Duration::from_millis(500);
+            cfg.shutdown_reap_deadline = Duration::from_millis(250);
+            let runtime = start_subsystems(&cfg).expect("subsystems must start");
+            tokio::time::timeout(Duration::from_secs(5), run_shutdown_protocol(runtime, &cfg))
+                .await
+                .expect(
+                    "shutdown protocol must complete within deadline when dispatcher is running",
+                );
+        }
+
+        // AC-2: a Periodic event enqueued in persistence is dequeued by the
+        // dispatcher, a pi-agent session is acquired, and the payload is
+        // forwarded verbatim via send_prompt.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt() {
+            use bob_core::ports::PersistenceStore;
+
+            let tmp = tempfile::tempdir().expect("temp dir");
+            let record_file = tmp.path().join("received_prompt.txt");
+            let record_file_str = record_file.to_string_lossy().into_owned();
+
+            // Worker script: parse the RPC prompt, write the message to a file,
+            // then respond with success so send_prompt returns Ok(()).
+            let worker_script = format!(
+                "while IFS= read -r line; do \
+                 id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 msg=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"message\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf '%s\\n' \"$msg\" >> \"{}\"; \
+                 printf '{{\"id\":\"%s\",\"type\":\"response\",\"success\":true}}\\n' \"$id\"; \
+                 done",
+                record_file_str
+            );
+
+            let cfg = BobConfig {
+                admin_sock_path: tmp.path().join("admin.sock"),
+                extension_sock_path: tmp.path().join("extension.sock"),
+                extension_path: existing_extension_path(),
+                pi_agent_command: "sh".to_string(),
+                pi_agent_args: vec!["-c".to_string(), worker_script],
+                pi_agent_warm_pool_size: 1,
+                pi_agent_max_processes: 2,
+                request_queue_capacity: 16,
+                shutdown_drain_deadline: Duration::from_millis(500),
+                shutdown_reap_deadline: Duration::from_millis(250),
+                ..BobConfig::test_base()
+            };
+
+            let runtime = start_subsystems(&cfg).expect("subsystems must start");
+
+            // Enqueue a Periodic event directly into persistence so the dispatcher
+            // picks it up without going through the requests-handler preflight.
+            runtime
+                ._persistence
+                .enqueue(InternalEvent {
+                    kind: DeliveryKind::Periodic,
+                    payload: "periodic-test-prompt".to_owned(),
+                })
+                .await
+                .expect("enqueue must succeed");
+
+            // Wait for the dispatcher to dequeue the event, acquire a session, and
+            // forward the payload to the worker.  The worker writes the message to
+            // the record file upon receiving the prompt.
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if record_file.exists() {
+                        let content = std::fs::read_to_string(&record_file).unwrap_or_default();
+                        if content.contains("periodic-test-prompt") {
+                            break;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("dispatcher must forward periodic event payload to pi-agent within timeout");
+
+            run_shutdown_protocol(runtime, &cfg).await;
+        }
+
+        // AC-3: when send_prompt returns an error (e.g. the worker process
+        // exits immediately and cannot handle the prompt), the dispatcher logs
+        // a warning and continues processing subsequent events without crashing.
+        #[tokio::test(flavor = "current_thread")]
+        async fn dispatcher_continues_after_send_prompt_error() {
+            use bob_core::ports::PersistenceStore;
+
+            let tmp = tempfile::tempdir().expect("temp dir");
+            // "exit 0" workers exit immediately; send_prompt will fail because
+            // the child process is gone.
+            let cfg = test_cfg_with_sockets(&tmp);
+            let runtime = start_subsystems(&cfg).expect("subsystems must start");
+
+            // Enqueue several Periodic events; each will trigger a send_prompt
+            // error because the worker exits before the RPC reply arrives.
+            for _ in 0..3_u8 {
+                runtime
+                    ._persistence
+                    .enqueue(InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "error-resilience-test".to_owned(),
+                    })
+                    .await
+                    .expect("enqueue must succeed");
+            }
+
+            // Give the dispatcher time to attempt all three events.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+
+            // The dispatcher must still be running — errors must not crash it.
+            assert!(
+                !runtime.dispatcher_join.is_finished(),
+                "dispatcher must still be running after send_prompt errors"
+            );
+
+            run_shutdown_protocol(runtime, &cfg).await;
+        }
+
+        // AC-4: when no Periodic event is available the dispatcher waits without
+        // busy-spinning.  Verified indirectly: with an empty queue the shutdown
+        // completes cleanly and quickly (the dispatcher responds to the shutdown
+        // signal promptly rather than blocking until a drain deadline is hit).
+        #[tokio::test(flavor = "current_thread")]
+        async fn dispatcher_waits_without_busy_spinning_when_queue_is_empty() {
+            let tmp = tempfile::tempdir().expect("temp dir");
+            let mut cfg = test_cfg_with_sockets(&tmp);
+            cfg.shutdown_drain_deadline = Duration::from_millis(500);
+            cfg.shutdown_reap_deadline = Duration::from_millis(250);
+
+            let runtime = start_subsystems(&cfg).expect("subsystems must start");
+
+            // Leave the queue empty; give the dispatcher a cycle to enter its
+            // idle-wait state.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            let started_at = std::time::Instant::now();
+            run_shutdown_protocol(runtime, &cfg).await;
+
+            assert!(
+                started_at.elapsed() < cfg.shutdown_drain_deadline,
+                "idle dispatcher must respond to shutdown signal before the drain deadline expires"
+            );
+        }
     }
 
     // AC-3 (T-068): the pre-flight check uses the per-request context, not a
