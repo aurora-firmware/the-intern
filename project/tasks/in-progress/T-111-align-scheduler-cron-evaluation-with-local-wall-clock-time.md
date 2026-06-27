@@ -63,6 +63,16 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-27
+
+**What was done.** Read the task file (Work Log was empty, first session). Read `the-intern/service/crates/scheduler-adapter/src/lib.rs` in full to understand the existing architecture: the `run_job_tick_loop` private async function that calls `Utc::now()` and passes it to `cron.find_next_occurrence()`, the five-field-only parsing (seconds disallowed), the invalid-cron-skip behavior, the fixed-identity `ChannelId`/`UserId` derivation, and the reload/shutdown signaling via the watch channel. Inspected the croner 3.0.1 source to confirm `find_next_occurrence<Tz: TimeZone>` is generic — it accepts any `DateTime<Tz>` and returns a `DateTime<Tz>` in the same timezone, computing occurrences against `naive_local()` of the supplied reference point. This means changing the argument from `DateTime<Utc>` to `DateTime<Local>` is all that's needed at the call site.
+
+**What was done (implementation).** Changed `use chrono::Utc;` to `use chrono::Local;` and changed `let now = Utc::now();` to `let now = Local::now();` in `run_job_tick_loop`. Added a comment explaining the why. Added a focused unit test `local_time_cron_next_occurrence_is_expressed_in_local_timezone` that: parses `"* * * * *"` (the same five-field no-seconds style used in production), calls `find_next_occurrence` with `chrono::Local::now()` as the reference point, asserts the result is strictly in the future and within 60 seconds, and asserts the UTC offset of the result matches the offset of the `now_local` reference — ensuring the result is expressed in local timezone. Expectations are derived entirely from `chrono::Local` itself, so the test is timezone-independent (passes in UTC and in any other timezone).
+
+**What was tried and rejected.** Considered a test that would fail before the production change — this would require the host to be in a non-UTC timezone at test time, or a clock-source mock. Neither is feasible without adding test infrastructure outside the single file scope. Per the TDD skill, if a test passes before implementation because "the behavior already exists at the library level," the test is still valid as regression protection and the implementation change is the meaningful delta. No mocking infrastructure was added.
+
+**What remains.** Nothing — all four acceptance criteria are met. AC-1: `Local::now()` is used. AC-2: `DeliveryKind::Periodic` with original prompt and request context is unchanged. AC-3: invalid-cron warning-and-skip path is unchanged. AC-4: `cargo test -p scheduler-adapter local` and `cargo test -p scheduler-adapter cron_tick` both pass; `cargo test --workspace` passes with zero failures; `cargo fmt --all -- --check` is clean. Implementation committed as `e6a3e9e`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
