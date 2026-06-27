@@ -106,7 +106,7 @@ PASS | FAIL | ESCALATE
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
 
-### Review Verdict — 2026-06-27
+### Review Verdict — 2026-06-27 (cycle 1)
 
 FAIL
 
@@ -130,3 +130,23 @@ FAIL
 - **Location:** `schedule_entry_prompt_is_not_delivered_when_scheduler_user_is_not_admitted`, after `tokio::time::advance(Duration::from_secs(61)).await` and the 30 `yield_now()` calls (approximately lines 425–473).
 - **What is wrong:** After `advance(61s)` the test drains and re-polls `verdict_rx` using only bounded `yield_now()` loops while `tokio::time` remains paused. The monitoring actor, requests-handler, and pre-flight chain require more than 30+20 `yield_now()` calls to propagate the verdict under OS load. This causes intermittent assertion failure (≈20% failure rate observed).
 - **What should change:** Call `tokio::time::resume()` immediately after the 30 `yield_now()` block (before the `try_recv` drain). Then replace the bounded inner `for _ in 0..20` fallback loop with a real-time deadline poll that uses `tokio::time::sleep(Duration::from_millis(50)).await` per iteration and a `std::time::Instant` deadline of 5 seconds — the same pattern used by the AC-1 test for prompt-delivery observation. This allows the runtime to park and OS-schedule the actors until the verdict arrives.
+
+### Review Verdict — 2026-06-27 (cycle 2)
+
+PASS
+
+Both stages pass after the Developer's fix in commit `619b5cd`.
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1 (PASS): `schedule_entry_prompt_is_delivered_to_pi_agent_when_scheduler_user_is_admitted` delivers the configured prompt to the fake `sh` worker and asserts receipt after `tokio::time::resume()` + real-time polling.
+- AC-2 (PASS): `assert_eq!(delivered_prompt, expected_prompt, ...)` byte-for-byte equality check is present and runs after the delivery is confirmed.
+- AC-3 (PASS): `schedule_entry_prompt_is_not_delivered_when_scheduler_user_is_not_admitted` now calls `tokio::time::resume()` after `advance(61s)` + 10 initial `yield_now()` calls, then polls `verdict_rx` in a `while Instant::now() < verdict_deadline` loop (5s deadline, 50ms real-time sleep per iteration). The file-not-delivered check uses `tokio::time::sleep(200ms)` (real time). 20 consecutive focused runs — 0 failures.
+- AC-4 (PASS): Both tests use a `sh` script as the fake RPC worker; no real `pi` binary is required.
+
+**Stage 2 — Code Quality**
+
+- Fix is minimal and precisely scoped: only the AC-3 timing section was changed (no structural rewrites, no unrelated changes).
+- Inline dispatcher (`start_inline_dispatcher`) is unchanged and remains behaviorally equivalent to the production `start_periodic_dispatcher`.
+- Scope: still only the two specified files (`tests/scheduler_execution_e2e.rs` and `Cargo.toml`).
+- `cargo test --workspace` clean — no regressions.
