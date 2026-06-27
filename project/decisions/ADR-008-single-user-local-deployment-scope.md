@@ -47,8 +47,9 @@ deployment. Concretely:
 2. **Isolation rationale.** One pi-agent process per active session still holds,
    but its purpose is isolating *concurrent contexts of the one user* (e.g. an
    interactive chat and a scheduled job at the same time), not separating
-   different people. How a session is keyed from a request is a separate open
-   design item — see S-008 / the architecture record — not settled by this ADR.
+   different people. Queue-borne request context and supervised pi session
+   identity are separate concerns, settled by the relevant request-intake and
+   supervisor specs rather than by this ADR.
 3. **Identity.** "Single user" is about the OS/trust-domain account, **not** the
    number of application identities. The self-asserted-identity model (ADR-005)
    still carries multiple application-level identities and channels behind that

@@ -92,4 +92,5 @@ gate of little value under single-user-local. Revisit if multi-user becomes a go
 **Description:** Keep `bob chat` as a JSON-RPC client whose turns flow through the
 Requests Handler, preserving pre-flight admission unchanged.
 **Rejected because:** it contradicts CR-002's goal of a direct interactive `pi` session
-and re-scopes the work onto finishing S-006/S-008/CR-001 rather than launching pi.
+and re-scopes the work onto the retired S-006/S-008/CR-001 admin-socket chat path
+rather than launching pi.

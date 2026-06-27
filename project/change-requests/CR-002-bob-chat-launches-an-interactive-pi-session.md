@@ -1,11 +1,14 @@
 ---
 id: CR-002
 title: bob chat launches an interactive pi session
-status: pending
+status: completed
 created: '2026-06-22'
 ---
 
 # bob chat launches an interactive pi session
+
+> **Completed (2026-06-24):** Implemented by T-103 through T-108. S-002, S-004,
+> S-006, and S-007 are amended in place; S-008 is superseded and archived.
 
 ## Desired Changes
 

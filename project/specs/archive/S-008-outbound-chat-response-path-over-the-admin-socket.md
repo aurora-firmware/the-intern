@@ -210,4 +210,4 @@ No new configuration is introduced.
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| 2026-06-23 | Spec superseded (status → superseded). | CR-002 replaces admin-socket interactive chat and its outbound reply path with a supervised direct `pi` session; the reply router has no interactive consumer. | TBD (CR-002 breakdown) |
+| 2026-06-23 | Spec superseded (status → superseded) and moved to `project/specs/archive/`. | CR-002 replaces admin-socket interactive chat and its outbound reply path with a supervised direct `pi` session; the reply router has no interactive consumer. | T-107, T-108 |

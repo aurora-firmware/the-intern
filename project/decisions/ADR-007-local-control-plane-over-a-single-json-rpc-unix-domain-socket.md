@@ -22,8 +22,10 @@ never named as one architectural element:
 - S-002 introduced `admin.sock` and the `bob` CLI as "the public control
   surface," but fixed only the framing, transport, and authentication — not the
   method catalogue, and not the architecture-level decision.
-- S-005 mounted `report.submit` and `audit.tail` on the same socket; S-008
-  mounted `chat.*`; S-009 mounted `schedule.*`.
+- S-005 mounted `report.submit` and `audit.tail` on the same socket; S-009
+  mounted `schedule.*`. S-006/S-008 previously mounted `chat.*`; CR-002 later
+  retired that request-pipeline chat path and replaced it with supervised
+  interactive-session control over the same socket.
 - ADR-001 fixed the wire framing; ADR-003 placed the client in the `bob` binary;
   ADR-005 reshaped the trust model.
 
@@ -55,7 +57,7 @@ Several logically distinct interfaces are mounted on this one transport:
 |---|---|---|
 | Operator control | `service.status`, `sessions.list`/`kill`, `policy.reload`, `schedule.add`/`remove`/`list`/`reload` | new (this plane) |
 | Live observability | `audit.tail.subscribe`/`unsubscribe` | new (this plane) |
-| Interactive chat | `chat.open`/`send`/`close` (+ `chat.message` notifications) | S-006 / S-008 channel |
+| Interactive chat | `session.interactive.open` / attach lifecycle for a supervised pi session | CR-002 / ADR-011 |
 | External action reporting | `report.submit` | S-005 Monitoring interface |
 
 **Trust model (honest).** Admission to the socket is gated solely by filesystem
@@ -66,12 +68,11 @@ gate (ADR-005). The same gate is the intended invariant for `extension.sock`;
 the production bind does not yet enforce it, tracked as a bug rather than papered
 over here.
 
-**The chat and report surfaces are not new architecture.** They are the
-interactive-chat channel and Monitoring's inbound interface from the logical
-model, riding `admin.sock` because it is the one local transport that already
-exists. `bob chat` is a transport *into* the chat channel adapter, not a bypass:
-a chat message still flows Requests Handler → Policy Control → Agent Harness like
-any other channel (S-008).
+**The chat and report surfaces are not new architecture.** Monitoring's inbound
+report interface rides `admin.sock` because it is the one local transport that
+already exists. Interactive `bob chat` now uses `admin.sock` as a control-plane
+request to open and attach to a supervised pi session; chat turns do not traverse
+the queue-borne Requests Handler → Policy Control path (ADR-010).
 
 **Configuration as live state.** Some methods mutate `bob.toml` and signal the
 owning subsystem to reload — `schedule.*` is the worked example, with the

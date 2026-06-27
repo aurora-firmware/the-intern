@@ -353,4 +353,4 @@ The deliverable rests on a policy section in bob's existing TOML configuration
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| 2026-06-23 | Interactive chat exempted from pre-flight admission; admission scoped to queue-borne requests. | CR-002 routes interactive chat through a supervised direct `pi` session that bypasses the Requests-Handler queue; gated instead by the socket trust boundary + the `tool_call` action gate (ADR-010). | TBD (CR-002 breakdown) |
+| 2026-06-23 | Interactive chat exempted from pre-flight admission; admission scoped to queue-borne requests. | CR-002 routes interactive chat through a supervised direct `pi` session that bypasses the Requests-Handler queue; gated instead by the socket trust boundary + the `tool_call` action gate (ADR-010). | T-103, T-104, T-105, T-106, T-107, T-108 |

@@ -72,6 +72,15 @@ pub fn write_schedule_entries(path: &Path, entries: &[ScheduleEntry]) -> Service
 
     // Write to a temp file in the same directory for an atomic rename.
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    if !parent.as_os_str().is_empty() {
+        std::fs::create_dir_all(parent).map_err(|e| ServiceError::Persistence {
+            detail: format!(
+                "failed to create config parent directory {}: {e}",
+                parent.display()
+            ),
+        })?;
+    }
+
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -134,6 +143,18 @@ mod tests {
     fn persists_entries_and_can_be_read_back() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("bob.toml");
+
+        write_schedule_entries(&path, &[entry("job-1")]).expect("write must succeed");
+
+        let content = std::fs::read_to_string(&path).expect("read back");
+        assert!(content.contains("[[schedule]]"), "schedule section present");
+        assert!(content.contains("job-1"), "entry id persisted");
+    }
+
+    #[test]
+    fn creates_missing_parent_directories() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config").join("bob").join("config.toml");
 
         write_schedule_entries(&path, &[entry("job-1")]).expect("write must succeed");
 

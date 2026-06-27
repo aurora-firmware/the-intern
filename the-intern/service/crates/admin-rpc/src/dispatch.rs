@@ -632,7 +632,7 @@ impl Dispatcher {
         }
 
         // Read current entries from config, append the new one, write back.
-        let mut entries = match self.load_schedule_entries_from_config(config_path) {
+        let mut entries = match self.load_schedule_entries_from_config(&id, config_path) {
             Ok(e) => e,
             Err(outcome) => return outcome,
         };
@@ -642,7 +642,7 @@ impl Dispatcher {
             prompt: entry_prompt,
         });
 
-        if let Err(outcome) = self.write_and_reload(config_path, entries, handle) {
+        if let Err(outcome) = self.write_and_reload(&id, config_path, entries, handle) {
             return outcome;
         }
 
@@ -703,14 +703,14 @@ impl Dispatcher {
         }
 
         // Read config, filter out the entry, write back.
-        let entries = match self.load_schedule_entries_from_config(config_path) {
+        let entries = match self.load_schedule_entries_from_config(&id, config_path) {
             Ok(e) => e,
             Err(outcome) => return outcome,
         };
         let updated: Vec<ScheduleEntry> =
             entries.into_iter().filter(|e| e.id != entry_id).collect();
 
-        if let Err(outcome) = self.write_and_reload(config_path, updated, handle) {
+        if let Err(outcome) = self.write_and_reload(&id, config_path, updated, handle) {
             return outcome;
         }
 
@@ -766,7 +766,7 @@ impl Dispatcher {
             }
         };
 
-        let entries = match self.load_schedule_entries_from_config(config_path) {
+        let entries = match self.load_schedule_entries_from_config(&id, config_path) {
             Ok(e) => e,
             Err(outcome) => return outcome,
         };
@@ -798,6 +798,7 @@ impl Dispatcher {
     /// Returns `Err(DispatchOutcome::Err(...))` on read or parse failure.
     fn load_schedule_entries_from_config(
         &self,
+        id: &Value,
         path: &std::path::Path,
     ) -> Result<Vec<ScheduleEntry>, DispatchOutcome> {
         use bob_core::types::ScheduleEntry as SE;
@@ -809,7 +810,7 @@ impl Dispatcher {
 
         let content = std::fs::read_to_string(path).map_err(|e| {
             DispatchOutcome::Err(ErrorResponse::error(
-                Value::Null,
+                id.clone(),
                 CODE_METHOD_NOT_FOUND,
                 "schedule method: failed to read config file",
                 Some(json!({
@@ -838,7 +839,7 @@ impl Dispatcher {
 
         let parsed: ScheduleSection = toml::from_str(&content).map_err(|e| {
             DispatchOutcome::Err(ErrorResponse::error(
-                Value::Null,
+                id.clone(),
                 CODE_METHOD_NOT_FOUND,
                 "schedule method: failed to parse config file",
                 Some(json!({
@@ -864,13 +865,14 @@ impl Dispatcher {
     /// Returns `Err(DispatchOutcome::Err(...))` on write or reload failure.
     fn write_and_reload(
         &self,
+        id: &Value,
         config_path: &std::path::Path,
         entries: Vec<ScheduleEntry>,
         handle: &scheduler_adapter::ReloadHandle,
     ) -> Result<(), DispatchOutcome> {
         bob_core::types::schedule::write_schedule_entries(config_path, &entries).map_err(|e| {
             DispatchOutcome::Err(ErrorResponse::error(
-                Value::Null,
+                id.clone(),
                 CODE_METHOD_NOT_FOUND,
                 "schedule method: failed to write config file",
                 Some(json!({
@@ -882,7 +884,7 @@ impl Dispatcher {
 
         if handle.reload(entries).is_err() {
             return Err(DispatchOutcome::Err(ErrorResponse::error(
-                Value::Null,
+                id.clone(),
                 CODE_METHOD_NOT_FOUND,
                 "schedule method: scheduler actor has stopped",
                 Some(json!({ "category": "service_down" })),
@@ -2178,6 +2180,37 @@ mod tests {
             !content.contains("bad-job"),
             "invalid entry must not be persisted"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_config_parse_error_preserves_request_id() {
+        let (_dir, config_path) = write_temp_bob_toml("not = [valid");
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_config_path(config_path);
+        let req = make_request_with_params(
+            "schedule.add",
+            json!(314),
+            json!({
+                "id": "new-job",
+                "cron": "0 9 * * *",
+                "prompt": "Morning report"
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(314));
+                assert!(resp.error.message.contains("parse config file"));
+            }
+            DispatchOutcome::Ok(resp) => panic!("expected parse error, got Ok: {resp:?}"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
     }
 
     // AC-3 (T-097): schedule.remove with known id removes from config and returns ok.

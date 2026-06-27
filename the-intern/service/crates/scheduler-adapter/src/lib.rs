@@ -3,8 +3,12 @@
 use bob_core::types::{
     ChannelId, DeliveryKind, InternalEvent, RequestContext, ScheduleEntry, UserId,
 };
-use chrono::Utc;
-use croner::parser::{CronParser, Seconds};
+use chrono::{DateTime, Local};
+use croner::{
+    errors::CronError,
+    parser::{CronParser, Seconds},
+    Cron,
+};
 use requests_handler::Handle as IntakeHandle;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -162,8 +166,11 @@ async fn run_job_tick_loop(
 ) {
     loop {
         // Compute wall-clock duration to the next cron fire.
-        let now = Utc::now();
-        let next = match cron.find_next_occurrence(&now, false) {
+        // Using Local::now() ensures the cron expression is evaluated against
+        // the host's local wall-clock time, not UTC, so "12:02 * * * *"
+        // fires at 12:02 local time for the operator.
+        let now = Local::now();
+        let next = match next_cron_occurrence(&cron, &now) {
             Ok(dt) => dt,
             Err(err) => {
                 tracing::warn!(
@@ -212,6 +219,10 @@ async fn run_job_tick_loop(
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+fn next_cron_occurrence(cron: &Cron, now: &DateTime<Local>) -> Result<DateTime<Local>, CronError> {
+    cron.find_next_occurrence(now, false)
+}
 
 /// Build per-job state from a list of entries.
 ///
@@ -324,6 +335,7 @@ pub fn start(intake: IntakeHandle, entries: Vec<ScheduleEntry>) -> (ReloadHandle
 
 #[cfg(test)]
 mod tests {
+    use super::next_cron_occurrence;
     use bob_core::types::{DeliveryKind, InternalEvent, RequestContext, ScheduleEntry};
     use requests_handler::{start_with, Config as QueueConfig};
     use std::sync::{Arc, Mutex};
@@ -628,6 +640,45 @@ mod tests {
         cancel_tx.send(true).unwrap();
         let _ = tokio::time::timeout(Duration::from_secs(5), intake_task).await;
         scheduler_join.abort();
+    }
+
+    // AC-1 (T-111): next-fire calculation must use the local wall clock, not UTC.
+    // The test derives all expectations from chrono::Local itself so it is
+    // timezone-independent: it passes in UTC and in every other timezone.
+    #[test]
+    fn local_time_cron_next_occurrence_is_expressed_in_local_timezone() {
+        use chrono::Offset as _;
+
+        let parser = croner::parser::CronParser::builder()
+            .seconds(croner::parser::Seconds::Disallowed)
+            .build();
+        let cron = parser.parse("* * * * *").expect("valid five-field cron");
+
+        let now_local = chrono::Local::now();
+        let next_local = next_cron_occurrence(&cron, &now_local)
+            .expect("next occurrence must be computable from Local::now()");
+
+        // The next occurrence must be strictly in the future.
+        assert!(
+            next_local > now_local,
+            "next occurrence must be after now_local"
+        );
+
+        // For '* * * * *' the next minute boundary is always ≤ 60 seconds away.
+        let secs_until_next = (next_local - now_local).num_seconds();
+        assert!(
+            secs_until_next > 0 && secs_until_next <= 60,
+            "next minute boundary must be within 60 seconds, got {}s",
+            secs_until_next
+        );
+
+        // The UTC offset of the result must equal the local offset at 'now',
+        // confirming the computation is anchored to local wall-clock time.
+        assert_eq!(
+            next_local.offset().fix(),
+            now_local.offset().fix(),
+            "next occurrence must be expressed in the local timezone offset, not UTC"
+        );
     }
 
     // AC-4 (T-097): subscribe() returns a receiver that reflects the live job table.
