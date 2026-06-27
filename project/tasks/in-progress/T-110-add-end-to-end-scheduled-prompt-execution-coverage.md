@@ -86,6 +86,14 @@ All four acceptance criteria are covered by two test functions:
 
 Both pass in isolation and in the full workspace suite (`cargo test --workspace`).
 
+### Session 2 — 2026-06-27
+
+The reviewer confirmed AC-3 (`schedule_entry_prompt_is_not_delivered_when_scheduler_user_is_not_admitted`) was flaky, failing the denied-verdict assertion in approximately 2 of 10 runs. The root cause was the same issue already diagnosed and fixed for AC-1 in Session 1: with `tokio::time` paused, a bounded `yield_now()` loop gives the actor chain no real wall-clock time budget. The monitoring publish chain (scheduler → requests-handler → pre-flight closure → monitoring actor → subscriber channel) crosses at least five async message hops. Under workspace-level OS load those tasks may not get CPU within 30+20 bounded yields, leaving `verdict_rx` empty when checked.
+
+The fix exactly mirrors the AC-1 pattern: after `advance(61s)` and a small number of initial yields (10, enough to kick off the scheduler tick), call `tokio::time::resume()`. Then replace the nested `yield_now()` + `try_recv()` retry block with a single `while std::time::Instant::now() < deadline` loop that drains `verdict_rx` and sleeps `tokio::time::sleep(50ms)` per iteration. The 50ms sleep is a real wall-clock sleep (time is resumed); it parks the runtime in `epoll_wait`, giving every actor task a scheduled turn. For the second assertion (file-not-delivered), the `advance(500ms)` + 20 yields was replaced with a single `tokio::time::sleep(200ms)` (real time) to let the dispatcher cycle through persistence (empty after denial) before checking.
+
+Robustness verified: 20/20 consecutive focused runs passed (`cargo test -p bob --test scheduler_execution_e2e`). `cargo test --workspace` run once — all test binaries pass, scheduler_execution_e2e shows 2 passed, 0 failed, 0.26s. Fix committed as `619b5cd`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
