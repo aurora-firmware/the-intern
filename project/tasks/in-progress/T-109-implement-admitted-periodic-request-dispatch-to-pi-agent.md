@@ -92,3 +92,64 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-27
+
+PASS
+
+Both stages passed.
+
+**Stage 1 — Acceptance Criteria**
+
+AC-1: Verified. `start_periodic_dispatcher` is called inside `try_start_subsystems` and the
+returned join handle is stored in `Runtime.dispatcher_join`. Phase 1 of
+`run_shutdown_protocol` sends `true` on `dispatcher_cancel_tx`; Phase 3 appends
+`dispatcher_join` to `all_joins` alongside `scheduler_adapter_join`. Two dedicated
+tests confirm startup and shutdown completion.
+
+AC-2: Verified. The `Ok(Some(event))` match arm calls `supervisor.acquire_session()` then
+`supervisor.send_prompt(session_id, event.payload)` verbatim. The end-to-end test
+uses a real `sh` worker that writes the received message to a file and asserts the
+file contains the exact payload string `"periodic-test-prompt"`.
+
+AC-3: Verified. All three error paths (dequeue error, session acquisition failure, prompt
+send failure) log a `tracing::warn!` and either back off or `continue` without
+panicking. The resilience test enqueues three Periodic events against an `exit 0`
+worker, waits 300 ms, and asserts the dispatcher task is still alive.
+
+AC-4: Verified. The empty-queue path and the non-Periodic re-enqueue path both use
+`tokio::select!` with `time::sleep(PERIODIC_DISPATCH_POLL_INTERVAL)` and
+`cancel_rx.changed()`, ensuring the task yields to the executor and responds to the
+shutdown signal without spinning. The idle-shutdown test confirms the protocol
+completes well within the 500 ms drain deadline.
+
+AC-5: Verified. `cargo test -p bob serve::tests::periodic` reports 5/5 passing.
+`cargo test --workspace` reports all tests passing with no regressions.
+
+**Stage 2 — Code Quality**
+
+Correctness: The re-enqueue design for non-Periodic events is safe. The persistence
+crate is a single-actor model (mpsc channel to one task holding a `VecDeque`); all
+enqueue/dequeue operations are serialized, making double-consume impossible. The
+100 ms dispatcher back-off after re-enqueue is larger than the 50 ms sleep in the
+`preflight_uses_per_request_context` test, so no timing regression is introduced.
+`cargo fmt --all -- --check` reports no formatting issues.
+
+Tests: Five independent tests, one per AC, all using `current_thread` flavor with no
+shared mutable state. The AC-2 test avoids timing-sensitive assertions by polling
+for an observable file artifact with a 5-second outer timeout.
+
+Security / scope: Only `serve.rs` was modified, matching `Files to Touch`. No new
+external input surfaces, no secrets.
+
+**Non-blocking observations (no action required)**
+
+1. When `acquire_session` fails for a dequeued Periodic event the dispatcher loops
+   back immediately without a back-off sleep. If acquisition fails quickly and the
+   queue has many Periodic events this could produce a high call rate to the
+   supervisor. AC-4 covers only the empty-queue case, so this is not a spec
+   violation; a future task may address it.
+
+2. Non-Periodic events (Sync, etc.) will cycle in the queue indefinitely until a
+   consumer for their kind is wired in. This is the intentional provisional design
+   noted in the Work Log and is correct within the T-109 scope.
