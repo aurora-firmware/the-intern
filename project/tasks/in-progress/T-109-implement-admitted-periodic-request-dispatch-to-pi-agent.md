@@ -71,6 +71,16 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-27
+
+Implemented the admitted periodic request dispatcher as specified in T-109, completing all five acceptance criteria in a single TDD cycle.
+
+**What was done.** Added `start_periodic_dispatcher` to `bob/src/serve.rs`. The function spawns a Tokio task that loops over `persistence.dequeue_next()`. Periodic events are forwarded to pi-agent via `acquire_session` + `send_prompt`. Non-Periodic events are re-enqueued and backed off. Empty queue or dequeue errors trigger a 100 ms `tokio::select!` sleep that also watches the shutdown receiver, satisfying the no-busy-spin and no-shutdown-blocking requirements. Two new fields were added to `Runtime` (`dispatcher_cancel_tx: watch::Sender<bool>` and `dispatcher_join: JoinHandle<()>`); the existing `joins` vec remained at six entries so the `runtime_holds_six_non_supervisor_join_handles` test continued to pass. Phase 1 of `run_shutdown_protocol` sends `true` on `dispatcher_cancel_tx`; phase 3 appends `dispatcher_join` to `all_joins` alongside `scheduler_adapter_join`. Five tests in a `pub mod periodic` submodule cover startup (AC-1), prompt forwarding end-to-end with a sh RPC worker (AC-2), error resilience using a `exit 0` worker (AC-3), and idle back-off / shutdown responsiveness (AC-4/AC-5).
+
+**What was tried and rejected.** Considered dropping non-Periodic events silently (simpler, but breaks existing serve tests that enqueue Sync events and then dequeue them). Considered requiring a separate notification channel from the scheduler-adapter so the dispatcher only wakes when work is available (cleaner, but would require modifying a crate outside the `Files to Touch` list). Settled on re-enqueue + 100 ms back-off as the minimal change that preserves correctness and keeps existing tests deterministically passing.
+
+**What remains.** Nothing for this task. All five ACs are covered by passing tests. The branch is ready for review and integration.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
