@@ -11,8 +11,8 @@ created: '2026-06-11'
 > moves to a supervised direct `pi` session whose output reaches the terminal
 > directly), so this admin-socket outbound-path change request is obsolete.
 >
-> **Resolution (2026-06-11):** accepted at Gate 1 as spec S-008
-> (`project/specs/S-008-outbound-chat-response-path-over-the-admin-socket.md`).
+> **Resolution (2026-06-11):** accepted at Gate 1 as spec S-008, now archived at
+> `project/specs/archive/S-008-outbound-chat-response-path-over-the-admin-socket.md`.
 > Decisions: multiplex on the subscription connection (per-service registry
 > rejected); CLI `--session` maps to `context_id` (the `session` wire field is
 > retired); delivery contract only — reply generation stays Phase 2 work.

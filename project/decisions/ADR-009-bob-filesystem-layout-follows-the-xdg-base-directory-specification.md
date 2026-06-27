@@ -12,14 +12,14 @@ created: '2026-06-23'
 bob needs a single, documented answer to "where does each of its files live",
 covering configuration, the pi extension, runtime sockets, and the audit log.
 
-Today bob already resolves most locations from XDG base directories
+At the time of this decision bob already resolved most locations from XDG base directories
 (`$XDG_CONFIG_HOME/bob/config.toml`, `$XDG_STATE_HOME/bob/audit.jsonl`,
 `$XDG_RUNTIME_DIR/bob/` for sockets, each with spec-default fallbacks in
 `config.rs`), but two things are undecided:
 
-- The pi extension (`bob.ts`) has no bob-owned location — the operator installs
-  it manually into pi's own search path (S-003). CR-003 needs a default path bob
-  can pass to pi.
+- Before CR-003, the pi extension (`bob.ts`) had no bob-owned location: the
+  operator installed it manually into pi's own search path. CR-003 needed a
+  default path bob could pass to pi.
 - There is no single record codifying the layout, and per-path `BOB_*` env
   overrides have accreted.
 
@@ -41,13 +41,12 @@ Forces and constraints:
 
 Adopt the **XDG Base Directory specification** as bob's filesystem layout on
 Linux, with application name `bob`. Each variable falls back to its XDG-spec
-default when unset (config, state, and runtime resolution already exists in
-`config.rs`; data and cache are new — see the note after the table):
+default when unset:
 
 | Purpose | Location (default) | Holds |
 |---|---|---|
 | config | `$XDG_CONFIG_HOME/bob/` → `~/.config/bob/` | `config.toml` |
-| data (static app assets) | `$XDG_DATA_HOME/bob/` → `~/.local/share/bob/` | `extensions/bob.ts` *(new — CR-003)* |
+| data (static app assets) | `$XDG_DATA_HOME/bob/` → `~/.local/share/bob/` | `extensions/bob.ts` |
 | cache (regenerable) | `$XDG_CACHE_HOME/bob/` → `~/.cache/bob/` | reserved; not yet implemented |
 | state (persistent logs) | `$XDG_STATE_HOME/bob/` → `~/.local/state/bob/` | `audit.jsonl` |
 | runtime (ephemeral) | `$XDG_RUNTIME_DIR/bob/` | `admin.sock`, `extension.sock`, pidfile |
@@ -72,10 +71,9 @@ Rules:
 - **macOS** retains its existing platform conventions (Application Support /
   `TMPDIR`-based runtime), as already implemented; this ADR specifies Linux.
 
-To be explicit: bob's existing resolution (`config.rs`) already covers **config**,
-**state**, and **runtime** from the matching XDG variables. The **data** row
-(extension path / `extension_path`) and the **cache** row are **new — not yet
-implemented in `config.rs`** — introduced by CR-003 and by future work respectively.
+To be explicit: bob's resolution (`config.rs`) covers **config**, **state**,
+**runtime**, and the **data** row used by the extension path / `extension_path`.
+The **cache** row remains reserved for future work.
 
 ## Consequences
 

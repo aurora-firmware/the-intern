@@ -1,11 +1,14 @@
 ---
 id: CR-003
 title: bob loads its pi extension by path from the XDG data directory
-status: pending
+status: completed
 created: '2026-06-23'
 ---
 
 # bob loads its pi extension by path from the XDG data directory
+
+> **Completed (2026-06-24):** Implemented by T-100, T-101, T-102, and the
+> CR-003 portions of T-108. S-003 and S-007 are amended in place.
 
 ## Desired Changes
 
