@@ -1,7 +1,7 @@
 ---
 id: T-110
 title: Add end-to-end scheduled prompt execution coverage
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-06-27'
