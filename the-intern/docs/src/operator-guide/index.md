@@ -384,6 +384,12 @@ section means no jobs are scheduled (the scheduler starts but fires nothing).
 
 Six-field expressions (with a leading seconds field) are not accepted.
 
+Five-field cron expressions are evaluated against the host's **local wall-clock
+time**, not UTC. If the host's timezone is set to `America/New_York` and you
+write `0 9 * * *`, the job fires at 09:00 New York local time regardless of
+what UTC says. Set the host timezone before adding jobs so the cron schedule
+aligns with your expectations.
+
 ### Managing jobs at runtime
 
 The four `bob schedule` subcommands let you inspect and modify the active job
@@ -440,6 +446,82 @@ job list with the updated contents. Use this after editing `config.toml` by hand
 ```bash
 bob schedule reload
 ```
+
+### Policy admission for scheduled jobs
+
+When a scheduled job's cron expression fires, the scheduler submits a `periodic`
+request to the internal queue. That request passes through **pre-flight policy
+admission** before pi-agent receives the prompt — the same gate that applies to
+every other incoming request. If the scheduler's derived identity is not present
+in `[policy].admitted_users`, the request is denied and a `PreflightDenied`
+audit record is appended; pi-agent never sees the prompt.
+
+**Obtaining the scheduler UserId**
+
+Each job's `UserId` is derived deterministically from the job's `id` field. It
+does not change across reloads or process restarts. When `bob serve` registers a
+job — at startup, after `bob schedule add`, or after `bob schedule reload` — it
+logs an `INFO`-level line containing the job's fixed identities:
+
+```
+scheduler-adapter job registered — fixed channel/user IDs for policy rules
+    job_id="check-email" user_id="<UUID>" channel_id="<UUID>" cron="*/15 * * * *"
+```
+
+Copy the UUID from the `user_id` field and add it to `[policy].admitted_users`
+in your config file:
+
+```toml
+[policy]
+admitted_users = [
+    "<UUID from user_id field in the log>",
+]
+```
+
+Then apply the change without restarting the service:
+
+```bash
+bob policy reload
+```
+
+Without that entry every tick of the job is silently denied and no pi-agent
+prompt is sent. Each denial produces a `PreflightDenied` audit record (see
+[Observability for scheduled jobs](#observability-for-scheduled-jobs) below).
+
+### Observability for scheduled jobs
+
+Bob provides four observation points for scheduled-job execution. There is no
+dedicated schedule run-history store and no per-job success or failure counter;
+all observability flows through the existing monitoring layer (consistent with
+the fire-and-forget semantics of the `periodic` delivery kind per ADR-006).
+
+**Service logs** — the scheduler emits structured `INFO` log lines when each job
+is registered at startup and on reload. Warnings are logged when a cron
+expression cannot be parsed (the job is skipped and does not fire), when a
+periodic event cannot be submitted to the queue, and when session acquisition or
+prompt delivery fails inside the periodic dispatcher.
+
+**Policy verdict audit records** — every pre-flight decision for a scheduled
+job is appended to the audit log as a `verdict` record. A job whose `UserId` is
+not in `[policy].admitted_users` produces a `PreflightDenied` record; an
+admitted job produces an admission record. Stream verdict records live with:
+
+```bash
+bob audit tail --filter verdicts
+```
+
+**Extension events** — the bob extension running inside each pi-agent session
+emits events that are written to the audit log as `event` records. These records
+capture what the agent did during execution. Stream them with:
+
+```bash
+bob audit tail --filter events
+```
+
+**No dedicated schedule run-history store** — there is no per-job execution
+history, no "last run" timestamp, and no run counter persisted by bob itself.
+Operators who need durable job-run records must collect and retain the audit log
+externally (for example, by shipping the JSONL file to a log aggregator).
 
 ---
 
