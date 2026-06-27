@@ -67,6 +67,25 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-27
+
+Implemented the full set of acceptance criteria for T-110. The integration test `the-intern/service/crates/bob/tests/scheduler_execution_e2e.rs` was written from scratch, assembling the complete scheduled-prompt pipeline using only public crate APIs (no edits to `serve.rs`):
+
+- `scheduler-adapter` → `requests-handler` (pre-flight) → `persistence` → inline periodic dispatcher → `pi-agent-supervisor` (fake `sh` RPC worker).
+- A `start_inline_dispatcher()` helper replicates `serve::start_periodic_dispatcher` (private) for test use.
+- `tokio::time::pause()` + `advance(61s)` triggers the `* * * * *` cron tick without real wall-clock waiting.
+- A fake `sh` script worker reads JSON-RPC from stdin, writes the `message` field to a temp file, and responds with a success reply — no real `pi` binary required (AC-4).
+
+**Key design decision:** After `advance(200ms)` wakes the dispatcher and enough `yield_now()` slices let it reach `send_prompt()`, the test calls `tokio::time::resume()` before the result-polling loop. With time paused, `tokio::time::advance()` runs in zero wall-clock time, the tokio IO reactor never gets an idle cycle via `epoll_wait`, and the OS does not schedule the sh child process. The advance-based tight loop exhausted 100 iterations before the child responded — causing a reliable failure in the full workspace run (isolated run passed only because of less OS load). After `resume()`, `tokio::time::sleep(50ms).await` uses real time, the runtime parks in `epoll_wait`, the child gets CPU and writes the file within milliseconds, and the test resolves in ≈50ms real time.
+
+**Cargo.toml change:** Added `tokio = { version = "1", features = ["test-util"] }` to `bob`'s `[dev-dependencies]` so the integration test binary can call `pause()`/`advance()`/`resume()`.
+
+All four acceptance criteria are covered by two test functions:
+- `schedule_entry_prompt_is_delivered_to_pi_agent_when_scheduler_user_is_admitted` — AC-1, AC-2, AC-4.
+- `schedule_entry_prompt_is_not_delivered_when_scheduler_user_is_not_admitted` — AC-3, AC-4.
+
+Both pass in isolation and in the full workspace suite (`cargo test --workspace`).
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
