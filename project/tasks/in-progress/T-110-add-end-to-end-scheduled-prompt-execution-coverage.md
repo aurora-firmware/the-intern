@@ -97,3 +97,28 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-27
+
+FAIL
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1 (PASS): The admitted-user test correctly delivers the prompt to the fake `sh` worker and asserts it at the assertion site.
+- AC-2 (PASS): Byte-for-byte equality assertion is present (`assert_eq!(delivered_prompt, expected_prompt, ...)`) after the polling loop confirms delivery.
+- AC-3 (FAIL — confirmed flaky): The denied-verdict observation in `schedule_entry_prompt_is_not_delivered_when_scheduler_user_is_not_admitted` is non-deterministic. The async event chain (scheduler → requests-handler → pre-flight → monitoring publish) involves multiple message-passing steps across tokio actors. The observation relies on a bounded `yield_now()` loop (30 yields before the drain attempt, 20 more if still empty) with no real-time fallback. Time remains paused throughout the entire assertion phase. Under OS load this is insufficient: 2 of 10 consecutive focused runs failed at line 475 with `"a denied pre-flight verdict must be recorded in monitoring when user is not admitted"`.
+- AC-4 (PASS): Both test functions use a `sh` script as the fake RPC worker; no real `pi` binary is required.
+
+**Stage 2 — Code Quality**
+
+- The inline dispatcher (`start_inline_dispatcher`) faithfully replicates `serve::start_periodic_dispatcher`: same cancel-check loop structure, same dequeue/re-enqueue logic for non-periodic events, same acquire-then-send-prompt path for periodic events. Behaviorally equivalent to the production function.
+- The AC-1/AC-2 test handles the IO-driven observation correctly: `tokio::time::resume()` is called before the file-polling loop so the runtime parks in `epoll_wait` and the OS can schedule the `sh` child. This is the correct pattern.
+- The AC-3 test does not apply the same pattern to the monitoring observation step. The fix is straightforward: call `tokio::time::resume()` after the advance+yield block, then poll `verdict_rx` with real `tokio::time::sleep(Duration::from_millis(50))` sleeps inside a deadline loop (matching the AC-1 pattern), rather than bounded `yield_now()` only.
+- Scope is clean: only the two specified files were changed (`tests/scheduler_execution_e2e.rs` and `Cargo.toml`).
+
+**What should change:**
+
+- **File:** `the-intern/service/crates/bob/tests/scheduler_execution_e2e.rs`
+- **Location:** `schedule_entry_prompt_is_not_delivered_when_scheduler_user_is_not_admitted`, after `tokio::time::advance(Duration::from_secs(61)).await` and the 30 `yield_now()` calls (approximately lines 425–473).
+- **What is wrong:** After `advance(61s)` the test drains and re-polls `verdict_rx` using only bounded `yield_now()` loops while `tokio::time` remains paused. The monitoring actor, requests-handler, and pre-flight chain require more than 30+20 `yield_now()` calls to propagate the verdict under OS load. This causes intermittent assertion failure (≈20% failure rate observed).
+- **What should change:** Call `tokio::time::resume()` immediately after the 30 `yield_now()` block (before the `try_recv` drain). Then replace the bounded inner `for _ in 0..20` fallback loop with a real-time deadline poll that uses `tokio::time::sleep(Duration::from_millis(50)).await` per iteration and a `std::time::Instant` deadline of 5 seconds — the same pattern used by the AC-1 test for prompt-delivery observation. This allows the runtime to park and OS-schedule the actors until the verdict arrives.
