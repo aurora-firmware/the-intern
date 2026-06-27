@@ -463,10 +463,11 @@ fn remove_socket_files_best_effort(cfg: &BobConfig) {
 /// The dispatcher runs in a dedicated Tokio task.  On each iteration it
 /// dequeues the oldest event from `persistence`.  If the event is a
 /// `DeliveryKind::Periodic` event the dispatcher acquires a pi-agent session
-/// via `supervisor` and forwards `event.payload` verbatim.  Any error during
-/// dequeue, session acquisition, or prompt sending is logged as a warning;
-/// processing then continues from the next event so a single failure does not
-/// stall the pipeline.
+/// via `supervisor`, forwards `event.payload` verbatim, and then closes the
+/// one-shot session. Any error during dequeue, session acquisition, prompt
+/// sending, or session cleanup is logged as a warning; processing then
+/// continues from the next event so a single failure does not stall the
+/// pipeline.
 ///
 /// Non-`Periodic` events are re-enqueued so they are not lost, and the
 /// dispatcher backs off for `PERIODIC_DISPATCH_POLL_INTERVAL` before the next
@@ -526,7 +527,9 @@ fn start_periodic_dispatcher(
                 }
 
                 Ok(Some(event)) => {
-                    // Admitted Periodic event — acquire a session and send the prompt.
+                    // Admitted Periodic event: use a fresh one-shot session and
+                    // release it after prompt delivery so periodic jobs cannot
+                    // exhaust the supervisor's active session capacity.
                     let session_id = match supervisor.acquire_session().await {
                         Ok(id) => id,
                         Err(e) => {
@@ -541,6 +544,13 @@ fn start_periodic_dispatcher(
                         tracing::warn!(
                             error = %e,
                             "periodic dispatcher: prompt send failed; continuing"
+                        );
+                    }
+                    if let Err(e) = supervisor.kill_session(session_id).await {
+                        tracing::warn!(
+                            error = %e,
+                            session_id = %session_id,
+                            "periodic dispatcher: session cleanup failed; continuing"
                         );
                     }
                 }
@@ -1404,9 +1414,10 @@ pub mod tests {
                 .await
                 .expect("enqueue must succeed");
 
-            // Wait for the dispatcher to dequeue the event, acquire a session, and
-            // forward the payload to the worker.  The worker writes the message to
-            // the record file upon receiving the prompt.
+            // Wait for the dispatcher to dequeue the event, acquire a one-shot
+            // session, forward the payload, and close the session after the
+            // successful response. The worker writes the message to the record
+            // file upon receiving the prompt.
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
                     if record_file.exists() {
@@ -1420,6 +1431,23 @@ pub mod tests {
             })
             .await
             .expect("dispatcher must forward periodic event payload to pi-agent within timeout");
+
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if runtime
+                        ._pi_agent_supervisor
+                        .list_sessions()
+                        .await
+                        .expect("list_sessions must succeed")
+                        .is_empty()
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("dispatcher must release the one-shot session after dispatch");
 
             run_shutdown_protocol(runtime, &cfg).await;
         }

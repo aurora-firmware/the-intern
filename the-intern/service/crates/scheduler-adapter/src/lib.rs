@@ -3,8 +3,12 @@
 use bob_core::types::{
     ChannelId, DeliveryKind, InternalEvent, RequestContext, ScheduleEntry, UserId,
 };
-use chrono::Local;
-use croner::parser::{CronParser, Seconds};
+use chrono::{DateTime, Local};
+use croner::{
+    errors::CronError,
+    parser::{CronParser, Seconds},
+    Cron,
+};
 use requests_handler::Handle as IntakeHandle;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -166,7 +170,7 @@ async fn run_job_tick_loop(
         // the host's local wall-clock time, not UTC, so "12:02 * * * *"
         // fires at 12:02 local time for the operator.
         let now = Local::now();
-        let next = match cron.find_next_occurrence(&now, false) {
+        let next = match next_cron_occurrence(&cron, &now) {
             Ok(dt) => dt,
             Err(err) => {
                 tracing::warn!(
@@ -215,6 +219,10 @@ async fn run_job_tick_loop(
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+fn next_cron_occurrence(cron: &Cron, now: &DateTime<Local>) -> Result<DateTime<Local>, CronError> {
+    cron.find_next_occurrence(now, false)
+}
 
 /// Build per-job state from a list of entries.
 ///
@@ -327,6 +335,7 @@ pub fn start(intake: IntakeHandle, entries: Vec<ScheduleEntry>) -> (ReloadHandle
 
 #[cfg(test)]
 mod tests {
+    use super::next_cron_occurrence;
     use bob_core::types::{DeliveryKind, InternalEvent, RequestContext, ScheduleEntry};
     use requests_handler::{start_with, Config as QueueConfig};
     use std::sync::{Arc, Mutex};
@@ -646,8 +655,7 @@ mod tests {
         let cron = parser.parse("* * * * *").expect("valid five-field cron");
 
         let now_local = chrono::Local::now();
-        let next_local = cron
-            .find_next_occurrence(&now_local, false)
+        let next_local = next_cron_occurrence(&cron, &now_local)
             .expect("next occurrence must be computable from Local::now()");
 
         // The next occurrence must be strictly in the future.

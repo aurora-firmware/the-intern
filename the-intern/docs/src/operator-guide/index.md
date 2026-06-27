@@ -285,8 +285,8 @@ engine works, see the [Architecture Overview](../architecture-overview/index.md)
 
 When a request enters the queue, `bob` checks the sender's identity against the
 `admitted_users` list. Requests from identities not in the list are dropped
-before any further processing. A `PreflightDenied` audit record is appended for
-each blocked request.
+before any further processing. A denied `verdict` audit record is appended for
+each blocked request with a reason that starts with `preflight denied:`.
 
 Configure the admitted users in the `[policy]` section:
 
@@ -453,7 +453,7 @@ When a scheduled job's cron expression fires, the scheduler submits a `periodic`
 request to the internal queue. That request passes through **pre-flight policy
 admission** before pi-agent receives the prompt — the same gate that applies to
 every other incoming request. If the scheduler's derived identity is not present
-in `[policy].admitted_users`, the request is denied and a `PreflightDenied`
+in `[policy].admitted_users`, the request is denied and a denied `verdict`
 audit record is appended; pi-agent never sees the prompt.
 
 **Obtaining the scheduler UserId**
@@ -485,7 +485,7 @@ bob policy reload
 ```
 
 Without that entry every tick of the job is silently denied and no pi-agent
-prompt is sent. Each denial produces a `PreflightDenied` audit record (see
+prompt is sent. Each denial produces a denied `verdict` audit record (see
 [Observability for scheduled jobs](#observability-for-scheduled-jobs) below).
 
 ### Observability for scheduled jobs
@@ -503,8 +503,9 @@ prompt delivery fails inside the periodic dispatcher.
 
 **Policy verdict audit records** — every pre-flight decision for a scheduled
 job is appended to the audit log as a `verdict` record. A job whose `UserId` is
-not in `[policy].admitted_users` produces a `PreflightDenied` record; an
-admitted job produces an admission record. Stream verdict records live with:
+not in `[policy].admitted_users` produces a denied verdict with `allow: false`
+and a reason that starts with `preflight denied:`; an admitted job produces an
+allow verdict. Stream verdict records live with:
 
 ```bash
 bob audit tail --filter verdicts
