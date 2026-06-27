@@ -67,6 +67,20 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-27
+
+Read the task file (empty work log, first session), then read all referenced source before touching prose: `scheduler-adapter/src/lib.rs` for the exact log line and identity-derivation logic (`UserId::from_name(&entry.id)`, the `info!` macro in `spawn_job_tasks` with message "scheduler-adapter job registered — fixed channel/user IDs for policy rules" and fields `job_id`, `user_id`, `channel_id`, `cron`); `serve.rs` for `start_periodic_dispatcher` (admitted periodic events are drained from persistence, a pi-agent session is acquired, and the prompt is sent verbatim — fire-and-forget, per-event failures are logged as warnings and skipped); S-009 and ADR-006 for the fire-and-forget and no-run-history-store mandates.
+
+Updated `the-intern/docs/src/operator-guide/index.md` with three additions to the existing Scheduled jobs section:
+
+1. A local-time note appended to the "Cron expression format" subsection (AC-3): five-field cron expressions are evaluated in the host's local wall-clock time, not UTC.
+
+2. A new "Policy admission for scheduled jobs" subsection (AC-1, AC-2): states that each tick goes through pre-flight policy admission before pi-agent receives the prompt; explains how to read the `user_id` UUID from the `scheduler-adapter job registered` `INFO` log line and add it to `[policy].admitted_users`, with a `bob policy reload` step.
+
+3. A new "Observability for scheduled jobs" subsection (AC-4): lists the four observation points — service logs, policy verdict audit records, extension events, and explicitly states there is no dedicated schedule run-history store — keeping S-009/ADR-006 fire-and-forget semantics intact.
+
+`mdbook build` from `the-intern/docs` succeeded (the pre-existing mermaid preprocessor version warning is not an error and was present before this change). All five acceptance criteria are met. Nothing remains for the next session. Implementation committed as `51ea880`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
