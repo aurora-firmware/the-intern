@@ -95,6 +95,42 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-30
+
+**TDD Cycle 1 — Red/Green/Refactor**
+
+All five acceptance criteria implemented in a single TDD cycle.
+
+**Red phase:** Added test `dispatch_schedule_add_with_schedule_store_path_persists_entry_to_json_store` that calls `.with_schedule_store_path()` and verifies the JSON store is written. Confirmed it failed to compile because `with_schedule_store_path` did not yet exist.
+
+**Green phase — structural changes:**
+
+- `admin-rpc/Cargo.toml`: removed the `toml = "0.8"` dependency. It was only used by `load_schedule_entries_from_config` which we replaced.
+- `admin-rpc/src/lib.rs`: renamed `Config.config_path` → `schedule_store_path`; updated `start()` to call `dispatcher.with_schedule_store_path(p)` instead of `with_config_path`.
+- `admin-rpc/src/dispatch.rs`:
+  - Renamed `Dispatcher.config_path` → `schedule_store_path`.
+  - Removed `with_config_path()`; added `with_schedule_store_path()`.
+  - Replaced `load_schedule_entries_from_config()` (parsed TOML config) with `load_schedule_entries_from_store()` (calls `bob_core::types::schedule::read_schedule_store`). The new helper is simpler because `read_schedule_store` already handles the "missing file = empty Vec" case.
+  - Updated `write_and_reload()` to call `bob_core::types::schedule::write_schedule_store` for atomic JSON writes.
+  - Updated `schedule_handles()` and all three handler methods (`handle_schedule_add`, `handle_schedule_remove`, `handle_schedule_reload`) to use `schedule_store_path`. Error messages updated to say "schedule store" instead of "config path".
+  - `BobConfig::config_path` is NOT touched — it remains for policy-control hot-reload; only the admin-rpc `Config` field changed.
+- `bob/src/serve.rs`: updated `try_start_subsystems()` to populate `admin_rpc::Config { schedule_store_path }` from `cfg.schedule_store_path` (skipping the empty-path sentinel from `BobConfig::test_base()`).
+- Updated all 7 existing schedule tests that used `with_config_path` and TOML fixtures to use `with_schedule_store_path` and JSON store helpers (`write_temp_schedule_store`, `temp_schedule_store_path`). Updated `dispatch_schedule_add_config_parse_error_preserves_request_id` to write malformed JSON and assert the new error message `"failed to read schedule store"`.
+- `cargo fmt --all` applied.
+
+**Decisions:**
+
+- AC-5 (concurrency lock) required no changes — `schedule_write_lock: Arc<Mutex<()>>` was already in place and locked in `handle_schedule_add` and `handle_schedule_remove`; it was preserved unchanged.
+- Chose to keep `write_temp_bob_toml` replaced by two helpers (`temp_schedule_store_path` for empty/missing-file cases, `write_temp_schedule_store` for pre-populated cases) because the semantics are meaningfully different and separate names make the intent clear.
+
+**Outcome:** All workspace tests pass (zero failures across 20+ test suites). Format check passes. Committed as `feat(admin-rpc): persist schedule mutations to JSON store (T-115)` (`7199a03`) on branch `task/T-115-persist-schedule-rpc-mutations-to-json-state`.
+
+**Reviewer attention:**
+- The `BobConfig.config_path` field in `bob/src/config.rs` is intentionally unchanged — it serves the policy-control hot-reload path and is unrelated to the schedule store.
+- `serve.rs` skips injecting the store path when `cfg.schedule_store_path.as_os_str().is_empty()` (the `test_base()` sentinel); in production this path is always non-empty because `BobConfig::build()` resolves it from XDG_STATE_HOME.
+
+_Loop note: the Developer originally committed this Work Log and a stray `completed/` copy of the task file on the task branch (commit `4540185`); that lifecycle commit was reset off the source branch and the Work Log was re-recorded here on `dev-agent` per the git model._
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
