@@ -217,10 +217,10 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     info!("scheduler-adapter actor started");
 
     info!("starting admin-rpc actor");
-    // Pass the config file path to admin-RPC so that schedule.* methods can
-    // read and write the [[schedule]] section of bob.toml (T-097).
-    // An empty path (no config file loaded) means schedule persistence is
-    // unavailable; the schedule.* methods will return -32601 in that case.
+    // Pass the config file path to admin-RPC for hot-reload of the [policy]
+    // section.  Schedule entries are now loaded from the JSON schedule store
+    // (cfg.schedule_store_path, T-114); wiring the JSON store path to
+    // admin-RPC for schedule.* persistence is deferred to a follow-up task.
     let maybe_config_path = if cfg.config_path.as_os_str().is_empty() {
         None
     } else {
@@ -827,6 +827,46 @@ pub mod tests {
             !runtime.scheduler_adapter_join.is_finished(),
             "scheduler adapter actor must be running after start_subsystems"
         );
+        run_shutdown_protocol(runtime, &cfg).await;
+    }
+
+    // AC-2 (T-114): scheduler adapter is wired with schedule entries from
+    // cfg.schedule.entries, which at startup come from the JSON schedule store
+    // loaded by BobConfig::load_with_sources.
+    #[tokio::test(flavor = "current_thread")]
+    async fn scheduler_adapter_is_initialized_with_schedule_entries_from_config() {
+        use bob_core::types::ScheduleEntry;
+
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let entry = ScheduleEntry {
+            id: "json-store-job".to_owned(),
+            cron: "0 9 * * *".to_owned(),
+            prompt: "from json store".to_owned(),
+        };
+        let cfg = BobConfig {
+            admin_sock_path: tmp.path().join("admin.sock"),
+            extension_sock_path: tmp.path().join("extension.sock"),
+            extension_path: existing_extension_path(),
+            // Simulate what BobConfig::load() populates from the JSON store.
+            schedule: crate::config::ScheduleConfig {
+                entries: vec![entry.clone()],
+            },
+            ..BobConfig::test_base()
+        };
+
+        let runtime = start_subsystems(&cfg).expect("subsystems must start");
+
+        let loaded_entries = runtime._scheduler_adapter.subscribe().borrow().clone();
+        assert_eq!(
+            loaded_entries.len(),
+            1,
+            "scheduler adapter must be initialized with the single entry from cfg.schedule"
+        );
+        assert_eq!(
+            loaded_entries[0].id, "json-store-job",
+            "scheduler entry id must match the entry from cfg.schedule"
+        );
+
         run_shutdown_protocol(runtime, &cfg).await;
     }
 

@@ -749,6 +749,7 @@ fn client_cfg(admin_sock_path: PathBuf) -> BobConfig {
         },
         config_path: PathBuf::new(),
         schedule: ScheduleConfig { entries: vec![] },
+        schedule_store_path: PathBuf::new(),
     }
 }
 
