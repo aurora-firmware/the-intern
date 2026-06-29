@@ -131,3 +131,78 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-30
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+AC-1 (scheduler firing with empty admitted_users is admitted): Met. The bypass
+branch (`if event.kind == DeliveryKind::Periodic`) routes periodic events
+directly to `persistence_store.enqueue` without calling `run_preflight`.
+Test `periodic_event_is_admitted_and_reaches_pi_agent_with_empty_admitted_users`
+exercises the full path (requests-handler → bypass → persistence → dispatcher →
+pi-agent) using `BobConfig::test_base()` which has empty `admitted_users`.
+
+AC-2 (no UserId admission evaluation for scheduler firings): Met. `run_preflight`
+(and the `PolicyEngine::evaluate_admission` call inside it) is never reached for
+`DeliveryKind::Periodic` events. The condition is structurally exclusive.
+
+AC-3 (scheduler request context fields preserved for audit attribution): Met. The
+`RequestContext` (carrying stable `channel_id`, `user_id`, and `context_id`/job
+id set by the scheduler-adapter) is captured in the bypass closure and used in
+the failure-path `tracing::warn!`. The scheduler-adapter updated docs confirm
+these fields exist for audit attribution, not for admission. The context is not
+stripped; it remains available in the closure on the success path for future use.
+
+AC-4 (tool_call action authorization unchanged): Met by inspection. No changes
+were made to the periodic dispatcher, pi-agent supervisor, or any code on the
+post-persistence path. The diff touches only the pre-persistence preflight
+closure in `serve.rs` and doc/log wording in `scheduler-adapter/src/lib.rs`.
+
+AC-5 (non-scheduler requests still denied when sender absent from admitted_users):
+Met. The `else` branch forwards all non-Periodic events to `run_preflight`
+unchanged. Test `sync_event_from_sender_absent_from_admitted_users_is_denied`
+submits a `DeliveryKind::Sync` event from a UserId not in `admitted_users` and
+asserts that persistence is empty after the preflight actor processes it.
+
+Security scope check: `DeliveryKind` has exactly three variants (`Sync`,
+`Async`, `Periodic`). The bypass is conditional on `== DeliveryKind::Periodic`;
+`Sync` and `Async` events always reach `run_preflight`. The scheduler-adapter
+only ever constructs `InternalEvent { kind: DeliveryKind::Periodic, ... }`, so
+there is no path by which a non-periodic event could enter the bypass branch
+from the scheduler.
+
+No unspecified behavior was added. No unexpected files were modified.
+
+**Stage 2 — Code Quality**
+
+Correctness: the bypass logic is minimal and correct. Error handling for failed
+`persistence_store.enqueue` emits a structured `WARN` log with `job_id` from
+`context.context_id` — appropriate level and no sensitive payload exposed.
+
+Tests: both new tests construct independent fixtures, use descriptive names, and
+assert the right outcome (prompt reaches pi-agent for AC-1; persistence stays
+empty for AC-5). The AC-1 test uses a file-based polling approach consistent
+with the existing `periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt`
+test. The 50ms sleep in the AC-5 test is consistent with the project's existing
+integration test patterns.
+
+Security: no hardcoded secrets; bypass is strictly scoped; non-Periodic events
+are unaffected.
+
+Readability: comment block clearly references ADR-012 and explains the trust
+model. Scheduler-adapter doc updates remove stale "for policy rules" language
+without altering any runtime behavior.
+
+All tests green: `cargo test -p bob --lib serve::tests` (34 passed), `cargo
+test -p scheduler-adapter` (9 passed), `cargo test -p requests-handler` (15
+passed), `cargo test --workspace` (no failures across all crates).
+
+**Non-blocking observation**: the bypass path does not write an audit record on
+successful scheduler enqueue. ADR-012 notes (neutral consequence) that "audit
+should still record scheduled execution". AC-3 requires preserving context
+fields, not emitting a record, so this does not block the verdict. A future
+task could add an admit-verdict audit record for periodic events symmetrically
+with the allow-verdict record already written by `run_preflight`.
