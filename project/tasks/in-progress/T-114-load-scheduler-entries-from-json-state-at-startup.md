@@ -157,3 +157,33 @@ One blocking issue found.
 
 - File: `the-intern/service/crates/bob/Cargo.toml`.
 - What was found: `croner = "3"` remains listed but is no longer imported in any `.rs` file within the `bob` crate after `validate_schedule_entries` (its sole consumer) was removed. This will not cause a build or test failure (clippy is not yet a clean gate), but the dependency is now dead weight. Consider removing it as a cleanup alongside the doc-comment fix.
+
+### Review Verdict — 2026-06-30 (cycle 2)
+
+PASS
+
+**Cycle 2 confirmation — both cycle 1 findings resolved.**
+
+**Finding 1 (blocking) — doc comment corrected (commit `8bc45bd`).**
+The `schedule` field on `BobConfig` in `the-intern/service/crates/bob/src/config.rs` (lines 45–50) now reads:
+"Schedule entries loaded from the JSON schedule store at `schedule_store_path` during `BobConfig::load()`. A missing or empty store yields an empty entries vec (no jobs). The `[[schedule]]` TOML section is no longer authoritative and is silently ignored."
+No trace of the old TOML-section framing remains.
+
+**Finding 2 (non-blocking) — `croner` dependency removed (commit `8bc45bd`).**
+`croner = "3"` is absent from `the-intern/service/crates/bob/Cargo.toml` and from `Cargo.lock`.
+`grep -rn croner the-intern/service/crates/bob` returned zero results.
+
+**Stage 1 — All five acceptance criteria still pass (unchanged from cycle 1).**
+
+- AC-1: `resolves_schedule_store_path_from_xdg_state_home_when_env_var_is_set` and `resolves_schedule_store_path_from_home_fallback_when_xdg_state_home_is_absent` both pass.
+- AC-2: `scheduler_adapter_is_initialized_with_schedule_entries_from_config` passes.
+- AC-3: `starts_with_empty_schedule_entries_when_json_store_is_missing` passes.
+- AC-4: `returns_configuration_error_when_schedule_store_is_malformed` passes.
+- AC-5: `schedule_section_in_config_toml_is_silently_ignored` passes.
+
+**Stage 2 — No regressions. Build and test results.**
+
+- `cargo test -p bob --lib config::tests` — 31 passed, 0 failed.
+- `cargo test -p bob --lib serve::tests` — 32 passed, 0 failed.
+- `cargo test --workspace` — 0 failures across all crates.
+- `cargo build -p bob` — compiled cleanly, zero warnings.
