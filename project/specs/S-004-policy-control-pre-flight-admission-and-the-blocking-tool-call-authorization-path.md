@@ -68,9 +68,10 @@ What this specification explicitly does NOT cover:
 - **Deterministic policy outside the agent.** Both verdicts are computed by the
   Rust service from explicit rules. The agent process never sees, supplies, or
   influences the ruleset, and cannot assert its own authorization.
-- **One ruleset, two gates.** Admission (pre-flight) and action (`tool_call`)
-  are evaluated against a single in-memory ruleset loaded from one config
-  source with one reload path. There is no second, divergent policy store.
+- **One ruleset for policy-controlled gates.** Admission-gated pre-flight
+  requests and action (`tool_call`) verdicts are evaluated against a single
+  in-memory ruleset loaded from one config source with one reload path. There
+  is no second, divergent policy store.
 - **Default-deny, allow-only.** Anything not matched by an explicit allow rule
   is denied. This holds for both gates and for every failure mode.
 - **Fail closed.** Any inability to reach a verdict — transport failure, a
@@ -121,7 +122,7 @@ What this specification explicitly does NOT cover:
 | `PolicyEngine` (policy-control) | Pure, synchronous evaluation of an admission request or an action request against an immutable ruleset snapshot, returning a verdict | No I/O, no async; the unit-test surface of this spec |
 | Ruleset snapshot | Immutable in-memory representation of the active admission allow-list and action allow-list, cheaply shareable and atomically swappable | Held behind a lock-free cell; readers never block writers |
 | policy-control actor | Owns the canonical config, builds the initial snapshot, processes the reload command, publishes new snapshots | Thin; not on the verdict hot path |
-| Requests Handler (pre-flight gate) | Evaluates each dequeued request's `sender` against the admission ruleset via the engine; forwards on allow, denies and audits on block | Replaces the standalone `allowed_user_ids` check; behaviour preserved |
+| Requests Handler (pre-flight gate) | Evaluates each admission-gated dequeued request's `sender` against the admission ruleset via the engine; forwards on allow, denies and audits on block | Replaces the standalone `allowed_user_ids` check; behaviour preserved except for explicit channel exceptions such as ADR-012 scheduler jobs |
 | `extension-ipc::multiplex` (action gate) | On each inbound `Authz` frame, evaluates `(tool, arguments)` against the action ruleset via the engine and routes the resulting `AuthzVerdict` back | Replaces the hardcoded deny verdict |
 | `bob.ts` extension | Hosts pi-agent's blocking `tool_call` hook; sends an `Authz` request, awaits the verdict under a bounded timeout, returns allow/block to pi; fails closed | New behaviour on the existing extension |
 | admin-RPC surface | Exposes a `policy.reload` method that instructs the policy-control actor to re-read config and swap the snapshot | New method on the existing `admin.sock` |
@@ -219,7 +220,7 @@ bob.ts receives the verdict within the bounded timeout
 Pre-flight admission gate:
 
 ```
-Requests Handler dequeues an internal event with its RequestContext
+Requests Handler dequeues an admission-gated internal event with its RequestContext
   ↓
 PolicyEngine.evaluate_admission(context.sender) against the live snapshot
   → allow: event is enqueued onward
@@ -233,8 +234,15 @@ PolicyEngine.evaluate_admission(context.sender) against the live snapshot
 > does **not** traverse the chat-adapter → intake → queue path, and is therefore
 > **exempt** from pre-flight admission: its gates are the 0700 socket trust boundary
 > (ADR-005 / ADR-007) and the `tool_call` action gate, which remains fully in force.
-> Non-interactive / programmatic intake (for example the scheduler adapter, S-009)
-> still passes through pre-flight admission unchanged.
+> Non-interactive / programmatic intake still passes through pre-flight admission
+> unless an accepted ADR defines a narrower local trust-boundary admission rule.
+>
+> **Amended (ADR-012 / CR-004, 2026-06-30).** Scheduler jobs are admitted for
+> firing when they are present in the trusted schedule store. They must not be
+> denied solely because a scheduler-derived `UserId` is absent from
+> `[policy].admitted_users`. This exception is scheduler-specific: future
+> external or multi-user adapters still need their own admission decision, and
+> every scheduler-triggered `tool_call` remains subject to the action gate.
 
 Operator reload:
 
@@ -258,14 +266,15 @@ The deliverable rests on a policy section in bob's existing TOML configuration
 ### Admission ruleset
 
 - **What:** the set of `UserId`s permitted to submit requests. **Why:** it is
-  the pre-flight identity gate.
+  the pre-flight identity gate for admission-gated requests.
 - **Where:** the policy section of bob's TOML config. The existing
   `allowed_user_ids` key is the migration source; whether it is renamed or
   relocated under the policy section is a breakdown decision, but its meaning
   is preserved.
 - **Constraints:** each entry is the string form of a `UserId` (a UUID).
-- **Default behavior:** a missing or empty admission list denies all requests
-  (unchanged from today's `run_preflight`).
+- **Default behavior:** a missing or empty admission list denies all
+  admission-gated requests (unchanged from today's `run_preflight`). ADR-012
+  scheduler jobs are not admitted by this list.
 
 ### Action ruleset
 
@@ -354,3 +363,4 @@ The deliverable rests on a policy section in bob's existing TOML configuration
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-06-23 | Interactive chat exempted from pre-flight admission; admission scoped to queue-borne requests. | CR-002 routes interactive chat through a supervised direct `pi` session that bypasses the Requests-Handler queue; gated instead by the socket trust boundary + the `tool_call` action gate (ADR-010). | T-103, T-104, T-105, T-106, T-107, T-108 |
+| 2026-06-30 | Scheduler jobs exempted from scheduler-derived UUID admission; `[policy].admitted_users` applies only to admission-gated requests. | ADR-012 / CR-004 make local scheduler admission depend on trusted schedule-store membership under the Unix trust boundary, while preserving the global `tool_call` action gate. | Scheduler amendment tasks TBD |

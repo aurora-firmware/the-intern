@@ -101,6 +101,12 @@ be revisited and real end-user authentication introduced.
 > application identity for attribution/audit. This narrows the rule for that one
 > channel; all other inbound paths are unchanged.
 
+> **Amended (ADR-012, 2026-06-30).** Scheduler jobs are another local-channel
+> exception, but only for admission. A scheduled request may still carry
+> application identity for attribution and audit, but scheduler firing is
+> admitted by trusted schedule-store membership under the Unix trust boundary,
+> not by requiring a scheduler-derived `UserId` in `[policy].admitted_users`.
+
 ### Removed: the in-service uid allow-list
 
 The previously separate in-service gate — `bob_core::auth::is_allowed` checking
@@ -134,9 +140,10 @@ here; reconciling it is follow-on work toward closing F4.
   on a meaningful sender instead of an anonymous placeholder.
 - Policy rules can be written against stable, named application identities
   rather than numeric OS uids or random UUIDs.
-- The model extends unchanged to future channels (email, webhook, scheduler)
-  and to a future external intake socket: each request self-identifies, and
-  only the gate differs per transport.
+- The model extends to future channels and to a future external intake socket:
+  each request self-identifies, and only the gate differs per transport.
+  ADR-012 narrows scheduler admission specifically; it does not remove
+  application identity for attribution or for other adapters.
 - No dependence on racy or forgeable signals, and no need for an
   OS-uid-to-user mapping table.
 

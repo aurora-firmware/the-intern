@@ -16,11 +16,12 @@ request today originates from an interactive caller. This matters now because
 Phase 6 of S-001 calls for a scheduler channel alongside chat and email, and
 scheduled triggering is the prerequisite for any periodic
 automation (such as email polling) the operator wants to configure. When this
-work is done, an operator can define named cron jobs in `bob.toml`, manage them
-at runtime with `bob schedule` subcommands, and rely on bob to fire the
-corresponding pi-agent prompts on time without any external scheduler. Success
-is confirmed when a configured cron entry causes a `periodic` request to reach
-pi-agent on the expected cadence and the entry survives a `bob` restart.
+work is done, an operator can define named cron jobs through `bob schedule`,
+persist them in bob's dedicated schedule state store, and rely on bob to fire
+the corresponding pi-agent prompts on time without any external scheduler.
+Success is confirmed when a configured cron entry causes a `periodic` request
+to reach pi-agent on the expected cadence and the entry survives a `bob`
+restart.
 
 ## Exclusions
 
@@ -55,10 +56,16 @@ What this specification explicitly does NOT cover:
   as trigger source) must not enter the deterministic core. The scheduler
   adapter translates timer events into `periodic` `InternalRequest` values and
   injects them into the queue, exactly as any other channel adapter would.
-- **Config file is the source of truth; admin-RPC is the mutation path.** The
-  `[schedule]` section of `bob.toml` is authoritative. The `bob schedule`
-  subcommands mutate that section and signal the adapter to reload; they never
-  maintain independent state.
+- **Schedule state file is the source of truth; admin-RPC is the mutation
+  path.** The versioned JSON schedule store defined by ADR-012 is
+  authoritative. The `bob schedule` subcommands mutate that store over
+  `admin.sock` and signal the adapter to reload; they never maintain
+  independent state.
+- **Unix trust boundary admits scheduled work.** A job that is present in the
+  trusted schedule store is admitted for firing. Scheduler jobs must not require
+  a scheduler-derived UUID entry in `[policy].admitted_users`; every tool call
+  made by the resulting pi-agent session remains subject to S-004 action
+  authorization.
 - **Each cron expression must be validated on entry.** An invalid cron
   expression must be rejected at `bob schedule add` time (and at startup) with
   a clear error, never silently ignored or deferred.
@@ -75,7 +82,7 @@ Operator                  bob CLI                  admin.sock
    │                         │  schedule.add RPC       │
    │                         ├────────────────────────►│
    │                         │                         │  Scheduler Actor
-   │                         │                         ├────────────────►  writes bob.toml
+   │                         │                         ├────────────────►  writes schedules.json
    │                         │                         │                   reloads live jobs
    │  (response)             │  (receipt)              │
    │◄────────────────────────┤◄────────────────────────┤
@@ -98,11 +105,11 @@ Operator                  bob CLI                  admin.sock
 
 | Component | Responsibility | Notes |
 |---|---|---|
-| Scheduler adapter actor | Owns the live job table; fires `periodic` `InternalRequest` on each cron tick; reloads config on signal | Wired into `bob-serve` supervision tree alongside chat-adapter |
-| `[schedule]` config section | Persists named jobs (id, cron expression, prompt) across restarts | Part of `bob.toml`; validated at startup and on reload |
+| Scheduler adapter actor | Owns the live job table; fires `periodic` `InternalRequest` on each cron tick; reloads schedule state on signal | Wired into `bob-serve` supervision tree |
+| Schedule state store | Persists named jobs (id, cron expression, prompt) across restarts | Versioned JSON document at `$XDG_STATE_HOME/bob/schedules.json`, falling back to `~/.local/state/bob/schedules.json`; validated at startup and on reload |
 | `bob schedule` subcommands | Operator-facing CLI for add, remove, list, and reload | Thin admin-RPC clients; mirror pattern of existing `bob` subcommands |
 | admin-RPC scheduler methods | Expose schedule mutation and query over `admin.sock` | New methods: `schedule.add`, `schedule.remove`, `schedule.list`, `schedule.reload` |
-| Internal queue | Receives `periodic` requests from the scheduler adapter | Unchanged; the scheduler is just another producer |
+| Internal queue | Receives `periodic` requests from the scheduler adapter | Unchanged; the scheduler is just another producer, with scheduler admission already satisfied by trusted schedule-store membership |
 | Monitoring layer (S-005) | Records the `periodic` request event on queue admission | Unchanged; no new storage added by this spec |
 
 ## Components
@@ -111,19 +118,19 @@ Operator                  bob CLI                  admin.sock
 
 **Purpose:** Maintains the live job table, evaluates cron expressions against wall-clock time, and submits a `periodic` `InternalRequest` carrying the job's prompt and a `ChannelId` of `"scheduler"` to the internal queue on each tick.
 **Estimated size:** Medium.
-**Interfaces:** Consumes the internal queue producer handle and a config-reload signal; exposes no outbound interface. Wired into the `bob-serve` supervision tree.
+**Interfaces:** Consumes the internal queue producer handle and a schedule-reload signal; exposes no outbound interface. Wired into the `bob-serve` supervision tree.
 
-### Component 2: Schedule config schema
+### Component 2: Schedule state schema
 
-**Purpose:** Defines and validates the `[schedule]` section of `bob.toml`, mapping named job entries (id, cron expression, prompt string) to the types the scheduler actor consumes.
+**Purpose:** Defines and validates the versioned JSON schedule store, mapping named job entries (id, cron expression, prompt string) to the types the scheduler actor consumes.
 **Estimated size:** Small.
-**Interfaces:** Consumed by the scheduler actor at startup and reload; consumed by the `schedule.add` RPC handler for validation.
+**Interfaces:** Consumed by the scheduler actor at startup and reload; consumed by the `schedule.add` RPC handler for validation. The store is written atomically with temp-file-and-rename and preserves the file mode required by ADR-012.
 
 ### Component 3: admin-RPC scheduler methods
 
-**Purpose:** Exposes `schedule.add`, `schedule.remove`, `schedule.list`, and `schedule.reload` over `admin.sock`, delegating to the scheduler actor and persisting mutations to `bob.toml`.
+**Purpose:** Exposes `schedule.add`, `schedule.remove`, `schedule.list`, and `schedule.reload` over `admin.sock`, delegating to the scheduler actor and persisting mutations to `schedules.json`.
 **Estimated size:** Small–medium.
-**Interfaces:** Consumed by the `bob schedule` subcommands; delegates to the scheduler actor's reload signal and to the config writer.
+**Interfaces:** Consumed by the `bob schedule` subcommands; delegates to the scheduler actor's reload signal and to the schedule-store writer.
 
 ### Component 4: `bob schedule` subcommands
 
@@ -142,11 +149,11 @@ bob CLI sends schedule.add RPC to admin.sock
   ↓
 admin-RPC handler validates cron expression and id uniqueness
   → invalid: return error to CLI; nothing written
-  → valid: write new entry to bob.toml [schedule] section
+  → valid: atomically write new entry to schedules.json
   ↓
 admin-RPC handler signals scheduler actor to reload
   ↓
-Scheduler actor re-reads config, updates live job table
+Scheduler actor re-reads schedule state, updates live job table
   ↓
 bob CLI prints confirmation to operator
 ```
@@ -161,8 +168,9 @@ Scheduler actor constructs periodic InternalRequest
   ↓
 Request submitted to internal queue
   ↓
-Requests Handler runs pre-flight admission (policy check)
-  → rejected: monitoring records denial; no pi-agent dispatch
+Requests Handler accepts scheduler firing because the job was present in the
+trusted schedule store (ADR-012)
+  → if queue/admission infrastructure fails: monitoring records failure; no pi-agent dispatch
   → admitted: monitoring records admission
   ↓
 pi-agent receives request, executes prompt verbatim
@@ -173,7 +181,7 @@ pi-agent receives request, executes prompt verbatim
 **bob restart:**
 
 ```
-bob starts, reads bob.toml [schedule] section
+bob starts, reads schedules.json from persistent state
   ↓
 Scheduler actor validates all cron expressions
   → any invalid: log error, skip that entry (do not abort startup)
@@ -182,20 +190,40 @@ Live job table populated; scheduler begins ticking
   (jobs that would have fired while bob was down are not replayed)
 ```
 
-## Configuration Requirements
+## State Store Requirements
 
-- **What:** A `[schedule]` section in `bob.toml` containing zero or more named job entries. Each entry requires a unique string `id`, a valid cron expression (`cron`), and a non-empty prompt string (`prompt`).
-- **Where:** `bob.toml`, the same layered config file used for all bob configuration (ADR-002).
-- **Constraints:** `id` must be unique across all entries. `cron` must be a valid 5-field cron expression. `prompt` must be non-empty. No maximum entry count is enforced at the spec level.
-- **Missing-value behaviour:** A missing or empty `[schedule]` section is valid and results in no scheduled jobs. An entry with an invalid cron expression is skipped with an error log at startup; it is rejected with an error response at `schedule.add` time.
+- **What:** A versioned JSON document containing zero or more named job entries.
+  Each entry requires a unique string `id`, a valid cron expression (`cron`),
+  and a non-empty prompt string (`prompt`).
+- **Where:** `$XDG_STATE_HOME/bob/schedules.json`, falling back to
+  `~/.local/state/bob/schedules.json` on Linux (ADR-009 / ADR-012).
+- **Shape:** the initial schema is `{ "version": 1, "entries": [...] }`, with
+  each entry shaped as `{ "id": string, "cron": string, "prompt": string }`.
+- **Constraints:** `id` must be unique across all entries. `cron` must be a
+  valid 5-field cron expression. `prompt` must be non-empty. No maximum entry
+  count is enforced at the spec level.
+- **Missing-value behaviour:** A missing schedule store or an empty `entries`
+  array is valid and results in no scheduled jobs. An entry with an invalid cron
+  expression is skipped with an error log at startup; it is rejected with an
+  error response at `schedule.add` time.
+- **Write contract:** `schedule.add` and `schedule.remove` write the whole JSON
+  document with atomic temp-file-and-rename updates and preserve the required
+  file mode.
+- **Permissions:** under the current single-user-local deployment, the parent
+  state directory is owner-only and `schedules.json` is `0600`. If future
+  admin-socket access is widened to a Unix group, the schedule store must use
+  the same trust population.
+- **Admission:** a schedule entry present in this trusted store is admitted for
+  firing. Scheduler execution does not require a scheduler-derived `UserId` in
+  `[policy].admitted_users`.
 
 ## Implementation Order
 
 | Phase | What | Depends On |
 |---|---|---|
-| 1 | Schedule config schema and startup validation wired into `BobConfig`; scheduler adapter actor scaffolded and supervised in `bob-serve` (no jobs fire yet, but the actor starts and stops cleanly) | S-006 adapter framework |
+| 1 | Schedule state schema and startup validation wired into the scheduler subsystem; scheduler adapter actor scaffolded and supervised in `bob-serve` (no jobs fire yet, but the actor starts and stops cleanly) | S-006 adapter framework |
 | 2 | Cron tick loop: scheduler actor fires `periodic` `InternalRequest` for each configured job on schedule; end-to-end path from tick to queue admission confirmed by test | Phase 1 |
-| 3 | admin-RPC scheduler methods (`schedule.add`, `schedule.remove`, `schedule.list`, `schedule.reload`) and `bob schedule` subcommands; mutations persist to `bob.toml` and reload live job table | Phase 2 |
+| 3 | admin-RPC scheduler methods (`schedule.add`, `schedule.remove`, `schedule.list`, `schedule.reload`) and `bob schedule` subcommands; mutations persist to `schedules.json` and reload live job table | Phase 2 |
 
 ## Amendment Log
 
@@ -204,3 +232,6 @@ Live job table populated; scheduler begins ticking
 |------|-------------|-----|----------------|
 | YYYY-MM-DD | Description of change | Reason for amendment | T-XXX, T-YYY |
 -->
+| Date | What changed | Why | Affected tasks |
+|------|-------------|-----|----------------|
+| 2026-06-30 | Schedule source of truth moved from `[schedule]` in `bob.toml` to `$XDG_STATE_HOME/bob/schedules.json`; scheduler UUID admission removed in favor of trusted schedule-store membership under the Unix trust boundary. | ADR-012 / CR-004 fix the hidden scheduler UUID allow-list failure and separate mutable schedule state from static config. | Scheduler amendment tasks TBD |
