@@ -4,6 +4,154 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{ServiceError, ServiceResult};
 
+/// Version tag written and expected by the JSON schedule-store document.
+const SCHEDULE_STORE_VERSION: u32 = 1;
+
+/// Serialisation wrapper for the on-disk JSON schedule-store document.
+///
+/// The shape is `{ "version": 1, "entries": [...] }`.
+#[derive(Debug, Serialize, Deserialize)]
+struct ScheduleStoreDoc {
+    version: u32,
+    entries: Vec<ScheduleEntry>,
+}
+
+/// Read schedule entries from a versioned JSON schedule-store file at `path`.
+///
+/// # Missing file
+///
+/// When `path` does not exist the function returns an empty `Vec` rather than
+/// an error, because an absent store is indistinguishable from a store that
+/// has never been written.
+///
+/// # Errors
+///
+/// Returns `ServiceError::Persistence` when the file exists but cannot be
+/// read from disk.
+/// Returns `ServiceError::Configuration` when the document is not valid JSON,
+/// carries an unrecognised `version` field, or contains entries that do not
+/// match the expected shape.
+pub fn read_schedule_store(path: &Path) -> ServiceResult<Vec<ScheduleEntry>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = std::fs::read_to_string(path).map_err(|e| ServiceError::Persistence {
+        detail: format!("failed to read schedule store {}: {e}", path.display()),
+    })?;
+
+    let doc: ScheduleStoreDoc =
+        serde_json::from_str(&content).map_err(|e| ServiceError::Configuration {
+            detail: format!("malformed schedule store {}: {e}", path.display()),
+        })?;
+
+    if doc.version != SCHEDULE_STORE_VERSION {
+        return Err(ServiceError::Configuration {
+            detail: format!(
+                "schedule store {} has unsupported version {}; expected {SCHEDULE_STORE_VERSION}",
+                path.display(),
+                doc.version
+            ),
+        });
+    }
+
+    Ok(doc.entries)
+}
+
+/// Atomically replace the JSON schedule-store file at `path` with a document
+/// containing `entries`.
+///
+/// # Atomicity
+///
+/// The document is serialised to a temporary file placed in the same directory
+/// as `path` and then renamed over `path`.  An observer therefore sees either
+/// the old complete document or the new complete document — never a partial
+/// write.
+///
+/// # Permissions
+///
+/// On Unix, a new store file is created with mode `0600` (owner read/write
+/// only).  When `path` already exists its permission bits are read before the
+/// write and restored on the replacement file before the rename, so an
+/// operator-restricted store is not silently widened to the process umask
+/// default.
+///
+/// # Errors
+///
+/// Returns `ServiceError::Persistence` for I/O failures (directory creation,
+/// temp-file write, permission change, or rename).
+pub fn write_schedule_store(path: &Path, entries: &[ScheduleEntry]) -> ServiceResult<()> {
+    let doc = ScheduleStoreDoc {
+        version: SCHEDULE_STORE_VERSION,
+        entries: entries.to_vec(),
+    };
+
+    let content = serde_json::to_string_pretty(&doc).map_err(|e| ServiceError::Persistence {
+        detail: format!("failed to serialise schedule store: {e}"),
+    })?;
+
+    // Ensure parent directories exist.
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    if !parent.as_os_str().is_empty() {
+        std::fs::create_dir_all(parent).map_err(|e| ServiceError::Persistence {
+            detail: format!(
+                "failed to create schedule store parent directory {}: {e}",
+                parent.display()
+            ),
+        })?;
+    }
+
+    // Capture the existing file's mode before writing so we can restore it.
+    // When no file exists we default to 0600.
+    #[cfg(unix)]
+    let existing_mode: Option<u32> = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).ok().map(|m| m.permissions().mode())
+    };
+
+    // Write to a temp file in the same directory for an atomic rename.
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp_path = parent.join(format!(".bob-schedule-tmp-{unique}"));
+
+    std::fs::write(&tmp_path, &content).map_err(|e| ServiceError::Persistence {
+        detail: format!(
+            "failed to write temp schedule store {}: {e}",
+            tmp_path.display()
+        ),
+    })?;
+
+    // Apply file permissions to the temp file before the rename.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = existing_mode.unwrap_or(0o600);
+        if let Err(e) = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(mode)) {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(ServiceError::Persistence {
+                detail: format!(
+                    "failed to set permissions on temp schedule store {}: {e}",
+                    tmp_path.display()
+                ),
+            });
+        }
+    }
+
+    std::fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        ServiceError::Persistence {
+            detail: format!(
+                "failed to rename temp schedule store to {}: {e}",
+                path.display()
+            ),
+        }
+    })?;
+
+    Ok(())
+}
+
 /// A validated schedule job entry sourced from the `[[schedule]]` TOML section.
 ///
 /// `id` is the unique string identifier for the job, `cron` is a standard
@@ -129,7 +277,7 @@ pub fn write_schedule_entries(path: &Path, entries: &[ScheduleEntry]) -> Service
 
 #[cfg(test)]
 mod tests {
-    use super::{write_schedule_entries, ScheduleEntry};
+    use super::{read_schedule_store, write_schedule_entries, write_schedule_store, ScheduleEntry};
 
     fn entry(id: &str) -> ScheduleEntry {
         ScheduleEntry {
@@ -218,5 +366,19 @@ mod tests {
 
         let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "rewrite must preserve the original 0600 mode");
+    }
+
+    // --- JSON schedule store tests ---
+
+    #[test]
+    fn read_schedule_store_returns_empty_list_when_file_is_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+
+        let entries = read_schedule_store(&path).expect("missing file must return Ok");
+        assert!(
+            entries.is_empty(),
+            "missing file must yield an empty entry list"
+        );
     }
 }
