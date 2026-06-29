@@ -42,9 +42,12 @@ pub struct BobConfig {
     /// An empty path means no config file was loaded (defaults only).
     /// Used by the policy-control actor for hot-reload.
     pub config_path: PathBuf,
-    /// Schedule configuration sourced from the `[[schedule]]` TOML section.
+    /// Schedule entries loaded from the JSON schedule store at
+    /// `schedule_store_path` during `BobConfig::load()`.
     ///
-    /// An absent or empty section yields an empty entries vec (no jobs).
+    /// A missing or empty store yields an empty entries vec (no jobs).
+    /// The `[[schedule]]` TOML section is no longer authoritative and is
+    /// silently ignored.
     pub schedule: ScheduleConfig,
     /// Resolved path to the JSON schedule store.
     ///

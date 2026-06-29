@@ -148,7 +148,6 @@ dependencies = [
  "async-trait",
  "bob-core",
  "clap",
- "croner",
  "extension-ipc",
  "figment",
  "monitoring",
