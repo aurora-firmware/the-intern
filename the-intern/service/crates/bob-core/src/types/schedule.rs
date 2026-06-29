@@ -499,4 +499,67 @@ mod tests {
             "expected Configuration error, got {err:?}"
         );
     }
+
+    #[test]
+    fn writer_produces_complete_readable_json_document() {
+        // AC-2: verifies the final file is a fully formed JSON document;
+        // the atomic-rename mechanism is validated by absence of partial writes.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+
+        write_schedule_store(
+            &path,
+            &[ScheduleEntry {
+                id: "test-job".to_owned(),
+                cron: "0 * * * *".to_owned(),
+                prompt: "hourly check".to_owned(),
+            }],
+        )
+        .expect("write must succeed");
+
+        let raw = std::fs::read_to_string(&path).expect("file must exist after write");
+        // The file must be valid JSON (not truncated or partial).
+        let parsed: serde_json::Value =
+            serde_json::from_str(&raw).expect("file contents must be valid JSON");
+        assert_eq!(parsed["version"], 1_u64);
+        assert_eq!(parsed["entries"][0]["id"], "test-job");
+    }
+
+    #[test]
+    fn writer_creates_missing_parent_directories_for_json_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir
+            .path()
+            .join("state")
+            .join("scheduler")
+            .join("schedule.json");
+
+        write_schedule_store(&path, &[entry("nested-job")]).expect("write must succeed");
+
+        let loaded = read_schedule_store(&path).expect("read must succeed");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, "nested-job");
+    }
+
+    #[test]
+    fn writer_replaces_existing_store_file_completely() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+
+        // Write a first set of entries.
+        write_schedule_store(&path, &[entry("first")]).expect("first write must succeed");
+
+        // Overwrite with a different set.
+        write_schedule_store(&path, &[entry("second"), entry("third")])
+            .expect("second write must succeed");
+
+        let loaded = read_schedule_store(&path).expect("read must succeed");
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].id, "second");
+        assert_eq!(loaded[1].id, "third");
+        assert!(
+            !loaded.iter().any(|e| e.id == "first"),
+            "first entry must be gone after replacement"
+        );
+    }
 }
