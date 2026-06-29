@@ -1,7 +1,7 @@
 ---
 id: T-113
 title: Add JSON schedule state store path and persistence
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-06-30'
