@@ -114,3 +114,51 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-30
+
+PASS
+
+Stage 1 — all five acceptance criteria met:
+
+- AC-1: `read_schedule_store` and `write_schedule_store` are both public and round-trip
+  version 1 JSON `{ "version": 1, "entries": [...] }` documents containing `ScheduleEntry`
+  values. Verified by `round_trips_multiple_entries_through_json_store`,
+  `round_trips_empty_entry_list_through_json_store`, and `json_store_document_contains_version_field`.
+- AC-2: Writer serializes to a temp file at `parent/.bob-schedule-tmp-{nanos}` (same
+  directory as target) and renames it over the destination. Verified by
+  `writer_produces_complete_readable_json_document` and `writer_replaces_existing_store_file_completely`.
+- AC-3: `if !path.exists() { return Ok(Vec::new()); }` returns an empty list for a missing
+  file. Verified by `read_schedule_store_returns_empty_list_when_file_is_missing`.
+- AC-4: Malformed JSON and missing required entry fields both fail at serde deserialization
+  and surface as `ServiceError::Configuration`. A version mismatch after successful
+  deserialization also returns `ServiceError::Configuration` with the version number in the
+  message. Verified by three dedicated error-path tests.
+- AC-5: On Unix, `existing_mode.unwrap_or(0o600)` applies 0600 for new files and the
+  pre-existing mode for rewrites, on the temp file before the rename. Verified by
+  `new_json_store_file_is_created_with_mode_0600` and `rewrite_preserves_restrictive_file_mode_on_json_store`.
+
+Only `the-intern/service/crates/bob-core/src/types/schedule.rs` was modified.
+`serde_json` was already a workspace dependency so no `Cargo.toml` change was required.
+The pre-existing TOML writer was left in place, which the task description explicitly permits.
+
+Stage 2 — code quality passes:
+
+- Correctness: logic handles expected inputs and edge cases (empty list, missing file,
+  version mismatch, malformed JSON, malformed entries) correctly. Error taxonomy follows
+  project conventions (`Persistence` for I/O failures, `Configuration` for format errors).
+  Temp-file cleanup on failure paths is handled.
+- Tests: 12 new tests covering both success and failure paths, each with its own tempdir
+  fixture (no shared mutable state). 17 schedule tests pass, full workspace suite passes
+  with zero failures.
+- Security: no hardcoded secrets; error messages include path identifiers but not entry
+  content, consistent with the coding guidelines.
+- Readability: descriptive names, focused functions, complete `# Errors` / `# Atomicity` /
+  `# Permissions` doc-comment sections on all public functions, no dead code.
+- Performance: no unnecessary allocations or blocking calls beyond what the I/O requires.
+  `serde_json::to_string_pretty` is appropriate for an operator-readable state file.
+
+Minor observation (non-blocking): the reader uses `path.exists()` before `read_to_string`,
+which introduces a narrow TOCTOU window. A permissions-denied filesystem would return
+`Ok(Vec::new())` rather than a `Persistence` error. This is a pre-existing pattern in the
+codebase and does not violate any acceptance criterion.
