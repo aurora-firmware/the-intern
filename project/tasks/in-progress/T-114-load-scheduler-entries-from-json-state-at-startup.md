@@ -107,6 +107,16 @@ Implemented all five acceptance criteria in two red→green→refactor TDD cycle
 
 Verification note: the task's verification command must be run as two separate invocations with `--lib` — `cargo test -p bob --lib config::tests` (31 passed) and `cargo test -p bob --lib serve::tests` (32 passed); the combined single-command form does not resolve both filters. Full workspace green.
 
+### Session 2 — 2026-06-30
+
+Two post-review fixes applied to `task/T-114-load-scheduler-entries-from-json-state-at-startup`.
+
+**Issue 1 (blocking) — stale doc comment corrected.** The `schedule` field on `BobConfig` in `the-intern/service/crates/bob/src/config.rs` previously carried the comment "Schedule configuration sourced from the `[[schedule]]` TOML section." and "An absent or empty section yields an empty entries vec." After T-114 the TOML section is no longer the source of truth; the JSON schedule store is. The comment was rewritten to read: "Schedule entries loaded from the JSON schedule store at `schedule_store_path` during `BobConfig::load()`." with a note that a missing or empty store yields an empty entries vec and that the `[[schedule]]` TOML section is silently ignored.
+
+**Issue 2 (non-blocking) — unused croner dependency removed.** `grep -rn croner` over the `bob` crate src/tests returned zero matches, confirming the dependency had no callers after `validate_schedule_entries` was dropped in Session 1. The `croner = "3"` line was removed from `Cargo.toml` and `Cargo.lock` was updated automatically.
+
+**Verification results.** `cargo build -p bob` compiled cleanly with zero warnings. `cargo test -p bob --lib config::tests` ran 31 tests (31 passed). `cargo test -p bob --lib serve::tests` ran 32 tests (32 passed). `cargo test --workspace` — every test result line reported 0 failures. `cargo fmt --all -- --check` exited silently. Both fixes were committed together in a single conventional commit (`8bc45bd`) on the task branch. No behaviour changes were made.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
