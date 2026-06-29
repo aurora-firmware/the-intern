@@ -381,4 +381,75 @@ mod tests {
             "missing file must yield an empty entry list"
         );
     }
+
+    #[test]
+    fn round_trips_multiple_entries_through_json_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+        let original = vec![
+            ScheduleEntry {
+                id: "job-alpha".to_owned(),
+                cron: "0 9 * * 1-5".to_owned(),
+                prompt: "send morning report".to_owned(),
+            },
+            ScheduleEntry {
+                id: "job-beta".to_owned(),
+                cron: "*/30 * * * *".to_owned(),
+                prompt: "check queue".to_owned(),
+            },
+        ];
+
+        write_schedule_store(&path, &original).expect("write must succeed");
+        let loaded = read_schedule_store(&path).expect("read must succeed");
+
+        assert_eq!(loaded.len(), 2, "entry count must match");
+        assert_eq!(loaded[0].id, "job-alpha");
+        assert_eq!(loaded[0].cron, "0 9 * * 1-5");
+        assert_eq!(loaded[0].prompt, "send morning report");
+        assert_eq!(loaded[1].id, "job-beta");
+        assert_eq!(loaded[1].cron, "*/30 * * * *");
+        assert_eq!(loaded[1].prompt, "check queue");
+    }
+
+    #[test]
+    fn round_trips_empty_entry_list_through_json_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+
+        write_schedule_store(&path, &[]).expect("write with empty list must succeed");
+        let loaded = read_schedule_store(&path).expect("read must succeed");
+
+        assert!(
+            loaded.is_empty(),
+            "empty entry list must round-trip as empty"
+        );
+    }
+
+    #[test]
+    fn json_store_document_contains_version_field() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+
+        write_schedule_store(
+            &path,
+            &[ScheduleEntry {
+                id: "chk".to_owned(),
+                cron: "* * * * *".to_owned(),
+                prompt: "ping".to_owned(),
+            }],
+        )
+        .expect("write must succeed");
+
+        let raw = std::fs::read_to_string(&path).expect("read raw");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("must be valid JSON");
+        assert_eq!(
+            v["version"].as_u64(),
+            Some(1),
+            "document must carry version 1"
+        );
+        assert!(
+            v["entries"].is_array(),
+            "document must carry 'entries' array"
+        );
+    }
 }
