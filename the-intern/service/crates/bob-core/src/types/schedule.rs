@@ -452,4 +452,51 @@ mod tests {
             "document must carry 'entries' array"
         );
     }
+
+    #[test]
+    fn read_schedule_store_returns_configuration_error_for_unsupported_version() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+        std::fs::write(&path, r#"{"version":99,"entries":[]}"#)
+            .expect("seed store with future version");
+
+        let err = read_schedule_store(&path).expect_err("unsupported version must return Err");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unsupported version") || msg.contains("version"),
+            "error message must mention the version problem: {msg}"
+        );
+    }
+
+    #[test]
+    fn read_schedule_store_returns_configuration_error_for_malformed_json() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+        std::fs::write(&path, b"not valid json at all").expect("seed malformed store");
+
+        let err = read_schedule_store(&path).expect_err("malformed JSON must return Err");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn read_schedule_store_returns_configuration_error_for_malformed_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+        // Valid version but entries contain objects missing required fields.
+        std::fs::write(&path, r#"{"version":1,"entries":[{"id":"x"}]}"#)
+            .expect("seed store with malformed entries");
+
+        let err = read_schedule_store(&path).expect_err("malformed entries must return Err");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+    }
 }
