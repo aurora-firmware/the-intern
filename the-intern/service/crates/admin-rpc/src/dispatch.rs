@@ -53,11 +53,11 @@ pub struct Dispatcher {
     /// When present, `schedule.*` methods (T-097) push updated job tables to
     /// the scheduler actor.  When absent, `schedule.*` methods return -32601.
     scheduler: Option<scheduler_adapter::ReloadHandle>,
-    /// Path to the `bob.toml` config file.
+    /// Path to the JSON schedule store (`schedules.json`, ADR-012).
     ///
     /// Required for `schedule.add`, `schedule.remove`, and `schedule.reload`
     /// to persist entries.  When absent those methods return -32601.
-    config_path: Option<PathBuf>,
+    schedule_store_path: Option<PathBuf>,
     /// Serializes `schedule.add`/`schedule.remove` so concurrent admin clients
     /// cannot interleave the load→modify→write→reload sequence and silently
     /// drop one another's update. Shared across all per-connection clones of
@@ -128,7 +128,7 @@ impl Dispatcher {
             policy,
             monitoring,
             scheduler: None,
-            config_path: None,
+            schedule_store_path: None,
             schedule_write_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             interactive_session: None,
             started_at: Instant::now(),
@@ -178,14 +178,14 @@ impl Dispatcher {
         self
     }
 
-    /// Set the path to the `bob.toml` config file.
+    /// Set the path to the JSON schedule store (`schedules.json`, ADR-012).
     ///
     /// Required for `schedule.add`, `schedule.remove`, and `schedule.reload`
     /// to persist and read schedule entries.  When absent those methods return
     /// `-32601 Method not found`.
     #[must_use]
-    pub fn with_config_path(mut self, path: PathBuf) -> Self {
-        self.config_path = Some(path);
+    pub fn with_schedule_store_path(mut self, path: PathBuf) -> Self {
+        self.schedule_store_path = Some(path);
         self
     }
 
@@ -537,13 +537,13 @@ impl Dispatcher {
     /// id not already in the live table), then atomically writes the updated
     /// `[[schedule]]` array back to the config file and signals a reload.
     async fn handle_schedule_add(&self, id: Value, params: &Option<Value>) -> DispatchOutcome {
-        let (handle, config_path) = match self.schedule_handles() {
+        let (handle, schedule_store_path) = match self.schedule_handles() {
             Some(pair) => pair,
             None => {
                 return DispatchOutcome::Err(ErrorResponse::error(
                     id,
                     CODE_METHOD_NOT_FOUND,
-                    "schedule.add is not available: no scheduler handle or config path",
+                    "schedule.add is not available: no scheduler handle or schedule store path",
                     Some(json!({ "method": "schedule.add" })),
                 ));
             }
@@ -631,8 +631,8 @@ impl Dispatcher {
             }
         }
 
-        // Read current entries from config, append the new one, write back.
-        let mut entries = match self.load_schedule_entries_from_config(&id, config_path) {
+        // Read current entries from the JSON store, append the new one, write back.
+        let mut entries = match self.load_schedule_entries_from_store(&id, schedule_store_path) {
             Ok(e) => e,
             Err(outcome) => return outcome,
         };
@@ -642,7 +642,7 @@ impl Dispatcher {
             prompt: entry_prompt,
         });
 
-        if let Err(outcome) = self.write_and_reload(&id, config_path, entries, handle) {
+        if let Err(outcome) = self.write_and_reload(&id, schedule_store_path, entries, handle) {
             return outcome;
         }
 
@@ -651,13 +651,13 @@ impl Dispatcher {
 
     /// Handle `schedule.remove { id }`.
     async fn handle_schedule_remove(&self, id: Value, params: &Option<Value>) -> DispatchOutcome {
-        let (handle, config_path) = match self.schedule_handles() {
+        let (handle, schedule_store_path) = match self.schedule_handles() {
             Some(pair) => pair,
             None => {
                 return DispatchOutcome::Err(ErrorResponse::error(
                     id,
                     CODE_METHOD_NOT_FOUND,
-                    "schedule.remove is not available: no scheduler handle or config path",
+                    "schedule.remove is not available: no scheduler handle or schedule store path",
                     Some(json!({ "method": "schedule.remove" })),
                 ));
             }
@@ -702,15 +702,15 @@ impl Dispatcher {
             }
         }
 
-        // Read config, filter out the entry, write back.
-        let entries = match self.load_schedule_entries_from_config(&id, config_path) {
+        // Read the JSON store, filter out the entry, write back.
+        let entries = match self.load_schedule_entries_from_store(&id, schedule_store_path) {
             Ok(e) => e,
             Err(outcome) => return outcome,
         };
         let updated: Vec<ScheduleEntry> =
             entries.into_iter().filter(|e| e.id != entry_id).collect();
 
-        if let Err(outcome) = self.write_and_reload(&id, config_path, updated, handle) {
+        if let Err(outcome) = self.write_and_reload(&id, schedule_store_path, updated, handle) {
             return outcome;
         }
 
@@ -749,24 +749,23 @@ impl Dispatcher {
 
     /// Handle `schedule.reload`.
     ///
-    /// Reads `[[schedule]]` entries from the config file on disk and sends the
-    /// full `Vec<ScheduleEntry>` over the reload handle.  This is the only
-    /// `schedule.*` method that re-reads disk; it allows the operator to
-    /// reconcile the live table with a hand-edited config file.
+    /// Re-reads the JSON schedule store from disk and sends the full
+    /// `Vec<ScheduleEntry>` over the reload handle.  This allows an operator
+    /// to apply a hand-edited `schedules.json` without restarting the service.
     async fn handle_schedule_reload(&self, id: Value) -> DispatchOutcome {
-        let (handle, config_path) = match self.schedule_handles() {
+        let (handle, schedule_store_path) = match self.schedule_handles() {
             Some(pair) => pair,
             None => {
                 return DispatchOutcome::Err(ErrorResponse::error(
                     id,
                     CODE_METHOD_NOT_FOUND,
-                    "schedule.reload is not available: no scheduler handle or config path",
+                    "schedule.reload is not available: no scheduler handle or schedule store path",
                     Some(json!({ "method": "schedule.reload" })),
                 ));
             }
         };
 
-        let entries = match self.load_schedule_entries_from_config(&id, config_path) {
+        let entries = match self.load_schedule_entries_from_store(&id, schedule_store_path) {
             Ok(e) => e,
             Err(outcome) => return outcome,
         };
@@ -785,102 +784,63 @@ impl Dispatcher {
 
     // ── Private schedule helpers ─────────────────────────────────────────────
 
-    /// Return `(handle, config_path)` when both are configured, or `None`.
+    /// Return `(handle, schedule_store_path)` when both are configured, or `None`.
     fn schedule_handles(&self) -> Option<(&scheduler_adapter::ReloadHandle, &std::path::Path)> {
-        match (&self.scheduler, &self.config_path) {
+        match (&self.scheduler, &self.schedule_store_path) {
             (Some(h), Some(p)) => Some((h, p.as_path())),
             _ => None,
         }
     }
 
-    /// Load `[[schedule]]` entries from the config file at `path`.
+    /// Load schedule entries from the JSON schedule store at `path`.
+    ///
+    /// Delegates to [`bob_core::types::schedule::read_schedule_store`], which
+    /// returns an empty `Vec` for a missing file and a `ServiceError` for any
+    /// I/O or parse failure.
     ///
     /// Returns `Err(DispatchOutcome::Err(...))` on read or parse failure.
-    fn load_schedule_entries_from_config(
+    fn load_schedule_entries_from_store(
         &self,
         id: &Value,
         path: &std::path::Path,
     ) -> Result<Vec<ScheduleEntry>, DispatchOutcome> {
-        use bob_core::types::ScheduleEntry as SE;
-
-        if !path.exists() {
-            // No config file yet — treat as empty schedule.
-            return Ok(Vec::new());
-        }
-
-        let content = std::fs::read_to_string(path).map_err(|e| {
+        bob_core::types::schedule::read_schedule_store(path).map_err(|e| {
             DispatchOutcome::Err(ErrorResponse::error(
                 id.clone(),
                 CODE_METHOD_NOT_FOUND,
-                "schedule method: failed to read config file",
-                Some(json!({
-                    "category": "configuration",
-                    "reason": e.to_string(),
-                })),
-            ))
-        })?;
-
-        // Parse only the [[schedule]] array; other keys are irrelevant here.
-        #[derive(serde::Deserialize, Default)]
-        struct ScheduleSection {
-            #[serde(default)]
-            schedule: Vec<RawEntry>,
-        }
-
-        #[derive(serde::Deserialize)]
-        struct RawEntry {
-            #[serde(default)]
-            id: String,
-            #[serde(default)]
-            cron: String,
-            #[serde(default)]
-            prompt: String,
-        }
-
-        let parsed: ScheduleSection = toml::from_str(&content).map_err(|e| {
-            DispatchOutcome::Err(ErrorResponse::error(
-                id.clone(),
-                CODE_METHOD_NOT_FOUND,
-                "schedule method: failed to parse config file",
-                Some(json!({
-                    "category": "configuration",
-                    "reason": e.to_string(),
-                })),
-            ))
-        })?;
-
-        Ok(parsed
-            .schedule
-            .into_iter()
-            .map(|r| SE {
-                id: r.id,
-                cron: r.cron,
-                prompt: r.prompt,
-            })
-            .collect())
-    }
-
-    /// Write `entries` to `config_path` and signal the scheduler actor to reload.
-    ///
-    /// Returns `Err(DispatchOutcome::Err(...))` on write or reload failure.
-    fn write_and_reload(
-        &self,
-        id: &Value,
-        config_path: &std::path::Path,
-        entries: Vec<ScheduleEntry>,
-        handle: &scheduler_adapter::ReloadHandle,
-    ) -> Result<(), DispatchOutcome> {
-        bob_core::types::schedule::write_schedule_entries(config_path, &entries).map_err(|e| {
-            DispatchOutcome::Err(ErrorResponse::error(
-                id.clone(),
-                CODE_METHOD_NOT_FOUND,
-                "schedule method: failed to write config file",
+                "schedule method: failed to read schedule store",
                 Some(json!({
                     "category": "persistence",
                     "reason": e.to_string(),
                 })),
             ))
-        })?;
+        })
+    }
+
+    /// Write `entries` atomically to the JSON schedule store at `schedule_store_path`
+    /// and signal the scheduler actor to reload its live job table.
+    ///
+    /// Returns `Err(DispatchOutcome::Err(...))` on write or reload failure.
+    fn write_and_reload(
+        &self,
+        id: &Value,
+        schedule_store_path: &std::path::Path,
+        entries: Vec<ScheduleEntry>,
+        handle: &scheduler_adapter::ReloadHandle,
+    ) -> Result<(), DispatchOutcome> {
+        bob_core::types::schedule::write_schedule_store(schedule_store_path, &entries).map_err(
+            |e| {
+                DispatchOutcome::Err(ErrorResponse::error(
+                    id.clone(),
+                    CODE_METHOD_NOT_FOUND,
+                    "schedule method: failed to write schedule store",
+                    Some(json!({
+                        "category": "persistence",
+                        "reason": e.to_string(),
+                    })),
+                ))
+            },
+        )?;
 
         if handle.reload(entries).is_err() {
             return Err(DispatchOutcome::Err(ErrorResponse::error(
@@ -1979,11 +1939,71 @@ mod tests {
         scheduler_adapter::start(intake, entries)
     }
 
-    fn write_temp_bob_toml(contents: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    /// Return a temp dir and a path to `schedules.json` without writing any
+    /// file. `read_schedule_store` treats a missing file as an empty store, so
+    /// this is the right starting point for tests that begin with zero entries.
+    fn temp_schedule_store_path() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("bob.toml");
-        std::fs::write(&path, contents).expect("write temp bob.toml");
+        let path = dir.path().join("schedules.json");
         (dir, path)
+    }
+
+    /// Write a JSON schedule store with the given entries to a temp directory.
+    /// Returns (TempDir, path to schedules.json).
+    fn write_temp_schedule_store(
+        entries: &[bob_core::types::ScheduleEntry],
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedules.json");
+        bob_core::types::schedule::write_schedule_store(&path, entries)
+            .expect("write temp schedule store");
+        (dir, path)
+    }
+
+    // AC-1 (T-115): schedule.add persists a new entry to the JSON schedule store
+    // when the dispatcher is configured with a schedule store path (not the TOML
+    // config file path).
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_with_schedule_store_path_persists_entry_to_json_store() {
+        use bob_core::types::schedule::read_schedule_store;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store_path = dir.path().join("schedules.json");
+
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_schedule_store_path(store_path.clone());
+
+        let req = make_request_with_params(
+            "schedule.add",
+            json!(400),
+            json!({
+                "id": "json-stored-job",
+                "cron": "0 9 * * *",
+                "prompt": "Morning report"
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => {
+                assert_eq!(resp.id, json!(400));
+                assert_eq!(resp.result["ok"], json!(true));
+            }
+            DispatchOutcome::Err(e) => {
+                panic!("expected Ok, got error: {}", e.error.message)
+            }
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+
+        // AC-1: entry must be persisted to the JSON schedule store, not TOML.
+        let entries = read_schedule_store(&store_path).expect("JSON store must be readable");
+        assert_eq!(entries.len(), 1, "one entry must be in the JSON store");
+        assert_eq!(entries[0].id, "json-stored-job", "entry id must match");
     }
 
     // AC-1 (T-097): schedule.list with a scheduler handle returns the live job table.
@@ -2053,14 +2073,17 @@ mod tests {
         }
     }
 
-    // AC-1 (T-097): schedule.add with valid entry writes to config and returns ok.
+    // AC-1 (T-097, T-115): schedule.add with valid entry writes to the JSON
+    // schedule store and returns ok.
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_schedule_add_with_valid_entry_persists_and_returns_ok() {
-        let (_dir, config_path) = write_temp_bob_toml("");
+        use bob_core::types::schedule::read_schedule_store;
+
+        let (_dir, store_path) = temp_schedule_store_path();
         let (reload_handle, scheduler_join) = make_scheduler_handle();
         let dispatcher = make_dispatcher_no_handles()
             .with_scheduler_handle(reload_handle)
-            .with_config_path(config_path.clone());
+            .with_schedule_store_path(store_path.clone());
 
         let req = make_request_with_params(
             "schedule.add",
@@ -2087,16 +2110,25 @@ mod tests {
             _ => panic!("unexpected dispatch outcome variant"),
         }
 
-        // Verify the entry was persisted to the config file.
-        let content = std::fs::read_to_string(&config_path).expect("read config");
-        assert!(content.contains("new-job"), "entry id must be persisted");
+        // Verify the entry was persisted to the JSON schedule store.
+        let entries = read_schedule_store(&store_path).expect("JSON store must be readable");
+        assert!(
+            entries.iter().any(|e| e.id == "new-job"),
+            "entry id must be persisted to JSON store"
+        );
     }
 
-    // AC-2 (T-097): schedule.add with duplicate id returns -32602 and leaves file unchanged.
+    // AC-2 (T-097, T-115): schedule.add with duplicate id returns -32602 and
+    // leaves the JSON store unchanged.
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_schedule_add_with_duplicate_id_returns_error_and_leaves_file_unchanged() {
-        let initial = "[[schedule]]\nid = \"existing\"\ncron = \"0 9 * * *\"\nprompt = \"p\"\n";
-        let (_dir, config_path) = write_temp_bob_toml(initial);
+        use bob_core::types::schedule::read_schedule_store;
+
+        let (_dir, store_path) = write_temp_schedule_store(&[bob_core::types::ScheduleEntry {
+            id: "existing".to_owned(),
+            cron: "0 9 * * *".to_owned(),
+            prompt: "p".to_owned(),
+        }]);
         let (reload_handle, scheduler_join) = make_scheduler_handle();
 
         // Pre-load the existing entry into the watch channel so schedule.add can
@@ -2112,7 +2144,7 @@ mod tests {
 
         let dispatcher = make_dispatcher_no_handles()
             .with_scheduler_handle(reload_handle)
-            .with_config_path(config_path.clone());
+            .with_schedule_store_path(store_path.clone());
 
         let req = make_request_with_params(
             "schedule.add",
@@ -2137,19 +2169,25 @@ mod tests {
             _ => panic!("unexpected dispatch outcome variant"),
         }
 
-        // File must be unchanged — still contains the original entry.
-        let content = std::fs::read_to_string(&config_path).expect("read config");
-        assert!(content.contains("existing"), "original entry must remain");
+        // JSON store must be unchanged — still contains the original entry.
+        let entries = read_schedule_store(&store_path).expect("read JSON store");
+        assert!(
+            entries.iter().any(|e| e.id == "existing"),
+            "original entry must remain in JSON store"
+        );
     }
 
-    // AC-2 (T-097): schedule.add with invalid cron returns error.
+    // AC-2 (T-097, T-115): schedule.add with invalid cron returns error and
+    // must not write the invalid entry to the JSON store.
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_schedule_add_with_invalid_cron_returns_error() {
-        let (_dir, config_path) = write_temp_bob_toml("");
+        use bob_core::types::schedule::read_schedule_store;
+
+        let (_dir, store_path) = temp_schedule_store_path();
         let (reload_handle, scheduler_join) = make_scheduler_handle();
         let dispatcher = make_dispatcher_no_handles()
             .with_scheduler_handle(reload_handle)
-            .with_config_path(config_path.clone());
+            .with_schedule_store_path(store_path.clone());
 
         let req = make_request_with_params(
             "schedule.add",
@@ -2174,21 +2212,28 @@ mod tests {
             _ => panic!("unexpected dispatch outcome variant"),
         }
 
-        // File must not have been written with invalid data.
-        let content = std::fs::read_to_string(&config_path).expect("read config");
+        // JSON store must not have been written with invalid data.
+        let entries = read_schedule_store(&store_path).expect("read store");
         assert!(
-            !content.contains("bad-job"),
-            "invalid entry must not be persisted"
+            entries.iter().all(|e| e.id != "bad-job"),
+            "invalid entry must not be persisted to JSON store"
         );
     }
 
+    // AC-1 (T-115): a malformed JSON schedule store returns an error whose
+    // `id` field matches the request id (regression: request id must not be lost
+    // on read errors).
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_schedule_add_config_parse_error_preserves_request_id() {
-        let (_dir, config_path) = write_temp_bob_toml("not = [valid");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store_path = dir.path().join("schedules.json");
+        // Write a file that is not valid JSON so read_schedule_store returns an error.
+        std::fs::write(&store_path, b"{ this is not valid json }").expect("write malformed store");
+
         let (reload_handle, scheduler_join) = make_scheduler_handle();
         let dispatcher = make_dispatcher_no_handles()
             .with_scheduler_handle(reload_handle)
-            .with_config_path(config_path);
+            .with_schedule_store_path(store_path);
         let req = make_request_with_params(
             "schedule.add",
             json!(314),
@@ -2206,19 +2251,35 @@ mod tests {
         match outcome {
             DispatchOutcome::Err(resp) => {
                 assert_eq!(resp.id, json!(314));
-                assert!(resp.error.message.contains("parse config file"));
+                assert!(
+                    resp.error.message.contains("failed to read schedule store"),
+                    "unexpected error message: {}",
+                    resp.error.message
+                );
             }
             DispatchOutcome::Ok(resp) => panic!("expected parse error, got Ok: {resp:?}"),
             _ => panic!("unexpected dispatch outcome variant"),
         }
     }
 
-    // AC-3 (T-097): schedule.remove with known id removes from config and returns ok.
+    // AC-3 (T-097, T-115): schedule.remove with known id removes from the JSON
+    // schedule store and returns ok.
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_schedule_remove_with_known_id_removes_entry_and_returns_ok() {
-        let initial =
-            "[[schedule]]\nid = \"to-remove\"\ncron = \"0 9 * * *\"\nprompt = \"p\"\n\n[[schedule]]\nid = \"keep\"\ncron = \"0 10 * * *\"\nprompt = \"q\"\n";
-        let (_dir, config_path) = write_temp_bob_toml(initial);
+        use bob_core::types::schedule::read_schedule_store;
+
+        let (_dir, store_path) = write_temp_schedule_store(&[
+            bob_core::types::ScheduleEntry {
+                id: "to-remove".to_owned(),
+                cron: "0 9 * * *".to_owned(),
+                prompt: "p".to_owned(),
+            },
+            bob_core::types::ScheduleEntry {
+                id: "keep".to_owned(),
+                cron: "0 10 * * *".to_owned(),
+                prompt: "q".to_owned(),
+            },
+        ]);
         let (reload_handle, scheduler_join) = make_scheduler_handle();
 
         // Pre-load entries into the live table.
@@ -2240,7 +2301,7 @@ mod tests {
 
         let dispatcher = make_dispatcher_no_handles()
             .with_scheduler_handle(reload_handle)
-            .with_config_path(config_path.clone());
+            .with_schedule_store_path(store_path.clone());
 
         let req =
             make_request_with_params("schedule.remove", json!(320), json!({ "id": "to-remove" }));
@@ -2260,22 +2321,25 @@ mod tests {
             _ => panic!("unexpected dispatch outcome variant"),
         }
 
-        let content = std::fs::read_to_string(&config_path).expect("read config");
+        let entries = read_schedule_store(&store_path).expect("read JSON store");
         assert!(
-            !content.contains("to-remove"),
-            "removed entry must not be in file"
+            entries.iter().all(|e| e.id != "to-remove"),
+            "removed entry must not be in JSON store"
         );
-        assert!(content.contains("keep"), "other entry must remain");
+        assert!(
+            entries.iter().any(|e| e.id == "keep"),
+            "other entry must remain in JSON store"
+        );
     }
 
-    // AC-3 (T-097): schedule.remove with unknown id returns error.
+    // AC-3 (T-097, T-115): schedule.remove with unknown id returns error.
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_schedule_remove_with_unknown_id_returns_error() {
-        let (_dir, config_path) = write_temp_bob_toml("");
+        let (_dir, store_path) = temp_schedule_store_path();
         let (reload_handle, scheduler_join) = make_scheduler_handle();
         let dispatcher = make_dispatcher_no_handles()
             .with_scheduler_handle(reload_handle)
-            .with_config_path(config_path.clone());
+            .with_schedule_store_path(store_path);
 
         let req = make_request_with_params(
             "schedule.remove",
@@ -2297,17 +2361,20 @@ mod tests {
         }
     }
 
-    // AC-1 (T-097): schedule.reload reads from disk and signals the actor.
+    // AC-1 (T-097, T-115): schedule.reload reads from the JSON schedule store
+    // on disk and signals the scheduler actor.
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_schedule_reload_reads_from_disk_and_returns_ok() {
-        let (_dir, config_path) = write_temp_bob_toml(
-            "[[schedule]]\nid = \"disk-job\"\ncron = \"0 9 * * *\"\nprompt = \"p\"\n",
-        );
+        let (_dir, store_path) = write_temp_schedule_store(&[bob_core::types::ScheduleEntry {
+            id: "disk-job".to_owned(),
+            cron: "0 9 * * *".to_owned(),
+            prompt: "p".to_owned(),
+        }]);
         let (reload_handle, scheduler_join) = make_scheduler_handle();
         let rx = reload_handle.subscribe();
         let dispatcher = make_dispatcher_no_handles()
             .with_scheduler_handle(reload_handle)
-            .with_config_path(config_path.clone());
+            .with_schedule_store_path(store_path);
 
         let req = make_request("schedule.reload", json!(330));
         let mut registry = make_registry();

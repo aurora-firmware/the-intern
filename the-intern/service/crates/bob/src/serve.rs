@@ -217,14 +217,12 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     info!("scheduler-adapter actor started");
 
     info!("starting admin-rpc actor");
-    // Pass the config file path to admin-RPC for hot-reload of the [policy]
-    // section.  Schedule entries are now loaded from the JSON schedule store
-    // (cfg.schedule_store_path, T-114); wiring the JSON store path to
-    // admin-RPC for schedule.* persistence is deferred to a follow-up task.
-    let maybe_config_path = if cfg.config_path.as_os_str().is_empty() {
+    // Wire the JSON schedule store path (ADR-012, T-115) so that schedule.*
+    // admin-RPC mutations persist to `schedules.json` instead of `config.toml`.
+    let maybe_schedule_store_path = if cfg.schedule_store_path.as_os_str().is_empty() {
         None
     } else {
-        Some(cfg.config_path.clone())
+        Some(cfg.schedule_store_path.clone())
     };
     let admin_rpc_cfg = admin_rpc::Config {
         admin_sock_path: cfg.admin_sock_path.clone(),
@@ -235,7 +233,7 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         // schedule.* methods (T-097) can push updated job tables to the actor.
         // The primary handle is retained in the Runtime for shutdown ordering.
         scheduler: Some(scheduler_reload_handle.clone()),
-        config_path: maybe_config_path,
+        schedule_store_path: maybe_schedule_store_path,
         interactive_session: Some(build_interactive_session_config(cfg)),
         ..admin_rpc::Config::default()
     };
