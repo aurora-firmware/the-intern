@@ -562,4 +562,40 @@ mod tests {
             "first entry must be gone after replacement"
         );
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_json_store_file_is_created_with_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+
+        // File does not exist yet — writer must create it with 0600.
+        write_schedule_store(&path, &[entry("job-1")]).expect("write must succeed");
+
+        let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "new store file must be created with mode 0600");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rewrite_preserves_restrictive_file_mode_on_json_store() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+
+        // First write creates the file with 0600.
+        write_schedule_store(&path, &[entry("original")]).expect("first write must succeed");
+        // Explicitly set to 0600 to establish the invariant being tested.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("set restrictive mode");
+
+        // Second write must keep the 0600 mode after the atomic rename.
+        write_schedule_store(&path, &[entry("updated")]).expect("second write must succeed");
+
+        let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "rewrite must preserve the existing 0600 mode");
+    }
 }
