@@ -91,6 +91,18 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-30
+
+Implemented the JSON schedule-store API for AC-1 through AC-5 in a single session across five TDD cycles, all on `task/T-113-add-json-schedule-state-store-path-and-persistence`.
+
+The core addition is two public functions — `read_schedule_store` and `write_schedule_store` — plus a private `ScheduleStoreDoc` serialisation wrapper and a `SCHEDULE_STORE_VERSION` constant. The on-disk format is `{ "version": 1, "entries": [...] }` where each entry carries the existing `ScheduleEntry` fields (`id`, `cron`, `prompt`). Parsing goes through `serde_json::from_str::<ScheduleStoreDoc>` in one pass, which means a missing `cron` or `prompt` field in an entry is caught by serde and surfaces as `ServiceError::Configuration` automatically — no hand-rolled entry validation was needed.
+
+The writer follows the same temp-file-and-rename pattern used by the pre-existing TOML writer. On Unix, `std::fs::metadata(path).ok()` reads the current mode before the temp file is created; the result is used as `existing_mode.unwrap_or(0o600)` so new files land at `0600` and existing files keep their mode.
+
+The pre-existing `write_schedule_entries` (TOML writer) was left in place because `admin-rpc/dispatch.rs` still calls it and that file is outside the task's files-to-touch boundary. As a consequence `toml_edit` stays in `Cargo.toml`. The task description explicitly allows this ("can be removed or left only as dead-free migration support"), and removing it would require a separate follow-up task that touches admin-rpc.
+
+Twelve new unit tests were added covering: missing-file empty return (AC-3), three round-trip and document-shape tests (AC-1), three error-path tests for unsupported version and malformed content (AC-4), three writer behaviour tests for complete output / parent-directory creation / full replacement (AC-2), and two Unix-only permission tests (AC-5). The full workspace suite continues to pass with zero failures.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
