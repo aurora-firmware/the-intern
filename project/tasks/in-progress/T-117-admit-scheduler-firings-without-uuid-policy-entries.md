@@ -96,6 +96,30 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-30
+
+Picked up T-117 on branch `task/T-117-admit-scheduler-firings-without-uuid-policy-entries`. Work log was empty (first session).
+
+**What was done**
+
+Read the task, ADR-012, and the current flow through `serve.rs`, `scheduler-adapter/src/lib.rs`, and `requests-handler/src/handler.rs`. The scheduler submits `DeliveryKind::Periodic` events through the requests-handler; the preflight closure currently calls `run_preflight` for every event regardless of kind, which evaluates the scheduler-derived `UserId` against `[policy].admitted_users`. Under ADR-012, that check must not be applied to periodic events.
+
+The implementation is a single branch in `serve.rs`'s preflight closure: `if event.kind == DeliveryKind::Periodic { persistence_store.enqueue(event).await; } else { run_preflight(...).await; }`. No changes to `requests-handler/src/handler.rs` were needed — the exception is cleanest in `serve.rs` as the task specified. `scheduler-adapter/src/lib.rs` received only comment and log-message updates (replacing "for policy rules" with "for audit attribution") to remove policy-gating language that no longer reflects the design.
+
+**Tried and rejected**
+
+First attempt at the AC-1 test tried to observe admission by calling `persistence.dequeue_next()` right after submitting a Periodic event. This failed because the concurrently running periodic dispatcher consumed the event from persistence before the test assertion ran. Resolved by adopting the same end-to-end pattern as the existing `periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt` test: a worker script writes the prompt to a file, and the test waits for that file to appear.
+
+Also hit a compile error when constructing `BobConfig` inline with `policy: crate::config::PolicyConfig { admitted_users: vec![], ... }` — `PolicyConfig` is re-exported, not directly named under the `crate::config` path in test scope. Fixed by using `..BobConfig::test_base()` (which already has `PolicyConfig::default()` = empty `admitted_users`).
+
+**Tests added:** `periodic_event_is_admitted_and_reaches_pi_agent_with_empty_admitted_users` (AC-1, full path requests-handler → bypass → persistence → dispatcher → pi-agent) and `sync_event_from_sender_absent_from_admitted_users_is_denied` (AC-5). AC-4 verified by inspection (no changes on the post-persistence / tool_call authorization path).
+
+**Evidence:** `cargo test -p bob --lib serve::tests` 34 passed; `cargo test -p scheduler-adapter` 9 passed; `cargo test -p requests-handler` 15 passed; `cargo test --workspace` all green. Committed as `feat(scheduler): bypass UserId admission for periodic events per ADR-012` (`9632acd`).
+
+**What remains**
+
+Nothing. All five acceptance criteria are satisfied.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
