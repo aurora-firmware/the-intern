@@ -1,7 +1,7 @@
 ---
 id: T-115
 title: Persist schedule RPC mutations to JSON state
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-06-30'
