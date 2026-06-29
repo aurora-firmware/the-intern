@@ -118,3 +118,32 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-30
+
+FAIL
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1 (XDG path resolution): PASS. `default_schedule_store_path_for_env` correctly resolves `$XDG_STATE_HOME/bob/schedules.json` with fallback to `$HOME/.local/state/bob/schedules.json`. Two dedicated tests pass.
+- AC-2 (scheduler wired from JSON store): PASS. `BobConfig::load_with_sources` populates `cfg.schedule.entries` from `read_schedule_store`, and the serve-layer test `scheduler_adapter_is_initialized_with_schedule_entries_from_config` confirms those entries reach the scheduler adapter.
+- AC-3 (missing store → empty table): PASS. `read_schedule_store` returns `Ok(Vec::new())` when the path does not exist; dedicated test `starts_with_empty_schedule_entries_when_json_store_is_missing` passes.
+- AC-4 (malformed store → configuration error): PASS. `read_schedule_store` returns `ServiceError::Configuration` for invalid JSON; the `?` in `load_with_sources` surfaces it before any actor starts; test `returns_configuration_error_when_schedule_store_is_malformed` passes.
+- AC-5 (`[[schedule]]` no longer source of truth): PASS in implementation. `RawScheduleEntry`, `validate_schedule_entries`, and the `schedule: Vec<RawScheduleEntry>` field are removed. The `schedule_section_in_config_toml_is_silently_ignored` regression guard passes.
+
+Test results: `cargo test -p bob --lib config::tests` — 31 passed; `cargo test -p bob --lib serve::tests` — 32 passed; `cargo test --workspace` — all green.
+
+**Stage 2 — Code Quality**
+
+One blocking issue found.
+
+**Issue 1 (blocking): Stale doc comment on `BobConfig::schedule` field**
+
+- File: `the-intern/service/crates/bob/src/config.rs`, `BobConfig` struct, `schedule` field.
+- What is wrong: The doc comment still reads "Schedule configuration sourced from the `[[schedule]]` TOML section." After T-114, entries are loaded from the JSON schedule store (`read_schedule_store`), not from any TOML section. The second line "An absent or empty section yields an empty entries vec (no jobs)." likewise refers to a TOML section that is no longer the source. This directly contradicts the task's own AC-5 and will mislead future readers about where schedule data originates.
+- What should change: Update the doc comment to reflect that entries are now loaded from the JSON schedule store at `schedule_store_path`. For example: "Schedule entries loaded from the JSON schedule store at `schedule_store_path` during `BobConfig::load()`. A missing or empty store yields an empty entries vec (no jobs)."
+
+**Non-blocking observation: Unused `croner` dependency in `Cargo.toml`**
+
+- File: `the-intern/service/crates/bob/Cargo.toml`.
+- What was found: `croner = "3"` remains listed but is no longer imported in any `.rs` file within the `bob` crate after `validate_schedule_entries` (its sole consumer) was removed. This will not cause a build or test failure (clippy is not yet a clean gate), but the dependency is now dead weight. Consider removing it as a cleanup alongside the doc-comment fix.
