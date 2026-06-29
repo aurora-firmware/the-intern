@@ -7,8 +7,7 @@ use std::{
 };
 
 use bob_core::error::{ServiceError, ServiceResult};
-use bob_core::types::{AuditFilterKind, ScheduleEntry};
-use croner::parser::{CronParser, Seconds};
+use bob_core::types::{schedule::read_schedule_store, AuditFilterKind, ScheduleEntry};
 use figment::{
     providers::{Format, Serialized, Toml},
     Figment,
@@ -43,10 +42,20 @@ pub struct BobConfig {
     /// An empty path means no config file was loaded (defaults only).
     /// Used by the policy-control actor for hot-reload.
     pub config_path: PathBuf,
-    /// Schedule configuration sourced from the `[[schedule]]` TOML section.
+    /// Schedule entries loaded from the JSON schedule store at
+    /// `schedule_store_path` during `BobConfig::load()`.
     ///
-    /// An absent or empty section yields an empty entries vec (no jobs).
+    /// A missing or empty store yields an empty entries vec (no jobs).
+    /// The `[[schedule]]` TOML section is no longer authoritative and is
+    /// silently ignored.
     pub schedule: ScheduleConfig,
+    /// Resolved path to the JSON schedule store.
+    ///
+    /// The default on Linux is `$XDG_STATE_HOME/bob/schedules.json` with
+    /// `~/.local/state/bob/schedules.json` as the XDG fallback.  Can be
+    /// overridden via the `BOB_SCHEDULE_STORE_PATH` environment variable or a
+    /// `schedule_store_path` key in `config.toml`.
+    pub schedule_store_path: PathBuf,
 }
 
 /// Validated schedule configuration — the view the rest of the service uses.
@@ -104,6 +113,7 @@ impl BobConfig {
             schedule: ScheduleConfig {
                 entries: Vec::new(),
             },
+            schedule_store_path: PathBuf::new(),
         }
     }
 }
@@ -143,7 +153,13 @@ impl BobConfig {
             "loaded bob configuration from layered sources"
         );
 
-        let schedule = validate_schedule_entries(raw.schedule)?;
+        // Load schedule entries from the JSON store.  A missing store is treated
+        // as empty (no jobs); a malformed store fails startup with a
+        // Configuration error so the operator can fix the file.
+        let schedule_entries = read_schedule_store(&raw.schedule_store_path)?;
+        let schedule = ScheduleConfig {
+            entries: schedule_entries,
+        };
 
         let cfg = BobConfig {
             admin_sock_path: raw.admin_sock_path,
@@ -175,6 +191,7 @@ impl BobConfig {
             // can hot-reload from the same file on Handle::reload().
             config_path: config_path.clone(),
             schedule,
+            schedule_store_path: raw.schedule_store_path,
         };
 
         cfg.validate()
@@ -281,23 +298,9 @@ struct RawBobConfig {
     policy: PolicyConfig,
     #[serde(default)]
     monitoring: RawMonitoringConfig,
-    /// Raw schedule entries from `[[schedule]]` TOML; absent section → empty vec.
-    #[serde(default)]
-    schedule: Vec<RawScheduleEntry>,
-}
-
-/// Raw deserialization form of a single `[[schedule]]` TOML entry.
-///
-/// All fields are optional at the serde layer; missing or blank values are
-/// caught during validation in `load_with_sources`.
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-struct RawScheduleEntry {
-    #[serde(default)]
-    id: String,
-    #[serde(default)]
-    cron: String,
-    #[serde(default)]
-    prompt: String,
+    /// Resolved path to the JSON schedule store.  Set from the computed default
+    /// in `defaults_with_runtime_root` and overrideable via `BOB_SCHEDULE_STORE_PATH`.
+    schedule_store_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -306,55 +309,6 @@ struct RawMonitoringConfig {
     audit_log_path: Option<PathBuf>,
     #[serde(default)]
     default_tail_filters: Option<Vec<AuditFilterKind>>,
-}
-
-/// Validates raw schedule entries and converts them to typed `ScheduleEntry` values.
-///
-/// # Errors
-///
-/// Returns `ServiceError::Configuration` when any entry has a blank `id`,
-/// blank `cron`, blank `prompt`, or an invalid 5-field cron expression.
-fn validate_schedule_entries(raw_entries: Vec<RawScheduleEntry>) -> ServiceResult<ScheduleConfig> {
-    let cron_parser = CronParser::builder().seconds(Seconds::Disallowed).build();
-
-    let mut entries = Vec::with_capacity(raw_entries.len());
-
-    for (index, raw) in raw_entries.into_iter().enumerate() {
-        if raw.id.trim().is_empty() {
-            return Err(configuration_error(format!(
-                "schedule entry at index {index} has a blank id; id must be non-empty"
-            )));
-        }
-
-        if raw.cron.trim().is_empty() {
-            return Err(configuration_error(format!(
-                "schedule entry '{}' has a blank cron; cron must be a non-empty 5-field expression",
-                raw.id
-            )));
-        }
-
-        if raw.prompt.trim().is_empty() {
-            return Err(configuration_error(format!(
-                "schedule entry '{}' has a blank prompt; prompt must be non-empty",
-                raw.id
-            )));
-        }
-
-        if let Err(err) = cron_parser.parse(&raw.cron) {
-            return Err(configuration_error(format!(
-                "schedule entry '{}' has an invalid cron expression '{}': {err}",
-                raw.id, raw.cron
-            )));
-        }
-
-        entries.push(ScheduleEntry {
-            id: raw.id,
-            cron: raw.cron,
-            prompt: raw.prompt,
-        });
-    }
-
-    Ok(ScheduleConfig { entries })
 }
 
 fn parse_cli_overrides<I>(args: I) -> ServiceResult<BTreeMap<String, String>>
@@ -590,6 +544,7 @@ fn defaults_with_runtime_root(
 ) -> RawBobConfig {
     let monitoring_audit_log_path = default_monitoring_audit_log_path_for_env(env, uid);
     let extension_path = default_extension_path_for_env(env, uid);
+    let schedule_store_path = default_schedule_store_path_for_env(env, uid);
 
     RawBobConfig {
         admin_sock_path: runtime_root.join("admin.sock"),
@@ -611,7 +566,7 @@ fn defaults_with_runtime_root(
             audit_log_path: Some(monitoring_audit_log_path),
             default_tail_filters: Some(default_tail_filters()),
         },
-        schedule: Vec::new(),
+        schedule_store_path,
     }
 }
 
@@ -680,6 +635,36 @@ fn default_extension_path_for_env(env: &BTreeMap<String, String>, uid: u32) -> P
         });
 
     data_root.join("bob").join("extensions").join("bob.ts")
+}
+
+/// Resolves the default JSON schedule-store path from the environment.
+///
+/// On Linux, the path is `$XDG_STATE_HOME/bob/schedules.json`.  When
+/// `XDG_STATE_HOME` is absent, the XDG fallback `$HOME/.local/state/bob/schedules.json`
+/// is used.  On macOS, follows the same pattern as the audit log: prefers
+/// `XDG_STATE_HOME` then `$HOME/Library/Application Support`.  When both
+/// variables are absent, falls back to a temp-directory path to remain usable
+/// in test environments without a home directory.
+fn default_schedule_store_path_for_env(env: &BTreeMap<String, String>, uid: u32) -> PathBuf {
+    let state_root = if cfg!(target_os = "macos") {
+        env.get("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                env.get("HOME")
+                    .map(|home| Path::new(home).join("Library").join("Application Support"))
+            })
+            .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-state-{uid}")))
+    } else {
+        env.get("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                env.get("HOME")
+                    .map(|home| Path::new(home).join(".local").join("state"))
+            })
+            .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-state-{uid}")))
+    };
+
+    state_root.join("bob").join("schedules.json")
 }
 
 fn default_config_path(sources: &ConfigSources) -> PathBuf {
@@ -1396,10 +1381,184 @@ audit_log_path = "{}"
         fs::remove_file(config_file).expect("temp config file should be removable");
     }
 
-    // ── AC-1 (T-092): valid [[schedule]] entry deserialises into ScheduleEntry ─
+    // ── AC-1 (T-114): schedule_store_path resolved from XDG_STATE_HOME ──────────
 
     #[test]
-    fn loads_valid_schedule_entry_from_config_file() {
+    fn resolves_schedule_store_path_from_xdg_state_home_when_env_var_is_set() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let state_home = temp.path().join("xdg-state");
+
+        let config = load_with_env_overrides([(
+            "XDG_STATE_HOME",
+            state_home
+                .to_str()
+                .expect("temporary state-home path should be valid UTF-8"),
+        )])
+        .expect("config should load");
+
+        assert_eq!(
+            config.schedule_store_path,
+            state_home.join("bob").join("schedules.json"),
+            "schedule store path must resolve to XDG_STATE_HOME/bob/schedules.json"
+        );
+    }
+
+    #[test]
+    fn resolves_schedule_store_path_from_home_fallback_when_xdg_state_home_is_absent() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let home = temp.path().join("home");
+
+        let config = load_with_env_overrides([(
+            "HOME",
+            home.to_str()
+                .expect("temporary home path should be valid UTF-8"),
+        )])
+        .expect("config should load");
+
+        let expected = if cfg!(target_os = "macos") {
+            home.join("Library")
+                .join("Application Support")
+                .join("bob")
+                .join("schedules.json")
+        } else {
+            home.join(".local")
+                .join("state")
+                .join("bob")
+                .join("schedules.json")
+        };
+
+        assert_eq!(
+            config.schedule_store_path, expected,
+            "schedule store path must fall back to HOME/.local/state/bob/schedules.json on Linux"
+        );
+    }
+
+    // ── AC-2/3/4 (T-114): schedule entries loaded from JSON store at startup ─────
+
+    #[test]
+    fn loads_schedule_entries_from_json_store_when_store_exists() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let store_path = temp.path().join("schedules.json");
+
+        // Write two entries to the JSON store before loading config.
+        let entries = vec![
+            bob_core::types::ScheduleEntry {
+                id: "morning-digest".to_owned(),
+                cron: "0 9 * * 1-5".to_owned(),
+                prompt: "send morning digest".to_owned(),
+            },
+            bob_core::types::ScheduleEntry {
+                id: "weekly-report".to_owned(),
+                cron: "0 17 * * 5".to_owned(),
+                prompt: "compile weekly report".to_owned(),
+            },
+        ];
+        bob_core::types::schedule::write_schedule_store(&store_path, &entries)
+            .expect("write schedule store must succeed");
+
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let mut cli_overrides = BTreeMap::new();
+        cli_overrides.insert(
+            "schedule_store_path".to_string(),
+            store_path.to_str().expect("valid path").to_string(),
+        );
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+            cli_overrides,
+            uid: 4242,
+        })
+        .expect("config should load");
+
+        assert_eq!(
+            config.schedule.entries.len(),
+            2,
+            "both JSON store entries must be loaded"
+        );
+        assert_eq!(config.schedule.entries[0].id, "morning-digest");
+        assert_eq!(config.schedule.entries[1].id, "weekly-report");
+    }
+
+    #[test]
+    fn starts_with_empty_schedule_entries_when_json_store_is_missing() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let nonexistent_store = temp.path().join("does-not-exist.json");
+
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let mut cli_overrides = BTreeMap::new();
+        cli_overrides.insert(
+            "schedule_store_path".to_string(),
+            nonexistent_store.to_str().expect("valid path").to_string(),
+        );
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+            cli_overrides,
+            uid: 4242,
+        })
+        .expect("config should load when schedule store is missing");
+
+        assert!(
+            config.schedule.entries.is_empty(),
+            "missing schedule store must yield empty entries"
+        );
+    }
+
+    #[test]
+    fn returns_configuration_error_when_schedule_store_is_malformed() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let store_path = temp.path().join("schedules.json");
+
+        // Write malformed JSON to the store.
+        fs::write(&store_path, "not valid json at all").expect("write malformed store");
+
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let mut cli_overrides = BTreeMap::new();
+        cli_overrides.insert(
+            "schedule_store_path".to_string(),
+            store_path.to_str().expect("valid path").to_string(),
+        );
+
+        let result = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+            cli_overrides,
+            uid: 4242,
+        });
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { .. })),
+            "malformed schedule store must yield a Configuration error, got {result:?}"
+        );
+    }
+
+    // ── AC-5 (T-114): [[schedule]] in config.toml is silently ignored ────────────
+
+    #[test]
+    fn schedule_section_in_config_toml_is_silently_ignored() {
+        // A config.toml with [[schedule]] entries must be accepted without error;
+        // the entries are not loaded into cfg.schedule (they are silently discarded
+        // because the JSON schedule store is now the authoritative source).
         let mut env = BTreeMap::new();
         if cfg!(target_os = "macos") {
             env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
@@ -1410,9 +1569,9 @@ audit_log_path = "{}"
         let config_file = write_temp_config(
             r#"
 [[schedule]]
-id = "daily-digest"
+id = "toml-job"
 cron = "0 9 * * *"
-prompt = "Send the daily digest"
+prompt = "from toml"
 "#,
         );
 
@@ -1422,162 +1581,16 @@ prompt = "Send the daily digest"
             cli_overrides: BTreeMap::new(),
             uid: 4242,
         })
-        .expect("config with valid [[schedule]] entry should parse");
+        .expect("config with [[schedule]] in TOML must load without error");
 
-        assert_eq!(config.schedule.entries.len(), 1);
-        assert_eq!(config.schedule.entries[0].id, "daily-digest");
-        assert_eq!(config.schedule.entries[0].cron, "0 9 * * *");
-        assert_eq!(config.schedule.entries[0].prompt, "Send the daily digest");
-
-        fs::remove_file(config_file).expect("temp config file should be removable");
-    }
-
-    // ── AC-2 (T-092): invalid cron expression yields Configuration error ───────
-
-    #[test]
-    fn returns_configuration_error_when_schedule_entry_has_invalid_cron() {
-        let mut env = BTreeMap::new();
-        if cfg!(target_os = "macos") {
-            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
-        } else {
-            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
-        }
-
-        let config_file = write_temp_config(
-            r#"
-[[schedule]]
-id = "bad-cron"
-cron = "not-a-cron"
-prompt = "Something"
-"#,
-        );
-
-        let result = BobConfig::load_with_sources(ConfigSources {
-            env,
-            config_path: Some(config_file.clone()),
-            cli_overrides: BTreeMap::new(),
-            uid: 4242,
-        });
-
-        assert!(
-            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("cron")),
-            "expected Configuration error mentioning cron, got {result:?}"
-        );
-
-        fs::remove_file(config_file).expect("temp config file should be removable");
-    }
-
-    // ── AC-3 (T-092): blank id/cron/prompt yields Configuration error ─────────
-
-    #[test]
-    fn returns_configuration_error_when_schedule_entry_id_is_blank() {
-        let mut env = BTreeMap::new();
-        if cfg!(target_os = "macos") {
-            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
-        } else {
-            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
-        }
-
-        let config_file = write_temp_config(
-            r#"
-[[schedule]]
-id = ""
-cron = "0 9 * * *"
-prompt = "Something"
-"#,
-        );
-
-        let result = BobConfig::load_with_sources(ConfigSources {
-            env,
-            config_path: Some(config_file.clone()),
-            cli_overrides: BTreeMap::new(),
-            uid: 4242,
-        });
-
-        assert!(
-            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("id")),
-            "expected Configuration error mentioning id, got {result:?}"
-        );
-
-        fs::remove_file(config_file).expect("temp config file should be removable");
-    }
-
-    #[test]
-    fn returns_configuration_error_when_schedule_entry_cron_is_blank() {
-        let mut env = BTreeMap::new();
-        if cfg!(target_os = "macos") {
-            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
-        } else {
-            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
-        }
-
-        let config_file = write_temp_config(
-            r#"
-[[schedule]]
-id = "job-one"
-cron = ""
-prompt = "Something"
-"#,
-        );
-
-        let result = BobConfig::load_with_sources(ConfigSources {
-            env,
-            config_path: Some(config_file.clone()),
-            cli_overrides: BTreeMap::new(),
-            uid: 4242,
-        });
-
-        assert!(
-            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("cron")),
-            "expected Configuration error mentioning cron, got {result:?}"
-        );
-
-        fs::remove_file(config_file).expect("temp config file should be removable");
-    }
-
-    #[test]
-    fn returns_configuration_error_when_schedule_entry_prompt_is_blank() {
-        let mut env = BTreeMap::new();
-        if cfg!(target_os = "macos") {
-            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
-        } else {
-            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
-        }
-
-        let config_file = write_temp_config(
-            r#"
-[[schedule]]
-id = "job-one"
-cron = "0 9 * * *"
-prompt = ""
-"#,
-        );
-
-        let result = BobConfig::load_with_sources(ConfigSources {
-            env,
-            config_path: Some(config_file.clone()),
-            cli_overrides: BTreeMap::new(),
-            uid: 4242,
-        });
-
-        assert!(
-            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("prompt")),
-            "expected Configuration error mentioning prompt, got {result:?}"
-        );
-
-        fs::remove_file(config_file).expect("temp config file should be removable");
-    }
-
-    // ── AC-4 (T-092): absent [schedule] section yields empty entries vec ───────
-
-    #[test]
-    fn loads_config_with_empty_schedule_entries_when_schedule_section_is_absent() {
-        let config = load_with_env_overrides([]).expect("config without [schedule] should succeed");
-
+        // The [[schedule]] TOML entries must be silently ignored; the JSON store
+        // (which is missing here) is the authoritative source.
         assert!(
             config.schedule.entries.is_empty(),
-            "absent [schedule] must yield empty entries vec"
+            "[[schedule]] in TOML must be silently ignored; entries must come from the JSON store"
         );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
     }
 
     // ── AC-3 (T-053): legacy top-level allowed_user_ids field is removed ──────
