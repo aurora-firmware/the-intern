@@ -142,3 +142,74 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-30
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+AC-1: `schedule.add` persistence to `schedules.json` and live reload confirmed.
+`handle_schedule_add` calls `load_schedule_entries_from_store` (delegates to
+`bob_core::types::schedule::read_schedule_store`), appends the new entry, then
+calls `write_and_reload` (delegates to `write_schedule_store`). Two tests cover
+this: `dispatch_schedule_add_with_schedule_store_path_persists_entry_to_json_store`
+(new, T-115-specific) and `dispatch_schedule_add_with_valid_entry_persists_and_returns_ok`
+(updated). Both verify the JSON store contains the expected entry after the call.
+
+AC-2: `schedule.remove` removal from `schedules.json` and reload confirmed.
+`handle_schedule_remove` follows the same read-modify-write-reload pattern.
+Test `dispatch_schedule_remove_with_known_id_removes_entry_and_returns_ok`
+verifies the removed entry is absent and the retained entry is present in the
+JSON store after the call.
+
+AC-3: `schedule.reload` re-reads `schedules.json` and replaces the live table.
+`handle_schedule_reload` calls `load_schedule_entries_from_store` and then
+`handle.reload(entries)`. Test `dispatch_schedule_reload_reads_from_disk_and_returns_ok`
+writes a JSON store then verifies the scheduler actor receives the correct entries.
+
+AC-4: Typed invalid-request errors are preserved. Cron validation uses the same
+`croner::parser::CronParser` and returns `CODE_INVALID_REQUEST` (-32602) for
+invalid expressions, duplicates, and missing ids. `CODE_METHOD_NOT_FOUND` is
+returned when the handler is unavailable. Tests for duplicate id, invalid cron,
+unknown remove id, and malformed JSON store all pass and assert the correct
+error codes and messages.
+
+AC-5: `schedule_write_lock: Arc<Mutex<()>>` is unchanged. `_write_guard` is
+acquired in `handle_schedule_add` and `handle_schedule_remove` before the
+duplicate/existence check and the read-modify-write-reload sequence, serializing
+concurrent mutations. Not weakened.
+
+Specific checks:
+- `read_schedule_store` and `write_schedule_store` used throughout; old
+  `write_schedule_entries` (TOML) is not present.
+- `admin_rpc::Config.schedule_store_path` renamed from `config_path`; `lib.rs`
+  and `start()` updated accordingly.
+- `serve.rs` wires `cfg.schedule_store_path` into `admin_rpc::Config`;
+  `cfg.config_path` is still used for policy hot-reload only (correct and
+  intentional).
+- `toml = "0.8"` dependency removed from `admin-rpc/Cargo.toml` and
+  `Cargo.lock`; no dead dependencies remain.
+
+**Stage 2 — Code Quality**
+
+All 100 `admin-rpc` tests and 32 `bob serve` tests pass. Full workspace (503+
+tests across all crates) passes with zero failures.
+
+Correctness: Lock scope covers the full read-modify-write-reload sequence.
+Missing-file case is handled by `read_schedule_store` returning an empty `Vec`
+(no separate existence check needed; behavior is correct). Error responses
+preserve the original request id.
+
+Tests: Each test constructs its own temp directory; no shared mutable state.
+Success and failure paths covered for all three mutating handlers. New
+`dispatch_schedule_add_with_schedule_store_path_persists_entry_to_json_store`
+is the dedicated T-115 regression guard.
+
+Readability: Names are clear and specific. `temp_schedule_store_path` and
+`write_temp_schedule_store` helper semantics are well separated and documented.
+
+Minor observation (non-blocking): The doc comment on the private method
+`handle_schedule_add` at line 538 of `dispatch.rs` still says "atomically
+writes the updated `[[schedule]]` array back to the config file" — should
+reference the JSON schedule store. Does not affect correctness.
