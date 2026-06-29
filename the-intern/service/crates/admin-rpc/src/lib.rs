@@ -69,12 +69,12 @@ pub struct Config {
     /// the scheduler actor.  When `None` (the default), `schedule.*` methods
     /// return `-32601 Method not found`.
     pub scheduler: Option<scheduler_adapter::ReloadHandle>,
-    /// Optional path to the `bob.toml` config file.
+    /// Optional path to the JSON schedule store (`schedules.json`, ADR-012).
     ///
     /// Required for `schedule.add`, `schedule.remove`, and `schedule.reload`
     /// to persist changes.  When `None` (the default), those methods return
     /// `-32601 Method not found`.
-    pub config_path: Option<std::path::PathBuf>,
+    pub schedule_store_path: Option<std::path::PathBuf>,
     /// Configuration for spawning interactive pi sessions (T-105 / ADR-011).
     ///
     /// When `Some`, `session.interactive.open` uses these values to spawn the
@@ -116,7 +116,7 @@ impl Default for Config {
             audit_bus: None,
             slow_subscriber_deadline: Duration::from_secs(5),
             scheduler: None,
-            config_path: None,
+            schedule_store_path: None,
             interactive_session: None,
         }
     }
@@ -861,9 +861,9 @@ pub fn start(cfg: Config) -> Result<(Handle, JoinHandle<()>), std::io::Error> {
     if let Some(h) = cfg.scheduler.clone() {
         dispatcher = dispatcher.with_scheduler_handle(h);
     }
-    // Inject the config file path when provided (T-097).
-    if let Some(p) = cfg.config_path.clone() {
-        dispatcher = dispatcher.with_config_path(p);
+    // Inject the JSON schedule store path when provided (T-115 / ADR-012).
+    if let Some(p) = cfg.schedule_store_path.clone() {
+        dispatcher = dispatcher.with_schedule_store_path(p);
     }
     // Inject the interactive-session spawn config when provided (T-105).
     if let Some(interactive_cfg) = cfg.interactive_session.clone() {
