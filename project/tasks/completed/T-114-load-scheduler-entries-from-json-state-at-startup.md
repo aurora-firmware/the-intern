@@ -1,7 +1,7 @@
 ---
 id: T-114
 title: Load scheduler entries from JSON state at startup
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-06-30'
