@@ -91,6 +91,22 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-30
+
+Implemented all five acceptance criteria in two red→green→refactor TDD cycles.
+
+**Cycle 1 (AC-1)**: Added `schedule_store_path: PathBuf` to both `BobConfig` and `RawBobConfig`, added `default_schedule_store_path_for_env` (following the same XDG pattern used by the audit-log path), and computed the default in `defaults_with_runtime_root` so it participates in figment's layered override chain. The env var `BOB_SCHEDULE_STORE_PATH` and a `schedule_store_path` key in `config.toml` both override it automatically. Two AC-1 tests cover XDG_STATE_HOME presence and HOME fallback.
+
+**Cycle 2 (AC-2/3/4/5)**: Replaced the `validate_schedule_entries` call in `load_with_sources` with a call to `bob_core::types::schedule::read_schedule_store`. A missing store returns `Ok(Vec::new())` (AC-3); malformed JSON returns `ServiceError::Configuration` which surfaces from `BobConfig::load()` before serve.rs runs (AC-4). Removed `RawScheduleEntry`, `validate_schedule_entries`, and the `schedule: Vec<RawScheduleEntry>` field from `RawBobConfig`; serde's default `#[derive(Deserialize)]` silently ignores unknown TOML fields, so any `[[schedule]]` section in `config.toml` is now ignored without error (AC-5). Retired six `[[schedule]]` TOML deserialization tests. Added five new tests: two AC-1 path-resolution tests, three AC-2/3/4 config-level tests, one AC-5 regression guard (verifying `[[schedule]]` in TOML is silently ignored), and one AC-2 serve-level wiring test confirming `cfg.schedule.entries` (now populated from the JSON store) reaches the scheduler adapter.
+
+**Trade-off considered**: Loading in `load_with_sources` (config.rs) rather than in `try_start_subsystems` (serve.rs) ensures malformed-store errors are `ServiceError::Configuration` before any actor starts. The alternative (loading in serve.rs) would have wrapped the error in `ServiceError::ServiceDown`. Loading in config.rs is consistent with the existing pattern where config values are validated once at load time.
+
+**Minor structural fix**: `shell_e2e.rs` builds `BobConfig` without the `..test_base()` shorthand and required a one-line addition for the new `schedule_store_path` field.
+
+**What remains**: Admin-RPC's `schedule.*` methods still write to the TOML `config_path` (via `write_schedule_entries`). Wiring the JSON `schedule_store_path` to admin-RPC for persistent writes is deferred to T-115 — it requires modifying the `admin_rpc::Config` struct, which is out of this task's scope.
+
+Verification note: the task's verification command must be run as two separate invocations with `--lib` — `cargo test -p bob --lib config::tests` (31 passed) and `cargo test -p bob --lib serve::tests` (32 passed); the combined single-command form does not resolve both filters. Full workspace green.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
