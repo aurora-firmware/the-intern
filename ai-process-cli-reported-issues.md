@@ -284,3 +284,22 @@ explained by `--help`, causing avoidable failures during bug creation.
 **Suggested fix.** Either (a) make `ai-team` resolve project root from
 `.ai-team.toml` regardless of cwd, or (b) document the required cwd in CLI help
 and all relevant skills.
+
+## 2026-06-30 — parallel `ai-team task new` calls assign duplicate IDs
+
+**Symptom.** Running several `ai-team task new ... --json` commands in parallel
+created two pending task files with `id: T-115`.
+
+**Reproduction.**
+```
+ai-team task new "Persist schedule RPC mutations to JSON state" --priority high --assigned-role unassigned --json
+ai-team task new "Admit scheduler firings without UUID policy entries" --priority high --assigned-role unassigned --json
+# both returned {"id": "T-115", ...}
+```
+
+**Impact.** Pending task identifiers became ambiguous and required manual
+renumbering of one generated task file.
+
+**Suggested fix.** Make task ID allocation atomic across concurrent CLI
+processes, for example by taking a project-local lock while scanning and
+creating the task file.

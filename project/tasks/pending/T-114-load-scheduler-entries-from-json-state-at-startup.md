@@ -1,0 +1,104 @@
+---
+id: T-114
+title: Load scheduler entries from JSON state at startup
+status: pending
+priority: high
+assigned-role: unassigned
+created: '2026-06-30'
+---
+
+# Load scheduler entries from JSON state at startup
+
+<!--
+Task Quality Rules (see the new-task skill for full details):
+  - Atomic — one clear outcome.
+  - One-shottable — ≤ 3–4 files touched, ≤ 5 ACs, Description ≈ 20 lines.
+  - Verifiable — concrete Verification command or explicit manual steps.
+  - Self-contained — Description is enough to start without follow-up questions.
+  - EARS — every AC matches one of the five EARS patterns below.
+  - Dependency-honest — list every prior task this one reads from or modifies.
+-->
+
+## Description
+
+Wire the ADR-012 schedule-store path into `BobConfig` and startup. The scheduler
+must load entries from persistent JSON state, not from `[[schedule]]` in
+`config.toml`.
+
+Add a resolved `schedule_store_path` using `$XDG_STATE_HOME/bob/schedules.json`
+on Linux with fallback to `~/.local/state/bob/schedules.json`; keep test
+overrides consistent with the existing XDG/runtime config helpers. At startup,
+read that JSON store via the core helper from T-113 and pass those entries to
+the scheduler actor. A missing schedule store means no jobs. `config.toml`
+should no longer deserialize `[[schedule]]` as the authoritative source.
+
+## Acceptance Criteria
+
+<!-- EARS pattern reference. Every criterion must match one pattern:
+  1. Ubiquitous            — The system shall [outcome]
+  2. Event-driven          — WHEN [trigger] THE SYSTEM SHALL [outcome]
+  3. Unwanted-behaviour    — IF [fault] THEN THE SYSTEM SHALL [outcome]
+  4. State-driven          — WHILE [state] THE SYSTEM SHALL [outcome]
+  5. Optional              — WHERE [feature included] THE SYSTEM SHALL [outcome]
+
+Examples:
+  AC-1: WHEN the user submits valid credentials THE SYSTEM SHALL
+        redirect to /dashboard within 200ms.
+  AC-2: IF the password is incorrect THEN THE SYSTEM SHALL return 401
+        and display "Invalid credentials".
+  AC-3: The system shall log every authentication attempt with user id
+        and outcome.
+-->
+
+AC-1: WHEN `BobConfig::load()` runs without an explicit schedule-store override
+      THE SYSTEM SHALL resolve the Linux default schedule store to
+      `$XDG_STATE_HOME/bob/schedules.json` with the XDG fallback path when the
+      environment variable is absent.
+AC-2: WHEN `bob serve` starts THE SYSTEM SHALL initialize the scheduler adapter
+      from `schedules.json` rather than from `[[schedule]]` in `config.toml`.
+AC-3: IF the schedule store is missing THEN THE SYSTEM SHALL start with an empty
+      scheduler job table.
+AC-4: IF the schedule store exists but is malformed THEN THE SYSTEM SHALL fail
+      startup with a configuration error.
+AC-5: The system shall stop treating `[[schedule]]` in `config.toml` as the
+      scheduler source of truth.
+
+## Dependencies
+
+- `T-113` — JSON schedule-store read/write helpers.
+
+## Files to Touch
+
+- `the-intern/service/crates/bob/src/config.rs` — add schedule-store path
+  resolution and startup loading; remove or retire `[[schedule]]` config
+  deserialization tests.
+- `the-intern/service/crates/bob/src/serve.rs` — pass JSON-loaded schedule
+  entries and schedule-store path through startup wiring.
+
+## Verification
+
+```bash
+cd the-intern/service && cargo test -p bob config::tests serve::tests
+```
+
+## Work Log
+
+<!-- Mandatory. Append one entry per session boundary. Format:
+### Session N — YYYY-MM-DD
+Free-prose body: what was done this session, what was tried and
+rejected, decisions made, what remains for next session.
+
+Start every session by reading the entries below.
+The final entry serves as the handoff to the reviewer. -->
+
+## Review
+
+<!-- Reviewer: append verdict here after each review cycle.
+
+### Review Verdict — YYYY-MM-DD
+PASS | FAIL | ESCALATE
+
+- For FAIL: file, location, what is wrong, what should change.
+- For PASS: brief confirmation that both stages passed.
+- For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
+-->
