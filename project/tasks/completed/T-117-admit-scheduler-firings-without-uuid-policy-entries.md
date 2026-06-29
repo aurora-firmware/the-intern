@@ -1,7 +1,7 @@
 ---
 id: T-117
 title: Admit scheduler firings without UUID policy entries
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-06-30'
