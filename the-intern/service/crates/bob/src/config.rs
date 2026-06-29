@@ -47,6 +47,13 @@ pub struct BobConfig {
     ///
     /// An absent or empty section yields an empty entries vec (no jobs).
     pub schedule: ScheduleConfig,
+    /// Resolved path to the JSON schedule store.
+    ///
+    /// The default on Linux is `$XDG_STATE_HOME/bob/schedules.json` with
+    /// `~/.local/state/bob/schedules.json` as the XDG fallback.  Can be
+    /// overridden via the `BOB_SCHEDULE_STORE_PATH` environment variable or a
+    /// `schedule_store_path` key in `config.toml`.
+    pub schedule_store_path: PathBuf,
 }
 
 /// Validated schedule configuration — the view the rest of the service uses.
@@ -104,6 +111,7 @@ impl BobConfig {
             schedule: ScheduleConfig {
                 entries: Vec::new(),
             },
+            schedule_store_path: PathBuf::new(),
         }
     }
 }
@@ -175,6 +183,7 @@ impl BobConfig {
             // can hot-reload from the same file on Handle::reload().
             config_path: config_path.clone(),
             schedule,
+            schedule_store_path: raw.schedule_store_path,
         };
 
         cfg.validate()
@@ -284,6 +293,9 @@ struct RawBobConfig {
     /// Raw schedule entries from `[[schedule]]` TOML; absent section → empty vec.
     #[serde(default)]
     schedule: Vec<RawScheduleEntry>,
+    /// Resolved path to the JSON schedule store.  Set from the computed default
+    /// in `defaults_with_runtime_root` and overrideable via `BOB_SCHEDULE_STORE_PATH`.
+    schedule_store_path: PathBuf,
 }
 
 /// Raw deserialization form of a single `[[schedule]]` TOML entry.
@@ -590,6 +602,7 @@ fn defaults_with_runtime_root(
 ) -> RawBobConfig {
     let monitoring_audit_log_path = default_monitoring_audit_log_path_for_env(env, uid);
     let extension_path = default_extension_path_for_env(env, uid);
+    let schedule_store_path = default_schedule_store_path_for_env(env, uid);
 
     RawBobConfig {
         admin_sock_path: runtime_root.join("admin.sock"),
@@ -612,6 +625,7 @@ fn defaults_with_runtime_root(
             default_tail_filters: Some(default_tail_filters()),
         },
         schedule: Vec::new(),
+        schedule_store_path,
     }
 }
 
@@ -680,6 +694,36 @@ fn default_extension_path_for_env(env: &BTreeMap<String, String>, uid: u32) -> P
         });
 
     data_root.join("bob").join("extensions").join("bob.ts")
+}
+
+/// Resolves the default JSON schedule-store path from the environment.
+///
+/// On Linux, the path is `$XDG_STATE_HOME/bob/schedules.json`.  When
+/// `XDG_STATE_HOME` is absent, the XDG fallback `$HOME/.local/state/bob/schedules.json`
+/// is used.  On macOS, follows the same pattern as the audit log: prefers
+/// `XDG_STATE_HOME` then `$HOME/Library/Application Support`.  When both
+/// variables are absent, falls back to a temp-directory path to remain usable
+/// in test environments without a home directory.
+fn default_schedule_store_path_for_env(env: &BTreeMap<String, String>, uid: u32) -> PathBuf {
+    let state_root = if cfg!(target_os = "macos") {
+        env.get("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                env.get("HOME")
+                    .map(|home| Path::new(home).join("Library").join("Application Support"))
+            })
+            .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-state-{uid}")))
+    } else {
+        env.get("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                env.get("HOME")
+                    .map(|home| Path::new(home).join(".local").join("state"))
+            })
+            .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-state-{uid}")))
+    };
+
+    state_root.join("bob").join("schedules.json")
 }
 
 fn default_config_path(sources: &ConfigSources) -> PathBuf {
@@ -1394,6 +1438,58 @@ audit_log_path = "{}"
         }
 
         fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    // ── AC-1 (T-114): schedule_store_path resolved from XDG_STATE_HOME ──────────
+
+    #[test]
+    fn resolves_schedule_store_path_from_xdg_state_home_when_env_var_is_set() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let state_home = temp.path().join("xdg-state");
+
+        let config = load_with_env_overrides([(
+            "XDG_STATE_HOME",
+            state_home
+                .to_str()
+                .expect("temporary state-home path should be valid UTF-8"),
+        )])
+        .expect("config should load");
+
+        assert_eq!(
+            config.schedule_store_path,
+            state_home.join("bob").join("schedules.json"),
+            "schedule store path must resolve to XDG_STATE_HOME/bob/schedules.json"
+        );
+    }
+
+    #[test]
+    fn resolves_schedule_store_path_from_home_fallback_when_xdg_state_home_is_absent() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let home = temp.path().join("home");
+
+        let config = load_with_env_overrides([(
+            "HOME",
+            home.to_str()
+                .expect("temporary home path should be valid UTF-8"),
+        )])
+        .expect("config should load");
+
+        let expected = if cfg!(target_os = "macos") {
+            home.join("Library")
+                .join("Application Support")
+                .join("bob")
+                .join("schedules.json")
+        } else {
+            home.join(".local")
+                .join("state")
+                .join("bob")
+                .join("schedules.json")
+        };
+
+        assert_eq!(
+            config.schedule_store_path, expected,
+            "schedule store path must fall back to HOME/.local/state/bob/schedules.json on Linux"
+        );
     }
 
     // ── AC-1 (T-092): valid [[schedule]] entry deserialises into ScheduleEntry ─
