@@ -178,14 +178,32 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
             let persistence_store = Arc::clone(&persistence_store);
             let audit_sink = Arc::clone(&audit_sink);
             async move {
-                requests_handler::run_preflight(
-                    event,
-                    Some(&context),
-                    &preflight_snapshot,
-                    persistence_store.as_ref(),
-                    audit_sink.as_ref(),
-                )
-                .await;
+                if event.kind == DeliveryKind::Periodic {
+                    // ADR-012: scheduled jobs are admitted by the local Unix trust
+                    // boundary, not by scheduler-derived UserId checks against
+                    // [policy].admitted_users.  A schedule entry present in the
+                    // trusted JSON schedule store is sufficient authorization; no
+                    // additional UserId admission evaluation is performed here.
+                    //
+                    // The request context (job id in context_id, channel/user ids)
+                    // is preserved for audit attribution by the scheduler-adapter.
+                    if let Err(err) = persistence_store.enqueue(event).await {
+                        tracing::warn!(
+                            error = %err,
+                            job_id = context.context_id.as_deref().unwrap_or("<unknown>"),
+                            "scheduler: periodic event persistence enqueue failed"
+                        );
+                    }
+                } else {
+                    requests_handler::run_preflight(
+                        event,
+                        Some(&context),
+                        &preflight_snapshot,
+                        persistence_store.as_ref(),
+                        audit_sink.as_ref(),
+                    )
+                    .await;
+                }
             }
         },
         rh_cancel_rx,
@@ -1553,6 +1571,141 @@ pub mod tests {
                 "idle dispatcher must respond to shutdown signal before the drain deadline expires"
             );
         }
+    }
+
+    // T-117 AC-1: WHEN a valid scheduled job fires and admitted_users is empty
+    // THE SYSTEM SHALL admit the scheduler firing into the periodic dispatch path.
+    //
+    // Periodic events submitted through the requests-handler must bypass the
+    // UserId admission check (ADR-012) and reach pi-agent via the periodic
+    // dispatcher, even when no users are listed in admitted_users.
+    //
+    // The test submits through the requests-handler (not directly to persistence)
+    // to exercise the admission-bypass path, then waits for the prompt to appear
+    // in the worker output — proving the event traversed the full path:
+    // requests-handler → (bypass) → persistence → dispatcher → pi-agent.
+    #[tokio::test(flavor = "current_thread")]
+    async fn periodic_event_is_admitted_and_reaches_pi_agent_with_empty_admitted_users() {
+        use bob_core::types::{ChannelId, RequestContext};
+
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let record_file = tmp.path().join("received_prompt.txt");
+        let record_file_str = record_file.to_string_lossy().into_owned();
+
+        // Worker script: write the incoming message to a file and respond with success.
+        let worker_script = format!(
+            "while IFS= read -r line; do \
+             id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+             msg=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"message\":\"\\([^\"]*\\)\".*/\\1/p'); \
+             printf '%s\\n' \"$msg\" >> \"{}\"; \
+             printf '{{\"id\":\"%s\",\"type\":\"response\",\"success\":true}}\\n' \"$id\"; \
+             done",
+            record_file_str
+        );
+
+        // BobConfig::test_base() already has policy: PolicyConfig::default() which
+        // yields empty admitted_users (deny-all for normal admission-gated requests).
+        let cfg = BobConfig {
+            admin_sock_path: tmp.path().join("admin.sock"),
+            extension_sock_path: tmp.path().join("extension.sock"),
+            extension_path: existing_extension_path(),
+            pi_agent_command: "sh".to_string(),
+            pi_agent_args: vec!["-c".to_string(), worker_script],
+            pi_agent_warm_pool_size: 1,
+            pi_agent_max_processes: 2,
+            request_queue_capacity: 16,
+            shutdown_drain_deadline: Duration::from_millis(500),
+            shutdown_reap_deadline: Duration::from_millis(250),
+            ..BobConfig::test_base()
+        };
+
+        let runtime = start_subsystems(&cfg).expect("subsystems must start");
+
+        // Submit a Periodic event via the requests-handler.  The preflight closure
+        // must bypass UserId admission (ADR-012) and enqueue directly to persistence.
+        let event = InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "adr012-scheduler-test-prompt".to_owned(),
+        };
+        // Context has attribution fields (job_id, channel, scheduler user) for AC-3.
+        let ctx = RequestContext {
+            sender: UserId::new(), // not in admitted_users — admission must be bypassed
+            source: ChannelId::new(),
+            context_id: Some("test-job".to_owned()),
+            reply_address: None,
+        };
+        runtime
+            ._requests_handler
+            .submit_event(event, ctx)
+            .await
+            .expect("submit must succeed");
+
+        // Wait for the periodic dispatcher to pick up the event and forward to pi-agent.
+        // The worker writes the message to record_file on each successful send_prompt call.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if record_file.exists() {
+                    let content = std::fs::read_to_string(&record_file).unwrap_or_default();
+                    if content.contains("adr012-scheduler-test-prompt") {
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect(
+            "periodic event must reach pi-agent even with empty admitted_users (ADR-012 bypass)",
+        );
+
+        run_shutdown_protocol(runtime, &cfg).await;
+    }
+
+    // T-117 AC-5: IF a non-scheduler admission-gated request has a sender absent
+    // from admitted_users THEN THE SYSTEM SHALL continue to deny that request.
+    // Non-periodic events still go through the normal pre-flight admission gate.
+    #[tokio::test(flavor = "current_thread")]
+    async fn sync_event_from_sender_absent_from_admitted_users_is_denied() {
+        use bob_core::types::{ChannelId, RequestContext};
+
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let mut cfg = test_cfg_with_sockets(&tmp);
+        // Admit exactly one user; the event will come from a different user.
+        let admitted_user = UserId::new();
+        cfg.policy.admitted_users = vec![admitted_user.to_string()];
+
+        let runtime = start_subsystems(&cfg).expect("subsystems must start");
+
+        let event = InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "from non-admitted user".to_owned(),
+        };
+        let ctx = RequestContext {
+            sender: UserId::new(), // not in admitted_users
+            source: ChannelId::new(),
+            context_id: None,
+            reply_address: None,
+        };
+        runtime
+            ._requests_handler
+            .submit_event(event, ctx)
+            .await
+            .expect("submit must succeed");
+
+        // Give the preflight actor time to process the event.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let result = runtime
+            ._persistence
+            .dequeue_next()
+            .await
+            .expect("dequeue should not fail");
+        assert!(
+            result.is_none(),
+            "sync event from non-admitted sender must not reach persistence"
+        );
+
+        run_shutdown_protocol(runtime, &cfg).await;
     }
 
     // AC-3 (T-068): the pre-flight check uses the per-request context, not a
