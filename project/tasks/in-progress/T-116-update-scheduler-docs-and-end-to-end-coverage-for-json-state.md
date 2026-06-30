@@ -130,3 +130,36 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-30
+
+FAIL
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1: PASS. `operator-guide/index.md` has a new "Schedule store (`schedules.json`)" subsection that documents `schedules.json` as the authoritative source, the Linux XDG state path (`$XDG_STATE_HOME/bob/schedules.json`), and the fallback (`~/.local/state/bob/schedules.json`).
+- AC-2: PASS. The old "Policy admission for scheduled jobs" subsection (which instructed operators to copy scheduler-derived UUIDs into `[policy].admitted_users`) was entirely replaced. The new "Admission of scheduled jobs" subsection explicitly states: "Do not add scheduler-derived UUIDs to `[policy].admitted_users` for scheduled jobs."
+- AC-3: PASS. The operator guide's admission section states scheduled jobs are admitted by the Unix trust boundary and the trusted schedule store, and explicitly states every `tool_call` still goes through S-004 action authorization. The architecture-overview paragraph was updated to match (ADR-012 reference, no per-job UUID required, S-004 applies).
+- AC-4: PASS. The e2e test `schedule_entry_from_json_store_is_delivered_when_admitted_users_is_empty` writes a `schedules.json`, reads it back via `read_schedule_store`, uses an empty `PolicyConfig` (deny-all), and asserts byte-for-byte delivery to the fake sh worker. `cargo test --test scheduler_execution_e2e -- --nocapture` passes (1 test, 0 failed). `cargo test --workspace` passes (all 505+ tests across all crates, 0 failed).
+- AC-5: FAIL. See below.
+
+**AC-5 failure — active `[[schedule]]` reference in extension-author-guide**
+
+Grep on the task branch confirms one remaining active (non-historical) `[[schedule]]` reference:
+
+- **File:** `the-intern/docs/src/extension-author-guide/index.md`
+- **Line:** 153
+- **Current text:** `It creates one task per configured \`[[schedule]]\` entry and, on each cron tick, submits:`
+- **What is wrong:** The "Shipped scheduler adapter" section describes current adapter behavior. Stating that the adapter creates tasks "per configured `[[schedule]]` entry" presents `[[schedule]]` in `config.toml` as the active scheduler source of truth. This is factually incorrect — the adapter now reads from `schedules.json` — and is active guidance for extension authors, not historical content. AC-5 requires that such a reference be updated or marked as historical.
+- **What should change:** Update line 153 to name the JSON schedule store as the source. For example: `It creates one task per entry in the JSON schedule store (\`schedules.json\`) and, on each cron tick, submits:`
+
+The operator-guide and architecture-overview `[[schedule]]` references were all correctly updated or explicitly marked as deprecated/historical on the task branch. Only this one line in the extension-author-guide remains.
+
+**Stage 2 — Code Quality (checked, no additional issues)**
+
+- The e2e test is well-structured: isolated temp dir, explicit JSON store write-then-read roundtrip mirroring production startup, production-like requests-handler closure (Periodic bypasses pre-flight), clear assertion messages, and a correct teardown sequence.
+- The doc changes are accurate and internally consistent across operator-guide and architecture-overview.
+- `cargo fmt --check` is clean. `mdbook build` succeeds (non-blocking mermaid version warning only).
+- No unexpected files modified; no dead code or commented-out blocks added.
+
+**Required fix before re-submit:** Update `the-intern/docs/src/extension-author-guide/index.md` line 153 to remove the active `[[schedule]]` reference (update to name `schedules.json` or mark as historical). This is the only blocking issue.
