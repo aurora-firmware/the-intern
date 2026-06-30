@@ -266,3 +266,29 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-06-30
+
+PASS
+
+**Stage 1 — Diagnosis and fix criteria: passed.**
+
+Diagnosis Log contains two complete entries. Diagnosis 1 recorded the symptom and isolated the fault to `handleInboundLine`. Diagnosis 2 confirmed reproduction via `cargo test -p extension-ipc` (the existing test `connection_authz_frame_returns_deny_verdict_with_same_session` asserts `reply["verdict"]["allow"] == false` and `reply["verdict"]["reason"].is_string()`, directly demonstrating the Rust side has always used the structured shape), traced the wire mismatch to `framing.rs` and `bob.ts` lines 149-153, and produced a concrete three-part fix contract.
+
+The fix addresses each element of that contract:
+- `handleInboundLine` now validates `frame.verdict` as a non-null, non-array object with a boolean `allow` field before resolving an outcome. `allow === true` resolves `{kind:"allow"}`; `allow === false` resolves `{kind:"block", reason}` carrying the string reason or null.
+- Every malformed shape (wrong kind, wrong session, non-object verdict, non-boolean `allow`) resolves `{kind:"error"}` — fail-closed is fully preserved on the error/transport path.
+- `handleToolCall` passes `outcome.reason ?? "blocked by policy"` as the block reason, surfacing the actual policy reason rather than the previous hardcoded string.
+- The stale doc comment on line 18 was corrected from the string encoding to the structured `{allow, reason}` shape.
+
+No Rust changes were made; `cargo test -p extension-ipc` (31 passed, 0 failed) confirms no regression. `npm test` (33 passed, 0 failed) confirms all TypeScript tests including the three new B-016 regression tests pass. `cargo test -p bob shell_e2e` and the live manual steps require UDS peer credentials and a live `pi` binary; they could not be run in this sandbox and are correctly noted as deferred in the Work Log.
+
+**Stage 2 — Code quality: passed.**
+
+`VerdictOutcome` is a well-formed discriminated union on `kind`. The validation in `handleInboundLine` uses explicit early returns for each invalid shape, making the logic easy to audit. The `typeof verdictObj.allow !== "boolean"` guard correctly rejects both string-encoded booleans (the original defect vector) and any other non-boolean. The `reason` field is safely extracted: only a `string` reason is threaded; everything else normalises to `null`, which `handleToolCall` then replaces with the fallback string.
+
+The three regression tests genuinely exercise the defect. Tests B-016-001 and B-016-002 use `sendRaw` to inject the exact Rust wire format, which would have triggered the original `resolve("error")` path before the fix. B-016-001 asserts `block` is falsy; B-016-002 asserts both `block:true` and that `result.reason` equals the exact policy reason string (not the hardcoded fallback) — this is the critical correctness assertion for the policy reason threading. B-016-003 sends `{allow:"yes"}` and asserts `block:true` plus a warning, confirming fail-closed survives the malformed-verdict case.
+
+Test isolation is sound: `beforeEach` creates a fresh temp dir and socket path for each test; `afterEach` removes it and cleans env vars. Each test creates its own server and destroys it before returning.
+
+No unrelated code was changed. The fix is minimal and confined to the three planned parts from the Diagnosis 2 contract.
