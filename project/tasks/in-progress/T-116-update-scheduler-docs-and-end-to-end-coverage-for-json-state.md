@@ -119,6 +119,14 @@ Considered updating the two existing e2e tests in-place rather than replacing th
 
 The extension-author-guide's "Shipped scheduler adapter" paragraph (`the-intern/docs/src/extension-author-guide/index.md`, line 153) still says "per configured `[[schedule]]` entry". This file is not in the task's Files to Touch list and was left unmodified; it is active guidance for adapter authors that arguably falls under AC-5 ("repository documentation still references `[[schedule]]` ... SHALL update or mark as historical"). Reviewer should decide whether this must be addressed within T-116 (e.g. a small in-scope fix or follow-up task). `cargo test --test scheduler_execution_e2e` passes (1 test); `cargo test --workspace` green; `cargo fmt --check` clean; `mdbook build` succeeded (one non-blocking mdbook-mermaid version-mismatch warning). Committed as `docs(operator-guide): update scheduler docs and e2e for JSON state` (`1732d5f`).
 
+### Session 2 — 2026-06-30
+
+**What changed.** The Reviewer (cycle 1) identified one remaining active `[[schedule]]` source-of-truth reference in `the-intern/docs/src/extension-author-guide/index.md` at line 153. The sentence "It creates one task per configured `[[schedule]]` entry and, on each cron tick, submits:" was updated to "It creates one task per entry in the JSON schedule store (`schedules.json`) and, on each cron tick, submits:". The surrounding bullet list and all other wording were left intact; only the source-of-truth noun phrase was corrected.
+
+**Sweep results.** After the edit, `grep -rn "\[\[schedule\]\]" the-intern/docs/src` returned exactly two hits, both in `operator-guide/index.md` (lines ~395–397) inside the explicit migration callout box headed "Note on `[[schedule]]` in `config.toml`:" which states the TOML table is "no longer read by `bob serve`" and redirects to `schedules.json`. These are correctly marked historical and required no change.
+
+**Verification.** `mdbook build` completed without errors (pre-existing mdbook-mermaid version warning only). `cargo test --test scheduler_execution_e2e` passed (1 test, 0 failures). Committed as `docs(extension-author-guide): name json schedule store as scheduler source` (`67eb991`).
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
