@@ -143,14 +143,17 @@ types. For each trigger, an adapter constructs:
 - a submission through the requests-handler `IntakeHandle`.
 
 Adapters do not evaluate admission or action policy. The Requests Handler owns
-pre-flight admission for queue-borne requests, while the extension and policy
-engine enforce tool-call authorization inside supervised pi sessions.
+pre-flight admission for *admission-gated* queue-borne requests, while the
+extension and policy engine enforce tool-call authorization inside supervised pi
+sessions. Not every adapter is admission-gated: under ADR-012 the scheduler's
+`Periodic` events are admitted by trusted schedule-store membership and skip
+pre-flight admission (see below).
 
 ### Shipped scheduler adapter
 
 `the-intern/service/crates/scheduler-adapter/` is the concrete implementation
 shipped with bob. The actor always starts with `bob serve`. It creates one task
-per configured `[[schedule]]` entry and, on each cron tick, submits:
+per entry in the JSON schedule store (`schedules.json`) and, on each cron tick, submits:
 
 - `DeliveryKind::Periodic` with the configured prompt as its payload;
 - stable `UserId` and `ChannelId` values derived from the job id;
@@ -159,6 +162,12 @@ per configured `[[schedule]]` entry and, on each cron tick, submits:
 
 Reloading the schedule rebuilds the live job table. A failed intake submission
 is logged and does not terminate the scheduler loop.
+
+Under ADR-012 the scheduler is **not admission-gated**: a job present in the
+trusted schedule store is admitted for firing, so its `Periodic` events bypass
+pre-flight admission and do **not** require a `[policy].admitted_users` entry.
+The stable `UserId` is retained only for audit attribution, not for admission.
+Every resulting `tool_call` is still subject to the S-004 action gate.
 
 ### Application identity
 

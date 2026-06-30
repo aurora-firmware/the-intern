@@ -187,9 +187,9 @@ shell where you run client commands too.
 ## Channel adapters and interactive chat
 
 The scheduler is the shipped channel adapter. It starts with `bob serve` and
-turns each due `[[schedule]]` entry into a periodic request. There is no
-adapter-level enable flag: an empty schedule means the actor remains idle, and
-one or more entries make it fire prompts at their configured times. See
+turns each due entry in the JSON schedule store into a periodic request. There
+is no adapter-level enable flag: an empty schedule means the actor remains idle,
+and one or more entries make it fire prompts at their configured times. See
 [Scheduled jobs](#scheduled-jobs) for the entry format and runtime management
 commands.
 
@@ -273,20 +273,34 @@ affect what is delivered to live subscribers.
 
 ## Policy basics
 
-`bob` applies two deterministic authorization gates to every request. Both are
-evaluated by the `policy-control` subsystem against an in-memory ruleset loaded
-from your TOML config. The default behavior when no `[policy]` section is present
-is **deny all**.
+`bob` has two deterministic authorization gates, both evaluated by the
+`policy-control` subsystem against an in-memory ruleset loaded from your TOML
+config. The default behavior when no `[policy]` section is present is **deny all**
+for the action gate. The two gates apply at different points and to different
+traffic:
+
+- **Pre-flight admission** applies to *admission-gated* queue-borne requests
+  (e.g. external channel adapters). It does **not** apply to scheduled jobs —
+  under ADR-012 scheduler `Periodic` events are admitted by trusted
+  schedule-store membership and are not checked against `admitted_users`, so an
+  empty `admitted_users` list does not block scheduled prompt delivery.
+  Interactive `bob chat` likewise does not run pre-flight admission.
+- **The tool-call action gate** applies to *every* tool call from *every*
+  supervised pi-agent session, including sessions started by scheduled jobs and
+  interactive chat. There is no bypass for this gate.
 
 For the architectural rationale and a detailed description of how the policy
 engine works, see the [Architecture Overview](../architecture-overview/index.md).
 
 ### Pre-flight admission
 
-When a request enters the queue, `bob` checks the sender's identity against the
-`admitted_users` list. Requests from identities not in the list are dropped
-before any further processing. A denied `verdict` audit record is appended for
-each blocked request with a reason that starts with `preflight denied:`.
+When an *admission-gated* request enters the queue, `bob` checks the sender's
+identity against the `admitted_users` list. Requests from identities not in the
+list are dropped before any further processing. A denied `verdict` audit record
+is appended for each blocked request with a reason that starts with `preflight
+denied:`. Scheduled jobs are not admission-gated (see the note above): they are
+admitted by trusted schedule-store membership and do not require an
+`admitted_users` entry.
 
 Configure the admitted users in the `[policy]` section:
 
@@ -346,27 +360,64 @@ fire while the service is running, so every execution has a full audit trail.
 Operators who need guaranteed delivery across restarts should keep bob running
 under a process supervisor such as systemd.
 
-### Configuring scheduled jobs in `config.toml`
+### Schedule store (`schedules.json`)
 
-Add one `[[schedule]]` table per job. Each entry requires three fields:
+`schedules.json` is the authoritative source for all scheduled jobs. `bob serve`
+reads it at startup; `bob schedule add` and `bob schedule remove` persist
+changes to it; and `bob schedule reload` applies edits you made to it directly.
+
+**Default path (Linux):**
+
+```
+$XDG_STATE_HOME/bob/schedules.json
+```
+
+When `XDG_STATE_HOME` is not set, the XDG fallback is:
+
+```
+~/.local/state/bob/schedules.json
+```
+
+You can override the path in `config.toml`:
+
+```toml
+schedule_store_path = "/opt/bob/state/schedules.json"
+```
+
+Or set it via environment variable: `BOB_SCHEDULE_STORE_PATH`.
+
+**File format:** The schedule store is a JSON document with this shape:
+
+```json
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "check-email",
+      "cron": "*/15 * * * *",
+      "prompt": "Check the inbox and summarise any unread messages."
+    }
+  ]
+}
+```
+
+The file is created with owner-only permissions (`0600`) and updated atomically
+(written to a temp file in the same directory, then renamed), so a partial write
+never corrupts the active schedule. An absent store is treated as empty — no
+jobs are scheduled until entries are added.
+
+**Note on `[[schedule]]` in `config.toml`:** The `[[schedule]]` TOML table is
+no longer read by `bob serve`. Entries written to `config.toml` under
+`[[schedule]]` are silently ignored. Use `schedules.json` and the
+`bob schedule` subcommands instead.
+
+Each entry in the store requires three fields:
 
 | Field    | Type   | Description                                    |
 |----------|--------|------------------------------------------------|
 | `id`     | string | Unique identifier for the job (non-empty)      |
 | `cron`   | string | 5-field cron expression (see below)            |
 | `prompt` | string | The pi-agent prompt text to run on each tick   |
-
-Example — check email every 15 minutes:
-
-```toml
-[[schedule]]
-id     = "check-email"
-cron   = "*/15 * * * *"
-prompt = "Check the inbox and summarise any unread messages."
-```
-
-You can add multiple `[[schedule]]` blocks. An absent or empty `[[schedule]]`
-section means no jobs are scheduled (the scheduler starts but fires nothing).
 
 #### Cron expression format
 
@@ -411,8 +462,8 @@ bob schedule list --json
 
 #### `bob schedule add`
 
-Register a new job and persist it to the config file. The job becomes active
-immediately after the command succeeds:
+Register a new job and persist it to the JSON schedule store. The job becomes
+active immediately after the command succeeds:
 
 ```bash
 bob schedule add \
@@ -431,8 +482,8 @@ Flags:
 
 #### `bob schedule remove`
 
-Remove an existing job by its ID. The removal is persisted to the config file
-and takes effect immediately:
+Remove an existing job by its ID. The removal is persisted to the JSON schedule
+store and takes effect immediately:
 
 ```bash
 bob schedule remove --id "check-email"
@@ -440,53 +491,30 @@ bob schedule remove --id "check-email"
 
 #### `bob schedule reload`
 
-Re-read the `[[schedule]]` section of the config file and replace the active
-job list with the updated contents. Use this after editing `config.toml` by hand:
+Re-read `schedules.json` and replace the active job list with its contents.
+Use this after editing `schedules.json` directly:
 
 ```bash
 bob schedule reload
 ```
 
-### Policy admission for scheduled jobs
+### Admission of scheduled jobs
 
-When a scheduled job's cron expression fires, the scheduler submits a `periodic`
-request to the internal queue. That request passes through **pre-flight policy
-admission** before pi-agent receives the prompt — the same gate that applies to
-every other incoming request. If the scheduler's derived identity is not present
-in `[policy].admitted_users`, the request is denied and a denied `verdict`
-audit record is appended; pi-agent never sees the prompt.
+Scheduled jobs are admitted by the **Unix trust boundary** and the trusted
+schedule store — not by per-job UUID entries in `[policy].admitted_users`.
+Because `schedules.json` is a local file owned by the operator (mode `0600`,
+written only by `bob` itself or an authorized operator), a valid entry in it is
+sufficient authorization for a periodic prompt to reach the agent.
 
-**Obtaining the scheduler UserId**
+**Do not add scheduler-derived UUIDs to `[policy].admitted_users` for scheduled
+jobs.** Empty or absent `admitted_users` does not block scheduled prompt
+delivery.
 
-Each job's `UserId` is derived deterministically from the job's `id` field. It
-does not change across reloads or process restarts. When `bob serve` registers a
-job — at startup, after `bob schedule add`, or after `bob schedule reload` — it
-logs an `INFO`-level line containing the job's fixed identities:
-
-```
-scheduler-adapter job registered — fixed channel/user IDs for policy rules
-    job_id="check-email" user_id="<UUID>" channel_id="<UUID>" cron="*/15 * * * *"
-```
-
-Copy the UUID from the `user_id` field and add it to `[policy].admitted_users`
-in your config file:
-
-```toml
-[policy]
-admitted_users = [
-    "<UUID from user_id field in the log>",
-]
-```
-
-Then apply the change without restarting the service:
-
-```bash
-bob policy reload
-```
-
-Without that entry every tick of the job is silently denied and no pi-agent
-prompt is sent. Each denial produces a denied `verdict` audit record (see
-[Observability for scheduled jobs](#observability-for-scheduled-jobs) below).
+Every `tool_call` produced during a scheduled session still goes through S-004
+action authorization: the bob extension intercepts each tool invocation and
+sends it to the policy engine for evaluation against `[[policy.action_rules]]`.
+Only explicitly allowed tools execute; everything else is blocked. This gate is
+independent of admission and cannot be bypassed by the scheduler.
 
 ### Observability for scheduled jobs
 
@@ -501,11 +529,12 @@ expression cannot be parsed (the job is skipped and does not fire), when a
 periodic event cannot be submitted to the queue, and when session acquisition or
 prompt delivery fails inside the periodic dispatcher.
 
-**Policy verdict audit records** — every pre-flight decision for a scheduled
-job is appended to the audit log as a `verdict` record. A job whose `UserId` is
-not in `[policy].admitted_users` produces a denied verdict with `allow: false`
-and a reason that starts with `preflight denied:`; an admitted job produces an
-allow verdict. Stream verdict records live with:
+**Policy verdict audit records** — scheduled jobs bypass pre-flight admission,
+so no pre-flight `verdict` record is written for periodic prompts. Tool-call
+authorization verdicts are still written for every tool invocation that occurs
+during a scheduled session: `allow: true` when the tool matches a
+`[[policy.action_rules]]` rule, and `allow: false` when it does not. Stream
+them live with:
 
 ```bash
 bob audit tail --filter verdicts

@@ -20,8 +20,9 @@ The forces at play:
   to process. If bob is not running, there is no queue, no pi-agent, and no
   meaningful target for a fired job.
 - The operator already manages the schedule through bob (`bob schedule`
-  subcommands, `bob.toml`). Splitting control across bob and the OS scheduler
-  creates two separate management surfaces for the same concern.
+  subcommands and bob-owned persistent schedule state). Splitting control
+  across bob and the OS scheduler creates two separate management surfaces for
+  the same concern.
 - A job that fires outside the service lifetime either fails silently (the
   invocation errors out) or produces partial side-effects with no audit trail in
   the monitoring layer.
@@ -35,13 +36,18 @@ cron tick loop. If bob is down when a job would have fired, that job is skipped
 and not replayed when the service restarts. The operator controls the full
 schedule lifecycle through bob.
 
+> **Amended (ADR-012, 2026-06-30).** The scheduler remains bob-internal, but the
+> persistent source of schedule state is no longer `bob.toml`. Schedule entries
+> live in the dedicated JSON state store defined by ADR-012; `bob schedule`
+> remains the operator control surface.
+
 ## Consequences
 
 ### Positive
 
-- A single control surface: the operator uses `bob schedule` and `bob.toml` for
-  all schedule management; no OS-level files need to be created, rotated, or
-  removed alongside the service.
+- A single control surface: the operator uses `bob schedule` and bob-owned
+  schedule state for all schedule management; no OS-level files need to be
+  created, rotated, or removed alongside the service.
 - Job lifecycle is tied to service health by design: no invocation reaches
   pi-agent unless bob is running, eliminating a class of race conditions and
   partial failures.
@@ -75,9 +81,9 @@ runs `bob run-job <id>` (or similar) at the configured time. Bob is only a job
 runner, not a scheduler.
 **Rejected because:** Jobs fire even when the bob service is down, producing
 failed invocations with no queue, no pi-agent, and no audit trail. The operator
-must manage two separate control surfaces (crontab entries and `bob.toml`),
-keeping them in sync manually. There is no natural place to enforce policy
-pre-flight checks on externally-fired jobs.
+must manage two separate control surfaces (crontab entries and bob schedule
+state), keeping them in sync manually. There is no natural place to enforce the
+local scheduler admission contract on externally-fired jobs.
 
 ### Alternative B: Hybrid — system cron triggers bob, which checks service health
 

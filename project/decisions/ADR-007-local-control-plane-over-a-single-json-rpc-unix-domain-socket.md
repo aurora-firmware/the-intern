@@ -74,10 +74,16 @@ already exists. Interactive `bob chat` now uses `admin.sock` as a control-plane
 request to open and attach to a supervised pi session; chat turns do not traverse
 the queue-borne Requests Handler → Policy Control path (ADR-010).
 
-**Configuration as live state.** Some methods mutate `bob.toml` and signal the
-owning subsystem to reload — `schedule.*` is the worked example, with the
-`[schedule]` section as the source of truth (ADR-006). For these subsystems
-configuration is runtime-mutable, persistent state, not just startup input.
+**Configuration and persistent state.** Some methods apply operator changes to
+live subsystems and signal the owning subsystem to reload. `policy.reload`
+re-reads static config; `schedule.*` mutates the dedicated schedule state store
+defined by ADR-012 and reloads the scheduler. Mutable runtime state is kept out
+of `config.toml` unless an owning ADR explicitly says otherwise.
+
+> **Amended (ADR-012, 2026-06-30).** The original `schedule.*` example used
+> `[schedule]` in `bob.toml` as its source of truth. ADR-012 replaces that with
+> `$XDG_STATE_HOME/bob/schedules.json` and keeps the same admin-socket method
+> family as the authorized mutation path.
 
 ## Consequences
 

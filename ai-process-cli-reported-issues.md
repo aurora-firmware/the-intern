@@ -3,6 +3,28 @@
 Running log of bugs and friction observed while using the `ai-team` CLI and the
 slash-skills that wrap it. New entries at the top.
 
+## 2026-06-30 — Developer subagent edited lifecycle task file on the task branch
+
+**Symptom.** During `dev-loop` processing of T-115, the Developer subagent
+committed the Work Log into the canonical task file *and* added a `completed/`
+copy of it on the task branch (commit `4540185`), despite the dev-loop Developer
+prompt stating "Do not edit the task lifecycle file on the task branch." The
+git model reserves lifecycle state for `dev-agent`; `integrate` Step 3.4 would
+have hard-stopped on the lifecycle modification.
+
+**Reproduction.** Spawn the Developer via dev-loop Step 5; the agent returns a
+Work Log but also writes it to disk and `git add`s the task file on the task
+branch.
+
+**Impact.** The loop had to reset the source branch to the source-only commit
+and re-record the Work Log on `dev-agent` before review/integration could
+proceed. Left unhandled, integration would have stopped.
+
+**Suggested fix.** Either (a) strengthen the Developer agent definition to
+forbid any `git add`/commit under `project/tasks/` and `project/bugs/`, or
+(b) have dev-loop pass the Developer a guard reminder and/or strip lifecycle
+changes from the source branch automatically before review.
+
 ## 2026-06-23 — `integrate` post-merge regression check uses task-scoped verification, missing cross-crate breaks
 
 **Symptom.** B-013 was a red baseline on `dev-agent`: T-101 added a fail-closed
@@ -284,3 +306,22 @@ explained by `--help`, causing avoidable failures during bug creation.
 **Suggested fix.** Either (a) make `ai-team` resolve project root from
 `.ai-team.toml` regardless of cwd, or (b) document the required cwd in CLI help
 and all relevant skills.
+
+## 2026-06-30 — parallel `ai-team task new` calls assign duplicate IDs
+
+**Symptom.** Running several `ai-team task new ... --json` commands in parallel
+created two pending task files with `id: T-115`.
+
+**Reproduction.**
+```
+ai-team task new "Persist schedule RPC mutations to JSON state" --priority high --assigned-role unassigned --json
+ai-team task new "Admit scheduler firings without UUID policy entries" --priority high --assigned-role unassigned --json
+# both returned {"id": "T-115", ...}
+```
+
+**Impact.** Pending task identifiers became ambiguous and required manual
+renumbering of one generated task file.
+
+**Suggested fix.** Make task ID allocation atomic across concurrent CLI
+processes, for example by taking a project-local lock while scanning and
+creating the task file.

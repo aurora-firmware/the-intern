@@ -34,15 +34,21 @@ Internally `bob serve` uses an **in-process bounded request queue** to decouple 
 channel adapters from the Requests Handler. Each bounded channel is a typed
 backpressure point — a full queue is observable, not a silent stall.
 
-Persistence in v1 is **in-memory** for the inbound queue and session state. The audit
-log is the only durable store (an append-only JSONL file on disk).
+Persistence in v1 is **in-memory** for the inbound queue and session state. Durable
+on-disk state is limited to two stores: the **audit log** (an append-only JSONL file)
+and the scheduler's **JSON schedule store** (`schedules.json`), which is the source of
+truth for scheduled jobs and survives restart (see ADR-012).
 
 ---
 
 ## Request Lifecycle
 
-Every queue-borne request follows the same path through `bob serve`. The shipped
-scheduler adapter uses this path; future external adapters use it too.
+Every **admission-gated** queue-borne request follows the same path through `bob
+serve`; future external adapters use it too. The shipped scheduler adapter is the one
+exception: under ADR-012 its `Periodic` events are admitted by trusted schedule-store
+membership and **bypass pre-flight admission** (they are not checked against
+`[policy].admitted_users`), but they otherwise follow the same routing and remain
+subject to the action gate on every resulting `tool_call`.
 
 ```mermaid
 sequenceDiagram
@@ -58,6 +64,7 @@ sequenceDiagram
     Source->>CA: inbound trigger
     CA->>Q: submit InternalEvent + RequestContext
     Q->>RH: dequeue
+    Note over Q,RH: Scheduler Periodic events are pre-admitted by trusted<br/>schedule-store membership (ADR-012) and skip this step
     RH->>RH: evaluate_admission(sender)
     alt sender not admitted
         Note over RH: drop event; write denial verdict to audit log
@@ -148,9 +155,13 @@ The core never enumerates channel types. An emailed request and a scheduled trig
 look identical once they leave their adapters.
 
 **Scheduler adapter** is the shipped implementation. It starts with the service,
-maintains the configured cron job table, and submits a `Periodic` event when a job
-fires. Each job has stable sender and channel identities derived from its id, so
-pre-flight policy can address scheduled work consistently across reloads and restarts.
+reads entries from the JSON schedule store (`schedules.json` under the XDG state
+directory), maintains the active cron job table, and submits a `Periodic` event
+when a job fires. Each job has stable sender and channel identities derived from
+its id. `Periodic` events bypass pre-flight admission (ADR-012): the trusted
+schedule store is the admission gate, so no per-job UUID entry in
+`[policy].admitted_users` is required. Every resulting `tool_call` still goes
+through S-004 action authorization inside the supervised pi session.
 
 Interactive `bob chat` is not a channel adapter: it opens the direct supervised
 session described above. Email and other external adapters are not yet implemented.

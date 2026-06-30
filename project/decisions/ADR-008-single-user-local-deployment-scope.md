@@ -54,8 +54,9 @@ deployment. Concretely:
    number of application identities. The self-asserted-identity model (ADR-005)
    still carries multiple application-level identities and channels behind that
    one uid — for example a chat `sender` asserted over the socket, or the
-   scheduler's adapter-assigned, job-derived identity (S-009). Policy and audit
-   operate on those application identities.
+   scheduler's adapter-assigned identity where a concrete adapter spec still
+   defines one. Policy and audit operate on those application identities, except
+   where a later ADR narrows a local channel's admission gate.
 4. **Ingress.** The service exposes no inbound network listener. Synchronous
    input arrives over `admin.sock`; asynchronous input is obtained by polling on
    a schedule (e.g. email via the scheduler driving a skill). The committed
@@ -68,6 +69,12 @@ deployment. Concretely:
 This narrows the per-user language in S-001 and the logical model; S-001 is
 amended to reference this ADR. `system_overview.md` remains the implementation-
 agnostic logical model and is not rewritten around the deployment scope.
+
+> **Amended (ADR-012, 2026-06-30).** Scheduler jobs are still within the
+> single-user-local trust domain, but scheduler admission is no longer based on
+> a job-derived application `UserId` in `[policy].admitted_users`. A schedule
+> entry present in the trusted schedule store is admitted for firing; action
+> authorization and audit identity remain separate concerns.
 
 **Upgrade path (nothing foreclosed).** If the-intern ever needs to admit a
 second OS user, a remote/semi-trusted caller, or an inbound network channel, that
@@ -99,10 +106,10 @@ to the operator surface, such additions are new work, not a redesign.
 
 ### Neutral
 
-- The application-identity model is unchanged: multiple senders/channels behind
-  one uid remain first-class, which is what keeps policy and audit meaningful and
-  what makes a future multi-user upgrade a matter of changing the gate, not the
-  identity model.
+- The application-identity model remains first-class for attribution and for
+  channels whose specs use it for admission. ADR-012 narrows only the scheduler
+  admission gate; future multi-user or external intake still requires revisiting
+  the trust model.
 
 ## Alternatives Considered
 

@@ -97,7 +97,7 @@ What this specification explicitly does NOT cover:
 |---|---|---|
 | Rust service | Hosts the deterministic components; owns the inbound queue, identity, persistence, and supervision of pi-agent processes | Single long-lived binary on Linux + macOS; shell defined in S-002 |
 | Channel adapters | Accept inbound traffic from chat, email, scheduler; normalize each into a common internal request, classified by delivery kind (`sync`/`async`/`periodic`) per ADR-004 | Part of the Rust service; the only components that know channel specifics |
-| Requests Handler | Consume the inbound queue, attach user/channel identity, run pre-flight identity/access checks | Part of the Rust service |
+| Requests Handler | Consume the inbound queue, attach user/channel identity, run pre-flight identity/access checks where the channel's admission model requires them | Part of the Rust service |
 | Policy Control | Decide per-user authorization for actions raised mid-run by the agent | Part of the Rust service; never inside the agent |
 | Monitoring | Maintain an append-only audit log; expose an inbound interface for external tools to report actions | Part of the Rust service |
 | pi-agent process | Run one user-session's agent | Spawned on demand, idle-reaped, drawn from a warm pool |
@@ -179,7 +179,7 @@ End-to-end flow from an inbound event to a completed action:
 ```
 Channel adapter normalizes inbound event -> internal queue
   ↓
-Requests Handler attaches identity, runs pre-flight identity/access check
+Requests Handler attaches identity and applies the channel's admission model
   ↓
 Rust service routes prompt to the user's pi-agent process
 (spawning one from the warm pool if none is active)
@@ -195,8 +195,10 @@ Extension forwards events to Monitoring; CLI tool may also self-report
 Response returned through the originating channel; audit log updated
 ```
 
-A pre-flight denial stops the request before any agent work begins. A
-per-action denial stops the side effect while the session continues.
+A pre-flight denial stops an admission-gated request before any agent work
+begins. Scheduler jobs are admitted under ADR-012 by trusted schedule-store
+membership rather than by scheduler UUID allow-list membership. A per-action
+denial stops the side effect while the session continues.
 
 What returns to the caller depends on the request's delivery kind (ADR-004): a
 `sync` request gets an immediate acknowledgement-or-error receipt and, later,
@@ -217,8 +219,8 @@ configurable:
   verdicts.
 - **Sockets and transports** — the Unix socket path for the extension channel
   and the transport for the Monitoring report interface.
-- **Persistence** — locations for the audit log, the inbound queue, and session
-  state.
+- **Persistence** — locations for the audit log, the inbound queue, session
+  state, and scheduler state.
 
 ## Implementation Order
 
@@ -253,3 +255,4 @@ configurable:
 | 2026-05-21 | Event-driven-uniformity principle, Channel adapters responsibility row, Component 1 inbound interface, and Workflow response paragraph clarified: the core request interface is typed by delivery kind (`sync`/`async`/`periodic`), never by channel; channel identity is confined to adapters; per-kind response semantics stated. | ADR-004 accepted 2026-05-21. The shipped `InternalEvent` enum (per-channel variants from T-008) hardcoded channel identity the core should not know; this contradicted the spec's intent and is being corrected. | Corrective tasks to reshape `InternalEvent` and its `requests-handler`/`persistence` consumers (to be planned separately); Phase 6 channel-adapter design unaffected in scope but now builds on the corrected core type. |
 | 2026-06-13 | Deployment scope narrowed to single-user-local: the "Per-user isolation" principle reframed to single-user (one OS/trust-domain account; per-session isolation of the user's concurrent contexts, not cross-user). Webhooks removed from the committed channel set (Purpose, Channel-adapters row, Component 1 inbound, Exclusions example, Phase 6). | ADR-008 (single-user-local deployment scope) accepted 2026-06-13, reconciling S-001 with the committed product and the trust model in ADR-005/ADR-007. The core stays delivery-kind-typed (ADR-004), so the narrowed channel set does not constrain future channel additions. | None (no tasks in flight against these sections). |
 | 2026-06-23 | Phase 6 chat clause updated: interactive chat is a supervised, directly-launched `pi` session (CR-002 / ADR-010), not an `admin.sock` chat subscription. | CR-002 redefines `bob chat`; the S-002 interactive-chat-adapter path is superseded for interactive use (S-006 amended, S-008 archived as superseded). | T-103, T-104, T-105, T-106, T-107, T-108 |
+| 2026-06-30 | Requests Handler language narrowed from universal pre-flight identity checks to per-channel admission models; scheduler admission now references ADR-012. | CR-004 / ADR-012 remove scheduler-derived UUID admission and use the Unix trust boundary plus trusted schedule store for scheduled work. | Scheduler amendment tasks TBD |

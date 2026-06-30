@@ -45,8 +45,13 @@ The interactive `pi` session is **owned and supervised by `bob serve`** so the
 extension membrane and monitoring are in effect (without which gate 2 would be inert).
 
 Pre-flight admission (`admitted_users`) **remains in force for non-interactive /
-programmatic intake** (for example the scheduler adapter) that does traverse the
-Requests Handler.
+programmatic intake** that traverses the Requests Handler, except where a later
+ADR defines a channel-specific local trust-boundary admission rule.
+
+> **Amended (ADR-012, 2026-06-30).** The scheduler adapter is now such an
+> exception. Scheduler jobs are admitted for firing when they are present in the
+> trusted schedule store; they are not rejected solely because a scheduler
+> `UserId` is missing from `[policy].admitted_users`.
 
 This **amends** S-004 (pre-flight admission applies to queue-borne requests, not to
 interactive chat) and the ADR-005 intake-rejection expectation **for the
@@ -73,8 +78,9 @@ interactive-chat channel**. It does not supersede either decision.
 
 ### Neutral
 
-- Non-interactive channels keep pre-flight admission; the policy ruleset and hot-reload
-  path are unchanged.
+- Non-interactive channels keep pre-flight admission unless a later ADR defines
+  a channel-specific exception. ADR-012 defines that exception for scheduler
+  jobs only.
 - The chat session still carries an application identity for audit/monitoring; only the
   admission *gate* is removed for it.
 

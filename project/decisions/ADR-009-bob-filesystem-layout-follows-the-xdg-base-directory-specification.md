@@ -12,10 +12,10 @@ created: '2026-06-23'
 bob needs a single, documented answer to "where does each of its files live",
 covering configuration, the pi extension, runtime sockets, and the audit log.
 
-At the time of this decision bob already resolved most locations from XDG base directories
-(`$XDG_CONFIG_HOME/bob/config.toml`, `$XDG_STATE_HOME/bob/audit.jsonl`,
-`$XDG_RUNTIME_DIR/bob/` for sockets, each with spec-default fallbacks in
-`config.rs`), but two things are undecided:
+At the time of this decision bob already resolved most locations from XDG base
+directories (`$XDG_CONFIG_HOME/bob/config.toml`,
+`$XDG_STATE_HOME/bob/audit.jsonl`, `$XDG_RUNTIME_DIR/bob/` for sockets, each
+with spec-default fallbacks in `config.rs`), but two things are undecided:
 
 - Before CR-003, the pi extension (`bob.ts`) had no bob-owned location: the
   operator installed it manually into pi's own search path. CR-003 needed a
@@ -48,7 +48,7 @@ default when unset:
 | config | `$XDG_CONFIG_HOME/bob/` → `~/.config/bob/` | `config.toml` |
 | data (static app assets) | `$XDG_DATA_HOME/bob/` → `~/.local/share/bob/` | `extensions/bob.ts` |
 | cache (regenerable) | `$XDG_CACHE_HOME/bob/` → `~/.cache/bob/` | reserved; not yet implemented |
-| state (persistent logs) | `$XDG_STATE_HOME/bob/` → `~/.local/state/bob/` | `audit.jsonl` |
+| state (persistent logs and mutable service state) | `$XDG_STATE_HOME/bob/` → `~/.local/state/bob/` | `audit.jsonl`, `schedules.json` |
 | runtime (ephemeral) | `$XDG_RUNTIME_DIR/bob/` | `admin.sock`, `extension.sock`, pidfile |
 
 Rules:
@@ -59,6 +59,9 @@ Rules:
   independent application assets, which is what the extension is.
 - The **audit log** lives under `state` (persists across reboots), **not** under
   runtime or cache.
+- The **schedule store** lives under `state` as `schedules.json` (ADR-012). It
+  persists across reboots, is rewritten atomically, and is not part of static
+  `config.toml`.
 - **Sockets and pidfile** live under `runtime` (tmpfs, short paths, per-user,
   cleared on reboot). When `XDG_RUNTIME_DIR` is unset, fall back to a per-uid
   temp directory (already implemented).
@@ -68,12 +71,20 @@ Rules:
 - The runtime directory (and any directory holding a socket) MUST be `0700`
   owner-only to preserve the Layer-1 transport trust boundary (ADR-005,
   ADR-007). `XDG_RUNTIME_DIR` is already `0700` by the spec.
+- The schedule state directory and file MUST preserve the same local trust
+  population as `admin.sock`. Under the current owner-only deployment, the
+  directory is owner-only and `schedules.json` is `0600`. If bob later supports
+  group access to `admin.sock`, the same group trust model must apply to the
+  schedule store.
 - **macOS** retains its existing platform conventions (Application Support /
   `TMPDIR`-based runtime), as already implemented; this ADR specifies Linux.
 
 To be explicit: bob's resolution (`config.rs`) covers **config**, **state**,
 **runtime**, and the **data** row used by the extension path / `extension_path`.
 The **cache** row remains reserved for future work.
+
+> **Amended (ADR-012, 2026-06-30).** `schedules.json` is added to persistent
+> state. Schedule entries are mutable service state, not layered TOML config.
 
 ## Consequences
 

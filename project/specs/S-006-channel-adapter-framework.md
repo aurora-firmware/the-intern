@@ -78,7 +78,7 @@ What this specification explicitly does NOT cover:
 |   Channel intake handle  (the one doorway)                  |
 |        |  bounded submit, returns accept/reject              |
 |        v                                                    |
-|   Internal event queue --> Requests Handler (pre-flight)     |
+|   Internal event queue --> Requests Handler (admission)      |
 |                                                             |
 |   bob serve: constructs + supervises enabled adapters       |
 +-------------------------------------------------------------+
@@ -136,13 +136,18 @@ Adapter submits via the channel intake handle
 Intake handle enqueues onto the bounded internal event queue and
 returns an accept/reject receipt
   ↓
-Requests Handler dequeues and runs the existing pre-flight
-identity/access check (Phase 1b / ADR-004)
+Requests Handler dequeues and applies the concrete channel's
+admission model (Phase 1b / ADR-004; scheduler exception in ADR-012)
 ```
 
 The receipt (accepted, or rejected for a full queue) is the inbound
 acknowledgement-or-error of ADR-004. Channel-specific response routing is out of
 scope for the framework and belongs in the concrete adapter spec.
+
+Admission semantics are also owned by the concrete adapter spec and the policy
+ADRs. Most queue-borne adapters use the S-004 pre-flight `UserId` gate; the
+scheduler adapter is narrowed by ADR-012 to trusted schedule-store membership
+under the Unix trust boundary.
 
 ## Configuration Requirements
 
@@ -186,3 +191,4 @@ scope for the framework and belongs in the concrete adapter spec.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-06-23 | Interactive-chat adapter removed from the active spec; the channel-adapter framework (intake handle, configuration, supervision wiring) remains active and is used by later adapters such as S-009 scheduler. | CR-002 routes interactive chat through a supervised direct `pi` session, bypassing and retiring the admin-socket chat subscription path. | T-107, T-108 |
+| 2026-06-30 | Framework workflow changed from unconditional pre-flight identity check to concrete-adapter admission model; scheduler exception recorded. | ADR-012 / CR-004 move scheduler admission to the Unix trust boundary and trusted schedule store, while leaving the common intake doorway intact. | Scheduler amendment tasks TBD |

@@ -67,8 +67,8 @@ impl ReloadHandle {
 ///
 /// The `channel_id` and `user_id` are derived deterministically from the job
 /// `id`, so they stay stable across reloads and process restarts. Every tick
-/// for a given job appears to come from the same virtual channel and user, and
-/// operators can reference these IDs in policy rules.
+/// for a given job appears to come from the same virtual channel and user,
+/// providing stable attribution fields for audit records.
 struct JobState {
     entry: ScheduleEntry,
     channel_id: ChannelId,
@@ -228,9 +228,9 @@ fn next_cron_occurrence(cron: &Cron, now: &DateTime<Local>) -> Result<DateTime<L
 ///
 /// Each job's `ChannelId` and `UserId` are derived deterministically from its
 /// `id`, so rebuilding the table on reload yields the *same* identities for
-/// unchanged jobs (and the same identities across process restarts). This
-/// keeps the identity that policy rules reference stable, instead of being
-/// re-randomised every time the table is rebuilt.
+/// unchanged jobs (and the same identities across process restarts). Stable
+/// identities ensure audit attribution fields remain consistent across reloads
+/// and restarts without being re-randomised.
 fn build_job_states(entries: Vec<ScheduleEntry>) -> Vec<JobState> {
     entries
         .into_iter()
@@ -260,7 +260,7 @@ fn spawn_job_tasks(intake: &IntakeHandle, jobs: &[JobState]) -> Vec<tokio::task:
                     channel_id = %job.channel_id,
                     user_id = %job.user_id,
                     cron = %job.entry.cron,
-                    "scheduler-adapter job registered — fixed channel/user IDs for policy rules"
+                    "scheduler-adapter job registered — stable channel/user IDs for audit attribution"
                 );
                 let intake_clone = intake.clone();
                 let job_id = job.entry.id.clone();
@@ -301,8 +301,13 @@ fn spawn_job_tasks(intake: &IntakeHandle, jobs: &[JobState]) -> Vec<tokio::task:
 /// For each `ScheduleEntry`, a `ChannelId` and `UserId` are derived
 /// deterministically from the job `id`, so they stay stable across reloads and
 /// restarts. These IDs are reused on every tick for that job so that
-/// policy rules can reference them consistently. They are logged at `INFO`
+/// audit attribution fields remain consistent. They are logged at `INFO`
 /// level when each job is registered.
+///
+/// Under ADR-012, scheduler firings are admitted by the local Unix trust
+/// boundary rather than by `[policy].admitted_users` UserId checks. The
+/// `UserId` in each firing's `RequestContext` is retained for audit attribution
+/// only, not for admission control.
 #[must_use]
 pub fn start(intake: IntakeHandle, entries: Vec<ScheduleEntry>) -> (ReloadHandle, JoinHandle<()>) {
     // The watch channel carries the reload signal.  The receiver is held by the
