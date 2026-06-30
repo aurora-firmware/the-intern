@@ -58,6 +58,13 @@ pub struct Dispatcher {
     /// Required for `schedule.add`, `schedule.remove`, and `schedule.reload`
     /// to persist entries.  When absent those methods return -32601.
     schedule_store_path: Option<PathBuf>,
+    /// Effective uid of the trusted service principal (ADR-012 / ADR-005).
+    ///
+    /// When set, schedule reads verify the store lives within the Unix trust
+    /// boundary before trusting it, and writes enforce an owner-only parent
+    /// directory. When `None` (e.g. in tests that do not exercise the trust
+    /// boundary) the checks are skipped.
+    schedule_store_uid: Option<u32>,
     /// Serializes `schedule.add`/`schedule.remove` so concurrent admin clients
     /// cannot interleave the load→modify→write→reload sequence and silently
     /// drop one another's update. Shared across all per-connection clones of
@@ -129,6 +136,7 @@ impl Dispatcher {
             monitoring,
             scheduler: None,
             schedule_store_path: None,
+            schedule_store_uid: None,
             schedule_write_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             interactive_session: None,
             started_at: Instant::now(),
@@ -186,6 +194,16 @@ impl Dispatcher {
     #[must_use]
     pub fn with_schedule_store_path(mut self, path: PathBuf) -> Self {
         self.schedule_store_path = Some(path);
+        self
+    }
+
+    /// Set the trusted service-principal uid used to enforce the schedule
+    /// store's Unix trust boundary (ADR-012 / ADR-005). When set, reads verify
+    /// the store and its parent directory before trusting them and writes
+    /// enforce an owner-only parent directory.
+    #[must_use]
+    pub fn with_schedule_store_uid(mut self, uid: u32) -> Self {
+        self.schedule_store_uid = Some(uid);
         self
     }
 
@@ -804,6 +822,23 @@ impl Dispatcher {
         id: &Value,
         path: &std::path::Path,
     ) -> Result<Vec<ScheduleEntry>, DispatchOutcome> {
+        // Scheduled jobs bypass `[policy].admitted_users` (ADR-012), so the
+        // store must be confirmed inside the Unix trust boundary before its
+        // contents are trusted at reload time. Fail closed on any violation.
+        if let Some(uid) = self.schedule_store_uid {
+            if let Err(e) = bob_core::types::schedule::verify_trusted_store(path, uid) {
+                return Err(DispatchOutcome::Err(ErrorResponse::error(
+                    id.clone(),
+                    CODE_INVALID_REQUEST,
+                    "schedule method: schedule store failed the trust-boundary check",
+                    Some(json!({
+                        "category": "invalid_request",
+                        "reason": e.to_string(),
+                    })),
+                )));
+            }
+        }
+
         bob_core::types::schedule::read_schedule_store(path).map_err(|e| {
             DispatchOutcome::Err(ErrorResponse::error(
                 id.clone(),
@@ -828,6 +863,25 @@ impl Dispatcher {
         entries: Vec<ScheduleEntry>,
         handle: &scheduler_adapter::ReloadHandle,
     ) -> Result<(), DispatchOutcome> {
+        // Enforce an owner-only parent directory before writing trusted schedule
+        // state (ADR-012 / ADR-005).
+        if let Some(uid) = self.schedule_store_uid {
+            let parent = schedule_store_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."));
+            if let Err(e) = bob_core::types::schedule::enforce_trusted_store_dir(parent, uid) {
+                return Err(DispatchOutcome::Err(ErrorResponse::error(
+                    id.clone(),
+                    CODE_INVALID_REQUEST,
+                    "schedule method: schedule store directory failed the trust-boundary check",
+                    Some(json!({
+                        "category": "invalid_request",
+                        "reason": e.to_string(),
+                    })),
+                )));
+            }
+        }
+
         bob_core::types::schedule::write_schedule_store(schedule_store_path, &entries).map_err(
             |e| {
                 DispatchOutcome::Err(ErrorResponse::error(

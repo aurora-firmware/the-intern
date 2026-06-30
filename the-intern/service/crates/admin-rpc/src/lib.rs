@@ -75,6 +75,13 @@ pub struct Config {
     /// to persist changes.  When `None` (the default), those methods return
     /// `-32601 Method not found`.
     pub schedule_store_path: Option<std::path::PathBuf>,
+    /// Effective uid of the trusted service principal (ADR-012 / ADR-005).
+    ///
+    /// When `Some`, schedule reads verify the store is inside the Unix trust
+    /// boundary before trusting it and writes enforce an owner-only parent
+    /// directory. When `None` (the default), the trust-boundary checks are
+    /// skipped.
+    pub schedule_store_uid: Option<u32>,
     /// Configuration for spawning interactive pi sessions (T-105 / ADR-011).
     ///
     /// When `Some`, `session.interactive.open` uses these values to spawn the
@@ -117,6 +124,7 @@ impl Default for Config {
             slow_subscriber_deadline: Duration::from_secs(5),
             scheduler: None,
             schedule_store_path: None,
+            schedule_store_uid: None,
             interactive_session: None,
         }
     }
@@ -864,6 +872,11 @@ pub fn start(cfg: Config) -> Result<(Handle, JoinHandle<()>), std::io::Error> {
     // Inject the JSON schedule store path when provided (T-115 / ADR-012).
     if let Some(p) = cfg.schedule_store_path.clone() {
         dispatcher = dispatcher.with_schedule_store_path(p);
+    }
+    // Inject the trusted service-principal uid for the schedule-store trust
+    // boundary (ADR-012 / ADR-005).
+    if let Some(uid) = cfg.schedule_store_uid {
+        dispatcher = dispatcher.with_schedule_store_uid(uid);
     }
     // Inject the interactive-session spawn config when provided (T-105).
     if let Some(interactive_cfg) = cfg.interactive_session.clone() {

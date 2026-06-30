@@ -156,6 +156,13 @@ impl BobConfig {
         // Load schedule entries from the JSON store.  A missing store is treated
         // as empty (no jobs); a malformed store fails startup with a
         // Configuration error so the operator can fix the file.
+        //
+        // Scheduled jobs are admitted by trusted schedule-store membership and
+        // bypass `[policy].admitted_users` (ADR-012), so the store must live
+        // within the Unix trust boundary before its contents are trusted at
+        // startup.  Fail closed if the store or its parent directory is not
+        // owned by the service principal or is group/other-writable.
+        bob_core::types::schedule::verify_trusted_store(&raw.schedule_store_path, effective_uid())?;
         let schedule_entries = read_schedule_store(&raw.schedule_store_path)?;
         let schedule = ScheduleConfig {
             entries: schedule_entries,
@@ -708,6 +715,20 @@ fn current_uid() -> u32 {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn current_uid() -> u32 {
+    0
+}
+
+/// The process **effective** uid — the principal that actually owns and gates
+/// access to filesystem state (the schedule store, ADR-012/ADR-005). Used for
+/// the schedule-store trust-boundary check, which governs real filesystem
+/// access rather than path derivation.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn effective_uid() -> u32 {
+    nix::unistd::Uid::effective().as_raw()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn effective_uid() -> u32 {
     0
 }
 
@@ -1523,8 +1544,16 @@ audit_log_path = "{}"
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let store_path = temp.path().join("schedules.json");
 
-        // Write malformed JSON to the store.
+        // Write malformed JSON to the store. Keep it owner-only so the
+        // trust-boundary check passes and the malformed-content path is the one
+        // under test.
         fs::write(&store_path, "not valid json at all").expect("write malformed store");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&store_path, fs::Permissions::from_mode(0o600))
+                .expect("restrict store mode");
+        }
 
         let mut env = BTreeMap::new();
         if cfg!(target_os = "macos") {

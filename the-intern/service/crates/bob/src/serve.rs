@@ -242,6 +242,11 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     } else {
         Some(cfg.schedule_store_path.clone())
     };
+    // The trusted service principal for the schedule-store Unix trust boundary
+    // (ADR-012 / ADR-005). Only meaningful when a real store path is wired.
+    let maybe_schedule_store_uid = maybe_schedule_store_path
+        .as_ref()
+        .map(|_| crate::config::effective_uid());
     let admin_rpc_cfg = admin_rpc::Config {
         admin_sock_path: cfg.admin_sock_path.clone(),
         supervisor: Some(pi_agent_supervisor_handle.clone()),
@@ -252,6 +257,7 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         // The primary handle is retained in the Runtime for shutdown ordering.
         scheduler: Some(scheduler_reload_handle.clone()),
         schedule_store_path: maybe_schedule_store_path,
+        schedule_store_uid: maybe_schedule_store_uid,
         interactive_session: Some(build_interactive_session_config(cfg)),
         ..admin_rpc::Config::default()
     };

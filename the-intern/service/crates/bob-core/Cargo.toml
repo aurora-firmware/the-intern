@@ -11,6 +11,7 @@ thiserror = { workspace = true }
 async-trait = { workspace = true }
 nix = { version = "0.29", default-features = false, features = ["socket", "user"] }
 toml_edit = "0.22"
+croner = "3"
 
 [dev-dependencies]
 futures = "0.3"

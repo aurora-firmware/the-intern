@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use croner::parser::{CronParser, Seconds};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ServiceError, ServiceResult};
@@ -29,8 +30,16 @@ struct ScheduleStoreDoc {
 /// Returns `ServiceError::Persistence` when the file exists but cannot be
 /// read from disk.
 /// Returns `ServiceError::Configuration` when the document is not valid JSON,
-/// carries an unrecognised `version` field, or contains entries that do not
-/// match the expected shape.
+/// carries an unrecognised `version` field, contains entries that do not match
+/// the expected shape, or violates the whole-store invariants enforced by
+/// [`validate_schedule_store`] (unique non-empty `id`, valid 5-field `cron`,
+/// non-empty `prompt`). The store is accepted or rejected as a whole; a single
+/// bad entry fails the read rather than being silently skipped (S-009).
+///
+/// This reader establishes *content* validity only. Callers that treat the
+/// store as trusted, admitted work (startup and `schedule.reload`) must also
+/// confirm the file lives within the Unix trust boundary via
+/// [`verify_trusted_store`] before reading.
 pub fn read_schedule_store(path: &Path) -> ServiceResult<Vec<ScheduleEntry>> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -55,7 +64,217 @@ pub fn read_schedule_store(path: &Path) -> ServiceResult<Vec<ScheduleEntry>> {
         });
     }
 
+    validate_schedule_store(&doc.entries)?;
+
     Ok(doc.entries)
+}
+
+/// Validate the whole-store invariants required of schedule entries (S-009).
+///
+/// Every entry must have a non-empty `id`, a non-empty `prompt`, and a valid
+/// 5-field cron expression (minute hour day-of-month month day-of-week); `id`
+/// values must be unique across the store. The store is validated as a whole —
+/// a single bad entry rejects the entire document rather than being silently
+/// skipped or deferred.
+///
+/// # Errors
+///
+/// Returns `ServiceError::Configuration` describing the first invariant
+/// violation found.
+pub fn validate_schedule_store(entries: &[ScheduleEntry]) -> ServiceResult<()> {
+    let parser = CronParser::builder().seconds(Seconds::Disallowed).build();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+    for entry in entries {
+        if entry.id.trim().is_empty() {
+            return Err(ServiceError::Configuration {
+                detail: "schedule store contains an entry with a blank id".to_owned(),
+            });
+        }
+        if entry.prompt.trim().is_empty() {
+            return Err(ServiceError::Configuration {
+                detail: format!("schedule entry {:?} has a blank prompt", entry.id),
+            });
+        }
+        if entry.cron.trim().is_empty() {
+            return Err(ServiceError::Configuration {
+                detail: format!("schedule entry {:?} has a blank cron expression", entry.id),
+            });
+        }
+        if let Err(e) = parser.parse(&entry.cron) {
+            return Err(ServiceError::Configuration {
+                detail: format!(
+                    "schedule entry {:?} has an invalid cron expression {:?}: {e}",
+                    entry.id, entry.cron
+                ),
+            });
+        }
+        if !seen.insert(entry.id.as_str()) {
+            return Err(ServiceError::Configuration {
+                detail: format!("schedule store contains a duplicate id {:?}", entry.id),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Verify that the schedule store at `path` and its parent directory live within
+/// the Unix trust boundary before their contents are trusted (ADR-012, ADR-005).
+///
+/// Scheduled jobs admitted from the store bypass `[policy].admitted_users`, so
+/// the "trusted" premise must be established at the filesystem boundary. On Unix
+/// this fails closed with `ServiceError::Configuration` when:
+/// - the parent directory is not owned by `expected_uid`, or is group/other
+///   writable (which would let another principal replace or race the store);
+/// - the store file is not owned by `expected_uid`, or is group/other accessible
+///   (`mode & 0o077 != 0`).
+///
+/// A missing store is accepted (an absent store means "no jobs"). This is a
+/// read-side check and never tightens modes — a file another principal may have
+/// written is refused, not silently adopted. On non-Unix platforms this is a
+/// no-op (those builds carry no trust enforcement and are not a supported secure
+/// deployment).
+#[cfg(unix)]
+pub fn verify_trusted_store(path: &Path, expected_uid: u32) -> ServiceResult<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    if !parent.as_os_str().is_empty() {
+        let meta = std::fs::metadata(parent).map_err(|e| ServiceError::Configuration {
+            detail: format!(
+                "cannot stat schedule store parent directory {}: {e}",
+                parent.display()
+            ),
+        })?;
+        if meta.uid() != expected_uid {
+            return Err(ServiceError::Configuration {
+                detail: format!(
+                    "schedule store parent directory {} is owned by uid {}, not the trusted uid {expected_uid}",
+                    parent.display(),
+                    meta.uid()
+                ),
+            });
+        }
+        if meta.permissions().mode() & 0o022 != 0 {
+            return Err(ServiceError::Configuration {
+                detail: format!(
+                    "schedule store parent directory {} is group/other writable (mode {:o}); refusing to trust its contents",
+                    parent.display(),
+                    meta.permissions().mode() & 0o777
+                ),
+            });
+        }
+    }
+
+    let meta = std::fs::metadata(path).map_err(|e| ServiceError::Configuration {
+        detail: format!("cannot stat schedule store {}: {e}", path.display()),
+    })?;
+    if meta.uid() != expected_uid {
+        return Err(ServiceError::Configuration {
+            detail: format!(
+                "schedule store {} is owned by uid {}, not the trusted uid {expected_uid}",
+                path.display(),
+                meta.uid()
+            ),
+        });
+    }
+    if meta.permissions().mode() & 0o077 != 0 {
+        return Err(ServiceError::Configuration {
+            detail: format!(
+                "schedule store {} is group/other accessible (mode {:o}); expected owner-only",
+                path.display(),
+                meta.permissions().mode() & 0o777
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn verify_trusted_store(_path: &Path, _expected_uid: u32) -> ServiceResult<()> {
+    Ok(())
+}
+
+/// Ensure the schedule store's parent directory is a trusted, owner-only
+/// directory before the store is written (ADR-012, ADR-005).
+///
+/// On Unix: creates the directory with mode `0o700` when absent; fails closed
+/// with `ServiceError::Configuration` when it exists but is not owned by
+/// `expected_uid` (bob cannot establish the trust premise for, or even chmod, a
+/// directory it does not own); tightens an owner-owned directory to `0o700` when
+/// its mode allows group/other access. On non-Unix platforms this only creates
+/// the directory.
+#[cfg(unix)]
+pub fn enforce_trusted_store_dir(parent: &Path, expected_uid: u32) -> ServiceResult<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    if parent.as_os_str().is_empty() {
+        return Ok(());
+    }
+
+    if !parent.exists() {
+        std::fs::create_dir_all(parent).map_err(|e| ServiceError::Persistence {
+            detail: format!(
+                "failed to create schedule store parent directory {}: {e}",
+                parent.display()
+            ),
+        })?;
+        return std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).map_err(
+            |e| ServiceError::Persistence {
+                detail: format!(
+                    "failed to set owner-only mode on schedule store parent directory {}: {e}",
+                    parent.display()
+                ),
+            },
+        );
+    }
+
+    let meta = std::fs::metadata(parent).map_err(|e| ServiceError::Persistence {
+        detail: format!(
+            "cannot stat schedule store parent directory {}: {e}",
+            parent.display()
+        ),
+    })?;
+    if meta.uid() != expected_uid {
+        return Err(ServiceError::Configuration {
+            detail: format!(
+                "schedule store parent directory {} is owned by uid {}, not the trusted uid {expected_uid}; refusing to write",
+                parent.display(),
+                meta.uid()
+            ),
+        });
+    }
+    if meta.permissions().mode() & 0o077 != 0 {
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
+            ServiceError::Persistence {
+                detail: format!(
+                    "failed to tighten schedule store parent directory {} to owner-only: {e}",
+                    parent.display()
+                ),
+            }
+        })?;
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn enforce_trusted_store_dir(parent: &Path, _expected_uid: u32) -> ServiceResult<()> {
+    if !parent.as_os_str().is_empty() {
+        std::fs::create_dir_all(parent).map_err(|e| ServiceError::Persistence {
+            detail: format!(
+                "failed to create schedule store parent directory {}: {e}",
+                parent.display()
+            ),
+        })?;
+    }
+    Ok(())
 }
 
 /// Atomically replace the JSON schedule-store file at `path` with a document
@@ -81,6 +300,9 @@ pub fn read_schedule_store(path: &Path) -> ServiceResult<Vec<ScheduleEntry>> {
 /// Returns `ServiceError::Persistence` for I/O failures (directory creation,
 /// temp-file write, permission change, or rename).
 pub fn write_schedule_store(path: &Path, entries: &[ScheduleEntry]) -> ServiceResult<()> {
+    // Never persist a store that violates the whole-store invariants (S-009).
+    validate_schedule_store(entries)?;
+
     let doc = ScheduleStoreDoc {
         version: SCHEDULE_STORE_VERSION,
         entries: entries.to_vec(),
@@ -116,18 +338,37 @@ pub fn write_schedule_store(path: &Path, entries: &[ScheduleEntry]) -> ServiceRe
         .unwrap_or(0);
     let tmp_path = parent.join(format!(".bob-schedule-tmp-{unique}"));
 
-    std::fs::write(&tmp_path, &content).map_err(|e| ServiceError::Persistence {
-        detail: format!(
-            "failed to write temp schedule store {}: {e}",
-            tmp_path.display()
-        ),
-    })?;
-
-    // Apply file permissions to the temp file before the rename.
+    // On Unix, create the temp file with restrictive permissions from open time
+    // (mode applied at creation, never momentarily 0644) and `create_new` so the
+    // unique temp name cannot be pre-staged or symlinked by another principal.
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
         let mode = existing_mode.unwrap_or(0o600);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .open(&tmp_path)
+            .map_err(|e| ServiceError::Persistence {
+                detail: format!(
+                    "failed to create temp schedule store {}: {e}",
+                    tmp_path.display()
+                ),
+            })?;
+        if let Err(e) = file.write_all(content.as_bytes()) {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(ServiceError::Persistence {
+                detail: format!(
+                    "failed to write temp schedule store {}: {e}",
+                    tmp_path.display()
+                ),
+            });
+        }
+        // Restore the exact intended mode in case the process umask masked bits
+        // at open time (e.g. a preserved group-readable mode).
         if let Err(e) = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(mode)) {
             let _ = std::fs::remove_file(&tmp_path);
             return Err(ServiceError::Persistence {
@@ -138,6 +379,14 @@ pub fn write_schedule_store(path: &Path, entries: &[ScheduleEntry]) -> ServiceRe
             });
         }
     }
+
+    #[cfg(not(unix))]
+    std::fs::write(&tmp_path, &content).map_err(|e| ServiceError::Persistence {
+        detail: format!(
+            "failed to write temp schedule store {}: {e}",
+            tmp_path.display()
+        ),
+    })?;
 
     std::fs::rename(&tmp_path, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp_path);
@@ -277,7 +526,10 @@ pub fn write_schedule_entries(path: &Path, entries: &[ScheduleEntry]) -> Service
 
 #[cfg(test)]
 mod tests {
-    use super::{read_schedule_store, write_schedule_entries, write_schedule_store, ScheduleEntry};
+    use super::{
+        read_schedule_store, validate_schedule_store, write_schedule_entries, write_schedule_store,
+        ScheduleEntry,
+    };
 
     fn entry(id: &str) -> ScheduleEntry {
         ScheduleEntry {
@@ -597,5 +849,207 @@ mod tests {
 
         let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "rewrite must preserve the existing 0600 mode");
+    }
+
+    // --- Whole-store validation (S-009) ---
+
+    #[test]
+    fn validate_accepts_a_valid_unique_store() {
+        validate_schedule_store(&[entry("a"), entry("b")]).expect("valid store must pass");
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_ids() {
+        let err = validate_schedule_store(&[entry("dup"), entry("dup")])
+            .expect_err("duplicate ids must be rejected");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+        assert!(err.to_string().contains("duplicate"), "message: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_blank_id_prompt_and_cron() {
+        for bad in [
+            ScheduleEntry {
+                id: "  ".to_owned(),
+                cron: "* * * * *".to_owned(),
+                prompt: "p".to_owned(),
+            },
+            ScheduleEntry {
+                id: "x".to_owned(),
+                cron: "* * * * *".to_owned(),
+                prompt: "   ".to_owned(),
+            },
+            ScheduleEntry {
+                id: "x".to_owned(),
+                cron: "   ".to_owned(),
+                prompt: "p".to_owned(),
+            },
+        ] {
+            let err = validate_schedule_store(&[bad]).expect_err("blank field must be rejected");
+            assert!(
+                matches!(err, crate::error::ServiceError::Configuration { .. }),
+                "expected Configuration error, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_rejects_invalid_cron() {
+        let bad = ScheduleEntry {
+            id: "x".to_owned(),
+            cron: "not a cron".to_owned(),
+            prompt: "p".to_owned(),
+        };
+        let err = validate_schedule_store(&[bad]).expect_err("invalid cron must be rejected");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn read_schedule_store_rejects_duplicate_ids_in_hand_edited_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"entries":[
+                {"id":"dup","cron":"* * * * *","prompt":"a"},
+                {"id":"dup","cron":"* * * * *","prompt":"b"}
+            ]}"#,
+        )
+        .expect("seed store with duplicate ids");
+
+        let err = read_schedule_store(&path).expect_err("duplicate ids must fail the read");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn read_schedule_store_rejects_invalid_cron_in_hand_edited_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"entries":[{"id":"x","cron":"bogus","prompt":"p"}]}"#,
+        )
+        .expect("seed store with invalid cron");
+
+        let err = read_schedule_store(&path).expect_err("invalid cron must fail the read");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+    }
+
+    // --- Unix trust-boundary enforcement (ADR-012 / ADR-005) ---
+
+    #[cfg(unix)]
+    fn euid() -> u32 {
+        nix::unistd::Uid::effective().as_raw()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_trusted_store_accepts_owner_only_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+        write_schedule_store(&path, &[entry("a")]).expect("write must succeed");
+
+        super::verify_trusted_store(&path, euid()).expect("owner-only 0600 store must be trusted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_trusted_store_accepts_missing_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+        super::verify_trusted_store(&path, euid()).expect("missing store must be accepted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_trusted_store_fails_closed_on_group_accessible_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+        write_schedule_store(&path, &[entry("a")]).expect("write must succeed");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("widen mode");
+
+        let err = super::verify_trusted_store(&path, euid())
+            .expect_err("group/other-accessible store must fail closed");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_trusted_store_fails_closed_on_world_writable_parent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store_dir = dir.path().join("bob");
+        std::fs::create_dir(&store_dir).expect("mkdir");
+        let path = store_dir.join("schedule.json");
+        write_schedule_store(&path, &[entry("a")]).expect("write must succeed");
+        std::fs::set_permissions(&store_dir, std::fs::Permissions::from_mode(0o777))
+            .expect("widen parent");
+
+        let err = super::verify_trusted_store(&path, euid())
+            .expect_err("group/other-writable parent must fail closed");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn enforce_trusted_store_dir_creates_owner_only_dir_when_absent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store_dir = dir.path().join("state").join("bob");
+        super::enforce_trusted_store_dir(&store_dir, euid()).expect("must create dir");
+
+        let mode = std::fs::metadata(&store_dir)
+            .expect("stat")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "new store dir must be owner-only");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn enforce_trusted_store_dir_tightens_loose_owner_dir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store_dir = dir.path().join("bob");
+        std::fs::create_dir(&store_dir).expect("mkdir");
+        std::fs::set_permissions(&store_dir, std::fs::Permissions::from_mode(0o777))
+            .expect("widen dir");
+
+        super::enforce_trusted_store_dir(&store_dir, euid()).expect("must tighten");
+
+        let mode = std::fs::metadata(&store_dir)
+            .expect("stat")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "loose store dir must be tightened to owner-only"
+        );
     }
 }
