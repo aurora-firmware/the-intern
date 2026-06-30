@@ -62,13 +62,16 @@ What this specification explicitly does NOT cover:
   `admin.sock` and signal the adapter to reload; they never maintain
   independent state.
 - **Unix trust boundary admits scheduled work.** A job that is present in the
-  trusted schedule store is admitted for firing. Scheduler jobs must not require
-  a scheduler-derived UUID entry in `[policy].admitted_users`; every tool call
-  made by the resulting pi-agent session remains subject to S-004 action
-  authorization.
-- **Each cron expression must be validated on entry.** An invalid cron
-  expression must be rejected at `bob schedule add` time (and at startup) with
-  a clear error, never silently ignored or deferred.
+  trusted schedule store is admitted for firing. The authorization check for
+  schedule creation and mutation is access to `admin.sock` and the protected
+  schedule store, not a scheduler-derived UUID entry in `[policy].admitted_users`.
+  Every tool call made by the resulting pi-agent session remains subject to
+  S-004 action authorization.
+- **Schedule entries must be valid before becoming runnable.** Bob must not
+  accept or load a bad job. Every entry must have a non-empty unique id, a valid
+  cron expression, and a non-empty prompt. `schedule.add`, service startup, and
+  `schedule.reload` all validate these invariants with a clear error; malformed
+  entries are never silently ignored or deferred.
 - **Job payloads are opaque to bob.** The prompt string is passed verbatim to
   pi-agent. Bob neither parses nor validates the content.
 
@@ -174,6 +177,8 @@ trusted schedule store (ADR-012)
   → admitted: monitoring records admission
   ↓
 pi-agent receives request, executes prompt verbatim
+  → any resulting tool_call is evaluated by the S-004 action gate
+  → blocked tool_call: pi-agent session continues, but that side effect does not run
   ↓
 (no response path — fire and forget)
 ```
@@ -183,11 +188,24 @@ pi-agent receives request, executes prompt verbatim
 ```
 bob starts, reads schedules.json from persistent state
   ↓
-Scheduler actor validates all cron expressions
-  → any invalid: log error, skip that entry (do not abort startup)
+Bob validates the whole schedule store
+  → malformed store or invalid entry: startup fails with a clear configuration error
+  → missing store or empty entries array: valid, no jobs scheduled
   ↓
 Live job table populated; scheduler begins ticking
   (jobs that would have fired while bob was down are not replayed)
+```
+
+**Manual schedule-store reload:**
+
+```
+Operator edits schedules.json directly
+  ↓
+Operator runs bob schedule reload
+  ↓
+admin-RPC handler reads and validates the whole schedule store
+  → malformed store or invalid entry: return error; live job table is unchanged
+  → valid: replace the live job table with the validated entries
 ```
 
 ## State Store Requirements
@@ -203,9 +221,11 @@ Live job table populated; scheduler begins ticking
   valid 5-field cron expression. `prompt` must be non-empty. No maximum entry
   count is enforced at the spec level.
 - **Missing-value behaviour:** A missing schedule store or an empty `entries`
-  array is valid and results in no scheduled jobs. An entry with an invalid cron
-  expression is skipped with an error log at startup; it is rejected with an
-  error response at `schedule.add` time.
+  array is valid and results in no scheduled jobs. A malformed document, duplicate
+  id, blank field, or invalid cron expression is rejected as a whole at startup
+  and at `schedule.reload` time; the service must not silently skip individual
+  bad entries. The same invariants are enforced at `schedule.add` time before
+  anything is written.
 - **Write contract:** `schedule.add` and `schedule.remove` write the whole JSON
   document with atomic temp-file-and-rename updates and preserve the required
   file mode.
@@ -235,3 +255,4 @@ Live job table populated; scheduler begins ticking
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-06-30 | Schedule source of truth moved from `[schedule]` in `bob.toml` to `$XDG_STATE_HOME/bob/schedules.json`; scheduler UUID admission removed in favor of trusted schedule-store membership under the Unix trust boundary. | ADR-012 / CR-004 fix the hidden scheduler UUID allow-list failure and separate mutable schedule state from static config. | Scheduler amendment tasks TBD |
+| 2026-06-30 | Clarified schedule-store validation and runtime policy boundaries: `schedule.add`, startup, and `schedule.reload` reject malformed jobs as a whole; valid scheduled prompts may still have later tool calls blocked by S-004 action authorization. | Architecture-consistency review found contradictory startup behavior, and human clarification confirmed bob must not accept bad jobs while tool policy remains a later per-action gate. | Scheduler amendment tasks TBD |
