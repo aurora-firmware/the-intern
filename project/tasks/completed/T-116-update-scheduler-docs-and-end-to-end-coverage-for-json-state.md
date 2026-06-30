@@ -1,7 +1,7 @@
 ---
 id: T-116
 title: Update scheduler docs and end-to-end coverage for JSON state
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-06-30'
