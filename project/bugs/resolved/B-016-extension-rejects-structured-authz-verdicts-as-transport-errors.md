@@ -217,8 +217,8 @@ Planned fix (TS extension only — no Rust changes required):
 3. Correct the stale wire-contract doc comment at line 18 to reflect the structured shape.
 
 Planned verification:
-  cargo test -p extension-ipc       (must remain green — no Rust changes)
-  cargo test -p bob shell_e2e       (end-to-end pass)
+  cargo test -p extension-ipc          (must remain green — no Rust changes)
+  cargo test -p bob --test shell_e2e   (end-to-end pass)
   Manual: start dev bob service, trigger a tool call, confirm the extension no longer
   emits "authz verdict error", confirmed allowed calls run and denied calls surface
   the actual policy reason rather than "authz verdict error".
@@ -255,7 +255,7 @@ After the production fix the three B-016 regression tests passed, but two existi
 
 **What was rejected.** No alternative approaches were considered; the Diagnosis 2 contract was clear and the minimal fix path was obvious.
 
-**What was not verified.** `cargo test -p bob shell_e2e` and the live interactive session steps require Unix-domain-socket peer credentials and a live `pi` binary, which are unavailable in this sandbox. These must be run in a normal dev shell after the branch is merged.
+**What was not verified.** `cargo test -p bob --test shell_e2e` and the live interactive session steps require Unix-domain-socket peer credentials and a live `pi` binary, which are unavailable in this sandbox. These must be run in a normal dev shell after the branch is merged.
 
 **What remains.** Nothing — all acceptance criteria from the Diagnosis 2 contract are met and all 33 TypeScript tests and 31 Rust `extension-ipc` tests pass. The fix is committed on `bug/B-016-extension-rejects-structured-authz-verdicts-as-transport-errors` (commit `b5c26cb`) and is ready for review.
 
@@ -285,7 +285,7 @@ The fix addresses each element of that contract:
 - `handleToolCall` passes `outcome.reason ?? "blocked by policy"` as the block reason, surfacing the actual policy reason rather than the previous hardcoded string.
 - The stale doc comment on line 18 was corrected from the string encoding to the structured `{allow, reason}` shape.
 
-No Rust changes were made; `cargo test -p extension-ipc` (31 passed, 0 failed) confirms no regression. `npm test` (33 passed, 0 failed) confirms all TypeScript tests including the three new B-016 regression tests pass. `cargo test -p bob shell_e2e` and the live manual steps require UDS peer credentials and a live `pi` binary; they could not be run in this sandbox and are correctly noted as deferred in the Work Log.
+No Rust changes were made; `cargo test -p extension-ipc` (31 passed, 0 failed) confirms no regression. `npm test` (33 passed, 0 failed) confirms all TypeScript tests including the three new B-016 regression tests pass. `cargo test -p bob --test shell_e2e` and the live manual steps require UDS peer credentials and a live `pi` binary; they could not be run in this sandbox and are correctly noted as deferred in the Work Log.
 
 **Stage 2 — Code quality: passed.**
 
