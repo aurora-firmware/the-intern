@@ -245,7 +245,7 @@ payload shape. No production code was changed.
 The TypeScript extension `the-intern/extensions/bob.ts` was fixed to parse structured authz_verdict frames that match the Rust wire format `{"allow": bool, "reason": string|null}` rather than the stale string comparison `frame.verdict === "allow" || frame.verdict === "block"`.
 
 **What was done.**
-Three regression tests were added to `bob.test.ts` before any production code was changed: one asserting `{allow:true,reason:null}` results in `block:false`, one asserting `{allow:false,reason:"..."}` results in `block:true` with the actual policy reason in `ToolCallEventResult.reason`, and one asserting a malformed object (`allow:"yes"`) still fails closed on the error path. The first two tests failed against the unfixed code, confirming they exercised the defect.
+Three regression tests were added to `bob.test.ts` before any production code was changed: one asserting `{allow:true,reason:null}` results in `block:false`, one asserting `{allow:false,reason:"..."}` results in `block:true` with the actual policy reason in `ToolCallEventResult.reason`, and one asserting a malformed object (`allow:"yes"`) still fails closed on the error path. The first two tests failed against the unfixed code, confirming they exercised the defect. (A fourth B-016 regression test — for a top-level `null` verdict frame — was added later during the PR #34 review follow-up; see Session 3, bringing the suite to 34 TypeScript tests with four B-016 regression cases.)
 
 The production fix had three parts. First, `VerdictOutcome` was changed from a string union to a discriminated union `{kind:"allow"} | {kind:"block";reason:string|null} | {kind:"error"} | {kind:"transport_error_logged"}` so the policy reason can be carried through without a separate variable. Second, `handleInboundLine` was rewritten to validate that `frame.verdict` is a non-null, non-array object with a boolean `allow` field before resolving the outcome, with explicit early returns to the `{kind:"error"}` path for every malformed shape. Third, `handleToolCall` was updated to use `outcome.kind` comparisons and pass `outcome.reason ?? "blocked by policy"` as the `ToolCallEventResult.reason` when the outcome is a block.
 
@@ -257,7 +257,17 @@ After the production fix the three B-016 regression tests passed, but two existi
 
 **What was not verified.** `cargo test -p bob --test shell_e2e` and the live interactive session steps require Unix-domain-socket peer credentials and a live `pi` binary, which are unavailable in this sandbox. These must be run in a normal dev shell after the branch is merged.
 
-**What remains.** Nothing — all acceptance criteria from the Diagnosis 2 contract are met and all 33 TypeScript tests and 31 Rust `extension-ipc` tests pass. The fix is committed on `bug/B-016-extension-rejects-structured-authz-verdicts-as-transport-errors` (commit `b5c26cb`) and is ready for review.
+**What remains.** Nothing — all acceptance criteria from the Diagnosis 2 contract are met and all TypeScript tests (33 at the close of this session; 34 after the Session 3 follow-up) and 31 Rust `extension-ipc` tests pass. The fix is committed on `bug/B-016-extension-rejects-structured-authz-verdicts-as-transport-errors` (commit `b5c26cb`) and is ready for review.
+
+### Session 3 — 2026-06-30
+
+PR #34 review follow-up. The GitHub PR review of the merged B-016 fix raised one security finding and two documentation findings, all addressed here. No bug-loop cycle was involved; the source change was made on `bug/B-016-null-frame-guard` and merged into `dev-agent`, and the documentation changes were made directly on `dev-agent`.
+
+**Security.** `handleInboundLine` cast the parsed line to `Record<string, unknown>` and read `frame.kind` before checking the top-level shape, so a bare JSON `null` line (valid JSON) threw a `TypeError` inside the socket data handler instead of failing closed through the resolver. Added a top-level guard immediately after `JSON.parse` — `parsed === null || typeof parsed !== "object" || Array.isArray(parsed)` resolves `{kind:"error"}` — so `null`, primitives, and arrays now fail closed. Added a fourth B-016 regression test (`top-level non-object verdict frame fails closed without crashing`) that sends a bare `null` frame and asserts a prompt fail-closed (block:true, exactly one warning, resolved well before the verdict timeout). Confirmed red→green: without the guard the new test reproduced the exact `TypeError` at `bob.ts:154` thrown from the data handler (`bob.ts:183`); with the guard it passes.
+
+**Documentation.** Corrected the Fix Verification command from the bare `cargo test -p bob shell_e2e` (a no-op test-name filter that silently runs zero tests) to `cargo test -p bob --test shell_e2e`, and aligned the remaining current verification references in this record to the `--test` form.
+
+**Verification after the follow-up.** `npm test` 34 passed (four B-016 regression tests), `tsc --noEmit` clean, `cargo test -p extension-ipc` 31 passed, `cargo test -p bob --test shell_e2e` 5 passed.
 
 ## Review
 
@@ -296,3 +306,13 @@ The three regression tests genuinely exercise the defect. Tests B-016-001 and B-
 Test isolation is sound: `beforeEach` creates a fresh temp dir and socket path for each test; `afterEach` removes it and cleans env vars. Each test creates its own server and destroys it before returning.
 
 No unrelated code was changed. The fix is minimal and confined to the three planned parts from the Diagnosis 2 contract.
+
+(The verdict above reflects review cycle 1, when the fix carried three B-016 regression tests and the suite was 33 tests. The PR #34 review follow-up below supersedes the test-count figures.)
+
+### Review Verdict — 2026-06-30 (PR #34 review follow-up)
+
+PASS
+
+The GitHub PR #34 review of the merged fix raised one security finding (top-level non-object verdict frames crashed instead of failing closed) and two documentation findings (the zero-test `cargo test -p bob shell_e2e` command and stale test counts). All were addressed — see Work Log Session 3.
+
+Fail-closed behaviour is now preserved for every malformed top-level frame, including the bare JSON `null` that previously threw. The TypeScript suite is **34 tests including four B-016 regression cases**; `cargo test -p extension-ipc` (31) and `cargo test -p bob --test shell_e2e` (5) remain green; `tsc --noEmit` is clean. No further code or documentation gaps were found.
