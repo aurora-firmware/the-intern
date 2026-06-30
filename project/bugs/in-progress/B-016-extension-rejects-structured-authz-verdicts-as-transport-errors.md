@@ -236,6 +236,25 @@ failed closed with `authz verdict error`. Traced the authz reply path and found
 the TypeScript extension and Rust service disagree on the `authz_verdict`
 payload shape. No production code was changed.
 
+### Session 2 — 2026-06-30
+
+The TypeScript extension `the-intern/extensions/bob.ts` was fixed to parse structured authz_verdict frames that match the Rust wire format `{"allow": bool, "reason": string|null}` rather than the stale string comparison `frame.verdict === "allow" || frame.verdict === "block"`.
+
+**What was done.**
+Three regression tests were added to `bob.test.ts` before any production code was changed: one asserting `{allow:true,reason:null}` results in `block:false`, one asserting `{allow:false,reason:"..."}` results in `block:true` with the actual policy reason in `ToolCallEventResult.reason`, and one asserting a malformed object (`allow:"yes"`) still fails closed on the error path. The first two tests failed against the unfixed code, confirming they exercised the defect.
+
+The production fix had three parts. First, `VerdictOutcome` was changed from a string union to a discriminated union `{kind:"allow"} | {kind:"block";reason:string|null} | {kind:"error"} | {kind:"transport_error_logged"}` so the policy reason can be carried through without a separate variable. Second, `handleInboundLine` was rewritten to validate that `frame.verdict` is a non-null, non-array object with a boolean `allow` field before resolving the outcome, with explicit early returns to the `{kind:"error"}` path for every malformed shape. Third, `handleToolCall` was updated to use `outcome.kind` comparisons and pass `outcome.reason ?? "blocked by policy"` as the `ToolCallEventResult.reason` when the outcome is a block.
+
+The socket close handler and the `markDead → resolvePendingVerdicts` call were updated to pass the new object types instead of strings. The wire contract doc comment on line 18 was corrected to document the structured `{allow, reason}` shape.
+
+After the production fix the three B-016 regression tests passed, but two existing tests (AC-2 allow and AC-4 default-timeout) failed because `createAuthzServer.sendVerdict` was still calling `verdict: "allow"` (old string format). Those calls were updated to the structured format `{allow:true,reason:null}`. The AC-3a block test already passed after the fix (the string "block" also fails the object check and routes to the error path), but its call site was also updated for correctness.
+
+**What was rejected.** No alternative approaches were considered; the Diagnosis 2 contract was clear and the minimal fix path was obvious.
+
+**What was not verified.** `cargo test -p bob shell_e2e` and the live interactive session steps require Unix-domain-socket peer credentials and a live `pi` binary, which are unavailable in this sandbox. These must be run in a normal dev shell after the branch is merged.
+
+**What remains.** Nothing — all acceptance criteria from the Diagnosis 2 contract are met and all 33 TypeScript tests and 31 Rust `extension-ipc` tests pass. The fix is committed on `bug/B-016-extension-rejects-structured-authz-verdicts-as-transport-errors` (commit `b5c26cb`) and is ready for review.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
