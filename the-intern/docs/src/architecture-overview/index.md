@@ -148,9 +148,13 @@ The core never enumerates channel types. An emailed request and a scheduled trig
 look identical once they leave their adapters.
 
 **Scheduler adapter** is the shipped implementation. It starts with the service,
-maintains the configured cron job table, and submits a `Periodic` event when a job
-fires. Each job has stable sender and channel identities derived from its id, so
-pre-flight policy can address scheduled work consistently across reloads and restarts.
+reads entries from the JSON schedule store (`schedules.json` under the XDG state
+directory), maintains the active cron job table, and submits a `Periodic` event
+when a job fires. Each job has stable sender and channel identities derived from
+its id. `Periodic` events bypass pre-flight admission (ADR-012): the trusted
+schedule store is the admission gate, so no per-job UUID entry in
+`[policy].admitted_users` is required. Every resulting `tool_call` still goes
+through S-004 action authorization inside the supervised pi session.
 
 Interactive `bob chat` is not a channel adapter: it opens the direct supervised
 session described above. Email and other external adapters are not yet implemented.
