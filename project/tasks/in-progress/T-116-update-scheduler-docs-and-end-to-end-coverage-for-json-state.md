@@ -97,6 +97,28 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-06-30
+
+_Loop note: an earlier session was interrupted by a session limit before committing anything; this work started from a clean branch._
+
+Implemented all five acceptance criteria in a single TDD cycle.
+
+**What was done:**
+
+AC-1/AC-2/AC-3 — Rewrote the `operator-guide/index.md` "Scheduled jobs" section. The old "Configuring scheduled jobs in `config.toml`" subsection was replaced with "Schedule store (`schedules.json`)" that documents the JSON file as the authoritative source, its Linux XDG state path (`$XDG_STATE_HOME/bob/schedules.json`) and fallback (`~/.local/state/bob/schedules.json`), the JSON document shape, 0600 permissions, and atomic-write guarantees. The old "Policy admission for scheduled jobs" subsection — which instructed operators to copy scheduler-derived UUIDs into `[policy].admitted_users` — was replaced with "Admission of scheduled jobs" explaining the ADR-012 trust model: Unix trust boundary plus trusted schedule store, empty `admitted_users` does not block delivery, tool-call authorization still applies. The `bob schedule add/remove/reload` descriptions were updated to reference the JSON store rather than `config.toml`. The observability section was updated to remove the old claim about pre-flight verdict records being emitted for periodic events.
+
+AC-4 — Replaced the two existing e2e tests with a single new test (`schedule_entry_from_json_store_is_delivered_when_admitted_users_is_empty`). The test writes a `schedules.json` file, reads it back with `read_schedule_store` (mirroring the production startup path from T-113/T-114), wires a requests-handler closure that replicates the production logic from `serve.rs` (Periodic events bypass `run_preflight` and are directly enqueued), uses empty `admitted_users`, and asserts byte-for-byte delivery to the fake sh worker.
+
+AC-5 — All `[[schedule]]` references in the operator guide were updated or marked as migration notes. One reference was retained in a "Note on `[[schedule]]` in `config.toml`" box explicitly stating it is no longer read. The architecture-overview "Scheduler adapter" paragraph was rewritten to name the JSON store as source of truth.
+
+**What was tried and rejected:**
+
+Considered updating the two existing e2e tests in-place rather than replacing them. Rejected because the second test asserted the exact behavior that ADR-012 changed (periodic event denied by pre-flight), so updating it in-place would have turned it into a fundamentally different test with a misleading name. A clean replacement was clearer.
+
+**What remains / reviewer attention:**
+
+The extension-author-guide's "Shipped scheduler adapter" paragraph (`the-intern/docs/src/extension-author-guide/index.md`, line 153) still says "per configured `[[schedule]]` entry". This file is not in the task's Files to Touch list and was left unmodified; it is active guidance for adapter authors that arguably falls under AC-5 ("repository documentation still references `[[schedule]]` ... SHALL update or mark as historical"). Reviewer should decide whether this must be addressed within T-116 (e.g. a small in-scope fix or follow-up task). `cargo test --test scheduler_execution_e2e` passes (1 test); `cargo test --workspace` green; `cargo fmt --check` clean; `mdbook build` succeeded (one non-blocking mdbook-mermaid version-mismatch warning). Committed as `docs(operator-guide): update scheduler docs and e2e for JSON state` (`1732d5f`).
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
