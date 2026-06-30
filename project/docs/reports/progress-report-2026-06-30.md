@@ -8,7 +8,7 @@ created: 2026-06-30
 
 ## Summary
 
-Active specs: 8. Pending tasks: 0. In progress tasks: 0. Completed tasks: 117. Blocked tasks: 0. Open bugs: 0. Bugs in progress: 0. Resolved bugs: 15. ADRs: 12. Latest integration result: chore(tasks): merge T-116 update scheduler docs and e2e for json state.
+Active specs: 8. Pending tasks: 0. In progress tasks: 0. Completed tasks: 117. Blocked tasks: 0. Open bugs: 0. Bugs in progress: 0. Resolved bugs: 16. ADRs: 12. Latest integration result: chore(bugs): merge B-016 parse structured authz verdict frames.
 
 ## Specifications
 
@@ -25,7 +25,7 @@ Active specs: 8. Pending tasks: 0. In progress tasks: 0. Completed tasks: 117. B
 
 ## Integration Evidence
 
-- Latest integration-test result: chore(tasks): merge T-116 update scheduler docs and e2e for json state
+- Latest integration-test result: chore(bugs): merge B-016 parse structured authz verdict frames
 - Source: git log --all --grep=merge|integration|verification|test -n 1
 - Date: 2026-06-30
 
@@ -182,6 +182,7 @@ Active specs: 8. Pending tasks: 0. In progress tasks: 0. Completed tasks: 117. B
 | B-013 | admin-rpc dispatch sessions.list/kill tests fail under T-101 extension fail-closed gate | high | resolved | complete |
 | B-014 | Bob serve omits interactive pi spawn configuration | medium | resolved | complete |
 | B-015 | Interactive pi exit notification waits for idle reaper | medium | resolved | complete |
+| B-016 | Extension rejects structured authz verdicts as transport errors | critical | resolved | complete |
 
 ## Decisions
 
