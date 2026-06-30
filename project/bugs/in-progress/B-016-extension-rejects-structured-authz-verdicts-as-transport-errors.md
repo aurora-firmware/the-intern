@@ -155,6 +155,70 @@ Rust verdict frames; run `cargo test -p extension-ipc`; perform a manual
 interactive Bob session and confirm a tool call no longer fails with
 `authz verdict error`.
 
+### Diagnosis 2 — 2026-06-30
+
+Reproduction status: confirmed — the defect is reproducible via code inspection and
+the existing Rust integration test, which directly demonstrates the wire mismatch.
+
+Evidence captured:
+
+1. `cargo test -p extension-ipc` — 31 passed, 0 failed. The test
+   `connection_authz_frame_returns_deny_verdict_with_same_session`
+   (`the-intern/service/crates/extension-ipc/src/lib.rs` line 405) sends an
+   `authz` frame over a Unix socket pair and asserts the reply satisfies
+   `reply["verdict"]["allow"] == false` and `reply["verdict"]["reason"].is_string()`.
+   This confirms the Rust service has always emitted a structured object for `verdict`.
+
+2. `framing.rs` lines 40-47 — `OutboundFrame::AuthzVerdict { session, verdict: PolicyVerdict }`
+   is serialised with `#[serde(tag = "kind", rename_all = "snake_case")]` on the enum.
+   `PolicyVerdict` (`bob-core/src/types/records.rs` lines 9-15) is a plain struct with
+   `pub allow: bool` and `pub reason: Option<String>`, no field rename attributes.
+   Serialised wire shape: `{"kind":"authz_verdict","session":"<uuid>","verdict":{"allow":true|false,"reason":"..."|null}}`.
+
+3. `bob.ts` `handleInboundLine` (lines 149-153) checks
+   `(frame.verdict === "allow" || frame.verdict === "block")`.
+   Because `frame.verdict` is always an object `{allow,reason}` in the actual wire
+   stream, this equality is never true. The else branch fires unconditionally and
+   calls `resolve("error")`, which `handleToolCall` maps to
+   `{ block: true, reason: "authz verdict error" }`.
+
+4. `bob.ts` line 18 doc comment still documents the old wire contract
+   `"verdict":"allow"|"block"` — a string that was never serialised by the Rust side.
+
+5. S-004 Component 4 specifies the multiplexer produces `AuthzVerdict` using `PolicyVerdict`;
+   Component 5 specifies `bob.ts` consumes it. The spec names the Rust type and makes no
+   mention of a string-only encoding. The Rust implementation is aligned with the spec;
+   the TS implementation is not.
+
+Isolated fault: `handleInboundLine` in `the-intern/extensions/bob.ts` (lines 149-153).
+The function's verdict guard uses string equality against `"allow"` / `"block"`, which
+cannot match the structured `PolicyVerdict` object the Rust service always sends.
+The stale doc comment at line 18 is a secondary documentation fault.
+
+Root cause: The TypeScript extension's inbound wire contract was written against an
+earlier design where `verdict` was a plain string. The Rust service was implemented
+with a structured `PolicyVerdict` object (`{allow: bool, reason: string|null}`), but
+the TS extension was never updated to match. The Rust side is the correct side per
+S-004 and per its own tests.
+
+Planned fix (TS extension only — no Rust changes required):
+
+1. Update `handleInboundLine` to parse `frame.verdict` as a structured object
+   `{allow: boolean, reason?: string | null}` rather than comparing it to plain strings.
+   - `verdict.allow === true`  → resolve the allow outcome.
+   - `verdict.allow === false` → resolve a block outcome carrying `verdict.reason`.
+2. Extend `VerdictOutcome` (or use a companion field) so the block reason from the
+   policy can be threaded to `handleToolCall`'s `{ block: true, reason: "..." }` return,
+   replacing the current hardcoded `"blocked by policy"` string.
+3. Correct the stale wire-contract doc comment at line 18 to reflect the structured shape.
+
+Planned verification:
+  cargo test -p extension-ipc       (must remain green — no Rust changes)
+  cargo test -p bob shell_e2e       (end-to-end pass)
+  Manual: start dev bob service, trigger a tool call, confirm the extension no longer
+  emits "authz verdict error", confirmed allowed calls run and denied calls surface
+  the actual policy reason rather than "authz verdict error".
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
