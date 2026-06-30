@@ -150,7 +150,7 @@ engine enforce tool-call authorization inside supervised pi sessions.
 
 `the-intern/service/crates/scheduler-adapter/` is the concrete implementation
 shipped with bob. The actor always starts with `bob serve`. It creates one task
-per configured `[[schedule]]` entry and, on each cron tick, submits:
+per entry in the JSON schedule store (`schedules.json`) and, on each cron tick, submits:
 
 - `DeliveryKind::Periodic` with the configured prompt as its payload;
 - stable `UserId` and `ChannelId` values derived from the job id;
