@@ -107,8 +107,12 @@ expects `verdict` to be a string. The tool call is fail-closed with
 
 ```bash
 cargo test -p extension-ipc
-cargo test -p bob shell_e2e
+cargo test -p bob --test shell_e2e
 ```
+
+Note: use `--test shell_e2e` to run the `shell_e2e` integration target. A bare
+`cargo test -p bob shell_e2e` treats `shell_e2e` as a test-name filter and
+silently runs zero tests.
 
 Manual verification:
 
