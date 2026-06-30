@@ -171,3 +171,19 @@ The operator-guide and architecture-overview `[[schedule]]` references were all 
 - No unexpected files modified; no dead code or commented-out blocks added.
 
 **Required fix before re-submit:** Update `the-intern/docs/src/extension-author-guide/index.md` line 153 to remove the active `[[schedule]]` reference (update to name `schedules.json` or mark as historical). This is the only blocking issue.
+
+### Review Verdict — 2026-06-30 (cycle 2)
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1: PASS (confirmed unchanged from cycle 1; operator-guide has a "Schedule store (`schedules.json`)" subsection documenting the JSON file as authoritative source, the Linux XDG state path `$XDG_STATE_HOME/bob/schedules.json`, and the fallback `~/.local/state/bob/schedules.json`).
+- AC-2: PASS (confirmed unchanged; old policy-admission subsection removed and replaced; new subsection explicitly instructs operators not to add scheduler-derived UUIDs to `[policy].admitted_users`).
+- AC-3: PASS (confirmed unchanged; operator-guide and architecture-overview both state scheduled jobs are admitted by the Unix trust boundary plus trusted schedule store, and every `tool_call` still goes through S-004 action authorization).
+- AC-4: PASS. `cargo test --test scheduler_execution_e2e -- --nocapture` passes (1 test, 0 failures). `cargo test --workspace` passes all crate tests, 0 failures.
+- AC-5: PASS. Commit `67eb991` on the task branch updated `the-intern/docs/src/extension-author-guide/index.md` line 153 from "per configured `[[schedule]]` entry" to "per entry in the JSON schedule store (`schedules.json`)". A fresh `grep -rn "\[\[schedule\]\]" the-intern/docs/src` on the task branch returns exactly two hits, both in `operator-guide/index.md` at lines 395–397, inside the explicit "Note on `[[schedule]]` in `config.toml`:" migration callout that states the TOML table is "no longer read by `bob serve`". No active source-of-truth references remain.
+
+**Stage 2 — Code Quality**
+
+No code changes since cycle 1 beyond the single one-line doc edit. All stage 2 checks from cycle 1 remain valid. `mdbook build` succeeds (pre-existing mdbook-mermaid version warning only, non-blocking). No dead code, no unexpected files modified.
