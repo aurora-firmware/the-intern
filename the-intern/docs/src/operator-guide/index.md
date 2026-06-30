@@ -273,20 +273,34 @@ affect what is delivered to live subscribers.
 
 ## Policy basics
 
-`bob` applies two deterministic authorization gates to every request. Both are
-evaluated by the `policy-control` subsystem against an in-memory ruleset loaded
-from your TOML config. The default behavior when no `[policy]` section is present
-is **deny all**.
+`bob` has two deterministic authorization gates, both evaluated by the
+`policy-control` subsystem against an in-memory ruleset loaded from your TOML
+config. The default behavior when no `[policy]` section is present is **deny all**
+for the action gate. The two gates apply at different points and to different
+traffic:
+
+- **Pre-flight admission** applies to *admission-gated* queue-borne requests
+  (e.g. external channel adapters). It does **not** apply to scheduled jobs —
+  under ADR-012 scheduler `Periodic` events are admitted by trusted
+  schedule-store membership and are not checked against `admitted_users`, so an
+  empty `admitted_users` list does not block scheduled prompt delivery.
+  Interactive `bob chat` likewise does not run pre-flight admission.
+- **The tool-call action gate** applies to *every* tool call from *every*
+  supervised pi-agent session, including sessions started by scheduled jobs and
+  interactive chat. There is no bypass for this gate.
 
 For the architectural rationale and a detailed description of how the policy
 engine works, see the [Architecture Overview](../architecture-overview/index.md).
 
 ### Pre-flight admission
 
-When a request enters the queue, `bob` checks the sender's identity against the
-`admitted_users` list. Requests from identities not in the list are dropped
-before any further processing. A denied `verdict` audit record is appended for
-each blocked request with a reason that starts with `preflight denied:`.
+When an *admission-gated* request enters the queue, `bob` checks the sender's
+identity against the `admitted_users` list. Requests from identities not in the
+list are dropped before any further processing. A denied `verdict` audit record
+is appended for each blocked request with a reason that starts with `preflight
+denied:`. Scheduled jobs are not admission-gated (see the note above): they are
+admitted by trusted schedule-store membership and do not require an
+`admitted_users` entry.
 
 Configure the admitted users in the `[policy]` section:
 
