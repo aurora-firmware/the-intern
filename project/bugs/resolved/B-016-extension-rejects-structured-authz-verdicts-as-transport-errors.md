@@ -2,7 +2,7 @@
 id: B-016
 title: Extension rejects structured authz verdicts as transport errors
 severity: critical
-status: in-progress
+status: resolved
 created: '2026-06-30'
 ---
 
