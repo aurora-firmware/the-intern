@@ -401,7 +401,8 @@ pub fn write_schedule_store(path: &Path, entries: &[ScheduleEntry]) -> ServiceRe
     Ok(())
 }
 
-/// A validated schedule job entry sourced from the `[[schedule]]` TOML section.
+/// A validated schedule job entry sourced from the JSON schedule store
+/// (`schedules.json`).
 ///
 /// `id` is the unique string identifier for the job, `cron` is a standard
 /// 5-field cron expression (minute hour day-of-month month day-of-week), and
