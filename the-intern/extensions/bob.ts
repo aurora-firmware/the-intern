@@ -15,7 +15,7 @@
  *
  * Wire contract (inbound frames, received from the bob service):
  *   OutboundFrame::AuthzVerdict:
- *     {"kind":"authz_verdict","session":"<BOB_SESSION_ID>","verdict":"allow"|"block"}\n
+ *     {"kind":"authz_verdict","session":"<BOB_SESSION_ID>","verdict":{"allow":true|false,"reason":"..."|null}}\n
  *
  * Failure behaviour (one warning, then silent no-op for the session):
  *   - Missing BOB_SESSION_ID or BOB_EXTENSION_SOCK_PATH at load time.
@@ -125,7 +125,11 @@ export default function bobFactory(pi: ExtensionAPI): void {
   // Each entry corresponds to one outstanding Authz frame awaiting a verdict.
   // Resolved in FIFO order as AuthzVerdict frames arrive.
   // ---------------------------------------------------------------------------
-  type VerdictOutcome = "allow" | "block" | "error" | "transport_error_logged";
+  type VerdictOutcome =
+    | { kind: "allow" }
+    | { kind: "block"; reason: string | null }
+    | { kind: "error" }
+    | { kind: "transport_error_logged" };
   type VerdictResolver = (verdict: VerdictOutcome) => void;
   const pendingVerdicts: VerdictResolver[] = [];
 
@@ -133,26 +137,39 @@ export default function bobFactory(pi: ExtensionAPI): void {
   let inboundBuffer = "";
 
   function handleInboundLine(line: string): void {
-    // Each line must be a valid JSON AuthzVerdict frame.
-    // If it is not, the oldest pending resolver is fail-closed.
+    // Each line must be a valid JSON AuthzVerdict frame with a structured
+    // verdict object: {"allow": boolean, "reason": string | null}.
+    // Anything else — malformed JSON, wrong kind, wrong session, non-object
+    // verdict, or non-boolean allow — resolves as "error" (fail-closed).
     if (pendingVerdicts.length === 0) return;
     const resolve = pendingVerdicts.shift()!;
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
     } catch {
-      resolve("error");
+      resolve({ kind: "error" });
       return;
     }
     const frame = parsed as Record<string, unknown>;
-    if (
-      frame.kind === "authz_verdict" &&
-      frame.session === sessionId &&
-      (frame.verdict === "allow" || frame.verdict === "block")
-    ) {
-      resolve(frame.verdict as "allow" | "block");
+    if (frame.kind !== "authz_verdict" || frame.session !== sessionId) {
+      resolve({ kind: "error" });
+      return;
+    }
+    const v = frame.verdict;
+    if (v === null || typeof v !== "object" || Array.isArray(v)) {
+      resolve({ kind: "error" });
+      return;
+    }
+    const verdictObj = v as Record<string, unknown>;
+    if (typeof verdictObj.allow !== "boolean") {
+      resolve({ kind: "error" });
+      return;
+    }
+    if (verdictObj.allow) {
+      resolve({ kind: "allow" });
     } else {
-      resolve("error");
+      const reason = typeof verdictObj.reason === "string" ? verdictObj.reason : null;
+      resolve({ kind: "block", reason });
     }
   }
 
@@ -171,7 +188,7 @@ export default function bobFactory(pi: ExtensionAPI): void {
     sock.on("close", () => {
       // Fail-close all pending verdict waiters with "error".
       for (const resolve of pendingVerdicts) {
-        resolve("error");
+        resolve({ kind: "error" });
       }
       pendingVerdicts.length = 0;
     });
@@ -190,7 +207,7 @@ export default function bobFactory(pi: ExtensionAPI): void {
     socket = null;
     // Any in-flight tool_call authz must fail closed immediately and must not
     // emit a second warning in handleToolCall (this warning is the canonical one).
-    resolvePendingVerdicts("transport_error_logged");
+    resolvePendingVerdicts({ kind: "transport_error_logged" });
     warn(`transport error — event forwarding disabled for this session: ${reason}`, ctx);
   }
 
@@ -346,21 +363,23 @@ export default function bobFactory(pi: ExtensionAPI): void {
       return { block: true, reason: "authz verdict timeout" };
     }
 
-    if (outcome === "block") {
-      warn(`authz: tool call blocked by policy`, ctx);
-      return { block: true, reason: "blocked by policy" };
+    // After the timeout guard above, outcome is narrowed to VerdictOutcome.
+    if (outcome.kind === "block") {
+      const policyReason = outcome.reason ?? "blocked by policy";
+      warn(`authz: tool call blocked by policy: ${policyReason}`, ctx);
+      return { block: true, reason: policyReason };
     }
 
-    if (outcome === "error") {
+    if (outcome.kind === "error") {
       warn(`authz: unparseable or transport-error verdict — blocking tool call`, ctx);
       return { block: true, reason: "authz verdict error" };
     }
 
-    if (outcome === "transport_error_logged") {
+    if (outcome.kind === "transport_error_logged") {
       return { block: true, reason: "transport error" };
     }
 
-    // outcome === "allow"
+    // outcome.kind === "allow"
     return { block: false };
   }
 

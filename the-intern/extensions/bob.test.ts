@@ -708,7 +708,12 @@ describe("T-044 AC-2: ctx.ui absent — socket.write false falls back to stderr"
 async function createAuthzServer(serverSockPath: string): Promise<{
   close(): Promise<void>;
   lines(): string[];
-  sendVerdict(verdict: { kind: "authz_verdict"; session: string; verdict: string }): void;
+  /** Send a structured AuthzVerdict frame matching the Rust wire format. */
+  sendVerdict(verdict: {
+    kind: "authz_verdict";
+    session: string;
+    verdict: { allow: boolean; reason?: string | null };
+  }): void;
   sendRaw(data: string): void;
 }> {
   const received: string[] = [];
@@ -837,7 +842,7 @@ describe("T-057 AC-2: allow verdict permits tool call", () => {
 
     // Wait for the authz frame, then send back an allow verdict.
     await waitUntil(() => server.lines().length >= 1);
-    server.sendVerdict({ kind: "authz_verdict", session: SESSION_ID, verdict: "allow" });
+    server.sendVerdict({ kind: "authz_verdict", session: SESSION_ID, verdict: { allow: true, reason: null } });
 
     handlerResult = await handlerPromise;
 
@@ -877,7 +882,7 @@ describe("T-057 AC-3a: block verdict denies tool call", () => {
     const handlerPromise = handlers[0]!(toolCallEvent, {} as ExtensionContext);
 
     await waitUntil(() => server.lines().length >= 1);
-    server.sendVerdict({ kind: "authz_verdict", session: SESSION_ID, verdict: "block" });
+    server.sendVerdict({ kind: "authz_verdict", session: SESSION_ID, verdict: { allow: false, reason: null } });
 
     const result = await handlerPromise;
 
@@ -1016,6 +1021,120 @@ describe("T-057 AC-3d: transport failure fails closed", () => {
 });
 
 // ---------------------------------------------------------------------------
+// B-016 regression: extension must accept structured authz_verdict frames.
+//
+// The Rust service sends verdict as a structured JSON object:
+//   {"allow": bool, "reason": string|null}
+// NOT as a plain string "allow" or "block".
+// These tests assert the correct behaviour for all three cases:
+// structured allow, structured block with reason, and malformed verdict.
+// ---------------------------------------------------------------------------
+
+describe("B-016 regression: structured verdict {allow:true} permits tool call", () => {
+  it("returns block:false when the service sends verdict:{allow:true,reason:null}", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "500";
+
+    const server = await createAuthzServer(sockPath);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("tool_call") ?? [];
+    const handlerPromise = handlers[0]!(
+      { type: "tool_call", toolCallId: "b016-001", toolName: "read", input: { file_path: "/tmp/x" } },
+      {} as ExtensionContext,
+    );
+
+    await waitUntil(() => server.lines().length >= 1);
+    // Send the exact Rust wire format: verdict is a structured object.
+    server.sendRaw(
+      JSON.stringify({ kind: "authz_verdict", session: SESSION_ID, verdict: { allow: true, reason: null } }) + "\n",
+    );
+
+    const result = await handlerPromise;
+    expect((result as any)?.block).toBeFalsy();
+
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+    await server.close();
+  });
+});
+
+describe("B-016 regression: structured verdict {allow:false} surfaces policy reason", () => {
+  it("returns block:true and surfaces the policy reason from verdict.reason when allow:false", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "500";
+
+    const server = await createAuthzServer(sockPath);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("tool_call") ?? [];
+    const handlerPromise = handlers[0]!(
+      { type: "tool_call", toolCallId: "b016-002", toolName: "bash", input: { command: "rm -rf /" } },
+      {} as ExtensionContext,
+    );
+
+    await waitUntil(() => server.lines().length >= 1);
+    const policyReason = "no action rule permits tool 'bash' with the supplied arguments";
+    server.sendRaw(
+      JSON.stringify({
+        kind: "authz_verdict",
+        session: SESSION_ID,
+        verdict: { allow: false, reason: policyReason },
+      }) + "\n",
+    );
+
+    const result = await handlerPromise;
+    expect((result as any)?.block).toBe(true);
+    // The actual policy reason must be surfaced, not a hardcoded fallback.
+    expect((result as any)?.reason).toBe(policyReason);
+
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+    await server.close();
+  });
+});
+
+describe("B-016 regression: malformed structured verdict (non-boolean allow) fails closed", () => {
+  it("returns block:true on the error path when verdict.allow is not a boolean", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "500";
+
+    const server = await createAuthzServer(sockPath);
+    const pi = makeStubPi();
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("tool_call") ?? [];
+    const handlerPromise = handlers[0]!(
+      { type: "tool_call", toolCallId: "b016-003", toolName: "bash", input: { command: "ls" } },
+      {} as ExtensionContext,
+    );
+
+    await waitUntil(() => server.lines().length >= 1);
+    // Send a verdict object with a non-boolean allow — malformed per the Rust contract.
+    server.sendRaw(
+      JSON.stringify({ kind: "authz_verdict", session: SESSION_ID, verdict: { allow: "yes", reason: null } }) + "\n",
+    );
+
+    const result = await handlerPromise;
+    // Must fail closed (block: true, error path warning).
+    expect((result as any)?.block).toBe(true);
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+    await server.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // AC-3e: connect-time transport failure (no verdict) emits one warning.
 // ---------------------------------------------------------------------------
 
@@ -1110,7 +1229,7 @@ describe("T-057 AC-4: BOB_AUTHZ_TIMEOUT_MS controls verdict timeout", () => {
     const handlerPromise = handlers[0]!(toolCallEvent, {} as ExtensionContext);
 
     await waitUntil(() => server.lines().length >= 1);
-    server.sendVerdict({ kind: "authz_verdict", session: SESSION_ID, verdict: "allow" });
+    server.sendVerdict({ kind: "authz_verdict", session: SESSION_ID, verdict: { allow: true, reason: null } });
 
     const result = await handlerPromise;
     // Allow verdict with default timeout → should NOT block.
