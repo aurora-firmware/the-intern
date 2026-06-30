@@ -1134,6 +1134,48 @@ describe("B-016 regression: malformed structured verdict (non-boolean allow) fai
   });
 });
 
+describe("B-016 regression: top-level non-object verdict frame fails closed without crashing", () => {
+  it("resolves to the error path promptly when the frame is the JSON literal null", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    // Generous timeout so a prompt resolution proves the synchronous error path
+    // was taken rather than the verdict timeout. Before the top-level guard,
+    // reading frame.kind off null threw inside the socket data handler and the
+    // tool call was only released by this timeout (if at all).
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "2000";
+
+    const server = await createAuthzServer(sockPath);
+    const pi = makeStubPi();
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("tool_call") ?? [];
+    const handlerPromise = handlers[0]!(
+      { type: "tool_call", toolCallId: "b016-004", toolName: "bash", input: { command: "ls" } },
+      {} as ExtensionContext,
+    );
+
+    await waitUntil(() => server.lines().length >= 1);
+    // A bare `null` is valid JSON; it must fail closed, not throw.
+    const before = Date.now();
+    server.sendRaw("null\n");
+
+    const result = await handlerPromise;
+    const elapsed = Date.now() - before;
+
+    // Fail closed via the synchronous error path, well before the 2000ms timeout.
+    expect((result as any)?.block).toBe(true);
+    expect(elapsed).toBeLessThan(1000);
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+    await server.close();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // AC-3e: connect-time transport failure (no verdict) emits one warning.
 // ---------------------------------------------------------------------------

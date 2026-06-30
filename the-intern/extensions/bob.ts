@@ -139,14 +139,24 @@ export default function bobFactory(pi: ExtensionAPI): void {
   function handleInboundLine(line: string): void {
     // Each line must be a valid JSON AuthzVerdict frame with a structured
     // verdict object: {"allow": boolean, "reason": string | null}.
-    // Anything else — malformed JSON, wrong kind, wrong session, non-object
-    // verdict, or non-boolean allow — resolves as "error" (fail-closed).
+    // Anything else — malformed JSON, a non-object top-level frame (e.g. the
+    // JSON literal null, a primitive, or an array), wrong kind, wrong session,
+    // non-object verdict, or non-boolean allow — resolves as "error"
+    // (fail-closed).
     if (pendingVerdicts.length === 0) return;
     const resolve = pendingVerdicts.shift()!;
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
     } catch {
+      resolve({ kind: "error" });
+      return;
+    }
+    // Guard the top-level shape before treating it as a record: JSON.parse can
+    // legally return null, a primitive, or an array, and reading frame.kind off
+    // null would throw a TypeError inside the socket data handler rather than
+    // failing closed through the resolver below.
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       resolve({ kind: "error" });
       return;
     }
