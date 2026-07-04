@@ -279,3 +279,86 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-07-04
+
+PASS
+
+Diagnosis→fix evidence chain: `### Diagnosis 1` records reproduction status
+(confirmed, re-verified against `pi-logs.log` session `577ef1bc` plus static
+source analysis), captured evidence (timestamped extension-event timeline
+showing `kill_session` issued before `turn_start`/`before_provider_request`;
+`serve.rs` unconditional-kill code path; `send_prompt`/`parse_prompt_response`
+ack-only semantics; a passing run of the masking test), an isolated fault
+(`serve.rs` `start_periodic_dispatcher`, unconditional `kill_session` after
+`send_prompt`), a root-cause hypothesis (conflating RPC-acceptance ack with
+run completion), and planned verification. The fix contract in Diagnosis 1
+matches what was implemented in Session 1 and in the diff — no drift.
+
+Stage 1 (bug criteria):
+- Diagnosis Log has reproduction status and evidence: yes (see above).
+- Fix addresses the isolated fault: yes. `kill_session` is now only called on
+  the `send_prompt` `Err` path; on `Ok(())` the function falls through and
+  leaves the worker for the supervisor's existing idle reaper
+  (`reap_idle_and_surplus`, driven by `last_prompt_activity` +
+  `idle_reap_timeout`, ticking unconditionally in the supervisor actor loop —
+  confirmed at `pi-agent-supervisor/src/lib.rs:368` and
+  `pool.rs:256-283`, so periodic-dispatched sessions are reclaimed in
+  production, not just under test config overrides). This matches the bug's
+  Expected Behavior verbatim (fire-and-forget = no response routed back, not
+  run aborted; release via observed completion or the idle reaper).
+- Fix Verification steps followed: yes (see command output below).
+- No unrelated behavior added: confirmed — `git diff --stat
+  dev-agent...bug/B-017-...` touches only
+  `the-intern/service/crates/bob/src/serve.rs` (doc comments, the dispatch
+  match arm, one pre-existing test's config/assertions, and one new test).
+
+Stage 2 (code quality) + Bug Fix Addendum:
+- Minimal fix: the production-code change is exactly the isolated fault —
+  moving `kill_session` inside the `send_prompt` error branch. No refactoring
+  or unrelated cleanup bundled in.
+- Regression test genuinely discriminates the bug. I reproduced this
+  independently: built a worktree from the fix commit, mechanically reverted
+  only the dispatch arm back to the old unconditional-kill shape (keeping the
+  new test), and reran `cargo test -p bob --lib serve::tests::periodic`. The
+  new test `dispatcher_does_not_kill_worker_before_deferred_agent_run_completes`
+  failed with `Elapsed(())` against the old code and passed against the fix.
+  The fake worker's ack-then-`sleep 0.3`-then-write happens in the same
+  (unforked, non-backgrounded) process that `RpcWorkerProcess::terminate()`
+  SIGTERMs (confirmed at `process.rs` `request_graceful_termination`, which
+  signals `self.child.id()` directly) — so an early kill genuinely aborts the
+  deferred write, this is not a tautological test.
+- The modified pre-existing test
+  `periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt` still
+  asserts dispatch (payload forwarded, side-effect file written) and now
+  asserts eventual release via a shortened `pi_agent_idle_reap_timeout`
+  (100ms) rather than synchronous release — a legitimate update since the old
+  "release within 5s of dispatch" assertion was itself an encoding of the bug
+  the fix removes. Verified this test still passes under both the fix and
+  (as expected, since old code released synchronously) the pre-fix code.
+- No session leak, no regression to interactive sessions or the idle reaper:
+  `kill_session` call sites outside `serve.rs` are unaffected (only used by
+  admin-rpc's interactive-session teardown, `dispatch.rs`, and disconnect
+  handling); confirmed via `grep -rn kill_session`. `pi-agent-supervisor`'s
+  50-test suite (idle reaper + interactive lifecycle) is unaffected by this
+  change and passes in full.
+
+Fix Verification commands run from `the-intern/service/` (fix branch,
+worktree checkout of `d90fe09`):
+- `cargo test --workspace` → all crates green, 0 failures (bob 101, bob 118,
+  pi-agent-supervisor 50, admin-rpc 110, requests-handler 15,
+  scheduler-adapter 9, policy-control 45, plus integration test binaries: 1,
+  3, 1, 1, 2, 5, 31, 5, 21). No `Operation not permitted` UDS failures
+  observed in this sandbox.
+- `cargo test -p bob --test scheduler_execution_e2e -- --nocapture` → 1
+  passed.
+- `cargo test --test shell_e2e -- --nocapture` → 5 passed (also requested by
+  the review task; confirms no UDS sandbox restriction here either).
+- `cargo fmt --all -- --check` → clean.
+- Manual live-`pi` verification: not run (same as Work Log — requires
+  provider API access and real cron timing); the deterministic regression
+  test substitutes for it per the Diagnosis Log's planned verification, which
+  is an accepted trade-off already recorded and reasoned through in the Work
+  Log.
+
+Both review stages pass. No blocking issues found.
