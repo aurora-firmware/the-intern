@@ -4,6 +4,7 @@ pub mod framing;
 pub mod listener;
 pub mod multiplex;
 pub mod peer_cred;
+pub mod session_registry;
 
 use std::path::PathBuf;
 use std::sync::Arc;
