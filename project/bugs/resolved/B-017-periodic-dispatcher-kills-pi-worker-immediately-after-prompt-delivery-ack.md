@@ -2,7 +2,7 @@
 id: B-017
 title: periodic dispatcher kills pi worker immediately after prompt delivery ack
 severity: high
-status: in-progress
+status: resolved
 created: '2026-07-04'
 ---
 
