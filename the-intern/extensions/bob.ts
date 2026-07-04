@@ -20,7 +20,15 @@
  * Failure behaviour (one warning, then silent no-op for the session):
  *   - Missing BOB_SESSION_ID or BOB_EXTENSION_SOCK_PATH at load time.
  *   - UDS connect failure on first event.
- *   - Write failure mid-session.
+ *   - Genuine write failure mid-session: a socket 'error' event (e.g.
+ *     EPIPE/ECONNRESET), or socket.write() returning false while the socket
+ *     is already destroyed/not writable (a clean peer-initiated close can
+ *     reach this point without ever raising 'error').
+ *   - The pendingFrames cap being exceeded, whether while still connecting
+ *     or while a connected socket is waiting for 'drain'.
+ *   - socket.write() returning false while the socket is still healthy is
+ *     ordinary flow-control back-pressure, NOT a failure: the transport
+ *     stays alive and queued frames flush once the socket emits 'drain'.
  *
  * Authz failure behaviour (fail-closed):
  *   - Transport failure, unparseable verdict, or timeout → block + one warning.
@@ -90,9 +98,14 @@ function warn(message: string, ctx?: ExtensionContext): void {
 }
 
 // ---------------------------------------------------------------------------
-// Maximum number of frames allowed in the pre-connect queue.
-// Exceeding this limit means the transport is too slow to drain; we kill it
-// immediately (one warn, then silent no-op) rather than buffer unboundedly.
+// Maximum number of frames allowed to queue in pendingFrames — whether while
+// the connection is still being established, or while a connected socket is
+// waiting for 'drain' after reporting ordinary write() back-pressure.
+// Exceeding this limit means the peer is too slow (or permanently stuck) to
+// drain; we kill the transport immediately (one warn, then silent no-op)
+// rather than buffer unboundedly. Event loss under this sustained-overload
+// condition is acceptable (S-003); a single transient write() === false is
+// not treated this way — only a backlog this deep is.
 // ---------------------------------------------------------------------------
 const PENDING_FRAMES_CAP = 64;
 
@@ -117,7 +130,13 @@ export default function bobFactory(pi: ExtensionAPI): void {
   let socket: net.Socket | null = null;
   let transportDead = false;
   let connecting = false;
-  // Frames queued while the connect is in progress.
+  // True while waiting for a 'drain' event after socket.write() reported
+  // ordinary flow-control back-pressure (write() returned false). While set,
+  // flushPending defers writing any further frames rather than piling more
+  // data onto an already-full kernel send buffer.
+  let backpressured = false;
+  // Frames queued while the connect is in progress, or while waiting for
+  // 'drain' after a connected socket reports back-pressure.
   const pendingFrames: string[] = [];
 
   // ---------------------------------------------------------------------------
@@ -222,26 +241,42 @@ export default function bobFactory(pi: ExtensionAPI): void {
   }
 
   function flushPending(ctx?: ExtensionContext): void {
-    if (!socket || transportDead) return;
-    for (const frame of pendingFrames) {
+    if (!socket || transportDead || backpressured) return;
+    while (pendingFrames.length > 0) {
+      const frame = pendingFrames[0]!;
+      // Node always accepts a write() call and queues the frame for delivery
+      // internally, regardless of the return value: false means the internal
+      // buffer is over its high-water mark (ordinary flow-control
+      // back-pressure), not that the frame failed to send.  Remove it from
+      // our own queue either way — the socket has taken ownership of it.
       const ok = socket.write(frame);
-      // write() returns false when the kernel send-buffer is full (back-pressure)
-      // or when the socket has been destroyed by the peer.  Either way the frame
-      // was not accepted; kill the transport immediately rather than buffering.
+      pendingFrames.shift();
       if (!ok) {
-        pendingFrames.length = 0;
-        markDead("socket.write returned false — back-pressure or peer closed", ctx);
+        if (socket.destroyed || !socket.writable) {
+          // The socket is already gone. A false return here reports a
+          // genuine failure, not ordinary back-pressure: some peer-initiated
+          // close paths (a clean FIN) reach this point without ever raising
+          // an 'error' event, so detect it directly rather than relying only
+          // on 'error'/'close'.
+          markDead("socket.write returned false on a closed socket", ctx);
+        } else {
+          // Ordinary back-pressure: pause further writes until 'drain'
+          // signals the buffer has cleared; any frames still queued behind
+          // this one stay in pendingFrames for the next flush attempt.
+          backpressured = true;
+        }
         return;
       }
     }
-    pendingFrames.length = 0;
   }
 
   function ensureConnected(frame: string, ctx?: ExtensionContext): void {
     if (transportDead) return;
 
     if (pendingFrames.length >= PENDING_FRAMES_CAP) {
-      // Queue is full — the transport is too slow.  Drop this frame and all
+      // Queue is full — the peer is too slow to keep up, whether because the
+      // connection is still being established or because a connected socket
+      // has been waiting for 'drain' for too long.  Drop this frame and all
       // future frames by marking the transport dead (one warn, then silent).
       markDead(
         `pendingFrames cap of ${PENDING_FRAMES_CAP} exceeded — dropping frames`,
@@ -253,7 +288,8 @@ export default function bobFactory(pi: ExtensionAPI): void {
     pendingFrames.push(frame);
 
     if (socket !== null) {
-      // Already connected — flush immediately.
+      // Already connected — flush immediately (a no-op while waiting for
+      // 'drain'; the frame just pushed stays queued until then).
       flushPending(ctx);
       return;
     }
@@ -269,6 +305,13 @@ export default function bobFactory(pi: ExtensionAPI): void {
       connecting = false;
       socket = sock;
       attachVerdictReader(sock);
+      // Re-flush once the kernel send buffer clears after back-pressure.
+      // Reuses the ctx captured from the event that triggered this connect,
+      // matching how the 'error' handler below reports failures.
+      sock.on("drain", () => {
+        backpressured = false;
+        flushPending(ctx);
+      });
       flushPending(ctx);
     });
 

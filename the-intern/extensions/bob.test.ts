@@ -404,12 +404,14 @@ describe("B-003-A: pendingFrames cap (pre-connect)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// B-003-B: socket.write() back-pressure — write returns false → one warn,
-// transport marked dead, subsequent events become no-ops.
+// B-019 / B-003-B: socket.write() back-pressure is ordinary Node flow control,
+// not a transport failure. write() returning false must NOT warn or mark the
+// transport dead; frames queued while waiting for 'drain' must be delivered
+// once the buffer clears.
 // ---------------------------------------------------------------------------
 
-describe("B-003-B: socket.write() back-pressure", () => {
-  it("warns exactly once and marks transport dead when socket.write returns false", async () => {
+describe("B-003-B: socket.write() back-pressure is not fatal", () => {
+  it("does not warn or mark the transport dead when socket.write returns false, and flushes queued frames once 'drain' fires", async () => {
     process.env.BOB_SESSION_ID = SESSION_ID;
     process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
 
@@ -422,27 +424,104 @@ describe("B-003-B: socket.write() back-pressure", () => {
     await pi.emit("session_start", { type: "session_start", reason: "startup" });
     await waitUntil(() => server.lines().length >= 1);
 
-    // Monkey-patch the underlying Socket.write so the next call returns false.
-    // We reach into the net module and intercept the prototype method only for
-    // the duration of this assertion.
+    // Force the next socket.write() call to report back-pressure (false)
+    // without delivering the frame, and capture the live socket instance so
+    // the test can fire a synthetic 'drain' event without needing to
+    // genuinely fill the kernel send buffer.
+    let capturedSocket: net.Socket | undefined;
     const originalWrite = net.Socket.prototype.write;
-    net.Socket.prototype.write = function (..._args: unknown[]) {
-      // Restore immediately so only one call returns false.
+    net.Socket.prototype.write = function (this: net.Socket, ..._args: unknown[]) {
+      capturedSocket = this;
+      // Restore immediately so only this one call reports back-pressure.
       net.Socket.prototype.write = originalWrite;
       return false as any;
     };
 
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-    // Second event — write returns false, markDead should fire.
+    // Second event — write() returns false. Must NOT warn or mark dead.
     await pi.emit("agent_start", { type: "agent_start" });
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 50));
 
-    // Exactly one warn.
+    expect(stderrSpy).not.toHaveBeenCalled();
+
+    // Third event — arrives while still waiting for 'drain'. write() (now
+    // restored to the real implementation) must not be invoked for it yet;
+    // it stays queued instead of reaching the server.
+    await pi.emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 1 });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(server.lines().length).toBe(1);
+    expect(stderrSpy).not.toHaveBeenCalled();
+
+    // Simulate the kernel send buffer clearing.
+    expect(capturedSocket).toBeDefined();
+    capturedSocket!.emit("drain");
+
+    // The queued turn_start frame is flushed once 'drain' fires.
+    await waitUntil(() => server.lines().length >= 2);
+    const frame = JSON.parse(server.lines()[1]!);
+    expect(frame.payload.event).toBe("turn_start");
+
+    // Still no warnings — the transport was healthy throughout.
+    expect(stderrSpy).not.toHaveBeenCalled();
+
+    stderrSpy.mockRestore();
+    net.Socket.prototype.write = originalWrite; // safety restore
+    await server.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B-019: the pendingFrames cap also bounds the post-connect drain-wait queue.
+// A peer that never drains must degrade quietly (one warn, transport marked
+// dead) instead of growing pendingFrames unboundedly — the same policy
+// already applied to the pre-connect queue (B-003-A).
+// ---------------------------------------------------------------------------
+
+describe("B-019: pendingFrames cap also bounds the post-connect drain-wait queue", () => {
+  it("warns exactly once and marks transport dead when more than CAP frames queue up while waiting for drain", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+
+    const server = await createTestServer(sockPath);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    // First event — establishes the connection.
+    await pi.emit("session_start", { type: "session_start", reason: "startup" });
+    await waitUntil(() => server.lines().length >= 1);
+
+    // Force the next write to report back-pressure and never drain — the
+    // peer is permanently stuck rather than merely transiently slow.
+    const originalWrite = net.Socket.prototype.write;
+    net.Socket.prototype.write = function (..._args: unknown[]) {
+      net.Socket.prototype.write = originalWrite;
+      return false as any;
+    };
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    // This event triggers the back-pressure signal (write() returns false);
+    // no 'drain' event will ever follow in this test.
+    await pi.emit("agent_start", { type: "agent_start" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(stderrSpy).not.toHaveBeenCalled();
+
+    // Queue more than CAP additional frames while still waiting for drain.
+    const eventCount = PENDING_FRAMES_CAP + 1;
+    for (let i = 0; i < eventCount; i++) {
+      void pi.emit("turn_start", { turnIndex: i });
+    }
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Exactly one warn for the cap breach — the same established drop policy
+    // used by the pre-connect queue.
     expect(stderrSpy).toHaveBeenCalledTimes(1);
     expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
 
-    // Transport is dead — third event must be a silent no-op.
+    // Transport is dead — a subsequent event is a silent no-op.
     const warnCountBefore = stderrSpy.mock.calls.length;
     await pi.emit("agent_end", { type: "agent_end", messages: [] });
     await new Promise((r) => setTimeout(r, 50));
@@ -558,8 +637,8 @@ describe("T-044 AC-1: ctx.ui.notify branch — connect failure with ctx.ui prese
   });
 });
 
-describe("T-044 AC-1: ctx.ui.notify branch — socket.write false with ctx.ui present", () => {
-  it("calls ctx.ui.notify exactly once and writes nothing to stderr when socket.write returns false", async () => {
+describe("T-044 AC-1: ctx.ui.notify branch — genuine transport failure with ctx.ui present", () => {
+  it("calls ctx.ui.notify exactly once and writes nothing to stderr when the socket errors after the server closes", async () => {
     process.env.BOB_SESSION_ID = SESSION_ID;
     process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
 
@@ -568,22 +647,21 @@ describe("T-044 AC-1: ctx.ui.notify branch — socket.write false with ctx.ui pr
 
     bobFactory(pi as any);
 
-    // First event — establishes the connection via the empty-ctx path so that
-    // socket.write patching applies to the second event only.
+    // First event — establishes the connection via the empty-ctx path.
     await pi.emit("session_start", { type: "session_start", reason: "startup" });
     await waitUntil(() => server.lines().length >= 1);
 
-    // Patch socket.write to return false for the next call only.
-    const originalWrite = net.Socket.prototype.write;
-    net.Socket.prototype.write = function (..._args: unknown[]) {
-      net.Socket.prototype.write = originalWrite;
-      return false as any;
-    };
+    // Tear down the server to force a genuine write failure (EPIPE/ECONNRESET)
+    // — not the ordinary back-pressure signal (write() === false), which no
+    // longer warns or kills the transport (see B-003-B).
+    await server.close();
+    await new Promise((r) => setTimeout(r, 50));
 
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const { ctx, notifySpy } = makeCtxWithUi();
 
-    // Second event — write returns false; markDead fires with the provided ctx.
+    // Second event — the write fails with a genuine socket error; markDead
+    // fires with the provided ctx.
     await pi.emitWithCtx("agent_start", { type: "agent_start" }, ctx);
     await new Promise((r) => setTimeout(r, 100));
 
@@ -595,8 +673,6 @@ describe("T-044 AC-1: ctx.ui.notify branch — socket.write false with ctx.ui pr
     expect(stderrSpy).toHaveBeenCalledTimes(0);
 
     stderrSpy.mockRestore();
-    net.Socket.prototype.write = originalWrite; // safety restore
-    await server.close();
   });
 });
 
@@ -663,8 +739,8 @@ describe("T-044 AC-2: ctx.ui absent — connect failure falls back to stderr", (
   });
 });
 
-describe("T-044 AC-2: ctx.ui absent — socket.write false falls back to stderr", () => {
-  it("writes exactly one line to stderr and calls no ui.notify when socket.write returns false without ctx.ui", async () => {
+describe("T-044 AC-2: ctx.ui absent — genuine transport failure falls back to stderr", () => {
+  it("writes exactly one line to stderr and calls no ui.notify when the socket errors after the server closes, without ctx.ui", async () => {
     process.env.BOB_SESSION_ID = SESSION_ID;
     process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
 
@@ -676,11 +752,11 @@ describe("T-044 AC-2: ctx.ui absent — socket.write false falls back to stderr"
     await pi.emit("session_start", { type: "session_start", reason: "startup" });
     await waitUntil(() => server.lines().length >= 1);
 
-    const originalWrite = net.Socket.prototype.write;
-    net.Socket.prototype.write = function (..._args: unknown[]) {
-      net.Socket.prototype.write = originalWrite;
-      return false as any;
-    };
+    // Tear down the server to force a genuine write failure (EPIPE/ECONNRESET)
+    // — not the ordinary back-pressure signal (write() === false), which no
+    // longer warns or kills the transport (see B-003-B).
+    await server.close();
+    await new Promise((r) => setTimeout(r, 50));
 
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
@@ -692,8 +768,6 @@ describe("T-044 AC-2: ctx.ui absent — socket.write false falls back to stderr"
     expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
 
     stderrSpy.mockRestore();
-    net.Socket.prototype.write = originalWrite;
-    await server.close();
   });
 });
 
@@ -1208,6 +1282,75 @@ describe("T-057 AC-3e: connect-time failure without verdict", () => {
 
     stderrSpy.mockRestore();
     delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B-019 regression: a tool_call after ordinary write() back-pressure is still
+// authorized (verdict honored), not short-circuited with "transport is dead".
+// ---------------------------------------------------------------------------
+
+describe("B-019 regression: tool_call stays authorized after write() back-pressure", () => {
+  it("honors an allow verdict for a tool_call sent after a write() === false event, once queued frames flush on drain", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "2000";
+
+    const server = await createAuthzServer(sockPath);
+    const pi = makeStubPi();
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    bobFactory(pi as any);
+
+    // First event — establishes the connection.
+    await pi.emit("session_start", { type: "session_start", reason: "startup" });
+    await waitUntil(() => server.lines().length >= 1);
+
+    // Force the next write to report back-pressure and capture the live
+    // socket so the test can fire a synthetic 'drain' event.
+    let capturedSocket: net.Socket | undefined;
+    const originalWrite = net.Socket.prototype.write;
+    net.Socket.prototype.write = function (this: net.Socket, ..._args: unknown[]) {
+      capturedSocket = this;
+      net.Socket.prototype.write = originalWrite;
+      return false as any;
+    };
+
+    // Second event — write() returns false. Must not warn or kill transport.
+    await pi.emit("agent_start", { type: "agent_start" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(stderrSpy).not.toHaveBeenCalled();
+
+    // A tool_call fired now queues its authz frame behind the back-pressure
+    // signal rather than being rejected outright.
+    const handlers = pi.handlers.get("tool_call") ?? [];
+    const handlerPromise = handlers[0]!(
+      { type: "tool_call", toolCallId: "b019-001", toolName: "read", input: { file_path: "/tmp/x" } },
+      {} as ExtensionContext,
+    );
+
+    // Simulate the kernel send buffer clearing so the queued authz frame
+    // flushes to the server.
+    expect(capturedSocket).toBeDefined();
+    capturedSocket!.emit("drain");
+
+    await waitUntil(() => server.lines().length >= 2);
+    const authzFrame = JSON.parse(server.lines()[1]!);
+    expect(authzFrame.kind).toBe("authz");
+
+    server.sendVerdict({ kind: "authz_verdict", session: SESSION_ID, verdict: { allow: true, reason: null } });
+
+    const result = await handlerPromise;
+
+    // The verdict was honored — not short-circuited by "transport is dead".
+    expect((result as any)?.block).toBeFalsy();
+    expect((result as any)?.reason).not.toBe("transport is dead");
+    expect(stderrSpy).not.toHaveBeenCalled();
+
+    stderrSpy.mockRestore();
+    net.Socket.prototype.write = originalWrite; // safety restore
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+    await server.close();
   });
 });
 
