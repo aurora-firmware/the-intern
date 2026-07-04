@@ -69,6 +69,14 @@ enum Command {
         message: String,
         response_tx: oneshot::Sender<ServiceResult<()>>,
     },
+    /// Like [`Command::SendPrompt`], but detaches the worker's stdout into a
+    /// background drain once the prompt is accepted, so a fire-and-forget run
+    /// cannot deadlock on a full stdout pipe (see `SessionPool::send_prompt_and_drain`).
+    SendPromptAndDrain {
+        session_id: SessionId,
+        message: String,
+        response_tx: oneshot::Sender<ServiceResult<()>>,
+    },
     StartInteractiveSession {
         command: String,
         args: Vec<String>,
@@ -150,6 +158,31 @@ impl Handle {
         let (response_tx, response_rx) = oneshot::channel();
         self.tx
             .send(Command::SendPrompt {
+                session_id,
+                message,
+                response_tx,
+            })
+            .await
+            .map_err(|_| ServiceError::Shutdown)?;
+
+        response_rx.await.map_err(|_| ServiceError::Shutdown)?
+    }
+
+    /// Sends a prompt for a fire-and-forget run, then leaves the worker's stdout
+    /// draining in the background.
+    ///
+    /// Returns once the child acknowledges receipt of the prompt. The agent run
+    /// continues asynchronously while a background task drains stdout so the
+    /// child cannot block on a full pipe mid-run. Intended for the periodic
+    /// dispatcher, where nothing reads the worker after the prompt is sent.
+    pub async fn send_prompt_and_drain(
+        &self,
+        session_id: SessionId,
+        message: String,
+    ) -> ServiceResult<()> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.tx
+            .send(Command::SendPromptAndDrain {
                 session_id,
                 message,
                 response_tx,
@@ -297,6 +330,19 @@ impl Actor {
                                 "pi-agent-supervisor send prompt command received"
                             );
                             let _ = response_tx.send(self.pool.send_prompt(session_id, message).await);
+                        }
+                        Command::SendPromptAndDrain {
+                            session_id,
+                            message,
+                            response_tx,
+                        } => {
+                            tracing::debug!(
+                                session_id = %session_id,
+                                message_len = message.len(),
+                                "pi-agent-supervisor send prompt (drain) command received"
+                            );
+                            let _ = response_tx
+                                .send(self.pool.send_prompt_and_drain(session_id, message).await);
                         }
                         Command::WatchInteractiveSessionExit {
                             session_id,
@@ -687,6 +733,53 @@ mod tests {
             .expect("session listing should succeed");
         assert_eq!(sessions, vec![session_id]);
         task.abort();
+    }
+
+    // Regression: a fire-and-forget periodic run must not deadlock on a full
+    // stdout pipe. Without a background drain, once the run streams more than a
+    // pipe buffer (~8 KiB) of RPC output with nobody reading it, the child
+    // blocks mid-run and the scheduled action never completes (e.g. the file
+    // write never happens). The worker below ACKs the prompt, streams far more
+    // than a pipe buffer to stdout, and only then writes a marker file — which
+    // can appear only if `send_prompt_and_drain` keeps reading stdout.
+    #[tokio::test(flavor = "current_thread")]
+    async fn send_prompt_and_drain_keeps_a_streaming_run_from_blocking_on_stdout() {
+        let marker =
+            std::env::temp_dir().join(format!("bob-drain-marker-{}.txt", SessionId::new()));
+        let _ = std::fs::remove_file(&marker);
+
+        // Streams ~6000 padded event records (well over any stdout pipe buffer)
+        // after the ACK, then writes the marker. Only reachable if stdout drains.
+        let script = r#"while IFS= read -r line; do id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'); printf '{"id":"%s","type":"response","success":true}\n' "$id"; i=0; while [ $i -lt 6000 ]; do printf '{"type":"event","seq":%d,"pad":"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"}\n' "$i"; i=$((i+1)); done; printf 'done' > "__MARKER__"; done"#
+            .replace("__MARKER__", &marker.display().to_string());
+
+        let (handle, task) =
+            start(test_config("sh", &["-c", &script], 1, 2)).expect("startup should succeed");
+        let session_id = handle
+            .acquire_session()
+            .await
+            .expect("session acquire should succeed");
+        handle
+            .send_prompt_and_drain(session_id, "go".to_string())
+            .await
+            .expect("send_prompt_and_drain should ack the prompt");
+
+        let appeared = tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if marker.exists() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+
+        let _ = std::fs::remove_file(&marker);
+        task.abort();
+        appeared.expect(
+            "run must stream past the stdout pipe buffer and write its marker; \
+             the background stdout drain must keep reading after the prompt ACK",
+        );
     }
 
     // AC-1/AC-2: start_interactive_session spawns the child and exposes its id via list_sessions.
