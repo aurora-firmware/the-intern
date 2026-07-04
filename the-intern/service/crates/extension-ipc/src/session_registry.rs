@@ -33,6 +33,7 @@ pub struct SessionRegistry {
 }
 
 impl SessionRegistry {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -41,6 +42,11 @@ impl SessionRegistry {
     /// different connection already owns it. Re-registering the same
     /// `(session, connection_id)` pair is always `Registered`, so a
     /// connection may safely call this once per session id it observes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal registry lock is poisoned by another thread
+    /// having panicked while holding it.
     pub fn register(&self, session: SessionId, connection_id: u64) -> RegistrationOutcome {
         let mut owners = self.owners.lock().expect("session registry lock poisoned");
         match owners.get(&session) {
@@ -57,6 +63,11 @@ impl SessionRegistry {
     /// Releases `connection_id`'s ownership of `session`, if it is still the
     /// owner. A no-op for a connection that never owned the session (for
     /// example, one that only ever observed a `Duplicate` outcome for it).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal registry lock is poisoned by another thread
+    /// having panicked while holding it.
     pub fn release(&self, session: SessionId, connection_id: u64) {
         let mut owners = self.owners.lock().expect("session registry lock poisoned");
         if owners.get(&session) == Some(&connection_id) {
