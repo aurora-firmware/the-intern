@@ -35,16 +35,20 @@
  *     backlog (a connected-but-backpressured socket): the oldest queued
  *     EVENT frames are dropped FIFO to bound memory, but the socket is left
  *     alive so any already-queued or future authz frame still flushes once
- *     'drain' fires. Killing the transport here would disable tool-call
- *     authorization for the rest of the session on nothing more than an
- *     event burst — event loss under sustained overload is acceptable
- *     (S-003), but authz must keep working as long as the socket is alive.
+ *     'drain' fires. If the bounded backlog is already all authz frames, the
+ *     oldest authz frame is evicted with its matching resolver and that one
+ *     tool call fails closed immediately, keeping later verdicts aligned with
+ *     later frames that are still queued. Killing the transport here would
+ *     disable tool-call authorization for the rest of the session on nothing
+ *     more than an event burst — event loss under sustained overload is
+ *     acceptable (S-003), but authz must keep working as long as the socket is
+ *     alive.
  *
  * Authz failure behaviour (fail-closed):
  *   - Transport failure, unparseable verdict, or timeout → block + one warning.
  *   - An authz frame stuck behind a peer that never drains fails closed via
- *     the bounded BOB_AUTHZ_TIMEOUT_MS verdict timeout, not by killing the
- *     transport.
+ *     either precise queue-overflow eviction or the bounded
+ *     BOB_AUTHZ_TIMEOUT_MS verdict timeout, not by killing the transport.
  */
 
 import * as net from "node:net";
@@ -123,7 +127,10 @@ function warn(message: string, ctx?: ExtensionContext): void {
 //     socket itself is not the problem, only slow to drain, so it stays
 //     alive; the oldest queued EVENT frames are dropped FIFO instead (one
 //     warn, then silent) so authz frames already queued or arriving later
-//     can still be sent and flushed once 'drain' eventually fires.
+//     can still be sent and flushed once 'drain' eventually fires. If the
+//     bounded backlog is already all authz frames, the oldest authz frame is
+//     evicted together with its matching verdict resolver so later verdicts
+//     still match later queued frames.
 // ---------------------------------------------------------------------------
 const PENDING_FRAMES_CAP = 64;
 
@@ -157,13 +164,6 @@ export default function bobFactory(pi: ExtensionAPI): void {
   // this session. Set once and never cleared — matches the "one warning,
   // then silent" convention used for every other failure/degradation path.
   let drainBacklogWarned = false;
-  // Frames queued while the connect is in progress, or while waiting for
-  // 'drain' after a connected socket reports back-pressure. Each entry
-  // tracks whether it is an authz frame so the post-connect cap-eviction
-  // policy can prefer dropping ordinary event frames over authz frames.
-  type PendingFrame = { text: string; isAuthz: boolean };
-  const pendingFrames: PendingFrame[] = [];
-
   // ---------------------------------------------------------------------------
   // Pending authz verdict resolvers.
   // Each entry corresponds to one outstanding Authz frame awaiting a verdict.
@@ -173,9 +173,19 @@ export default function bobFactory(pi: ExtensionAPI): void {
     | { kind: "allow" }
     | { kind: "block"; reason: string | null }
     | { kind: "error" }
+    | { kind: "queue_overflow" }
     | { kind: "transport_error_logged" };
   type VerdictResolver = (verdict: VerdictOutcome) => void;
   const pendingVerdicts: VerdictResolver[] = [];
+
+  // Frames queued while the connect is in progress, or while waiting for
+  // 'drain' after a connected socket reports back-pressure. Authz frames carry
+  // their verdict resolver so cap eviction can fail the same call closed and
+  // keep the FIFO verdict queue aligned with frames that were actually sent.
+  type PendingFrame =
+    | { text: string; isAuthz: false }
+    | { text: string; isAuthz: true; verdictResolve: VerdictResolver };
+  const pendingFrames: PendingFrame[] = [];
 
   // Buffer for inbound NDJSON lines from the socket (verdict frames).
   let inboundBuffer = "";
@@ -255,6 +265,13 @@ export default function bobFactory(pi: ExtensionAPI): void {
     pendingVerdicts.length = 0;
   }
 
+  function resolveEvictedAuthzFrame(frame: PendingFrame): void {
+    if (!frame.isAuthz) return;
+    const idx = pendingVerdicts.indexOf(frame.verdictResolve);
+    if (idx !== -1) pendingVerdicts.splice(idx, 1);
+    frame.verdictResolve({ kind: "queue_overflow" });
+  }
+
   function markDead(reason: string, ctx?: ExtensionContext): void {
     transportDead = true;
     socket?.destroy();
@@ -295,7 +312,11 @@ export default function bobFactory(pi: ExtensionAPI): void {
     }
   }
 
-  function ensureConnected(frame: string, ctx?: ExtensionContext, isAuthz = false): void {
+  function ensureConnected(
+    frame: string,
+    ctx?: ExtensionContext,
+    verdictResolve?: VerdictResolver
+  ): void {
     if (transportDead) return;
 
     if (pendingFrames.length >= PENDING_FRAMES_CAP) {
@@ -330,13 +351,18 @@ export default function bobFactory(pi: ExtensionAPI): void {
         pendingFrames.splice(oldestEventIndex, 1);
       } else {
         // Every queued frame is an authz frame (no event frame to drop
-        // instead) — evict the oldest one as a last resort; its resolver
-        // still fails closed via the authz verdict timeout.
-        pendingFrames.shift();
+        // instead) — evict the oldest one as a last resort and fail the same
+        // tool call closed so later verdicts still match later sent frames.
+        const evicted = pendingFrames.shift();
+        if (evicted) resolveEvictedAuthzFrame(evicted);
       }
     }
 
-    pendingFrames.push({ text: frame, isAuthz });
+    pendingFrames.push(
+      verdictResolve
+        ? { text: frame, isAuthz: true, verdictResolve }
+        : { text: frame, isAuthz: false }
+    );
 
     if (socket !== null) {
       // Already connected — flush immediately (a no-op while waiting for
@@ -451,7 +477,7 @@ export default function bobFactory(pi: ExtensionAPI): void {
     // Send the authz frame (this may trigger a lazy connect). Tag it as an
     // authz frame so a post-connect cap breach prefers evicting an ordinary
     // event frame over this one.
-    ensureConnected(frame, ctx, true);
+    ensureConnected(frame, ctx, verdictResolve);
 
     // Await the verdict with a bounded timeout.
     const timeoutMs = resolveAuthzTimeout();
@@ -483,6 +509,10 @@ export default function bobFactory(pi: ExtensionAPI): void {
 
     if (outcome.kind === "transport_error_logged") {
       return { block: true, reason: "transport error" };
+    }
+
+    if (outcome.kind === "queue_overflow") {
+      return { block: true, reason: "authz queue overflow" };
     }
 
     // outcome.kind === "allow"

@@ -657,6 +657,91 @@ describe("B-019: authz frame survives a post-connect event backlog that exceeds 
     delete process.env.BOB_AUTHZ_TIMEOUT_MS;
     await server.close();
   });
+
+  it("fails closed only the evicted authz call when an all-authz post-connect backlog exceeds the cap", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "2000";
+
+    const server = await createAuthzServer(sockPath);
+    const pi = makeStubPi();
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    bobFactory(pi as any);
+
+    await pi.emit("session_start", { type: "session_start", reason: "startup" });
+    await waitUntil(() => server.lines().length >= 1);
+
+    let capturedSocket: net.Socket | undefined;
+    const originalWrite = net.Socket.prototype.write;
+    net.Socket.prototype.write = function (this: net.Socket, ..._args: unknown[]) {
+      capturedSocket = this;
+      net.Socket.prototype.write = originalWrite;
+      return false as any;
+    };
+
+    await pi.emit("agent_start", { type: "agent_start" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const handlers = pi.handlers.get("tool_call") ?? [];
+    const calls: Promise<unknown>[] = [];
+    for (let i = 0; i < PENDING_FRAMES_CAP + 1; i++) {
+      calls.push(
+        Promise.resolve(
+          handlers[0]!(
+            {
+              type: "tool_call",
+              toolCallId: `b019-authz-overflow-${i}`,
+              toolName: `tool-${i}`,
+              input: { index: i },
+            },
+            {} as ExtensionContext,
+          )
+        )
+      );
+    }
+
+    const firstResult = await calls[0]!;
+    expect((firstResult as any)?.block).toBe(true);
+    expect((firstResult as any)?.reason).toBe("authz queue overflow");
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).not.toMatch(/transport error/i);
+
+    expect(capturedSocket).toBeDefined();
+    capturedSocket!.emit("drain");
+
+    await waitUntil(() => server.lines().filter((line) => JSON.parse(line).kind === "authz").length >= PENDING_FRAMES_CAP);
+    const authzFrames = server.lines()
+      .map((line) => JSON.parse(line))
+      .filter((frame) => frame.kind === "authz");
+    expect(authzFrames).toHaveLength(PENDING_FRAMES_CAP);
+    expect(authzFrames[0]!.tool).toBe("tool-1");
+    expect(authzFrames.at(-1)!.tool).toBe(`tool-${PENDING_FRAMES_CAP}`);
+
+    for (let i = 1; i <= PENDING_FRAMES_CAP; i++) {
+      server.sendVerdict({
+        kind: "authz_verdict",
+        session: SESSION_ID,
+        verdict: { allow: i % 2 === 0, reason: i % 2 === 0 ? null : `deny-${i}` },
+      });
+    }
+
+    const remainingResults = await Promise.all(calls.slice(1));
+    for (let i = 1; i <= PENDING_FRAMES_CAP; i++) {
+      const result = remainingResults[i - 1] as any;
+      if (i % 2 === 0) {
+        expect(result?.block).toBeFalsy();
+      } else {
+        expect(result?.block).toBe(true);
+        expect(result?.reason).toBe(`deny-${i}`);
+      }
+    }
+
+    stderrSpy.mockRestore();
+    net.Socket.prototype.write = originalWrite; // safety restore
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
+    await server.close();
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -25,19 +25,24 @@ backpressure.
 
 ## Reproduction Status
 
-Status: not yet reproduced
+Status: reproduced and fixed
 
-Identified by code review (2026-07-04) of `bob.ts::flushPending`. Not yet
-observed in a live session, but the trigger condition (a large frame burst
-exceeding the kernel socket buffer while the service-side reader is busy) is
-realistic: event payloads include entire provider request bodies, and the
-service reads frames on a single per-connection loop that also performs
-monitoring appends.
+Identified by code review (2026-07-04) of `bob.ts::flushPending`, then
+reproduced with regression tests that forced `socket.write()` to report
+ordinary backpressure while the socket remained writable. The trigger
+condition (a large frame burst exceeding the kernel socket buffer while the
+service-side reader is busy) is realistic: event payloads include entire
+provider request bodies, and the service reads frames on a single
+per-connection loop that also performs monitoring appends.
 
 ## Evidence
 
-- Logs / stack traces / failing assertions: none yet (latent).
-- Failing command or test: none yet.
+- Logs / stack traces / failing assertions: regression tests failed before the
+  fix by observing the transport-dead fail-closed path after ordinary
+  backpressure.
+- Failing command or test: `npm test -- bob.test.ts` in
+  `the-intern/extensions/`, specifically the B-019 backpressure regression
+  tests.
 - Code: `the-intern/extensions/bob.ts` — `flushPending`:
   `const ok = socket.write(frame); if (!ok) { … markDead("socket.write
   returned false — back-pressure or peer closed", ctx); }`. `markDead` sets
