@@ -485,11 +485,15 @@ fn remove_socket_files_best_effort(cfg: &BobConfig) {
 /// The dispatcher runs in a dedicated Tokio task.  On each iteration it
 /// dequeues the oldest event from `persistence`.  If the event is a
 /// `DeliveryKind::Periodic` event the dispatcher acquires a pi-agent session
-/// via `supervisor`, forwards `event.payload` verbatim, and then closes the
-/// one-shot session. Any error during dequeue, session acquisition, prompt
-/// sending, or session cleanup is logged as a warning; processing then
-/// continues from the next event so a single failure does not stall the
-/// pipeline.
+/// via `supervisor` and forwards `event.payload` verbatim.  `send_prompt`
+/// returns once pi acknowledges *receipt* of the prompt, not once the agent
+/// run finishes, so the dispatcher does not close the session on success —
+/// the run continues asynchronously and the worker is released later by the
+/// supervisor's existing idle reaper.  If the prompt is not accepted at all
+/// (`send_prompt` errors) the session is closed immediately since no run was
+/// started.  Any error during dequeue, session acquisition, prompt sending,
+/// or session cleanup is logged as a warning; processing then continues from
+/// the next event so a single failure does not stall the pipeline.
 ///
 /// Non-`Periodic` events are re-enqueued so they are not lost, and the
 /// dispatcher backs off for `PERIODIC_DISPATCH_POLL_INTERVAL` before the next
@@ -549,9 +553,7 @@ fn start_periodic_dispatcher(
                 }
 
                 Ok(Some(event)) => {
-                    // Admitted Periodic event: use a fresh one-shot session and
-                    // release it after prompt delivery so periodic jobs cannot
-                    // exhaust the supervisor's active session capacity.
+                    // Admitted Periodic event: use a fresh one-shot session.
                     let session_id = match supervisor.acquire_session().await {
                         Ok(id) => id,
                         Err(e) => {
@@ -562,18 +564,31 @@ fn start_periodic_dispatcher(
                             continue;
                         }
                     };
+                    // `send_prompt` returns as soon as pi acknowledges *receipt*
+                    // of the prompt over its RPC channel; the agent run (provider
+                    // calls, tool execution) continues asynchronously afterward.
+                    // On success we must NOT kill the session here — doing so
+                    // aborts the run before it can complete (B-017). The worker
+                    // is instead released later by the existing idle reaper
+                    // (`last_prompt_activity` + `idle_reap_timeout`), the same
+                    // backstop that reclaims other supervisor-managed sessions,
+                    // so periodic jobs still cannot leak workers indefinitely.
+                    //
+                    // On failure there is no run in flight to wait for (the
+                    // prompt was never accepted), so the session is cleaned up
+                    // immediately as before.
                     if let Err(e) = supervisor.send_prompt(session_id, event.payload).await {
                         tracing::warn!(
                             error = %e,
                             "periodic dispatcher: prompt send failed; continuing"
                         );
-                    }
-                    if let Err(e) = supervisor.kill_session(session_id).await {
-                        tracing::warn!(
-                            error = %e,
-                            session_id = %session_id,
-                            "periodic dispatcher: session cleanup failed; continuing"
-                        );
+                        if let Err(e) = supervisor.kill_session(session_id).await {
+                            tracing::warn!(
+                                error = %e,
+                                session_id = %session_id,
+                                "periodic dispatcher: session cleanup failed; continuing"
+                            );
+                        }
                     }
                 }
             }
@@ -1428,7 +1443,11 @@ pub mod tests {
 
         // AC-2: a Periodic event enqueued in persistence is dequeued by the
         // dispatcher, a pi-agent session is acquired, and the payload is
-        // forwarded verbatim via send_prompt.
+        // forwarded verbatim via send_prompt. B-017: the dispatcher does not
+        // close the session synchronously on success (that would abort a real
+        // in-flight agent run) — release is left to the supervisor's idle
+        // reaper, exercised here with a short `pi_agent_idle_reap_timeout` so
+        // the backstop fires within the test window.
         #[tokio::test(flavor = "current_thread")]
         async fn periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt() {
             use bob_core::ports::PersistenceStore;
@@ -1457,6 +1476,7 @@ pub mod tests {
                 pi_agent_args: vec!["-c".to_string(), worker_script],
                 pi_agent_warm_pool_size: 1,
                 pi_agent_max_processes: 2,
+                pi_agent_idle_reap_timeout: Duration::from_millis(100),
                 request_queue_capacity: 16,
                 shutdown_drain_deadline: Duration::from_millis(500),
                 shutdown_reap_deadline: Duration::from_millis(250),
@@ -1477,9 +1497,8 @@ pub mod tests {
                 .expect("enqueue must succeed");
 
             // Wait for the dispatcher to dequeue the event, acquire a one-shot
-            // session, forward the payload, and close the session after the
-            // successful response. The worker writes the message to the record
-            // file upon receiving the prompt.
+            // session, and forward the payload. The worker writes the message
+            // to the record file upon receiving the prompt.
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
                     if record_file.exists() {
@@ -1494,6 +1513,8 @@ pub mod tests {
             .await
             .expect("dispatcher must forward periodic event payload to pi-agent within timeout");
 
+            // The session is not closed synchronously after dispatch (B-017);
+            // it is released once the idle reaper's backstop timeout elapses.
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
                     if runtime
@@ -1509,7 +1530,91 @@ pub mod tests {
                 }
             })
             .await
-            .expect("dispatcher must release the one-shot session after dispatch");
+            .expect("idle reaper must eventually release the one-shot session");
+
+            run_shutdown_protocol(runtime, &cfg).await;
+        }
+
+        // B-017 regression: the dispatcher must not tear down the pi worker
+        // immediately after the prompt-acceptance ack. Real pi workers accept
+        // the prompt over `runRpcMode()` (the `{"success":true}` response) and
+        // then continue the agent run (provider call, tool execution)
+        // asynchronously; the ack only confirms receipt, not completion. This
+        // fake worker mirrors that timing by sending the ack first and only
+        // performing its observable side effect afterward, inside the same
+        // (unforked) worker process — so if the dispatcher kills the worker
+        // right after the ack, the deferred side effect is aborted along with
+        // the process and never happens.
+        #[tokio::test(flavor = "current_thread")]
+        async fn dispatcher_does_not_kill_worker_before_deferred_agent_run_completes() {
+            use bob_core::ports::PersistenceStore;
+
+            let tmp = tempfile::tempdir().expect("temp dir");
+            let record_file = tmp.path().join("deferred_side_effect.txt");
+            let record_file_str = record_file.to_string_lossy().into_owned();
+
+            // Worker script: acknowledge the prompt immediately, then sleep
+            // (simulating the in-flight agent run continuing past the ack)
+            // before performing the observable side effect. No subshell/`&`
+            // is used: the sleep and the write happen in the same process the
+            // dispatcher would kill, exactly like a real pi run continuing
+            // after its RPC acceptance response.
+            let worker_script = format!(
+                "while IFS= read -r line; do \
+                 id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 msg=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"message\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf '{{\"id\":\"%s\",\"type\":\"response\",\"success\":true}}\\n' \"$id\"; \
+                 sleep 0.3; \
+                 printf '%s\\n' \"$msg\" >> \"{}\"; \
+                 done",
+                record_file_str
+            );
+
+            let cfg = BobConfig {
+                admin_sock_path: tmp.path().join("admin.sock"),
+                extension_sock_path: tmp.path().join("extension.sock"),
+                extension_path: existing_extension_path(),
+                pi_agent_command: "sh".to_string(),
+                pi_agent_args: vec!["-c".to_string(), worker_script],
+                pi_agent_warm_pool_size: 1,
+                pi_agent_max_processes: 2,
+                request_queue_capacity: 16,
+                shutdown_drain_deadline: Duration::from_millis(500),
+                shutdown_reap_deadline: Duration::from_millis(250),
+                ..BobConfig::test_base()
+            };
+
+            let runtime = start_subsystems(&cfg).expect("subsystems must start");
+
+            runtime
+                ._persistence
+                .enqueue(InternalEvent {
+                    kind: DeliveryKind::Periodic,
+                    payload: "deferred-side-effect-prompt".to_owned(),
+                })
+                .await
+                .expect("enqueue must succeed");
+
+            // The deferred side effect (the file write) only happens ~300ms
+            // after the ack. If the dispatcher kills the worker right after
+            // the ack (the B-017 bug), the sleep is interrupted by SIGTERM
+            // and this write never happens, so this wait times out.
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if record_file.exists() {
+                        let content = std::fs::read_to_string(&record_file).unwrap_or_default();
+                        if content.contains("deferred-side-effect-prompt") {
+                            break;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect(
+                "the deferred agent-run side effect must complete; the dispatcher must not \
+                 kill the worker before the run (simulated by the post-ack sleep) finishes",
+            );
 
             run_shutdown_protocol(runtime, &cfg).await;
         }
