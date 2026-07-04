@@ -2,7 +2,7 @@
 id: B-018
 title: stale second bob extension instance silently blocks all tool calls
 severity: medium
-status: open
+status: in-progress
 created: '2026-07-04'
 ---
 
