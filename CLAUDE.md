@@ -45,6 +45,20 @@ mdBook docs to the GitHub Release.
 
 ## Run
 
+For local development, the helper scripts keep all bob config, state, data, and
+sockets under `.tmp/bob-dev` and run Cargo from `the-intern/service/`:
+
+```bash
+# Terminal A — start the service
+./scripts/run-bob-dev.sh
+
+# Terminal B — run bob commands against that service
+./scripts/bob-dev.sh status
+./scripts/bob-dev.sh sessions list --json
+```
+
+The helper requires the real `pi` binary on `PATH`.
+
 Use environment overrides to keep sockets in an isolated runtime directory:
 
 ```bash
@@ -82,8 +96,8 @@ Two things live here, and they must not be confused:
 
 1. **The product being designed — "the Intern".** A logical architecture for an
    intelligent office-assistant agent, with architecture in
-   `project/docs/system_overview.md`, implementation roadmap in
-   `project/docs/roadmap.md`, and current Rust service code in
+   `project/docs/system_overview.md` and
+   `project/docs/the-intern-architecture.md`, and current Rust service code in
    `the-intern/service/`.
 2. **The AI-team process that builds it.** Role definitions in
    `.claude/agents/` (mirrored in `.codex/agents/`) and the slash-skills in
@@ -111,27 +125,20 @@ Two things live here, and they must not be confused:
 ├── .codex/
 │   └── agents/                  # Mirror role definitions for the codex toolchain (*.toml)
 ├── the-intern/
-│   ├── extensions/              # Future JS extension/plugin code area
+│   ├── docs/                    # User manual (mdBook source; shipped with releases)
+│   ├── extensions/              # JS extension for pi-agent (`bob.ts`)
 │   └── service/                 # Rust service workspace (`bob` and subsystem crates)
 └── project/                     # Source of truth for product lifecycle state
     ├── docs/                    # Product design (system_overview.md, the-intern-architecture.md)
-    │                            # Coding guidance and roadmap live here too
+    │                            # Coding guidance lives here too; archive/ holds retired docs
     ├── specs/                   # Approved specifications (input to spec-breakdown)
     ├── decisions/               # ADRs
+    ├── reports/                 # Generated status and gate reports
     ├── tasks/{pending,in-progress,completed,blocked}/
     └── bugs/{open,in-progress,resolved}/
 ```
 
 Directory *is* the status for tasks and bugs — moving a file is how state transitions.
-
-### The `ai-team` CLI
-
-IMPORTANT: The skills used in this project, together with the ai-team CLI are
-under development. Please write down there every bug or problem you notice with
-any of them in `ai-process-cli-reported-issues.md`.
-
-Repository orchestration commands are provided by the slash-skills, backed by
-the `ai-team` CLI.
 
 ### Runtime prerequisites
 
@@ -140,6 +147,10 @@ the `ai-team` CLI.
 - If `pi` is not available at any point, stop the current work and escalate;
   do not implement substitutes, mocks, or alternate process runners as a way
   around the missing prerequisite.
+- `README.md` is the canonical record of the currently used/tested pi-agent
+  versions (no backwards compatibility guaranteed). Whenever the pi-agent
+  version in use changes, update the README's compatibility section — specs
+  and ADRs must not pin pi-agent versions.
 
 ### Git model (authoritative: `git-conventions` skill)
 
@@ -164,7 +175,5 @@ Hard rules: no `--no-verify`, no `--force` on `dev-agent`/`main`, no amending pu
 
 ### Pointers
 
-- Coding guidelines: `project/docs/coding-guidelines-node.md`,
-  `project/docs/coding-guidelines-rust.md`
-- Roadmap: `project/docs/roadmap.md`
+- Coding guidelines: `project/docs/coding-guidelines-node.md`, `project/docs/coding-guidelines-rust.md`
 - Local Rust verification details: `the-intern/service/README.md`

@@ -1,11 +1,15 @@
 # the-intern Project Roadmap
 
+> **Note (2026-07-04): this roadmap is outdated and retained for historical
+> reference only.** It predates CR-002 (interactive chat as a supervised
+> direct `pi` session) and ADR-012 (scheduler state and admission), and its
+> phase framing no longer tracks delivery. The current source of truth is the
+> approved specs in `project/specs/` and the ADRs in `project/decisions/`.
+
 ## Phase 0 — Foundations
 Phase 0 establishes the delivery baseline with CI scaffolding, coding guidelines, and the `the-intern/service` plus `the-intern/extensions` layout so later architecture work lands in a stable environment. This preparatory phase aligns with the execution sequence described in `project/specs/the-intern-agent-service-architecture.md`, which defines the ordered implementation roadmap that starts at service fundamentals.
 
 ## Phase 1 — Rust service skeleton
-
-**Status: complete through Phase 1b.**
 
 Phase 1 delivers the deterministic backbone for all later runtime behavior, in two steps defined by `project/specs/the-intern-agent-service-architecture.md` (S-001) and `project/specs/bob-service-shell-architecture.md` (S-002):
 

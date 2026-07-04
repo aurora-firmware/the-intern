@@ -11,7 +11,9 @@ created: '2026-06-23'
 ## Context
 
 CR-002 makes `bob chat` launch a supervised, directly-launched interactive `pi`
-session owned by `bob serve`. Verified during T-103 (pi 0.79.10): interactive pi
+session owned by `bob serve`. Verified during T-103 (against the pi-agent
+version in use at the time; tested versions are recorded in the repository
+`README.md`): interactive pi
 is the default mode (an `ink` TUI) and **requires a real TTY** — it uses
 `process.stdin.setRawMode` and checks `process.stdin.isTTY`, degrading to
 non-interactive on plain pipes. So the service-spawned pi must be given a real

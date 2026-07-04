@@ -89,9 +89,11 @@ supervises, and the short-lived `bob` CLI clients that drive it:
 
 A single binary that hosts the deterministic components from the logical model:
 
-- **Channel adapters** — accept inbound traffic from the active channels
-  (interactive chat over `admin.sock` and the scheduler in v1) and normalize each
-  into a common internal event.
+- **Channel adapters** — accept inbound traffic from the active queue-borne
+  channels (the scheduler in v1) and normalize each into a common internal
+  event. Interactive chat is *not* an adapter: it is a supervised,
+  directly-launched `pi` session (CR-002, ADR-010) that never enters the
+  queue.
 - **Requests Handler** — pulls events from the inbound queue, attaches user and
   channel identity, and runs pre-flight identity/access checks before any agent
   work begins.
@@ -115,8 +117,8 @@ this boundary isolates *concurrent contexts of that user* — an interactive cha
 and a scheduled job at the same time each get their own agent process — rather
 than separate people. How a session is derived from an inbound request is an
 **open design item**: the supervisor allocates its own `SessionId` per worker,
-while a request carries an optional `context_id` (S-008), and no mapping between
-the two is defined yet. Idle processes are reaped; a small pre-warmed pool
+while a queue-borne request carries an optional `context_id` in its
+`RequestContext` (ADR-004), and no mapping between the two is defined yet. Idle processes are reaped; a small pre-warmed pool
 absorbs spawn latency. Prompts are delivered to each process from the Rust
 service over pi-agent's `runRpcMode()` JSON-RPC channel.
 
@@ -157,33 +159,47 @@ be introduced only if the trust boundary widens.
 
 ## How channels trigger the agent
 
-the-intern is event-driven, not session-driven. All channels — synchronous and
-asynchronous alike — normalize their input into internal events on a shared
-inbound queue, classified by **delivery kind** (`sync`, `async`, `periodic`)
-rather than by channel; the deterministic core never enumerates channel types
-(ADR-004). The Requests Handler consumes that queue, so an emailed request, a
-scheduled task, and a chat message all follow the same path. This is why the
-system is a persistent service: asynchronous events must be handled even when no
-user is connected.
+the-intern is event-driven, not session-driven. Queue-borne channels —
+synchronous and asynchronous alike — normalize their input into internal
+events on a shared inbound queue, classified by **delivery kind** (`sync`,
+`async`, `periodic`) rather than by channel; the deterministic core never
+enumerates channel types (ADR-004). The Requests Handler consumes that queue,
+so an emailed request and a scheduled task follow the same path. This is why
+the system is a persistent service: asynchronous events must be handled even
+when no user is connected.
+
+**Interactive chat is the exception (CR-002, ADR-010, ADR-011).** `bob chat`
+does not feed the queue. It asks the service over `admin.sock` to open a
+supervised interactive `pi` session, passing the client's terminal file
+descriptors via `SCM_RIGHTS` so pi runs on the user's real TTY while remaining
+a supervised child of `bob serve`. Chat turns therefore never traverse the
+adapter → intake → Requests Handler path; the session's gates are socket
+access and the per-action `tool_call` authorization hook.
 
 **Ingress is local and pull-based (ADR-008).** The service exposes no inbound
-network listener. Interactive chat arrives over `admin.sock`; asynchronous input
-is obtained by *polling* on a schedule — email, for example, is the scheduler
-firing a prompt that drives the email skill (S-009), not an inbound push.
-Because the deterministic core is typed by delivery kind and never enumerates
-channels (ADR-004), any new channel is added as another adapter behind its own
-ingress, without changing the core.
+network listener. Interactive sessions are opened over `admin.sock`;
+asynchronous input is obtained by *polling* on a schedule — email, for
+example, is the scheduler firing a prompt that drives the email skill (S-009),
+not an inbound push. Because the deterministic core is typed by delivery kind
+and never enumerates channels (ADR-004), any new channel is added as another
+adapter behind its own ingress, without changing the core.
 
 ## Security integration
 
 Authorization is deterministic and enforced outside the agent:
 
-- **Pre-flight** — the Requests Handler checks identity and access before the
-  agent is involved at all.
+- **Pre-flight** — the Requests Handler applies each channel's admission model
+  to queue-borne requests before any agent work begins. Two channels have
+  explicit, recorded exceptions: interactive chat is exempt because it never
+  traverses the queue — its gates are socket access and the action gate
+  (ADR-010) — and scheduler jobs are admitted by trusted schedule-store
+  membership rather than by a `UserId` allow-list entry (ADR-012).
 - **Per-action** — when the agent attempts an action, the extension's
   `tool_call` hook blocks execution and asks Policy Control in the Rust service
   for a verdict. The agent cannot reach an external effect without a passing
-  verdict, and it cannot modify the deterministic policy code.
+  verdict, and it cannot modify the deterministic policy code. This gate
+  applies to every supervised session, including interactive chat and
+  scheduler-triggered runs.
 
 This keeps the trust boundary intact: the extension inside the agent process is
 only a courier; every decision is made in the Rust service.
@@ -199,16 +215,19 @@ establishes that the caller is the trusted service-owner uid; it does not by
 itself say *which* application-level user or channel is acting. An inbound
 request gets its application identity one of two ways, depending on the channel:
 
-- *Externally asserted* — a request that crosses a socket (interactive chat)
-  carries its own application identity in its arguments; the adapter copies it
-  into `RequestContext.sender`. bob honors it because the gate has already
-  vouched for the caller (ADR-005).
+- *Externally asserted* — a request that crosses a socket carries its own
+  application identity in its arguments; the adapter copies it into
+  `RequestContext.sender`. bob honors it because the gate has already vouched
+  for the caller (ADR-005). An interactive chat session likewise carries an
+  application identity, though only for attribution and audit — its admission
+  gate is the socket itself (ADR-010).
 - *Adapter-assigned* — a request that originates in-process and crosses no
   socket (the scheduler) has no external caller to assert anything, so the
-  channel adapter assigns a stable identity itself: the scheduler derives a
-  fixed `UserId`/`ChannelId` per job (S-009). These derived identities are
-  deliberately predictable and must stay non-authoritative — a guessable
-  identity must never confer authority.
+  channel adapter assigns a stable identity for attribution and audit.
+  Since ADR-012 that identity plays no admission role: a scheduler job is
+  admitted by its presence in the trusted schedule store, and derived
+  identities must stay non-authoritative — a guessable identity must never
+  confer authority.
 
 Either way, pre-flight admission, policy, and audit operate on that application
 `sender`. The threat model is explicit: any process running as the service-owner
@@ -252,7 +271,7 @@ Several logically distinct interfaces are mounted on this one transport:
 |---|---|---|
 | Operator control | `service.status`, `sessions.list`/`kill`, `policy.reload`, `schedule.add`/`remove`/`list`/`reload` | operator, via `bob` |
 | Live observability | `audit.tail.subscribe`/`unsubscribe` | operator, via `bob audit tail` |
-| Interactive chat | `chat.open`/`send`/`close` (+ `chat.message` notifications) | user, via `bob chat` |
+| Interactive chat | `session.interactive.open` / attach lifecycle for a supervised `pi` session | user, via `bob chat` |
 | External action reporting | `report.submit` | Action CLIs |
 
 The operator and observability rows are genuinely new — they answer "how do you
@@ -260,20 +279,24 @@ run the thing," which the logical model deliberately did not ask. The chat and
 report rows are **not** new architecture: they are the interactive-chat channel
 and Monitoring's inbound report interface from the logical model, riding this
 socket simply because it is the one local transport that already exists. `bob
-chat` is a transport *into* the chat channel adapter, not a bypass — a chat
-message still flows Requests Handler → Policy Control → Agent Harness like any
-other channel (S-008).
+chat` uses the plane as a control request to open and attach to a supervised
+interactive `pi` session — the client's terminal fds cross as `SCM_RIGHTS`
+ancillary data (ADR-011) — and chat turns do not traverse the queue-borne
+Requests Handler → Policy Control path (ADR-010, CR-002).
 
-**Configuration is live state.** Some methods mutate `bob.toml` and signal the
-owning subsystem to reload. `schedule.*` is the worked example: the `[schedule]`
-section is the source of truth, and `bob schedule add`/`remove` edits that file
-and reloads the live job table (ADR-006). For these subsystems configuration is
-not just startup input but runtime-mutable, persistent state.
+**Configuration and persistent state are live.** Some methods apply operator
+changes to running subsystems and signal the owner to reload. `policy.reload`
+re-reads the policy section of static `config.toml`. `schedule.*` mutates the
+dedicated schedule state store — a versioned JSON document at
+`$XDG_STATE_HOME/bob/schedules.json` (ADR-012) — and reloads the live job
+table; the scheduler itself stays bob-internal (ADR-006). Mutable runtime
+state is kept out of `config.toml` unless an owning ADR says otherwise.
 
 The transport, framing, and trust boundary of this plane are fixed by ADR-001
 (newline-delimited JSON-RPC), ADR-005 (the filesystem-permission gate and
 self-asserted identity), and ADR-007 (the control plane as a whole); the client
-lives in the `bob` binary by ADR-003.
+lives in the `bob` binary by ADR-003; terminal fd-passing for interactive chat
+is fixed by ADR-011.
 
 ## Technology stack
 
@@ -286,8 +309,8 @@ lives in the `bob` binary by ADR-003.
   because pi-agent's hooks are an in-process API.
 - **Two Unix sockets** — `extension.sock` for the extension-to-service channel
   (session-tagged, multiplexed) and `admin.sock` for the local control plane
-  (JSON-RPC 2.0; operator, chat, and report surfaces); **`runRpcMode()`
-  JSON-RPC** for prompt delivery.
+  (JSON-RPC 2.0; operator, interactive-session, and report surfaces);
+  **`runRpcMode()` JSON-RPC** for prompt delivery to queue-borne sessions.
 - External **CLI tools** for Actions, selected to run on the supported
   Unix-likes.
 
@@ -319,14 +342,21 @@ lives in the `bob` binary by ADR-003.
 - **Single-user-local scope.** the-intern targets one user on one machine; the
   OS account is the entire trust domain. This justifies the filesystem-only
   gate, local pull-based ingress, and no secret custody (ADR-008).
+- **Interactive chat is a supervised direct `pi` session.** `bob chat` asks
+  the service to launch pi on the user's real terminal (fds passed via
+  `SCM_RIGHTS`, ADR-011); it is exempt from pre-flight admission and gated by
+  socket access plus the `tool_call` hook (ADR-010, CR-002).
+- **Bob-internal scheduler with a JSON state store.** Cron jobs live inside
+  `bob serve` (no system cron, ADR-006); schedule entries persist in
+  `$XDG_STATE_HOME/bob/schedules.json`, mutated only via `bob schedule` /
+  `schedule.*`, and a job in the trusted store is admitted for firing
+  (ADR-012).
+- **XDG filesystem layout.** Config, data (extension), state (audit log,
+  schedule store), and runtime (sockets) follow the XDG Base Directory
+  specification on Linux (ADR-009).
 
 ## Open items
 
-- Confirm against the pi-agent source that the `tool_call` hook accepts an
-  **asynchronous** blocking verdict. This is load-bearing for the security
-  design and must be verified before or early in implementation.
-- Confirm the prompt-delivery path: whether `runRpcMode()` is the right channel
-  for injecting prompts, or whether the extension must also carry prompt input.
 - `report.submit` shares `admin.sock` with the operator commands. Fine while
   every caller is the same-uid local user; revisit (a dedicated report socket or
   per-method authorization) only if external tools ever need a different trust

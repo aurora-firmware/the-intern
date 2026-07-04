@@ -330,12 +330,10 @@ The deliverable rests on a policy section in bob's existing TOML configuration
 
 ## Open Questions
 
-- **Async blocking verdict (carried from S-001).** The design requires
-  pi-agent's `tool_call` hook to accept an *asynchronous* allow/block verdict —
-  the hook must be able to suspend while the `Authz`/`AuthzVerdict` round-trip
-  completes. This must be verified against the pi-agent source before Phase 5
-  is implemented; the spec-breakdown skill is expected to call out an explicit
-  verification step. `[TODO]`
+- **Async blocking verdict (carried from S-001).** Resolved — pi-agent's
+  `tool_call` hook accepts an *asynchronous* allow/block verdict; the hook
+  suspends while the `Authz`/`AuthzVerdict` round-trip completes. Verified
+  during Phase 5 delivery (`bob.ts` blocking hook implemented and in force).
 - **Glob and field-path syntax.** The argument matcher's glob dialect and the
   `arguments` field-path syntax are left to task breakdown; the matching
   *semantics* in Configuration Requirements are the contract. `[TODO]`
