@@ -4,10 +4,13 @@ pub mod framing;
 pub mod listener;
 pub mod multiplex;
 pub mod peer_cred;
+pub mod session_registry;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use bob_core::types::SessionId;
 use tokio::{
     net::UnixStream,
     sync::{mpsc, watch},
@@ -15,7 +18,10 @@ use tokio::{
 };
 
 use crate::listener::{Listener, ListenerConfig};
-use crate::multiplex::{MonitoringHandle, NoopMonitoringHandle, SessionMultiplexer};
+use crate::multiplex::{
+    MonitoringEvent, MonitoringHandle, NoopMonitoringHandle, SessionMultiplexer,
+};
+use crate::session_registry::{RegistrationOutcome, SessionRegistry};
 
 pub use crate::multiplex::{MonitoringBackedHandle, TracingMonitoringHandle};
 
@@ -99,29 +105,43 @@ async fn run_connection(
     stream: UnixStream,
     monitoring_handle: Arc<dyn MonitoringHandle>,
     snapshot: policy_control::SnapshotHandle,
+    // B-018: `session_registry` is shared across every connection accepted
+    // by the same `run_listener`; `connection_id` identifies this specific
+    // connection within that registry. See `session_registry` module docs.
+    session_registry: Arc<SessionRegistry>,
+    connection_id: u64,
 ) {
     let stream = stream;
     let (out_tx, mut out_rx) = mpsc::unbounded_channel();
-    let mut multiplexer = SessionMultiplexer::new(monitoring_handle, snapshot, out_tx.clone());
+    let mut multiplexer =
+        SessionMultiplexer::new(Arc::clone(&monitoring_handle), snapshot, out_tx.clone());
     let mut inbound = Vec::new();
     let mut read_buf = [0_u8; 4096];
+    // Session ids this connection has already checked against the shared
+    // registry. Checking once per session id (not once per frame) keeps a
+    // long-lived duplicate connection from re-emitting the warning/audit
+    // signal on every subsequent frame.
+    let mut known_sessions: HashSet<SessionId> = HashSet::new();
 
-    loop {
+    // Labeled so an error deep inside the inner `while` loop below can exit
+    // the whole connection while still reaching the registry cleanup after
+    // the loop (a bare `return` would skip that cleanup).
+    'connection: loop {
         match stream.readable().await {
             Ok(()) => {}
             Err(e) => {
                 tracing::warn!(error = %e, "extension-ipc: failed waiting for readable socket");
-                break;
+                break 'connection;
             }
         }
 
         let n = match stream.try_read(&mut read_buf) {
-            Ok(0) => break,
+            Ok(0) => break 'connection,
             Ok(n) => n,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue 'connection,
             Err(e) => {
                 tracing::warn!(error = %e, "extension-ipc: failed to read frame; closing connection");
-                break;
+                break 'connection;
             }
         };
         inbound.extend_from_slice(&read_buf[..n]);
@@ -132,20 +152,31 @@ async fn run_connection(
                 Ok(line) => line,
                 Err(e) => {
                     tracing::warn!(error = %e, "extension-ipc: frame is not utf-8; closing connection");
-                    return;
+                    break 'connection;
                 }
             };
             let frame = match framing::parse_inbound_frame(&line) {
                 Ok(frame) => frame,
                 Err(e) => {
                     tracing::warn!(error = %e, "extension-ipc: malformed frame; closing connection");
-                    return;
+                    break 'connection;
                 }
             };
 
+            let session = frame_session(&frame);
+            if known_sessions.insert(session) {
+                check_for_duplicate_session(
+                    &session_registry,
+                    session,
+                    connection_id,
+                    &monitoring_handle,
+                )
+                .await;
+            }
+
             if let Err(e) = multiplexer.handle_frame(frame).await {
                 tracing::warn!(error = %e, "extension-ipc: failed to route frame; closing connection");
-                return;
+                break 'connection;
             }
 
             while let Ok(outbound) = out_rx.try_recv() {
@@ -153,16 +184,72 @@ async fn run_connection(
                     Ok(wire) => wire,
                     Err(e) => {
                         tracing::warn!(error = %e, "extension-ipc: failed to encode outbound frame");
-                        return;
+                        break 'connection;
                     }
                 };
 
                 if let Err(e) = write_all_nonblocking(&stream, wire.as_bytes()).await {
                     tracing::warn!(error = %e, "extension-ipc: failed to write outbound frame");
-                    return;
+                    break 'connection;
                 }
             }
         }
+    }
+
+    // Release every session id this connection ever claimed so a later,
+    // legitimate reconnect under the same session id is not mistaken for a
+    // duplicate. `release` is a no-op for session ids this connection only
+    // ever observed a `Duplicate` outcome for.
+    for session in known_sessions {
+        session_registry.release(session, connection_id);
+    }
+}
+
+/// Returns the session id carried by any inbound frame.
+fn frame_session(frame: &framing::InboundFrame) -> SessionId {
+    match frame {
+        framing::InboundFrame::Authz { session, .. }
+        | framing::InboundFrame::Event { session, .. } => *session,
+    }
+}
+
+/// Checks whether `connection_id` is the sole owner of `session` in the
+/// shared registry. If a different, still-live connection already owns it,
+/// this is B-018's silent collision: a second (likely stale) extension
+/// instance is running the authz/event path for the same session. That
+/// state must never be silent, so both a WARN-level log line and an audit
+/// `event` record are emitted, attributing the collision to both connection
+/// ids. The frame is still processed normally by both connections
+/// afterwards (flag loudly, do not refuse) — see the B-018 Work Log for why
+/// refusing either connection outright is not the safer choice here.
+async fn check_for_duplicate_session(
+    session_registry: &SessionRegistry,
+    session: SessionId,
+    connection_id: u64,
+    monitoring_handle: &Arc<dyn MonitoringHandle>,
+) {
+    if let RegistrationOutcome::Duplicate {
+        existing_connection_id,
+    } = session_registry.register(session, connection_id)
+    {
+        tracing::warn!(
+            session = %session,
+            connection_id,
+            existing_connection_id,
+            "extension-ipc: duplicate extension instance detected for session — a second \
+             connection registered an already-active session id; one hook may be stale and \
+             fail closed even though the other returns a verdict (B-018)"
+        );
+        monitoring_handle
+            .record_event(MonitoringEvent {
+                session,
+                payload: serde_json::json!({
+                    "event": "duplicate_extension_connection",
+                    "connection_id": connection_id,
+                    "existing_connection_id": existing_connection_id,
+                }),
+            })
+            .await;
     }
 }
 
@@ -194,6 +281,11 @@ async fn run_listener(
     // Detached connection tasks would otherwise keep their cloned subsystem
     // handles (monitoring, policy snapshot) alive and stall the shutdown drain.
     let mut connections = tokio::task::JoinSet::new();
+    // B-018: shared across every connection this listener accepts, so a
+    // second connection registering an already-active session id is
+    // detected instead of silently coexisting. See `session_registry`.
+    let session_registry = Arc::new(SessionRegistry::new());
+    let mut next_connection_id: u64 = 1;
     loop {
         tokio::select! {
             biased;
@@ -210,7 +302,16 @@ async fn run_listener(
                     Ok(Some(stream)) => {
                         let monitoring = Arc::clone(&monitoring_handle);
                         let snapshot = snapshot.clone();
-                        connections.spawn(run_connection(stream, monitoring, snapshot));
+                        let registry = Arc::clone(&session_registry);
+                        let connection_id = next_connection_id;
+                        next_connection_id += 1;
+                        connections.spawn(run_connection(
+                            stream,
+                            monitoring,
+                            snapshot,
+                            registry,
+                            connection_id,
+                        ));
                     }
                     Ok(None) => {
                         // Rejected peer already logged in `Listener::accept`.
@@ -309,6 +410,12 @@ mod tests {
         handle
     }
 
+    /// A registry with no other connections registered, for tests that do
+    /// not exercise the B-018 duplicate-connection detection path.
+    fn fresh_registry() -> Arc<SessionRegistry> {
+        Arc::new(SessionRegistry::new())
+    }
+
     async fn write_frame(stream: &UnixStream, payload: &str) {
         write_all_nonblocking(stream, payload.as_bytes())
             .await
@@ -405,7 +512,13 @@ mod tests {
     async fn connection_authz_frame_returns_deny_verdict_with_same_session() {
         let (client, server) = UnixStream::pair().expect("socket pair");
         let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
-        let conn = tokio::spawn(run_connection(server, monitoring, deny_all_snapshot()));
+        let conn = tokio::spawn(run_connection(
+            server,
+            monitoring,
+            deny_all_snapshot(),
+            fresh_registry(),
+            1,
+        ));
 
         let session = bob_core::types::SessionId::new();
         let authz = format!(
@@ -426,12 +539,130 @@ mod tests {
         conn.abort();
     }
 
+    // ---- B-018: duplicate extension connection detection ----
+    //
+    // These tests reproduce the collision at the heart of B-018: a stale
+    // second `bob.ts` instance opens its own connection under the same
+    // `BOB_SESSION_ID` as the current instance. Before this fix, nothing
+    // detected that two live connections shared one session id, so the
+    // stale instance's fail-closed verdict silently blocked every tool call
+    // even though the current instance's verdict allowed it.
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn second_connection_registering_same_session_id_emits_duplicate_audit_event() {
+        let monitor = Arc::new(CapturingMonitoringHandle::default());
+        let monitoring: Arc<dyn MonitoringHandle> = monitor.clone();
+        let registry = fresh_registry();
+        let session = bob_core::types::SessionId::new();
+        let authz = format!(
+            "{{\"kind\":\"authz\",\"session\":\"{session}\",\"tool\":\"bash\",\"arguments\":{{\"cmd\":\"ls\"}}}}\n"
+        );
+
+        // First connection: the current, correct extension instance.
+        let (client_a, server_a) = UnixStream::pair().expect("socket pair a");
+        let conn_a = tokio::spawn(run_connection(
+            server_a,
+            Arc::clone(&monitoring),
+            deny_all_snapshot(),
+            Arc::clone(&registry),
+            1,
+        ));
+        write_frame(&client_a, &authz).await;
+        wait_for_line(&client_a, 500)
+            .await
+            .expect("first connection must reply with a verdict");
+
+        // Second connection: a stale/duplicate instance registering the same
+        // session id while the first connection is still live.
+        let (client_b, server_b) = UnixStream::pair().expect("socket pair b");
+        let conn_b = tokio::spawn(run_connection(
+            server_b,
+            Arc::clone(&monitoring),
+            deny_all_snapshot(),
+            Arc::clone(&registry),
+            2,
+        ));
+        write_frame(&client_b, &authz).await;
+        wait_for_line(&client_b, 500)
+            .await
+            .expect("second connection must still receive its own verdict (flagged, not refused)");
+
+        let events = monitor.events.lock().expect("events lock");
+        let duplicate_event = events
+            .iter()
+            .find(|e| e.payload["event"] == "duplicate_extension_connection")
+            .expect("a duplicate_extension_connection audit event must be recorded");
+        assert_eq!(duplicate_event.session, session);
+        assert_eq!(duplicate_event.payload["connection_id"], 2);
+        assert_eq!(duplicate_event.payload["existing_connection_id"], 1);
+
+        drop(client_a);
+        drop(client_b);
+        conn_a.abort();
+        conn_b.abort();
+    }
+
+    // Note: a companion test asserting the WARN-level tracing line via a
+    // captured `tracing::subscriber::set_default` subscriber (mirroring the
+    // pattern in `multiplex.rs`) was written and did reproduce the log line
+    // when run in isolation, but was flaky (~1 in 5) under the default
+    // parallel `cargo test` execution because `tracing`'s per-thread default
+    // subscriber races with other tests' subscribers running concurrently on
+    // other threads in the same process. It was removed to keep this suite
+    // deterministic; the `tracing::warn!` call is emitted from the same
+    // branch, immediately before the audit event asserted above, in
+    // `check_for_duplicate_session`, so the log line's presence is confirmed
+    // by source inspection rather than a flaky capture-based test.
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn same_connection_sending_two_frames_for_one_session_does_not_report_a_duplicate() {
+        let monitor = Arc::new(CapturingMonitoringHandle::default());
+        let monitoring: Arc<dyn MonitoringHandle> = monitor.clone();
+        let registry = fresh_registry();
+        let session = bob_core::types::SessionId::new();
+
+        let (client, server) = UnixStream::pair().expect("socket pair");
+        let conn = tokio::spawn(run_connection(
+            server,
+            monitoring,
+            deny_all_snapshot(),
+            registry,
+            1,
+        ));
+
+        let authz = format!(
+            "{{\"kind\":\"authz\",\"session\":\"{session}\",\"tool\":\"bash\",\"arguments\":{{\"cmd\":\"ls\"}}}}\n"
+        );
+        write_frame(&client, &authz).await;
+        wait_for_line(&client, 500).await.expect("first reply");
+        write_frame(&client, &authz).await;
+        wait_for_line(&client, 500).await.expect("second reply");
+
+        let events = monitor.events.lock().expect("events lock");
+        assert!(
+            events
+                .iter()
+                .all(|e| e.payload["event"] != "duplicate_extension_connection"),
+            "a single connection reusing its own session id must never be reported as a \
+             duplicate; events: {events:?}"
+        );
+
+        drop(client);
+        conn.abort();
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn connection_event_frame_forwards_to_monitoring_without_reply() {
         let (client, server) = UnixStream::pair().expect("socket pair");
         let monitoring = Arc::new(CapturingMonitoringHandle::default());
         let sink: Arc<dyn MonitoringHandle> = monitoring.clone();
-        let conn = tokio::spawn(run_connection(server, sink, deny_all_snapshot()));
+        let conn = tokio::spawn(run_connection(
+            server,
+            sink,
+            deny_all_snapshot(),
+            fresh_registry(),
+            1,
+        ));
         let session = bob_core::types::SessionId::new();
 
         let event = format!(
@@ -457,7 +688,13 @@ mod tests {
     async fn connection_parse_failures_close_socket_without_echo() {
         let (client, server) = UnixStream::pair().expect("socket pair");
         let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
-        let conn = tokio::spawn(run_connection(server, monitoring, deny_all_snapshot()));
+        let conn = tokio::spawn(run_connection(
+            server,
+            monitoring,
+            deny_all_snapshot(),
+            fresh_registry(),
+            1,
+        ));
 
         write_frame(&client, "{\"kind\":\"event\",\"payload\":{\"bad\":true}}\n").await;
 
@@ -473,7 +710,13 @@ mod tests {
     async fn connection_malformed_json_closes_socket_without_echo() {
         let (client, server) = UnixStream::pair().expect("socket pair");
         let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
-        let conn = tokio::spawn(run_connection(server, monitoring, deny_all_snapshot()));
+        let conn = tokio::spawn(run_connection(
+            server,
+            monitoring,
+            deny_all_snapshot(),
+            fresh_registry(),
+            1,
+        ));
 
         write_frame(&client, "{\"kind\":\"authz\" this is invalid\n").await;
 
@@ -489,7 +732,13 @@ mod tests {
     async fn connection_invalid_utf8_closes_socket_without_echo() {
         let (client, server) = UnixStream::pair().expect("socket pair");
         let monitoring: Arc<dyn MonitoringHandle> = Arc::new(CapturingMonitoringHandle::default());
-        let conn = tokio::spawn(run_connection(server, monitoring, deny_all_snapshot()));
+        let conn = tokio::spawn(run_connection(
+            server,
+            monitoring,
+            deny_all_snapshot(),
+            fresh_registry(),
+            1,
+        ));
 
         write_all_nonblocking(&client, b"\xff\n")
             .await

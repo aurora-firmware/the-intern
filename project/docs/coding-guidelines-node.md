@@ -1,205 +1,180 @@
 # Node.js Coding Guidelines
 
-These conventions apply to the TypeScript extension that runs inside each
-pi-agent process. They are prose only; tool configs belong with the
-implementation when the extension package exists.
+These conventions apply to TypeScript code in `the-intern/extensions/`. The
+extension runs inside each pi-agent process, so code in this package must be
+small, explicit, fail-closed, and easy to audit.
 
 ---
 
-## 1. Source Layout and Module Naming
+## 1. Design Principles
 
-The extension lives under `the-intern/extensions/` and targets Node.js 20 or
-newer. TypeScript is the default source language because the architecture keeps
-this as the only TypeScript surface in the system. Plain JS is reserved
-for generated output or upstream artifacts if they are ever needed.
+Use SOLID as a practical design checklist:
 
-Entry points are thin. They register pi-agent hooks, initialize logging,
-validate configuration, connect to the Rust service socket, and delegate to
-modules grouped by responsibility: `hooks/`, `monitoring/`, `policy-client/`,
-`schemas/`, and `skills/`.
+- **Single Responsibility:** each file, class, function, and schema should have
+  one reason to change. Split code when a module mixes hook registration,
+  socket transport, validation, logging, and policy handling.
+- **Open/Closed:** add new message shapes, event kinds, or policy outcomes by
+  extending typed handlers and schemas instead of rewriting broad conditionals.
+- **Liskov Substitution:** fakes and test doubles must obey the same observable
+  contract as the socket, logger, clock, or pi-agent API they replace.
+- **Interface Segregation:** expose narrow interfaces for hook handling,
+  verdict transport, event forwarding, and logging. Do not make callers depend
+  on methods they do not use.
+- **Dependency Inversion:** high-level hook logic depends on small local
+  interfaces; concrete sockets, clocks, process APIs, and loggers are passed in
+  at the boundary.
 
-Module file names are `kebab-case` and describe one clear responsibility:
-`tool-call-hook.ts`, `verdict-socket.ts`, `event-forwarder.ts`. Avoid barrel
-re-exports that obscure where a symbol originates. A file that exceeds about
-300 lines is a signal to split it.
+Prefer simple functions and plain data over framework-heavy abstractions. Add an
+abstraction only when it reduces duplication, clarifies a boundary, or makes
+security-critical behavior easier to test.
 
-Internal modules use relative imports. Do not use path aliases that require
-bundler configuration; keep the import graph resolvable by Node.js and the
-chosen TypeScript build without special runtime hooks.
+## 2. Source Layout and Naming
 
-## 2. Identifier Naming Conventions
+Entry points stay thin: register pi-agent hooks, load configuration, initialize
+logging, and delegate to focused modules.
 
-| Kind | Convention | Example |
-|---|---|---|
-| Variables and functions | `camelCase` | `sendVerdict`, `sessionId` |
-| Classes and types | `PascalCase` | `SocketClient`, `ToolCallHook` |
-| Constants, module-level and never reassigned | `SCREAMING_SNAKE_CASE` | `MAX_RETRY_COUNT` |
-| Files and directories | `kebab-case` | `event-forwarder.ts` |
+Files and directories use `kebab-case`. Variables and functions use
+`camelCase`. Classes, interfaces, and types use `PascalCase`. Constants that are
+never reassigned use `SCREAMING_SNAKE_CASE`.
 
-Prefer descriptive full words over abbreviations unless the abbreviation is
-universally understood (`url`, `id`, `rpc`). Boolean variables and functions are
-prefixed with `is`, `has`, or `can`: `isAuthorized`, `hasActiveSession`.
+Use descriptive full words unless the abbreviation is standard (`id`, `url`,
+`rpc`). Boolean names start with `is`, `has`, or `can`.
 
-## 3. Interface Contracts and Runtime Validation
+Avoid barrel re-exports that hide where a symbol comes from. A file over about
+300 lines is a signal to split it by responsibility.
+
+## 3. Boundaries and Validation
 
 TypeScript types do not validate runtime data. Define schemas for every message
-crossing the extension boundary: pi-agent `tool_call` payloads, verdict socket
-requests, verdict responses, monitoring events, socket errors, and skill
-metadata.
+that crosses a boundary: pi-agent events, tool-call requests, socket requests,
+socket responses, monitoring events, and persisted or replayed metadata.
 
-Validate as early as possible and fail closed. A malformed tool-call request,
-malformed verdict, missing session identifier, invalid user identity, or
-unknown action shape blocks the tool call and emits a safe monitoring event.
+Validate as early as possible and fail closed. A malformed tool call, verdict,
+session id, user identity, action shape, or monitoring frame must not be treated
+as allowed behavior.
 
-Schemas should constrain payload size, required identifiers, enum values,
-argument shapes, and redaction behavior. Treat all model-originated tool
-arguments as untrusted even when they arrive through pi-agent APIs.
+Schemas should constrain:
+
+- required identifiers
+- enum values
+- payload sizes
+- argument shapes
+- redaction behavior
+
+Treat model-originated tool arguments as untrusted, even when they arrive
+through pi-agent APIs.
 
 ## 4. Error Handling
 
-Throw typed `Error` subclasses, not plain objects or string literals. Define one
-subclass per failure domain: `SocketConnectionError`, `VerdictTimeoutError`,
-`MalformedVerdictError`. Include the operation that failed and the safe
-identifiers needed for diagnosis.
+Throw typed `Error` subclasses, not strings or plain objects. Define errors by
+failure domain, such as `SocketConnectionError`, `VerdictTimeoutError`, and
+`MalformedVerdictError`.
 
-Do not mix thrown errors with result objects in the same codebase layer. Async
-functions in the extension throw on failure and return the resolved value on
-success. Callers use `try/catch`; they do not check a `result.ok` flag unless
-they are at a protocol boundary that explicitly models allow/block.
+Do not mix thrown errors and `result.ok` objects within the same layer. Async
+extension code throws on failure and returns values on success. Use result-like
+protocol objects only at boundaries that explicitly model allow/block behavior.
 
-Distinguish operational errors from programmer errors. Operational errors such
-as verdict timeout, socket disconnect, or rejected payload become explicit
-block/audit outcomes. Programmer errors and unknown extension state are fatal to
-the session process so the Rust supervisor can replace it.
+Operational errors, such as socket disconnects, verdict timeouts, and malformed
+remote payloads, become explicit block or monitoring outcomes. Programmer
+errors and impossible states should terminate the process so the Rust supervisor
+can replace untrusted state.
 
-The blocking authorization path fails closed. If Policy Control is unreachable,
-times out, returns malformed data, or cannot prove an allow verdict, the hook
-returns a block result and emits a monitoring record.
+Include safe diagnostic context: operation name, session id, request id, byte
+lengths, and known enum values. Do not include credentials, raw user text, raw
+tool arguments, file contents, or sensitive policy-controlled data. Preserve
+original errors as `cause` where useful.
 
-Never swallow errors with an empty `catch` block. If a failure is truly safe to
-ignore, add a comment explaining why. Include original errors as `cause` where
-useful:
+Never leave an empty `catch` block. Every promise is awaited or has a `.catch`
+handler. Process-level `unhandledRejection` and `uncaughtException` handlers
+log safely, notify monitoring when possible, and let untrusted state terminate.
 
-```ts
-throw new SocketConnectionError(
-  `failed to connect to verdict socket for session ${sessionId}`,
-  { cause: originalError }
-);
-```
-
-Unhandled promise rejections are bugs. Every `Promise` chain or `async`
-function is either `await`-ed or has a `.catch` handler attached. Register
-process-level `unhandledRejection` and `uncaughtException` handlers that log
-safely, notify monitoring when possible, and let untrusted state terminate.
-
-## 5. Logging Conventions
-
-Use a structured logger that emits JSON lines to `stdout`. Application code does
-not route logs to files, databases, or external services; the runtime
-environment handles routing.
-
-Each log entry carries at minimum `level`, `timestamp`, `msg`, and relevant
-correlation fields. Include `sessionId`, `requestId` or `traceId`,
-`toolCallId`, and `policyDecisionId` when present. Propagate
-those identifiers through socket messages and monitoring events.
-
-Additional fields are `camelCase` key-value pairs that describe the event
-without exposing sensitive content.
-
-| Level | When to use |
-|---|---|
-| `error` | A condition the extension cannot recover from without intervention |
-| `warn` | A recoverable problem such as retry exhaustion or malformed input |
-| `info` | Significant lifecycle events, verdicts, and forwarding milestones |
-| `debug` | Detailed tracing data useful during development |
-
-Never log credential values, raw user message text, raw tool arguments, file
-contents, or data classified as sensitive by Policy Control. Log payload shape,
-field names, byte lengths, hashes, and safe identifiers instead.
-
-## 6. Security Rules
+## 5. Security Rules
 
 The extension is a trust-boundary courier, not a policy engine. It forwards
-requests to the Rust service and enforces the returned verdict; it does not
-invent authorization rules locally.
+authorization requests to the Rust service and enforces the returned verdict. It
+does not invent local allow rules.
 
-Do not use evaluated code: no `eval`, `new Function`, or equivalent dynamic
-execution. Do not load modules from user-controlled or model-controlled names.
-Dynamic imports are allowed only from literal allowlists defined in source.
+The blocking authorization path fails closed. If the service is unreachable,
+times out, returns malformed data, or cannot prove an allow verdict, block the
+tool call and emit a safe monitoring record.
 
-Do not construct shell command strings. If extension code ever has to describe
-or prepare action invocations, represent tools and arguments as structured data
-and enforce allowlists before anything reaches pi-agent's `bash` tool.
+Do not use `eval`, `new Function`, or equivalent dynamic execution. Do not load
+modules from user-controlled or model-controlled names. Dynamic imports are
+allowed only from literal allowlists in source.
 
-Regular expressions used on untrusted input must be simple, bounded, and covered
-by tests for pathological input. Prefer parser or schema validation over complex
-regexes for message and argument validation.
+Do not construct shell command strings. Represent tools and arguments as
+structured data, validate them, and let the policy gate decide whether execution
+is allowed.
+
+Regular expressions over untrusted input must be simple, bounded, and tested
+with pathological input. Prefer schemas or parsers over complex regexes.
 
 Secrets come from environment or runtime configuration, never from committed
-source. Do not print secrets through logs, error messages, test snapshots, or
-monitoring payloads.
+source. Do not print secrets through logs, errors, test snapshots, or monitoring
+payloads.
 
-## 7. Event Loop, Timeouts, and Backpressure
+## 6. Async, Timeouts, and Backpressure
 
-Hook code must stay short and bounded. Do not perform CPU-heavy inspection,
-large synchronous parsing, blocking filesystem work, or long retries in the
-event loop. Defer heavy work to the Rust service or a dedicated process.
+Hook code must be short and bounded. Do not do CPU-heavy inspection, large
+synchronous parsing, blocking filesystem work, or long retry loops on the event
+loop.
 
-All socket calls have explicit timeouts. Timeout behavior is deterministic:
-authorization timeouts block the tool call, monitoring timeouts are recorded
-when possible, and reconnect attempts use bounded retry policies.
+Every socket call has an explicit timeout. Authorization timeouts block the
+tool call. Monitoring timeouts are recorded when possible.
 
-Handle socket backpressure explicitly. Bound outgoing queues, cap message
-sizes, and define what is dropped, retried, or blocked when the Rust service is
+Handle backpressure deliberately. Bound outgoing queues, cap message sizes, and
+define whether work is dropped, retried, or blocked when the Rust service is
 down.
 
-## 8. Testing Conventions
+## 7. Logging and Monitoring
 
-Unit tests live adjacent to the module they test, in a sibling file or a
-`__tests__/` subdirectory. Integration tests that exercise the hook against a
-stubbed socket go in the extension test directory.
+Use structured JSON logs on `stdout`. Application code does not write logs to
+files, databases, or external services.
 
-A good test:
+Every log entry includes at least `level`, `timestamp`, `msg`, and relevant
+correlation fields. Use `sessionId`, `requestId`, `traceId`, `toolCallId`, and
+`policyDecisionId` when present.
 
-- Has a descriptive name that states the condition and expected outcome:
-  `blocks_tool_call_when_verdict_socket_returns_deny`.
-- Uses a clear arrange, act, assert structure.
-- Constructs its own fixtures; no shared mutable state between tests.
-- Replaces network, filesystem, clock, and process access with in-process fakes
-  or stubs unless that boundary is the subject under test.
-- Asserts one observable behavior per test. If a test has five unrelated
-  assertions, split it into five tests.
+Use levels consistently:
 
-Security-critical coverage must include allow verdict, deny verdict, verdict
-timeout, malformed verdict, socket disconnect, malformed tool-call payload,
-event forwarding, redaction, and no real side effect when authorization blocks.
+| Level | Use |
+|---|---|
+| `error` | Cannot recover without intervention |
+| `warn` | Recoverable problem or blocked unsafe input |
+| `info` | Lifecycle, verdict, and forwarding milestones |
+| `debug` | Development-only diagnostic detail |
 
-Do not select a specific test runner here; use whatever tooling the project
-settles on. The conventions above apply regardless of runner choice.
+Never log credential values, raw user messages, raw tool arguments, file
+contents, or sensitive policy-controlled data. Log shapes, field names, byte
+lengths, hashes, and safe identifiers instead.
 
-## 9. Package and Runtime Hygiene
+## 8. Testing
 
-Commit the package lockfile when the extension package is introduced. CI and
-release builds install from the lockfile, not from floating dependency
-resolution. Keep dependency count low, especially on hook, validation, logging,
-and socket paths.
+Tests describe behavior in their names:
+`blocks_tool_call_when_verdict_socket_times_out`.
 
-Use a maintained Node.js LTS-compatible runtime at or above the architecture's
-Node.js 20 baseline. Production runs set production environment mode and avoid
-loading development-only dependencies.
+Each test should:
 
-Add dependency vulnerability checks and no-secret scanning when package metadata
-exists. A dependency used only for development must not be required by runtime
-extension code.
+- arrange only the state it needs
+- act through the public behavior of the unit
+- assert one observable outcome
+- avoid shared mutable state
+- replace sockets, clocks, filesystem, process APIs, and loggers with fakes
+  unless that boundary is the subject under test
 
-## 10. Formatter and Linter
+Security-critical coverage includes allow verdicts, deny verdicts, verdict
+timeouts, malformed verdicts, socket disconnects, malformed tool-call payloads,
+event forwarding, redaction, and no side effect when authorization blocks.
 
-**`prettier`** enforces consistent formatting automatically across TypeScript
-and JS files. Run it before every commit.
+## 9. Package and Tooling
 
-**`eslint`** provides static analysis for common mistakes and security rules:
-unused variables, missing `await`, unsafe dynamic code, suspicious regexes,
-unsafe child-process usage, and accidental floating promises. Configure it for
-Node.js, TypeScript, and the chosen module system. Treat lint errors as
-blocking; suppress a rule only with an inline comment explaining why the
+Target Node.js 20 or newer. Commit the package lockfile. CI and releases install
+from the lockfile, not floating dependency resolution.
+
+Keep runtime dependencies few and justified, especially on hook, validation,
+logging, and socket paths. Development-only dependencies must not be imported by
+runtime extension code.
+
+Use Prettier for formatting and ESLint for static checks. Treat lint errors as
+blocking. Suppress a rule only with an inline comment that explains why the
 suppression is safe.

@@ -73,7 +73,7 @@ What this specification explicitly does NOT cover:
 
 ```
 +-------------------------------------------------------------+
-| Rust service (single OS-agnostic binary)                    |
+| Rust service (single binary; Unix-likes: Linux and macOS)   |
 |                                                             |
 |  Channel adapters -> Requests Handler -> Policy Control     |
 |                              |              ^               |
@@ -96,7 +96,7 @@ What this specification explicitly does NOT cover:
 | Component | Responsibility | Notes |
 |---|---|---|
 | Rust service | Hosts the deterministic components; owns the inbound queue, identity, persistence, and supervision of pi-agent processes | Single long-lived binary on Linux + macOS; shell defined in S-002 |
-| Channel adapters | Accept inbound traffic from chat, email, scheduler; normalize each into a common internal request, classified by delivery kind (`sync`/`async`/`periodic`) per ADR-004 | Part of the Rust service; the only components that know channel specifics |
+| Channel adapters | Accept inbound traffic from external adapters such as email and scheduler; normalize each into a common internal request, classified by delivery kind (`sync`/`async`/`periodic`) per ADR-004 | Part of the Rust service; the only components that know adapter-specific protocols. Interactive chat is a supervised directly launched `pi` session and does not enter the queue |
 | Requests Handler | Consume the inbound queue, attach user/channel identity, run pre-flight identity/access checks where the channel's admission model requires them | Part of the Rust service |
 | Policy Control | Decide per-user authorization for actions raised mid-run by the agent | Part of the Rust service; never inside the agent |
 | Monitoring | Maintain an append-only audit log; expose an inbound interface for external tools to report actions | Part of the Rust service |
@@ -125,11 +125,9 @@ supervises the pi-agent process pool.
   agent events* destined for Monitoring. Both families are tagged with a
   session identifier so the Rust service can multiplex them.
 - *Monitoring report interface:* an inbound endpoint, reachable by external CLI
-  tools, accepting action records. Transport is `[TODO]`; given the Unix-likes
-  scope adopted via S-002, the surviving candidates are extending `admin.sock`
-  with a `report.*` JSON-RPC method family or introducing a dedicated
-  `report.sock` UDS. The decision is tracked in S-002 and must land before
-  Phase 5 (Monitoring) begins.
+  tools, accepting action records. Transport is decided: the `report.submit`
+  JSON-RPC method on `admin.sock` (S-005; ratified by ADR-007). No dedicated
+  `report.sock` is introduced in v1.
 
 ### Component 2: pi-agent process
 
@@ -237,15 +235,17 @@ configurable:
 
 ## Open Questions
 
-- **Async blocking verdict.** The design requires pi-agent's `tool_call` hook to
-  accept an *asynchronous* allow/block verdict. This must be verified against the
-  pi-agent source before Phase 4. `[TODO]`
-- **Prompt-delivery path.** Confirm `runRpcMode()` is the correct channel for
-  injecting prompts, or whether the extension must also carry prompt input.
-  `[TODO]`
-- **Monitoring report transport.** Choose the OS-agnostic transport for the
-  external-tool report interface (local HTTP endpoint vs. a reporting CLI).
-  `[TODO]`
+All original open questions are resolved:
+
+- **Async blocking verdict.** Resolved — pi-agent's `tool_call` hook accepts an
+  asynchronous allow/block verdict; verified during S-004 delivery, where the
+  blocking authorization path is implemented and in force.
+- **Prompt-delivery path.** Resolved — `runRpcMode()` JSON-RPC is the prompt
+  channel for supervised worker sessions, implemented by the pi-agent
+  supervisor (Phase 2). Interactive chat uses a separate supervised direct
+  `pi` session instead of prompt injection (CR-002 / ADR-011).
+- **Monitoring report transport.** Resolved — `report.submit` on `admin.sock`
+  (S-005, ADR-007).
 
 ## Amendment Log
 
@@ -256,3 +256,4 @@ configurable:
 | 2026-06-13 | Deployment scope narrowed to single-user-local: the "Per-user isolation" principle reframed to single-user (one OS/trust-domain account; per-session isolation of the user's concurrent contexts, not cross-user). Webhooks removed from the committed channel set (Purpose, Channel-adapters row, Component 1 inbound, Exclusions example, Phase 6). | ADR-008 (single-user-local deployment scope) accepted 2026-06-13, reconciling S-001 with the committed product and the trust model in ADR-005/ADR-007. The core stays delivery-kind-typed (ADR-004), so the narrowed channel set does not constrain future channel additions. | None (no tasks in flight against these sections). |
 | 2026-06-23 | Phase 6 chat clause updated: interactive chat is a supervised, directly-launched `pi` session (CR-002 / ADR-010), not an `admin.sock` chat subscription. | CR-002 redefines `bob chat`; the S-002 interactive-chat-adapter path is superseded for interactive use (S-006 amended, S-008 archived as superseded). | T-103, T-104, T-105, T-106, T-107, T-108 |
 | 2026-06-30 | Requests Handler language narrowed from universal pre-flight identity checks to per-channel admission models; scheduler admission now references ADR-012. | CR-004 / ADR-012 remove scheduler-derived UUID admission and use the Unix trust boundary plus trusted schedule store for scheduled work. | Scheduler amendment tasks TBD |
+| 2026-07-04 | System diagram label corrected from "single OS-agnostic binary" to "Unix-likes (Linux and macOS)", matching the 2026-05-16 OS-scope amendment; Component 1 report-interface transport marked decided (`report.submit` on `admin.sock`, S-005/ADR-007); the three Open Questions marked resolved. | Documentation-consistency review: the diagram and Open Questions had not been updated after the amendments and after S-004/S-005 delivery answered them. | None (documentation reconciliation). |

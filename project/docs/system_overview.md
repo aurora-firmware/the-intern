@@ -100,7 +100,7 @@ flowchart TD
     subgraph orchestration [Orchestration layer]
         AH["Agent Harness (Orchestrator)"]
         AHOOK["Harness Hooks"]
-        MCP["MCPs or SKILLs"]
+        SKILLS["Skills / tool interfaces"]
     end
 
     ACTIONS(["Actions (CLI tools)"])
@@ -111,8 +111,8 @@ flowchart TD
     PC -->|authorized request| AH
     AHOOK --> |action or delegation request| PC
     PC -->|authorized action| AHOOK
-    MCP -->|exec| ACTIONS
-    ACTIONS -->|result| MCP
+    SKILLS -->|exec| ACTIONS
+    ACTIONS -->|result| SKILLS
     AH -->|response| RH
     CA -->|channel output| EC
 ```

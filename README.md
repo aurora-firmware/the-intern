@@ -4,23 +4,26 @@ The Intern is an AI office-assistant project. This repository contains the
 product design, the lifecycle workflow that drives the work, and the Rust
 service (`bob`) that implements it.
 
-The service currently runs through Phase 6 (chat channel). `bob serve` is a
-binary with a Unix admin socket, a Unix extension socket, an in-process request
-queue, in-memory persistence, graceful shutdown, and a pi-agent supervisor that
-owns the lifecycle of `pi` child processes (spawn, warm pool, prompt routing,
-idle reaping, kill). On top of that foundation it also runs:
+`bob serve` is a binary with a Unix admin socket, a Unix extension socket, an
+in-process request queue, in-memory persistence, graceful shutdown, and a
+pi-agent supervisor that owns the lifecycle of `pi` child processes (spawn,
+warm pool, prompt routing, idle reaping, kill). On top of that foundation it
+also runs:
 
-- **Policy Control (Phase 4)** — deterministic pre-flight admission checks plus
-  the blocking `tool_call` authorization gate.
-- **Monitoring (Phase 5)** — an append-only JSONL audit log with live
-  `audit.tail` subscriptions and a `report.submit` intake.
-- **JS extension (Phase 3)** — `extensions/bob.ts`, which forwards pi-agent
-  runtime events into `extension.sock`.
-- **Interactive-chat adapter (Phase 6)** — a channel adapter that normalizes
-  `chat.send` traffic into the request queue via the requests-handler.
+- **Policy Control** — deterministic pre-flight admission checks for
+  queue-borne requests plus the blocking `tool_call` authorization gate.
+- **Monitoring** — an append-only JSONL audit log with live `audit.tail`
+  subscriptions and a `report.submit` intake.
+- **JS extension** — `extensions/bob.ts`, which forwards pi-agent runtime
+  events into `extension.sock` and hosts the `tool_call` authorization hook.
+- **Interactive chat** — `bob chat` opens a supervised, directly-launched
+  interactive `pi` session on the user's terminal (ADR-010/ADR-011).
+- **Scheduler** — bob-internal cron jobs persisted in
+  `$XDG_STATE_HOME/bob/schedules.json` and managed with `bob schedule`
+  (ADR-006/ADR-012).
 
-Phase 6's chat channel is wired end to end; the remaining channel adapters
-(email, scheduler) and Phase 7 (actions) are not yet implemented.
+The email channel adapter and the action skills (external CLI tools described
+to the agent) are not yet implemented.
 
 ## Repository structure
 
@@ -28,7 +31,7 @@ Phase 6's chat channel is wired end to end; the remaining channel adapters
 .
 ├── README.md, CLAUDE.md          # This file and the framework instructions
 ├── .ai-team.toml                 # ai-team CLI config
-├── .github/workflows/            # Placeholder CI (echo-only today)
+├── .github/workflows/            # CI (format, build, docs, tests) + release workflow
 ├── .claude/                      # Role agents and slash-skills (dev-loop,
 │   ├── agents/                   #   bug-loop, tdd, code-review, integrate,
 │   └── skills/                   #   spec-breakdown, etc.)
@@ -38,7 +41,7 @@ Phase 6's chat channel is wired end to end; the remaining channel adapters
 │   ├── extensions/               # JS extension for pi-agent (bob.ts)
 │   └── docs/                     # User manual (mdbook source; shipped with releases)
 └── project/                      # Source of truth for product lifecycle
-    ├── docs/                     # Architecture, roadmap, coding guidelines
+    ├── docs/                     # Architecture and coding guidelines
     ├── specs/                    # Approved specifications
     ├── decisions/                # ADRs
     ├── tasks/{pending,in-progress,completed,blocked}/
@@ -58,12 +61,20 @@ Directory *is* status for tasks and bugs — moving a file is how state changes.
   credentials, which can fail under restrictive sandboxes with
   `Operation not permitted`.
 
-## JS Extension — pi-agent Package Compatibility
+## pi-agent Version Compatibility
 
-The bob extension (`the-intern/extensions/bob.ts`) has been tested against
-`@earendil-works/pi-coding-agent` **version 0.75.3** only. This is the only
-supported pi-agent API version for the bob extension until a future task
-updates the compatibility record.
+This README is the canonical record of the pi-agent versions the project is
+tested against. **No backwards compatibility is guaranteed** — when the
+pi-agent version in use changes, update this section (specs and ADRs
+deliberately do not pin pi-agent versions).
+
+- **Extension API** — the bob extension (`the-intern/extensions/bob.ts`) has
+  been tested against `@earendil-works/pi-coding-agent` **version 0.75.3**
+  only. This is the only supported pi-agent API version for the bob extension
+  until a future task updates the compatibility record.
+- **Interactive `pi` binary** — the supervised interactive-chat behaviour
+  (TTY requirement, raw mode) was last verified against **pi 0.79.10**
+  (T-103).
 
 If a different version of `@earendil-works/pi-coding-agent` is installed,
 `npm test` in `the-intern/extensions` will fail with a clear incompatibility
@@ -123,6 +134,25 @@ yet a clean gate — the `bob` crate carries existing lint/doc debt.
 `bob serve` listens on two Unix sockets in `$BOB_TEST_RUNTIME_DIR`
 (or the default runtime dir). Override the paths to keep a session isolated.
 
+For source-checkout development, the repo includes helper scripts that keep bob
+config, state, data, and sockets under `.tmp/bob-dev` and run Cargo from
+`the-intern/service/`:
+
+**Terminal A — start the service with the dev helper:**
+
+```bash
+./scripts/run-bob-dev.sh
+```
+
+**Terminal B — drive it with matching dev-helper environment:**
+
+```bash
+./scripts/bob-dev.sh status
+./scripts/bob-dev.sh sessions list --json
+```
+
+The helper requires the real `pi` binary on `PATH`.
+
 **Terminal A — start the service:**
 
 ```bash
@@ -144,15 +174,15 @@ cargo run -p bob -- sessions list --json
 cargo run -p bob -- sessions kill <session-id>
 ```
 
-Available subcommands: `serve`, `status`, `sessions`, `audit`, `policy`, `chat`.
-Add `--help` to any of them for the full surface.
+Available subcommands: `serve`, `status`, `sessions`, `audit`, `policy`,
+`schedule`, `chat`. Add `--help` to any of them for the full surface.
 
-`bob chat` opens a chat subscription and sends each stdin line as a `chat.send`
-call; each request includes a self-asserted application identity from
-`chat_application_identity`, and the interactive-chat adapter normalizes that
-identity into the request queue where the requests-handler runs pre-flight
-admission. The chat channel is enabled by default and can be disabled via the
-`[channels.chat]` config section.
+`bob chat` requires the running service: it asks `bob serve` to launch a
+supervised interactive `pi` session and hands over the caller's terminal file
+descriptors (`SCM_RIGHTS` over `admin.sock`), so pi's interactive UI runs on
+your real TTY while bob supervises and reaps the child. Interactive chat is
+exempt from pre-flight admission (ADR-010); it is gated by socket access and
+the blocking `tool_call` authorization hook, which stays fully in force.
 
 Stop the service with Ctrl-C (SIGTERM); the supervisor reaps pi-agent
 children during shutdown phase 4 and the sockets are removed on exit.
@@ -165,7 +195,7 @@ reference. This is the first stop for anyone using or deploying the Intern.
 
 **`the-intern/docs/` vs `project/docs/`** — `the-intern/docs/` is the user
 manual and is shipped with every release. `project/docs/` holds internal
-development-lifecycle material (architecture notes, roadmap, coding guidelines)
+development-lifecycle material (architecture notes, coding guidelines)
 and is not shipped.
 
 ### Build the docs locally
@@ -205,11 +235,14 @@ asset. You can download it without installing any tooling from the
 ## Where to read more
 
 - Product overview — [project/docs/system_overview.md](project/docs/system_overview.md)
-- Delivery plan — [project/docs/roadmap.md](project/docs/roadmap.md)
+- Concrete architecture — [project/docs/the-intern-architecture.md](project/docs/the-intern-architecture.md)
 - Approved specifications — [project/specs/S-001-the-intern-agent-service-architecture.md](project/specs/S-001-the-intern-agent-service-architecture.md), [project/specs/S-002-bob-service-shell-architecture.md](project/specs/S-002-bob-service-shell-architecture.md)
+- Architecture decisions — [project/decisions/](project/decisions/)
 - Service-level build/test details — [the-intern/service/README.md](the-intern/service/README.md)
 - Coding guidelines — [Rust](project/docs/coding-guidelines-rust.md), [Node.js](project/docs/coding-guidelines-node.md)
 - Framework and slash-skill instructions — [CLAUDE.md](CLAUDE.md)
 
-GitHub workflows in `.github/workflows/` are placeholders today (echo-only);
-use the local commands above for real verification until they are wired up.
+CI (`.github/workflows/build.yml`) runs formatting, build, Rust docs, user
+docs, and the workspace test suite on pull requests and pushes to
+`dev-agent`/`main`; `deploy.yml` builds the release binary and docs archive
+on tag pushes.
