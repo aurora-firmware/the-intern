@@ -427,3 +427,137 @@ guidance above, add the missing authz-frame-under-backlog regression test,
 and resubmit. Everything else reviewed above (core fix, `'drain'` wiring,
 the `socket.destroyed`/`writable` deviation, and the genuine-failure
 regression suite) is correct and should be preserved as-is.
+
+### Review Verdict — 2026-07-04
+
+PASS
+
+**Scope of this cycle.** Reviewed Work Log Session 2 and commit `94c3710
+fix(extensions): keep transport alive under post-connect event backlog`
+against the single blocking issue from the prior FAIL verdict (the
+post-connect CAP/overload policy). Diffed `dev-agent...bug/B-019-...`
+(2 files: `the-intern/extensions/bob.ts`, `the-intern/extensions/bob.test.ts`
+— confirmed via `git diff --stat`; no service-side or out-of-repo files
+touched) and read `94c3710` in full, plus the complete post-fix `bob.ts`.
+
+**Blocking issue — resolved.** `ensureConnected`'s cap guard
+(`the-intern/extensions/bob.ts`, inside `if (pendingFrames.length >=
+PENDING_FRAMES_CAP)`) now branches on `socket === null`:
+- Pre-connect (`socket === null`): unchanged — calls `markDead` exactly as
+  before, matching B-003-A. Confirmed byte-for-byte behavior preserved by
+  the still-passing `B-003-A: pendingFrames cap (pre-connect)` and `T-044
+  AC-1 ... pendingFrames cap breach with ctx.ui present` tests (both
+  synchronous-burst-before-connect scenarios, so `socket` is still `null`
+  when the cap fires).
+- Post-connect (`socket !== null`): no longer calls `markDead` or sets
+  `transportDead`. A one-shot `drainBacklogWarned` flag gates a single
+  warning with distinct, non-fatal wording (`"pendingFrames cap of 64
+  exceeded while waiting for drain — dropping oldest queued events"` — does
+  not match `/transport error/i`, unlike `markDead`'s wording), and the
+  oldest queued frame with `!isAuthz` is evicted via
+  `pendingFrames.findIndex((queued) => !queued.isAuthz)` /
+  `pendingFrames.splice(oldestEventIndex, 1)` to make room before the new
+  frame is always pushed at the end of the guard block. This keeps the
+  queue length bounded at `PENDING_FRAMES_CAP` on every path (evict-then-push
+  never lets it exceed the cap) while leaving `socket`/`transportDead`
+  untouched, so the transport stays alive and anything still queued —
+  including a queued authz frame — flushes normally once `'drain'` fires.
+
+**Frame-typing (`pendingFrames: string[] → {text, isAuthz}[]`) — correct
+and complete.** Traced every touch point in `bob.ts`: the single `push` site
+(`ensureConnected`, `pendingFrames.push({ text: frame, isAuthz })`) is fed by
+exactly two call sites — `handleEvent` calls `ensureConnected(frame, ctx)`
+(default `isAuthz = false`, correct for ordinary events) and
+`handleToolCall` calls `ensureConnected(frame, ctx, true)` (correct for
+authz frames). `flushPending` reads `pendingFrames[0]!.text` for the actual
+`socket.write()` call and otherwise only shifts/splices the array — no
+remaining code path treats an entry as a bare string. `pendingFrames.length
+= 0` in the `'error'` handler still works unchanged against the new element
+shape. No other file or test manipulates `pendingFrames` directly (`grep -n
+"pendingFrames" bob.test.ts` shows only comments/describe-block titles); all
+test coverage exercises the queue through observable behavior (warnings,
+delivered frames, verdicts), not internal state.
+
+**Eviction correctness.** Traced the FIFO-oldest-event-first logic by hand
+against the `B-019: pendingFrames cap also bounds the post-connect
+drain-wait queue` test's `CAP + 5` (69) `turn_start` burst: the guard runs
+before each push, so once the queue reaches `CAP` (64), each subsequent push
+evicts exactly one oldest-event index (0, then 1, 2, 3, 4 across the 5
+overflow pushes) before appending the new frame, leaving the queue at a
+constant 64 throughout and never exceeding the cap. This produces surviving
+event indices `5..68` (the newest 64), exactly matching the test's
+assertions (`turnStartIndices[0] === overflow`, last `=== eventCount - 1`,
+`lines.length === 1 + PENDING_FRAMES_CAP`), and only one warning fires for
+the whole burst. The "authz frame survives a post-connect event backlog"
+test extends this: once the 64-frame all-event queue is full, enqueuing an
+authz frame correctly evicts the oldest *event* frame (`findIndex(!isAuthz)`
+finds an event, not the authz frame itself) rather than falling back to the
+`pendingFrames.shift()` last-resort branch — that branch is reachable only
+when every queued frame is already an authz frame, which is not exercised
+by either committed test but is a documented, reviewer-accepted last resort
+(the stuck authz frame still fails closed via `BOB_AUTHZ_TIMEOUT_MS`, an
+independent `Promise.race` in `handleToolCall` that does not depend on the
+frame ever reaching the wire). No off-by-one, empty-queue, or
+`findIndex === -1`-mishandling defects found: `findIndex` returning `-1`
+is explicitly handled by the `else` branch, and the guard's "evict only if
+at/over cap" check correctly runs once per push rather than looping, so it
+can never under- or over-evict for a single incoming frame.
+
+**Bug's Expected Behavior — now fully satisfied.** Verified directly, not
+just via the tests: under a sustained event backlog the transport is never
+marked dead (no `markDead` call on this path, `transportDead` untouched),
+event loss is bounded and FIFO-oldest-first (not unbounded, not silently
+dropping the newest event instead), and tool-call authorization keeps
+working — an authz frame behind a full event backlog is preferentially kept
+in the queue over event frames, delivered once `'drain'` fires, and its
+verdict honored (not short-circuited with `"transport is dead"`). The
+5-second `BOB_AUTHZ_TIMEOUT_MS` remains the fail-closed backstop for a peer
+that genuinely never drains (unchanged, independent code path). This
+resolves the contradiction the prior FAIL identified between the
+implementation and both the bug's Expected Behavior and Diagnosis 1's
+S-003/S-004 design guidance.
+
+**Required tests — both present and independently confirmed to prove the
+fix.** Rewrote the pre-fix `bob.ts` (checked out commit `ffbeba4`, the
+cycle-1 tree, into a scratch `git worktree` with the current `bob.test.ts`
+from `94c3710`) and re-ran `npm test`: both `B-019: pendingFrames cap also
+bounds the post-connect drain-wait queue` and `B-019: authz frame survives a
+post-connect event backlog that exceeds the cap` fail against the cycle-1
+code with `AssertionError: expected '[bob] warn: transport error — event
+f…' not to match /transport error/i` (i.e., the cycle-1 code still calls
+`markDead` on this path, exactly the defect this cycle fixes) — 2 failed, 35
+passed. Restored the worktree to `94c3710` and confirmed both pass alongside
+the full suite. This is genuine before/after regression-test evidence, not
+an assumption from reading the diff.
+
+**Previously-approved parts — confirmed intact, no regression.** Full
+36-test-turned-37-test suite passes, including (all unmodified by this
+cycle's diff): the core `flushPending` fix (frame-shift-before-write-check,
+`backpressured` flag, no `markDead` on healthy back-pressure), the `'drain'`
+listener wiring in `ensureConnected`'s connect callback, the
+`socket.destroyed || !socket.writable` deviation and its dependent `AC-4:
+transport failure handling` test, `T-057 AC-3d`/`AC-3e`, all four `B-016`
+regression tests, the rewritten `B-003-B` test, both `T-044 AC-1`/`AC-2`
+families (including the pre-connect cap-breach `ctx.ui` variant, confirmed
+still hitting the unchanged `socket === null` branch), and the Session-1
+`B-019 regression: tool_call stays authorized after write() back-pressure`
+test (byte-for-byte unmodified in the diff).
+
+**Fix Verification — ran myself from `the-intern/extensions/` on the bug
+branch** (via a `git worktree` checkout at `94c3710`, `npm install`): `npm
+test` → 2 files, 37 tests, all passing (re-run 3x, stable, no flakiness).
+`npm run typecheck` → clean, no errors. Scope confirmed confined to
+`bob.ts` and `bob.test.ts` via `git diff --stat
+dev-agent...bug/B-019-...`.
+
+**Minor, non-blocking observation:** the "every queued frame is already an
+authz frame" fallback branch (`pendingFrames.shift()` in the `else` arm) has
+no dedicated test, only the documented reasoning that it degrades to the
+existing authz-timeout fail-closed path. Given how rarely authz frames
+alone could fill a 64-entry queue (would require 64 concurrent in-flight
+tool calls with no events at all queued behind a stalled drain), this is an
+acceptable, explicitly-flagged edge case and does not block this verdict.
+
+Both stages (diagnosis→fix evidence chain, acceptance/bug criteria, and
+code quality including the bug-fix addendum) pass. No further changes
+required; ready to move to `resolved/`.
