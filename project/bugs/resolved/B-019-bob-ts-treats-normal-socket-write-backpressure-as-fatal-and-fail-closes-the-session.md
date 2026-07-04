@@ -3,7 +3,7 @@ id: B-019
 title: bob.ts treats normal socket write backpressure as fatal and fail-closes 
   the session
 severity: medium
-status: in-progress
+status: resolved
 created: '2026-07-04'
 ---
 
