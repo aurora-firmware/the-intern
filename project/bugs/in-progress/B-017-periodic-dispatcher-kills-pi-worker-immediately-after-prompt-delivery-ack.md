@@ -124,6 +124,81 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-07-04
+
+Reproduction status: Confirmed. Independently re-verified against the repo-root
+artifact `pi-logs.log` (untracked, session
+`577ef1bc-e5de-497b-b4f0-f42f6b9443ac`, captured from a live `bob serve` + real
+`pi` run on 2026-06-30) plus static source analysis of the current
+`bug/B-017-...` branch (identical to `dev-agent` @ `0144821`, no drift). A fresh
+live re-run was not performed this session; the captured log plus source-path
+analysis together confirm the fault deterministically — it is a structural
+code-path defect, not a timing-dependent flake.
+
+Evidence captured:
+- `pi-logs.log` timeline for session `577ef1bc`:
+  - `14:47:00.120662Z` — `pi-agent-supervisor send prompt command received`
+  - `14:47:00.839199Z` — extension event `agent_start`
+  - `14:47:00.839468Z` — `pi-agent-supervisor kill session command received`
+    (dispatcher's `kill_session` invoked here)
+  - `14:47:00.839768Z` — extension event `turn_start` (fires *after* the kill
+    command was issued)
+  - `14:47:00.852065Z` — extension event `before_provider_request` (12.6 ms
+    after the kill command)
+  - `14:47:00.866436Z` — extension event `session_shutdown` (14.4 ms after
+    `before_provider_request`)
+  - `grep -c` for `after_provider_response`, `tool_execution_start`,
+    `tool_execution_end`, `agent_end` = 0. The run never got a provider response
+    and never executed a tool. The kill command was sent *before* the provider
+    request even began — it is unconditional and immediate, not a reaction to
+    run completion.
+- `serve.rs:551-577` (`start_periodic_dispatcher`, `Ok(Some(event))` arm):
+  confirmed `acquire_session()` → `send_prompt()` → unconditional
+  `kill_session()`; each step's error is only `tracing::warn!`-logged and never
+  used to skip the kill.
+- `pi-agent-supervisor/src/pool.rs:127-163` (`send_prompt`): returns `Ok(())`
+  as soon as `rpc::parse_prompt_response` yields `Some(true)`.
+- `pi-agent-supervisor/src/rpc.rs:31-55` (`parse_prompt_response`): matches
+  purely on `{"id": <matching>, "type": "response", "success": true}` — the RPC
+  *acceptance* ack, with no notion of run completion.
+- `pool.rs:106-125` (`kill_session`) + `process.rs:160-189` (`terminate`):
+  `kill_session` unconditionally removes and terminates the worker (SIGTERM then
+  force-kill after `child_termination_deadline`), regardless of run state.
+- `cargo test -p bob periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt -- --nocapture`
+  → 1 passed. The fake worker script (`serve.rs:1442-1450`) writes the record
+  file and emits the `{"success":true}` ack from the *same* shell loop
+  iteration, so the observable side effect happens synchronously with the ack
+  the dispatcher waits on — the test cannot detect a kill that happens after the
+  ack, confirming the masking claim.
+
+Isolated fault: `crates/bob/src/serve.rs`, `start_periodic_dispatcher`,
+lines 551-577 — the unconditional `supervisor.kill_session(session_id).await`
+immediately following `supervisor.send_prompt(...)`, with no wait for or
+observation of agent-run completion before tearing the worker down.
+
+Root cause or fault hypothesis: The dispatcher conflates "prompt was accepted by
+the RPC channel" (`send_prompt`'s return, driven by the
+`{"type":"response","success":true}` ack) with "the agent run is finished."
+These are different events in pi's `runRpcMode()` protocol: the ack only
+confirms receipt of the prompt command; the actual agent turn (provider calls,
+tool execution, `agent_end`) proceeds asynchronously afterward. `kill_session`
+SIGTERMs the worker as soon as the ack arrives, aborting the run before the
+first provider call completes. This is a logic error (missing run-completion
+condition) in `start_periodic_dispatcher`, not an environment or timing issue.
+The existing e2e test does not catch it because its fake worker performs the
+side effect synchronously inside the ack-handling loop iteration, unlike a real
+pi worker where the side effect happens after the ack during the (currently
+aborted) run.
+
+Planned verification: `cargo test --workspace`;
+`cargo test -p bob --test scheduler_execution_e2e -- --nocapture`; a new/updated
+e2e test whose fake worker defers its side effect until *after* sending the ack
+(simulating real pi timing) to prove the session is not torn down before the
+deferred side effect completes; manual check per the bug's Fix Verification
+(schedule a job with an observable side effect via `scripts/bob-dev.sh`, confirm
+the side-effect file appears and the serve log shows the run completing before
+session teardown).
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
