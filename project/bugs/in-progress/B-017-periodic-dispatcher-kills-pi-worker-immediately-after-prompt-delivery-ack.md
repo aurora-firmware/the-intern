@@ -209,6 +209,65 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-07-04
+
+Implemented the B-017 fix per the Diagnosis Log fix contract (isolated fault:
+`serve.rs` `start_periodic_dispatcher`, unconditional `kill_session` after
+`send_prompt`). Read the pool/reaper/`lib.rs` code in `pi-agent-supervisor`
+first to confirm the idle-reap backstop mechanism (`reap_idle_and_surplus`,
+driven by a `time::interval(idle_reap_timeout)` tick comparing
+`last_prompt_activity`) and how interactive sessions are released (exit watchers
++ `poll_interactive_exits`, not a duplicate teardown path) — this confirmed the
+fix should route through the existing reaper rather than invent a new
+completion-detection mechanism, matching the requirement not to introduce a
+parallel teardown path.
+
+Followed TDD: added
+`dispatcher_does_not_kill_worker_before_deferred_agent_run_completes` to
+`serve::tests::periodic`, using a fake `sh` worker that sends the RPC ack
+*before* a `sleep 0.3` and the observable file write (same unforked process,
+deliberately not backgrounded with `&`, so SIGTERM to the worker's own pid —
+exactly what `RpcWorkerProcess::terminate()` sends — aborts the deferred write,
+faithfully mirroring how a real single-process pi run would be aborted by an
+early SIGTERM). Verified this test failed against the original code
+(`Elapsed(())` — the write never happened because the worker was killed
+mid-sleep).
+
+Implemented the minimal fix: restructured the dispatch match arm so
+`kill_session` is only called when `send_prompt` returns `Err` (no run was ever
+accepted, so immediate cleanup is still correct). On `Ok(())` the function falls
+through without killing the session, leaving the worker to be reclaimed later by
+the idle reaper. Updated the function's doc comment to describe the new
+contract.
+
+This broke the pre-existing AC-2 test
+`periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt`, whose second
+assertion ("dispatcher must release the one-shot session after dispatch" within
+5s) was itself an encoding of the bug — under the fix, release now takes as long
+as `idle_reap_timeout` (300s in `BobConfig::test_base()`). Updated the test to
+set a short `pi_agent_idle_reap_timeout` (100ms) so the idle-reap backstop fires
+within the test's 5s window, and reworded the assertion/comments to describe
+"eventual release via idle reap" rather than "synchronous release after
+dispatch." Rejected the alternative of implementing true agent-run-completion
+detection (watching for an `agent_end` extension event before releasing): it
+would require wiring `extension_ipc` events into the per-session lifecycle, a
+materially larger cross-crate change beyond the isolated fault and explicitly
+discouraged by the requirement — and the idle-reap backstop was explicitly
+called out as an acceptable release path in the bug's Expected Behavior.
+
+Verified full green: `serve::tests::periodic` (7 tests, run 5x for
+flake-checking), `pi-agent-supervisor` (50 tests, confirming no regression to
+idle reaper / interactive-session lifecycle), `scheduler_execution_e2e` (1
+test), `shell_e2e` (5 tests), `cargo test --workspace` (all crates, 0 failures),
+`cargo fmt --all -- --check` (clean), `cargo build -p bob` (succeeds). Committed
+as a single fix+test cycle: `d90fe09 fix(dispatcher): keep pi worker alive past
+prompt-acceptance ack`. Files touched: `crates/bob/src/serve.rs` only.
+
+Not run: the bug's manual verification against a live `pi` binary + real
+scheduled job (needs provider API access and real cron timing) — the automated
+regression test reproduces the exact defect mechanism deterministically instead.
+Remaining: only the review cycle and integration into `dev-agent`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
