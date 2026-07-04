@@ -286,3 +286,130 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-07-04
+
+FAIL
+
+**Diagnosis→fix evidence chain:** Complete. Diagnosis 1 records reproduction
+status (a deterministic, temporary, fully-reverted unit-level repro),
+evidence captured (source line citations, a `grep` confirming no `'drain'`
+listener existed, the pre-existing `PENDING_FRAMES_CAP`'s pre-connect-only
+scope, a clean 34/34 baseline, and the diagnostic test's exact captured
+output matching the bug's Actual Behavior verbatim), an isolated fault
+(`flushPending`'s unconditional `markDead` on `write() === false` combined
+with the absent `'drain'` listener), and a root cause stated as confirmed,
+with a correctly identified open design question flagged for
+implementation time. Step 1's evidence-chain check passes.
+
+**Core fix — verified correct.** Diffed `bob.ts` on the bug branch against
+`dev-agent`. `flushPending` now loops over `pendingFrames`, shifts each
+frame off the queue as `write()` is called (correct: Node takes ownership of
+the buffer regardless of return value), and on `write() === false` for a
+healthy socket sets `backpressured = true` and returns — `markDead` is not
+called and `transportDead` is untouched. A `'drain'` listener is registered
+in `ensureConnected`'s connect callback (`sock.on("drain", () => {
+backpressured = false; flushPending(ctx); })`), alongside
+`attachVerdictReader`, so queued frames flush once the buffer clears. This
+matches the fix contract's steps 1–2 exactly and is confirmed by the
+rewritten `B-003-B` test (no warning, no dead transport, frame flushes on a
+synthetic `'drain'`) and the new `B-019 regression: tool_call stays
+authorized after write() back-pressure` test (an authz frame queued behind a
+back-pressured write is still delivered and its verdict honored, not
+short-circuited with `"transport is dead"`).
+
+**`socket.destroyed || !socket.writable` deviation — sound, and confirmed
+necessary.** Traced Node's semantics: ordinary back-pressure (buffer over
+`highWaterMark`) never sets `destroyed` or clears `writable`, so a healthy
+backpressured socket cannot be misclassified as dead by this check. The
+check runs synchronously immediately after `write()` returns with no
+intervening event-loop turn, so there is no race window between the write
+call and the check (any synchronous side effect of the write, e.g. Node
+calling `errorOrDestroy` internally for a write-after-destroy, is already
+reflected by the time the check runs). I confirmed the check is not
+redundant window-dressing: the pre-existing, *unmodified*
+`AC-4: transport failure handling > "logs one warning on write failure and
+treats subsequent events as no-ops"` test tears down the real server via
+`conn.destroy()` (no `write()` monkey-patch at all) and still passes only
+because of this check — without it, that test would regress exactly as the
+Work Log describes (the client's `'close'` fires with `hadError: false` and
+no `'error'`, `attachVerdictReader`'s `'close'` handler intentionally does
+not call `markDead`, so the next `write()` on the now-destroyed socket would
+be treated as ordinary back-pressure, `backpressured` would be set and never
+clear since no `'drain'` will ever come, and the transport would sit "alive"
+but permanently stuck until the unrelated 64-frame cap or the 5s authz
+timeout). This is a legitimate, well-justified, minimal deviation from the
+fix contract's literal step 1, confined to `flushPending`, and does not
+touch the `'error'`/`'close'` handlers. AC-4, T-057 AC-3d/AC-3e, and all four
+B-016 tests are unmodified in the diff and pass — traced each: AC-4's write
+after real close relies on the new `destroyed` check as above; T-057 AC-3d
+and the B-016 tests are driven independently by `attachVerdictReader`'s
+`'close'` handler resolving `pendingVerdicts` to `"error"`, which was never
+touched.
+
+**CAP/overload policy — this is the blocking issue.**
+
+- **File and location:** `the-intern/extensions/bob.ts`, `ensureConnected`,
+  the `if (pendingFrames.length >= PENDING_FRAMES_CAP) { markDead(...); }`
+  guard, now also reached from the post-connect drain-wait state (per the
+  new `backpressured` flag making `flushPending` a no-op while
+  `pendingFrames` keeps growing).
+- **What is wrong:** The Developer reused the pre-connect cap's existing
+  "call `markDead`" drop policy verbatim for the new post-connect
+  drain-wait backlog. `pendingFrames` is a single FIFO queue shared by both
+  ordinary event frames and authz frames (`handleToolCall` calls
+  `ensureConnected` exactly like `handleEvent` does), so a sustained
+  64+-frame backlog of *any kind* — including a realistic burst of
+  large/rapid pi events such as per-chunk `message_update` or full-payload
+  `before_provider_request`/`after_provider_response` frames, which is the
+  bug's own documented trigger scenario — sets `transportDead = true`
+  permanently for the rest of the session, with no reset path other than a
+  restart. This reintroduces the bug's core symptom (an otherwise-healthy
+  session's tools being permanently disabled by an event burst) at a higher
+  trigger threshold (64 frames instead of 1), rather than eliminating it.
+  This contradicts two things on record: (1) the bug's own Expected
+  Behavior — "Only genuine transport errors ('error', 'close', failed
+  connect) kill the transport... Tool-call authorization keeps working as
+  long as the socket is actually alive" — which draws an explicit
+  boundary between "kill the transport" and the cap's "drop or cap queued
+  frames" action (the two sentences are adjacent and mutually clarifying;
+  if the cap's action were "kill the transport," the bug's own sentence
+  restricting transport-kill to genuine transport errors would be
+  self-contradictory); and (2) Diagnosis 1's own recorded design guidance
+  for exactly this decision — "informed by S-003's quiet-degradation
+  contract (event loss under sustained overload is acceptable; tool-call
+  authorization is not)" — which the implementation does not honor: event
+  loss and authz loss are treated identically (both take down the whole
+  transport) rather than differentiated.
+- **What should change:** Differentiate the pre-connect and post-connect
+  cases. Leave the pre-connect (`connecting === true`) cap behavior as-is
+  (unchanged scope, matches B-003-A). For the new post-connect drain-wait
+  backlog, implement a policy that does not set `transportDead` and does
+  not call `markDead`: e.g., once the cap is exceeded, warn once and drop
+  the oldest queued *event* frames (FIFO) to bound memory while leaving the
+  socket itself alive, so any already-queued or future authz frame can
+  still be sent and flushed once `'drain'` eventually fires. If an authz
+  frame specifically needs a fail-closed backstop for a peer that never
+  drains, the already-existing 5-second `BOB_AUTHZ_TIMEOUT_MS` path is the
+  designed mechanism for that (S-004's fail-closed contract explicitly
+  covers "a verdict that does not arrive within a bounded timeout" as a
+  legitimate fail-closed trigger) — it does not require killing
+  `transportDead` for the rest of the session. Add a regression test that
+  reproduces an authz frame queued in/behind a 64+-frame event-only backlog
+  and asserts it is still deliverable and honored once `'drain'` fires (the
+  current `B-019: pendingFrames cap also bounds the post-connect drain-wait
+  queue` test only exercises pure event frames and does not cover an authz
+  frame caught in the same backlog).
+
+**Fix Verification — ran myself from `the-intern/extensions/` on the bug
+branch** (via a `git worktree` checkout, `npm install`): `npm test` → 2
+files, 36 tests, all passing (re-run 3x, stable, no flakiness). `npm run
+typecheck` → clean, no errors. Scope confirmed confined to `bob.ts` and
+`bob.test.ts` (`git diff --stat dev-agent...bug/B-019-...` shows only those
+two files).
+
+The Developer should revise the post-connect drain-wait cap policy per the
+guidance above, add the missing authz-frame-under-backlog regression test,
+and resubmit. Everything else reviewed above (core fix, `'drain'` wiring,
+the `socket.destroyed`/`writable` deviation, and the genuine-failure
+regression suite) is correct and should be preserved as-is.
