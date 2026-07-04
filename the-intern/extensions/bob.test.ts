@@ -473,14 +473,22 @@ describe("B-003-B: socket.write() back-pressure is not fatal", () => {
 });
 
 // ---------------------------------------------------------------------------
-// B-019: the pendingFrames cap also bounds the post-connect drain-wait queue.
-// A peer that never drains must degrade quietly (one warn, transport marked
-// dead) instead of growing pendingFrames unboundedly — the same policy
-// already applied to the pre-connect queue (B-003-A).
+// B-019: the pendingFrames cap also bounds the post-connect drain-wait queue,
+// but — unlike the pre-connect queue (B-003-A) — it must NOT kill the
+// transport. pendingFrames is a single FIFO shared by ordinary event frames
+// and authz frames (handleToolCall calls ensureConnected exactly like
+// handleEvent does), so treating a sustained event burst as a fatal
+// transport error would permanently disable tool-call authorization for the
+// rest of the session — reintroducing the bug's own symptom at a higher
+// threshold. The post-connect policy instead warns once and drops the
+// oldest queued EVENT frames (FIFO) to bound memory, leaving the socket
+// alive so any already-queued or future authz frame still flushes once
+// 'drain' fires; S-004's 5-second BOB_AUTHZ_TIMEOUT_MS remains the
+// designed fail-closed backstop for an authz frame whose peer never drains.
 // ---------------------------------------------------------------------------
 
 describe("B-019: pendingFrames cap also bounds the post-connect drain-wait queue", () => {
-  it("warns exactly once and marks transport dead when more than CAP frames queue up while waiting for drain", async () => {
+  it("warns once, drops the oldest queued event frames, and keeps the transport alive when more than CAP frames queue up while waiting for drain", async () => {
     process.env.BOB_SESSION_ID = SESSION_ID;
     process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
 
@@ -493,10 +501,14 @@ describe("B-019: pendingFrames cap also bounds the post-connect drain-wait queue
     await pi.emit("session_start", { type: "session_start", reason: "startup" });
     await waitUntil(() => server.lines().length >= 1);
 
-    // Force the next write to report back-pressure and never drain — the
-    // peer is permanently stuck rather than merely transiently slow.
+    // Force the next write to report back-pressure and capture the live
+    // socket so the test can fire a synthetic 'drain' event later — the
+    // peer is unresponsive for an extended period, not merely transiently
+    // slow, but the transport must still survive it.
+    let capturedSocket: net.Socket | undefined;
     const originalWrite = net.Socket.prototype.write;
-    net.Socket.prototype.write = function (..._args: unknown[]) {
+    net.Socket.prototype.write = function (this: net.Socket, ..._args: unknown[]) {
+      capturedSocket = this;
       net.Socket.prototype.write = originalWrite;
       return false as any;
     };
@@ -504,31 +516,145 @@ describe("B-019: pendingFrames cap also bounds the post-connect drain-wait queue
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     // This event triggers the back-pressure signal (write() returns false);
-    // no 'drain' event will ever follow in this test.
+    // 'drain' will not fire until the test simulates it below.
     await pi.emit("agent_start", { type: "agent_start" });
     await new Promise((r) => setTimeout(r, 50));
     expect(stderrSpy).not.toHaveBeenCalled();
 
-    // Queue more than CAP additional frames while still waiting for drain.
-    const eventCount = PENDING_FRAMES_CAP + 1;
+    // Queue more than CAP additional event frames while still waiting for
+    // drain — a realistic burst of large/rapid pi events (e.g. per-chunk
+    // message_update) is the bug's own documented trigger scenario.
+    const overflow = 5;
+    const eventCount = PENDING_FRAMES_CAP + overflow;
     for (let i = 0; i < eventCount; i++) {
       void pi.emit("turn_start", { turnIndex: i });
     }
     await new Promise((r) => setTimeout(r, 200));
 
-    // Exactly one warn for the cap breach — the same established drop policy
-    // used by the pre-connect queue.
+    // Exactly one warning for the cap breach — a distinct, quiet-degradation
+    // warning, NOT the fatal "transport error" wording markDead uses.
     expect(stderrSpy).toHaveBeenCalledTimes(1);
     expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+    expect(stderrSpy.mock.calls[0]![0]).not.toMatch(/transport error/i);
 
-    // Transport is dead — a subsequent event is a silent no-op.
-    const warnCountBefore = stderrSpy.mock.calls.length;
-    await pi.emit("agent_end", { type: "agent_end", messages: [] });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(stderrSpy).toHaveBeenCalledTimes(warnCountBefore);
+    // Simulate the kernel send buffer finally clearing. If the transport had
+    // been marked dead, flushPending would refuse to deliver anything here;
+    // the frames arriving below is the proof the socket stayed alive.
+    expect(capturedSocket).toBeDefined();
+    capturedSocket!.emit("drain");
+
+    // session_start + the CAP frames retained after dropping the oldest
+    // `overflow` turn_start frames.
+    await waitUntil(() => server.lines().length >= 1 + PENDING_FRAMES_CAP);
+    const lines = server.lines();
+    expect(lines.length).toBe(1 + PENDING_FRAMES_CAP);
+
+    // The oldest `overflow` turn_start frames (indices 0..overflow-1) were
+    // dropped; the surviving frames are the newest CAP ones, still in order.
+    const turnStartIndices = lines.slice(1).map((line) => JSON.parse(line).payload.data.turnIndex);
+    expect(turnStartIndices[0]).toBe(overflow);
+    expect(turnStartIndices[turnStartIndices.length - 1]).toBe(eventCount - 1);
+
+    // No additional warning was needed to drop the remaining overflow.
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
 
     stderrSpy.mockRestore();
     net.Socket.prototype.write = originalWrite; // safety restore
+    await server.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B-019: an authz frame queued behind a sustained post-connect event backlog
+// must still be delivered and its verdict honored once 'drain' fires — the
+// event-only cap eviction above must not touch the authz frame, and hitting
+// the cap must not mark the transport dead (which would fail every future
+// tool call with "transport is dead" instead of letting a real verdict
+// arrive).
+// ---------------------------------------------------------------------------
+
+describe("B-019: authz frame survives a post-connect event backlog that exceeds the cap", () => {
+  it("delivers and honors the verdict for an authz frame queued behind a CAP-exceeding event backlog once drain fires", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_AUTHZ_TIMEOUT_MS = "2000";
+
+    const server = await createAuthzServer(sockPath);
+    const pi = makeStubPi();
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    bobFactory(pi as any);
+
+    // First event — establishes the connection.
+    await pi.emit("session_start", { type: "session_start", reason: "startup" });
+    await waitUntil(() => server.lines().length >= 1);
+
+    // Force the next write to report back-pressure and capture the live
+    // socket so the test can fire a synthetic 'drain' event later.
+    let capturedSocket: net.Socket | undefined;
+    const originalWrite = net.Socket.prototype.write;
+    net.Socket.prototype.write = function (this: net.Socket, ..._args: unknown[]) {
+      capturedSocket = this;
+      net.Socket.prototype.write = originalWrite;
+      return false as any;
+    };
+
+    // This event triggers the back-pressure signal (write() returns false).
+    await pi.emit("agent_start", { type: "agent_start" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(stderrSpy).not.toHaveBeenCalled();
+
+    // Queue a CAP-exceeding backlog of pure event frames while backpressured.
+    const eventCount = PENDING_FRAMES_CAP + 5;
+    for (let i = 0; i < eventCount; i++) {
+      void pi.emit("turn_start", { turnIndex: i });
+    }
+    await new Promise((r) => setTimeout(r, 200));
+
+    // The cap-breach warning fired once already, for the event-only backlog.
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).not.toMatch(/transport error/i);
+
+    // Now fire a tool_call — its authz frame is enqueued behind the
+    // CAP-deep event backlog. Enqueuing it must evict an oldest EVENT frame
+    // (not itself) to make room, since pendingFrames is still at the cap.
+    const handlers = pi.handlers.get("tool_call") ?? [];
+    const handlerPromise = handlers[0]!(
+      { type: "tool_call", toolCallId: "b019-backlog-001", toolName: "read", input: { file_path: "/tmp/x" } },
+      {} as ExtensionContext,
+    );
+
+    // No second (fatal) warning was triggered by queuing the authz frame.
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+
+    // Simulate the kernel send buffer clearing so the full backlog — ending
+    // with the authz frame — flushes to the server.
+    expect(capturedSocket).toBeDefined();
+    capturedSocket!.emit("drain");
+
+    await waitUntil(() => server.lines().some((line) => JSON.parse(line).kind === "authz"));
+    const authzLine = server.lines().find((line) => JSON.parse(line).kind === "authz")!;
+    const authzFrame = JSON.parse(authzLine);
+    expect(authzFrame.kind).toBe("authz");
+    expect(authzFrame.tool).toBe("read");
+
+    server.sendVerdict({ kind: "authz_verdict", session: SESSION_ID, verdict: { allow: true, reason: null } });
+
+    const result = await handlerPromise;
+
+    // The verdict was honored — the transport was never marked dead, so the
+    // authz call was not short-circuited with "transport is dead".
+    expect((result as any)?.block).toBeFalsy();
+    expect((result as any)?.reason).not.toBe("transport is dead");
+
+    // Still exactly one warning for the whole scenario — the quiet
+    // event-eviction warning, never a fatal transport-dead warning.
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).not.toMatch(/transport error/i);
+
+    stderrSpy.mockRestore();
+    net.Socket.prototype.write = originalWrite; // safety restore
+    delete process.env.BOB_AUTHZ_TIMEOUT_MS;
     await server.close();
   });
 });

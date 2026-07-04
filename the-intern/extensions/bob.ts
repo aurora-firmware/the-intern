@@ -24,14 +24,27 @@
  *     EPIPE/ECONNRESET), or socket.write() returning false while the socket
  *     is already destroyed/not writable (a clean peer-initiated close can
  *     reach this point without ever raising 'error').
- *   - The pendingFrames cap being exceeded, whether while still connecting
- *     or while a connected socket is waiting for 'drain'.
+ *   - The pendingFrames cap being exceeded while still connecting (the peer
+ *     is too slow or unreachable before a socket has ever been established).
  *   - socket.write() returning false while the socket is still healthy is
  *     ordinary flow-control back-pressure, NOT a failure: the transport
  *     stays alive and queued frames flush once the socket emits 'drain'.
  *
+ * Quiet-degradation behaviour (one warning, then silent, transport stays alive):
+ *   - The pendingFrames cap being exceeded by a POST-CONNECT drain-wait
+ *     backlog (a connected-but-backpressured socket): the oldest queued
+ *     EVENT frames are dropped FIFO to bound memory, but the socket is left
+ *     alive so any already-queued or future authz frame still flushes once
+ *     'drain' fires. Killing the transport here would disable tool-call
+ *     authorization for the rest of the session on nothing more than an
+ *     event burst — event loss under sustained overload is acceptable
+ *     (S-003), but authz must keep working as long as the socket is alive.
+ *
  * Authz failure behaviour (fail-closed):
  *   - Transport failure, unparseable verdict, or timeout → block + one warning.
+ *   - An authz frame stuck behind a peer that never drains fails closed via
+ *     the bounded BOB_AUTHZ_TIMEOUT_MS verdict timeout, not by killing the
+ *     transport.
  */
 
 import * as net from "node:net";
@@ -102,10 +115,15 @@ function warn(message: string, ctx?: ExtensionContext): void {
 // the connection is still being established, or while a connected socket is
 // waiting for 'drain' after reporting ordinary write() back-pressure.
 // Exceeding this limit means the peer is too slow (or permanently stuck) to
-// drain; we kill the transport immediately (one warn, then silent no-op)
-// rather than buffer unboundedly. Event loss under this sustained-overload
-// condition is acceptable (S-003); a single transient write() === false is
-// not treated this way — only a backlog this deep is.
+// drain; a single transient write() === false is not treated this way —
+// only a backlog this deep is. The two cases are handled differently:
+//   - Pre-connect (no socket yet): the transport is killed outright (one
+//     warn, then silent no-op) — there is no live socket to preserve.
+//   - Post-connect drain-wait (a connected, backpressured socket): the
+//     socket itself is not the problem, only slow to drain, so it stays
+//     alive; the oldest queued EVENT frames are dropped FIFO instead (one
+//     warn, then silent) so authz frames already queued or arriving later
+//     can still be sent and flushed once 'drain' eventually fires.
 // ---------------------------------------------------------------------------
 const PENDING_FRAMES_CAP = 64;
 
@@ -135,9 +153,16 @@ export default function bobFactory(pi: ExtensionAPI): void {
   // flushPending defers writing any further frames rather than piling more
   // data onto an already-full kernel send buffer.
   let backpressured = false;
+  // True once the post-connect drain-wait cap-breach warning has fired for
+  // this session. Set once and never cleared — matches the "one warning,
+  // then silent" convention used for every other failure/degradation path.
+  let drainBacklogWarned = false;
   // Frames queued while the connect is in progress, or while waiting for
-  // 'drain' after a connected socket reports back-pressure.
-  const pendingFrames: string[] = [];
+  // 'drain' after a connected socket reports back-pressure. Each entry
+  // tracks whether it is an authz frame so the post-connect cap-eviction
+  // policy can prefer dropping ordinary event frames over authz frames.
+  type PendingFrame = { text: string; isAuthz: boolean };
+  const pendingFrames: PendingFrame[] = [];
 
   // ---------------------------------------------------------------------------
   // Pending authz verdict resolvers.
@@ -249,7 +274,7 @@ export default function bobFactory(pi: ExtensionAPI): void {
       // buffer is over its high-water mark (ordinary flow-control
       // back-pressure), not that the frame failed to send.  Remove it from
       // our own queue either way — the socket has taken ownership of it.
-      const ok = socket.write(frame);
+      const ok = socket.write(frame.text);
       pendingFrames.shift();
       if (!ok) {
         if (socket.destroyed || !socket.writable) {
@@ -270,22 +295,48 @@ export default function bobFactory(pi: ExtensionAPI): void {
     }
   }
 
-  function ensureConnected(frame: string, ctx?: ExtensionContext): void {
+  function ensureConnected(frame: string, ctx?: ExtensionContext, isAuthz = false): void {
     if (transportDead) return;
 
     if (pendingFrames.length >= PENDING_FRAMES_CAP) {
-      // Queue is full — the peer is too slow to keep up, whether because the
-      // connection is still being established or because a connected socket
-      // has been waiting for 'drain' for too long.  Drop this frame and all
-      // future frames by marking the transport dead (one warn, then silent).
-      markDead(
-        `pendingFrames cap of ${PENDING_FRAMES_CAP} exceeded — dropping frames`,
-        ctx
-      );
-      return;
+      if (socket === null) {
+        // Pre-connect: the peer is too slow (or unreachable) to even finish
+        // connecting. There is no live socket to preserve, so drop this
+        // frame and all future frames by marking the transport dead (one
+        // warn, then silent) — unchanged from the original cap policy.
+        markDead(
+          `pendingFrames cap of ${PENDING_FRAMES_CAP} exceeded — dropping frames`,
+          ctx
+        );
+        return;
+      }
+      // Post-connect drain-wait: the socket itself is alive, only slow to
+      // drain. Killing the transport here would also kill any already-queued
+      // or future authz frame, permanently disabling tool calls for the rest
+      // of the session on nothing more than a sustained event burst. Instead,
+      // warn once and drop the oldest queued EVENT frame (FIFO) to bound
+      // memory, keeping the socket alive so authz frames keep flowing; a
+      // stuck authz frame still fails closed via BOB_AUTHZ_TIMEOUT_MS.
+      if (!drainBacklogWarned) {
+        drainBacklogWarned = true;
+        warn(
+          `pendingFrames cap of ${PENDING_FRAMES_CAP} exceeded while waiting for drain — ` +
+            "dropping oldest queued events",
+          ctx
+        );
+      }
+      const oldestEventIndex = pendingFrames.findIndex((queued) => !queued.isAuthz);
+      if (oldestEventIndex !== -1) {
+        pendingFrames.splice(oldestEventIndex, 1);
+      } else {
+        // Every queued frame is an authz frame (no event frame to drop
+        // instead) — evict the oldest one as a last resort; its resolver
+        // still fails closed via the authz verdict timeout.
+        pendingFrames.shift();
+      }
     }
 
-    pendingFrames.push(frame);
+    pendingFrames.push({ text: frame, isAuthz });
 
     if (socket !== null) {
       // Already connected — flush immediately (a no-op while waiting for
@@ -397,8 +448,10 @@ export default function bobFactory(pi: ExtensionAPI): void {
     });
     pendingVerdicts.push(verdictResolve);
 
-    // Send the authz frame (this may trigger a lazy connect).
-    ensureConnected(frame, ctx);
+    // Send the authz frame (this may trigger a lazy connect). Tag it as an
+    // authz frame so a post-connect cap breach prefers evicting an ordinary
+    // event frame over this one.
+    ensureConnected(frame, ctx, true);
 
     // Await the verdict with a bounded timeout.
     const timeoutMs = resolveAuthzTimeout();
