@@ -173,6 +173,82 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-07-04
+
+Implemented the PRIMARY remediation from the escalation guidance: a shared,
+listener-level `SessionRegistry` (new module
+`extension-ipc/src/session_registry.rs`) tracking which connection id owns
+each live `SessionId`. `run_listener` now creates one registry per listener
+and assigns each accepted connection a monotonic id; `run_connection` checks
+every newly-observed session id against the registry exactly once (not per
+frame, to avoid flooding), and on a `Duplicate` outcome emits a WARN-level
+tracing log naming both connection ids plus a `duplicate_extension_connection`
+audit `event` via the existing `MonitoringHandle::record_event` (no new
+`AuditRecordKind` needed — reused the existing Event schema with a
+distinguishing name to avoid rippling into monitoring/admin-rpc/
+requests-handler). Session ids are released from the registry when a
+connection's read loop ends (refactored to a labeled `'connection: loop` so
+every exit path — EOF, read/write error, malformed frame, parse failure —
+reaches the cleanup instead of bypassing it via a bare `return`), so a later
+legitimate reconnect under the same session id is not mistaken for a
+duplicate.
+
+Design choice made without further escalation, per the loop's guidance:
+FLAG LOUDLY, do not refuse the second connection. Reasoning: the service has
+no reliable way to determine which of two simultaneously-live connections
+under one session id is the current, correct instance versus the stale one —
+pi's `packages` + `--extension` loading order isn't something bob controls.
+Refusing the second connection is a coin flip that could refuse the correct
+one and leave the session with zero working extension, which is worse than
+today's failure mode. Flagging loudly changes nothing about existing
+verdict-handling behavior (zero regression risk) while giving the operator
+exactly the "attributable signal" the bug's Expected Behavior asked for as
+the minimum bar.
+
+Deferred the OPTIONAL wire-version-marker hardening per the bug's explicit
+scope guidance (do not expand into a protocol handshake redesign); the
+service-side registry alone satisfies the Expected Behavior.
+
+TDD: two red→green cycles, each committed separately.
+  1. `session_registry.rs` — wrote the unit tests first against a stub
+     `register`/`release` that always returned `Registered`/no-op, confirmed
+     2 of 4 tests failed (red), then implemented the real `HashMap<SessionId,
+     u64>` + `Mutex` logic (green). Committed as
+     "feat(extension-ipc): add cross-connection session ownership registry".
+  2. Wired the registry into `run_listener`/`run_connection`, added the new
+     integration tests. One test (asserting the WARN log via a captured
+     tracing subscriber, mirroring `multiplex.rs`'s existing pattern) was
+     written, passed in isolation, but proved flaky under parallel
+     `cargo test` (thread-local tracing-subscriber race with other
+     concurrently-running tests — confirmed via 6 runs each at default
+     parallelism vs. `--test-threads=1`). Rejected that test to keep the
+     suite deterministic; kept the mock-based audit-event test (fully
+     deterministic, no tracing internals involved) as the durable evidence,
+     with a code comment explaining the removal and pointing at the adjacent
+     `tracing::warn!` call for source-level confirmation. Committed as
+     "fix(extension-ipc): flag duplicate extension connections loudly".
+
+Docs: added an operator-guide subsection on removing the stale `packages`
+entry and describing the new detection signal; fixed a stale
+`"verdict":"allow"|"block"` wire-format example in the extension-author-guide
+(it documented the exact obsolete format this bug is about) and added a
+"One connection per session" subsection there. Verified with `mdbook build`
+that the new cross-doc anchor link resolves. Did not touch `bob.ts` — no
+extension-side code change was needed for the chosen fix, confirmed `npm
+test` (34 tests) still passes.
+
+Verification: `cargo test --workspace` all green (26 binaries, re-run 3x);
+`cargo test -p extension-ipc` 37/37 green, re-run 6x at default parallelism
+with no flakiness; `cargo build -p bob` and `cargo fmt --all -- --check`
+clean; `cargo clippy -p extension-ipc --all-targets` shows no new warnings
+beyond this crate's pre-existing pedantic/doc debt (added `#[must_use]`/
+`# Panics` docs to the two new public methods to avoid adding to it).
+
+Remaining for next session / reviewer attention: none required for this
+bug's Expected Behavior. If a future task wants the optional wire-version
+marker, `framing.rs` and `bob.ts` are the touch points; this session
+deliberately left them unchanged.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
