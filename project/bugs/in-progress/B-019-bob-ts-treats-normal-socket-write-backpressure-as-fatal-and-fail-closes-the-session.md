@@ -119,6 +119,136 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-07-04
+
+**Reproduction status:** Confirmed via a temporary automated reproduction (added to
+`the-intern/extensions/`, run, then fully reverted — `git status --porcelain` clean
+afterward). Not a live-session observation (the bug's own status was "not yet
+reproduced, identified by code review"), but this is a deterministic unit-level
+confirmation of the defect, not a flake: the same monkey-patched `write()` call
+reproduces the failure on every run.
+
+**Evidence captured:**
+- Read the current source, `the-intern/extensions/bob.ts` @ HEAD of this branch
+  (`3d15082`), confirming all three claims in the bug's Suspected Area:
+  (a) `flushPending` (lines 224-238): `const ok = socket.write(frame); if (!ok) {
+  pendingFrames.length = 0; markDead("socket.write returned false — back-pressure
+  or peer closed", ctx); return; }` — unconditional fatal treatment of `write() ===
+  false`.
+  (b) `markDead` (lines 214-222): sets `transportDead = true`, calls
+  `socket?.destroy()`, sets `socket = null`, and resolves every pending verdict
+  resolver with `{ kind: "transport_error_logged" }`.
+  (c) `handleToolCall` (lines 342-345): `if (transportDead) { warn(...); return {
+  block: true, reason: "transport is dead" }; }` — checked first, before any
+  frame is even sent, so it fires for every tool call after the first
+  backpressured write.
+- `grep -n "drain" the-intern/extensions/bob.ts` → one hit, inside an unrelated
+  comment ("... transport is too slow to drain ..."); no `'drain'` event
+  listener exists anywhere in `ensureConnected`/`flushPending`/the connect
+  callback.
+- `PENDING_FRAMES_CAP` (line 97) exists and is enforced in `ensureConnected`
+  (line 243), but only against the pre-connect queue (frames accumulated while
+  `connecting === true`); it is never read or written by `flushPending`, so it
+  provides no protection for, and does not interact with, post-connect write
+  backpressure — the mechanism the bug's Expected Behavior assumes is already
+  wired up for this case is not.
+- Baseline: `cd the-intern/extensions && npm test` → 2 files, 34 tests, all
+  passing on the unmodified tree (`pi-agent-compat.test.ts` 5 tests,
+  `bob.test.ts` 29 tests). Notably, three of those 34 currently-passing tests
+  encode the defect as intended behavior and will need to be rewritten as part
+  of the fix, not merely left in place: `bob.test.ts` "B-003-B: socket.write()
+  back-pressure" (lines 411-455) asserts one warning + transport-dead +
+  silent-no-op after a single `write() === false`; "T-044 AC-1 ... socket.write
+  false with ctx.ui present" (lines 561-601) and "T-044 AC-2 ... socket.write
+  false falls back to stderr" (lines 666-698) assert the same via the two
+  warn-delivery branches.
+- Temporary reproduction (`bob.b019.diagnostic.test.ts`, deleted after this
+  run): established a real UDS connection via `session_start`, monkey-patched
+  `net.Socket.prototype.write` to perform the real write but return `false`
+  for exactly one call (simulating backpressure without an actual transport
+  failure), then fired a `tool_call` and awaited its result while the fake
+  server sent back an `allow` verdict. Command:
+  `npx vitest run bob.b019.diagnostic.test.ts`. Output:
+  `[bob] warn: transport error — event forwarding disabled for this session:
+  socket.write returned false — back-pressure or peer closed`
+  `[bob] warn: authz: tool call blocked — transport is dead`
+  `AssertionError: expected 'transport is dead' not to be 'transport is dead'`
+  — i.e. the tool call was blocked with `reason: "transport is dead"` even
+  though the socket was never closed, errored, or actually failed; this
+  reproduces the bug's documented Actual Behavior verbatim (both warning
+  strings match the bug report exactly). File was removed after the run;
+  `npm test` re-run afterward returns to the clean 34/34 baseline, and
+  `git status --porcelain` is empty.
+
+**Isolated fault:** `flushPending()` in `the-intern/extensions/bob.ts`
+(lines 224-238), specifically `if (!ok) { ...; markDead(...); return; }`,
+combined with the total absence of a `'drain'` listener in `ensureConnected`'s
+connect callback (lines 267-273) or anywhere else in the transport state
+machine.
+
+**Root cause or fault hypothesis (confirmed, not speculative):** The code
+conflates two semantically distinct `net.Socket` signals. `write()` returning
+`false` is a purely local, non-fatal flow-control signal — the kernel/userland
+send buffer exceeded `highWaterMark`; Node still queues the data and guarantees
+delivery once the peer drains it, signaled by `'drain'`. Genuine transport
+failure (peer closed, connection reset, failed connect) is delivered
+separately via the socket's `'error'` and `'close'` events, which the code
+*already* handles correctly and independently: `ensureConnected`'s
+`sock.on("error", ...)` (lines 275-283) and `attachVerdictReader`'s
+`sock.on("close", ...)` (lines 198-204) both correctly fail-close. Because
+`flushPending` was written without a `'drain'` handler to fall back on, the
+only way it could see was to treat `false` the same as those genuine failures
+— that is the defect. Once `markDead` fires from this false signal,
+`transportDead` becomes permanently sticky for the rest of the session (there
+is no reset path other than session restart), so `handleToolCall`'s
+fail-closed check at lines 342-345 blocks every later tool call regardless of
+actual socket/service health, exactly as the bug describes.
+
+**Design-decision flag (per diagnosis guidance):** The core correctness fix —
+do not call `markDead` on `write() === false`; wait for `'drain'` before
+writing more queued frames — is unambiguous. One open design question remains
+for the fix/verification step: whether frames that accumulate *while waiting
+for `'drain'`* after connection is already established should be bounded by
+the existing `PENDING_FRAMES_CAP` (extending its current pre-connect-only
+scope) or by a separate cap/drop policy for sustained post-connect backpressure.
+This should be resolved during implementation, informed by S-003's
+quiet-degradation contract (event loss under sustained overload is acceptable;
+tool-call authorization is not).
+
+**Planned fix:**
+1. In `flushPending`, when `socket.write(frame)` returns `false`, stop the
+   write loop (do not call `markDead`) and leave any not-yet-written frames in
+   `pendingFrames` for the next flush attempt.
+2. Register a `'drain'` listener on the socket (in `ensureConnected`'s connect
+   callback, alongside `attachVerdictReader`) that re-invokes `flushPending`
+   once the kernel buffer clears, so queued frames are eventually delivered.
+3. Apply the design decision above to whatever queue accumulates during the
+   drain-wait window, so a peer that never drains still degrades quietly
+   (bounded drop/cap) rather than growing pendingFrames unboundedly.
+4. Leave the genuine-failure paths (`sock.on("error", ...)`,
+   `sock.on("close", ...)`) untouched — they already call `markDead` correctly
+   and must keep doing so.
+5. Rewrite the three existing tests that currently assert the buggy behavior
+   (`B-003-B`, the two `T-044 ... socket.write false ...` tests in
+   `bob.test.ts`) to assert the corrected contract, and add a new test proving
+   a subsequent `tool_call` is still authorized after a `write() === false`
+   event once `'drain'` fires.
+
+**Planned verification:**
+- `cd the-intern/extensions && npm test` — full suite green, including the
+  rewritten backpressure tests, asserting: `write() === false` does not call
+  `markDead` or emit the "transport error" warning; queued frames are
+  delivered once `'drain'` fires (mocked `net.Socket` or a real UDS with a
+  paused reader); a `tool_call` issued after a backpressured write is still
+  sent to the service and its verdict honored (not short-circuited with
+  `"transport is dead"`).
+- `npm run typecheck`.
+- Regression check: the existing genuine-failure tests continue to pass
+  unmodified — AC-4 "socket.write failure after server close" (bob.test.ts
+  lines 490-523, a real `EPIPE`/`ECONNRESET` via `'error'`, not a `false`
+  return), and T-057 AC-3d/AC-3e (transport closed/connect-failed → fail
+  closed).
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
