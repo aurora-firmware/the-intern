@@ -118,6 +118,40 @@ that the resolved path is a regular file before it spawns pi. If the file is
 missing, the spawn fails closed and the error names the expected path; bob never
 starts a session without its monitoring and authorization extension.
 
+### Remove stale extension copies from pi's own `packages` list
+
+pi loads extensions from two independent sources: the `--extension <path>`
+flag bob passes on every spawn, and pi's own `~/.pi/agent/settings.json`
+`packages` list. These are additive, not deduplicated against each other. If
+`packages` still references an old, manually installed copy of `bob.ts` (for
+example from a pre-CR-003 install, or an extracted release archive left over
+from an earlier upgrade), pi loads **two** bob extension instances into the
+same session. Both connect to `extension.sock` under the same session id and
+both register a blocking `tool_call` hook.
+
+An older `bob.ts` copy cannot parse the current structured verdict frame and
+fails closed by design, so its hook blocks every tool call even when the
+current instance's hook — and the policy engine — allowed it. The audit log
+(`bob audit tail`) shows the contradiction directly: every event and verdict
+appears twice, and a `verdict` record with `allow: true` coexists with tool
+calls that are still denied in the TUI.
+
+**Fix:** open `~/.pi/agent/settings.json` and remove any entry from
+`packages` that points at a `bob.ts` file — bob supplies its own copy via
+`--extension` and does not need or expect one listed there. This file is
+managed by pi, not by bob; bob never edits it.
+
+**Detection:** as of this fix, bob no longer lets this collision pass
+silently. If a second connection registers an already-active session id, the
+service emits a `WARN`-level log line naming both connections and records a
+`duplicate_extension_connection` audit `event` (visible via `bob audit tail
+--filter events`) identifying the collision. Bob flags the collision rather
+than refusing the second connection outright, because the service cannot
+reliably tell which of the two connections is the stale one, and refusing the
+wrong one would leave the session with no working extension at all. Seeing
+this signal is itself the actionable sign to remove the stale `packages`
+entry above.
+
 ---
 
 ## Runtime layout
@@ -216,6 +250,10 @@ representing one audit record.
 The audit log captures three kinds of records:
 
 - **`event`** — pi-agent extension events forwarded from running sessions.
+  This also includes bob's own `duplicate_extension_connection` event,
+  recorded when a second connection registers a session id that already has
+  a live connection (see
+  [Remove stale extension copies from pi's own `packages` list](#remove-stale-extension-copies-from-pis-own-packages-list)).
 - **`verdict`** — policy verdicts: whether a pre-flight admission check or a
   `tool_call` authorization request was allowed or blocked.
 - **`report`** — external action reports submitted via `report.submit` on

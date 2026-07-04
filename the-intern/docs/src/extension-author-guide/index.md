@@ -68,12 +68,35 @@ The bob service sends back only one frame type:
 **AuthzVerdict frame**:
 
 ```json
-{"kind":"authz_verdict","session":"<BOB_SESSION_ID>","verdict":"allow"|"block"}
+{"kind":"authz_verdict","session":"<BOB_SESSION_ID>","verdict":{"allow":true|false,"reason":"..."|null}}
 ```
 
-Verdicts are resolved in FIFO order. If a verdict does not arrive within the
-configured timeout (default 5 000 ms, overridable via `BOB_AUTHZ_TIMEOUT_MS`),
+`verdict` is a structured object, not a string: `allow` is a boolean and
+`reason` is an optional human-readable explanation. Verdicts are resolved in
+FIFO order. If a verdict does not arrive within the configured timeout
+(default 5 000 ms, overridable via `BOB_AUTHZ_TIMEOUT_MS`), or if a frame does
+not match this shape (for example a legacy `"verdict":"allow"|"block"` string,
+as sent by extension releases before this wire format was introduced),
 `bob.ts` fails closed and blocks the tool call.
+
+### One connection per session, and why it matters
+
+pi additively loads extensions from both the `--extension` flag bob passes
+and its own `~/.pi/agent/settings.json` `packages` list (see the
+[Operator & Deployer Guide](../operator-guide/index.md#remove-stale-extension-copies-from-pis-own-packages-list)).
+If a second `bob.ts` instance — for example a stale copy left in `packages`
+— opens its own connection under the same `BOB_SESSION_ID`, the service
+detects that a second live connection has registered an already-active
+session id. It emits a `WARN`-level log line and a
+`duplicate_extension_connection` audit `event` naming both connections,
+rather than letting the two hooks silently coexist. The service does not
+close either connection when this happens: both keep receiving verdicts as
+normal, because the service has no reliable way to tell which connection is
+the stale one. Extension authors building their own `extension.sock` client
+should likewise expect at most one live connection per session id in the
+intended deployment, and should treat this signal as evidence of a
+misconfiguration to fix (see the operator guide section above), not as a
+protocol handshake to participate in.
 
 ### Failure behaviour
 
