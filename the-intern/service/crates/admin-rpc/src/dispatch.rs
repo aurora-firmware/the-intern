@@ -806,6 +806,9 @@ impl Dispatcher {
                 if let Some(file) = &e.file {
                     obj.insert("file".to_owned(), json!(file));
                 }
+                if let Some(cwd) = &e.cwd {
+                    obj.insert("cwd".to_owned(), json!(cwd));
+                }
                 Value::Object(obj)
             })
             .collect();
@@ -2381,6 +2384,68 @@ mod tests {
                 assert!(
                     arr[0].get("prompt").is_none(),
                     "prompt key must be omitted for a file-backed entry"
+                );
+            }
+            DispatchOutcome::Err(e) => panic!("expected Ok, got error: {}", e.error.message),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-3 (T-124): schedule.list includes the cwd field for an entry that has one.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_list_emits_cwd_field_when_set() {
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        reload_handle
+            .reload(vec![bob_core::types::ScheduleEntry::with_prompt(
+                "cwd-job",
+                "0 9 * * *",
+                "run",
+            )
+            .with_cwd("/srv/workspaces/a")])
+            .expect("reload");
+        tokio::task::yield_now().await;
+
+        let dispatcher = make_dispatcher_no_handles().with_scheduler_handle(reload_handle);
+        let req = make_request("schedule.list", json!(352));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => {
+                let arr = resp.result.as_array().expect("result must be an array");
+                assert_eq!(arr[0]["cwd"], json!("/srv/workspaces/a"));
+            }
+            DispatchOutcome::Err(e) => panic!("expected Ok, got error: {}", e.error.message),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-4 (T-124): schedule.list omits the cwd field for an entry that has none.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_list_omits_cwd_field_when_unset() {
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        reload_handle
+            .reload(vec![bob_core::types::ScheduleEntry::with_prompt(
+                "no-cwd-job",
+                "0 9 * * *",
+                "run",
+            )])
+            .expect("reload");
+        tokio::task::yield_now().await;
+
+        let dispatcher = make_dispatcher_no_handles().with_scheduler_handle(reload_handle);
+        let req = make_request("schedule.list", json!(353));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => {
+                let arr = resp.result.as_array().expect("result must be an array");
+                assert!(
+                    arr[0].get("cwd").is_none(),
+                    "cwd key must be omitted when unset"
                 );
             }
             DispatchOutcome::Err(e) => panic!("expected Ok, got error: {}", e.error.message),
