@@ -75,6 +75,11 @@ pub enum ScheduleCommand {
         /// each run. Mutually exclusive with `--prompt`.
         #[arg(long)]
         file: Option<String>,
+        /// Working directory the job runs in when it fires. Must be an
+        /// absolute path; the directory is not required to exist yet, since
+        /// existence is checked at fire time rather than at add time.
+        #[arg(long)]
+        cwd: Option<String>,
     },
     Remove {
         #[arg(long)]
@@ -91,7 +96,7 @@ pub enum ScheduleCommand {
 mod tests {
     use clap::{CommandFactory, Parser};
 
-    use super::{AuditCommand, Cli, Command, SessionsCommand};
+    use super::{AuditCommand, Cli, Command, ScheduleCommand, SessionsCommand};
     use bob_core::types::AuditFilterKind;
 
     #[test]
@@ -133,6 +138,56 @@ mod tests {
                 session: Some(ref session)
             } if session == "abc"
         ));
+    }
+
+    #[test]
+    fn schedule_add_parses_optional_cwd_flag() {
+        let cli = Cli::parse_from([
+            "bob",
+            "schedule",
+            "add",
+            "--id",
+            "job-1",
+            "--cron",
+            "* * * * *",
+            "--prompt",
+            "hi",
+            "--cwd",
+            "/abs/workspace",
+        ]);
+
+        let cwd = match cli.command {
+            Command::Schedule {
+                command: ScheduleCommand::Add { cwd, .. },
+            } => cwd,
+            other => panic!("expected schedule add, got {other:?}"),
+        };
+
+        assert_eq!(cwd.as_deref(), Some("/abs/workspace"));
+    }
+
+    #[test]
+    fn schedule_add_without_cwd_flag_defaults_to_none() {
+        let cli = Cli::parse_from([
+            "bob",
+            "schedule",
+            "add",
+            "--id",
+            "job-1",
+            "--cron",
+            "* * * * *",
+            "--prompt",
+            "hi",
+        ]);
+
+        let cwd = match cli.command {
+            Command::Schedule {
+                command: ScheduleCommand::Add { cwd, .. },
+            } => cwd,
+            other => panic!("expected schedule add, got {other:?}"),
+        };
+
+        assert!(cwd.is_none());
     }
 
     #[test]

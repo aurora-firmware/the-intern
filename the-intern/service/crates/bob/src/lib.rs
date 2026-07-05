@@ -33,6 +33,7 @@ pub trait DispatchRuntime {
         cron: &str,
         prompt: Option<&str>,
         file: Option<&str>,
+        cwd: Option<&str>,
     ) -> ServiceResult<()>;
     fn schedule_remove(&self, json: bool, id: &str) -> ServiceResult<()>;
     fn schedule_list(&self, json: bool) -> ServiceResult<()>;
@@ -83,8 +84,9 @@ impl DispatchRuntime for ProductionRuntime {
         cron: &str,
         prompt: Option<&str>,
         file: Option<&str>,
+        cwd: Option<&str>,
     ) -> ServiceResult<()> {
-        cli::commands::schedule_add(json, id, cron, prompt, file)
+        cli::commands::schedule_add(json, id, cron, prompt, file, cwd)
     }
 
     fn schedule_remove(&self, json: bool, id: &str) -> ServiceResult<()> {
@@ -131,7 +133,15 @@ pub async fn run_cli_with_runtime(runtime: &impl DispatchRuntime, cli: Cli) -> S
                 cron,
                 prompt,
                 file,
-            } => runtime.schedule_add(cli.json, &id, &cron, prompt.as_deref(), file.as_deref()),
+                cwd,
+            } => runtime.schedule_add(
+                cli.json,
+                &id,
+                &cron,
+                prompt.as_deref(),
+                file.as_deref(),
+                cwd.as_deref(),
+            ),
             ScheduleCommand::Remove { id } => runtime.schedule_remove(cli.json, &id),
             ScheduleCommand::List { json } => runtime.schedule_list(json),
             ScheduleCommand::Reload => runtime.schedule_reload(cli.json),
@@ -211,6 +221,7 @@ mod tests {
             _cron: &str,
             _prompt: Option<&str>,
             _file: Option<&str>,
+            _cwd: Option<&str>,
         ) -> ServiceResult<()> {
             Err(ServiceError::NotImplemented)
         }

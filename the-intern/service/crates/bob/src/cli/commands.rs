@@ -40,8 +40,9 @@ pub fn schedule_add(
     cron: &str,
     prompt: Option<&str>,
     file: Option<&str>,
+    cwd: Option<&str>,
 ) -> ServiceResult<()> {
-    schedule::run_add(json, id, cron, prompt, file)
+    schedule::run_add(json, id, cron, prompt, file, cwd)
 }
 
 pub fn schedule_remove(json: bool, id: &str) -> ServiceResult<()> {
