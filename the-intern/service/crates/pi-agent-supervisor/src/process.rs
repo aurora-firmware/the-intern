@@ -23,6 +23,9 @@ pub struct WorkerProcessConfig {
     pub extension_sock_path: PathBuf,
     /// Resolved path passed to pi as `--extension <path>`.
     pub extension_path: PathBuf,
+    /// Working directory set on the child process via `current_dir`. `None`
+    /// means the child inherits the launch cwd unchanged.
+    pub worker_cwd: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -65,6 +68,10 @@ impl RpcWorkerProcess {
 
         if !cfg.extension_sock_path.as_os_str().is_empty() {
             cmd.env("BOB_EXTENSION_SOCK_PATH", &cfg.extension_sock_path);
+        }
+
+        if let Some(worker_cwd) = &cfg.worker_cwd {
+            cmd.current_dir(worker_cwd);
         }
 
         let mut child = cmd.spawn().map_err(|error| ServiceError::ChildProcess {
@@ -446,6 +453,7 @@ mod tests {
             session_id: SessionId::new(),
             extension_sock_path: PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
+            worker_cwd: None,
         }
     }
 
@@ -503,6 +511,7 @@ mod tests {
             session_id,
             extension_sock_path: PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
+            worker_cwd: None,
         };
 
         let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
@@ -536,6 +545,7 @@ mod tests {
             session_id,
             extension_sock_path: sock_path.clone(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
+            worker_cwd: None,
         };
 
         let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
@@ -568,6 +578,7 @@ mod tests {
             session_id,
             extension_sock_path: PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
+            worker_cwd: None,
         };
 
         let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
@@ -582,6 +593,70 @@ mod tests {
             value,
             Value::String("unset".to_string()),
             "BOB_EXTENSION_SOCK_PATH should not be set on child env when path is empty"
+        );
+    }
+
+    // AC-2 (T-121): when worker_cwd is configured, the child's current
+    // directory is set to it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_sets_current_dir_on_child_when_worker_cwd_is_configured() {
+        let worker_cwd = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-worker-cwd-{}",
+            SessionId::new()
+        ));
+        std::fs::create_dir_all(&worker_cwd).expect("create worker cwd dir should succeed");
+
+        let mut cfg = spawn_config("sh", &["-c", "printf '\"%s\"\\n' \"$(pwd)\""]);
+        cfg.worker_cwd = Some(worker_cwd.clone());
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+        let value = worker
+            .read_next_stdout_json()
+            .await
+            .expect("stdout read should succeed")
+            .expect("value should be present");
+
+        let expected =
+            std::fs::canonicalize(&worker_cwd).expect("canonicalize expected worker cwd");
+        let actual_raw = value
+            .as_str()
+            .expect("child pwd output should be a JSON string");
+        let actual =
+            std::fs::canonicalize(actual_raw).expect("canonicalize child-reported current dir");
+
+        assert_eq!(
+            actual, expected,
+            "child current dir should match configured worker_cwd"
+        );
+
+        std::fs::remove_dir_all(&worker_cwd).ok();
+    }
+
+    // AC-3 (T-121): when worker_cwd is unset, the child inherits the launch cwd.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_inherits_launch_cwd_when_worker_cwd_is_not_configured() {
+        let cfg = spawn_config("sh", &["-c", "printf '\"%s\"\\n' \"$(pwd)\""]);
+        assert_eq!(
+            cfg.worker_cwd, None,
+            "test setup expects worker_cwd to default to None"
+        );
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+        let value = worker
+            .read_next_stdout_json()
+            .await
+            .expect("stdout read should succeed")
+            .expect("value should be present");
+
+        let expected = std::env::current_dir().expect("current dir should be available");
+        let actual_raw = value
+            .as_str()
+            .expect("child pwd output should be a JSON string");
+
+        assert_eq!(
+            actual_raw,
+            expected.to_string_lossy(),
+            "child should inherit the launch cwd when worker_cwd is unset"
         );
     }
 
@@ -715,6 +790,7 @@ mod tests {
             session_id: SessionId::new(),
             extension_sock_path: PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
+            worker_cwd: None,
         })
         .expect("spawn should succeed");
 

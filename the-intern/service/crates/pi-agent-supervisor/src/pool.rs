@@ -431,6 +431,7 @@ impl SessionPool {
             session_id,
             extension_sock_path: cfg.extension_sock_path.clone(),
             extension_path: cfg.extension_path.clone(),
+            worker_cwd: cfg.worker_cwd.clone(),
         }
     }
 
