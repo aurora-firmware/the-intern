@@ -29,7 +29,11 @@ pub struct WorkerProcessConfig {
 pub struct RpcWorkerProcess {
     child: Child,
     stdin: Option<ChildStdin>,
-    stdout: BufReader<ChildStdout>,
+    /// `None` once the reader has been detached via [`take_stdout`] so a caller
+    /// can drain it in the background (see the periodic-dispatch path). After
+    /// detaching, [`read_next_stdout_json`] errors because the worker no longer
+    /// owns the stream.
+    stdout: Option<BufReader<ChildStdout>>,
     _stderr: ChildStderr,
     child_termination_deadline: Duration,
 }
@@ -92,7 +96,7 @@ impl RpcWorkerProcess {
         Ok(Self {
             child,
             stdin: Some(stdin),
-            stdout: BufReader::new(stdout),
+            stdout: Some(BufReader::new(stdout)),
             _stderr: stderr,
             child_termination_deadline: cfg.child_termination_deadline,
         })
@@ -129,9 +133,15 @@ impl RpcWorkerProcess {
     }
 
     pub async fn read_next_stdout_json(&mut self) -> ServiceResult<Option<Value>> {
+        let stdout = self
+            .stdout
+            .as_mut()
+            .ok_or_else(|| ServiceError::ChildProcess {
+                detail: "child stdout has been detached for background draining".to_string(),
+            })?;
         let mut line = String::new();
         let read =
-            self.stdout
+            stdout
                 .read_line(&mut line)
                 .await
                 .map_err(|error| ServiceError::ChildProcess {
@@ -155,6 +165,19 @@ impl RpcWorkerProcess {
             })?;
 
         Ok(Some(value))
+    }
+
+    /// Detaches the child's stdout reader so the caller can drain it elsewhere.
+    ///
+    /// Returns `None` if the reader was already taken. After this returns, the
+    /// worker no longer reads its own stdout, so [`read_next_stdout_json`] will
+    /// error. This exists for the fire-and-forget periodic-dispatch path: once
+    /// the prompt is accepted, the agent run streams to completion
+    /// asynchronously and nothing would otherwise read stdout. An unread stdout
+    /// pipe fills after a few kilobytes and blocks the child mid-run, so the
+    /// caller must keep draining the returned reader until EOF.
+    pub fn take_stdout(&mut self) -> Option<BufReader<ChildStdout>> {
+        self.stdout.take()
     }
 
     pub async fn terminate(mut self) -> ServiceResult<TerminationOutcome> {
@@ -602,9 +625,9 @@ mod tests {
             .await
             .expect("send_json should succeed");
 
+        let stdout = worker.stdout.as_mut().expect("stdout should be present");
         let mut line = Vec::new();
-        worker
-            .stdout
+        stdout
             .read_until(b'\n', &mut line)
             .await
             .expect("stdout read should succeed");
@@ -613,10 +636,11 @@ mod tests {
         expected.push(b'\n');
         assert_eq!(line, expected, "child stdin frame should be JSON + LF");
 
+        let stdout = worker.stdout.as_mut().expect("stdout should be present");
         let mut extra = Vec::new();
         let no_extra_line = timeout(
             TokioDuration::from_millis(25),
-            worker.stdout.read_until(b'\n', &mut extra),
+            stdout.read_until(b'\n', &mut extra),
         )
         .await;
         assert!(
