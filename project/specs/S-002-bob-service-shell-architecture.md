@@ -146,7 +146,7 @@ admin actor never sees extension traffic and vice versa.
 | Requests Handler actor | Scaffold for S-001 Phase 1 work — owns the inbound internal-event queue and pre-flight identity attachment | Empty implementation in this spec |
 | Policy Control actor | Scaffold for S-001 Phase 4 work — accepts verdict requests over its handle, returns allow/block | Empty implementation; pre-loaded with a deny-by-default stub |
 | Monitoring actor | Scaffold for S-001 Phase 5 work — accepts events and report records, exposes a subscription stream for admin-RPC | Empty implementation; uses an in-memory ring buffer for early development |
-| Pi-agent Supervisor actor | Scaffold for S-001 Phase 2 work — owns the warm pool, spawn/reap, and prompt routing | Empty implementation; `bob sessions list` shows the (currently empty) pool |
+| Pi-agent Supervisor actor | Scaffold for S-001 Phase 2 work — owns the warm pool, spawn/reap, and prompt routing; spawns each worker with an explicit working directory resolved from `pi_agent_cwd` (inheriting the launch cwd when unset), and supports acquiring a session under a caller-supplied cwd for per-entry scheduled jobs | Warm workers carry the service-wide cwd; a per-entry-cwd request needs a dedicated worker (see Component 6) |
 | Persistence actor | Scaffold for the inbound queue, audit log, and session state stores | Empty implementation; trait-only |
 | `bob` client subcommands | Thin clients over the local control plane; resolve socket path from config, open `admin.sock`, perform one call (or one subscription, for `audit tail`), render results, exit. `bob chat` is the exception in shape but not ownership: it requires the running service and requests a supervised interactive `pi` session rather than feeding the request-intake path. | No business logic |
 
@@ -261,6 +261,24 @@ construction).
   method that returns an empty list, so `bob sessions list` works end-to-end
   from day one.
 
+**Worker working directory and the warm-pool contract.** The supervisor spawns
+every pool worker with an explicit working directory: `pi_agent_cwd` when set,
+otherwise the inherited launch cwd. Warm-pool workers are pre-spawned with that
+single service-wide cwd, so they can only be reused by requests that want that
+cwd. A request that supplies its own working directory (a per-entry scheduled
+job with an explicit `cwd`, per S-009) therefore **cannot** reuse a warm
+worker: the supervisor must spawn a **dedicated** worker in the requested
+directory. That dedicated worker forgoes warm-pool latency and consumes one
+`max_processes` slot for the duration of the run.
+
+**When `max_processes` is exhausted.** Acquisition of a per-entry-cwd worker is
+bound by `max_processes` exactly like any other spawn: when active plus warm
+workers already fill the limit, the acquisition is refused rather than evicting
+a live worker or exceeding the bound. Because scheduled runs are
+fire-and-forget `periodic` deliveries with no caller to receive a receipt, a
+refused acquisition **skips that fire** with a logged warning and a monitoring
+failure record; the schedule entry remains and fires again on its next tick.
+
 ### Component 7: `bob` client subcommands
 
 **Purpose:** Operator and user surface; every non-`serve` subcommand is a
@@ -277,7 +295,10 @@ thin JSON-RPC client.
 - *Interactive chat:* `bob chat` requires the running service, asks it to open a
   supervised interactive pi session, and brokers the caller's terminal to that
   service-owned child. It is gated by socket access and the `tool_call` authz
-  membrane, not by pre-flight request admission (ADR-010).
+  membrane, not by pre-flight request admission (ADR-010). `bob chat` runs the
+  interactive `pi` session in the current working directory where the `bob chat`
+  command is invoked; it does **not** consult `pi_agent_cwd`, which governs only
+  the `bob serve` RPC worker pool. CR-005 leaves interactive behaviour unchanged.
 - *Rendering:* human-readable by default; `--json` for machine consumption
   on every subcommand.
 
@@ -382,6 +403,23 @@ Behavioural — concrete keys are defined when each subsystem lands.
   can tune backpressure per subsystem.
 - **Shutdown deadlines.** The drain, child-reap, and forced-kill deadlines
   from §8 of the Rust coding guidelines are configurable, with safe defaults.
+- **pi-agent worker working directory (`pi_agent_cwd`).** The service-wide
+  working directory the supervisor gives every pi-agent RPC worker it spawns
+  for the `bob serve` pool. *What must exist:* an optional key naming the
+  directory workers run in. *Where it lives:* `config.toml` as a top-level
+  `snake_case` key (ADR-002), not a per-subsystem table. *Constraints:* when
+  set it must be an **absolute** path; a relative value is rejected at config
+  load with a clear configuration error. *Missing-value behaviour:* unset →
+  workers inherit the launch cwd of the `bob serve` process (the pre-CR-005
+  behaviour, backward compatible and the v1 default). *Existence handling
+  (lazy / spawn-time):* directory existence is **not** gated at config load and
+  does **not** fast-fail service startup; a set-but-missing `pi_agent_cwd`
+  surfaces at worker spawn time as a logged (warned) worker-spawn failure
+  through the supervisor's existing child-process error path (and, for a
+  scheduled firing, is skipped with a warning like any other spawn failure).
+  Operators are advised to set an explicit workspace so pi's context-file
+  (`AGENTS.md`/`CLAUDE.md`), skills, and relative-path resolution are
+  predictable.
 - **Tracing.** Log level, formatter (development vs. JSON), and span sample
   rate. Audit log destinations are configured separately when Monitoring lands.
 - **Subsystem placeholders.** Each subsystem reserves its own configuration
@@ -435,3 +473,4 @@ present.
 |------|-------------|-----|----------------|
 | 2026-06-13 | Reconciled the connection-gate description with ADR-005: filesystem permissions are the sole admission gate, `SO_PEERCRED` is audit-only, and the in-service uid allow-list (`admin_allowed_uids`/`admin_allowed_gid`) is removed (additional uids via a Unix group instead). Updated the Responsibility table, Components 4–5 authentication, the system diagram and workflow labels, the Configuration and Open-Questions sections, and Implementation Order Phases 4/5/7. | ADR-005 (accepted 2026-05-22) removed the peer-credential gate and the uid allow-list, but S-002's gate wording was never updated; PR #22 reconciles the artifact set. | None (gate already implemented per ADR-005; documentation reconciliation only). |
 | 2026-06-23 | `bob chat` redefined: it requires the running service and launches a supervised, directly-launched interactive `pi` session (exempt from pre-flight admission, ADR-010) instead of feeding the admin-socket interactive-chat adapter. The obsolete chat-subscription workflow was removed from the active spec text. | CR-002. | T-103, T-104, T-105, T-106, T-107, T-108 |
+| 2026-07-05 | Added the service-wide `pi_agent_cwd` config key (absolute-only; default = inherit launch cwd; existence handled lazily at spawn time — no startup gate); the supervisor spawns workers with an explicit resolved cwd; documented that a per-entry-cwd scheduled job spawns a dedicated worker (no warm-pool reuse), consumes a `max_processes` slot, and — when the pool is exhausted — skips that fire with a warning rather than blocking or evicting; clarified that `bob chat` ignores `pi_agent_cwd` and uses the invocation cwd. | CR-005. | CR-005 tasks TBD |

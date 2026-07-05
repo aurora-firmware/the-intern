@@ -87,17 +87,36 @@ Concretely:
        {
          "id": "check-email",
          "cron": "*/15 * * * *",
-         "prompt": "Check email and summarize anything urgent"
+         "prompt": "Check email and summarize anything urgent",
+         "cwd": "/srv/workspaces/email"
        }
      ]
    }
    ```
+
+   Each entry carries exactly one prompt source — either an inline `prompt`
+   string or an absolute `file` path read fresh at each fire — plus an optional
+   absolute `cwd`. The unused prompt field and an absent `cwd` are omitted on
+   disk; the store version stays `1` and older `prompt`-only stores load
+   unchanged.
 
    Implementations must write it with atomic temp-file-and-rename updates and
    preserve the required file mode.
 6. **Action authorization is unchanged.** Once a scheduled prompt reaches
    pi-agent, every tool call still passes through the existing S-004
    `tool_call` action authorization gate.
+7. **Prompt-file contents and the working directory are trusted, un-checked
+   inputs.** A schedule entry's `file` contents and its `cwd` originate in the
+   owner-only schedule store, so their *values* are trusted; bob performs **no**
+   ownership or permission check on either the prompt file or the working
+   directory before use. This is a deliberate relaxation, previously recorded
+   only as a code comment: because pi auto-loads `AGENTS.md`/`CLAUDE.md` and
+   skills from the working directory and reads the prompt file verbatim, a file
+   or directory writable by another principal could inject prompt content or
+   context that bypasses `[policy].admitted_users`. Operators MUST keep both the
+   prompt file and the cwd under the same owner-only protection as
+   `schedules.json` itself. Filesystem permissions — not a bob-side ownership
+   check — are the gate.
 
 This ADR amends ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, and ADR-010 for
 the scheduler path. It does not remove application-level `UserId` as a general
@@ -129,6 +148,10 @@ external or multi-user adapters.
 - ADRs and approved specs that currently describe scheduler UUID admission and
   `[schedule]` in `config.toml` must be amended before implementation work
   proceeds.
+- Prompt-file contents and the scheduled working directory are used without an
+  ownership check; a mis-permissioned file or directory can inject trusted
+  context. Acceptable only while schedule state and its referenced paths are
+  guarded by the same Unix owner-only permissions as the control plane.
 
 ### Neutral
 
