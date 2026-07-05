@@ -638,6 +638,16 @@ impl Dispatcher {
                 }
             };
 
+        // `cwd` is an optional, independent field naming the working directory
+        // the job should run from (T-118/T-124); it is not part of the
+        // prompt/file mutual-exclusion above.
+        let raw_cwd = params_value
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+
         // Validate the cron expression (must be a valid 5-field expression).
         let parser = CronParser::builder().seconds(Seconds::Disallowed).build();
         if let Err(err) = parser.parse(&entry_cron) {
@@ -679,13 +689,17 @@ impl Dispatcher {
             Ok(e) => e,
             Err(outcome) => return outcome,
         };
-        entries.push(ScheduleEntry {
+        let mut new_entry = ScheduleEntry {
             id: entry_id,
             cron: entry_cron,
             prompt: entry_prompt,
             file: entry_file,
             cwd: None,
-        });
+        };
+        if let Some(cwd) = raw_cwd {
+            new_entry = new_entry.with_cwd(cwd);
+        }
+        entries.push(new_entry);
 
         if let Err(outcome) = self.write_and_reload(&id, schedule_store_path, entries, handle) {
             return outcome;
@@ -2297,6 +2311,47 @@ mod tests {
             DispatchOutcome::Ok(_) => panic!("expected error when neither prompt nor file set"),
             _ => panic!("unexpected dispatch outcome variant"),
         }
+    }
+
+    // AC-1 (T-124): schedule.add with an absolute cwd persists the cwd field
+    // on the created entry.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_with_absolute_cwd_persists_cwd_field() {
+        use bob_core::types::schedule::read_schedule_store;
+
+        let (_dir, store_path) = temp_schedule_store_path();
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_schedule_store_path(store_path.clone());
+
+        let req = make_request_with_params(
+            "schedule.add",
+            json!(350),
+            json!({
+                "id": "cwd-job",
+                "cron": "0 9 * * *",
+                "prompt": "run",
+                "cwd": "/srv/workspaces/a"
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => assert_eq!(resp.result["ok"], json!(true)),
+            DispatchOutcome::Err(e) => panic!("expected Ok, got error: {}", e.error.message),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+
+        let entries = read_schedule_store(&store_path).expect("JSON store must be readable");
+        let job = entries
+            .iter()
+            .find(|e| e.id == "cwd-job")
+            .expect("entry must be persisted");
+        assert_eq!(job.cwd.as_deref(), Some("/srv/workspaces/a"));
     }
 
     // schedule.list emits the `file` field (and omits `prompt`) for a
