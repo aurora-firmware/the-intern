@@ -81,3 +81,35 @@ Nothing remains for T-118 itself. Follow-on tasks (T-124 for the real `--cwd`/`s
 **Obstacles Encountered:** Adding the `cwd` field turned `ScheduleEntry`'s two struct literals inside `schedule.rs`'s own test module into compile errors (non-exhaustive literal construction), which needed `cwd: None` added — a small, in-scope consequence of the field addition, not a boundary violation. AC-4 turned out to already hold as a natural consequence of the `#[serde(default, skip_serializing_if = "Option::is_none")]` attribute added in cycle 1 — the test for it passed immediately rather than failing first; kept it as a regression lock per the tdd skill's guidance rather than forcing an artificial red state.
 
 ## Review
+
+### Review Verdict — 2026-07-05
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1 (optional `cwd`, omitted when unset): Met. `ScheduleEntry.cwd: Option<String>` carries `#[serde(default, skip_serializing_if = "Option::is_none")]` (`schedule.rs:492-493`); `entry_without_cwd_omits_cwd_key_when_serialised` confirms the key is absent on write.
+- AC-2 (accept only non-blank absolute `cwd` when present): Met. `validate_schedule_store` adds an `if let Some(cwd) = entry.cwd...` block (`schedule.rs:138-152`) that mirrors the existing `file` absolute-path check exactly; `validate_accepts_an_entry_with_an_absolute_cwd` passes.
+- AC-3 (reject whole store, error names the entry id, for blank/relative `cwd`): Met. Both the blank and relative branches format `entry.id` into the `ServiceError::Configuration` detail (`schedule.rs:141`, `147`); `validate_rejects_a_relative_cwd_and_names_the_entry_id` asserts the id and the path-problem wording appear in the message, `validate_rejects_a_blank_cwd` asserts the blank case is rejected with the correct error variant.
+- AC-4 (backward-compatible load, version stays 1): Met. `read_schedule_store_parses_entries_written_before_cwd_existed` seeds a hand-written v1 JSON store with no `cwd` key, asserts version stays `1`, and asserts the loaded entry's `cwd` is `None`.
+- `with_cwd` setter for T-124: Present as a builder (`mut self -> Self`) on `ScheduleEntry`, matching the task's "attach a cwd to a built entry" framing; covered by `with_cwd_sets_the_cwd_field_on_a_built_entry`.
+- `dispatch.rs` mechanical fix: The one `ScheduleEntry { .. }` struct literal in `schedule.add`'s handler (~line 682) now sets `cwd: None`, exactly as scoped — no other wiring added, consistent with T-124 owning the real `--cwd` plumbing.
+- Files touched match the task's "Files to Touch" list exactly (`bob-core/src/types/schedule.rs`, `admin-rpc/src/dispatch.rs`); no unspecified files or behavior.
+
+**Stage 2 — Code Quality**
+
+- Correctness: validation block correctly trims, checks blank, then checks `Path::is_absolute`, in the same order/style as the existing `file` check; no directory-existence check was added (correctly deferred to T-127).
+- Tests: six new tests cover the builder, serialization omission, both validation failure paths (blank, relative) plus the identifying-error-message assertion, round-trip through the JSON store, and backward-compatible load of a pre-`cwd` store. Each test uses its own `tempfile::tempdir()`; no shared mutable state.
+- Security: no secrets; `cwd` is validated (non-blank, absolute) before being trusted, matching the existing `file` field's treatment.
+- Readability: descriptive test and error-message names; no dead code; doc comments for `validate_schedule_store` and `ScheduleEntry` updated to describe the new invariant.
+- Performance: no additional loops or blocking calls; validation stays O(1) per entry.
+
+**Verification performed by reviewer:**
+- Checked out `task/T-118-add-optional-cwd-field-to-scheduleentry-with-absolute-path-validation` into a scratch worktree.
+- `cargo test -p bob-core schedule` — 44 passed, 0 failed.
+- `cargo build -p admin-rpc -p bob` — succeeds (the `dispatch.rs` struct-literal fix keeps the workspace compiling).
+- `cargo test --workspace` — all crates green, no regressions.
+- `cargo fmt --all -- --check` — clean.
+- Confirmed via `grep -rn "ScheduleEntry {"` across the service tree that every struct-literal construction site (2 in `schedule.rs`'s own tests, 1 in `dispatch.rs`) was updated; no missed site.
+
+No blocking issues found. Minor non-blocking observation: `validate_rejects_a_blank_cwd`'s assertion checks only the error variant, not that the message names the entry id (unlike its relative-path sibling test) — the implementation itself does include `entry.id` in the blank-cwd message, so this is a test-coverage nicety, not a defect.
