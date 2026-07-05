@@ -67,3 +67,30 @@ Implemented all three acceptance criteria for T-125 in three TDD cycles, each co
 **Obstacles Encountered:** None. `pi` binary was not needed for this CLI-only task (no `serve`/e2e tests touched); dependency T-124 was already completed and merged, so the `schedule.add`/`schedule.list` RPC layer already supported `cwd` — only the CLI needed wiring.
 
 ## Review
+
+### Review Verdict — 2026-07-05
+
+PASS
+
+**Stage 1 — Acceptance Criteria:**
+- AC-1 (optional `--cwd <dir>` flag mapped to `schedule.add`'s `cwd` parameter): met. `--cwd: Option<String>` added to `ScheduleCommand::Add` in `cli/mod.rs`, threaded unmodified through `DispatchRuntime::schedule_add` (both `ProductionRuntime` and the test `FakeRuntime`) in `lib.rs`, through `cli::commands::schedule_add`, into `schedule::run_add`/`run_add_with_config`/`run_add_with_caller`, and merged into the `schedule.add` RPC params only when present. Verified with clap-parsing tests (`schedule_add_parses_optional_cwd_flag`, `schedule_add_without_cwd_flag_defaults_to_none`) and caller-level tests (`schedule_add_sends_cwd_param_when_cwd_is_given`, `schedule_add_omits_cwd_param_when_cwd_is_not_given`).
+- AC-2 (relative `--cwd` fails without contacting the service): met. `validate_cwd` in `schedule.rs` checks `Path::is_absolute()` only (no existence check, matching the "not required to exist at add time" instruction) and is called in `run_add` immediately after `resolve_add_source`, strictly before `load_config()`/`call_admin` (the only socket-contacting call). Confirmed by reading the call order in `run_add` and by `validate_cwd_errors_on_a_relative_path` (asserts the error message mentions both "cwd" and "absolute").
+- AC-3 (render `cwd` in both human and `--json` `schedule list` output): met. `--json` output is a direct passthrough of the `schedule.list` RPC response, which already carries `cwd` server-side from T-124 — confirmed as a regression test (`schedule_list_json_output_includes_cwd_field_when_entry_has_one`). Human output: `write_human_schedule` appends `  cwd: <path>` when present and omits it otherwise, covered by `schedule_list_human_output_includes_cwd_when_entry_has_one` / `..._omits_cwd_when_entry_has_none`.
+- No unspecified behavior added; `--cwd` is correctly independent of `--prompt`/`--file` (no `conflicts_with`/`required_unless_present`), matching admin-rpc's existing independent handling of `raw_cwd` (`dispatch.rs`).
+- Only the four files listed under "Files to Touch" were modified (`git diff --stat` against `dev-agent`): `cli/mod.rs`, `cli/commands.rs`, `cli/commands/schedule.rs`, `lib.rs`.
+
+**Stage 2 — Code Quality:**
+- Correctness: argument threading is consistent end-to-end; `validate_cwd` correctly runs before any RPC round-trip; human/JSON rendering both handle presence and absence of `cwd`.
+- Tests: new tests cover both the presence and absence of `--cwd`/`cwd`, for parsing, RPC-param construction, and both list-rendering formats; tests are independent (no shared mutable state, each builds its own fixture).
+- Security: no secrets; `--cwd` is validated as an absolute path before use, existence deliberately deferred to fire time per the task's explicit instruction.
+- Readability: `validate_cwd` mirrors the existing `resolve_add_source` pattern; doc comments follow the existing `--file` style.
+- Performance: no loops/blocking calls introduced beyond the existing per-entry list iteration.
+
+**Verification performed:**
+- `cargo build -p bob` — clean.
+- `cargo test -p bob cli` — 63 passed, 0 failed.
+- `cargo test --workspace` — all crates green (109/138/1/3/1/1/2/5/127/37/5/29/60/45/15/17 passed across suites, 0 failed).
+- `cargo fmt --all -- --check` — clean.
+- Read full diff against `dev-agent` for all four touched files; confirmed no scope creep.
+
+No blocking issues. No non-blocking observations beyond noting the design choice (documented in the Work Log) to keep `cwd` as an independent parameter rather than folding it into `AddSource` — this is correct and matches the server-side contract.
