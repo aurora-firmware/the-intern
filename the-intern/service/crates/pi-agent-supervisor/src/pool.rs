@@ -8,6 +8,7 @@ use bob_core::{
 };
 use std::collections::HashMap;
 use std::os::unix::io::OwnedFd;
+use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::ChildStdout;
 use tokio::sync::oneshot;
@@ -125,6 +126,28 @@ impl SessionPool {
                 ),
             });
         };
+
+        self.active_workers.insert(
+            session_id,
+            ActiveSessionWorker {
+                worker,
+                last_prompt_activity: Instant::now(),
+                drain_handle: None,
+            },
+        );
+        Ok(session_id)
+    }
+
+    /// Acquires a dedicated worker bound to a caller-supplied working directory.
+    ///
+    /// Per S-002 Component 6 (warm-pool contract), warm-pool workers are
+    /// pre-spawned with the service-wide cwd, so a request naming its own
+    /// working directory cannot reuse one. This always spawns a **dedicated**
+    /// worker whose `current_dir` is `cwd`, bypassing the warm pool entirely.
+    pub fn acquire_session_with_cwd(&mut self, cwd: PathBuf) -> ServiceResult<SessionId> {
+        let session_id = SessionId::new();
+        let process_cfg = Self::worker_process_config_for_cwd_session(&self.cfg, session_id, cwd);
+        let worker = crate::process::RpcWorkerProcess::spawn(&process_cfg)?;
 
         self.active_workers.insert(
             session_id,
@@ -435,6 +458,19 @@ impl SessionPool {
         }
     }
 
+    /// Builds a [`WorkerProcessConfig`] for a cwd-scoped dedicated worker,
+    /// overriding the service-wide `worker_cwd` with the caller-supplied `cwd`.
+    fn worker_process_config_for_cwd_session(
+        cfg: &Config,
+        session_id: SessionId,
+        cwd: PathBuf,
+    ) -> WorkerProcessConfig {
+        WorkerProcessConfig {
+            worker_cwd: Some(cwd),
+            ..Self::worker_process_config_for_session(cfg, session_id)
+        }
+    }
+
     fn total_process_count(&self) -> usize {
         self.warm_workers.len() + self.active_workers.len()
     }
@@ -574,6 +610,76 @@ mod tests {
             .expect_err("second session should fail at max capacity");
 
         assert!(matches!(error, ServiceError::ChildProcess { .. }));
+    }
+
+    // AC-1 (T-122): acquire_session_with_cwd must not consume a pre-spawned
+    // warm worker even when one is available, because warm workers carry the
+    // service-wide cwd and cannot be reused for a caller-supplied directory.
+    #[tokio::test(flavor = "current_thread")]
+    async fn acquire_session_with_cwd_does_not_consume_a_warm_worker() {
+        let cfg = test_config("sh", &["-c", "exit 0"], 1, 2);
+        let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
+        assert_eq!(
+            pool.warm_worker_count(),
+            1,
+            "test setup expects one pre-spawned warm worker"
+        );
+
+        let worker_cwd = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-dedicated-cwd-warm-check-{}",
+            SessionId::new()
+        ));
+        std::fs::create_dir_all(&worker_cwd).expect("create dedicated cwd should succeed");
+
+        pool.acquire_session_with_cwd(worker_cwd.clone())
+            .expect("acquiring a cwd-scoped session should succeed");
+
+        assert_eq!(
+            pool.warm_worker_count(),
+            1,
+            "cwd-scoped acquisition must not consume the pre-spawned warm worker"
+        );
+
+        std::fs::remove_dir_all(&worker_cwd).ok();
+    }
+
+    // AC-1 (T-122): the dedicated worker actually runs in the caller-supplied
+    // directory rather than the (unset) service-wide cwd.
+    #[tokio::test(flavor = "current_thread")]
+    async fn acquire_session_with_cwd_spawns_dedicated_worker_running_in_given_directory() {
+        let worker_cwd = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-dedicated-cwd-{}",
+            SessionId::new()
+        ));
+        std::fs::create_dir_all(&worker_cwd).expect("create dedicated cwd should succeed");
+
+        let cfg = test_config("sh", &["-c", "pwd > marker.txt"], 0, 1);
+        let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
+
+        pool.acquire_session_with_cwd(worker_cwd.clone())
+            .expect("acquiring a cwd-scoped session should succeed");
+
+        let marker_path = worker_cwd.join("marker.txt");
+        for _ in 0..100 {
+            if marker_path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let contents = std::fs::read_to_string(&marker_path)
+            .expect("dedicated worker should have written the marker file in its cwd");
+        let actual =
+            std::fs::canonicalize(contents.trim()).expect("canonicalize actual reported cwd");
+        let expected =
+            std::fs::canonicalize(&worker_cwd).expect("canonicalize expected worker cwd");
+
+        assert_eq!(
+            actual, expected,
+            "dedicated worker should run in the caller-supplied cwd"
+        );
+
+        std::fs::remove_dir_all(&worker_cwd).ok();
     }
 
     #[tokio::test(flavor = "current_thread")]
