@@ -1,7 +1,7 @@
 ---
 id: T-119
 title: Add pi_agent_cwd service-wide worker working-directory config key
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-07-05'
