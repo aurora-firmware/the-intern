@@ -29,6 +29,15 @@ pub struct BobConfig {
     pub pi_agent_warm_pool_size: usize,
     pub pi_agent_max_processes: usize,
     pub pi_agent_idle_reap_timeout: Duration,
+    /// Service-wide working directory for every pi-agent RPC pool worker
+    /// (S-002 CR-005).
+    ///
+    /// `None` (the unset default) means workers inherit the launch cwd of
+    /// `bob serve` — the pre-CR-005 behaviour. When set it is always an
+    /// absolute path (`validate()` rejects a relative value at load time).
+    /// Directory existence is not checked here; a missing directory surfaces
+    /// as a spawn-time error from the supervisor.
+    pub pi_agent_cwd: Option<PathBuf>,
     pub tracing_level: String,
     pub tracing_format: String,
     /// Policy rules sourced from the `[policy]` TOML section.
@@ -102,6 +111,7 @@ impl BobConfig {
             pi_agent_warm_pool_size: 1,
             pi_agent_max_processes: 8,
             pi_agent_idle_reap_timeout: Duration::from_secs(300),
+            pi_agent_cwd: None,
             tracing_level: "info".to_string(),
             tracing_format: "pretty".to_string(),
             policy: PolicyConfig::default(),
@@ -181,6 +191,7 @@ impl BobConfig {
             pi_agent_warm_pool_size: raw.pi_agent_warm_pool_size,
             pi_agent_max_processes: raw.pi_agent_max_processes,
             pi_agent_idle_reap_timeout: raw.pi_agent_idle_reap_timeout,
+            pi_agent_cwd: raw.pi_agent_cwd,
             tracing_level: raw.tracing_level,
             tracing_format: raw.tracing_format,
             policy: raw.policy,
@@ -243,6 +254,15 @@ impl BobConfig {
 
         ensure_monitoring_audit_log_path(&self.monitoring.audit_log_path)?;
 
+        if let Some(pi_agent_cwd) = &self.pi_agent_cwd {
+            if !pi_agent_cwd.is_absolute() {
+                return Err(configuration_error(format!(
+                    "pi_agent_cwd must be an absolute path, got {}",
+                    pi_agent_cwd.display()
+                )));
+            }
+        }
+
         Ok(self)
     }
 }
@@ -293,6 +313,8 @@ struct RawBobConfig {
     pi_agent_max_processes: usize,
     #[serde(deserialize_with = "deserialize_duration")]
     pi_agent_idle_reap_timeout: Duration,
+    #[serde(default)]
+    pi_agent_cwd: Option<PathBuf>,
     tracing_level: String,
     tracing_format: String,
     /// Policy rules from the `[policy]` TOML section; absent means deny-all.
@@ -566,6 +588,7 @@ fn defaults_with_runtime_root(
         pi_agent_warm_pool_size: 1,
         pi_agent_max_processes: 8,
         pi_agent_idle_reap_timeout: Duration::from_secs(300),
+        pi_agent_cwd: None,
         tracing_level: default_tracing_level().to_string(),
         tracing_format: "pretty".to_string(),
         policy: PolicyConfig::default(),
@@ -1634,6 +1657,109 @@ prompt = "from toml"
         // If `allowed_user_ids` still existed as a field this line would need it;
         // the fact that it compiles without it proves the legacy field is gone.
         let _: &policy_control::PolicyConfig = &cfg.policy;
+    }
+
+    // ── AC-1/AC-3 (T-119): pi_agent_cwd is optional and unset by default ─────
+
+    #[test]
+    fn pi_agent_cwd_is_none_when_unset() {
+        let config = load_with_env_overrides([]).expect("config without pi_agent_cwd should load");
+
+        assert_eq!(
+            config.pi_agent_cwd, None,
+            "unset pi_agent_cwd must leave the worker cwd unset so workers inherit the launch cwd"
+        );
+    }
+
+    // ── AC-1 (T-119): pi_agent_cwd parses an absolute path from config.toml ──
+
+    #[test]
+    fn loads_pi_agent_cwd_absolute_path_from_config_file() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let config_file = write_temp_config(r#"pi_agent_cwd = "/opt/bob/workspace""#);
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("absolute pi_agent_cwd should load");
+
+        assert_eq!(
+            config.pi_agent_cwd,
+            Some(PathBuf::from("/opt/bob/workspace"))
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    // ── AC-4 (T-119): pi_agent_cwd existence is not checked at load time ─────
+
+    #[test]
+    fn loads_successfully_when_pi_agent_cwd_names_a_nonexistent_directory() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let nonexistent = temp.path().join("does-not-exist-yet");
+
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let config_file =
+            write_temp_config(&format!(r#"pi_agent_cwd = "{}""#, nonexistent.display()));
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("pi_agent_cwd naming a nonexistent directory should still load");
+
+        assert_eq!(config.pi_agent_cwd, Some(nonexistent.clone()));
+        assert!(
+            !nonexistent.exists(),
+            "the named directory must remain unchecked and uncreated at load time"
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    // ── AC-2 (T-119): a relative pi_agent_cwd fails config load ───────────────
+
+    #[test]
+    fn returns_configuration_error_when_pi_agent_cwd_is_relative() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let config_file = write_temp_config(r#"pi_agent_cwd = "relative/workspace""#);
+
+        let result = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        });
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("pi_agent_cwd")),
+            "expected Configuration error naming pi_agent_cwd, got {result:?}"
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
     }
 
     // ── AC-1 (T-097): write_schedule_entries persists entries to the TOML file ─
