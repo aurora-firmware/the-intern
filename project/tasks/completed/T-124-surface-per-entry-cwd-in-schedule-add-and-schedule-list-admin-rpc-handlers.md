@@ -2,7 +2,7 @@
 id: T-124
 title: Surface per-entry cwd in schedule.add and schedule.list admin-RPC 
   handlers
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-07-05'
