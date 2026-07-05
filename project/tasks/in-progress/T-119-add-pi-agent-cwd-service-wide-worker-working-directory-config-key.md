@@ -50,4 +50,20 @@ cd the-intern/service && cargo test -p bob config
 
 ## Work Log
 
+### Session 2 — 2026-07-05
+
+Implemented T-119 end-to-end via two TDD cycles on `task/T-119-add-pi-agent-cwd-service-wide-worker-working-directory-config-key`.
+
+**Cycle 1 (AC-1, AC-3, AC-4 — config surface and parsing):** Wrote four tests first (`pi_agent_cwd_is_none_when_unset`, `loads_pi_agent_cwd_absolute_path_from_config_file`, `loads_successfully_when_pi_agent_cwd_names_a_nonexistent_directory`, and the AC-2 relative-path test) in `crates/bob/src/config.rs`. Confirmed the AC-1/3/4 tests failed to compile without the field. Added `pi_agent_cwd: Option<PathBuf>` to `BobConfig` and `RawBobConfig` (with `#[serde(default)]` on the raw field so an absent TOML key resolves to `None` rather than a figment extraction error), wired it through `test_base()`, `defaults_with_runtime_root`, and the `load_with_sources` raw→cfg mapping. This broke an unrelated `BobConfig` struct literal in `crates/bob/tests/shell_e2e.rs` (a test helper building a minimal config for the admin-client e2e test) — fixed with a one-line `pi_agent_cwd: None` addition, the same mechanical-fix pattern the sibling task T-121 already documents for `serve.rs`. Ran `cargo test -p bob config`: AC-1/3/4 tests passed, AC-2 test failed as expected (no validation yet). Committed as `feat(config): add optional pi_agent_cwd worker working-directory key`.
+
+**Cycle 2 (AC-2 — absolute-path validation):** Added the absolute-path check to `BobConfig::validate()`, returning a `Configuration` error naming `pi_agent_cwd` when the path is relative (mirrors the existing relative-cwd/relative-file validation style already used for schedule entries in `bob-core/src/types/schedule.rs`). Ran `cargo fmt --all` (one formatting fix needed in the new test block) and reran `cargo test -p bob config` — all 47 tests green. Committed as `fix(config): reject a relative pi_agent_cwd at load time`.
+
+**Verification:** Ran the task's own verification command (`cargo test -p bob config`) and the full workspace suite (`cargo test --workspace`) — both green, no failures anywhere in the workspace. `cargo fmt --all -- --check` is clean.
+
+**What was tried and rejected:** Considered gating on directory existence at load time, but the task description and S-002 amendment are explicit that existence must remain unchecked (lazy/spawn-time posture) — no test was written for that behavior since AC-4 explicitly requires the opposite.
+
+**What remains:** Nothing within this task's scope. Wiring `pi_agent_cwd` into the pi-agent supervisor (setting `current_dir` on spawned workers) is explicitly deferred to T-121/T-126 per the task description and is out of scope here.
+
+**Obstacles Encountered:** Adding the new struct field broke an unrelated `BobConfig` literal in `crates/bob/tests/shell_e2e.rs` (a test helper, not in the task's `Files to Touch`). Fixed it with a one-line addition (`pi_agent_cwd: None`) since it was purely a compile-consequence of the additive field, not a scope change — mirrors the exact same pattern already documented in the sibling task T-121 for `serve.rs`.
+
 ## Review
