@@ -108,6 +108,10 @@ fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Con
         child_termination_deadline: cfg.shutdown_reap_deadline,
         extension_sock_path: cfg.extension_sock_path.clone(),
         extension_path: cfg.extension_path.clone(),
+        // T-126 resolves this from `pi_agent_cwd`; kept unset here so bob
+        // continues to compile now that the supervisor Config carries a
+        // service-wide worker cwd (T-121).
+        worker_cwd: None,
     }
 }
 

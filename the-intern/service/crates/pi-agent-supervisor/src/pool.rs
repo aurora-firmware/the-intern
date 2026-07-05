@@ -460,6 +460,7 @@ mod tests {
             child_termination_deadline: Duration::from_millis(2000),
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
+            worker_cwd: None,
         }
     }
 
