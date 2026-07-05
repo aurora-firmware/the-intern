@@ -1,7 +1,7 @@
 ---
 id: T-118
 title: Add optional cwd field to ScheduleEntry with absolute-path validation
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-07-05'
