@@ -40,10 +40,11 @@ type Reply<T> = oneshot::Sender<ServiceResult<T>>;
 enum Command {
     Enqueue {
         event: InternalEvent,
+        job_id: Option<String>,
         reply: Reply<()>,
     },
     DequeueNext {
-        reply: Reply<Option<InternalEvent>>,
+        reply: Reply<Option<(InternalEvent, Option<String>)>>,
     },
     PutSessionState {
         id: SessionId,
@@ -93,7 +94,12 @@ impl PersistenceStore for Handle {
     ///
     /// Returns `ServiceError::Persistence` when the queue is at capacity or the actor is down.
     async fn enqueue(&self, event: InternalEvent) -> ServiceResult<()> {
-        self.send(|reply| Command::Enqueue { event, reply }).await
+        self.send(|reply| Command::Enqueue {
+            event,
+            job_id: None,
+            reply,
+        })
+        .await
     }
 
     /// Removes and returns the oldest inbound event.
@@ -102,7 +108,8 @@ impl PersistenceStore for Handle {
     ///
     /// Returns `ServiceError::Persistence` when the actor is down.
     async fn dequeue_next(&self) -> ServiceResult<Option<InternalEvent>> {
-        self.send(|reply| Command::DequeueNext { reply }).await
+        let result = self.send(|reply| Command::DequeueNext { reply }).await?;
+        Ok(result.map(|(event, _job_id)| event))
     }
 
     /// Stores `state` for `id`, overwriting any existing entry.
@@ -156,8 +163,12 @@ impl Actor {
         );
         while let Some(command) = self.rx.recv().await {
             match command {
-                Command::Enqueue { event, reply } => {
-                    let result = self.inbound.enqueue(event);
+                Command::Enqueue {
+                    event,
+                    job_id,
+                    reply,
+                } => {
+                    let result = self.inbound.enqueue(event, job_id);
                     let _ = reply.send(result);
                 }
                 Command::DequeueNext { reply } => {
