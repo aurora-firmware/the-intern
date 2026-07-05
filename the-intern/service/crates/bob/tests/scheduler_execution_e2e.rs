@@ -181,6 +181,7 @@ async fn schedule_entry_from_json_store_is_delivered_when_admitted_users_is_empt
             child_termination_deadline: Duration::from_millis(500),
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: current_exe_path(),
+            worker_cwd: None,
         })
         .expect("pi-agent supervisor must start with fake worker");
 
