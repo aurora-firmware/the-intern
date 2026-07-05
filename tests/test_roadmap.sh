@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ROADMAP="$REPO_ROOT/project/docs/roadmap.md"
+ROADMAP="$REPO_ROOT/project/docs/archive/roadmap.md"
 SPEC_REF="project/specs/the-intern-agent-service-architecture.md"
 
 pass_count=0
