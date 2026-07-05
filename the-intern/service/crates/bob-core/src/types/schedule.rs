@@ -1328,6 +1328,29 @@ mod tests {
     }
 
     #[test]
+    fn read_schedule_store_parses_entries_written_before_cwd_existed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"entries":[{"id":"legacy","cron":"* * * * *","prompt":"p"}]}"#,
+        )
+        .expect("seed store written without a cwd key");
+
+        let raw = std::fs::read_to_string(&path).expect("read raw seed");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+        assert_eq!(v["version"].as_u64(), Some(1), "store version stays 1");
+
+        let loaded =
+            read_schedule_store(&path).expect("store written without a cwd key must still parse");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(
+            loaded[0].cwd, None,
+            "cwd must be unset when the key is absent"
+        );
+    }
+
+    #[test]
     fn read_schedule_store_reads_a_hand_edited_file_backed_entry() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("schedule.json");
