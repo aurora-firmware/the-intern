@@ -76,9 +76,12 @@ pub fn read_schedule_store(path: &Path) -> ServiceResult<Vec<ScheduleEntry>> {
 /// (minute hour day-of-month month day-of-week), and exactly one non-blank
 /// prompt source: either a `prompt` (literal text) or a `file` (an absolute
 /// path whose contents are read at fire time). Setting both, setting neither,
-/// or giving `file` a relative path is rejected. `id` values must be unique
-/// across the store. The store is validated as a whole — a single bad entry
-/// rejects the entire document rather than being silently skipped or deferred.
+/// or giving `file` a relative path is rejected. When present, `cwd` must also
+/// be a non-blank absolute path (CR-005); a blank or relative `cwd` rejects the
+/// entry the same way a bad `file` does — directory existence is a fire-time
+/// concern and is not checked here. `id` values must be unique across the
+/// store. The store is validated as a whole — a single bad entry rejects the
+/// entire document rather than being silently skipped or deferred.
 ///
 /// # Errors
 ///
@@ -129,6 +132,21 @@ pub fn validate_schedule_store(entries: &[ScheduleEntry]) -> ServiceResult<()> {
             _ => {
                 return Err(ServiceError::Configuration {
                     detail: format!("schedule entry {:?} has a blank prompt or file", entry.id),
+                });
+            }
+        }
+        if let Some(cwd) = entry.cwd.as_deref().map(str::trim) {
+            if cwd.is_empty() {
+                return Err(ServiceError::Configuration {
+                    detail: format!("schedule entry {:?} has a blank cwd", entry.id),
+                });
+            }
+            if !std::path::Path::new(cwd).is_absolute() {
+                return Err(ServiceError::Configuration {
+                    detail: format!(
+                        "schedule entry {:?} has a relative cwd {cwd:?}; an absolute path is required",
+                        entry.id
+                    ),
                 });
             }
         }
@@ -453,10 +471,16 @@ pub fn write_schedule_store(path: &Path, entries: &[ScheduleEntry]) -> ServiceRe
 ///   resolution happens in the scheduler-adapter).
 ///
 /// Exactly one of `prompt`/`file` must be present and non-blank, and `file`
-/// must be an absolute path — both enforced by [`validate_schedule_store`]. On
-/// disk an entry serialises to `{ "id", "cron", "prompt" }` or
-/// `{ "id", "cron", "file" }`; the unused field is omitted, so existing
-/// `prompt`-only stores continue to load unchanged (store version stays 1).
+/// must be an absolute path — both enforced by [`validate_schedule_store`].
+///
+/// `cwd` is an optional, independent field naming the working directory the
+/// job should run from (CR-005). When present it must also be a non-blank
+/// absolute path; resolving whether that directory still exists is deferred
+/// to fire time, not checked here. On disk an entry serialises to
+/// `{ "id", "cron", "prompt" }` or `{ "id", "cron", "file" }`, each optionally
+/// followed by `"cwd"` when set; unset fields are omitted, so existing stores
+/// written before `cwd` existed continue to load unchanged (store version
+/// stays 1).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScheduleEntry {
     pub id: String,
@@ -1250,6 +1274,42 @@ mod tests {
         assert!(
             v["entries"][0].get("cwd").is_none(),
             "cwd key must be omitted when unset"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_an_entry_with_an_absolute_cwd() {
+        let ok = ScheduleEntry::with_prompt("x", "* * * * *", "p").with_cwd("/srv/work");
+        validate_schedule_store(&[ok]).expect("absolute cwd must pass validation");
+    }
+
+    #[test]
+    fn validate_rejects_a_relative_cwd_and_names_the_entry_id() {
+        let bad =
+            ScheduleEntry::with_prompt("bad-cwd-job", "* * * * *", "p").with_cwd("relative/dir");
+        let err = validate_schedule_store(&[bad]).expect_err("relative cwd must be rejected");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bad-cwd-job"),
+            "error must identify the offending entry id: {msg}"
+        );
+        assert!(
+            msg.contains("relative") || msg.contains("absolute"),
+            "error must mention the path problem: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_a_blank_cwd() {
+        let bad = ScheduleEntry::with_prompt("x", "* * * * *", "p").with_cwd("   ");
+        let err = validate_schedule_store(&[bad]).expect_err("blank cwd must be rejected");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
         );
     }
 
