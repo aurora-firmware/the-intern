@@ -57,13 +57,14 @@ pub(super) fn run_add(
     cron: &str,
     prompt: Option<&str>,
     file: Option<&str>,
+    cwd: Option<&str>,
 ) -> ServiceResult<()> {
     // Resolve (and canonicalise a --file) before touching the service so a bad
     // path fails fast, before any RPC round-trip.
     let source = resolve_add_source(prompt, file)?;
     let cfg = load_config()?;
     let mut out = io::stdout();
-    run_add_with_config(json_output, id, cron, source, &cfg, &mut out)
+    run_add_with_config(json_output, id, cron, source, cwd, &cfg, &mut out)
 }
 
 pub(super) fn run_remove(json_output: bool, id: &str) -> ServiceResult<()> {
@@ -89,10 +90,11 @@ pub(super) fn run_add_with_config(
     id: &str,
     cron: &str,
     source: AddSource,
+    cwd: Option<&str>,
     cfg: &BobConfig,
     out: &mut impl Write,
 ) -> ServiceResult<()> {
-    run_add_with_caller(json_output, id, cron, source, out, |method, params| {
+    run_add_with_caller(json_output, id, cron, source, cwd, out, |method, params| {
         run_async(call_admin(cfg, method, params))
     })
 }
@@ -133,13 +135,17 @@ fn run_add_with_caller(
     id: &str,
     cron: &str,
     source: AddSource,
+    cwd: Option<&str>,
     out: &mut impl Write,
     mut caller: impl FnMut(&str, Value) -> ServiceResult<Value>,
 ) -> ServiceResult<()> {
-    let params = match &source {
+    let mut params = match &source {
         AddSource::Prompt(prompt) => json!({ "id": id, "cron": cron, "prompt": prompt }),
         AddSource::File(file) => json!({ "id": id, "cron": cron, "file": file }),
     };
+    if let Some(cwd) = cwd {
+        params["cwd"] = json!(cwd);
+    }
     let response = caller("schedule.add", params)?;
 
     if json_output {
@@ -242,6 +248,7 @@ mod tests {
             "foo",
             "* * * * *",
             AddSource::Prompt("check mail".to_owned()),
+            None,
             &mut out,
             |method, params| {
                 assert_eq!(method, "schedule.add");
@@ -268,6 +275,7 @@ mod tests {
             "foo",
             "* * * * *",
             AddSource::Prompt("check mail".to_owned()),
+            None,
             &mut out,
             |_, _| Ok(json!({"ok": true})),
         )
@@ -359,6 +367,56 @@ mod tests {
         assert_eq!(String::from_utf8(out).expect("utf8"), "{\"ok\":true}\n");
     }
 
+    // --- per-entry working directory (--cwd) ---
+
+    #[test]
+    fn schedule_add_sends_cwd_param_when_cwd_is_given() {
+        let mut out = Vec::new();
+        run_add_with_caller(
+            false,
+            "foo",
+            "* * * * *",
+            AddSource::Prompt("check mail".to_owned()),
+            Some("/srv/workspaces/a"),
+            &mut out,
+            |method, params| {
+                assert_eq!(method, "schedule.add");
+                assert_eq!(
+                    params,
+                    json!({
+                        "id": "foo",
+                        "cron": "* * * * *",
+                        "prompt": "check mail",
+                        "cwd": "/srv/workspaces/a",
+                    })
+                );
+                Ok(json!({"ok": true}))
+            },
+        )
+        .expect("add succeeds");
+    }
+
+    #[test]
+    fn schedule_add_omits_cwd_param_when_cwd_is_not_given() {
+        let mut out = Vec::new();
+        run_add_with_caller(
+            false,
+            "foo",
+            "* * * * *",
+            AddSource::Prompt("check mail".to_owned()),
+            None,
+            &mut out,
+            |_, params| {
+                assert!(
+                    params.get("cwd").is_none(),
+                    "cwd key must be omitted when --cwd is not given: {params}"
+                );
+                Ok(json!({"ok": true}))
+            },
+        )
+        .expect("add succeeds");
+    }
+
     // --- file-backed prompts (--file) ---
 
     #[test]
@@ -369,6 +427,7 @@ mod tests {
             "foo",
             "0 9 * * *",
             AddSource::File("/abs/prompt.txt".to_owned()),
+            None,
             &mut out,
             |method, params| {
                 assert_eq!(method, "schedule.add");
