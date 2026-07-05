@@ -1,12 +1,19 @@
 ---
 id: CR-005-amendment-drafts
 title: Proposed amendment drafts for CR-005 (configurable working directory)
-status: pending-approval
+status: applied
 created: '2026-07-05'
 author: planner
 ---
 
-# CR-005 — Proposed Amendment Drafts (pending human approval)
+# CR-005 — Amendment Drafts (approved and applied 2026-07-05)
+
+> **RESOLVED 2026-07-05.** These drafts were approved as drafted and applied to
+> the canonical artifacts: S-002, S-009, S-005, and ADR-012 were amended; the §5
+> F2 data-flow ADR was recorded and accepted as **ADR-013**; and Gate 2 tasks
+> T-118–T-130 were created (passed the Architect preflight). This file is
+> retained as the proposal record — the "proposal / pending approval / TBD /
+> number to be confirmed" language below reflects its state at drafting time.
 
 These are **proposals**, not applied changes. Per the CR-005 resolution the
 approved specs/ADRs are NOT edited here; this companion file holds the exact

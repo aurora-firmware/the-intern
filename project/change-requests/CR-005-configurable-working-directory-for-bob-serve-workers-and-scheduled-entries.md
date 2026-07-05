@@ -2,7 +2,7 @@
 id: CR-005
 title: Configurable working directory for bob serve workers and scheduled 
   entries
-status: pending
+status: completed
 created: '2026-07-05'
 ---
 
@@ -135,8 +135,9 @@ directory, which applies globally and is awkward to script.
   unchanged — cwd is **not** put on the delivery type (F1). The inbound
   persistence queue instead carries the **job id**; the dispatcher looks up cwd
   from the live schedule table (`ReloadHandle::subscribe`). This change to what
-  the queue carries needs a **new ADR** (or ADR-004 addendum), recorded by the
-  Architect once the design is settled.
+  the queue carries is recorded as **ADR-013** (accepted 2026-07-05):
+  `InternalEvent` stays unchanged and the dispatcher resolves cwd from the live
+  table via the job id.
 - **ADR-012 (scheduler trust boundary):** record the trust relaxation explicitly
   for BOTH prompt files and cwd (today only a code comment): the value is trusted
   because it originates in the owner-only schedule store; pi auto-loads
@@ -189,6 +190,20 @@ above are the normal change-request path.
 
 Concrete, approvable amendment wording for S-002, S-009, S-005, ADR-012, and the
 new F2 data-flow ADR lives in the companion file
-`CR-005-amendment-drafts.md` (same directory). Those drafts are proposals
-pending human approval; the canonical specs/ADRs are not edited until they are
-approved.
+`CR-005-amendment-drafts.md` (same directory). Those drafts were **approved as
+drafted (2026-07-05) and applied** to the canonical specs/ADRs (S-002, S-009,
+S-005, ADR-012), with the F2 data-flow ADR recorded and accepted as **ADR-013**.
+
+## Outcome (2026-07-05)
+
+- **Approved** as drafted (human, 2026-07-05).
+- **Amendments applied** to S-002, S-009, S-005, and ADR-012.
+- **ADR-013 recorded and accepted** — the inbound queue carries the job-id
+  correlator and the dispatcher resolves per-entry cwd from the live schedule
+  table; `InternalEvent` unchanged. S-001 confirmed to need no amendment.
+- **Gate 2 task breakdown complete** — tasks T-118–T-130 in
+  `project/tasks/pending/`, passed the Architect Gate 2 preflight.
+- **Follow-up**: bug B-020 (remove the legacy TOML `write_schedule_entries`
+  writer) filed out of scope.
+- **Remaining**: implementation of T-118–T-130 via `/dev-loop`; the `--file`
+  prompt feature is already merged (commit `b54bbe9`).
