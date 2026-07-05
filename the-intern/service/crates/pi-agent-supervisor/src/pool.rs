@@ -127,14 +127,7 @@ impl SessionPool {
             });
         };
 
-        self.active_workers.insert(
-            session_id,
-            ActiveSessionWorker {
-                worker,
-                last_prompt_activity: Instant::now(),
-                drain_handle: None,
-            },
-        );
+        self.track_active_worker(session_id, worker);
         Ok(session_id)
     }
 
@@ -162,6 +155,18 @@ impl SessionPool {
         let process_cfg = Self::worker_process_config_for_cwd_session(&self.cfg, session_id, cwd);
         let worker = crate::process::RpcWorkerProcess::spawn(&process_cfg)?;
 
+        self.track_active_worker(session_id, worker);
+        Ok(session_id)
+    }
+
+    /// Records a newly-acquired worker as an active session with fresh
+    /// prompt-activity tracking, shared by both [`Self::acquire_session`] and
+    /// [`Self::acquire_session_with_cwd`].
+    fn track_active_worker(
+        &mut self,
+        session_id: SessionId,
+        worker: crate::process::RpcWorkerProcess,
+    ) {
         self.active_workers.insert(
             session_id,
             ActiveSessionWorker {
@@ -170,7 +175,6 @@ impl SessionPool {
                 drain_handle: None,
             },
         );
-        Ok(session_id)
     }
 
     pub fn list_sessions(&self) -> Vec<SessionId> {
