@@ -241,8 +241,13 @@ fn write_human_schedule(out: &mut impl Write, response: &Value) -> ServiceResult
                 "job in schedule.list must have a prompt or file",
             ));
         };
-        writeln!(out, "{id}  {cron}  {source}")
-            .map_err(|e| invalid_request_error(format!("failed to write schedule output: {e}")))?;
+        // `cwd` is optional and independent of the prompt source; omitted
+        // when the entry has none.
+        match job.get("cwd").and_then(|v| v.as_str()) {
+            Some(cwd) => writeln!(out, "{id}  {cron}  {source}  cwd: {cwd}"),
+            None => writeln!(out, "{id}  {cron}  {source}"),
+        }
+        .map_err(|e| invalid_request_error(format!("failed to write schedule output: {e}")))?;
     }
     Ok(())
 }
@@ -358,6 +363,61 @@ mod tests {
         assert_eq!(
             String::from_utf8(out).expect("utf8"),
             "[{\"cron\":\"0 * * * *\",\"id\":\"job-1\",\"prompt\":\"check calendar\"}]\n"
+        );
+    }
+
+    #[test]
+    fn schedule_list_human_output_includes_cwd_when_entry_has_one() {
+        let mut out = Vec::new();
+        run_list_with_caller(false, &mut out, |_, _| {
+            Ok(json!([
+                {
+                    "id": "job-1",
+                    "cron": "0 * * * *",
+                    "prompt": "check calendar",
+                    "cwd": "/srv/workspaces/a",
+                }
+            ]))
+        })
+        .expect("list succeeds");
+
+        let output = String::from_utf8(out).expect("utf8");
+        assert!(output.contains("/srv/workspaces/a"), "output was: {output}");
+    }
+
+    #[test]
+    fn schedule_list_human_output_omits_cwd_when_entry_has_none() {
+        let mut out = Vec::new();
+        run_list_with_caller(false, &mut out, |_, _| {
+            Ok(json!([{"id": "job-1", "cron": "0 * * * *", "prompt": "check calendar"}]))
+        })
+        .expect("list succeeds");
+
+        let output = String::from_utf8(out).expect("utf8");
+        assert!(
+            !output.to_lowercase().contains("cwd"),
+            "output was: {output}"
+        );
+    }
+
+    #[test]
+    fn schedule_list_json_output_includes_cwd_field_when_entry_has_one() {
+        let mut out = Vec::new();
+        run_list_with_caller(true, &mut out, |_, _| {
+            Ok(json!([
+                {
+                    "id": "job-1",
+                    "cron": "0 * * * *",
+                    "prompt": "check calendar",
+                    "cwd": "/srv/workspaces/a",
+                }
+            ]))
+        })
+        .expect("list succeeds");
+
+        assert_eq!(
+            String::from_utf8(out).expect("utf8"),
+            "[{\"cron\":\"0 * * * *\",\"cwd\":\"/srv/workspaces/a\",\"id\":\"job-1\",\"prompt\":\"check calendar\"}]\n"
         );
     }
 
