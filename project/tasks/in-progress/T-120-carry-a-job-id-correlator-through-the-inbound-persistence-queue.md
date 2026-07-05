@@ -62,4 +62,22 @@ cd the-intern/service && cargo test --workspace
 
 ## Work Log
 
+### Session 1 — 2026-07-05
+
+Implemented ADR-013's job-id correlator across the three files named in the task, following red→green→refactor for each acceptance criterion, three commits total.
+
+**Cycle 1 (`crates/bob-core/src/ports.rs`):** Added `enqueue_with_job_id(event, job_id: Option<String>)` and `dequeue_next_with_job_id() -> ServiceResult<Option<(InternalEvent, Option<String>)>>` to `PersistenceStore` as default-implemented methods that delegate to the existing `enqueue`/`dequeue_next`, discarding/absent-ing the correlator. Added a `RecordingPersistenceStore` test double (deliberately *not* overriding the new methods) to pin down the default-delegation contract: enqueuing with a correlator via the default still calls through to plain `enqueue` (correlator ignored), and dequeuing via the default always reports an absent correlator. This is the mechanism that keeps `RecordingStore` (`requests-handler`) and `serve.rs` compiling with zero changes — confirmed later with a `git diff dev-agent --stat` showing no diff on those files.
+
+**Cycle 2 (`crates/persistence/src/inbound.rs`):** Changed the inner `VecDeque<InternalEvent>` to `VecDeque<(InternalEvent, Option<String>)>`; `enqueue` takes an extra `job_id: Option<String>` and `dequeue_next` returns the tuple. Updated all pre-existing tests to the new two-argument/tuple-return shape (no behavior change intended there) and added new tests for correlator round-trip, absent-correlator dequeue, FIFO-with-correlators, and capacity-with-a-correlator. This also required a same-cycle wiring fix in `lib.rs` (the actor's `Command::Enqueue`/`Command::DequeueNext` shapes and the `Handle`'s plain `enqueue`/`dequeue_next` impl) purely to keep the crate compiling against the new `InboundQueue` signature — done with `job_id: None` on the plain path, no new externally-visible behavior yet.
+
+**Cycle 3 (`crates/persistence/src/lib.rs`):** Overrode `enqueue_with_job_id`/`dequeue_next_with_job_id` on `Handle` to thread the real job id through `Command::Enqueue`/`Command::DequeueNext` instead of falling through to the trait default (which would silently drop it). Wrote failing tests first (they failed at the assertion level, correlator coming back `None` instead of `Some("job-1")`, confirming the default's limitation), then added the overrides to make them pass. Added FIFO- and capacity-preservation tests specifically exercising the correlator-carrying path.
+
+Nothing was tried and rejected — the design tracked ADR-013 and the task's stated approach (additive default methods) directly, so there wasn't a competing alternative worth exploring. One judgment call: extended the trait method names to `enqueue_with_job_id`/`dequeue_next_with_job_id` (not specified verbatim in the task) since the task only said "correlator-carrying methods" — this seemed the most self-documenting choice consistent with `job_id: Option<String>` already used as `RequestContext::context_id`'s underlying type in the codebase.
+
+Verification: `cargo test -p bob-core --lib ports::tests`, `cargo test -p persistence --lib inbound`, and `cargo test -p persistence --lib tests::` all confirmed red→green per cycle. Final `cargo test --workspace` — all 17 test binaries `ok`, 0 failed. `cargo build -p bob` succeeds. `cargo fmt --all -- --check` clean. `git diff dev-agent --stat -- crates/bob/src/serve.rs crates/requests-handler/src/handler.rs` is empty, confirming AC-3's "compiling unchanged" claim; both crates' existing test suites still pass (`bob`: 128 passed, `requests-handler`: 15 passed).
+
+What remains: nothing within this task's scope. The periodic dispatcher's actual consumption of the correlator (resolving `cwd` from the live schedule table, per ADR-013) and updating the `serve.rs` call sites are explicitly deferred to T-126, as stated in the task description.
+
+**Obstacles Encountered:** None. Sandbox and toolchain worked as expected for these crates (no Unix-domain-socket tests were touched by this task).
+
 ## Review
