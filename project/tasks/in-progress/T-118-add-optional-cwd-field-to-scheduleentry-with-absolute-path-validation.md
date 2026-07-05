@@ -60,4 +60,24 @@ cd the-intern/service && cargo test -p bob-core schedule && cargo build -p admin
 
 ## Work Log
 
+### Session 1 — 2026-07-05
+
+Implemented T-118 end-to-end via four TDD cycles, all on `task/T-118-add-optional-cwd-field-to-scheduleentry-with-absolute-path-validation`.
+
+Cycle 1 (AC-1): Added `cwd: Option<String>` to `ScheduleEntry` with `#[serde(default, skip_serializing_if = "Option::is_none")]`, updated the `with_prompt`/`with_file` constructors to set `cwd: None`, and added a `with_cwd(mut self, cwd) -> Self` builder that consumes and returns an entry (chains onto `with_prompt`/`with_file`, matching the task's "attach a cwd to a built entry" framing for T-124's future use). Wrote tests first (`with_cwd_sets_the_cwd_field_on_a_built_entry`, `entry_without_cwd_omits_cwd_key_when_serialised`, `round_trips_an_entry_with_cwd_through_json_store`) and confirmed a compile-error red state before adding the field/method. Also had to patch two pre-existing struct-literal tests in the same file (`validate_rejects_entry_setting_both_prompt_and_file`, `validate_rejects_entry_setting_neither_prompt_nor_file`) with `cwd: None` since the struct isn't `#[non_exhaustive]`.
+
+Cycle 2 (AC-2/AC-3): Added a `cwd` check block in `validate_schedule_store` — blank cwd rejected with an entry-id-scoped message, relative cwd rejected the same way, mirroring the existing `file` absolute-path check exactly (same trim/absolute logic, same error-message style). Tests `validate_accepts_an_entry_with_an_absolute_cwd`, `validate_rejects_a_relative_cwd_and_names_the_entry_id`, `validate_rejects_a_blank_cwd` were written first and confirmed failing (assertion panics, not compile errors, since the field already existed from cycle 1) before adding the validation block. Updated the `validate_schedule_store` and `ScheduleEntry` doc comments to describe the new invariant.
+
+Cycle 3 (AC-4): Wrote `read_schedule_store_parses_entries_written_before_cwd_existed`, seeding a hand-written JSON store with no `cwd` key and asserting version stays `1` and the loaded entry's `cwd` is `None`. This test passed immediately — the `#[serde(default)]` attribute from cycle 1 already provides full backward compatibility. Per the tdd skill's guidance for a test that passes on first run, kept it (it is not tautological — it locks in real, load-bearing behavior against regression) and committed it as a standalone test-only commit rather than manufacturing artificial failure.
+
+Cycle 4 (mechanical `dispatch.rs` fix): Confirmed `cargo build -p admin-rpc -p bob` failed with `E0063: missing field cwd` at the one `ScheduleEntry { .. }` literal in `schedule.add`'s handler (~line 682), exactly as flagged in the task description. Added `cwd: None` there; build went green. This is explicitly a placeholder per the task — T-124 will replace it with real `with_cwd` wiring once the CLI/RPC `cwd` parameter exists.
+
+Verification: ran the task's exact command (`cargo test -p bob-core schedule && cargo build -p admin-rpc -p bob`) after every cycle, and `cargo test --workspace` at the end — all green, no regressions in `scheduler-adapter`, `admin-rpc`, `bob`, or any other crate. `cargo fmt --all -- --check` is clean.
+
+Nothing was tried and rejected beyond the initial API-shape question for `with_cwd` (constructor-style `with_cwd(id, cron, cwd)` vs. builder-style `.with_cwd(cwd)` chained onto an existing entry) — chose the builder form because the task explicitly says "attach a cwd to a built entry," which only the chained/consuming-`self` form satisfies naturally.
+
+Nothing remains for T-118 itself. Follow-on tasks (T-124 for the real `--cwd`/`schedule.add` wiring, T-127 for the fire-time missing-directory skip+warn, T-125/T-126/T-129/T-130 per the spec's changelog) depend on this field and validation and can now proceed.
+
+**Obstacles Encountered:** Adding the `cwd` field turned `ScheduleEntry`'s two struct literals inside `schedule.rs`'s own test module into compile errors (non-exhaustive literal construction), which needed `cwd: None` added — a small, in-scope consequence of the field addition, not a boundary violation. AC-4 turned out to already hold as a natural consequence of the `#[serde(default, skip_serializing_if = "Option::is_none")]` attribute added in cycle 1 — the test for it passed immediately rather than failing first; kept it as a regression lock per the tdd skill's guidance rather than forcing an artificial red state.
+
 ## Review
