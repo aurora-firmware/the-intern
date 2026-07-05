@@ -736,6 +736,40 @@ mod tests {
         std::fs::remove_dir_all(&worker_cwd).ok();
     }
 
+    // AC-3 (T-122): while a cwd-scoped dedicated worker is active it counts
+    // against max_processes, so a subsequent acquisition of any kind is
+    // refused until the dedicated worker is removed (killed or reaped).
+    #[tokio::test(flavor = "current_thread")]
+    async fn acquire_session_with_cwd_counts_toward_max_processes_while_active() {
+        let cfg = test_config(
+            "sh",
+            &["-c", "trap 'exit 0' TERM; while :; do sleep 1; done"],
+            0,
+            1,
+        );
+        let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
+
+        let worker_cwd = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-dedicated-cwd-bound-{}",
+            SessionId::new()
+        ));
+        std::fs::create_dir_all(&worker_cwd).expect("create dedicated cwd should succeed");
+
+        pool.acquire_session_with_cwd(worker_cwd.clone())
+            .expect("first cwd-scoped acquisition should succeed within max_processes");
+
+        let error = pool
+            .acquire_session()
+            .expect_err("acquisition should be refused while dedicated worker fills max_processes");
+
+        assert!(
+            matches!(error, ServiceError::ChildProcess { .. }),
+            "expected ServiceError::ChildProcess, got: {error:?}"
+        );
+
+        std::fs::remove_dir_all(&worker_cwd).ok();
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn reap_idle_and_surplus_terminates_surplus_warm_workers_above_configured_pool_size() {
         let cfg = test_config(
