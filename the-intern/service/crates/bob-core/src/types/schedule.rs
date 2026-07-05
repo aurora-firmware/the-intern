@@ -465,6 +465,8 @@ pub struct ScheduleEntry {
     pub prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 impl ScheduleEntry {
@@ -479,6 +481,7 @@ impl ScheduleEntry {
             cron: cron.into(),
             prompt: Some(prompt.into()),
             file: None,
+            cwd: None,
         }
     }
 
@@ -495,7 +498,16 @@ impl ScheduleEntry {
             cron: cron.into(),
             prompt: None,
             file: Some(file.into()),
+            cwd: None,
         }
+    }
+
+    /// Attach a working directory to an already-built schedule entry. `cwd`
+    /// should be a non-blank absolute path; [`validate_schedule_store`] rejects
+    /// blank or relative values.
+    pub fn with_cwd(mut self, cwd: impl Into<String>) -> Self {
+        self.cwd = Some(cwd.into());
+        self
     }
 }
 
@@ -1159,6 +1171,7 @@ mod tests {
             cron: "* * * * *".to_owned(),
             prompt: Some("p".to_owned()),
             file: Some("/abs/p.txt".to_owned()),
+            cwd: None,
         };
         let err =
             validate_schedule_store(&[bad]).expect_err("both prompt and file must be rejected");
@@ -1176,6 +1189,7 @@ mod tests {
             cron: "* * * * *".to_owned(),
             prompt: None,
             file: None,
+            cwd: None,
         };
         let err =
             validate_schedule_store(&[bad]).expect_err("neither prompt nor file must be rejected");
@@ -1214,6 +1228,43 @@ mod tests {
     fn validate_accepts_a_file_backed_entry_with_absolute_path() {
         validate_schedule_store(&[ScheduleEntry::with_file("x", "* * * * *", "/abs/p.txt")])
             .expect("absolute file-backed entry must pass");
+    }
+
+    // --- optional per-entry cwd (CR-005 / T-118) ---
+
+    #[test]
+    fn with_cwd_sets_the_cwd_field_on_a_built_entry() {
+        let built = ScheduleEntry::with_prompt("x", "* * * * *", "p").with_cwd("/srv/work");
+        assert_eq!(built.cwd.as_deref(), Some("/srv/work"));
+    }
+
+    #[test]
+    fn entry_without_cwd_omits_cwd_key_when_serialised() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+
+        write_schedule_store(&path, &[entry("no-cwd")]).expect("write must succeed");
+
+        let raw = std::fs::read_to_string(&path).expect("read raw");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+        assert!(
+            v["entries"][0].get("cwd").is_none(),
+            "cwd key must be omitted when unset"
+        );
+    }
+
+    #[test]
+    fn round_trips_an_entry_with_cwd_through_json_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+        let original =
+            vec![ScheduleEntry::with_prompt("job-cwd", "* * * * *", "run")
+                .with_cwd("/srv/workspaces/a")];
+
+        write_schedule_store(&path, &original).expect("write must succeed");
+        let loaded = read_schedule_store(&path).expect("read must succeed");
+
+        assert_eq!(loaded[0].cwd.as_deref(), Some("/srv/workspaces/a"));
     }
 
     #[test]
