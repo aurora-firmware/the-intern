@@ -67,8 +67,14 @@ pub enum ScheduleCommand {
         id: String,
         #[arg(long)]
         cron: String,
+        /// Literal prompt text sent when the job fires. Mutually exclusive with
+        /// `--file`.
+        #[arg(long, conflicts_with = "file", required_unless_present = "file")]
+        prompt: Option<String>,
+        /// Path to a file whose contents are used as the prompt, read fresh at
+        /// each run. Mutually exclusive with `--prompt`.
         #[arg(long)]
-        prompt: String,
+        file: Option<String>,
     },
     Remove {
         #[arg(long)]

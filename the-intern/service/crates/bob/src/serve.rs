@@ -884,11 +884,7 @@ pub mod tests {
         use bob_core::types::ScheduleEntry;
 
         let tmp = tempfile::tempdir().expect("temp dir");
-        let entry = ScheduleEntry {
-            id: "json-store-job".to_owned(),
-            cron: "0 9 * * *".to_owned(),
-            prompt: "from json store".to_owned(),
-        };
+        let entry = ScheduleEntry::with_prompt("json-store-job", "0 9 * * *", "from json store");
         let cfg = BobConfig {
             admin_sock_path: tmp.path().join("admin.sock"),
             extension_sock_path: tmp.path().join("extension.sock"),

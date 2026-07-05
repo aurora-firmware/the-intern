@@ -26,7 +26,14 @@ pub trait DispatchRuntime {
     fn sessions_kill(&self, json: bool, id: &str) -> ServiceResult<()>;
     fn audit_tail(&self, json: bool, filters: Vec<AuditFilterKind>) -> ServiceResult<()>;
     fn policy_reload(&self, json: bool) -> ServiceResult<()>;
-    fn schedule_add(&self, json: bool, id: &str, cron: &str, prompt: &str) -> ServiceResult<()>;
+    fn schedule_add(
+        &self,
+        json: bool,
+        id: &str,
+        cron: &str,
+        prompt: Option<&str>,
+        file: Option<&str>,
+    ) -> ServiceResult<()>;
     fn schedule_remove(&self, json: bool, id: &str) -> ServiceResult<()>;
     fn schedule_list(&self, json: bool) -> ServiceResult<()>;
     fn schedule_reload(&self, json: bool) -> ServiceResult<()>;
@@ -69,8 +76,15 @@ impl DispatchRuntime for ProductionRuntime {
         cli::commands::policy_reload(json)
     }
 
-    fn schedule_add(&self, json: bool, id: &str, cron: &str, prompt: &str) -> ServiceResult<()> {
-        cli::commands::schedule_add(json, id, cron, prompt)
+    fn schedule_add(
+        &self,
+        json: bool,
+        id: &str,
+        cron: &str,
+        prompt: Option<&str>,
+        file: Option<&str>,
+    ) -> ServiceResult<()> {
+        cli::commands::schedule_add(json, id, cron, prompt, file)
     }
 
     fn schedule_remove(&self, json: bool, id: &str) -> ServiceResult<()> {
@@ -112,9 +126,12 @@ pub async fn run_cli_with_runtime(runtime: &impl DispatchRuntime, cli: Cli) -> S
             PolicyCommand::Reload => runtime.policy_reload(cli.json),
         },
         Command::Schedule { command } => match command {
-            ScheduleCommand::Add { id, cron, prompt } => {
-                runtime.schedule_add(cli.json, &id, &cron, &prompt)
-            }
+            ScheduleCommand::Add {
+                id,
+                cron,
+                prompt,
+                file,
+            } => runtime.schedule_add(cli.json, &id, &cron, prompt.as_deref(), file.as_deref()),
             ScheduleCommand::Remove { id } => runtime.schedule_remove(cli.json, &id),
             ScheduleCommand::List { json } => runtime.schedule_list(json),
             ScheduleCommand::Reload => runtime.schedule_reload(cli.json),
@@ -192,7 +209,8 @@ mod tests {
             _json: bool,
             _id: &str,
             _cron: &str,
-            _prompt: &str,
+            _prompt: Option<&str>,
+            _file: Option<&str>,
         ) -> ServiceResult<()> {
             Err(ServiceError::NotImplemented)
         }

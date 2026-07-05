@@ -434,6 +434,11 @@ Or set it via environment variable: `BOB_SCHEDULE_STORE_PATH`.
       "id": "check-email",
       "cron": "*/15 * * * *",
       "prompt": "Check the inbox and summarise any unread messages."
+    },
+    {
+      "id": "daily-report",
+      "cron": "0 9 * * *",
+      "file": "/opt/bob/prompts/daily-report.txt"
     }
   ]
 }
@@ -449,13 +454,30 @@ no longer read by `bob serve`. Entries written to `config.toml` under
 `[[schedule]]` are silently ignored. Use `schedules.json` and the
 `bob schedule` subcommands instead.
 
-Each entry in the store requires three fields:
+Each entry has an `id`, a `cron`, and **exactly one** prompt source — either a
+`prompt` (literal text) or a `file` (an absolute path):
 
-| Field    | Type   | Description                                    |
-|----------|--------|------------------------------------------------|
-| `id`     | string | Unique identifier for the job (non-empty)      |
-| `cron`   | string | 5-field cron expression (see below)            |
-| `prompt` | string | The pi-agent prompt text to run on each tick   |
+| Field    | Type   | Description                                                                     |
+|----------|--------|---------------------------------------------------------------------------------|
+| `id`     | string | Unique identifier for the job (non-empty)                                        |
+| `cron`   | string | 5-field cron expression (see below)                                             |
+| `prompt` | string | Literal pi-agent prompt text run on each tick                                    |
+| `file`   | string | Absolute path to a file whose contents are the prompt, read fresh on each tick   |
+
+Provide exactly one of `prompt` or `file`. Setting both, setting neither, or
+giving `file` a relative path is rejected when the store is loaded (the whole
+store fails to load rather than skipping the bad entry).
+
+**File-backed prompts.** When an entry uses `file`, bob reads that file's
+contents *fresh every time the job fires*, so editing the file changes what
+future runs send without touching the schedule. If the file is missing,
+unreadable, or blank at fire time, that tick is skipped and a warning is logged.
+
+> **Security:** unlike `schedules.json` itself, a `file` prompt is read with no
+> ownership or permission check — a deliberate relaxation of the ADR-012 trust
+> boundary. Because scheduled jobs bypass `[policy].admitted_users`, a prompt
+> file that another user can write is an injection path into a trusted job. Keep
+> prompt files under the same owner-only protection as the schedule store.
 
 #### Cron expression format
 
@@ -510,13 +532,29 @@ bob schedule add \
   --prompt "Check the inbox and summarise any unread messages."
 ```
 
+Or read the prompt from a file, re-read fresh on every run:
+
+```bash
+bob schedule add \
+  --id "daily-report" \
+  --cron "0 9 * * *" \
+  --file ./prompts/daily-report.txt
+```
+
 Flags:
 
-| Flag       | Required | Description                        |
-|------------|----------|------------------------------------|
-| `--id`     | yes      | Unique job identifier              |
-| `--cron`   | yes      | 5-field cron expression            |
-| `--prompt` | yes      | pi-agent prompt text for each tick |
+| Flag       | Required        | Description                                            |
+|------------|-----------------|--------------------------------------------------------|
+| `--id`     | yes             | Unique job identifier                                  |
+| `--cron`   | yes             | 5-field cron expression                                |
+| `--prompt` | one of these    | Literal pi-agent prompt text for each tick             |
+| `--file`   | one of these    | Path to a file whose contents are the prompt           |
+
+Provide exactly one of `--prompt` or `--file`; they are mutually exclusive. A
+`--file` path is resolved to an absolute path against your shell's working
+directory (so relative paths work) and **must exist when you run the command** —
+a missing file is rejected immediately rather than stored. The absolute path is
+what gets recorded, and its contents are read fresh at each run.
 
 #### `bob schedule remove`
 

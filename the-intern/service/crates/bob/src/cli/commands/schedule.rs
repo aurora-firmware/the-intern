@@ -7,10 +7,63 @@ use crate::config::BobConfig;
 
 use super::{call_admin, invalid_request_error, load_config, run_async, write_json_line};
 
-pub(super) fn run_add(json_output: bool, id: &str, cron: &str, prompt: &str) -> ServiceResult<()> {
+/// The resolved prompt source for `schedule add`, mapping to exactly one of the
+/// mutually exclusive `prompt`/`file` RPC parameters.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum AddSource {
+    Prompt(String),
+    File(String),
+}
+
+/// Resolve the `--prompt`/`--file` CLI arguments into an [`AddSource`].
+///
+/// `--file` is canonicalised to an absolute path against the caller's working
+/// directory (so a relative path resolves against the operator's shell), and the
+/// absolute path is what gets stored — the `bob serve` process re-reads it from
+/// its own working directory at each fire, where only an absolute path resolves
+/// reliably. A missing path, a non-file, or a non-UTF-8 path is an error so the
+/// operator finds out at add time rather than silently at fire time. Exactly one
+/// of `--prompt`/`--file` must be present (clap also enforces this).
+pub(super) fn resolve_add_source(
+    prompt: Option<&str>,
+    file: Option<&str>,
+) -> ServiceResult<AddSource> {
+    match (prompt, file) {
+        (Some(p), None) => Ok(AddSource::Prompt(p.to_owned())),
+        (None, Some(f)) => {
+            let abs = std::fs::canonicalize(f).map_err(|e| {
+                invalid_request_error(format!("--file {f:?} could not be resolved: {e}"))
+            })?;
+            if !abs.is_file() {
+                return Err(invalid_request_error(format!(
+                    "--file {f:?} is not a regular file"
+                )));
+            }
+            let abs = abs.to_str().ok_or_else(|| {
+                invalid_request_error(format!("--file {f:?} resolves to a non-UTF-8 path"))
+            })?;
+            Ok(AddSource::File(abs.to_owned()))
+        }
+        (Some(_), Some(_)) => Err(invalid_request_error(
+            "--prompt and --file are mutually exclusive",
+        )),
+        (None, None) => Err(invalid_request_error("--prompt or --file is required")),
+    }
+}
+
+pub(super) fn run_add(
+    json_output: bool,
+    id: &str,
+    cron: &str,
+    prompt: Option<&str>,
+    file: Option<&str>,
+) -> ServiceResult<()> {
+    // Resolve (and canonicalise a --file) before touching the service so a bad
+    // path fails fast, before any RPC round-trip.
+    let source = resolve_add_source(prompt, file)?;
     let cfg = load_config()?;
     let mut out = io::stdout();
-    run_add_with_config(json_output, id, cron, prompt, &cfg, &mut out)
+    run_add_with_config(json_output, id, cron, source, &cfg, &mut out)
 }
 
 pub(super) fn run_remove(json_output: bool, id: &str) -> ServiceResult<()> {
@@ -35,11 +88,11 @@ pub(super) fn run_add_with_config(
     json_output: bool,
     id: &str,
     cron: &str,
-    prompt: &str,
+    source: AddSource,
     cfg: &BobConfig,
     out: &mut impl Write,
 ) -> ServiceResult<()> {
-    run_add_with_caller(json_output, id, cron, prompt, out, |method, params| {
+    run_add_with_caller(json_output, id, cron, source, out, |method, params| {
         run_async(call_admin(cfg, method, params))
     })
 }
@@ -79,14 +132,15 @@ fn run_add_with_caller(
     json_output: bool,
     id: &str,
     cron: &str,
-    prompt: &str,
+    source: AddSource,
     out: &mut impl Write,
     mut caller: impl FnMut(&str, Value) -> ServiceResult<Value>,
 ) -> ServiceResult<()> {
-    let response = caller(
-        "schedule.add",
-        json!({ "id": id, "cron": cron, "prompt": prompt }),
-    )?;
+    let params = match &source {
+        AddSource::Prompt(prompt) => json!({ "id": id, "cron": cron, "prompt": prompt }),
+        AddSource::File(file) => json!({ "id": id, "cron": cron, "file": file }),
+    };
+    let response = caller("schedule.add", params)?;
 
     if json_output {
         return write_json_line(out, &response);
@@ -155,11 +209,17 @@ fn write_human_schedule(out: &mut impl Write, response: &Value) -> ServiceResult
             .get("cron")
             .and_then(|v| v.as_str())
             .ok_or_else(|| invalid_request_error("job cron in schedule.list must be a string"))?;
-        let prompt = job
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| invalid_request_error("job prompt in schedule.list must be a string"))?;
-        writeln!(out, "{id}  {cron}  {prompt}")
+        // An entry carries exactly one of `prompt` (literal) or `file` (path).
+        let source = if let Some(prompt) = job.get("prompt").and_then(|v| v.as_str()) {
+            format!("prompt: {prompt}")
+        } else if let Some(file) = job.get("file").and_then(|v| v.as_str()) {
+            format!("file: {file}")
+        } else {
+            return Err(invalid_request_error(
+                "job in schedule.list must have a prompt or file",
+            ));
+        };
+        writeln!(out, "{id}  {cron}  {source}")
             .map_err(|e| invalid_request_error(format!("failed to write schedule output: {e}")))?;
     }
     Ok(())
@@ -170,7 +230,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        run_add_with_caller, run_list_with_caller, run_reload_with_caller, run_remove_with_caller,
+        resolve_add_source, run_add_with_caller, run_list_with_caller, run_reload_with_caller,
+        run_remove_with_caller, AddSource,
     };
 
     #[test]
@@ -180,7 +241,7 @@ mod tests {
             false,
             "foo",
             "* * * * *",
-            "check mail",
+            AddSource::Prompt("check mail".to_owned()),
             &mut out,
             |method, params| {
                 assert_eq!(method, "schedule.add");
@@ -202,9 +263,14 @@ mod tests {
     #[test]
     fn schedule_add_json_output_is_single_json_document() {
         let mut out = Vec::new();
-        run_add_with_caller(true, "foo", "* * * * *", "check mail", &mut out, |_, _| {
-            Ok(json!({"ok": true}))
-        })
+        run_add_with_caller(
+            true,
+            "foo",
+            "* * * * *",
+            AddSource::Prompt("check mail".to_owned()),
+            &mut out,
+            |_, _| Ok(json!({"ok": true})),
+        )
         .expect("add succeeds");
 
         assert_eq!(String::from_utf8(out).expect("utf8"), "{\"ok\":true}\n");
@@ -291,5 +357,83 @@ mod tests {
             .expect("reload succeeds");
 
         assert_eq!(String::from_utf8(out).expect("utf8"), "{\"ok\":true}\n");
+    }
+
+    // --- file-backed prompts (--file) ---
+
+    #[test]
+    fn schedule_add_sends_file_param_for_a_file_source() {
+        let mut out = Vec::new();
+        run_add_with_caller(
+            false,
+            "foo",
+            "0 9 * * *",
+            AddSource::File("/abs/prompt.txt".to_owned()),
+            &mut out,
+            |method, params| {
+                assert_eq!(method, "schedule.add");
+                assert_eq!(
+                    params,
+                    json!({"id": "foo", "cron": "0 9 * * *", "file": "/abs/prompt.txt"})
+                );
+                Ok(json!({"ok": true}))
+            },
+        )
+        .expect("add succeeds");
+
+        assert_eq!(
+            String::from_utf8(out).expect("utf8"),
+            "schedule added: foo\n"
+        );
+    }
+
+    #[test]
+    fn resolve_add_source_returns_prompt_for_prompt_arg() {
+        let src = resolve_add_source(Some("check mail"), None).expect("prompt resolves");
+        assert_eq!(src, AddSource::Prompt("check mail".to_owned()));
+    }
+
+    #[test]
+    fn resolve_add_source_canonicalizes_existing_file_to_absolute() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("prompt.txt");
+        std::fs::write(&path, "file contents").expect("write");
+
+        let src = resolve_add_source(None, Some(path.to_str().expect("utf8 path")))
+            .expect("existing file resolves");
+        match src {
+            AddSource::File(abs) => {
+                assert!(
+                    std::path::Path::new(&abs).is_absolute(),
+                    "resolved path must be absolute: {abs}"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(&abs).expect("read resolved path"),
+                    "file contents"
+                );
+            }
+            other => panic!("expected AddSource::File, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_add_source_errors_on_missing_file() {
+        let err = resolve_add_source(None, Some("/nonexistent/abs/does-not-exist.txt"))
+            .expect_err("missing file must error");
+        assert!(
+            err.to_string().to_lowercase().contains("file"),
+            "message must mention the file: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_add_source_errors_when_neither_prompt_nor_file() {
+        resolve_add_source(None, None).expect_err("neither prompt nor file must error");
+    }
+
+    #[test]
+    fn resolve_add_source_errors_when_both_prompt_and_file() {
+        resolve_add_source(Some("hi"), Some("/abs/p.txt"))
+            .expect_err("both prompt and file must error");
     }
 }

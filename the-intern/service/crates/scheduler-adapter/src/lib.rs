@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::path::PathBuf;
+
 use bob_core::types::{
     ChannelId, DeliveryKind, InternalEvent, RequestContext, ScheduleEntry, UserId,
 };
@@ -73,6 +75,73 @@ struct JobState {
     entry: ScheduleEntry,
     channel_id: ChannelId,
     user_id: UserId,
+}
+
+/// The resolved source of a job's prompt, derived once from a [`ScheduleEntry`]
+/// when the job table is built.
+///
+/// `Text` is literal prompt text sent verbatim. `File` is an absolute path
+/// whose contents are read *fresh at each fire* by [`resolve_payload`], so
+/// editing the file changes what future runs send.
+#[derive(Clone, Debug, PartialEq)]
+enum PromptSource {
+    Text(String),
+    File(PathBuf),
+}
+
+/// Derive the [`PromptSource`] for a schedule entry.
+///
+/// A `file` entry becomes [`PromptSource::File`]; otherwise the entry's literal
+/// `prompt` (or an empty string when absent) becomes [`PromptSource::Text`].
+/// The schedule store guarantees exactly one of the two is set (see
+/// `validate_schedule_store`), so the fallback only guards a malformed
+/// in-memory table.
+fn prompt_source(entry: &ScheduleEntry) -> PromptSource {
+    if let Some(file) = &entry.file {
+        PromptSource::File(PathBuf::from(file))
+    } else {
+        PromptSource::Text(entry.prompt.clone().unwrap_or_default())
+    }
+}
+
+/// Resolve a [`PromptSource`] into the prompt text to send for one fire.
+///
+/// `Text` is returned verbatim. `File` is read from disk *now* (a small,
+/// infrequent synchronous read on the per-job tick task): its
+/// trimmed-non-empty contents are sent, while a missing, unreadable, or blank
+/// file returns `None` so the caller skips this fire and logs a warning.
+///
+/// # Security (ADR-012)
+///
+/// The prompt file is read with no ownership/permission check — a deliberate,
+/// documented relaxation of the schedule-store trust boundary. A file writable
+/// by another principal can therefore inject a prompt into a scheduled job that
+/// bypasses `[policy].admitted_users`; operators must keep prompt files under
+/// the same owner-only protection as the schedule store itself.
+fn resolve_payload(source: &PromptSource, job_id: &str) -> Option<String> {
+    match source {
+        PromptSource::Text(text) => Some(text.clone()),
+        PromptSource::File(path) => match std::fs::read_to_string(path) {
+            Ok(contents) if !contents.trim().is_empty() => Some(contents),
+            Ok(_) => {
+                tracing::warn!(
+                    job_id = %job_id,
+                    path = %path.display(),
+                    "scheduled prompt file is blank; skipping this fire"
+                );
+                None
+            }
+            Err(err) => {
+                tracing::warn!(
+                    job_id = %job_id,
+                    path = %path.display(),
+                    error = %err,
+                    "failed to read scheduled prompt file; skipping this fire"
+                );
+                None
+            }
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +229,7 @@ async fn run_job_tick_loop(
     intake: IntakeHandle,
     cron: croner::Cron,
     job_id: String,
-    job_prompt: String,
+    source: PromptSource,
     channel_id: ChannelId,
     user_id: UserId,
 ) {
@@ -194,10 +263,17 @@ async fn run_job_tick_loop(
 
         tokio::time::sleep(duration_to_next).await;
 
+        // Resolve the prompt for this fire. A file-backed job reads its file
+        // fresh here; a missing, unreadable, or blank file skips this fire
+        // (a warning is logged inside `resolve_payload`).
+        let Some(payload) = resolve_payload(&source, &job_id) else {
+            continue;
+        };
+
         // Fire: construct and submit the periodic event.
         let event = InternalEvent {
             kind: DeliveryKind::Periodic,
-            payload: job_prompt.clone(),
+            payload,
         };
         let context = RequestContext {
             sender: user_id,
@@ -264,12 +340,11 @@ fn spawn_job_tasks(intake: &IntakeHandle, jobs: &[JobState]) -> Vec<tokio::task:
                 );
                 let intake_clone = intake.clone();
                 let job_id = job.entry.id.clone();
-                let job_prompt = job.entry.prompt.clone();
+                let source = prompt_source(&job.entry);
                 let channel_id = job.channel_id;
                 let user_id = job.user_id;
                 Some(tokio::spawn(async move {
-                    run_job_tick_loop(intake_clone, cron, job_id, job_prompt, channel_id, user_id)
-                        .await;
+                    run_job_tick_loop(intake_clone, cron, job_id, source, channel_id, user_id).await;
                 }))
             }
             Err(err) => {
@@ -340,9 +415,10 @@ pub fn start(intake: IntakeHandle, entries: Vec<ScheduleEntry>) -> (ReloadHandle
 
 #[cfg(test)]
 mod tests {
-    use super::next_cron_occurrence;
+    use super::{next_cron_occurrence, prompt_source, resolve_payload, PromptSource};
     use bob_core::types::{DeliveryKind, InternalEvent, RequestContext, ScheduleEntry};
     use requests_handler::{start_with, Config as QueueConfig};
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tokio::sync::watch;
@@ -437,11 +513,7 @@ mod tests {
         let job_id = "daily-report".to_owned();
         let job_prompt = "Generate the daily report".to_owned();
         // "* * * * *" fires every minute; advancing 61 seconds triggers at least one tick.
-        let entry = ScheduleEntry {
-            id: job_id.clone(),
-            cron: "* * * * *".to_owned(),
-            prompt: job_prompt.clone(),
-        };
+        let entry = ScheduleEntry::with_prompt(job_id.clone(), "* * * * *", job_prompt.clone());
         let entries = vec![entry];
 
         let (_reload_handle, _scheduler_join) = crate::start(intake, entries);
@@ -499,11 +571,7 @@ mod tests {
 
         let (intake, intake_task, intake_cancel, collected) = make_intake_with_collector();
 
-        let entry = ScheduleEntry {
-            id: "repeating-job".to_owned(),
-            cron: "* * * * *".to_owned(),
-            prompt: "repeat".to_owned(),
-        };
+        let entry = ScheduleEntry::with_prompt("repeating-job", "* * * * *", "repeat");
 
         let (_reload_handle, _scheduler_join) = crate::start(intake, vec![entry]);
 
@@ -555,21 +623,13 @@ mod tests {
     // breaking policy rules that reference a job's ChannelId/UserId.
     #[test]
     fn build_job_states_derives_stable_identities_across_rebuilds() {
-        let entry = ScheduleEntry {
-            id: "job-a".to_owned(),
-            cron: "* * * * *".to_owned(),
-            prompt: "a".to_owned(),
-        };
+        let entry = ScheduleEntry::with_prompt("job-a", "* * * * *", "a");
 
         let first = super::build_job_states(vec![entry.clone()]);
         // A reload that adds an unrelated job still rebuilds job-a's state.
         let second = super::build_job_states(vec![
             entry,
-            ScheduleEntry {
-                id: "job-b".to_owned(),
-                cron: "* * * * *".to_owned(),
-                prompt: "b".to_owned(),
-            },
+            ScheduleEntry::with_prompt("job-b", "* * * * *", "b"),
         ]);
 
         assert_eq!(
@@ -617,11 +677,7 @@ mod tests {
             cancel_rx,
         );
 
-        let entry = ScheduleEntry {
-            id: "blocked-job".to_owned(),
-            cron: "* * * * *".to_owned(),
-            prompt: "probe".to_owned(),
-        };
+        let entry = ScheduleEntry::with_prompt("blocked-job", "* * * * *", "probe");
         let (_reload_handle, scheduler_join) = crate::start(intake, vec![entry]);
 
         // Yield first to let the actor start and register timers.
@@ -702,11 +758,7 @@ mod tests {
         );
 
         // After reload with one entry, the receiver must reflect the new table.
-        let new_entry = ScheduleEntry {
-            id: "job-1".to_owned(),
-            cron: "* * * * *".to_owned(),
-            prompt: "run job".to_owned(),
-        };
+        let new_entry = ScheduleEntry::with_prompt("job-1", "* * * * *", "run job");
         reload_handle
             .reload(vec![new_entry.clone()])
             .expect("reload must succeed");
@@ -747,5 +799,139 @@ mod tests {
         );
 
         join_handle.abort();
+    }
+
+    // --- fire-time prompt resolution (file-backed prompts) ---
+
+    #[test]
+    fn resolve_payload_returns_text_verbatim() {
+        let src = PromptSource::Text("literal prompt".to_owned());
+        assert_eq!(
+            resolve_payload(&src, "job").as_deref(),
+            Some("literal prompt")
+        );
+    }
+
+    #[test]
+    fn resolve_payload_reads_file_contents_fresh_each_call() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("prompt.txt");
+        std::fs::write(&path, "first contents").expect("write");
+        let src = PromptSource::File(path.clone());
+        assert_eq!(
+            resolve_payload(&src, "job").as_deref(),
+            Some("first contents")
+        );
+
+        // Editing the file changes what a later fire reads (dynamic re-read).
+        std::fs::write(&path, "second contents").expect("rewrite");
+        assert_eq!(
+            resolve_payload(&src, "job").as_deref(),
+            Some("second contents")
+        );
+    }
+
+    #[test]
+    fn resolve_payload_skips_missing_file() {
+        let src = PromptSource::File(PathBuf::from("/nonexistent/abs/does-not-exist-xyz.txt"));
+        assert_eq!(resolve_payload(&src, "job"), None);
+    }
+
+    #[test]
+    fn resolve_payload_skips_blank_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("blank.txt");
+        std::fs::write(&path, "   \n\t").expect("write blank");
+        assert_eq!(resolve_payload(&PromptSource::File(path), "job"), None);
+    }
+
+    #[test]
+    fn prompt_source_maps_file_entry_to_file_variant() {
+        let entry = ScheduleEntry::with_file("j", "* * * * *", "/abs/p.txt");
+        assert_eq!(
+            prompt_source(&entry),
+            PromptSource::File(PathBuf::from("/abs/p.txt"))
+        );
+    }
+
+    #[test]
+    fn prompt_source_maps_prompt_entry_to_text_variant() {
+        let entry = ScheduleEntry::with_prompt("j", "* * * * *", "hello");
+        assert_eq!(
+            prompt_source(&entry),
+            PromptSource::Text("hello".to_owned())
+        );
+    }
+
+    // AC: a file-backed job fires with the file's *contents* as the payload.
+    #[tokio::test(flavor = "current_thread")]
+    async fn file_backed_job_fires_with_file_contents_as_payload() {
+        tokio::time::pause();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("prompt.txt");
+        std::fs::write(&path, "contents from the prompt file").expect("write prompt file");
+
+        let (intake, intake_task, intake_cancel, collected) = make_intake_with_collector();
+
+        let entry =
+            ScheduleEntry::with_file("file-job", "* * * * *", path.to_str().expect("utf8 path"));
+        let (_reload_handle, _scheduler_join) = crate::start(intake, vec![entry]);
+
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(61)).await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        intake_cancel.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), intake_task)
+            .await
+            .expect("intake task must finish")
+            .expect("intake task must not panic");
+
+        let events = collected.lock().unwrap();
+        assert!(
+            !events.is_empty(),
+            "a periodic event must have been submitted"
+        );
+        assert_eq!(
+            events[0].0.payload, "contents from the prompt file",
+            "payload must be the file contents, not the path"
+        );
+    }
+
+    // AC: a file-backed job whose file is missing at fire time submits no event.
+    #[tokio::test(flavor = "current_thread")]
+    async fn file_backed_job_with_missing_file_submits_no_event() {
+        tokio::time::pause();
+
+        let (intake, intake_task, intake_cancel, collected) = make_intake_with_collector();
+
+        let entry = ScheduleEntry::with_file(
+            "missing-file-job",
+            "* * * * *",
+            "/nonexistent/abs/path/does-not-exist.txt",
+        );
+        let (_reload_handle, _scheduler_join) = crate::start(intake, vec![entry]);
+
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(130)).await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        intake_cancel.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), intake_task)
+            .await
+            .expect("intake task must finish")
+            .expect("intake task must not panic");
+
+        let events = collected.lock().unwrap();
+        assert!(
+            events.is_empty(),
+            "a missing prompt file must submit no event, got {}",
+            events.len()
+        );
     }
 }

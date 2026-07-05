@@ -120,11 +120,11 @@ async fn schedule_entry_from_json_store_is_delivered_when_admitted_users_is_empt
     let store_path = tmp.path().join("schedules.json");
     bob_core::types::schedule::write_schedule_store(
         &store_path,
-        &[ScheduleEntry {
-            id: job_id.to_string(),
-            cron: "* * * * *".to_string(),
-            prompt: expected_prompt.to_string(),
-        }],
+        &[ScheduleEntry::with_prompt(
+            job_id.to_string(),
+            "* * * * *".to_string(),
+            expected_prompt.to_string(),
+        )],
     )
     .expect("JSON schedule store write must succeed");
     let entries = bob_core::types::schedule::read_schedule_store(&store_path)

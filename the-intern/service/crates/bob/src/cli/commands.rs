@@ -34,8 +34,14 @@ pub fn policy_reload(json: bool) -> ServiceResult<()> {
     policy::run(json)
 }
 
-pub fn schedule_add(json: bool, id: &str, cron: &str, prompt: &str) -> ServiceResult<()> {
-    schedule::run_add(json, id, cron, prompt)
+pub fn schedule_add(
+    json: bool,
+    id: &str,
+    cron: &str,
+    prompt: Option<&str>,
+    file: Option<&str>,
+) -> ServiceResult<()> {
+    schedule::run_add(json, id, cron, prompt, file)
 }
 
 pub fn schedule_remove(json: bool, id: &str) -> ServiceResult<()> {
