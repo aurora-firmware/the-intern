@@ -34,6 +34,10 @@ pub struct Config {
     pub extension_sock_path: PathBuf,
     /// Resolved path to the pi extension that enforces tool-call authorization.
     pub extension_path: PathBuf,
+    /// Service-wide working directory set on the child process when spawning
+    /// a pool worker. `None` means workers inherit the launch cwd of `bob
+    /// serve` unchanged.
+    pub worker_cwd: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -48,6 +52,7 @@ impl Default for Config {
             child_termination_deadline: Duration::from_secs(10),
             extension_sock_path: PathBuf::new(),
             extension_path: PathBuf::new(),
+            worker_cwd: None,
         }
     }
 }
@@ -471,6 +476,7 @@ mod tests {
             child_termination_deadline: Duration::from_millis(2000),
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
+            worker_cwd: None,
         }
     }
 
@@ -487,6 +493,32 @@ mod tests {
         assert!(cfg.max_processes > 0);
         assert!(cfg.idle_reap_timeout > Duration::from_secs(0));
         assert!(cfg.child_termination_deadline > Duration::from_secs(0));
+    }
+
+    // AC-1 (T-121): Config carries an optional service-wide worker working
+    // directory, unset by default so workers inherit the launch cwd.
+    #[test]
+    fn default_config_leaves_worker_cwd_unset() {
+        let cfg = Config::default();
+
+        assert_eq!(
+            cfg.worker_cwd, None,
+            "worker_cwd should be unset by default so workers inherit the launch cwd"
+        );
+    }
+
+    // AC-1 (T-121): Config can carry a configured worker working directory.
+    #[test]
+    fn config_carries_configured_worker_cwd() {
+        let cfg = Config {
+            worker_cwd: Some(std::path::PathBuf::from("/opt/bob/workspace")),
+            ..test_config("sh", &["-c", "exit 0"], 1, 2)
+        };
+
+        assert_eq!(
+            cfg.worker_cwd,
+            Some(std::path::PathBuf::from("/opt/bob/workspace"))
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -964,6 +996,7 @@ mod tests {
             child_termination_deadline: Duration::from_millis(25),
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
+            worker_cwd: None,
         };
 
         let (handle, task) = start(cfg).expect("startup should succeed");
