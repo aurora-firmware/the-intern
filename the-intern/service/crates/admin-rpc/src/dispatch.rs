@@ -684,6 +684,7 @@ impl Dispatcher {
             cron: entry_cron,
             prompt: entry_prompt,
             file: entry_file,
+            cwd: None,
         });
 
         if let Err(outcome) = self.write_and_reload(&id, schedule_store_path, entries, handle) {
