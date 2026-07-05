@@ -2,7 +2,7 @@
 id: T-121
 title: Spawn pi-agent pool workers with an explicit service-wide working 
   directory
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-07-05'
