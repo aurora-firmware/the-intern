@@ -2254,6 +2254,54 @@ mod tests {
         );
     }
 
+    // AC-2 (T-124): schedule.add with a relative cwd is rejected with a clear
+    // error and writes nothing to the store.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_with_relative_cwd_returns_error_and_writes_nothing() {
+        use bob_core::types::schedule::read_schedule_store;
+
+        let (_dir, store_path) = temp_schedule_store_path();
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_schedule_store_path(store_path.clone());
+
+        let req = make_request_with_params(
+            "schedule.add",
+            json!(351),
+            json!({
+                "id": "bad-cwd-job",
+                "cron": "0 9 * * *",
+                "prompt": "run",
+                "cwd": "relative/dir"
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(351));
+                let data = resp.error.data.expect("error data must be present");
+                let reason = data["reason"].as_str().expect("reason must be a string");
+                assert!(
+                    reason.contains("relative") || reason.contains("absolute"),
+                    "error must describe the path problem: {reason}"
+                );
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for relative cwd"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+
+        let entries = read_schedule_store(&store_path).expect("read store");
+        assert!(
+            entries.iter().all(|e| e.id != "bad-cwd-job"),
+            "entry with a relative cwd must not be persisted"
+        );
+    }
+
     // schedule.add with both prompt and file is rejected (mutually exclusive).
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_schedule_add_with_both_prompt_and_file_returns_error() {
