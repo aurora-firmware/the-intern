@@ -254,6 +254,15 @@ impl BobConfig {
 
         ensure_monitoring_audit_log_path(&self.monitoring.audit_log_path)?;
 
+        if let Some(pi_agent_cwd) = &self.pi_agent_cwd {
+            if !pi_agent_cwd.is_absolute() {
+                return Err(configuration_error(format!(
+                    "pi_agent_cwd must be an absolute path, got {}",
+                    pi_agent_cwd.display()
+                )));
+            }
+        }
+
         Ok(self)
     }
 }
@@ -1705,10 +1714,8 @@ prompt = "from toml"
             env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
         }
 
-        let config_file = write_temp_config(&format!(
-            r#"pi_agent_cwd = "{}""#,
-            nonexistent.display()
-        ));
+        let config_file =
+            write_temp_config(&format!(r#"pi_agent_cwd = "{}""#, nonexistent.display()));
 
         let config = BobConfig::load_with_sources(ConfigSources {
             env,
