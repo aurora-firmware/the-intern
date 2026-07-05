@@ -144,7 +144,20 @@ impl SessionPool {
     /// pre-spawned with the service-wide cwd, so a request naming its own
     /// working directory cannot reuse one. This always spawns a **dedicated**
     /// worker whose `current_dir` is `cwd`, bypassing the warm pool entirely.
+    ///
+    /// Bound by `max_processes` exactly like [`Self::acquire_session`]: when
+    /// active plus warm workers already fill the limit, the acquisition is
+    /// refused rather than evicting a live worker or exceeding the bound.
     pub fn acquire_session_with_cwd(&mut self, cwd: PathBuf) -> ServiceResult<SessionId> {
+        if self.total_process_count() >= self.cfg.max_processes {
+            return Err(ServiceError::ChildProcess {
+                detail: format!(
+                    "cannot acquire cwd-scoped session because active + warm workers reached max_processes ({})",
+                    self.cfg.max_processes
+                ),
+            });
+        }
+
         let session_id = SessionId::new();
         let process_cfg = Self::worker_process_config_for_cwd_session(&self.cfg, session_id, cwd);
         let worker = crate::process::RpcWorkerProcess::spawn(&process_cfg)?;
@@ -677,6 +690,47 @@ mod tests {
         assert_eq!(
             actual, expected,
             "dedicated worker should run in the caller-supplied cwd"
+        );
+
+        std::fs::remove_dir_all(&worker_cwd).ok();
+    }
+
+    // AC-2 (T-122): when active + warm workers already fill max_processes, a
+    // cwd-scoped acquisition must be refused without evicting the existing
+    // warm worker or exceeding the bound.
+    #[tokio::test(flavor = "current_thread")]
+    async fn acquire_session_with_cwd_refuses_without_evicting_when_max_processes_is_full() {
+        let cfg = test_config("sh", &["-c", "exit 0"], 1, 1);
+        let mut pool = SessionPool::new(&cfg).expect("pool startup should succeed");
+        assert_eq!(
+            pool.warm_worker_count(),
+            1,
+            "test setup expects the warm worker to already fill max_processes"
+        );
+
+        let worker_cwd = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-dedicated-cwd-refuse-{}",
+            SessionId::new()
+        ));
+        std::fs::create_dir_all(&worker_cwd).expect("create dedicated cwd should succeed");
+
+        let error = pool
+            .acquire_session_with_cwd(worker_cwd.clone())
+            .expect_err("cwd-scoped acquisition should be refused at max capacity");
+
+        assert!(
+            matches!(error, ServiceError::ChildProcess { .. }),
+            "expected ServiceError::ChildProcess, got: {error:?}"
+        );
+        assert_eq!(
+            pool.warm_worker_count(),
+            1,
+            "refused acquisition must not evict the existing warm worker"
+        );
+        assert_eq!(
+            pool.list_sessions().len(),
+            0,
+            "refused acquisition must not create an active session"
         );
 
         std::fs::remove_dir_all(&worker_cwd).ok();
