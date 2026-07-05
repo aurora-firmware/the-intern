@@ -71,3 +71,30 @@ Implemented T-122 end to end via TDD across three red→green→refactor cycles 
 **Obstacles Encountered:** The task's "Files to Touch" list includes `crates/pi-agent-supervisor/src/process.rs`, but no change was needed there. T-121 (a stated dependency, already completed) had already added generic `worker_cwd: Option<PathBuf>` support to `WorkerProcessConfig` and `RpcWorkerProcess::spawn`. The new pool-level method reuses that existing, already-tested spawn path by overriding `worker_cwd` per call rather than duplicating spawn logic, so `process.rs` was left untouched — noted here for the reviewer since it's a deviation from touching every file named in the task, even though it stays within the file-scope boundary. Also: `cargo clippy -p pi-agent-supervisor --all-targets -- -D warnings` cannot even reach this crate because `bob-core` fails to compile under `-D warnings` due to pre-existing pedantic lint debt (confirmed as expected per CLAUDE.md, which documents clippy as not yet a clean gate for this workspace); not treated as a blocker since it is outside this task's verification command and pre-existing.
 
 ## Review
+
+### Review Verdict — 2026-07-05
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1 (dedicated worker at caller-supplied cwd, not a warm worker): Met. `acquire_session_with_cwd` (`pool.rs`) always spawns a fresh worker via `worker_process_config_for_cwd_session`, which overrides `worker_cwd` with the caller's directory; it never pops from `warm_workers`. Verified by `acquire_session_with_cwd_does_not_consume_a_warm_worker` (warm worker count unchanged) and `acquire_session_with_cwd_spawns_dedicated_worker_running_in_given_directory` (real spawn, child's `pwd` matches the caller-supplied, canonicalized directory). Both pass.
+- AC-2 (refuse without eviction when `max_processes` is full): Met. The bound check `total_process_count() >= self.cfg.max_processes` runs before any spawn and returns `ServiceError::ChildProcess` without touching `warm_workers` or `active_workers`. Verified by `acquire_session_with_cwd_refuses_without_evicting_when_max_processes_is_full` (warm pool at 1/1, refusal confirmed, warm worker count and active session count both unchanged afterward).
+- AC-3 (dedicated worker counts toward the bound while active): Met. The dedicated worker is tracked via the new shared `track_active_worker` helper, which inserts into `active_workers` — already counted by `total_process_count()`. Verified by `acquire_session_with_cwd_counts_toward_max_processes_while_active` (a subsequent plain `acquire_session()` is refused while the dedicated worker is alive), and the Work Log records a deliberate vacuity check (temporarily not tracking the worker, confirming the test fails) before restoring the correct implementation.
+- No unspecified behavior added; only `pool.rs` and the task file were touched. The Work Log's noted deviation (leaving `process.rs` untouched) is justified: T-121 already added generic `worker_cwd: Option<PathBuf>` plumbing through `WorkerProcessConfig`/`RpcWorkerProcess::spawn`, confirmed by reading `process.rs` — reusing that existing, already-tested spawn path instead of duplicating it is the correct, minimal approach, not a scope gap.
+
+**Stage 2 — Code Quality**
+
+- Correctness: The bound check mirrors `acquire_session`'s existing check and is evaluated with `&mut self` under `current_thread` async tests, so there is no TOCTOU race. `worker_process_config_for_cwd_session` correctly reuses the base config and overrides only `worker_cwd` via struct-update syntax.
+- Tests: Four new tests cover the happy path, the real-spawn cwd verification, the refusal path (with explicit non-eviction and non-creation assertions), and the bound-persists-while-active path, each using a uniquely named temp directory (no shared mutable state across tests). Confirmed independently:
+  - `cd the-intern/service && cargo test -p pi-agent-supervisor` → 60 passed, 0 failed.
+  - `cargo test --workspace` → all crates green, no regressions.
+  - `cargo fmt --all -- --check` → clean.
+  - `cargo build -p bob` → clean, no warnings.
+- Security: No external/untrusted input handling introduced beyond what `acquire_session` already does; no secrets, no injection surface.
+- Readability: Method and helper names are descriptive (`acquire_session_with_cwd`, `worker_process_config_for_cwd_session`, `track_active_worker`); doc comments correctly cite S-002 Component 6. No dead code.
+- Performance: No unnecessary loops or blocking calls; the refactor into `track_active_worker` removes duplication without changing behavior (verified by the full suite staying green across the refactor commit).
+
+**Commits:** Four commits on `task/T-122-...` (`feat`, `feat`, `test`, `refactor`), each following `<type>(<component>): <description>` format, imperative, lowercase, no period, under 72 chars, no task ID repeated.
+
+No blocking issues found.
