@@ -1,7 +1,7 @@
 ---
 id: T-120
 title: Carry a job-id correlator through the inbound persistence queue
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-07-05'
