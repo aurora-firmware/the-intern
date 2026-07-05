@@ -81,3 +81,74 @@ What remains: nothing within this task's scope. The periodic dispatcher's actual
 **Obstacles Encountered:** None. Sandbox and toolchain worked as expected for these crates (no Unix-domain-socket tests were touched by this task).
 
 ## Review
+
+### Review Verdict — 2026-07-05
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1 (enqueue with optional job-id correlator, return it on dequeue) — met.
+  `PersistenceStore::enqueue_with_job_id`/`dequeue_next_with_job_id` added as
+  default-implemented trait methods (`crates/bob-core/src/ports.rs`), overridden
+  on `Handle` (`crates/persistence/src/lib.rs`) to thread the correlator through
+  `Command::Enqueue`/`Command::DequeueNext`, and carried in
+  `InboundQueue`'s `VecDeque<(InternalEvent, Option<String>)>`
+  (`crates/persistence/src/inbound.rs`).
+- AC-2 (same correlator round-trips) — met. Verified at all three layers:
+  `inbound::tests::dequeue_next_returns_the_job_id_correlator_it_was_enqueued_with`,
+  `tests::dequeue_next_with_job_id_returns_the_correlator_it_was_enqueued_with`
+  (persistence `lib.rs`), plus the `ports.rs` default-delegation tests.
+- AC-3 (absent correlator on plain enqueue; existing impls/call sites compile
+  unchanged) — met.
+  `git diff dev-agent task/T-120... --stat -- the-intern/service/crates/bob/src/serve.rs the-intern/service/crates/requests-handler/src/handler.rs`
+  is empty — confirmed independently by this review, not just asserted in the
+  work log. `RecordingStore` (`requests-handler/src/handler.rs`) and
+  `serve.rs`'s plain `enqueue`/`dequeue_next` call sites are untouched and
+  still compile against the trait defaults (`persistence_store_enqueue_with_job_id_default_delegates_to_plain_enqueue`,
+  `persistence_store_dequeue_next_with_job_id_default_returns_absent_correlator`
+  in `ports.rs`). `InternalEvent`/`types.rs` are untouched (no diff), consistent
+  with ADR-013 and the task description.
+- AC-4 (capacity + FIFO preserved) — met. Dedicated tests at both the
+  `inbound.rs` level (`dequeue_next_returns_job_id_correlators_in_fifo_order`,
+  `enqueue_with_job_id_at_capacity_returns_persistence_error`) and the `lib.rs`
+  `Handle` level (`dequeue_next_with_job_id_returns_entries_in_fifo_order`,
+  `enqueue_with_job_id_at_capacity_returns_persistence_error`).
+
+No unspecified behavior added. Files touched match the task's "Files to
+Touch" list exactly (`ports.rs`, `persistence/src/lib.rs`,
+`persistence/src/inbound.rs`), plus the canonical task file itself — no
+stray edits elsewhere.
+
+**Stage 2 — Code Quality**
+
+- Correctness: default methods delegate correctly (`let _ = job_id;` discards
+  the correlator on the default `enqueue_with_job_id`; `dequeue_next_with_job_id`
+  default maps to `(event, None)`); `Handle`'s overrides thread the real job id
+  through the actor's command channel without altering the actor's
+  infallible-dequeue behavior.
+- Tests: independent, cover round-trip, absent-correlator, FIFO-with-mixed-correlators,
+  and capacity-with-correlator paths at every layer touched. Re-ran
+  `cargo test --workspace` from a clean checkout of the task branch — 17
+  binaries, all green, 0 failed (matches the work log's own numbers,
+  including `bob`: 128 passed, `requests-handler`: 15 passed).
+- Security: no external input, no secrets, nothing parameterized-query
+  relevant here.
+- Readability: `enqueue_with_job_id`/`dequeue_next_with_job_id` naming is
+  self-documenting and matches the existing `context_id: Option<String>`
+  typing convention already used in `RequestContext`. No dead code.
+- Performance: no new loops/blocking calls; same `VecDeque` structure, same
+  capacity check.
+- `cargo fmt --all -- --check` clean; `cargo build -p bob` succeeds;
+  `cargo clippy -p bob-core -p persistence --all-targets` surfaces only
+  pre-existing pedantic warnings in unrelated code (none in `ports.rs` or
+  `inbound.rs`).
+
+**Minor, non-blocking observation:** all three commits on the task branch
+exceed the git-conventions 72-character subject-line limit (78, 80, and 85
+chars respectively, e.g. `feat(bob-core): add default-implemented job-id
+correlator methods to PersistenceStore`). Not blocking this review — the
+branch has not been pushed to `origin`, so a future amend to shorten these is
+still cheap if desired before integration.
+
+Next owner: Development Loop (task ready to proceed to integration).
