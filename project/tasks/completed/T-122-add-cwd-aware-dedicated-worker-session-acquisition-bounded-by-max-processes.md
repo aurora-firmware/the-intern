@@ -2,7 +2,7 @@
 id: T-122
 title: Add cwd-aware dedicated-worker session acquisition bounded by 
   max_processes
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-07-05'
