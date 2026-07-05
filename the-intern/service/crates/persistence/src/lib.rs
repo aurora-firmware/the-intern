@@ -112,6 +112,37 @@ impl PersistenceStore for Handle {
         Ok(result.map(|(event, _job_id)| event))
     }
 
+    /// Appends `event` to the inbound queue together with its job-id
+    /// correlator (ADR-013).
+    ///
+    /// # Errors
+    ///
+    /// Returns `ServiceError::Persistence` when the queue is at capacity or the actor is down.
+    async fn enqueue_with_job_id(
+        &self,
+        event: InternalEvent,
+        job_id: Option<String>,
+    ) -> ServiceResult<()> {
+        self.send(|reply| Command::Enqueue {
+            event,
+            job_id,
+            reply,
+        })
+        .await
+    }
+
+    /// Removes and returns the oldest inbound event together with the
+    /// job-id correlator it was enqueued with (ADR-013).
+    ///
+    /// # Errors
+    ///
+    /// Returns `ServiceError::Persistence` when the actor is down.
+    async fn dequeue_next_with_job_id(
+        &self,
+    ) -> ServiceResult<Option<(InternalEvent, Option<String>)>> {
+        self.send(|reply| Command::DequeueNext { reply }).await
+    }
+
     /// Stores `state` for `id`, overwriting any existing entry.
     ///
     /// # Errors
@@ -305,6 +336,104 @@ mod tests {
         // First entry is still present and dequeues correctly.
         let got = handle.dequeue_next().await.unwrap();
         assert_eq!(got, Some(first));
+        task.abort();
+    }
+
+    // AC-1 / AC-2: enqueuing with a job-id correlator yields the same
+    // correlator on dequeue (ADR-013).
+    #[tokio::test(flavor = "current_thread")]
+    async fn dequeue_next_with_job_id_returns_the_correlator_it_was_enqueued_with() {
+        let (handle, task) = start(small_cfg());
+        let event = InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "* * * * *".to_owned(),
+        };
+
+        handle
+            .enqueue_with_job_id(event.clone(), Some("job-1".to_owned()))
+            .await
+            .unwrap();
+        let got = handle.dequeue_next_with_job_id().await.unwrap();
+
+        assert_eq!(got, Some((event, Some("job-1".to_owned()))));
+        task.abort();
+    }
+
+    // AC-3: enqueuing without a correlator dequeues with an absent correlator.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dequeue_next_with_job_id_returns_absent_correlator_when_enqueued_without_one() {
+        let (handle, task) = start(small_cfg());
+        let event = InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "hello".to_owned(),
+        };
+
+        handle.enqueue(event.clone()).await.unwrap();
+        let got = handle.dequeue_next_with_job_id().await.unwrap();
+
+        assert_eq!(got, Some((event, None)));
+        task.abort();
+    }
+
+    // AC-4: FIFO ordering is preserved when correlators are carried alongside events.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dequeue_next_with_job_id_returns_entries_in_fifo_order() {
+        let (handle, task) = start(small_cfg());
+        let first = InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "first".to_owned(),
+        };
+        let second = InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "second".to_owned(),
+        };
+
+        handle
+            .enqueue_with_job_id(first.clone(), Some("job-1".to_owned()))
+            .await
+            .unwrap();
+        handle
+            .enqueue_with_job_id(second.clone(), Some("job-2".to_owned()))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle.dequeue_next_with_job_id().await.unwrap(),
+            Some((first, Some("job-1".to_owned())))
+        );
+        assert_eq!(
+            handle.dequeue_next_with_job_id().await.unwrap(),
+            Some((second, Some("job-2".to_owned())))
+        );
+        task.abort();
+    }
+
+    // AC-4: the capacity limit is preserved when a correlator is carried.
+    #[tokio::test(flavor = "current_thread")]
+    async fn enqueue_with_job_id_at_capacity_returns_persistence_error() {
+        let (handle, task) = start(small_cfg()); // capacity = 3
+        let event = || InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "* * * * *".to_owned(),
+        };
+        handle
+            .enqueue_with_job_id(event(), Some("job-1".to_owned()))
+            .await
+            .unwrap();
+        handle
+            .enqueue_with_job_id(event(), Some("job-2".to_owned()))
+            .await
+            .unwrap();
+        handle
+            .enqueue_with_job_id(event(), Some("job-3".to_owned()))
+            .await
+            .unwrap();
+
+        let result = handle
+            .enqueue_with_job_id(event(), Some("job-4".to_owned()))
+            .await;
+
+        assert!(matches!(result, Err(ServiceError::Persistence { .. })));
         task.abort();
     }
 
