@@ -51,6 +51,21 @@ pub(super) fn resolve_add_source(
     }
 }
 
+/// Validate the `--cwd` CLI argument. `cwd` is optional and independent of
+/// the prompt source; when given it must be an absolute path. The directory
+/// is not required to exist at add time (existence is a fire-time concern),
+/// so this only checks the path shape.
+pub(super) fn validate_cwd(cwd: Option<&str>) -> ServiceResult<()> {
+    if let Some(cwd) = cwd {
+        if !std::path::Path::new(cwd).is_absolute() {
+            return Err(invalid_request_error(format!(
+                "--cwd {cwd:?} must be an absolute path"
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn run_add(
     json_output: bool,
     id: &str,
@@ -59,9 +74,10 @@ pub(super) fn run_add(
     file: Option<&str>,
     cwd: Option<&str>,
 ) -> ServiceResult<()> {
-    // Resolve (and canonicalise a --file) before touching the service so a bad
-    // path fails fast, before any RPC round-trip.
+    // Resolve (and canonicalise a --file) and validate --cwd before touching
+    // the service so a bad path fails fast, before any RPC round-trip.
     let source = resolve_add_source(prompt, file)?;
+    validate_cwd(cwd)?;
     let cfg = load_config()?;
     let mut out = io::stdout();
     run_add_with_config(json_output, id, cron, source, cwd, &cfg, &mut out)
@@ -237,7 +253,7 @@ mod tests {
 
     use super::{
         resolve_add_source, run_add_with_caller, run_list_with_caller, run_reload_with_caller,
-        run_remove_with_caller, AddSource,
+        run_remove_with_caller, validate_cwd, AddSource,
     };
 
     #[test]
@@ -443,6 +459,29 @@ mod tests {
         assert_eq!(
             String::from_utf8(out).expect("utf8"),
             "schedule added: foo\n"
+        );
+    }
+
+    #[test]
+    fn validate_cwd_accepts_an_absolute_path() {
+        validate_cwd(Some("/srv/workspaces/a")).expect("absolute cwd must validate");
+    }
+
+    #[test]
+    fn validate_cwd_accepts_none() {
+        validate_cwd(None).expect("missing cwd must validate");
+    }
+
+    #[test]
+    fn validate_cwd_errors_on_a_relative_path() {
+        let err = validate_cwd(Some("relative/workspace")).expect_err("relative cwd must error");
+        assert!(
+            err.to_string().to_lowercase().contains("cwd"),
+            "message must mention cwd: {err}"
+        );
+        assert!(
+            err.to_string().contains("absolute"),
+            "message must mention absolute: {err}"
         );
     }
 
