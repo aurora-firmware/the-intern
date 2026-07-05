@@ -476,6 +476,19 @@ mod tests {
         assert_eq!(process_cfg.extension_path, extension_path);
     }
 
+    // AC-2 (T-121): the pool threads the configured service-wide worker cwd
+    // into the per-worker spawn config used for warm-worker spawning.
+    #[test]
+    fn worker_process_config_carries_configured_worker_cwd() {
+        let worker_cwd = std::path::PathBuf::from("/opt/bob/workspace");
+        let mut cfg = test_config("sh", &["-c", "exit 0"], 0, 1);
+        cfg.worker_cwd = Some(worker_cwd.clone());
+
+        let process_cfg = SessionPool::worker_process_config_for_session(&cfg, SessionId::new());
+
+        assert_eq!(process_cfg.worker_cwd, Some(worker_cwd));
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn pool_new_spawns_warm_workers_up_to_min_of_warm_pool_and_max_processes() {
         let cfg = test_config("sh", &["-c", "exit 0"], 3, 2);
