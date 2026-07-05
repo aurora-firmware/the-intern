@@ -67,3 +67,24 @@ Implemented T-119 end-to-end via two TDD cycles on `task/T-119-add-pi-agent-cwd-
 **Obstacles Encountered:** Adding the new struct field broke an unrelated `BobConfig` literal in `crates/bob/tests/shell_e2e.rs` (a test helper, not in the task's `Files to Touch`). Fixed it with a one-line addition (`pi_agent_cwd: None`) since it was purely a compile-consequence of the additive field, not a scope change — mirrors the exact same pattern already documented in the sibling task T-121 for `serve.rs`.
 
 ## Review
+
+### Review Verdict — 2026-07-05
+
+PASS
+
+**Stage 1 — Acceptance Criteria:**
+- AC-1 (optional top-level `pi_agent_cwd` parsed into `BobConfig`): met. `BobConfig.pi_agent_cwd: Option<PathBuf>` added, mapped through `RawBobConfig` (`#[serde(default)]` for an absent key) and `load_with_sources`. Verified by `pi_agent_cwd_is_none_when_unset` and `loads_pi_agent_cwd_absolute_path_from_config_file`.
+- AC-2 (relative path fails load with a clear error naming the key): met. `validate()` rejects a non-absolute `pi_agent_cwd` via `configuration_error(format!("pi_agent_cwd must be an absolute path, got {}", ...))`. Verified by `returns_configuration_error_when_pi_agent_cwd_is_relative`, which asserts the `Configuration` error detail contains `pi_agent_cwd`.
+- AC-3 (unset → worker cwd unset, workers inherit launch cwd): met. Default is `None` in `BobConfig::default()`/`test_base()`/`defaults_with_runtime_root`; no other code path sets a default cwd. Verified by `pi_agent_cwd_is_none_when_unset`.
+- AC-4 (non-existent directory still loads successfully): met. No existence check is present in `validate()` or elsewhere in the load path. Verified by `loads_successfully_when_pi_agent_cwd_names_a_nonexistent_directory`, which also asserts the named directory is not created as a side effect.
+- No unspecified behavior or functionality was added — wiring into the supervisor was correctly left out of scope for T-126, as documented in the Work Log.
+- Files touched: `crates/bob/src/config.rs` (per `Files to Touch`) plus a one-line mechanical fix to `crates/bob/tests/shell_e2e.rs`'s `client_cfg` struct literal, required because the new field is non-`Default`-derived on that struct literal. This mirrors the identical, pre-documented pattern in sibling task T-121 (breaking `serve.rs`'s `Config` literal) — reasonable and not a scope violation.
+
+**Stage 2 — Code Quality:**
+- Correctness: absolute/relative check uses `Path::is_absolute()`, the idiomatic and portable check; matches the existing validation style used elsewhere in `validate()` (e.g., `pi_agent_warm_pool_size` vs `pi_agent_max_processes`).
+- Tests: four new tests, one per acceptance criterion, each with a clear name and doc comment tying it to its AC; independent (each builds its own temp config file/dir and cleans up). Ran `cargo test -p bob config` in a clean worktree of the task branch: 47 passed, 0 failed. Ran `cargo test --workspace`: all crates green, 0 failed. `cargo fmt --all -- --check` clean.
+- Security: no secrets, no external input beyond the already-trusted config file/CLI/env surface; path handling only inspects absoluteness, no unchecked filesystem writes.
+- Readability: field doc comment clearly states the None/Some semantics and cites S-002 CR-005; error message names the offending key and echoes the bad value.
+- Performance: no loops or blocking calls introduced; validation is O(1).
+
+No blocking issues found. Minor non-blocking observation: the AC-2 error message could additionally state that the value must not be an absolute-path-relative distinction issue (e.g., mention that leading `~` is not expanded), but this is not required by the acceptance criteria and is not a defect.
