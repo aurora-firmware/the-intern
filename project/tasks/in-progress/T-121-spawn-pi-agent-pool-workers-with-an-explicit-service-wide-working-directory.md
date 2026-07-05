@@ -75,3 +75,25 @@ Implemented T-121 end to end via TDD across three red→green→refactor cycles,
 **Obstacles Encountered:** `crates/bob/tests/scheduler_execution_e2e.rs` constructs `pi_agent_supervisor::Config` directly and was not listed in the task's "Files to Touch," but adding the new field broke `cargo test --workspace` there. Applied the same minimal, mechanical `worker_cwd: None` fix used for `serve.rs` rather than escalating, since it is a direct, unavoidable consequence of the struct field addition the task itself authorizes.
 
 ## Review
+
+### Review Verdict — 2026-07-05
+
+PASS
+
+**Stage 1 — Acceptance Criteria:**
+- AC-1 (Config carries an optional worker working directory): met. `pi_agent_supervisor::Config` in `crates/pi-agent-supervisor/src/lib.rs` gained `pub worker_cwd: Option<PathBuf>`, defaulted to `None` in `impl Default for Config`. Covered by `tests::default_config_leaves_worker_cwd_unset` and `tests::config_carries_configured_worker_cwd`.
+- AC-2 (spawn sets `current_dir` when a worker cwd is configured): met. `RpcWorkerProcess::spawn` in `crates/pi-agent-supervisor/src/process.rs` calls `cmd.current_dir(worker_cwd)` only when `cfg.worker_cwd` is `Some`. `SessionPool::worker_process_config_for_session` in `pool.rs` threads `cfg.worker_cwd.clone()` into `WorkerProcessConfig`, and this helper is shared by both the warm-worker spawn path and the on-demand acquire-session spawn path, so the behavior applies uniformly. Covered by a real-spawn test (`process::tests::spawn_sets_current_dir_on_child_when_worker_cwd_is_configured`, spawns `sh -c pwd` into a temp dir and asserts the canonicalized reported cwd matches) and a pool-level threading test (`pool::tests::worker_process_config_carries_configured_worker_cwd`).
+- AC-3 (unconfigured worker cwd inherits launch cwd): met. When `worker_cwd` is `None`, `current_dir` is never called on the `Command`, so the child inherits the parent's cwd unchanged, matching today's behavior. Covered by `process::tests::spawn_inherits_launch_cwd_when_worker_cwd_is_not_configured`, which asserts the child's reported cwd equals `std::env::current_dir()`.
+- No unspecified behavior or functionality was added. `build_pi_agent_supervisor_config` in `crates/bob/src/serve.rs` sets `worker_cwd: None` exactly as the task instructs, with a comment pointing at T-126.
+- One file outside "Files to Touch" was modified: `crates/bob/tests/scheduler_execution_e2e.rs`, which also constructs `pi_agent_supervisor::Config` directly and needed `worker_cwd: None` to keep compiling under `cargo test --workspace`. This is the same mechanical, minimal, non-design fix the task explicitly authorizes for the analogous `serve.rs` site, not scope creep, and was called out plainly in the Work Log.
+
+**Stage 2 — Code Quality:**
+- Correctness: `current_dir` is only invoked conditionally on `Some`, preserving exact prior behavior for the unset case; existence of the directory is intentionally left unchecked per the task description, surfacing through the normal child-spawn error path.
+- Tests: both success (configured cwd honored) and default (inherits launch cwd) paths are covered with real child-process spawns, which is an appropriate use of the "boundary under test" exception in `coding-guidelines-rust.md` section 10. Tests use unique temp-directory names (keyed off a fresh `SessionId`) so they do not share mutable state. The pool-level test was confirmed non-vacuous by an intentional revert-and-rerun cycle recorded in the Work Log.
+- Security: no secrets, no unvalidated external input introduced.
+- Readability: new field and parameters are documented with doc comments explaining the `None` semantics; no dead code.
+- Performance: no added loops or blocking calls; `current_dir` is a cheap, synchronous builder call on `tokio::process::Command` before spawn.
+
+**Verification performed independently:** built a git worktree at the reviewed branch tip (`fda80cc`) and ran `cargo fmt --all -- --check` (clean), `cargo test -p pi-agent-supervisor` (56 passed, including all new AC tests), `cargo build -p bob` (succeeds), and `cargo test --workspace` (all crates green, no failures) — matching and extending the task's own verification command.
+
+**Minor, non-blocking observation:** three of the four task-branch commit subject lines (`test(pi-agent-supervisor): lock down warm-worker cwd threading through pool`, `feat(pi-agent-supervisor): set child current_dir from configured worker cwd`, `feat(pi-agent-supervisor): add optional service-wide worker cwd to Config`) run 73-75 characters, slightly over the git-conventions ≤72-char guideline. This is not flagged as a failing criterion because the same overage (and considerably larger, up to 85 chars) is already present in commits merged into `dev-agent`'s recent history, so it is consistent with established project practice rather than a regression introduced here.
