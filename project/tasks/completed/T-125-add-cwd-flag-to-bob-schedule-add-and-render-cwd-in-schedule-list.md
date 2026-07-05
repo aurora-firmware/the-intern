@@ -1,7 +1,7 @@
 ---
 id: T-125
 title: Add --cwd flag to bob schedule add and render cwd in schedule list
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-07-05'
