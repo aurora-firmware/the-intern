@@ -2404,6 +2404,80 @@ pub mod tests {
             let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
         }
 
+        // AC-3: a job id that no longer resolves to any live schedule entry
+        // (removed between enqueue and fire) falls back to the service-wide
+        // default cwd — the fire still dispatches via the plain
+        // `acquire_session`, it is not dropped or blocked.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_falls_back_to_default_cwd_when_job_id_not_in_live_table() {
+            let tmp = tempfile::tempdir().expect("temp dir");
+            let record_file = tmp.path().join("received_prompt.txt");
+            let record_file_str = record_file.to_string_lossy().into_owned();
+
+            let worker_script = format!(
+                "while IFS= read -r line; do \
+                 id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf 'received\\n' >> \"{}\"; \
+                 printf '{{\"id\":\"%s\",\"type\":\"response\",\"success\":true}}\\n' \"$id\"; \
+                 done",
+                record_file_str
+            );
+
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+            persistence_handle
+                .enqueue_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "stale-job-id-test".to_owned(),
+                    },
+                    Some("removed-job".to_owned()),
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            // The live table does not contain "removed-job" — simulates the
+            // entry being removed between enqueue and fire.
+            let schedule_rx = schedule_rx_with_entries(Vec::new());
+
+            let (supervisor_handle, supervisor_join) =
+                pi_agent_supervisor::start(pi_agent_supervisor::Config {
+                    worker_command: "sh".to_string(),
+                    worker_args: vec!["-c".to_string(), worker_script],
+                    warm_pool_size: 1,
+                    max_processes: 2,
+                    extension_path: existing_extension_path(),
+                    ..pi_agent_supervisor::Config::default()
+                })
+                .expect("supervisor must start");
+
+            let audit_sink: Arc<dyn AuditSink> = Arc::new(SpyAuditSink::default());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx,
+                audit_sink,
+                cancel_rx,
+            );
+
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if record_file.exists() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("dispatcher must fall back to the default cwd and still dispatch the fire");
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+        }
+
         // ── T-127: periodic-fire cwd precedence resolution ─────────────────
 
         // AC-1: a job id that resolves to a live entry with a per-entry `cwd`
