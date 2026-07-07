@@ -88,3 +88,31 @@ Cycle 3 added a confirmatory test for AC-3 (record-kind set stays `event`/`repor
 All three commits (`ff98ca2` feat, `ddf973a` test, `1a31fd4` test) are on the task branch. `cargo test --workspace` (128 `bob-core` tests passing, including 5 new/fixed) and `cargo fmt --all -- --check` are both clean.
 
 ## Review
+
+### Review Verdict — 2026-07-08
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1 (optional `resolved_cwd` field, `#[serde(default, skip_serializing_if)]`, omitted when absent): met. `crates/bob-core/src/types/records.rs` adds `pub resolved_cwd: Option<PathBuf>` to `ExtensionEventAuditPayload` with `#[serde(default, skip_serializing_if = "Option::is_none")]`. Covered by `extension_event_audit_payload_omits_resolved_cwd_when_absent` and `extension_event_audit_payload_includes_resolved_cwd_when_present`.
+- AC-2 (legacy JSONL records without the field still deserialize): met. `extension_event_audit_payload_deserializes_legacy_json_without_resolved_cwd_field` deserializes a JSON object lacking `resolved_cwd` and asserts it defaults to `None`.
+- AC-3 (record-kind set stays `event`/`report`/`verdict`; `report`/`verdict` payloads unchanged): met. `AuditRecordKind`, `ExternalReportAuditPayload`, and `PolicyVerdictAuditPayload` are untouched in the diff; `audit_record_event_payload_with_resolved_cwd_keeps_event_record_kind` round-trips a populated `resolved_cwd` through the full `AuditRecord` envelope and asserts `kind == "event"`.
+- Only the five files named in "Files to Touch" were modified (`crates/bob-core/src/types/records.rs`, `crates/extension-ipc/src/multiplex.rs`, `crates/monitoring/src/lib.rs`, `crates/admin-rpc/src/lib.rs`, `crates/bob/src/serve.rs`) — confirmed via `git diff --stat` against the pre-task commit. No unspecified behavior was added; population for `periodic` firings was correctly left out of scope (deferred to T-128).
+
+**Verified independently:**
+
+- All six `ExtensionEventAuditPayload { ... }` construction sites in the workspace (grepped across all crates) set `resolved_cwd`, including the fifth, previously-unlisted site inside `records.rs`'s own `#[cfg(test)]` module (~line 163). That file is already one of the task's declared "Files to Touch" for adding the field itself, so fixing a same-file test construction site to keep the crate compiling is not a scope violation.
+- The task description's claim that `default` is "required because the payload uses `#[serde(deny_unknown_fields)]`" is not accurate, and the Developer's Work Log correctly identifies this. Independently reproduced in an isolated scratch crate (same serde 1.0.228 / serde_json from this workspace's `Cargo.lock`): an `Option<T>` struct field under `#[serde(deny_unknown_fields)]` deserializes a missing key as `None` with or without an explicit `#[serde(default)]` attribute (this is serde-derive's implicit optional-field handling, triggered by the literal `Option<...>` field type). `deny_unknown_fields` only rejects fields present in the input that aren't recognized by the struct — it has no bearing on missing expected fields either way. Adding `#[serde(default)]` is therefore behaviorally redundant but harmless: it doesn't change deserialization outcome, doesn't weaken `deny_unknown_fields`'s rejection of unrecognized fields, and documents intent for maintainers unaware of the implicit-optional behavior. AC-1's literal wording names the attribute pair, so keeping it satisfies the criterion as written. No correctness issue either way.
+- Checked out the task branch and ran `cd the-intern/service && cargo test --workspace`: all suites pass (0 failed), including the four new/updated tests in `bob-core` (`extension_event_audit_payload_omits_resolved_cwd_when_absent`, `extension_event_audit_payload_includes_resolved_cwd_when_present`, `extension_event_audit_payload_deserializes_legacy_json_without_resolved_cwd_field`, `audit_record_event_payload_with_resolved_cwd_keeps_event_record_kind`) plus the pre-existing round-trip test fixed to set the new field. `cargo fmt --all -- --check` is clean. `cargo clippy --tests` on the touched crates shows only pre-existing pedantic warnings in unrelated code (per CLAUDE.md, clippy is not yet a clean gate for this workspace); none touch the new field, its construction sites, or the new tests.
+- Three commits on the task branch (`ff98ca2` feat, `ddf973a` test, `1a31fd4` test) follow `git-conventions` format.
+
+**Stage 2 — Code Quality**
+
+- Correctness: field addition follows the existing `summary: Option<String>` pattern; doc comment accurately describes the field's purpose and scope (periodic firings, T-128 dependency noted).
+- Tests: cover the omission path, inclusion path, legacy-deserialization path, and record-kind-preservation path; independent, no shared mutable state.
+- Security: not applicable (plain optional struct field, no external input parsing beyond existing serde boundary, no secrets, no queries).
+- Readability: `resolved_cwd` name is descriptive and matches the field's documented semantics; no dead code.
+- Performance: no loops, blocking calls, or resource concerns introduced.
+
+**Minor observation (non-blocking):** the Work Log states "128 `bob-core` tests passing"; the actual `cargo test -p bob-core` run shows 126 passing (4 new tests + 1 existing test updated to set the new field = 5 touched, matching the Work Log's "5 new/fixed" count). Likely a minor arithmetic slip in the log, not a functional discrepancy — all tests pass either way.
