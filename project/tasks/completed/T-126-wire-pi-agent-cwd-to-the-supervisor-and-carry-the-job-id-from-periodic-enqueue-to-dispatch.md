@@ -2,7 +2,7 @@
 id: T-126
 title: Wire pi_agent_cwd to the supervisor and carry the job id from periodic 
   enqueue to dispatch
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-07-05'
