@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use bob_core::error::{ServiceError, ServiceResult};
 use bob_core::ports::{AuditSink, PersistenceStore};
-use bob_core::types::DeliveryKind;
+use bob_core::types::{DeliveryKind, InternalEvent};
 use tokio::{sync::watch, task::JoinHandle, time};
 use tracing::info;
 
@@ -115,6 +115,36 @@ fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Con
     }
 }
 
+/// Enqueues an admitted `Periodic` event together with its job-id correlator
+/// (ADR-012 / ADR-013).
+///
+/// The job id comes from `RequestContext::context_id` and is threaded through
+/// `PersistenceStore::enqueue_with_job_id` (T-120) so the periodic dispatcher
+/// can read it back via `dequeue_next_with_job_id` (see
+/// `start_periodic_dispatcher`). This function only carries the correlator
+/// through the queue; it does not resolve a per-job cwd or acquire a worker
+/// (T-127).
+///
+/// Enqueue failures (queue full or the persistence actor being down) are
+/// logged as a warning and otherwise swallowed, matching the pre-T-126
+/// behaviour of the plain `enqueue` call this replaces.
+async fn admit_periodic_event(
+    persistence_store: &dyn PersistenceStore,
+    event: InternalEvent,
+    job_id: Option<String>,
+) {
+    if let Err(err) = persistence_store
+        .enqueue_with_job_id(event, job_id.clone())
+        .await
+    {
+        tracing::warn!(
+            error = %err,
+            job_id = job_id.as_deref().unwrap_or("<unknown>"),
+            "scheduler: periodic event persistence enqueue failed"
+        );
+    }
+}
+
 fn build_interactive_session_config(cfg: &BobConfig) -> admin_rpc::InteractiveSessionConfig {
     admin_rpc::InteractiveSessionConfig {
         command: cfg.pi_agent_command.clone(),
@@ -191,13 +221,15 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
                     //
                     // The request context (job id in context_id, channel/user ids)
                     // is preserved for audit attribution by the scheduler-adapter.
-                    if let Err(err) = persistence_store.enqueue(event).await {
-                        tracing::warn!(
-                            error = %err,
-                            job_id = context.context_id.as_deref().unwrap_or("<unknown>"),
-                            "scheduler: periodic event persistence enqueue failed"
-                        );
-                    }
+                    // T-126 (ADR-013): the job id is threaded through the inbound
+                    // queue via enqueue_with_job_id so the periodic dispatcher can
+                    // read it back on dequeue.
+                    admit_periodic_event(
+                        persistence_store.as_ref(),
+                        event,
+                        context.context_id.clone(),
+                    )
+                    .await;
                 } else {
                     requests_handler::run_preflight(
                         event,
@@ -732,6 +764,62 @@ pub mod tests {
             supervisor_cfg.worker_cwd, None,
             "unset pi_agent_cwd must leave worker_cwd unset so workers inherit the launch cwd"
         );
+    }
+
+    // AC-3 (T-126): admit_periodic_event must enqueue via the correlator-
+    // carrying enqueue_with_job_id (T-120/ADR-013) so the firing entry's job
+    // id (RequestContext::context_id) is retrievable from the inbound queue.
+    #[tokio::test(flavor = "current_thread")]
+    async fn admit_periodic_event_enqueues_with_job_id_from_context() {
+        let (persistence_handle, _persistence_join) =
+            persistence::start(persistence::Config::default());
+        let event = InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "carry-me".to_owned(),
+        };
+
+        admit_periodic_event(
+            &persistence_handle,
+            event.clone(),
+            Some("job-42".to_owned()),
+        )
+        .await;
+
+        let (got_event, got_job_id) = persistence_handle
+            .dequeue_next_with_job_id()
+            .await
+            .expect("dequeue must not fail")
+            .expect("event must be present in the queue");
+
+        assert_eq!(got_event, event);
+        assert_eq!(
+            got_job_id,
+            Some("job-42".to_owned()),
+            "job id from RequestContext::context_id must be carried into the queue"
+        );
+    }
+
+    // AC-3 (T-126): a periodic event whose context carries no job id must
+    // still enqueue successfully, with an absent correlator on dequeue.
+    #[tokio::test(flavor = "current_thread")]
+    async fn admit_periodic_event_enqueues_with_none_job_id_when_context_has_none() {
+        let (persistence_handle, _persistence_join) =
+            persistence::start(persistence::Config::default());
+        let event = InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "no-job-id".to_owned(),
+        };
+
+        admit_periodic_event(&persistence_handle, event.clone(), None).await;
+
+        let (got_event, got_job_id) = persistence_handle
+            .dequeue_next_with_job_id()
+            .await
+            .expect("dequeue must not fail")
+            .expect("event must be present in the queue");
+
+        assert_eq!(got_event, event);
+        assert_eq!(got_job_id, None);
     }
 
     #[test]
