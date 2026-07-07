@@ -59,7 +59,7 @@ pub struct ExtensionEventAuditPayload {
     /// Optional resolved absolute working directory used for a `periodic`
     /// (scheduled) firing. Omitted for events that have no execution
     /// directory (for example forwarded pi-agent extension events).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_cwd: Option<PathBuf>,
 }
 
@@ -239,6 +239,21 @@ mod tests {
                 .contains_key("resolved_cwd"),
             "resolved_cwd must be omitted from serialized output when absent, got: {json}"
         );
+    }
+
+    // AC-2 (T-123): older JSONL audit records written before this field existed
+    // must still deserialize, defaulting resolved_cwd to None.
+    #[test]
+    fn extension_event_audit_payload_deserializes_legacy_json_without_resolved_cwd_field() {
+        let legacy = json!({
+            "name": "extension.tool.called",
+            "summary": "tool invoked"
+        });
+
+        let payload: ExtensionEventAuditPayload = serde_json::from_value(legacy)
+            .expect("legacy payload without resolved_cwd must still deserialize");
+
+        assert_eq!(payload.resolved_cwd, None);
     }
 
     // AC-1 (T-123): resolved_cwd serializes as the absolute path when present.
