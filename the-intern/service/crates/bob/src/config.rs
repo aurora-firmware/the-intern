@@ -759,13 +759,6 @@ pub fn load() -> ServiceResult<BobConfig> {
     BobConfig::load()
 }
 
-/// Re-export of the canonical, atomic, mode-preserving schedule writer.
-///
-/// The implementation lives in [`bob_core::types::schedule`] so that this
-/// config layer and the admin-RPC `schedule.*` handlers share a single writer
-/// and cannot drift apart.
-pub use bob_core::types::schedule::write_schedule_entries;
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1760,86 +1753,6 @@ prompt = "from toml"
         );
 
         fs::remove_file(config_file).expect("temp config file should be removable");
-    }
-
-    // ── AC-1 (T-097): write_schedule_entries persists entries to the TOML file ─
-
-    #[test]
-    fn write_schedule_entries_persists_entries_and_can_be_read_back() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("bob.toml");
-
-        // Write one entry to a new file.
-        let entries = vec![ScheduleEntry::with_prompt(
-            "job-1",
-            "0 9 * * *",
-            "Daily digest",
-        )];
-        write_schedule_entries(&path, &entries).expect("write must succeed");
-
-        assert!(path.exists(), "config file must exist after write");
-
-        // Read back using figment to confirm the round-trip.
-        let content = std::fs::read_to_string(&path).expect("read file");
-        assert!(content.contains("job-1"), "id must be in file content");
-        assert!(
-            content.contains("Daily digest"),
-            "prompt must be in file content"
-        );
-    }
-
-    // ── AC-1 (T-097): write_schedule_entries preserves non-schedule config keys ─
-
-    #[test]
-    fn write_schedule_entries_preserves_other_config_keys() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("bob.toml");
-
-        // Write a file with an existing config key.
-        std::fs::write(&path, "tracing_level = \"debug\"\n\n[[schedule]]\nid = \"old-job\"\ncron = \"* * * * *\"\nprompt = \"old\"\n")
-            .expect("write initial config");
-
-        // Replace schedule entries; tracing_level must be preserved.
-        let new_entries = vec![ScheduleEntry::with_prompt(
-            "new-job",
-            "0 8 * * *",
-            "New prompt",
-        )];
-        write_schedule_entries(&path, &new_entries).expect("write must succeed");
-
-        let content = std::fs::read_to_string(&path).expect("read file");
-        assert!(
-            content.contains("tracing_level"),
-            "tracing_level key must be preserved"
-        );
-        assert!(content.contains("new-job"), "new entry id must be present");
-        assert!(!content.contains("old-job"), "old entry must be removed");
-    }
-
-    // ── AC-2 (T-097): write_schedule_entries with empty entries removes the section ─
-
-    #[test]
-    fn write_schedule_entries_with_empty_entries_removes_schedule_section() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("bob.toml");
-
-        std::fs::write(
-            &path,
-            "tracing_level = \"info\"\n\n[[schedule]]\nid = \"to-remove\"\ncron = \"* * * * *\"\nprompt = \"p\"\n",
-        )
-        .expect("write initial config");
-
-        write_schedule_entries(&path, &[]).expect("write must succeed");
-
-        let content = std::fs::read_to_string(&path).expect("read file");
-        assert!(
-            !content.contains("to-remove"),
-            "removed entry must not be in file"
-        );
-        assert!(
-            content.contains("tracing_level"),
-            "other keys must be preserved"
-        );
     }
 
     #[derive(Clone, Default)]
