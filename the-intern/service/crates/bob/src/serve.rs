@@ -612,6 +612,45 @@ async fn record_periodic_fire_skipped(
     }
 }
 
+/// Appends a monitoring record for a periodic fire whose job id no longer
+/// resolves to a live schedule entry (AC-3, ADR-013).
+///
+/// Unlike [`record_periodic_fire_skipped`] (AC-2), this fire is not skipped —
+/// it still proceeds via the service-wide default cwd — so the condition is
+/// recorded as a distinct fallback rather than a skip. Per
+/// `coding-guidelines-rust.md` §6, this persisted audit record is the actual
+/// "record the condition" behavior AC-3 requires; the accompanying
+/// `tracing::warn!` at the call site is operational logging only, not a
+/// substitute for it.
+async fn record_periodic_fire_fallback(audit: &dyn AuditSink, job_id: Option<&str>) {
+    let record = AuditRecord {
+        id: format!(
+            "audit_periodic_fire_fallback_{}",
+            chrono::Utc::now().timestamp_millis()
+        ),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        kind: AuditRecordKind::Report,
+        session_id: None,
+        payload: AuditRecordPayload::Report(ExternalReportAuditPayload {
+            action: "scheduler.periodic_fire_fallback".to_owned(),
+            outcome: ReportOutcome::Error,
+            session_id: None,
+            summary: Some(format!(
+                "job_id={}: no longer resolves to a live schedule entry; falling back to service-wide default cwd",
+                job_id.unwrap_or("<none>")
+            )),
+        }),
+    };
+
+    if let Err(err) = audit.append(record).await {
+        tracing::warn!(
+            error = %err,
+            job_id = job_id.unwrap_or("<none>"),
+            "periodic dispatcher: failed to append monitoring record for stale job id fallback"
+        );
+    }
+}
+
 /// Acquires a session via the plain `acquire_session` (the `pi_agent_cwd` /
 /// inherited-launch-cwd tiers of the precedence), logging a warning and
 /// returning `None` on failure.
@@ -788,11 +827,15 @@ fn start_periodic_dispatcher(
                         PeriodicCwdResolution::EntryNotFound => {
                             // AC-3: the job id no longer resolves to a live entry
                             // (removed between enqueue and fire). Fall back to the
-                            // service-wide default cwd and record the condition.
+                            // service-wide default cwd and record the condition —
+                            // the tracing::warn! is operational logging, the
+                            // audit record below is the actual recorded condition.
                             tracing::warn!(
                                 job_id = job_id.as_deref().unwrap_or("<none>"),
                                 "periodic dispatcher: job id no longer resolves to a live schedule entry; falling back to the service-wide default cwd"
                             );
+                            record_periodic_fire_fallback(audit_sink.as_ref(), job_id.as_deref())
+                                .await;
                             let Some(id) = acquire_default_session_or_warn(&supervisor).await
                             else {
                                 continue;
@@ -2483,6 +2526,93 @@ pub mod tests {
             })
             .await
             .expect("dispatcher must fall back to the default cwd and still dispatch the fire");
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+        }
+
+        // AC-3: a job id that no longer resolves to a live schedule entry must
+        // also produce a monitoring record for the fallback condition — per
+        // coding-guidelines-rust.md §6, "record the condition" means a
+        // persisted audit record, not just an operational tracing log.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_records_fallback_condition_when_job_id_not_in_live_table() {
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+            persistence_handle
+                .enqueue_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "stale-job-id-record-test".to_owned(),
+                    },
+                    Some("removed-job-for-record-test".to_owned()),
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            // The live table does not contain "removed-job-for-record-test".
+            let schedule_rx = schedule_rx_with_entries(Vec::new());
+
+            let worker_script = "while IFS= read -r line; do \
+                 id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf '{\"id\":\"%s\",\"type\":\"response\",\"success\":true}\\n' \"$id\"; \
+                 done"
+                .to_string();
+            let (supervisor_handle, supervisor_join) =
+                pi_agent_supervisor::start(pi_agent_supervisor::Config {
+                    worker_command: "sh".to_string(),
+                    worker_args: vec!["-c".to_string(), worker_script],
+                    warm_pool_size: 1,
+                    max_processes: 2,
+                    extension_path: existing_extension_path(),
+                    ..pi_agent_supervisor::Config::default()
+                })
+                .expect("supervisor must start");
+
+            let audit_sink = Arc::new(SpyAuditSink::default());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx,
+                Arc::clone(&audit_sink) as Arc<dyn AuditSink>,
+                cancel_rx,
+            );
+
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if !audit_sink.records().is_empty() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("stale job id fallback must produce a monitoring record");
+
+            let records = audit_sink.records();
+            assert_eq!(
+                records.len(),
+                1,
+                "expected exactly one fallback monitoring record, got {records:?}"
+            );
+            match &records[0].payload {
+                AuditRecordPayload::Report(payload) => {
+                    assert_eq!(payload.outcome, ReportOutcome::Error);
+                    let summary = payload.summary.as_deref().unwrap_or("");
+                    assert!(
+                        summary.contains("removed-job-for-record-test"),
+                        "summary should reference the job id: {summary:?}"
+                    );
+                    assert!(
+                        summary.to_lowercase().contains("fall"),
+                        "summary should describe a fallback, not a skip: {summary:?}"
+                    );
+                }
+                other => panic!("expected a Report payload, got {other:?}"),
+            }
 
             let _ = cancel_tx.send(true);
             drop(supervisor_handle);
