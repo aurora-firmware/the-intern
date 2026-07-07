@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 use bob_core::error::{ServiceError, ServiceResult};
 use bob_core::ports::{AuditSink, PersistenceStore};
-use bob_core::types::{DeliveryKind, InternalEvent};
+use bob_core::types::{
+    AuditRecord, AuditRecordKind, AuditRecordPayload, DeliveryKind, ExternalReportAuditPayload,
+    InternalEvent, ReportOutcome, ScheduleEntry, SessionId,
+};
 use tokio::{sync::watch, task::JoinHandle, time};
 use tracing::info;
 
@@ -200,6 +203,10 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     let audit_sink: Arc<dyn AuditSink> = Arc::new(monitoring::MonitoringAuditSink::new(
         monitoring_handle.clone(),
     ));
+    // T-127: a separate clone for the periodic dispatcher's monitoring failure
+    // record (AC-2), taken before `audit_sink` is moved into the pre-flight
+    // closure below.
+    let periodic_dispatch_audit_sink = Arc::clone(&audit_sink);
     // Clone the snapshot handle for use in the pre-flight closure.
     let preflight_snapshot = policy_snapshot.clone();
     let (requests_handler_handle, requests_handler_join) = requests_handler::start_with(
@@ -313,6 +320,8 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     let dispatcher_join = start_periodic_dispatcher(
         Arc::new(persistence_handle.clone()),
         pi_agent_supervisor_handle.clone(),
+        scheduler_reload_handle.subscribe(),
+        periodic_dispatch_audit_sink,
         dispatcher_cancel_rx,
     );
     info!("periodic dispatcher started");
@@ -516,6 +525,154 @@ fn remove_socket_files_best_effort(cfg: &BobConfig) {
     remove_socket_files(&cfg.admin_sock_path, &cfg.extension_sock_path);
 }
 
+/// Resolution of a periodic fire's working directory against the live
+/// schedule table (ADR-013), before the precedence's `pi_agent_cwd` /
+/// inherited-launch-cwd tiers are applied.
+///
+/// The lower two precedence tiers (service-wide `pi_agent_cwd`, then the
+/// inherited launch cwd) require no special handling here: both are already
+/// what the plain `pi_agent_supervisor::Handle::acquire_session` applies, so
+/// [`PeriodicCwdResolution::ServiceDefault`] covers both and the dispatcher
+/// just calls the unchanged `acquire_session`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PeriodicCwdResolution {
+    /// The job id resolved to a live entry with a per-entry `cwd`; the
+    /// dispatcher must acquire a dedicated worker bound to this directory
+    /// (T-122's cwd-aware acquisition) rather than the plain `acquire_session`.
+    PerEntry(PathBuf),
+    /// The job id resolved to a live entry with no per-entry `cwd`, or no job
+    /// id was carried with this fire; use the service-wide default (or
+    /// inherited launch cwd) via the plain `acquire_session`.
+    ServiceDefault,
+    /// The job id did not resolve to any live entry (removed between enqueue
+    /// and fire, or absent from the table); fall back to the service-wide
+    /// default and record the condition (AC-3, ADR-013).
+    EntryNotFound,
+}
+
+/// Resolves the working directory for one periodic fire from the live
+/// schedule table, per the precedence in T-127 (per-entry `cwd` →
+/// `pi_agent_cwd` → inherited launch cwd).
+///
+/// `job_id` is the correlator read back from the inbound queue (T-126,
+/// ADR-013); `live_entries` is the current table observed via
+/// `scheduler_adapter::ReloadHandle::subscribe`.
+fn resolve_periodic_cwd(
+    job_id: Option<&str>,
+    live_entries: &[ScheduleEntry],
+) -> PeriodicCwdResolution {
+    let Some(job_id) = job_id else {
+        return PeriodicCwdResolution::ServiceDefault;
+    };
+
+    match live_entries.iter().find(|entry| entry.id == job_id) {
+        Some(entry) => match &entry.cwd {
+            Some(cwd) => PeriodicCwdResolution::PerEntry(PathBuf::from(cwd)),
+            None => PeriodicCwdResolution::ServiceDefault,
+        },
+        None => PeriodicCwdResolution::EntryNotFound,
+    }
+}
+
+/// Appends a monitoring failure record for a skipped periodic fire (AC-2:
+/// the resolved per-entry `cwd` does not exist at fire time).
+///
+/// Mirrors the existing preflight-denied audit pattern (`requests_handler::run_preflight`):
+/// reuses the existing `Report`/`ExternalReportAuditPayload` shape with
+/// `ReportOutcome::Error` rather than introducing a new `AuditRecordKind`.
+/// A failure to append the record itself is logged as a warning and does not
+/// affect the fire being skipped.
+async fn record_periodic_fire_skipped(
+    audit: &dyn AuditSink,
+    job_id: Option<&str>,
+    summary: String,
+) {
+    let record = AuditRecord {
+        id: format!(
+            "audit_periodic_fire_skipped_{}",
+            chrono::Utc::now().timestamp_millis()
+        ),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        kind: AuditRecordKind::Report,
+        session_id: None,
+        payload: AuditRecordPayload::Report(ExternalReportAuditPayload {
+            action: "scheduler.periodic_fire".to_owned(),
+            outcome: ReportOutcome::Error,
+            session_id: None,
+            summary: Some(format!("job_id={}: {summary}", job_id.unwrap_or("<none>"))),
+        }),
+    };
+
+    if let Err(err) = audit.append(record).await {
+        tracing::warn!(
+            error = %err,
+            job_id = job_id.unwrap_or("<none>"),
+            "periodic dispatcher: failed to append monitoring failure record for skipped fire"
+        );
+    }
+}
+
+/// Appends a monitoring record for a periodic fire whose job id no longer
+/// resolves to a live schedule entry (AC-3, ADR-013).
+///
+/// Unlike [`record_periodic_fire_skipped`] (AC-2), this fire is not skipped —
+/// it still proceeds via the service-wide default cwd — so the condition is
+/// recorded as a distinct fallback rather than a skip. Per
+/// `coding-guidelines-rust.md` §6, this persisted audit record is the actual
+/// "record the condition" behavior AC-3 requires; the accompanying
+/// `tracing::warn!` at the call site is operational logging only, not a
+/// substitute for it.
+async fn record_periodic_fire_fallback(audit: &dyn AuditSink, job_id: Option<&str>) {
+    let record = AuditRecord {
+        id: format!(
+            "audit_periodic_fire_fallback_{}",
+            chrono::Utc::now().timestamp_millis()
+        ),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        kind: AuditRecordKind::Report,
+        session_id: None,
+        payload: AuditRecordPayload::Report(ExternalReportAuditPayload {
+            action: "scheduler.periodic_fire_fallback".to_owned(),
+            outcome: ReportOutcome::Error,
+            session_id: None,
+            summary: Some(format!(
+                "job_id={}: no longer resolves to a live schedule entry; falling back to service-wide default cwd",
+                job_id.unwrap_or("<none>")
+            )),
+        }),
+    };
+
+    if let Err(err) = audit.append(record).await {
+        tracing::warn!(
+            error = %err,
+            job_id = job_id.unwrap_or("<none>"),
+            "periodic dispatcher: failed to append monitoring record for stale job id fallback"
+        );
+    }
+}
+
+/// Acquires a session via the plain `acquire_session` (the `pi_agent_cwd` /
+/// inherited-launch-cwd tiers of the precedence), logging a warning and
+/// returning `None` on failure.
+///
+/// Shared by the [`PeriodicCwdResolution::ServiceDefault`] and
+/// [`PeriodicCwdResolution::EntryNotFound`] branches of the periodic
+/// dispatcher, which both fall back to this same acquisition.
+async fn acquire_default_session_or_warn(
+    supervisor: &pi_agent_supervisor::Handle,
+) -> Option<SessionId> {
+    match supervisor.acquire_session().await {
+        Ok(id) => Some(id),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "periodic dispatcher: session acquisition failed; continuing"
+            );
+            None
+        }
+    }
+}
+
 /// Starts the periodic dispatcher task and returns its join handle.
 ///
 /// The dispatcher runs in a dedicated Tokio task.  On each iteration it
@@ -543,9 +700,22 @@ fn remove_socket_files_best_effort(cfg: &BobConfig) {
 /// used elsewhere in this module) so tests can substitute a spy `PersistenceStore`
 /// to observe exactly which of the correlator-carrying (T-120) methods this
 /// dispatcher calls, without depending on real queue/process timing.
+///
+/// T-127: `schedule_entries_rx` observes the live schedule table (via
+/// `scheduler_adapter::ReloadHandle::subscribe`) so each fire's working
+/// directory can be resolved by job id (see `resolve_periodic_cwd`) using the
+/// precedence per-entry `cwd` → `pi_agent_cwd` → inherited launch cwd. When a
+/// per-entry `cwd` applies, the dispatcher acquires a dedicated worker bound
+/// to it via `supervisor.acquire_session_with_cwd` (T-122) instead of the
+/// plain `acquire_session`; a missing directory or a pool already at
+/// `max_processes` skips that fire with a warning (and, for the missing
+/// directory, a monitoring failure record via `audit_sink`) rather than
+/// blocking or evicting a worker.
 fn start_periodic_dispatcher(
     persistence: Arc<dyn PersistenceStore>,
     supervisor: pi_agent_supervisor::Handle,
+    schedule_entries_rx: watch::Receiver<Vec<ScheduleEntry>>,
+    audit_sink: Arc<dyn AuditSink>,
     mut cancel_rx: watch::Receiver<bool>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -601,22 +771,83 @@ fn start_periodic_dispatcher(
 
                 Ok(Some((event, job_id))) => {
                     // Admitted Periodic event: use a fresh one-shot session.
-                    // AC-3 (T-126): the job id read back from the queue is
-                    // logged here so it is observably carried through to the
-                    // dispatcher. Resolving a per-job cwd and acquiring the
-                    // worker with it is T-127's job, not this one's.
+                    // T-127: resolve this fire's working directory from the
+                    // live schedule table (per-entry cwd -> pi_agent_cwd ->
+                    // inherited launch cwd) and acquire accordingly.
                     tracing::debug!(
                         job_id = job_id.as_deref().unwrap_or("<none>"),
                         "periodic dispatcher: dispatching periodic event"
                     );
-                    let session_id = match supervisor.acquire_session().await {
-                        Ok(id) => id,
-                        Err(e) => {
+
+                    let live_entries = schedule_entries_rx.borrow().clone();
+                    let resolution = resolve_periodic_cwd(job_id.as_deref(), &live_entries);
+
+                    let session_id = match resolution {
+                        PeriodicCwdResolution::PerEntry(cwd) => {
+                            if !cwd.exists() {
+                                // AC-2: the resolved per-entry cwd does not exist at
+                                // fire time. Skip this fire (it fires again next
+                                // tick) with a warning and a monitoring failure
+                                // record, analogous to the missing-prompt-file skip
+                                // in scheduler-adapter's resolve_payload.
+                                tracing::warn!(
+                                    job_id = job_id.as_deref().unwrap_or("<none>"),
+                                    cwd = %cwd.display(),
+                                    "periodic dispatcher: resolved per-entry cwd does not exist; skipping this fire"
+                                );
+                                record_periodic_fire_skipped(
+                                    audit_sink.as_ref(),
+                                    job_id.as_deref(),
+                                    format!(
+                                        "resolved per-entry cwd {} does not exist at fire time",
+                                        cwd.display()
+                                    ),
+                                )
+                                .await;
+                                continue;
+                            }
+                            match supervisor.acquire_session_with_cwd(cwd.clone()).await {
+                                Ok(id) => id,
+                                Err(e) => {
+                                    // AC-4: a per-entry-cwd fire when the pool is at
+                                    // max_processes is refused (not blocked or
+                                    // evicted) by acquire_session_with_cwd (T-122).
+                                    // Skip this fire with a warning; it fires again
+                                    // next tick.
+                                    tracing::warn!(
+                                        error = %e,
+                                        job_id = job_id.as_deref().unwrap_or("<none>"),
+                                        cwd = %cwd.display(),
+                                        "periodic dispatcher: cwd-scoped session acquisition failed; skipping this fire"
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                        PeriodicCwdResolution::EntryNotFound => {
+                            // AC-3: the job id no longer resolves to a live entry
+                            // (removed between enqueue and fire). Fall back to the
+                            // service-wide default cwd and record the condition —
+                            // the tracing::warn! is operational logging, the
+                            // audit record below is the actual recorded condition.
                             tracing::warn!(
-                                error = %e,
-                                "periodic dispatcher: session acquisition failed; continuing"
+                                job_id = job_id.as_deref().unwrap_or("<none>"),
+                                "periodic dispatcher: job id no longer resolves to a live schedule entry; falling back to the service-wide default cwd"
                             );
-                            continue;
+                            record_periodic_fire_fallback(audit_sink.as_ref(), job_id.as_deref())
+                                .await;
+                            let Some(id) = acquire_default_session_or_warn(&supervisor).await
+                            else {
+                                continue;
+                            };
+                            id
+                        }
+                        PeriodicCwdResolution::ServiceDefault => {
+                            let Some(id) = acquire_default_session_or_warn(&supervisor).await
+                            else {
+                                continue;
+                            };
+                            id
                         }
                     };
                     // `send_prompt_and_drain` returns as soon as pi acknowledges
@@ -1933,6 +2164,38 @@ pub mod tests {
             pi_agent_supervisor::start(cfg).expect("supervisor must start with an empty warm pool")
         }
 
+        /// An `AuditSink` that records every appended record, so T-127 tests can
+        /// assert on the AC-2 monitoring failure record without depending on the
+        /// real monitoring actor.
+        #[derive(Default)]
+        struct SpyAuditSink {
+            records: std::sync::Mutex<Vec<bob_core::types::AuditRecord>>,
+        }
+
+        impl SpyAuditSink {
+            fn records(&self) -> Vec<bob_core::types::AuditRecord> {
+                self.records.lock().expect("records lock").clone()
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl bob_core::ports::AuditSink for SpyAuditSink {
+            async fn append(&self, record: bob_core::types::AuditRecord) -> ServiceResult<()> {
+                self.records.lock().expect("records lock").push(record);
+                Ok(())
+            }
+        }
+
+        /// A live schedule table receiver seeded with `entries`, for tests that
+        /// don't need a real `scheduler_adapter` actor — the dispatcher only ever
+        /// calls `.borrow()` on this receiver.
+        fn schedule_rx_with_entries(
+            entries: Vec<ScheduleEntry>,
+        ) -> watch::Receiver<Vec<ScheduleEntry>> {
+            let (_tx, rx) = watch::channel(entries);
+            rx
+        }
+
         // AC-3 (T-126): the periodic dispatcher reads the job-id correlator back
         // via `dequeue_next_with_job_id` (T-120), not the plain `dequeue_next`.
         #[tokio::test(flavor = "current_thread")]
@@ -1950,6 +2213,8 @@ pub mod tests {
             let dispatcher_join = start_periodic_dispatcher(
                 Arc::clone(&spy) as Arc<dyn PersistenceStore>,
                 supervisor_handle.clone(),
+                schedule_rx_with_entries(Vec::new()),
+                Arc::new(SpyAuditSink::default()),
                 cancel_rx,
             );
 
@@ -1995,6 +2260,8 @@ pub mod tests {
             let dispatcher_join = start_periodic_dispatcher(
                 Arc::clone(&spy) as Arc<dyn PersistenceStore>,
                 supervisor_handle.clone(),
+                schedule_rx_with_entries(Vec::new()),
+                Arc::new(SpyAuditSink::default()),
                 cancel_rx,
             );
 
@@ -2019,6 +2286,507 @@ pub mod tests {
             drop(supervisor_handle);
             let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
             let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+        }
+
+        // ── T-127: dispatcher-level cwd resolution and dedicated acquisition ──
+
+        // AC-1: when the dequeued job id resolves to a live entry with a
+        // per-entry `cwd`, the dispatcher acquires a dedicated worker bound to
+        // that directory (T-122) rather than a plain `acquire_session`.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_acquires_dedicated_worker_at_resolved_per_entry_cwd() {
+            let worker_cwd = std::env::temp_dir().join(format!(
+                "bob-serve-t127-per-entry-cwd-{}",
+                bob_core::types::SessionId::new()
+            ));
+            std::fs::create_dir_all(&worker_cwd).expect("create dedicated cwd should succeed");
+
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+            persistence_handle
+                .enqueue_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "per-entry-cwd-test".to_owned(),
+                    },
+                    Some("cwd-job".to_owned()),
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            let mut entry = ScheduleEntry::with_prompt("cwd-job", "0 9 * * *", "unused");
+            entry.cwd = Some(worker_cwd.to_string_lossy().into_owned());
+            let schedule_rx = schedule_rx_with_entries(vec![entry]);
+
+            let worker_script = "pwd > marker.txt; while IFS= read -r line; do \
+                 id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf '{\"id\":\"%s\",\"type\":\"response\",\"success\":true}\\n' \"$id\"; \
+                 done"
+                .to_string();
+            // warm_pool_size: 0 — a warm worker would also run worker_script but
+            // inherit the (unset) launch cwd instead of worker_cwd, writing a
+            // stray marker.txt outside the dedicated cwd this test asserts on.
+            let (supervisor_handle, supervisor_join) =
+                pi_agent_supervisor::start(pi_agent_supervisor::Config {
+                    worker_command: "sh".to_string(),
+                    worker_args: vec!["-c".to_string(), worker_script],
+                    warm_pool_size: 0,
+                    max_processes: 2,
+                    extension_path: existing_extension_path(),
+                    ..pi_agent_supervisor::Config::default()
+                })
+                .expect("supervisor must start");
+
+            let audit_sink: Arc<dyn AuditSink> = Arc::new(SpyAuditSink::default());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx,
+                audit_sink,
+                cancel_rx,
+            );
+
+            let marker_path = worker_cwd.join("marker.txt");
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if marker_path.exists() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("dedicated worker should have written the marker file in its cwd");
+
+            let contents = std::fs::read_to_string(&marker_path).expect("read marker file");
+            let actual_cwd =
+                std::fs::canonicalize(contents.trim()).expect("canonicalize actual reported cwd");
+            let expected_cwd =
+                std::fs::canonicalize(&worker_cwd).expect("canonicalize expected worker cwd");
+            assert_eq!(
+                actual_cwd, expected_cwd,
+                "dedicated worker should run in the resolved per-entry cwd"
+            );
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+            std::fs::remove_dir_all(&worker_cwd).ok();
+        }
+
+        // AC-2: a resolved per-entry `cwd` that does not exist at fire time is
+        // skipped with a warning and a monitoring failure record. No worker is
+        // ever acquired for the missing directory — proven here by pairing the
+        // missing-cwd entry with a supervisor that fails fast (missing binary,
+        // empty warm pool), so any accidental acquisition attempt would be
+        // observable as a *different* failure path than the one asserted below.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_skips_fire_and_records_failure_when_per_entry_cwd_is_missing()
+        {
+            let missing_cwd = std::env::temp_dir().join(format!(
+                "bob-serve-t127-missing-cwd-{}",
+                bob_core::types::SessionId::new()
+            ));
+            // Deliberately do not create `missing_cwd` on disk.
+
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+            persistence_handle
+                .enqueue_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "missing-cwd-test".to_owned(),
+                    },
+                    Some("missing-cwd-job".to_owned()),
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            let mut entry = ScheduleEntry::with_prompt("missing-cwd-job", "0 9 * * *", "unused");
+            entry.cwd = Some(missing_cwd.to_string_lossy().into_owned());
+            let schedule_rx = schedule_rx_with_entries(vec![entry]);
+
+            let (supervisor_handle, supervisor_join) = failing_supervisor_handle();
+
+            let audit_sink = Arc::new(SpyAuditSink::default());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx,
+                Arc::clone(&audit_sink) as Arc<dyn AuditSink>,
+                cancel_rx,
+            );
+
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if !audit_sink.records().is_empty() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("missing per-entry cwd must produce a monitoring failure record");
+
+            let records = audit_sink.records();
+            assert_eq!(
+                records.len(),
+                1,
+                "expected exactly one monitoring failure record, got {records:?}"
+            );
+            match &records[0].payload {
+                AuditRecordPayload::Report(payload) => {
+                    assert_eq!(payload.outcome, ReportOutcome::Error);
+                    assert!(
+                        payload
+                            .summary
+                            .as_deref()
+                            .unwrap_or("")
+                            .contains("missing-cwd-job"),
+                        "summary should reference the job id: {:?}",
+                        payload.summary
+                    );
+                }
+                other => panic!("expected a Report payload, got {other:?}"),
+            }
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+        }
+
+        // AC-3: a job id that no longer resolves to any live schedule entry
+        // (removed between enqueue and fire) falls back to the service-wide
+        // default cwd — the fire still dispatches via the plain
+        // `acquire_session`, it is not dropped or blocked.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_falls_back_to_default_cwd_when_job_id_not_in_live_table() {
+            let tmp = tempfile::tempdir().expect("temp dir");
+            let record_file = tmp.path().join("received_prompt.txt");
+            let record_file_str = record_file.to_string_lossy().into_owned();
+
+            let worker_script = format!(
+                "while IFS= read -r line; do \
+                 id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf 'received\\n' >> \"{}\"; \
+                 printf '{{\"id\":\"%s\",\"type\":\"response\",\"success\":true}}\\n' \"$id\"; \
+                 done",
+                record_file_str
+            );
+
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+            persistence_handle
+                .enqueue_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "stale-job-id-test".to_owned(),
+                    },
+                    Some("removed-job".to_owned()),
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            // The live table does not contain "removed-job" — simulates the
+            // entry being removed between enqueue and fire.
+            let schedule_rx = schedule_rx_with_entries(Vec::new());
+
+            let (supervisor_handle, supervisor_join) =
+                pi_agent_supervisor::start(pi_agent_supervisor::Config {
+                    worker_command: "sh".to_string(),
+                    worker_args: vec!["-c".to_string(), worker_script],
+                    warm_pool_size: 1,
+                    max_processes: 2,
+                    extension_path: existing_extension_path(),
+                    ..pi_agent_supervisor::Config::default()
+                })
+                .expect("supervisor must start");
+
+            let audit_sink: Arc<dyn AuditSink> = Arc::new(SpyAuditSink::default());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx,
+                audit_sink,
+                cancel_rx,
+            );
+
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if record_file.exists() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("dispatcher must fall back to the default cwd and still dispatch the fire");
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+        }
+
+        // AC-3: a job id that no longer resolves to a live schedule entry must
+        // also produce a monitoring record for the fallback condition — per
+        // coding-guidelines-rust.md §6, "record the condition" means a
+        // persisted audit record, not just an operational tracing log.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_records_fallback_condition_when_job_id_not_in_live_table() {
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+            persistence_handle
+                .enqueue_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "stale-job-id-record-test".to_owned(),
+                    },
+                    Some("removed-job-for-record-test".to_owned()),
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            // The live table does not contain "removed-job-for-record-test".
+            let schedule_rx = schedule_rx_with_entries(Vec::new());
+
+            let worker_script = "while IFS= read -r line; do \
+                 id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf '{\"id\":\"%s\",\"type\":\"response\",\"success\":true}\\n' \"$id\"; \
+                 done"
+                .to_string();
+            let (supervisor_handle, supervisor_join) =
+                pi_agent_supervisor::start(pi_agent_supervisor::Config {
+                    worker_command: "sh".to_string(),
+                    worker_args: vec!["-c".to_string(), worker_script],
+                    warm_pool_size: 1,
+                    max_processes: 2,
+                    extension_path: existing_extension_path(),
+                    ..pi_agent_supervisor::Config::default()
+                })
+                .expect("supervisor must start");
+
+            let audit_sink = Arc::new(SpyAuditSink::default());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx,
+                Arc::clone(&audit_sink) as Arc<dyn AuditSink>,
+                cancel_rx,
+            );
+
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if !audit_sink.records().is_empty() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("stale job id fallback must produce a monitoring record");
+
+            let records = audit_sink.records();
+            assert_eq!(
+                records.len(),
+                1,
+                "expected exactly one fallback monitoring record, got {records:?}"
+            );
+            match &records[0].payload {
+                AuditRecordPayload::Report(payload) => {
+                    assert_eq!(payload.outcome, ReportOutcome::Error);
+                    let summary = payload.summary.as_deref().unwrap_or("");
+                    assert!(
+                        summary.contains("removed-job-for-record-test"),
+                        "summary should reference the job id: {summary:?}"
+                    );
+                    assert!(
+                        summary.to_lowercase().contains("fall"),
+                        "summary should describe a fallback, not a skip: {summary:?}"
+                    );
+                }
+                other => panic!("expected a Report payload, got {other:?}"),
+            }
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+        }
+
+        // AC-4: when the pool is already at `max_processes`, a per-entry-cwd
+        // fire is skipped with a warning rather than blocking or evicting the
+        // existing live worker.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_skips_per_entry_cwd_fire_without_evicting_when_pool_is_full() {
+            let cwd_dir = std::env::temp_dir().join(format!(
+                "bob-serve-t127-max-processes-cwd-{}",
+                bob_core::types::SessionId::new()
+            ));
+            std::fs::create_dir_all(&cwd_dir).expect("create dedicated cwd should succeed");
+
+            // Worker script: acknowledge every prompt and keep running, so the
+            // first acquired session stays alive (occupying the sole
+            // max_processes slot) for the rest of the test.
+            let worker_script = "while IFS= read -r line; do \
+                 id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf '{\"id\":\"%s\",\"type\":\"response\",\"success\":true}\\n' \"$id\"; \
+                 done"
+                .to_string();
+
+            let (supervisor_handle, supervisor_join) =
+                pi_agent_supervisor::start(pi_agent_supervisor::Config {
+                    worker_command: "sh".to_string(),
+                    worker_args: vec!["-c".to_string(), worker_script],
+                    warm_pool_size: 0,
+                    max_processes: 1,
+                    extension_path: existing_extension_path(),
+                    ..pi_agent_supervisor::Config::default()
+                })
+                .expect("supervisor must start");
+
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+
+            // First fire: no per-entry cwd, occupies the sole max_processes
+            // slot via the plain acquire_session path.
+            persistence_handle
+                .enqueue_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "first-fire".to_owned(),
+                    },
+                    None,
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            let mut entry =
+                ScheduleEntry::with_prompt("cwd-job-at-capacity", "0 9 * * *", "unused");
+            entry.cwd = Some(cwd_dir.to_string_lossy().into_owned());
+            let schedule_rx = schedule_rx_with_entries(vec![entry]);
+
+            let audit_sink: Arc<dyn AuditSink> = Arc::new(SpyAuditSink::default());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx,
+                audit_sink,
+                cancel_rx,
+            );
+
+            // Wait for the first fire to acquire the sole slot.
+            let first_session_id = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let sessions = supervisor_handle
+                        .list_sessions()
+                        .await
+                        .expect("list sessions should succeed");
+                    if let Some(id) = sessions.first().copied() {
+                        break id;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("first fire must acquire the sole max_processes slot");
+
+            // Second fire: resolves to a per-entry cwd, but the pool is
+            // already full.
+            persistence_handle
+                .enqueue_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "second-fire-should-be-skipped".to_owned(),
+                    },
+                    Some("cwd-job-at-capacity".to_owned()),
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            // Give the dispatcher time to process (and skip) the second fire.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+
+            let marker_path = cwd_dir.join("marker.txt");
+            assert!(
+                !marker_path.exists(),
+                "a dedicated worker must never be spawned for the per-entry cwd fire while the pool is full"
+            );
+
+            let sessions_after = supervisor_handle
+                .list_sessions()
+                .await
+                .expect("list sessions should succeed");
+            assert_eq!(
+                sessions_after,
+                vec![first_session_id],
+                "the existing live worker must not be evicted by the refused cwd-scoped fire"
+            );
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+            std::fs::remove_dir_all(&cwd_dir).ok();
+        }
+
+        // ── T-127: periodic-fire cwd precedence resolution ─────────────────
+
+        // AC-1: a job id that resolves to a live entry with a per-entry `cwd`
+        // set must resolve to that directory (top precedence tier).
+        #[test]
+        fn resolve_periodic_cwd_returns_per_entry_when_live_entry_has_cwd_set() {
+            let mut entry = ScheduleEntry::with_prompt("cwd-job", "0 9 * * *", "unused");
+            entry.cwd = Some("/srv/workspaces/email".to_string());
+
+            let resolution = resolve_periodic_cwd(Some("cwd-job"), &[entry]);
+
+            assert_eq!(
+                resolution,
+                PeriodicCwdResolution::PerEntry(PathBuf::from("/srv/workspaces/email"))
+            );
+        }
+
+        // AC-1: a job id that resolves to a live entry with no per-entry `cwd`
+        // falls through to the service-wide default tier.
+        #[test]
+        fn resolve_periodic_cwd_returns_service_default_when_live_entry_has_no_cwd() {
+            let entry = ScheduleEntry::with_prompt("no-cwd-job", "0 9 * * *", "unused");
+
+            let resolution = resolve_periodic_cwd(Some("no-cwd-job"), &[entry]);
+
+            assert_eq!(resolution, PeriodicCwdResolution::ServiceDefault);
+        }
+
+        // AC-1: a fire carrying no job id at all (no scheduler correlator) has
+        // nothing to resolve against, so it uses the service-wide default tier.
+        #[test]
+        fn resolve_periodic_cwd_returns_service_default_when_job_id_is_none() {
+            let mut entry = ScheduleEntry::with_prompt("cwd-job", "0 9 * * *", "unused");
+            entry.cwd = Some("/srv/workspaces/email".to_string());
+
+            let resolution = resolve_periodic_cwd(None, &[entry]);
+
+            assert_eq!(resolution, PeriodicCwdResolution::ServiceDefault);
+        }
+
+        // AC-3: a job id that no longer resolves to any live entry (removed
+        // between enqueue and fire) is reported distinctly so the dispatcher
+        // can fall back to the default and record the condition.
+        #[test]
+        fn resolve_periodic_cwd_returns_entry_not_found_when_job_id_not_in_live_table() {
+            let entry = ScheduleEntry::with_prompt("other-job", "0 9 * * *", "unused");
+
+            let resolution = resolve_periodic_cwd(Some("removed-job"), &[entry]);
+
+            assert_eq!(resolution, PeriodicCwdResolution::EntryNotFound);
         }
     }
 

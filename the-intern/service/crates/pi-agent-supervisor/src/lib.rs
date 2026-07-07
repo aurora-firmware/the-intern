@@ -62,6 +62,14 @@ enum Command {
     AcquireSession {
         response_tx: oneshot::Sender<ServiceResult<SessionId>>,
     },
+    /// Like [`Command::AcquireSession`], but binds the spawned worker to a
+    /// caller-supplied working directory via
+    /// `pool::SessionPool::acquire_session_with_cwd` (T-122), for the periodic
+    /// dispatcher's per-entry `cwd` resolution (T-127).
+    AcquireSessionWithCwd {
+        cwd: PathBuf,
+        response_tx: oneshot::Sender<ServiceResult<SessionId>>,
+    },
     ListSessions {
         response_tx: oneshot::Sender<ServiceResult<Vec<SessionId>>>,
     },
@@ -130,6 +138,23 @@ impl Handle {
         let (response_tx, response_rx) = oneshot::channel();
         self.tx
             .send(Command::AcquireSession { response_tx })
+            .await
+            .map_err(|_| ServiceError::Shutdown)?;
+
+        response_rx.await.map_err(|_| ServiceError::Shutdown)?
+    }
+
+    /// Acquires a dedicated worker bound to `cwd` rather than a warm-pool
+    /// worker (T-122's `pool::SessionPool::acquire_session_with_cwd`).
+    ///
+    /// Bound by `max_processes` exactly like [`Self::acquire_session`]: when
+    /// active plus warm workers already fill the limit, the acquisition is
+    /// refused (`ServiceError::ChildProcess`) rather than evicting a live
+    /// worker or exceeding the bound.
+    pub async fn acquire_session_with_cwd(&self, cwd: PathBuf) -> ServiceResult<SessionId> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.tx
+            .send(Command::AcquireSessionWithCwd { cwd, response_tx })
             .await
             .map_err(|_| ServiceError::Shutdown)?;
 
@@ -306,6 +331,20 @@ impl Actor {
                                 tracing::debug!(
                                     session_id = %session_id,
                                     "pi-agent-supervisor session acquired"
+                                );
+                            }
+                            let _ = response_tx.send(result);
+                        }
+                        Command::AcquireSessionWithCwd { cwd, response_tx } => {
+                            tracing::debug!(
+                                cwd = %cwd.display(),
+                                "pi-agent-supervisor acquire cwd-scoped session command received"
+                            );
+                            let result = self.pool.acquire_session_with_cwd(cwd);
+                            if let Ok(session_id) = &result {
+                                tracing::debug!(
+                                    session_id = %session_id,
+                                    "pi-agent-supervisor cwd-scoped session acquired"
                                 );
                             }
                             let _ = response_tx.send(result);
@@ -592,6 +631,35 @@ mod tests {
 
         assert_eq!(sessions, vec![session_id]);
         task.abort();
+    }
+
+    // AC-1 (T-127): Handle::acquire_session_with_cwd is a thin passthrough to
+    // pool::SessionPool::acquire_session_with_cwd (T-122) — the returned
+    // session id must be tracked exactly like a plain acquire_session, so the
+    // periodic dispatcher can rely on the usual list_sessions/kill_session/
+    // send_prompt lifecycle for a cwd-scoped dedicated worker.
+    #[tokio::test(flavor = "current_thread")]
+    async fn acquire_session_with_cwd_returns_a_session_id_tracked_by_list_sessions() {
+        let (handle, task) =
+            start(test_config("sh", &["-c", "exit 0"], 1, 2)).expect("startup should succeed");
+        let worker_cwd = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-handle-cwd-{}",
+            SessionId::new()
+        ));
+        std::fs::create_dir_all(&worker_cwd).expect("create dedicated cwd should succeed");
+
+        let session_id = handle
+            .acquire_session_with_cwd(worker_cwd.clone())
+            .await
+            .expect("cwd-scoped session acquire should succeed");
+        let sessions = handle
+            .list_sessions()
+            .await
+            .expect("list sessions should succeed");
+
+        assert_eq!(sessions, vec![session_id]);
+        task.abort();
+        std::fs::remove_dir_all(&worker_cwd).ok();
     }
 
     #[tokio::test(flavor = "current_thread")]

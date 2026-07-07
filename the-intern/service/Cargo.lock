@@ -146,6 +146,7 @@ dependencies = [
  "admin-rpc",
  "async-trait",
  "bob-core",
+ "chrono",
  "clap",
  "extension-ipc",
  "figment",
