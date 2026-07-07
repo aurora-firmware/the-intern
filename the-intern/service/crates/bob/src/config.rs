@@ -1463,16 +1463,16 @@ audit_log_path = "{}"
 
         // Write two entries to the JSON store before loading config.
         let entries = vec![
-            bob_core::types::ScheduleEntry {
-                id: "morning-digest".to_owned(),
-                cron: "0 9 * * 1-5".to_owned(),
-                prompt: "send morning digest".to_owned(),
-            },
-            bob_core::types::ScheduleEntry {
-                id: "weekly-report".to_owned(),
-                cron: "0 17 * * 5".to_owned(),
-                prompt: "compile weekly report".to_owned(),
-            },
+            bob_core::types::ScheduleEntry::with_prompt(
+                "morning-digest",
+                "0 9 * * 1-5",
+                "send morning digest",
+            ),
+            bob_core::types::ScheduleEntry::with_prompt(
+                "weekly-report",
+                "0 17 * * 5",
+                "compile weekly report",
+            ),
         ];
         bob_core::types::schedule::write_schedule_store(&store_path, &entries)
             .expect("write schedule store must succeed");
@@ -1644,11 +1644,11 @@ prompt = "from toml"
         let path = dir.path().join("bob.toml");
 
         // Write one entry to a new file.
-        let entries = vec![ScheduleEntry {
-            id: "job-1".to_owned(),
-            cron: "0 9 * * *".to_owned(),
-            prompt: "Daily digest".to_owned(),
-        }];
+        let entries = vec![ScheduleEntry::with_prompt(
+            "job-1",
+            "0 9 * * *",
+            "Daily digest",
+        )];
         write_schedule_entries(&path, &entries).expect("write must succeed");
 
         assert!(path.exists(), "config file must exist after write");
@@ -1674,11 +1674,11 @@ prompt = "from toml"
             .expect("write initial config");
 
         // Replace schedule entries; tracing_level must be preserved.
-        let new_entries = vec![ScheduleEntry {
-            id: "new-job".to_owned(),
-            cron: "0 8 * * *".to_owned(),
-            prompt: "New prompt".to_owned(),
-        }];
+        let new_entries = vec![ScheduleEntry::with_prompt(
+            "new-job",
+            "0 8 * * *",
+            "New prompt",
+        )];
         write_schedule_entries(&path, &new_entries).expect("write must succeed");
 
         let content = std::fs::read_to_string(&path).expect("read file");

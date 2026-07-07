@@ -32,9 +32,10 @@ struct ScheduleStoreDoc {
 /// Returns `ServiceError::Configuration` when the document is not valid JSON,
 /// carries an unrecognised `version` field, contains entries that do not match
 /// the expected shape, or violates the whole-store invariants enforced by
-/// [`validate_schedule_store`] (unique non-empty `id`, valid 5-field `cron`,
-/// non-empty `prompt`). The store is accepted or rejected as a whole; a single
-/// bad entry fails the read rather than being silently skipped (S-009).
+/// [`validate_schedule_store`] (unique non-empty `id`, valid 5-field `cron`, and
+/// exactly one non-blank prompt source — either `prompt` or an absolute `file`).
+/// The store is accepted or rejected as a whole; a single bad entry fails the
+/// read rather than being silently skipped (S-009).
 ///
 /// This reader establishes *content* validity only. Callers that treat the
 /// store as trusted, admitted work (startup and `schedule.reload`) must also
@@ -71,11 +72,13 @@ pub fn read_schedule_store(path: &Path) -> ServiceResult<Vec<ScheduleEntry>> {
 
 /// Validate the whole-store invariants required of schedule entries (S-009).
 ///
-/// Every entry must have a non-empty `id`, a non-empty `prompt`, and a valid
-/// 5-field cron expression (minute hour day-of-month month day-of-week); `id`
-/// values must be unique across the store. The store is validated as a whole —
-/// a single bad entry rejects the entire document rather than being silently
-/// skipped or deferred.
+/// Every entry must have a non-empty `id`, a valid 5-field cron expression
+/// (minute hour day-of-month month day-of-week), and exactly one non-blank
+/// prompt source: either a `prompt` (literal text) or a `file` (an absolute
+/// path whose contents are read at fire time). Setting both, setting neither,
+/// or giving `file` a relative path is rejected. `id` values must be unique
+/// across the store. The store is validated as a whole — a single bad entry
+/// rejects the entire document rather than being silently skipped or deferred.
 ///
 /// # Errors
 ///
@@ -91,10 +94,43 @@ pub fn validate_schedule_store(entries: &[ScheduleEntry]) -> ServiceResult<()> {
                 detail: "schedule store contains an entry with a blank id".to_owned(),
             });
         }
-        if entry.prompt.trim().is_empty() {
-            return Err(ServiceError::Configuration {
-                detail: format!("schedule entry {:?} has a blank prompt", entry.id),
-            });
+        match (
+            entry.prompt.as_deref().map(str::trim),
+            entry.file.as_deref().map(str::trim),
+        ) {
+            (Some(p), None) if !p.is_empty() => {}
+            (None, Some(f)) if !f.is_empty() => {
+                if !std::path::Path::new(f).is_absolute() {
+                    return Err(ServiceError::Configuration {
+                        detail: format!(
+                            "schedule entry {:?} has a relative file path {f:?}; an absolute path is required",
+                            entry.id
+                        ),
+                    });
+                }
+            }
+            (Some(_), Some(_)) => {
+                return Err(ServiceError::Configuration {
+                    detail: format!(
+                        "schedule entry {:?} sets both prompt and file; exactly one is required",
+                        entry.id
+                    ),
+                });
+            }
+            (None, None) => {
+                return Err(ServiceError::Configuration {
+                    detail: format!(
+                        "schedule entry {:?} sets neither prompt nor file; exactly one is required",
+                        entry.id
+                    ),
+                });
+            }
+            // Exactly one field is present, but it is blank.
+            _ => {
+                return Err(ServiceError::Configuration {
+                    detail: format!("schedule entry {:?} has a blank prompt or file", entry.id),
+                });
+            }
         }
         if entry.cron.trim().is_empty() {
             return Err(ServiceError::Configuration {
@@ -404,14 +440,63 @@ pub fn write_schedule_store(path: &Path, entries: &[ScheduleEntry]) -> ServiceRe
 /// A validated schedule job entry sourced from the JSON schedule store
 /// (`schedules.json`).
 ///
-/// `id` is the unique string identifier for the job, `cron` is a standard
-/// 5-field cron expression (minute hour day-of-month month day-of-week), and
-/// `prompt` is the non-empty text sent to the agent when the job fires.
+/// `id` is the unique string identifier for the job and `cron` is a standard
+/// 5-field cron expression (minute hour day-of-month month day-of-week).
+///
+/// The prompt sent to the agent when the job fires comes from exactly one of
+/// two mutually exclusive fields:
+///
+/// - `prompt` — literal text, sent verbatim.
+/// - `file` — an absolute path to a file whose contents are read *fresh at
+///   each fire* and sent as the prompt. Editing the file changes what future
+///   runs send; a missing, unreadable, or blank file skips that fire (the
+///   resolution happens in the scheduler-adapter).
+///
+/// Exactly one of `prompt`/`file` must be present and non-blank, and `file`
+/// must be an absolute path — both enforced by [`validate_schedule_store`]. On
+/// disk an entry serialises to `{ "id", "cron", "prompt" }` or
+/// `{ "id", "cron", "file" }`; the unused field is omitted, so existing
+/// `prompt`-only stores continue to load unchanged (store version stays 1).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScheduleEntry {
     pub id: String,
     pub cron: String,
-    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+}
+
+impl ScheduleEntry {
+    /// Construct a literal-text schedule entry (the `prompt` is sent verbatim).
+    pub fn with_prompt(
+        id: impl Into<String>,
+        cron: impl Into<String>,
+        prompt: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            cron: cron.into(),
+            prompt: Some(prompt.into()),
+            file: None,
+        }
+    }
+
+    /// Construct a file-backed schedule entry. `file` should be an absolute
+    /// path; [`validate_schedule_store`] rejects relative paths, and the file's
+    /// contents are read fresh at each fire.
+    pub fn with_file(
+        id: impl Into<String>,
+        cron: impl Into<String>,
+        file: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            cron: cron.into(),
+            prompt: None,
+            file: Some(file.into()),
+        }
+    }
 }
 
 /// Atomically replace the `[[schedule]]` array in the TOML file at `path` with
@@ -462,7 +547,12 @@ pub fn write_schedule_entries(path: &Path, entries: &[ScheduleEntry]) -> Service
             let mut table = toml_edit::Table::new();
             table.insert("id", toml_edit::value(entry.id.as_str()));
             table.insert("cron", toml_edit::value(entry.cron.as_str()));
-            table.insert("prompt", toml_edit::value(entry.prompt.as_str()));
+            if let Some(prompt) = entry.prompt.as_deref() {
+                table.insert("prompt", toml_edit::value(prompt));
+            }
+            if let Some(file) = entry.file.as_deref() {
+                table.insert("file", toml_edit::value(file));
+            }
             arr.push(table);
         }
         doc.insert("schedule", toml_edit::Item::ArrayOfTables(arr));
@@ -533,11 +623,7 @@ mod tests {
     };
 
     fn entry(id: &str) -> ScheduleEntry {
-        ScheduleEntry {
-            id: id.to_owned(),
-            cron: "* * * * *".to_owned(),
-            prompt: "do the thing".to_owned(),
-        }
+        ScheduleEntry::with_prompt(id, "* * * * *", "do the thing")
     }
 
     #[test]
@@ -640,16 +726,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("schedule.json");
         let original = vec![
-            ScheduleEntry {
-                id: "job-alpha".to_owned(),
-                cron: "0 9 * * 1-5".to_owned(),
-                prompt: "send morning report".to_owned(),
-            },
-            ScheduleEntry {
-                id: "job-beta".to_owned(),
-                cron: "*/30 * * * *".to_owned(),
-                prompt: "check queue".to_owned(),
-            },
+            ScheduleEntry::with_prompt("job-alpha", "0 9 * * 1-5", "send morning report"),
+            ScheduleEntry::with_prompt("job-beta", "*/30 * * * *", "check queue"),
         ];
 
         write_schedule_store(&path, &original).expect("write must succeed");
@@ -658,10 +736,10 @@ mod tests {
         assert_eq!(loaded.len(), 2, "entry count must match");
         assert_eq!(loaded[0].id, "job-alpha");
         assert_eq!(loaded[0].cron, "0 9 * * 1-5");
-        assert_eq!(loaded[0].prompt, "send morning report");
+        assert_eq!(loaded[0].prompt.as_deref(), Some("send morning report"));
         assert_eq!(loaded[1].id, "job-beta");
         assert_eq!(loaded[1].cron, "*/30 * * * *");
-        assert_eq!(loaded[1].prompt, "check queue");
+        assert_eq!(loaded[1].prompt.as_deref(), Some("check queue"));
     }
 
     #[test]
@@ -685,11 +763,7 @@ mod tests {
 
         write_schedule_store(
             &path,
-            &[ScheduleEntry {
-                id: "chk".to_owned(),
-                cron: "* * * * *".to_owned(),
-                prompt: "ping".to_owned(),
-            }],
+            &[ScheduleEntry::with_prompt("chk", "* * * * *", "ping")],
         )
         .expect("write must succeed");
 
@@ -762,11 +836,11 @@ mod tests {
 
         write_schedule_store(
             &path,
-            &[ScheduleEntry {
-                id: "test-job".to_owned(),
-                cron: "0 * * * *".to_owned(),
-                prompt: "hourly check".to_owned(),
-            }],
+            &[ScheduleEntry::with_prompt(
+                "test-job",
+                "0 * * * *",
+                "hourly check",
+            )],
         )
         .expect("write must succeed");
 
@@ -873,21 +947,9 @@ mod tests {
     #[test]
     fn validate_rejects_blank_id_prompt_and_cron() {
         for bad in [
-            ScheduleEntry {
-                id: "  ".to_owned(),
-                cron: "* * * * *".to_owned(),
-                prompt: "p".to_owned(),
-            },
-            ScheduleEntry {
-                id: "x".to_owned(),
-                cron: "* * * * *".to_owned(),
-                prompt: "   ".to_owned(),
-            },
-            ScheduleEntry {
-                id: "x".to_owned(),
-                cron: "   ".to_owned(),
-                prompt: "p".to_owned(),
-            },
+            ScheduleEntry::with_prompt("  ", "* * * * *", "p"),
+            ScheduleEntry::with_prompt("x", "* * * * *", "   "),
+            ScheduleEntry::with_prompt("x", "   ", "p"),
         ] {
             let err = validate_schedule_store(&[bad]).expect_err("blank field must be rejected");
             assert!(
@@ -899,11 +961,7 @@ mod tests {
 
     #[test]
     fn validate_rejects_invalid_cron() {
-        let bad = ScheduleEntry {
-            id: "x".to_owned(),
-            cron: "not a cron".to_owned(),
-            prompt: "p".to_owned(),
-        };
+        let bad = ScheduleEntry::with_prompt("x", "not a cron", "p");
         let err = validate_schedule_store(&[bad]).expect_err("invalid cron must be rejected");
         assert!(
             matches!(err, crate::error::ServiceError::Configuration { .. }),
@@ -1052,5 +1110,124 @@ mod tests {
             mode, 0o700,
             "loose store dir must be tightened to owner-only"
         );
+    }
+
+    // --- prompt|file source (file-backed prompts) ---
+
+    #[test]
+    fn round_trips_a_file_backed_entry_through_json_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+        let original = vec![ScheduleEntry::with_file(
+            "job-file",
+            "0 9 * * *",
+            "/etc/bob/prompt.txt",
+        )];
+
+        write_schedule_store(&path, &original).expect("write must succeed");
+        let loaded = read_schedule_store(&path).expect("read must succeed");
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].prompt, None, "file-backed entry has no prompt");
+        assert_eq!(loaded[0].file.as_deref(), Some("/etc/bob/prompt.txt"));
+    }
+
+    #[test]
+    fn file_backed_entry_serialises_with_file_key_and_omits_prompt_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+
+        write_schedule_store(
+            &path,
+            &[ScheduleEntry::with_file("f", "* * * * *", "/abs/p.txt")],
+        )
+        .expect("write must succeed");
+
+        let raw = std::fs::read_to_string(&path).expect("read raw");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+        assert_eq!(v["entries"][0]["file"], "/abs/p.txt");
+        assert!(
+            v["entries"][0].get("prompt").is_none(),
+            "prompt key must be omitted for a file-backed entry"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_entry_setting_both_prompt_and_file() {
+        let bad = ScheduleEntry {
+            id: "x".to_owned(),
+            cron: "* * * * *".to_owned(),
+            prompt: Some("p".to_owned()),
+            file: Some("/abs/p.txt".to_owned()),
+        };
+        let err =
+            validate_schedule_store(&[bad]).expect_err("both prompt and file must be rejected");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+        assert!(err.to_string().contains("both"), "message: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_entry_setting_neither_prompt_nor_file() {
+        let bad = ScheduleEntry {
+            id: "x".to_owned(),
+            cron: "* * * * *".to_owned(),
+            prompt: None,
+            file: None,
+        };
+        let err =
+            validate_schedule_store(&[bad]).expect_err("neither prompt nor file must be rejected");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+        assert!(err.to_string().contains("neither"), "message: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_relative_file_path() {
+        let bad = ScheduleEntry::with_file("x", "* * * * *", "relative/p.txt");
+        let err = validate_schedule_store(&[bad]).expect_err("relative file must be rejected");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("relative") || err.to_string().contains("absolute"),
+            "message must mention the path problem: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_blank_file() {
+        let bad = ScheduleEntry::with_file("x", "* * * * *", "   ");
+        let err = validate_schedule_store(&[bad]).expect_err("blank file must be rejected");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_a_file_backed_entry_with_absolute_path() {
+        validate_schedule_store(&[ScheduleEntry::with_file("x", "* * * * *", "/abs/p.txt")])
+            .expect("absolute file-backed entry must pass");
+    }
+
+    #[test]
+    fn read_schedule_store_reads_a_hand_edited_file_backed_entry() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"entries":[{"id":"x","cron":"* * * * *","file":"/abs/p.txt"}]}"#,
+        )
+        .expect("seed store with a file-backed entry");
+
+        let loaded = read_schedule_store(&path).expect("file-backed entry must read");
+        assert_eq!(loaded[0].file.as_deref(), Some("/abs/p.txt"));
+        assert_eq!(loaded[0].prompt, None);
     }
 }

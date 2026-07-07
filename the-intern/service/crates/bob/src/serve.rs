@@ -564,20 +564,30 @@ fn start_periodic_dispatcher(
                             continue;
                         }
                     };
-                    // `send_prompt` returns as soon as pi acknowledges *receipt*
-                    // of the prompt over its RPC channel; the agent run (provider
-                    // calls, tool execution) continues asynchronously afterward.
-                    // On success we must NOT kill the session here — doing so
-                    // aborts the run before it can complete (B-017). The worker
-                    // is instead released later by the existing idle reaper
-                    // (`last_prompt_activity` + `idle_reap_timeout`), the same
-                    // backstop that reclaims other supervisor-managed sessions,
-                    // so periodic jobs still cannot leak workers indefinitely.
+                    // `send_prompt_and_drain` returns as soon as pi acknowledges
+                    // *receipt* of the prompt over its RPC channel; the agent run
+                    // (provider calls, tool execution) continues asynchronously
+                    // afterward. On success we must NOT kill the session here —
+                    // doing so aborts the run before it can complete (B-017).
+                    //
+                    // Critically, the `_and_drain` variant hands the worker's
+                    // stdout to a background drain task once the prompt is
+                    // accepted. Without a reader, the run's streamed RPC output
+                    // fills the ~8 KiB stdout pipe within a second or two and
+                    // blocks pi mid-run, so the scheduled action never reaches
+                    // its tool call (e.g. the file write never happens). Draining
+                    // keeps the run flowing to completion. Once that detached
+                    // stdout drain reaches EOF, the worker becomes idle again
+                    // and is released later by the idle reaper, so periodic
+                    // jobs cannot leak workers.
                     //
                     // On failure there is no run in flight to wait for (the
                     // prompt was never accepted), so the session is cleaned up
                     // immediately as before.
-                    if let Err(e) = supervisor.send_prompt(session_id, event.payload).await {
+                    if let Err(e) = supervisor
+                        .send_prompt_and_drain(session_id, event.payload)
+                        .await
+                    {
                         tracing::warn!(
                             error = %e,
                             "periodic dispatcher: prompt send failed; continuing"
@@ -875,11 +885,7 @@ pub mod tests {
         use bob_core::types::ScheduleEntry;
 
         let tmp = tempfile::tempdir().expect("temp dir");
-        let entry = ScheduleEntry {
-            id: "json-store-job".to_owned(),
-            cron: "0 9 * * *".to_owned(),
-            prompt: "from json store".to_owned(),
-        };
+        let entry = ScheduleEntry::with_prompt("json-store-job", "0 9 * * *", "from json store");
         let cfg = BobConfig {
             admin_sock_path: tmp.path().join("admin.sock"),
             extension_sock_path: tmp.path().join("extension.sock"),

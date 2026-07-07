@@ -549,11 +549,13 @@ impl Dispatcher {
 
     // ── Schedule method handlers ─────────────────────────────────────────────
 
-    /// Handle `schedule.add { id, cron, prompt }`.
+    /// Handle `schedule.add { id, cron, prompt | file }`.
     ///
-    /// Validates the entry (non-blank fields, valid 5-field croner expression,
-    /// id not already in the live table), then atomically writes the updated
-    /// `[[schedule]]` array back to the config file and signals a reload.
+    /// Validates the entry (non-blank `id`/`cron`, a valid 5-field croner
+    /// expression, exactly one non-blank prompt source — either `prompt`
+    /// literal text or a `file` path read at fire time — and an `id` not already
+    /// in the live table), then atomically writes the updated store back to the
+    /// JSON schedule store and signals a reload.
     async fn handle_schedule_add(&self, id: Value, params: &Option<Value>) -> DispatchOutcome {
         let (handle, schedule_store_path) = match self.schedule_handles() {
             Some(pair) => pair,
@@ -601,17 +603,40 @@ impl Dispatcher {
             }
         };
 
-        let entry_prompt = match params_value.get("prompt").and_then(|v| v.as_str()) {
-            Some(s) if !s.trim().is_empty() => s.to_owned(),
-            Some(_) | None => {
-                return DispatchOutcome::Err(ErrorResponse::error(
-                    id,
-                    CODE_INVALID_REQUEST,
-                    "schedule.add requires a non-blank params.prompt",
-                    Some(json!({ "category": "invalid_request" })),
-                ));
-            }
-        };
+        // Exactly one of `prompt` (literal text) or `file` (an absolute path
+        // whose contents are read at fire time) must be provided and non-blank.
+        // The CLI enforces this too; this is the defensive server-side check.
+        let raw_prompt = params_value
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let raw_file = params_value
+            .get("file")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let (entry_prompt, entry_file): (Option<String>, Option<String>) =
+            match (raw_prompt, raw_file) {
+                (Some(p), None) => (Some(p.to_owned()), None),
+                (None, Some(f)) => (None, Some(f.to_owned())),
+                (Some(_), Some(_)) => {
+                    return DispatchOutcome::Err(ErrorResponse::error(
+                        id,
+                        CODE_INVALID_REQUEST,
+                        "schedule.add: params.prompt and params.file are mutually exclusive",
+                        Some(json!({ "category": "invalid_request" })),
+                    ));
+                }
+                (None, None) => {
+                    return DispatchOutcome::Err(ErrorResponse::error(
+                        id,
+                        CODE_INVALID_REQUEST,
+                        "schedule.add requires a non-blank params.prompt or params.file",
+                        Some(json!({ "category": "invalid_request" })),
+                    ));
+                }
+            };
 
         // Validate the cron expression (must be a valid 5-field expression).
         let parser = CronParser::builder().seconds(Seconds::Disallowed).build();
@@ -658,6 +683,7 @@ impl Dispatcher {
             id: entry_id,
             cron: entry_cron,
             prompt: entry_prompt,
+            file: entry_file,
         });
 
         if let Err(outcome) = self.write_and_reload(&id, schedule_store_path, entries, handle) {
@@ -754,11 +780,18 @@ impl Dispatcher {
             .borrow()
             .iter()
             .map(|e| {
-                json!({
-                    "id": e.id,
-                    "cron": e.cron,
-                    "prompt": e.prompt,
-                })
+                let mut obj = serde_json::Map::new();
+                obj.insert("id".to_owned(), json!(e.id));
+                obj.insert("cron".to_owned(), json!(e.cron));
+                // Emit exactly the field the entry carries so `prompt`/`file`
+                // stay mutually exclusive in the wire shape.
+                if let Some(prompt) = &e.prompt {
+                    obj.insert("prompt".to_owned(), json!(prompt));
+                }
+                if let Some(file) = &e.file {
+                    obj.insert("file".to_owned(), json!(file));
+                }
+                Value::Object(obj)
             })
             .collect();
 
@@ -2070,16 +2103,8 @@ mod tests {
         // Pre-load two entries into the watch channel.
         reload_handle
             .reload(vec![
-                ScheduleEntry {
-                    id: "job-a".to_owned(),
-                    cron: "0 9 * * *".to_owned(),
-                    prompt: "Morning report".to_owned(),
-                },
-                ScheduleEntry {
-                    id: "job-b".to_owned(),
-                    cron: "0 17 * * *".to_owned(),
-                    prompt: "Evening report".to_owned(),
-                },
+                ScheduleEntry::with_prompt("job-a", "0 9 * * *", "Morning report"),
+                ScheduleEntry::with_prompt("job-b", "0 17 * * *", "Evening report"),
             ])
             .expect("reload must succeed");
         tokio::task::yield_now().await;
@@ -2172,27 +2197,163 @@ mod tests {
         );
     }
 
+    // File-backed schedule.add persists the `file` field (not a prompt).
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_with_file_persists_file_field() {
+        use bob_core::types::schedule::read_schedule_store;
+
+        let (_dir, store_path) = temp_schedule_store_path();
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_schedule_store_path(store_path.clone());
+
+        let req = make_request_with_params(
+            "schedule.add",
+            json!(340),
+            json!({ "id": "file-job", "cron": "0 9 * * *", "file": "/abs/prompt.txt" }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => assert_eq!(resp.result["ok"], json!(true)),
+            DispatchOutcome::Err(e) => panic!("expected Ok, got error: {}", e.error.message),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+
+        let entries = read_schedule_store(&store_path).expect("JSON store must be readable");
+        let job = entries
+            .iter()
+            .find(|e| e.id == "file-job")
+            .expect("entry must be persisted");
+        assert_eq!(job.file.as_deref(), Some("/abs/prompt.txt"));
+        assert_eq!(
+            job.prompt, None,
+            "file-backed entry must not carry a prompt"
+        );
+    }
+
+    // schedule.add with both prompt and file is rejected (mutually exclusive).
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_with_both_prompt_and_file_returns_error() {
+        let (_dir, store_path) = temp_schedule_store_path();
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_schedule_store_path(store_path);
+
+        let req = make_request_with_params(
+            "schedule.add",
+            json!(341),
+            json!({
+                "id": "both",
+                "cron": "0 9 * * *",
+                "prompt": "text",
+                "file": "/abs/prompt.txt"
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+                assert!(
+                    resp.error.message.contains("mutually exclusive"),
+                    "message: {}",
+                    resp.error.message
+                );
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error when both prompt and file set"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // schedule.add with neither prompt nor file is rejected.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_with_neither_prompt_nor_file_returns_error() {
+        let (_dir, store_path) = temp_schedule_store_path();
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_schedule_store_path(store_path);
+
+        let req = make_request_with_params(
+            "schedule.add",
+            json!(342),
+            json!({ "id": "neither", "cron": "0 9 * * *" }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => assert_eq!(resp.error.code, CODE_INVALID_REQUEST),
+            DispatchOutcome::Ok(_) => panic!("expected error when neither prompt nor file set"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // schedule.list emits the `file` field (and omits `prompt`) for a
+    // file-backed entry.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_list_emits_file_field_for_file_backed_entry() {
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        reload_handle
+            .reload(vec![bob_core::types::ScheduleEntry::with_file(
+                "file-job",
+                "0 9 * * *",
+                "/abs/prompt.txt",
+            )])
+            .expect("reload");
+        tokio::task::yield_now().await;
+
+        let dispatcher = make_dispatcher_no_handles().with_scheduler_handle(reload_handle);
+        let req = make_request("schedule.list", json!(343));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => {
+                let arr = resp.result.as_array().expect("result must be an array");
+                assert_eq!(arr[0]["file"], json!("/abs/prompt.txt"));
+                assert!(
+                    arr[0].get("prompt").is_none(),
+                    "prompt key must be omitted for a file-backed entry"
+                );
+            }
+            DispatchOutcome::Err(e) => panic!("expected Ok, got error: {}", e.error.message),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
     // AC-2 (T-097, T-115): schedule.add with duplicate id returns -32602 and
     // leaves the JSON store unchanged.
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_schedule_add_with_duplicate_id_returns_error_and_leaves_file_unchanged() {
         use bob_core::types::schedule::read_schedule_store;
 
-        let (_dir, store_path) = write_temp_schedule_store(&[bob_core::types::ScheduleEntry {
-            id: "existing".to_owned(),
-            cron: "0 9 * * *".to_owned(),
-            prompt: "p".to_owned(),
-        }]);
+        let (_dir, store_path) =
+            write_temp_schedule_store(&[bob_core::types::ScheduleEntry::with_prompt(
+                "existing",
+                "0 9 * * *",
+                "p",
+            )]);
         let (reload_handle, scheduler_join) = make_scheduler_handle();
 
         // Pre-load the existing entry into the watch channel so schedule.add can
         // detect the duplicate in the live table.
         reload_handle
-            .reload(vec![bob_core::types::ScheduleEntry {
-                id: "existing".to_owned(),
-                cron: "0 9 * * *".to_owned(),
-                prompt: "p".to_owned(),
-            }])
+            .reload(vec![bob_core::types::ScheduleEntry::with_prompt(
+                "existing",
+                "0 9 * * *",
+                "p",
+            )])
             .expect("reload");
         tokio::task::yield_now().await;
 
@@ -2323,32 +2484,16 @@ mod tests {
         use bob_core::types::schedule::read_schedule_store;
 
         let (_dir, store_path) = write_temp_schedule_store(&[
-            bob_core::types::ScheduleEntry {
-                id: "to-remove".to_owned(),
-                cron: "0 9 * * *".to_owned(),
-                prompt: "p".to_owned(),
-            },
-            bob_core::types::ScheduleEntry {
-                id: "keep".to_owned(),
-                cron: "0 10 * * *".to_owned(),
-                prompt: "q".to_owned(),
-            },
+            bob_core::types::ScheduleEntry::with_prompt("to-remove", "0 9 * * *", "p"),
+            bob_core::types::ScheduleEntry::with_prompt("keep", "0 10 * * *", "q"),
         ]);
         let (reload_handle, scheduler_join) = make_scheduler_handle();
 
         // Pre-load entries into the live table.
         reload_handle
             .reload(vec![
-                bob_core::types::ScheduleEntry {
-                    id: "to-remove".to_owned(),
-                    cron: "0 9 * * *".to_owned(),
-                    prompt: "p".to_owned(),
-                },
-                bob_core::types::ScheduleEntry {
-                    id: "keep".to_owned(),
-                    cron: "0 10 * * *".to_owned(),
-                    prompt: "q".to_owned(),
-                },
+                bob_core::types::ScheduleEntry::with_prompt("to-remove", "0 9 * * *", "p"),
+                bob_core::types::ScheduleEntry::with_prompt("keep", "0 10 * * *", "q"),
             ])
             .expect("reload");
         tokio::task::yield_now().await;
@@ -2419,11 +2564,12 @@ mod tests {
     // on disk and signals the scheduler actor.
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_schedule_reload_reads_from_disk_and_returns_ok() {
-        let (_dir, store_path) = write_temp_schedule_store(&[bob_core::types::ScheduleEntry {
-            id: "disk-job".to_owned(),
-            cron: "0 9 * * *".to_owned(),
-            prompt: "p".to_owned(),
-        }]);
+        let (_dir, store_path) =
+            write_temp_schedule_store(&[bob_core::types::ScheduleEntry::with_prompt(
+                "disk-job",
+                "0 9 * * *",
+                "p",
+            )]);
         let (reload_handle, scheduler_join) = make_scheduler_handle();
         let rx = reload_handle.subscribe();
         let dispatcher = make_dispatcher_no_handles()

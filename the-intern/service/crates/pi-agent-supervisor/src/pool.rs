@@ -8,13 +8,77 @@ use bob_core::{
 };
 use std::collections::HashMap;
 use std::os::unix::io::OwnedFd;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::ChildStdout;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 #[derive(Debug)]
 struct ActiveSessionWorker {
     worker: crate::process::RpcWorkerProcess,
     last_prompt_activity: Instant,
+    /// Background task draining the worker's stdout after a fire-and-forget
+    /// periodic prompt, if one is running. Aborted when the worker is removed
+    /// (killed, reaped, or shut down); otherwise it ends on its own at EOF.
+    drain_handle: Option<JoinHandle<()>>,
+}
+
+impl ActiveSessionWorker {
+    /// Refreshes fire-and-forget run state from the background stdout drain.
+    ///
+    /// While the drain task is still running, the periodic job is considered
+    /// in flight and must not be idle-reaped. Once the drain reaches EOF, the
+    /// child has finished the detached run, so the worker becomes idle again
+    /// and the idle timer restarts from that completion moment.
+    fn refresh_drain_state(&mut self) {
+        if self
+            .drain_handle
+            .as_ref()
+            .is_some_and(tokio::task::JoinHandle::is_finished)
+        {
+            self.drain_handle = None;
+            self.last_prompt_activity = Instant::now();
+        }
+    }
+
+    fn is_periodic_run_in_flight(&self) -> bool {
+        self.drain_handle.is_some()
+    }
+}
+
+/// Reads and discards a detached worker's stdout until EOF.
+///
+/// After a periodic prompt is accepted the agent run keeps streaming RPC
+/// records to stdout with no other reader. Continuously draining them keeps the
+/// OS pipe from filling: a full stdout pipe blocks the child mid-run, so
+/// without this the scheduled action would freeze before completing (e.g.
+/// before writing its output file). Ends when the child exits (EOF) or on a
+/// read error.
+fn spawn_stdout_drain(session_id: SessionId, mut stdout: BufReader<ChildStdout>) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match stdout.read_line(&mut line).await {
+                Ok(0) => break,
+                Ok(_) => {
+                    tracing::trace!(
+                        session_id = %session_id,
+                        "pi-agent-supervisor drained periodic worker stdout record"
+                    );
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        session_id = %session_id,
+                        error = %error,
+                        "pi-agent-supervisor stdout drain ended on read error"
+                    );
+                    break;
+                }
+            }
+        }
+    })
 }
 
 /// A warm worker waiting to be assigned to a session.
@@ -90,6 +154,7 @@ impl SessionPool {
             ActiveSessionWorker {
                 worker,
                 last_prompt_activity: Instant::now(),
+                drain_handle: None,
             },
         );
         Ok(session_id)
@@ -105,7 +170,10 @@ impl SessionPool {
 
     pub async fn kill_session(&mut self, session_id: SessionId) -> ServiceResult<()> {
         // Check active RPC workers first.
-        if let Some(worker) = self.active_workers.remove(&session_id) {
+        if let Some(mut worker) = self.active_workers.remove(&session_id) {
+            if let Some(handle) = worker.drain_handle.take() {
+                handle.abort();
+            }
             worker.worker.terminate().await?;
             return Ok(());
         }
@@ -160,6 +228,33 @@ impl SessionPool {
                 None => {}
             }
         }
+    }
+
+    /// Sends a prompt, then detaches the worker's stdout into a background drain.
+    ///
+    /// Used by the periodic dispatcher for fire-and-forget scheduled runs. Like
+    /// [`send_prompt`] it returns once the child acknowledges *receipt* of the
+    /// prompt; the agent run then continues asynchronously. Unlike `send_prompt`
+    /// it then hands the worker's stdout to a background task that drains it to
+    /// EOF, so the child never blocks on a full stdout pipe mid-run. The worker
+    /// stays in the pool and is reclaimed by the idle reaper (or `kill_session`)
+    /// as before.
+    pub async fn send_prompt_and_drain(
+        &mut self,
+        session_id: SessionId,
+        message: String,
+    ) -> ServiceResult<()> {
+        self.send_prompt(session_id, message).await?;
+
+        if let Some(active_worker) = self.active_workers.get_mut(&session_id) {
+            if let Some(stdout) = active_worker.worker.take_stdout() {
+                let handle = spawn_stdout_drain(session_id, stdout);
+                if let Some(previous) = active_worker.drain_handle.replace(handle) {
+                    previous.abort();
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Starts an interactive pi session on the supplied terminal file descriptors.
@@ -254,18 +349,26 @@ impl SessionPool {
     }
 
     pub async fn reap_idle_and_surplus(&mut self) -> ServiceResult<crate::reaper::ReapReport> {
+        for worker in self.active_workers.values_mut() {
+            worker.refresh_drain_state();
+        }
+
         let now = Instant::now();
         let stale_sessions = crate::reaper::select_idle_sessions(
             now,
             self.cfg.idle_reap_timeout,
             self.active_workers
                 .iter()
+                .filter(|(_, worker)| !worker.is_periodic_run_in_flight())
                 .map(|(session_id, worker)| (*session_id, worker.last_prompt_activity)),
         );
         let mut report = crate::reaper::ReapReport::default();
 
         for session_id in stale_sessions {
-            if let Some(worker) = self.active_workers.remove(&session_id) {
+            if let Some(mut worker) = self.active_workers.remove(&session_id) {
+                if let Some(handle) = worker.drain_handle.take() {
+                    handle.abort();
+                }
                 worker.worker.terminate().await?;
                 report.idle_sessions_reaped += 1;
             }
@@ -289,7 +392,10 @@ impl SessionPool {
         let mut report = crate::reaper::ShutdownReport::default();
         let mut first_error = None;
 
-        for (_session_id, worker) in self.active_workers.drain() {
+        for (_session_id, mut worker) in self.active_workers.drain() {
+            if let Some(handle) = worker.drain_handle.take() {
+                handle.abort();
+            }
             match worker.worker.terminate().await {
                 Ok(_) => report.active_workers_terminated += 1,
                 Err(error) => {
