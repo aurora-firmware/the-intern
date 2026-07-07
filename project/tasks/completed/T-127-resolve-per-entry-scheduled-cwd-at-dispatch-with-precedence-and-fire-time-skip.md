@@ -2,7 +2,7 @@
 id: T-127
 title: Resolve per-entry scheduled cwd at dispatch with precedence and fire-time
   skip
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-07-05'
