@@ -2478,6 +2478,123 @@ pub mod tests {
             let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
         }
 
+        // AC-4: when the pool is already at `max_processes`, a per-entry-cwd
+        // fire is skipped with a warning rather than blocking or evicting the
+        // existing live worker.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_skips_per_entry_cwd_fire_without_evicting_when_pool_is_full() {
+            let cwd_dir = std::env::temp_dir().join(format!(
+                "bob-serve-t127-max-processes-cwd-{}",
+                bob_core::types::SessionId::new()
+            ));
+            std::fs::create_dir_all(&cwd_dir).expect("create dedicated cwd should succeed");
+
+            // Worker script: acknowledge every prompt and keep running, so the
+            // first acquired session stays alive (occupying the sole
+            // max_processes slot) for the rest of the test.
+            let worker_script = "while IFS= read -r line; do \
+                 id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf '{\"id\":\"%s\",\"type\":\"response\",\"success\":true}\\n' \"$id\"; \
+                 done"
+                .to_string();
+
+            let (supervisor_handle, supervisor_join) =
+                pi_agent_supervisor::start(pi_agent_supervisor::Config {
+                    worker_command: "sh".to_string(),
+                    worker_args: vec!["-c".to_string(), worker_script],
+                    warm_pool_size: 0,
+                    max_processes: 1,
+                    extension_path: existing_extension_path(),
+                    ..pi_agent_supervisor::Config::default()
+                })
+                .expect("supervisor must start");
+
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+
+            // First fire: no per-entry cwd, occupies the sole max_processes
+            // slot via the plain acquire_session path.
+            persistence_handle
+                .enqueue_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "first-fire".to_owned(),
+                    },
+                    None,
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            let mut entry =
+                ScheduleEntry::with_prompt("cwd-job-at-capacity", "0 9 * * *", "unused");
+            entry.cwd = Some(cwd_dir.to_string_lossy().into_owned());
+            let schedule_rx = schedule_rx_with_entries(vec![entry]);
+
+            let audit_sink: Arc<dyn AuditSink> = Arc::new(SpyAuditSink::default());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx,
+                audit_sink,
+                cancel_rx,
+            );
+
+            // Wait for the first fire to acquire the sole slot.
+            let first_session_id = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let sessions = supervisor_handle
+                        .list_sessions()
+                        .await
+                        .expect("list sessions should succeed");
+                    if let Some(id) = sessions.first().copied() {
+                        break id;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("first fire must acquire the sole max_processes slot");
+
+            // Second fire: resolves to a per-entry cwd, but the pool is
+            // already full.
+            persistence_handle
+                .enqueue_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "second-fire-should-be-skipped".to_owned(),
+                    },
+                    Some("cwd-job-at-capacity".to_owned()),
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            // Give the dispatcher time to process (and skip) the second fire.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+
+            let marker_path = cwd_dir.join("marker.txt");
+            assert!(
+                !marker_path.exists(),
+                "a dedicated worker must never be spawned for the per-entry cwd fire while the pool is full"
+            );
+
+            let sessions_after = supervisor_handle
+                .list_sessions()
+                .await
+                .expect("list sessions should succeed");
+            assert_eq!(
+                sessions_after,
+                vec![first_session_id],
+                "the existing live worker must not be evicted by the refused cwd-scoped fire"
+            );
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+            std::fs::remove_dir_all(&cwd_dir).ok();
+        }
+
         // ── T-127: periodic-fire cwd precedence resolution ─────────────────
 
         // AC-1: a job id that resolves to a live entry with a per-entry `cwd`
