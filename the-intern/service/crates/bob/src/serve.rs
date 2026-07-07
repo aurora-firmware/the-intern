@@ -2321,6 +2321,89 @@ pub mod tests {
             std::fs::remove_dir_all(&worker_cwd).ok();
         }
 
+        // AC-2: a resolved per-entry `cwd` that does not exist at fire time is
+        // skipped with a warning and a monitoring failure record. No worker is
+        // ever acquired for the missing directory — proven here by pairing the
+        // missing-cwd entry with a supervisor that fails fast (missing binary,
+        // empty warm pool), so any accidental acquisition attempt would be
+        // observable as a *different* failure path than the one asserted below.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_skips_fire_and_records_failure_when_per_entry_cwd_is_missing()
+        {
+            let missing_cwd = std::env::temp_dir().join(format!(
+                "bob-serve-t127-missing-cwd-{}",
+                bob_core::types::SessionId::new()
+            ));
+            // Deliberately do not create `missing_cwd` on disk.
+
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+            persistence_handle
+                .enqueue_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "missing-cwd-test".to_owned(),
+                    },
+                    Some("missing-cwd-job".to_owned()),
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            let mut entry = ScheduleEntry::with_prompt("missing-cwd-job", "0 9 * * *", "unused");
+            entry.cwd = Some(missing_cwd.to_string_lossy().into_owned());
+            let schedule_rx = schedule_rx_with_entries(vec![entry]);
+
+            let (supervisor_handle, supervisor_join) = failing_supervisor_handle();
+
+            let audit_sink = Arc::new(SpyAuditSink::default());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx,
+                Arc::clone(&audit_sink) as Arc<dyn AuditSink>,
+                cancel_rx,
+            );
+
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if !audit_sink.records().is_empty() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("missing per-entry cwd must produce a monitoring failure record");
+
+            let records = audit_sink.records();
+            assert_eq!(
+                records.len(),
+                1,
+                "expected exactly one monitoring failure record, got {records:?}"
+            );
+            match &records[0].payload {
+                AuditRecordPayload::Report(payload) => {
+                    assert_eq!(payload.outcome, ReportOutcome::Error);
+                    assert!(
+                        payload
+                            .summary
+                            .as_deref()
+                            .unwrap_or("")
+                            .contains("missing-cwd-job"),
+                        "summary should reference the job id: {:?}",
+                        payload.summary
+                    );
+                }
+                other => panic!("expected a Report payload, got {other:?}"),
+            }
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+        }
+
         // ── T-127: periodic-fire cwd precedence resolution ─────────────────
 
         // AC-1: a job id that resolves to a live entry with a per-entry `cwd`
