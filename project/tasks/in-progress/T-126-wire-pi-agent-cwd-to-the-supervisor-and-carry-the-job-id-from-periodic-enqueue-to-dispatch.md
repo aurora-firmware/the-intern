@@ -82,3 +82,35 @@ Implemented both halves of T-126 in `crates/bob/src/serve.rs` via three red→gr
 **Verification Command Run:** `cd the-intern/service && cargo build -p bob && cargo test -p bob serve` — passes; also ran `cargo test --workspace` and `cargo fmt --all -- --check` — both clean
 
 ## Review
+
+### Review Verdict — 2026-07-07
+
+PASS
+
+**Stage 1 — Acceptance Criteria** (checked against `the-intern/service/crates/bob/src/serve.rs` on `task/T-126-wire-pi-agent-cwd-to-the-supervisor-and-carry-the-job-id-from-periodic-enqueue-to-dispatch`, diffed against `dev-agent` merge-base `8003eff`):
+
+- AC-1 (pi_agent_cwd set → worker_cwd configured): met. `build_pi_agent_supervisor_config` now sets `worker_cwd: cfg.pi_agent_cwd.clone()`. Confirmed `pi_agent_supervisor::Config.worker_cwd: Option<PathBuf>` (T-121) is consumed by `process.rs`'s `spawn` via `cmd.current_dir(worker_cwd)`. Covered by `pi_agent_supervisor_config_maps_pi_agent_cwd_when_set`.
+- AC-2 (pi_agent_cwd unset → worker_cwd stays unset): met. Same mapping is `None` when `cfg.pi_agent_cwd` is `None`. Covered by `pi_agent_supervisor_config_leaves_worker_cwd_unset_when_pi_agent_cwd_is_unset`.
+- AC-3 (periodic enqueue carries job id to dispatcher): met. New `admit_periodic_event` calls `PersistenceStore::enqueue_with_job_id` (T-120) with `context.context_id.clone()`, replacing the periodic branch's plain `enqueue` call in `try_start_subsystems`. `start_periodic_dispatcher` now calls `dequeue_next_with_job_id` and destructures `(event, job_id)`, logging the job id at periodic-dispatch time. Covered by `admit_periodic_event_enqueues_with_job_id_from_context`, `admit_periodic_event_enqueues_with_none_job_id_when_context_has_none`, and `periodic_dispatcher_calls_dequeue_next_with_job_id` (spy-verified: calls `dequeue_next_with_job_id`, never plain `dequeue_next`).
+- AC-4 (non-periodic dispatch requires no correlator, unchanged behaviour): met. The dispatcher's non-periodic re-enqueue arm still calls plain `enqueue(event)`, dropping the job id, and the non-periodic admission path in `try_start_subsystems` (the `else` branch calling `requests_handler::run_preflight`) is untouched by this diff. Covered by `dispatcher_re_enqueues_non_periodic_event_via_plain_enqueue` (spy-verified: calls plain `enqueue`, never `enqueue_with_job_id`).
+- No unspecified behaviour was added: T-127's cwd-resolution/`acquire_session_with_cwd` work is correctly left out, matching the task's explicit non-goal.
+- No unexpected files modified: `git diff dev-agent...task/T-126...` touches only `the-intern/service/crates/bob/src/serve.rs` (347 insertions / 18 deletions), matching "Files to Touch."
+
+**Stage 2 — Code Quality:**
+
+- Correctness: `worker_cwd` mapping is a straightforward clone; `admit_periodic_event` and the dispatcher's destructuring of `(event, job_id)` correctly preserve the pre-existing warn-and-swallow error handling for enqueue/dequeue failures. Verified `ADR-012`/`ADR-013` references in new comments correspond to real, relevant ADRs on file.
+- Tests: 6 new tests, covering both AC-1/AC-2 branches (set/unset) and both AC-3/AC-4 paths (job id present/absent, periodic/non-periodic), all independent (fresh `persistence::start` or `SpyPersistence` per test, no shared mutable state). The two dispatcher-level tests use a bounded polling loop (5s timeout) against an injected `SpyPersistence`, avoiding the tracing-capture race the Work Log describes hitting and rejecting.
+- Security: no new external input paths; nothing hardcoded.
+- Readability: new function and field comments clearly state intent and explicitly scope out T-127.
+- Performance: no new blocking calls or resource leaks; polling loops are test-only.
+
+**Independent verification performed** (branch `task/T-126-wire-pi-agent-cwd-to-the-supervisor-and-carry-the-job-id-from-periodic-enqueue-to-dispatch`, `pi` on `PATH`):
+- `cargo build -p bob` — succeeds.
+- `cargo test -p bob serve::` — 41 lib tests + 0 across integration binaries, all pass, including all 6 new tests (by name); repeated 3× with no flakiness.
+- `cargo test --workspace` — all suites pass, 0 failed (highest single-crate count 144 passed).
+- `cargo fmt --all -- --check` — clean.
+- `cargo clippy -p bob --tests` — one pre-existing error (`clippy::result_unit_err` in `crates/pi-agent-supervisor/src/pool.rs::register_interactive_exit_watcher`) confirmed unrelated to this task (that file has zero diff between `dev-agent` and this branch); no new warnings attributable to `serve.rs`.
+
+Minor observation (non-blocking): the dispatcher-level tests poll a shared spy with a 5ms sleep inside a 5s timeout — acceptable and consistent with existing patterns in this file, just noting for future reviewers that timing-based assertions remain in the suite even after the tracing-capture approach was rejected for flakiness.
+
+Next owner: active Development Loop.
