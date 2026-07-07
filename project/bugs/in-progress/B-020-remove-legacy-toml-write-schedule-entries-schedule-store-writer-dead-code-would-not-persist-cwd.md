@@ -170,4 +170,16 @@ fully removed.
 
 ## Work Log
 
+### Session 1 — 2026-07-07
+
+Implemented the fix contract recorded in the B-020 Diagnosis Log (2026-07-07, read from `dev-agent` since the branch predated that commit). Deleted `write_schedule_entries` (the legacy hand-rolled TOML `[[schedule]]` writer) from `crates/bob-core/src/types/schedule.rs`, including its doc comment, lines 538-652. Removed the `pub use bob_core::types::schedule::write_schedule_entries;` re-export and its doc comment from `crates/bob/src/config.rs` (lines 762-767). Deleted all 8 stale T-097 tests: the 5 colocated with the writer in `schedule.rs` (`persists_entries_and_can_be_read_back`, `creates_missing_parent_directories`, `preserves_other_config_keys`, `empty_entries_removes_schedule_section`, `preserves_restrictive_file_mode`) and the 3 in `config.rs` (`write_schedule_entries_persists_entries_and_can_be_read_back`, `write_schedule_entries_preserves_other_config_keys`, `write_schedule_entries_with_empty_entries_removes_schedule_section`), along with their `T-097` comment banners in `config.rs` (no banners existed in `schedule.rs`). Removed `write_schedule_entries` from the `use super::{...}` import list in `schedule.rs`'s test module.
+
+Grepped the workspace for `toml_edit` before touching dependencies and confirmed the crate was used nowhere else in `bob-core` (or the rest of the workspace) outside the deleted function, so removed the now-unused `toml_edit = "0.22"` dependency from `crates/bob-core/Cargo.toml`. `Cargo.lock` updated automatically to drop the `bob-core -> toml_edit` edge (still present transitively via `toml`, used by other crates — expected, left untouched).
+
+Captured a baseline `cargo test --workspace` run before any edits (595 total tests passed, 0 failed) and an after run (587 total tests passed, 0 failed) — a drop of exactly 8, matching the fix contract's planned verification. Ran `cargo build -p bob` (clean) and `cargo fmt --all -- --check`, which flagged one formatting diff on the trimmed `use super::{...}` import line in `schedule.rs`; ran `cargo fmt --all` to auto-fix it and re-verified `--check` passes, then re-ran the full workspace test suite and build to confirm nothing regressed after the format pass (same 587/0 result, clean build). Final `grep -rn "write_schedule_entries" the-intern/service` returns zero matches, confirming full removal.
+
+Nothing was rejected or tried and abandoned — the fix contract from the Diagnosis Log was followed exactly as written, with the fmt fixup being the only unplanned step (routine, not a design decision). Nothing remains outstanding for this bug; per the branch model, the bug lifecycle file itself was not edited on this branch (lifecycle state is owned by the loop on `dev-agent`).
+
+Commit on `bug/B-020-remove-legacy-toml-schedule-writer`: `3a6bcf9` — `chore(bob-core): remove dead write_schedule_entries toml writer`.
+
 ## Review
