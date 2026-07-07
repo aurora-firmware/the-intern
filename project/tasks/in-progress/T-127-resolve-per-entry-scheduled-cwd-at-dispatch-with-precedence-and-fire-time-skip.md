@@ -135,3 +135,100 @@ Stage 2 (code quality) was not evaluated because Stage 1 has an unmet acceptance
 **What should change:** In the `PeriodicCwdResolution::EntryNotFound` arm of `start_periodic_dispatcher` (`crates/bob/src/serve.rs`), append an `AuditRecord` via `audit_sink` recording the stale-job-id fallback condition — mirroring `record_periodic_fire_skipped`'s shape (reusing `AuditRecordKind::Report` / `ExternalReportAuditPayload`, distinguishing outcome/summary text from the AC-2 case, e.g. "job_id={job_id}: no longer resolves to a live schedule entry; falling back to service-wide default cwd"). Add a test (either extending `periodic_dispatcher_falls_back_to_default_cwd_when_job_id_not_in_live_table` with a `SpyAuditSink` assertion, or a new dedicated test) that asserts an audit record is produced for this condition, following the same pattern already used for AC-2's test.
 
 Next owner: Development Loop (`/dev-loop`) routes this back to the Developer for a fix-and-resubmit cycle.
+
+### Review Verdict — 2026-07-08 (cycle 2)
+
+PASS
+
+Re-reviewed from scratch against all four acceptance criteria on
+`task/T-127-resolve-per-entry-scheduled-cwd-at-dispatch-with-precedence-and-fire-time-skip`
+at tip `3030e07` (`fix(bob): record stale job id fallback as a persisted audit
+record`), diffed against the actual `dev-agent` merge-base `b46f5246`. Verified
+independently in a scratch worktree, not from the Developer's self-report:
+`cargo build -p bob` (clean), `cargo test -p bob serve` (53 passed, up from 52
+— the new AC-3 test), `cargo test -p pi-agent-supervisor` (61 passed),
+`cargo test --workspace` (all green across every crate), and
+`cargo fmt --all -- --check` (clean).
+
+**Stage 1 — Acceptance Criteria:**
+
+- AC-1 (resolve cwd from live table with precedence, acquire with that
+  directory): met, re-confirmed unchanged from cycle 1. `resolve_periodic_cwd`
+  and the `PerEntry` match arm are untouched by the cycle-2 fix commit.
+- AC-2 (missing per-entry cwd at fire time → skip with warning + monitoring
+  failure record): met, re-confirmed unchanged from cycle 1.
+- AC-3 (stale job id → fall back to default cwd and record the condition):
+  **now met.** `crates/bob/src/serve.rs`'s `PeriodicCwdResolution::EntryNotFound`
+  arm now calls the new `record_periodic_fire_fallback(audit_sink.as_ref(),
+  job_id.as_deref())` (line ~837) immediately after the `tracing::warn!` and
+  before `acquire_default_session_or_warn`. The function mirrors
+  `record_periodic_fire_skipped`'s shape exactly — same `AuditRecord` /
+  `AuditRecordKind::Report` / `ExternalReportAuditPayload { outcome:
+  ReportOutcome::Error, .. }` construction — with a distinct `action`
+  (`"scheduler.periodic_fire_fallback"`) and a summary describing a fallback
+  ("no longer resolves to a live schedule entry; falling back to
+  service-wide default cwd") rather than a skip, closing exactly the gap
+  identified in cycle 1. Covered by the new
+  `periodic_dispatcher_records_fallback_condition_when_job_id_not_in_live_table`
+  test, which enqueues a fire whose job id is absent from the live table and
+  asserts a `SpyAuditSink`-observed record with `outcome ==
+  ReportOutcome::Error`, a summary containing the job id, and a summary
+  containing "fall" (distinguishing it from AC-2's skip wording). I confirmed
+  this test is non-vacuous myself: with the `record_periodic_fire_fallback`
+  call temporarily removed in the scratch worktree, the test failed
+  (`Elapsed(())`, timed out waiting for a record that was never produced);
+  restoring the call made it pass again, and the full `bob serve` suite (53
+  tests) was clean afterward with the file restored to its committed state.
+- AC-4 (pool at `max_processes` for a per-entry-cwd fire → skip with warning,
+  no block/evict): met, re-confirmed unchanged from cycle 1.
+- No unspecified behaviour was added beyond what AC-1–AC-4 require: the
+  cycle-2 diff (`3030e07`) touches only `crates/bob/src/serve.rs` (131
+  insertions: the new function, its call site, and its test) — no other file
+  changed since cycle 1's already-approved diff.
+- No unexpected files modified relative to the Architect-amended Files to
+  Touch (`crates/bob/src/serve.rs`, `crates/pi-agent-supervisor/src/lib.rs`)
+  plus the already-reviewed-and-approved `chrono` addition to
+  `crates/bob/Cargo.toml`/`Cargo.lock` from cycle 1 — no re-litigation needed,
+  nothing changed there in cycle 2.
+
+**Stage 2 — Code Quality** (now evaluated, since Stage 1 fully passes):
+
+- **Correctness:** `record_periodic_fire_fallback` is called unconditionally
+  before the default-cwd acquisition attempt, so the condition is recorded
+  regardless of whether the subsequent `acquire_default_session_or_warn` call
+  itself succeeds or fails — correct, since AC-3's "record the condition"
+  refers to the stale-job-id state, not to acquisition outcome. The
+  `EntryNotFound` branch is only reached when `job_id` is `Some` (per
+  `resolve_periodic_cwd`, a `None` job id short-circuits to
+  `ServiceDefault` before the live-table lookup), so `job_id.unwrap_or("<none>")`
+  in the record body is dead-but-harmless defensive code, not a real gap.
+- **Tests:** the new test is independent (its own `persistence_handle`,
+  supervisor, `SpyAuditSink`, and `watch::channel`; no shared mutable state
+  with other tests), asserts on real audit-record content rather than just
+  "a record exists," and — per the vacuity check above — is a genuine
+  regression test that fails before the fix and passes after it. Both the
+  fallback path (this test) and the still-dispatches-successfully path
+  (`periodic_dispatcher_falls_back_to_default_cwd_when_job_id_not_in_live_table`,
+  unchanged from cycle 1) are covered.
+- **Security:** no hardcoded secrets, no new external input; the summary
+  string only ever includes the job id already carried through the queue.
+- **Readability:** `record_periodic_fire_fallback` is clearly named and
+  documented (doc comment cross-references `record_periodic_fire_skipped` and
+  explains the fallback-vs-skip distinction and the audit-vs-log distinction).
+  No dead code or commented-out blocks. Minor non-blocking observation: this
+  function and `record_periodic_fire_skipped` are near-duplicates (differ
+  only in id prefix, `action`, and summary text) — the Work Log's "Tried and
+  rejected" note explains this was a deliberate choice over a shared
+  parameterized helper, for per-call-site legibility. That is a defensible
+  call given the Reviewer's cycle-1 guidance explicitly said "mirroring the
+  pattern," not "share it," so this is not held against the fix.
+- **Performance:** no unnecessary loops, blocking calls, or resource leaks;
+  the new test's polling loop matches the existing 20ms-interval convention
+  used by every other dispatcher test in this file, and all task/session
+  handles are joined with a bounded timeout at teardown.
+- No unrelated refactoring, cleanup, or feature code is bundled into the fix
+  — the commit is scoped to exactly the AC-3 gap identified in cycle 1.
+
+Both stages pass. No blocking issues found.
+
+Next owner: Development Loop (`/dev-loop`) routes this to the Integrator for merge.
