@@ -3,7 +3,7 @@ id: B-020
 title: Remove legacy TOML write_schedule_entries schedule-store writer (dead 
   code, would not persist cwd)
 severity: low
-status: in-progress
+status: resolved
 created: '2026-07-05'
 ---
 
