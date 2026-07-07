@@ -176,6 +176,36 @@ mod tests {
         assert_audit_record_round_trip(record);
     }
 
+    // AC-3 (T-123): a populated resolved_cwd stays on the existing `event`
+    // record kind — no new audit record kind is introduced for scheduled
+    // (`periodic`) firings.
+    #[test]
+    fn audit_record_event_payload_with_resolved_cwd_keeps_event_record_kind() {
+        let record = AuditRecord {
+            id: "audit_004".to_owned(),
+            timestamp: "2026-05-20T10:03:00Z".to_owned(),
+            kind: AuditRecordKind::Event,
+            session_id: Some(SessionId::new()),
+            payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
+                name: "scheduler.job.fired".to_owned(),
+                summary: Some("periodic firing".to_owned()),
+                resolved_cwd: Some(PathBuf::from("/srv/bob/workspace")),
+            }),
+        };
+
+        let json = serde_json::to_value(&record).expect("serialization must succeed");
+        assert_eq!(
+            json["kind"], "event",
+            "resolved_cwd must not introduce a new audit record kind"
+        );
+        assert_eq!(
+            json["payload"]["resolved_cwd"], "/srv/bob/workspace",
+            "resolved_cwd must be nested in the event payload, got: {json}"
+        );
+
+        assert_audit_record_round_trip(record);
+    }
+
     #[test]
     fn audit_record_report_payload_supports_serde_json_round_trip() {
         let record = AuditRecord {
