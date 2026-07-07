@@ -69,4 +69,22 @@ cd the-intern/service && cargo test --workspace
 
 ## Work Log
 
+### Session 1 — 2026-07-08
+
+Implemented T-123 (optional `resolved_cwd` field on `ExtensionEventAuditPayload`) via three TDD cycles on `task/T-123-add-optional-resolved-working-directory-field-to-the-event-audit-payload`.
+
+Cycle 1 added `resolved_cwd: Option<PathBuf>` to the struct with `#[serde(skip_serializing_if = "Option::is_none")]`, confirmed RED via a compile failure (test referencing the not-yet-existing field), then fixed all five construction sites needed to make the workspace compile: the production site in `extension-ipc/src/multiplex.rs`, plus test-only sites in `monitoring/src/lib.rs`, `admin-rpc/src/lib.rs` (three call sites), `bob/src/serve.rs`, and one pre-existing test literal inside `bob-core/src/types/records.rs` itself (not explicitly named in the task's file-touch notes but within the already-listed file, so no scope issue). Added tests for omission-when-absent and inclusion-when-present.
+
+Cycle 2 targeted AC-2 (legacy JSONL records without the field must still deserialize). Wrote the test, and it passed even before adding `#[serde(default)]` — verified in an isolated scratch crate that serde derive already treats missing `Option<T>` fields as `None` regardless of `default`, `deny_unknown_fields`, or internally-tagged enum wrapping (reproduced the exact `AuditRecordPayload`-style tagged-enum shape to confirm). Added `#[serde(default, skip_serializing_if = "Option::is_none")]` anyway because AC-1's literal text names that exact attribute pair as a requirement, not just a suggestion — treated as an explicit spec directive rather than something only test-derived.
+
+Cycle 3 added a confirmatory test for AC-3 (record-kind set stays `event`/`report`/`verdict`, `report`/`verdict` payloads unchanged): a full `AuditRecord` envelope round-trip with a populated `resolved_cwd`, asserting the JSON `"kind"` tag stays `"event"` and the field nests correctly under `payload`. This passed immediately since no further production code was needed — AC-3 was already satisfied by leaving `ExternalReportAuditPayload` and `PolicyVerdictAuditPayload` untouched.
+
+**Tried and rejected:** Omitting the `default` attribute since it's behaviorally redundant given serde's implicit `Option<T>` handling — rejected because AC-1 explicitly names the attribute combination, and including it is harmless and documents intent for future maintainers who may not know about serde's implicit-optional quirk.
+
+**What remains:** Nothing outstanding for T-123 itself. Population of `resolved_cwd` for periodic firings is explicitly out of scope here and belongs to T-128, which depends on this task and on T-127 (already merged).
+
+**Obstacles Encountered:** (1) The task description's claim that `default` is "required because the payload uses `#[serde(deny_unknown_fields)]`" is not technically accurate — serde already defaults missing `Option<T>` fields to `None` regardless — but the attribute was added anyway per AC-1's literal wording; no functional risk either way. (2) `records.rs` had a fifth, previously unlisted `ExtensionEventAuditPayload` construction site in its own `#[cfg(test)]` module (~line 163); fixed since it's within an already-listed file, no boundary violation.
+
+All three commits (`ff98ca2` feat, `ddf973a` test, `1a31fd4` test) are on the task branch. `cargo test --workspace` (128 `bob-core` tests passing, including 5 new/fixed) and `cargo fmt --all -- --check` are both clean.
+
 ## Review
