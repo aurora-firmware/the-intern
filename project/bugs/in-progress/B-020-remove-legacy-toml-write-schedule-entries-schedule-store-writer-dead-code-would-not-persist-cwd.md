@@ -183,3 +183,80 @@ Nothing was rejected or tried and abandoned — the fix contract from the Diagno
 Commit on `bug/B-020-remove-legacy-toml-schedule-writer`: `3a6bcf9` — `chore(bob-core): remove dead write_schedule_entries toml writer`.
 
 ## Review
+
+### Review Verdict — 2026-07-07
+
+PASS
+
+**Diagnosis Log evaluation:** Complete evidence chain present — reproduction
+status (confirmed, static + a temporary empirical test that demonstrated the
+`cwd` drop and was cleanly discarded afterward), evidence (workspace greps for
+both writer symbols, direct reads of `write_schedule_entries` and
+`write_schedule_store`, baseline test/build runs), isolated fault
+(`write_schedule_entries`, `schedule.rs:562-652`), root cause (hand-rolled TOML
+serialization predating ADR-012/S-009's JSON store, never deleted after the
+JSON writer became the sole production path), and a fully enumerated fix
+contract (5-step planned fix, planned verification with an exact expected test
+delta of -8).
+
+**Stage 1 — Bug criteria:**
+- Fix addresses the isolated fault exactly as diagnosed: `write_schedule_entries`
+  and its doc comment removed from `crates/bob-core/src/types/schedule.rs`
+  (verified via `git show 3a6bcf9` — full ~200-line deletion, function and doc
+  comment only).
+- Re-export removed from `crates/bob/src/config.rs` (`pub use
+  bob_core::types::schedule::write_schedule_entries;` and its doc comment, gone).
+- All 8 stale T-097 tests deleted: 5 in `schedule.rs`
+  (`persists_entries_and_can_be_read_back`, `creates_missing_parent_directories`,
+  `preserves_other_config_keys`, `empty_entries_removes_schedule_section`,
+  `preserves_restrictive_file_mode`) and 3 in `config.rs`
+  (`write_schedule_entries_persists_entries_and_can_be_read_back`,
+  `write_schedule_entries_preserves_other_config_keys`,
+  `write_schedule_entries_with_empty_entries_removes_schedule_section`),
+  confirmed present in the diff and absent from the resulting file.
+- `write_schedule_entries` removed from the `use super::{...}` import list in
+  `schedule.rs`'s test module; `toml_edit = "0.22"` removed from
+  `crates/bob-core/Cargo.toml`; `Cargo.lock` updated to drop the direct
+  `bob-core -> toml_edit` edge. Confirmed `toml_edit` remains in `Cargo.lock`
+  only as a transitive dependency of `toml` (used elsewhere in the workspace),
+  as the Work Log states — checked directly in `Cargo.lock`.
+- `grep -rn "write_schedule_entries" the-intern/service --include="*.rs"
+  --include="*.toml"` on the branch returns zero matches. `grep -rn
+  "toml_edit"` likewise returns zero matches outside `Cargo.lock`'s transitive
+  entry.
+- No production behavior changed: `write_schedule_store` (the live JSON
+  writer, `schedule.rs` ~338) has zero diff lines against it — confirmed by
+  isolating the diff to only the deleted function, its doc comment, the test
+  module's import list, and the 8 deleted tests. `dispatch.rs`'s
+  `write_and_reload` (the only production caller of any schedule writer) is
+  untouched.
+- Only the 4 files named in the fix contract were touched
+  (`the-intern/service/Cargo.lock`, `crates/bob-core/Cargo.toml`,
+  `crates/bob-core/src/types/schedule.rs`, `crates/bob/src/config.rs`) — `git
+  show --stat 3a6bcf9` confirms no other files changed.
+
+**Stage 2 — Code quality / Bug Fix Addendum:**
+- Fix is minimal: pure deletion, no unrelated refactor or feature code
+  bundled in.
+- Regression test: not practical/applicable here per se — the fault was dead
+  code with no production caller, so there is no still-reachable behavior to
+  write a "fails before / passes after" test against; the correct verification
+  is that the fault (the unreachable, field-dropping writer) no longer exists
+  at all. The Work Log's explanation is reasonable: it captured a before/after
+  workspace test count (595 → 587, a drop of exactly 8, matching the fix
+  contract) as the chosen regression check, confirming no production code
+  depended on the removed symbols and that only the intended stale tests were
+  removed.
+- Diagnosis Log fix contract matches what was implemented exactly — all 5
+  planned-fix steps executed, nothing more, nothing less.
+
+**Fix Verification reproduced independently:**
+- `cargo fmt --all -- --check` → passes, 0 diffs.
+- `cargo build -p bob` → clean build, 0 errors/warnings surfaced.
+- `cargo test --workspace` → 587 passed, 0 failed, 0 ignored across all
+  crates (unit + doc tests), matching the Work Log's reported post-fix count
+  exactly.
+
+No blocking issues found. Both review stages pass.
+
+Next owner: Bug-Fix Loop.
