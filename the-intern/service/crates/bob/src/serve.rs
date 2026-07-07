@@ -7,7 +7,7 @@ use bob_core::error::{ServiceError, ServiceResult};
 use bob_core::ports::{AuditSink, PersistenceStore};
 use bob_core::types::{
     AuditRecord, AuditRecordKind, AuditRecordPayload, DeliveryKind, ExternalReportAuditPayload,
-    InternalEvent, ReportOutcome, ScheduleEntry,
+    InternalEvent, ReportOutcome, ScheduleEntry, SessionId,
 };
 use tokio::{sync::watch, task::JoinHandle, time};
 use tracing::info;
@@ -612,6 +612,28 @@ async fn record_periodic_fire_skipped(
     }
 }
 
+/// Acquires a session via the plain `acquire_session` (the `pi_agent_cwd` /
+/// inherited-launch-cwd tiers of the precedence), logging a warning and
+/// returning `None` on failure.
+///
+/// Shared by the [`PeriodicCwdResolution::ServiceDefault`] and
+/// [`PeriodicCwdResolution::EntryNotFound`] branches of the periodic
+/// dispatcher, which both fall back to this same acquisition.
+async fn acquire_default_session_or_warn(
+    supervisor: &pi_agent_supervisor::Handle,
+) -> Option<SessionId> {
+    match supervisor.acquire_session().await {
+        Ok(id) => Some(id),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "periodic dispatcher: session acquisition failed; continuing"
+            );
+            None
+        }
+    }
+}
+
 /// Starts the periodic dispatcher task and returns its join handle.
 ///
 /// The dispatcher runs in a dedicated Tokio task.  On each iteration it
@@ -771,28 +793,18 @@ fn start_periodic_dispatcher(
                                 job_id = job_id.as_deref().unwrap_or("<none>"),
                                 "periodic dispatcher: job id no longer resolves to a live schedule entry; falling back to the service-wide default cwd"
                             );
-                            match supervisor.acquire_session().await {
-                                Ok(id) => id,
-                                Err(e) => {
-                                    tracing::warn!(
-                                        error = %e,
-                                        "periodic dispatcher: session acquisition failed; continuing"
-                                    );
-                                    continue;
-                                }
-                            }
+                            let Some(id) = acquire_default_session_or_warn(&supervisor).await
+                            else {
+                                continue;
+                            };
+                            id
                         }
                         PeriodicCwdResolution::ServiceDefault => {
-                            match supervisor.acquire_session().await {
-                                Ok(id) => id,
-                                Err(e) => {
-                                    tracing::warn!(
-                                        error = %e,
-                                        "periodic dispatcher: session acquisition failed; continuing"
-                                    );
-                                    continue;
-                                }
-                            }
+                            let Some(id) = acquire_default_session_or_warn(&supervisor).await
+                            else {
+                                continue;
+                            };
+                            id
                         }
                     };
                     // `send_prompt_and_drain` returns as soon as pi acknowledges
