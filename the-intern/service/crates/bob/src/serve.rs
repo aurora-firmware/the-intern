@@ -311,7 +311,7 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     info!("starting periodic dispatcher");
     let (dispatcher_cancel_tx, dispatcher_cancel_rx) = watch::channel(false);
     let dispatcher_join = start_periodic_dispatcher(
-        persistence_handle.clone(),
+        Arc::new(persistence_handle.clone()),
         pi_agent_supervisor_handle.clone(),
         dispatcher_cancel_rx,
     );
@@ -538,8 +538,13 @@ fn remove_socket_files_best_effort(cfg: &BobConfig) {
 ///
 /// The task exits when `cancel_rx` receives `true`, which is sent during
 /// shutdown phase 1.
+///
+/// `persistence` is a trait object (rather than the concrete `persistence::Handle`
+/// used elsewhere in this module) so tests can substitute a spy `PersistenceStore`
+/// to observe exactly which of the correlator-carrying (T-120) methods this
+/// dispatcher calls, without depending on real queue/process timing.
 fn start_periodic_dispatcher(
-    persistence: persistence::Handle,
+    persistence: Arc<dyn PersistenceStore>,
     supervisor: pi_agent_supervisor::Handle,
     mut cancel_rx: watch::Receiver<bool>,
 ) -> JoinHandle<()> {
@@ -551,7 +556,11 @@ fn start_periodic_dispatcher(
                 break;
             }
 
-            match persistence.dequeue_next().await {
+            // T-126 (ADR-013): read back the job-id correlator the event was
+            // enqueued with. Non-periodic re-enqueues below intentionally keep
+            // using the plain `enqueue` (AC-4) — only the Periodic branch reads
+            // and (eventually, in T-127) acts on the job id.
+            match persistence.dequeue_next_with_job_id().await {
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
@@ -571,9 +580,11 @@ fn start_periodic_dispatcher(
                     }
                 }
 
-                Ok(Some(event)) if event.kind != DeliveryKind::Periodic => {
+                Ok(Some((event, _job_id))) if event.kind != DeliveryKind::Periodic => {
                     // Non-periodic events are not dispatched by this task.
-                    // Re-enqueue so they are not silently discarded.
+                    // Re-enqueue so they are not silently discarded. AC-4
+                    // (T-126): this keeps using the plain `enqueue` unchanged —
+                    // no job-id correlator is required or preserved here.
                     if let Err(e) = persistence.enqueue(event).await {
                         tracing::warn!(
                             error = %e,
@@ -588,8 +599,16 @@ fn start_periodic_dispatcher(
                     }
                 }
 
-                Ok(Some(event)) => {
+                Ok(Some((event, job_id))) => {
                     // Admitted Periodic event: use a fresh one-shot session.
+                    // AC-3 (T-126): the job id read back from the queue is
+                    // logged here so it is observably carried through to the
+                    // dispatcher. Resolving a per-job cwd and acquiring the
+                    // worker with it is T-127's job, not this one's.
+                    tracing::debug!(
+                        job_id = job_id.as_deref().unwrap_or("<none>"),
+                        "periodic dispatcher: dispatching periodic event"
+                    );
                     let session_id = match supervisor.acquire_session().await {
                         Ok(id) => id,
                         Err(e) => {
@@ -1814,6 +1833,192 @@ pub mod tests {
                 started_at.elapsed() < cfg.shutdown_drain_deadline,
                 "idle dispatcher must respond to shutdown signal before the drain deadline expires"
             );
+        }
+
+        // ── T-126: job-id correlator wiring through the periodic dispatcher ──
+
+        /// A `PersistenceStore` spy that records which methods were called and
+        /// serves at most one pre-loaded `(event, job_id)` pair, then reports an
+        /// empty queue forever after.
+        ///
+        /// Used to prove — deterministically, without racing the real queue or
+        /// depending on process/tracing timing — which of the correlator-carrying
+        /// (T-120) methods `start_periodic_dispatcher` calls on dequeue and
+        /// re-enqueue.
+        struct SpyPersistence {
+            calls: std::sync::Mutex<Vec<&'static str>>,
+            pending: std::sync::Mutex<Option<(InternalEvent, Option<String>)>>,
+        }
+
+        impl SpyPersistence {
+            fn with_pending(event: InternalEvent, job_id: Option<String>) -> Self {
+                Self {
+                    calls: std::sync::Mutex::new(Vec::new()),
+                    pending: std::sync::Mutex::new(Some((event, job_id))),
+                }
+            }
+
+            fn calls(&self) -> Vec<&'static str> {
+                self.calls.lock().expect("calls lock").clone()
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl PersistenceStore for SpyPersistence {
+            async fn enqueue(&self, _event: InternalEvent) -> ServiceResult<()> {
+                self.calls.lock().expect("calls lock").push("enqueue");
+                Ok(())
+            }
+
+            async fn dequeue_next(&self) -> ServiceResult<Option<InternalEvent>> {
+                self.calls.lock().expect("calls lock").push("dequeue_next");
+                Ok(self
+                    .pending
+                    .lock()
+                    .expect("pending lock")
+                    .take()
+                    .map(|(event, _job_id)| event))
+            }
+
+            async fn enqueue_with_job_id(
+                &self,
+                _event: InternalEvent,
+                _job_id: Option<String>,
+            ) -> ServiceResult<()> {
+                self.calls
+                    .lock()
+                    .expect("calls lock")
+                    .push("enqueue_with_job_id");
+                Ok(())
+            }
+
+            async fn dequeue_next_with_job_id(
+                &self,
+            ) -> ServiceResult<Option<(InternalEvent, Option<String>)>> {
+                self.calls
+                    .lock()
+                    .expect("calls lock")
+                    .push("dequeue_next_with_job_id");
+                Ok(self.pending.lock().expect("pending lock").take())
+            }
+
+            async fn put_session_state(
+                &self,
+                _id: bob_core::types::SessionId,
+                _state: bob_core::ports::SessionState,
+            ) -> ServiceResult<()> {
+                Ok(())
+            }
+
+            async fn get_session_state(
+                &self,
+                _id: bob_core::types::SessionId,
+            ) -> ServiceResult<Option<bob_core::ports::SessionState>> {
+                Ok(None)
+            }
+        }
+
+        /// A supervisor whose `acquire_session` fails immediately (missing
+        /// binary, empty warm pool) so tests can exercise the periodic branch's
+        /// dequeue step without waiting on any real process I/O.
+        fn failing_supervisor_handle() -> (pi_agent_supervisor::Handle, JoinHandle<()>) {
+            let cfg = pi_agent_supervisor::Config {
+                worker_command: "__t126_missing_pi_binary__".to_string(),
+                worker_args: Vec::new(),
+                warm_pool_size: 0,
+                max_processes: 1,
+                extension_path: existing_extension_path(),
+                ..pi_agent_supervisor::Config::default()
+            };
+            pi_agent_supervisor::start(cfg).expect("supervisor must start with an empty warm pool")
+        }
+
+        // AC-3 (T-126): the periodic dispatcher reads the job-id correlator back
+        // via `dequeue_next_with_job_id` (T-120), not the plain `dequeue_next`.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_calls_dequeue_next_with_job_id() {
+            let spy = Arc::new(SpyPersistence::with_pending(
+                InternalEvent {
+                    kind: DeliveryKind::Periodic,
+                    payload: "job-id-readback-test".to_owned(),
+                },
+                Some("job-readback-77".to_owned()),
+            ));
+            let (supervisor_handle, supervisor_join) = failing_supervisor_handle();
+
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::clone(&spy) as Arc<dyn PersistenceStore>,
+                supervisor_handle.clone(),
+                cancel_rx,
+            );
+
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if spy.calls().contains(&"dequeue_next_with_job_id") {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("dispatcher must call dequeue_next_with_job_id to read the job id back");
+
+            assert!(
+                !spy.calls().contains(&"dequeue_next"),
+                "dispatcher must use the job-id-carrying dequeue, not the plain one; calls: {:?}",
+                spy.calls()
+            );
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+        }
+
+        // AC-4 (T-126): the dispatcher's defensive re-enqueue of a wrongly-routed
+        // non-periodic event still uses the plain `enqueue` — no job-id
+        // correlator is required — so this path is unchanged by the periodic
+        // job-id wiring.
+        #[tokio::test(flavor = "current_thread")]
+        async fn dispatcher_re_enqueues_non_periodic_event_via_plain_enqueue() {
+            let spy = Arc::new(SpyPersistence::with_pending(
+                InternalEvent {
+                    kind: DeliveryKind::Sync,
+                    payload: "should-be-re-enqueued".to_owned(),
+                },
+                Some("stray-job-id".to_owned()),
+            ));
+            let (supervisor_handle, supervisor_join) = failing_supervisor_handle();
+
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::clone(&spy) as Arc<dyn PersistenceStore>,
+                supervisor_handle.clone(),
+                cancel_rx,
+            );
+
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if spy.calls().contains(&"enqueue") {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("dispatcher must re-enqueue the non-periodic event via plain enqueue");
+
+            assert!(
+                !spy.calls().contains(&"enqueue_with_job_id"),
+                "non-periodic re-enqueue must not require a job-id correlator; calls: {:?}",
+                spy.calls()
+            );
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
         }
     }
 
