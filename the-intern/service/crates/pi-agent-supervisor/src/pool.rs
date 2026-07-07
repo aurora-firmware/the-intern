@@ -24,6 +24,29 @@ struct ActiveSessionWorker {
     drain_handle: Option<JoinHandle<()>>,
 }
 
+impl ActiveSessionWorker {
+    /// Refreshes fire-and-forget run state from the background stdout drain.
+    ///
+    /// While the drain task is still running, the periodic job is considered
+    /// in flight and must not be idle-reaped. Once the drain reaches EOF, the
+    /// child has finished the detached run, so the worker becomes idle again
+    /// and the idle timer restarts from that completion moment.
+    fn refresh_drain_state(&mut self) {
+        if self
+            .drain_handle
+            .as_ref()
+            .is_some_and(tokio::task::JoinHandle::is_finished)
+        {
+            self.drain_handle = None;
+            self.last_prompt_activity = Instant::now();
+        }
+    }
+
+    fn is_periodic_run_in_flight(&self) -> bool {
+        self.drain_handle.is_some()
+    }
+}
+
 /// Reads and discards a detached worker's stdout until EOF.
 ///
 /// After a periodic prompt is accepted the agent run keeps streaming RPC
@@ -326,12 +349,17 @@ impl SessionPool {
     }
 
     pub async fn reap_idle_and_surplus(&mut self) -> ServiceResult<crate::reaper::ReapReport> {
+        for worker in self.active_workers.values_mut() {
+            worker.refresh_drain_state();
+        }
+
         let now = Instant::now();
         let stale_sessions = crate::reaper::select_idle_sessions(
             now,
             self.cfg.idle_reap_timeout,
             self.active_workers
                 .iter()
+                .filter(|(_, worker)| !worker.is_periodic_run_in_flight())
                 .map(|(session_id, worker)| (*session_id, worker.last_prompt_activity)),
         );
         let mut report = crate::reaper::ReapReport::default();

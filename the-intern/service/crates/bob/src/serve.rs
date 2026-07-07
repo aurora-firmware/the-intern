@@ -576,9 +576,10 @@ fn start_periodic_dispatcher(
                     // fills the ~8 KiB stdout pipe within a second or two and
                     // blocks pi mid-run, so the scheduled action never reaches
                     // its tool call (e.g. the file write never happens). Draining
-                    // keeps the run flowing to completion. The worker is still
-                    // released later by the idle reaper (`last_prompt_activity` +
-                    // `idle_reap_timeout`), so periodic jobs cannot leak workers.
+                    // keeps the run flowing to completion. Once that detached
+                    // stdout drain reaches EOF, the worker becomes idle again
+                    // and is released later by the idle reaper, so periodic
+                    // jobs cannot leak workers.
                     //
                     // On failure there is no run in flight to wait for (the
                     // prompt was never accepted), so the session is cleaned up

@@ -782,6 +782,58 @@ mod tests {
         );
     }
 
+    // Regression: a fire-and-forget periodic run must not be killed by the
+    // idle reaper while it is still executing, even if the child is silent
+    // after acknowledging the prompt. The old implementation refreshed
+    // `last_prompt_activity` only at ACK time, so a long-running job looked
+    // idle and could be terminated before it reached completion.
+    #[tokio::test(flavor = "current_thread")]
+    async fn send_prompt_and_drain_keeps_an_in_flight_run_alive_past_idle_reap_timeout() {
+        let marker =
+            std::env::temp_dir().join(format!("bob-inflight-marker-{}.txt", SessionId::new()));
+        let _ = std::fs::remove_file(&marker);
+
+        let script = r#"while IFS= read -r line; do id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'); printf '{"id":"%s","type":"response","success":true}\n' "$id"; sleep 0.2; printf 'done' > "__MARKER__"; done"#
+            .replace("__MARKER__", &marker.display().to_string());
+
+        let mut cfg = test_config("sh", &["-c", &script], 1, 2);
+        cfg.idle_reap_timeout = Duration::from_millis(40);
+        let (handle, task) = start(cfg).expect("startup should succeed");
+        let session_id = handle
+            .acquire_session()
+            .await
+            .expect("session acquire should succeed");
+        handle
+            .send_prompt_and_drain(session_id, "go".to_string())
+            .await
+            .expect("send_prompt_and_drain should ack the prompt");
+
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        let sessions = handle
+            .list_sessions()
+            .await
+            .expect("session listing should succeed");
+        assert!(
+            sessions.contains(&session_id),
+            "idle reaper must not remove a periodic run while it is still in flight"
+        );
+
+        let appeared = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if marker.exists() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+
+        let _ = std::fs::remove_file(&marker);
+        task.abort();
+        appeared.expect("long-running periodic run must remain alive long enough to finish");
+    }
+
     // AC-1/AC-2: start_interactive_session spawns the child and exposes its id via list_sessions.
     #[tokio::test(flavor = "current_thread")]
     async fn start_interactive_session_returns_session_id_visible_in_list_sessions() {
