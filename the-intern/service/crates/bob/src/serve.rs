@@ -108,10 +108,10 @@ fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Con
         child_termination_deadline: cfg.shutdown_reap_deadline,
         extension_sock_path: cfg.extension_sock_path.clone(),
         extension_path: cfg.extension_path.clone(),
-        // T-126 resolves this from `pi_agent_cwd`; kept unset here so bob
-        // continues to compile now that the supervisor Config carries a
-        // service-wide worker cwd (T-121).
-        worker_cwd: None,
+        // T-126: service-wide worker cwd mapped from pi_agent_cwd (T-119).
+        // Unset when pi_agent_cwd is None so warm-pool workers inherit the
+        // launch cwd of `bob serve` (AC-1/AC-2).
+        worker_cwd: cfg.pi_agent_cwd.clone(),
     }
 }
 
@@ -696,6 +696,42 @@ pub mod tests {
             Duration::from_secs(11)
         );
         assert_eq!(supervisor_cfg.extension_path, extension_path);
+    }
+
+    // AC-1 (T-126): pi_agent_cwd set on BobConfig must be mapped into the
+    // supervisor Config's worker_cwd so warm-pool workers run there.
+    #[test]
+    fn pi_agent_supervisor_config_maps_pi_agent_cwd_when_set() {
+        let cwd = std::path::PathBuf::from("/opt/bob/workspace");
+        let cfg = BobConfig {
+            pi_agent_cwd: Some(cwd.clone()),
+            ..BobConfig::test_base()
+        };
+
+        let supervisor_cfg = build_pi_agent_supervisor_config(&cfg);
+
+        assert_eq!(
+            supervisor_cfg.worker_cwd,
+            Some(cwd),
+            "pi_agent_cwd must be mapped into the supervisor Config's worker_cwd"
+        );
+    }
+
+    // AC-2 (T-126): when pi_agent_cwd is unset, worker_cwd must stay unset so
+    // warm-pool workers inherit the launch cwd of `bob serve`.
+    #[test]
+    fn pi_agent_supervisor_config_leaves_worker_cwd_unset_when_pi_agent_cwd_is_unset() {
+        let cfg = BobConfig {
+            pi_agent_cwd: None,
+            ..BobConfig::test_base()
+        };
+
+        let supervisor_cfg = build_pi_agent_supervisor_config(&cfg);
+
+        assert_eq!(
+            supervisor_cfg.worker_cwd, None,
+            "unset pi_agent_cwd must leave worker_cwd unset so workers inherit the launch cwd"
+        );
     }
 
     #[test]
