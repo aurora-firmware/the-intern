@@ -137,3 +137,87 @@ repeating the unverifiable spec claim, rather than silently fabricating a
 false statement in an operator-facing document.
 
 ## Review
+
+### Review Verdict — 2026-07-08
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1 (pi_agent_cwd, `--cwd`, precedence documented): Met. Verified every
+  documented mechanic against the shipped source rather than trusting the
+  diff's prose alone:
+  - `pi_agent_cwd`: absolute-only validation and unset-by-default/inherit
+    behavior match `crates/bob/src/config.rs` (`pi_agent_cwd.is_absolute()`
+    check, `pi_agent_cwd: None` default, existence-not-checked-at-load
+    covered by the `loads_successfully_when_pi_agent_cwd_names_a_nonexistent_directory`
+    test).
+  - Precedence (per-entry → service-wide → inherited): matches
+    `crates/bob/src/serve.rs::resolve_periodic_cwd` and
+    `start_periodic_dispatcher`'s `default_worker_cwd.or_else(std::env::current_dir)`
+    fallback exactly.
+  - `--cwd` flag: matches `crates/bob/src/cli/commands/schedule.rs`
+    (`validate_cwd` absolute-path-only check, not-required-to-exist-at-add-time
+    comment, `cwd` key added to params only when given). `bob schedule list`
+    human/JSON rendering (`cwd: <path>` suffix, omitted when absent) matches
+    `schedule_list_human_output_{includes,omits}_cwd...` and
+    `schedule_list_json_output_includes_cwd_field_when_entry_has_one`.
+- AC-2 (trust/owner-only guidance): Met. The expanded Security callout states
+  the scheduled `cwd` is read with no ownership/permission check, is an
+  injection path via auto-loaded `AGENTS.md`/`CLAUDE.md`/skills, and must be
+  kept owner-only like `schedules.json`, with filesystem permissions as the
+  gate — matches the task description's guidance verbatim in substance.
+- AC-3 (mdBook builds cleanly): Met. Independently reran in a separate
+  worktree (`BOB_BIN=<debug bob> mdbook build the-intern/docs` after `rm -rf
+  book`) — builds cleanly with only the pre-existing mdbook-mermaid version
+  warning (0.4.36 vs 0.4.52), no errors. Also independently reran the CI
+  "reject internal project doc links" grep
+  (`grep -RInE 'project/(decisions|docs|specs)' src`) against `the-intern/docs/src`
+  from the task branch — clean, matching the Work Log's claim.
+- Unspecified behavior / scope: The Developer substituted the verified-true
+  "`bob chat` always inherits `bob serve`'s own launch cwd" for the task
+  description's unverifiable "`bob chat` uses its invocation cwd" claim, and
+  filed the discrepancy as B-021. Assessed as a reasonable, well-justified
+  judgment call, not a deviation that should fail review: (1) AC-1's literal
+  wording only requires documenting `pi_agent_cwd`, `--cwd`, and the
+  precedence rule — it does not itself assert the `bob chat` claim; the task
+  Description text repeating the CR-005/S-002 claim is not independently
+  verified spec text, and CR-005's own resolution recorded it as "(no
+  change)" (assumed pre-existing, never implemented by any task); (2) traced
+  end-to-end and confirmed the claim is false in shipped code —
+  `chat.rs` sends `"params": {}` with no cwd, `InteractiveSessionConfig` and
+  `InteractiveProcessConfig` have no cwd field, and `InteractiveProcess::spawn`
+  never calls `current_dir` (contrast with `RpcWorkerProcess::spawn`, which
+  does); (3) this fact is directly security-relevant (it governs where pi
+  auto-loads `AGENTS.md`/`CLAUDE.md`/skills from for interactive sessions,
+  immediately adjacent to AC-2's trust guidance), so documenting the
+  spec's false claim in an operator-facing doc would have been actively
+  misleading rather than merely imprecise; (4) the fix itself was correctly
+  kept out of scope and filed as B-021 with a complete evidence chain
+  (confirmed reproduction status, file/line evidence, expected/actual,
+  suggested fix-verification test) rather than silently expanding T-129 into
+  a code change.
+- Files touched: only `the-intern/docs/src/operator-guide/index.md` (in
+  `Files to Touch`) and the new `project/bugs/open/B-021-...md` (expected,
+  out-of-scope bug filing per the Work Log; confirmed identical between the
+  task branch and `dev-agent`'s already-canonical `39f0bbf` — no net diff, as
+  expected).
+
+**Stage 2 — Code Quality**
+
+- Correctness: every command example, flag-table row, and rendered-output
+  sample checked against source (see above) — all accurate.
+- Tests: N/A for a docs-only task; AC-3's mdBook build serves as the
+  verification and was independently reproduced.
+- Security: the expanded Security callout is accurate and consistent with
+  the existing ADR-012 trust-boundary language already in the guide.
+- Readability: new "Working directory for pi-agent sessions" section is
+  well-organized, correctly placed, and its `#scheduled-jobs` cross-reference
+  resolves (confirmed via the clean mdBook build, which fails on broken
+  intra-book links).
+- Performance: N/A (docs-only).
+
+No blocking issues found. Minor, non-blocking observation: a couple of the
+edited Markdown tables (Schedule Entry Fields, `bob schedule add` Flags) have
+slightly inconsistent pipe-column alignment in the raw source; this is
+cosmetic only and does not affect mdBook's rendered output.
