@@ -3,7 +3,7 @@ id: B-021
 title: bob chat interactive session does not use the bob chat invocation cwd as 
   CR-005/S-002 specify
 severity: medium
-status: open
+status: in-progress
 created: '2026-07-08'
 task: T-129
 ---
