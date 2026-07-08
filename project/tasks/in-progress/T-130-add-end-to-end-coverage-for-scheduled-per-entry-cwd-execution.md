@@ -70,3 +70,113 @@ Implemented all three ACs via three red→green→refactor cycles, one commit ea
 **Obstacles Encountered:** None — the Unix-domain-socket-backed tests ran fine in this session's shell (no sandbox restriction encountered), contrary to the possibility flagged in the task description. No out-of-scope bugs or spec/implementation discrepancies were found this session (unlike T-129's B-021); no `new-bug` skill invocation was needed.
 
 ## Review
+
+### Review Verdict — 2026-07-08
+
+PASS
+
+Reviewed `task/T-130-scheduled-per-entry-cwd-e2e-coverage` (tip `a7588da`)
+against `dev-agent` merge-base `d74af2d`, diffing
+`the-intern/service/crates/bob/tests/scheduler_execution_e2e.rs` (the sole
+file touched — 771 insertions / 13 deletions, matching the declared "Files to
+Touch"). Cross-checked the replicated `PeriodicCwdResolution`/
+`resolve_periodic_cwd`/`record_periodic_fire_skipped`/
+`record_periodic_fire_dispatched` helpers and the extended
+`start_inline_dispatcher` against the real production implementation in
+`the-intern/service/crates/bob/src/serve.rs` (`start_periodic_dispatcher` and
+its helpers, T-127/T-128) — the replica's match arms, audit-record shapes,
+and precedence order are faithful to production. Verified independently in a
+scratch `git worktree` (not from the Developer's self-report):
+`cargo test -p bob --test scheduler_execution_e2e` (4 passed, up from 1),
+`cargo test -p bob --lib serve` (56 passed), `cargo test --workspace` (26/26
+test-result groups green, no compiler warnings), and
+`cargo fmt --all -- --check` (clean).
+
+**Stage 1 — Acceptance Criteria:**
+
+- AC-1 (per-entry `cwd` fire runs the pi session in that directory, honouring
+  precedence): met.
+  `scheduled_entry_with_per_entry_cwd_runs_pi_session_in_that_directory_honouring_precedence`
+  configures the supervisor's service-wide `worker_cwd` to a directory
+  distinct from the schedule entry's per-entry `cwd`, fires the entry, and
+  asserts (via a `pwd`-writing fake worker script) that the actual process
+  cwd — canonicalized — equals the per-entry `cwd`, not the configured
+  default. Because the marker file is read from inside the expected per-entry
+  directory, a precedence regression (falling through to the service-wide
+  default) would make the file never appear there and the test would time out
+  and fail — this is a genuine precedence proof, not just "some cwd was
+  applied."
+- AC-2 (missing per-entry `cwd` at fire time skips the fire with a warning,
+  entry remains): met.
+  `scheduled_entry_with_missing_per_entry_cwd_at_fire_time_skips_the_fire_and_leaves_the_entry_present`
+  never creates the entry's `cwd` on disk, pairs it with a fail-fast
+  (`exit 1`) worker so an accidental acquisition would be visibly distinct,
+  and asserts a `Report`-kind audit record with `outcome == Error` and a
+  summary containing both the job id and "does not exist", that
+  `supervisor.list_sessions()` stays empty (no acquisition attempted), and
+  that the entry is still present in the live schedule table
+  (`scheduler_handle.subscribe().borrow()`) afterward. I independently
+  reproduced the Work Log's vacuity check in the scratch worktree —
+  temporarily forcing the `!cwd.exists()` guard to `false && ...` — and
+  confirmed the test fails (`a missing per-entry cwd at fire time must append
+  a monitoring failure record`), then reverted and confirmed green again.
+- AC-3 (resolved cwd recorded on the audit record for a firing): met.
+  `scheduled_entry_firing_records_the_resolved_cwd_on_the_audit_record` fires
+  a per-entry-`cwd` entry and asserts exactly one `Event`-kind audit record
+  whose `ExtensionEventAuditPayload::resolved_cwd` equals the concrete
+  per-entry `cwd` and whose `session_id` is set — matching T-123's field and
+  T-128's "concrete resolved absolute path, not the raw per-entry field"
+  requirement (for this precedence tier the two coincide, as T-128's own
+  review already established for validated absolute per-entry paths).
+- No unspecified behavior was added: the diff adds only what the three ACs
+  require — the production-mirroring helpers/enum, a `SpyAuditSink`, the
+  extended `start_inline_dispatcher` signature, and the three new tests. The
+  Work Log's "Tried and rejected" note correctly declines to add a distinct
+  `EntryNotFound` fallback audit record (T-127's AC-3, already covered
+  elsewhere) since no T-130 AC or test exercises that tier.
+- No unexpected files modified: `git diff --stat` against the merge-base
+  shows only `scheduler_execution_e2e.rs`.
+- The one pre-existing test's update
+  (`schedule_entry_from_json_store_is_delivered_when_admitted_users_is_empty`,
+  threading `context.context_id` through `enqueue_with_job_id` and adding the
+  two new dispatcher parameters) is necessary, foreseeable plumbing to keep
+  it compiling and semantically aligned with the now-extended dispatcher
+  signature and production's own `admit_periodic_event` behavior — not scope
+  creep.
+
+**Stage 2 — Code Quality:**
+
+- **Correctness:** the replicated resolution/dispatch logic matches
+  production's `resolve_periodic_cwd`/`start_periodic_dispatcher` match
+  arms exactly (`PerEntry`/`ServiceDefault`/`EntryNotFound`, existence check,
+  `acquire_session_with_cwd` vs `acquire_session`, audit record placement
+  before `send_prompt`), confirmed by direct comparison with
+  `crates/bob/src/serve.rs`.
+- **Tests:** all three new tests are independent (own `tempdir`, supervisor,
+  monitoring/persistence/policy actors, and — where needed — their own
+  `SpyAuditSink`; no shared mutable state), cover both a success path (AC-1)
+  and failure/skip path (AC-2) plus a dedicated audit-content assertion
+  (AC-3), and assert on concrete values (canonicalized paths, exact audit
+  payload fields) rather than loose existence checks. I reproduced one
+  vacuity check myself (AC-2, above); AC-1's and AC-3's assertion structure
+  is self-evidently non-vacuous (a precedence or field-population regression
+  would make the specific assertion fail, not just some looser check).
+- **Security:** no hardcoded secrets, no new external input; test
+  fixtures use `tempfile::tempdir()` for all filesystem state.
+- **Readability:** new tests and helpers are clearly named and documented
+  (each carries an `// AC-N (T-130): ...` comment tying it to its
+  criterion); no dead code or commented-out blocks. The three new tests
+  share substantial setup boilerplate, matching the Reviewer-endorsed
+  precedent from T-127/T-128 (per-test legibility over DRY) already
+  established in this same file.
+- **Performance:** no unnecessary loops, blocking calls, or resource leaks;
+  polling loops match the existing 50ms real-time-delay convention used by
+  the pre-existing test in this file, and all task/session handles are
+  joined with a bounded timeout at teardown.
+- `cargo test --workspace` reproduced clean with zero compiler warnings
+  attributable to this diff.
+
+Both stages pass. No blocking issues found.
+
+Next owner: Development Loop (`/dev-loop`) routes this to the Integrator for
+merge.
