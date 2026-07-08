@@ -702,3 +702,196 @@ async fn scheduled_entry_with_per_entry_cwd_runs_pi_session_in_that_directory_ho
     let _ = tokio::time::timeout(Duration::from_millis(500), persistence_join).await;
     let _ = tokio::time::timeout(Duration::from_millis(500), policy_join).await;
 }
+
+// AC-2 (T-130): IF a scheduled entry's per-entry `cwd` does not exist at fire
+// time THEN THE SYSTEM SHALL skip the fire with a warning and leave the entry
+// present.
+#[tokio::test(flavor = "current_thread")]
+async fn scheduled_entry_with_missing_per_entry_cwd_at_fire_time_skips_the_fire_and_leaves_the_entry_present(
+) {
+    tokio::time::pause();
+
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let job_id = "e2e-missing-cwd-job";
+    let missing_cwd = tmp.path().join("does-not-exist-per-entry-cwd");
+    // Deliberately not created: this test exercises the missing-directory
+    // skip at fire time, not delivery.
+
+    let store_path = tmp.path().join("schedules.json");
+    bob_core::types::schedule::write_schedule_store(
+        &store_path,
+        &[ScheduleEntry::with_prompt(
+            job_id.to_string(),
+            "* * * * *".to_string(),
+            "e2e-scheduled-prompt-missing-cwd".to_string(),
+        )
+        .with_cwd(missing_cwd.to_string_lossy().into_owned())],
+    )
+    .expect("JSON schedule store write must succeed");
+    let entries = bob_core::types::schedule::read_schedule_store(&store_path)
+        .expect("JSON schedule store read must succeed");
+
+    let (persistence_handle, persistence_join) = persistence::start(persistence::Config::default());
+
+    let policy_cfg = policy_control::PolicyConfig::default();
+    let initial_snapshot = policy_control::RulesetSnapshot::from_config(policy_cfg)
+        .expect("empty (deny-all) policy config is always valid");
+    let (_, policy_join, policy_snapshot) = policy_control::start(policy_control::Config {
+        initial_snapshot,
+        config_path: std::path::PathBuf::new(),
+        command_buffer: 16,
+    });
+
+    // A worker that exits immediately if ever acquired, so an accidental
+    // acquisition attempt would be visibly distinct from the intended skip.
+    let (supervisor_handle, supervisor_join) =
+        pi_agent_supervisor::start(pi_agent_supervisor::Config {
+            worker_command: "sh".to_string(),
+            worker_args: vec!["-c".to_string(), "exit 1".to_string()],
+            warm_pool_size: 0,
+            max_processes: 2,
+            idle_reap_timeout: Duration::from_secs(300),
+            command_buffer: 16,
+            child_termination_deadline: Duration::from_millis(500),
+            extension_sock_path: std::path::PathBuf::new(),
+            extension_path: current_exe_path(),
+            worker_cwd: None,
+        })
+        .expect("pi-agent supervisor must start");
+
+    let persistence_arc: Arc<dyn PersistenceStore> = Arc::new(persistence_handle.clone());
+    let spy_audit_sink = Arc::new(SpyAuditSink::default());
+    let periodic_dispatch_audit_sink = Arc::clone(&spy_audit_sink) as Arc<dyn AuditSink>;
+    let closure_audit_sink = Arc::clone(&spy_audit_sink) as Arc<dyn AuditSink>;
+    let snap_for_preflight = policy_snapshot.clone();
+
+    let (rh_cancel_tx, rh_cancel_rx) = watch::channel(false);
+    let (requests_handle, requests_join) = requests_handler::start_with(
+        requests_handler::Config {
+            request_queue_capacity: 16,
+            request_submit_timeout: Duration::from_secs(5),
+        },
+        move |(event, context)| {
+            let store = Arc::clone(&persistence_arc);
+            let audit = Arc::clone(&closure_audit_sink);
+            let snap = snap_for_preflight.clone();
+            async move {
+                if event.kind == DeliveryKind::Periodic {
+                    let _ = store
+                        .enqueue_with_job_id(event, context.context_id.clone())
+                        .await;
+                } else {
+                    requests_handler::run_preflight(
+                        event,
+                        Some(&context),
+                        &snap,
+                        store.as_ref(),
+                        audit.as_ref(),
+                    )
+                    .await;
+                }
+            }
+        },
+        rh_cancel_rx,
+    );
+
+    let (scheduler_handle, scheduler_join) =
+        scheduler_adapter::start(requests_handle.clone(), entries);
+
+    let (dispatcher_cancel_tx, dispatcher_cancel_rx) = watch::channel(false);
+    let dispatcher_join = start_inline_dispatcher(
+        persistence_handle.clone(),
+        supervisor_handle.clone(),
+        scheduler_handle.subscribe(),
+        periodic_dispatch_audit_sink,
+        dispatcher_cancel_rx,
+    );
+
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_secs(61)).await;
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_millis(200)).await;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::resume();
+
+    // Poll for the skip's monitoring failure record using real-time delays.
+    let mut skip_recorded = false;
+    let poll_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < poll_deadline {
+        if spy_audit_sink
+            .records()
+            .iter()
+            .any(|r| r.kind == AuditRecordKind::Report)
+        {
+            skip_recorded = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    assert!(
+        skip_recorded,
+        "a missing per-entry cwd at fire time must append a monitoring failure record"
+    );
+
+    let records = spy_audit_sink.records();
+    let skip_record = records
+        .iter()
+        .find(|r| r.kind == AuditRecordKind::Report)
+        .expect("a Report-kind audit record must exist");
+    match &skip_record.payload {
+        AuditRecordPayload::Report(payload) => {
+            assert_eq!(payload.outcome, ReportOutcome::Error);
+            let summary = payload.summary.as_deref().unwrap_or_default();
+            assert!(
+                summary.contains(job_id),
+                "skip record summary must reference the job id, got: {summary}"
+            );
+            assert!(
+                summary.contains("does not exist"),
+                "skip record summary must explain the missing directory, got: {summary}"
+            );
+        }
+        other => panic!("expected a Report payload for the skipped fire, got: {other:?}"),
+    }
+
+    assert!(
+        supervisor_handle
+            .list_sessions()
+            .await
+            .expect("list_sessions must succeed")
+            .is_empty(),
+        "no session should ever be acquired for a fire skipped due to a missing per-entry cwd"
+    );
+
+    assert!(
+        scheduler_handle
+            .subscribe()
+            .borrow()
+            .iter()
+            .any(|entry| entry.id == job_id),
+        "the schedule entry must remain present in the live table after a skipped fire"
+    );
+
+    // ── Teardown ──────────────────────────────────────────────────────────────
+    let _ = dispatcher_cancel_tx.send(true);
+    let _ = rh_cancel_tx.send(true);
+    drop(scheduler_handle);
+    drop(supervisor_handle);
+    drop(requests_handle);
+    drop(persistence_handle);
+    drop(policy_snapshot);
+
+    let _ = tokio::time::timeout(Duration::from_millis(500), dispatcher_join).await;
+    let _ = tokio::time::timeout(Duration::from_millis(500), scheduler_join).await;
+    let _ = supervisor_join.await;
+    let _ = tokio::time::timeout(Duration::from_millis(500), requests_join).await;
+    let _ = tokio::time::timeout(Duration::from_millis(500), persistence_join).await;
+    let _ = tokio::time::timeout(Duration::from_millis(500), policy_join).await;
+}
