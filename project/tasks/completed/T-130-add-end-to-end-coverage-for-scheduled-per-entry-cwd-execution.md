@@ -1,7 +1,7 @@
 ---
 id: T-130
 title: Add end-to-end coverage for scheduled per-entry cwd execution
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-07-05'
