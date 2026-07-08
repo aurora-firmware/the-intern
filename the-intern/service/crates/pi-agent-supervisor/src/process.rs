@@ -270,6 +270,11 @@ pub struct InteractiveProcessConfig {
     pub extension_sock_path: PathBuf,
     /// Resolved path passed to pi as `--extension <path>`.
     pub extension_path: PathBuf,
+    /// Working directory set on the child process via `current_dir` (CR-005 /
+    /// B-021: the directory `bob chat` was invoked from). `None` means the
+    /// child inherits the launch cwd unchanged — mirrors
+    /// `WorkerProcessConfig::worker_cwd`.
+    pub cwd: Option<PathBuf>,
 }
 
 /// A supervised interactive pi child process.
@@ -324,6 +329,10 @@ impl InteractiveProcess {
 
         if !cfg.extension_sock_path.as_os_str().is_empty() {
             cmd.env("BOB_EXTENSION_SOCK_PATH", &cfg.extension_sock_path);
+        }
+
+        if let Some(cwd) = &cfg.cwd {
+            cmd.current_dir(cwd);
         }
 
         let child = cmd.spawn().map_err(|error| ServiceError::ChildProcess {
@@ -851,6 +860,7 @@ mod tests {
             session_id,
             extension_sock_path: sock_path.clone(),
             extension_path: extension_path.clone(),
+            cwd: None,
         };
 
         let process = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
@@ -900,6 +910,7 @@ mod tests {
             session_id: SessionId::new(),
             extension_sock_path: PathBuf::new(),
             extension_path: missing.clone(),
+            cwd: None,
         };
 
         let error = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
@@ -935,6 +946,7 @@ mod tests {
             session_id: SessionId::new(),
             extension_sock_path: PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
+            cwd: None,
         };
 
         let process = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
@@ -945,5 +957,121 @@ mod tests {
             !outcome.forced,
             "cooperative interactive child should terminate without force-kill"
         );
+    }
+
+    // B-021 / CR-005: when cfg.cwd is configured, the interactive child's
+    // current directory is set to it (mirrors
+    // spawn_sets_current_dir_on_child_when_worker_cwd_is_configured for
+    // RpcWorkerProcess).
+    #[tokio::test(flavor = "current_thread")]
+    async fn interactive_spawn_sets_current_dir_on_child_when_cwd_is_configured() {
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let interactive_cwd = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-interactive-cwd-{}",
+            SessionId::new()
+        ));
+        std::fs::create_dir_all(&interactive_cwd).expect("create interactive cwd dir");
+
+        let out_file = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-interactive-cwd-out-{}.txt",
+            SessionId::new()
+        ));
+        let _ = std::fs::remove_file(&out_file);
+
+        let stdin_fd: OwnedFd = File::open("/dev/null")
+            .expect("open /dev/null for stdin")
+            .into();
+        let stdout_fd: OwnedFd = File::create(&out_file)
+            .expect("create output file for stdout")
+            .into();
+        let stderr_fd: OwnedFd = File::open("/dev/null")
+            .expect("open /dev/null for stderr")
+            .into();
+
+        let cfg = InteractiveProcessConfig {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), "printf '%s' \"$(pwd)\"".to_string()],
+            child_termination_deadline: Duration::from_millis(2000),
+            session_id: SessionId::new(),
+            extension_sock_path: PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
+            cwd: Some(interactive_cwd.clone()),
+        };
+
+        let process = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
+            .expect("interactive spawn should succeed");
+        process.wait_for_exit().await;
+
+        let written = std::fs::read_to_string(&out_file)
+            .expect("output file should have been written by child");
+
+        let expected =
+            std::fs::canonicalize(&interactive_cwd).expect("canonicalize expected interactive cwd");
+        let actual =
+            std::fs::canonicalize(written.trim()).expect("canonicalize child-reported current dir");
+
+        assert_eq!(
+            actual, expected,
+            "interactive child current dir should match configured cwd"
+        );
+
+        std::fs::remove_dir_all(&interactive_cwd).ok();
+        let _ = std::fs::remove_file(&out_file);
+    }
+
+    // B-021 / CR-005: when cfg.cwd is unset, the interactive child inherits
+    // the launch cwd (mirrors
+    // spawn_inherits_launch_cwd_when_worker_cwd_is_not_configured for
+    // RpcWorkerProcess).
+    #[tokio::test(flavor = "current_thread")]
+    async fn interactive_spawn_inherits_launch_cwd_when_cwd_is_not_configured() {
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let out_file = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-interactive-no-cwd-out-{}.txt",
+            SessionId::new()
+        ));
+        let _ = std::fs::remove_file(&out_file);
+
+        let stdin_fd: OwnedFd = File::open("/dev/null")
+            .expect("open /dev/null for stdin")
+            .into();
+        let stdout_fd: OwnedFd = File::create(&out_file)
+            .expect("create output file for stdout")
+            .into();
+        let stderr_fd: OwnedFd = File::open("/dev/null")
+            .expect("open /dev/null for stderr")
+            .into();
+
+        let cfg = InteractiveProcessConfig {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), "printf '%s' \"$(pwd)\"".to_string()],
+            child_termination_deadline: Duration::from_millis(2000),
+            session_id: SessionId::new(),
+            extension_sock_path: PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
+            cwd: None,
+        };
+        assert_eq!(cfg.cwd, None, "test setup expects cwd to default to None");
+
+        let process = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
+            .expect("interactive spawn should succeed");
+        process.wait_for_exit().await;
+
+        let written = std::fs::read_to_string(&out_file)
+            .expect("output file should have been written by child");
+
+        let expected = std::env::current_dir().expect("current dir should be available");
+
+        assert_eq!(
+            written.trim(),
+            expected.to_string_lossy(),
+            "interactive child should inherit the launch cwd when cwd is unset"
+        );
+
+        let _ = std::fs::remove_file(&out_file);
     }
 }

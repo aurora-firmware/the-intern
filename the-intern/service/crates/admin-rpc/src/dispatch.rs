@@ -116,6 +116,13 @@ pub enum DispatchOutcome {
         id: serde_json::Value,
         /// A freshly-allocated session id to use for the spawned pi process.
         session_id: bob_core::types::SessionId,
+        /// The working directory the `bob chat` client was invoked from
+        /// (params.cwd), threaded through to the spawn-config construction
+        /// path (CR-005 / B-021). `None` when the client omitted it or the
+        /// field failed to parse as a string — the spawned child then
+        /// inherits `bob serve`'s own launch cwd. `pi_agent_cwd` is never
+        /// consulted for interactive sessions (CR-005).
+        cwd: Option<PathBuf>,
     },
 }
 
@@ -239,7 +246,10 @@ impl Dispatcher {
             "schedule.remove" => self.handle_schedule_remove(id, &request.params).await,
             "schedule.list" => self.handle_schedule_list(id).await,
             "schedule.reload" => self.handle_schedule_reload(id).await,
-            "session.interactive.open" => self.handle_session_interactive_open(id).await,
+            "session.interactive.open" => {
+                self.handle_session_interactive_open(id, &request.params)
+                    .await
+            }
             other => DispatchOutcome::Err(ErrorResponse::error(
                 id,
                 CODE_METHOD_NOT_FOUND,
@@ -438,7 +448,16 @@ impl Dispatcher {
     /// socket-access permission check performed at connection accept time.
     ///
     /// Returns `-32601 Method not found` when no supervisor handle is configured.
-    async fn handle_session_interactive_open(&self, id: Value) -> DispatchOutcome {
+    ///
+    /// Parses an optional `params.cwd` string (CR-005 / B-021): the `bob chat`
+    /// client sends its own invocation cwd here so the spawned pi child can run
+    /// in that directory instead of `bob serve`'s own launch cwd. Per CR-005,
+    /// `pi_agent_cwd` is never consulted on this path.
+    async fn handle_session_interactive_open(
+        &self,
+        id: Value,
+        params: &Option<Value>,
+    ) -> DispatchOutcome {
         let Some(_) = self.supervisor else {
             return DispatchOutcome::Err(ErrorResponse::error(
                 id,
@@ -448,11 +467,21 @@ impl Dispatcher {
             ));
         };
         let session_id = bob_core::types::SessionId::new();
+        let cwd = params
+            .as_ref()
+            .and_then(|p| p.get("cwd"))
+            .and_then(Value::as_str)
+            .map(PathBuf::from);
         tracing::debug!(
             session_id = %session_id,
+            cwd = ?cwd,
             "session.interactive.open: allocated session id, awaiting fd receive"
         );
-        DispatchOutcome::InteractiveSessionOpening { id, session_id }
+        DispatchOutcome::InteractiveSessionOpening {
+            id,
+            session_id,
+            cwd,
+        }
     }
 
     /// Handle `report.submit`.
@@ -2852,7 +2881,11 @@ mod tests {
 
         sup_task.abort();
         match outcome {
-            DispatchOutcome::InteractiveSessionOpening { id, session_id } => {
+            DispatchOutcome::InteractiveSessionOpening {
+                id,
+                session_id,
+                cwd,
+            } => {
                 assert_eq!(id, json!(601));
                 // session_id must be a freshly-allocated non-nil UUID
                 assert_ne!(
@@ -2860,6 +2893,66 @@ mod tests {
                     bob_core::types::SessionId::default(),
                     "session_id must be freshly allocated"
                 );
+                assert_eq!(
+                    cwd, None,
+                    "cwd must be None when the request omits params.cwd"
+                );
+            }
+            DispatchOutcome::Err(e) => panic!(
+                "expected InteractiveSessionOpening, got error: {}",
+                e.error.message
+            ),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // B-021 / CR-005: session.interactive.open with a params.cwd string parses
+    // it into the InteractiveSessionOpening outcome so the spawn-config
+    // construction path in admin-rpc's connection loop can thread it through
+    // to InteractiveProcess::spawn.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_session_interactive_open_with_params_cwd_parses_it_into_outcome() {
+        let (dispatcher, sup_task) = make_dispatcher_with_supervisor();
+        let req = make_request_with_params(
+            "session.interactive.open",
+            json!(602),
+            json!({ "cwd": "/tmp/bob-chat-invocation-dir" }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::InteractiveSessionOpening { id, cwd, .. } => {
+                assert_eq!(id, json!(602));
+                assert_eq!(cwd, Some(PathBuf::from("/tmp/bob-chat-invocation-dir")));
+            }
+            DispatchOutcome::Err(e) => panic!(
+                "expected InteractiveSessionOpening, got error: {}",
+                e.error.message
+            ),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // B-021 / CR-005: a non-string params.cwd is treated the same as an
+    // absent cwd (None) rather than causing an error — the client always
+    // sends a string, but the server must not panic or misparse malformed
+    // input from a non-conforming caller.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_session_interactive_open_with_non_string_params_cwd_leaves_cwd_none() {
+        let (dispatcher, sup_task) = make_dispatcher_with_supervisor();
+        let req =
+            make_request_with_params("session.interactive.open", json!(603), json!({ "cwd": 42 }));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::InteractiveSessionOpening { cwd, .. } => {
+                assert_eq!(cwd, None, "non-string params.cwd must not be parsed");
             }
             DispatchOutcome::Err(e) => panic!(
                 "expected InteractiveSessionOpening, got error: {}",

@@ -97,6 +97,10 @@ enum Command {
         session_id: SessionId,
         extension_sock_path: PathBuf,
         extension_path: PathBuf,
+        /// Working directory captured from the `bob chat` invocation cwd
+        /// (CR-005 / B-021). `None` means the interactive child inherits the
+        /// launch cwd unchanged.
+        cwd: Option<PathBuf>,
         stdin: OwnedFd,
         stdout: OwnedFd,
         stderr: OwnedFd,
@@ -271,6 +275,7 @@ impl Handle {
         session_id: SessionId,
         extension_sock_path: PathBuf,
         extension_path: PathBuf,
+        cwd: Option<PathBuf>,
         stdin: OwnedFd,
         stdout: OwnedFd,
         stderr: OwnedFd,
@@ -284,6 +289,7 @@ impl Handle {
                 session_id,
                 extension_sock_path,
                 extension_path,
+                cwd,
                 stdin,
                 stdout,
                 stderr,
@@ -422,6 +428,7 @@ impl Actor {
                             session_id,
                             extension_sock_path,
                             extension_path,
+                            cwd,
                             stdin,
                             stdout,
                             stderr,
@@ -438,6 +445,7 @@ impl Actor {
                                 session_id,
                                 extension_sock_path,
                                 extension_path,
+                                cwd,
                             };
                             let result =
                                 self.pool.start_interactive_session(cfg, stdin, stdout, stderr);
@@ -906,6 +914,7 @@ mod tests {
                 SessionId::new(),
                 std::path::PathBuf::new(),
                 std::env::current_exe().expect("current executable should exist"),
+                None,
                 stdin_fd,
                 stdout_fd,
                 stderr_fd,
@@ -950,6 +959,7 @@ mod tests {
                 SessionId::new(),
                 std::path::PathBuf::new(),
                 std::env::current_exe().expect("current executable should exist"),
+                None,
                 stdin_fd,
                 stdout_fd,
                 stderr_fd,
@@ -1002,6 +1012,7 @@ mod tests {
                 SessionId::new(),
                 std::path::PathBuf::new(),
                 std::env::current_exe().expect("current executable should exist"),
+                None,
                 stdin_fd,
                 stdout_fd,
                 stderr_fd,
