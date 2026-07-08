@@ -823,6 +823,7 @@ mod tests {
             session_id: bob_core::types::SessionId::new(),
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
+            cwd: None,
         };
 
         let session_id = pool
@@ -870,6 +871,7 @@ mod tests {
             session_id: bob_core::types::SessionId::new(),
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
+            cwd: None,
         };
 
         pool.start_interactive_session(interactive_cfg, stdin_fd, stdout_fd, stderr_fd)
