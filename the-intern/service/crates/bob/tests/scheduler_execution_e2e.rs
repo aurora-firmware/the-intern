@@ -895,3 +895,187 @@ async fn scheduled_entry_with_missing_per_entry_cwd_at_fire_time_skips_the_fire_
     let _ = tokio::time::timeout(Duration::from_millis(500), persistence_join).await;
     let _ = tokio::time::timeout(Duration::from_millis(500), policy_join).await;
 }
+
+// AC-3 (T-130): WHEN a scheduled entry fires THE SYSTEM SHALL record the
+// resolved cwd on the audit record.
+#[tokio::test(flavor = "current_thread")]
+async fn scheduled_entry_firing_records_the_resolved_cwd_on_the_audit_record() {
+    tokio::time::pause();
+
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let job_id = "e2e-audit-resolved-cwd-job";
+    let per_entry_cwd = tmp.path().join("audit-resolved-cwd");
+    std::fs::create_dir_all(&per_entry_cwd).expect("create per-entry cwd");
+
+    let store_path = tmp.path().join("schedules.json");
+    bob_core::types::schedule::write_schedule_store(
+        &store_path,
+        &[ScheduleEntry::with_prompt(
+            job_id.to_string(),
+            "* * * * *".to_string(),
+            "e2e-scheduled-prompt-audit-resolved-cwd".to_string(),
+        )
+        .with_cwd(per_entry_cwd.to_string_lossy().into_owned())],
+    )
+    .expect("JSON schedule store write must succeed");
+    let entries = bob_core::types::schedule::read_schedule_store(&store_path)
+        .expect("JSON schedule store read must succeed");
+
+    // Fake pi-agent RPC worker: acknowledges the one JSON-RPC request it
+    // receives. The assertions below are on the audit record, not delivery,
+    // so the worker does not need to report its cwd.
+    let worker_script = "while IFS= read -r line; do \
+         id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+         printf '{\"id\":\"%s\",\"type\":\"response\",\"success\":true}\\n' \"$id\"; \
+         done"
+        .to_string();
+
+    let (persistence_handle, persistence_join) = persistence::start(persistence::Config::default());
+
+    let policy_cfg = policy_control::PolicyConfig::default();
+    let initial_snapshot = policy_control::RulesetSnapshot::from_config(policy_cfg)
+        .expect("empty (deny-all) policy config is always valid");
+    let (_, policy_join, policy_snapshot) = policy_control::start(policy_control::Config {
+        initial_snapshot,
+        config_path: std::path::PathBuf::new(),
+        command_buffer: 16,
+    });
+
+    let (supervisor_handle, supervisor_join) =
+        pi_agent_supervisor::start(pi_agent_supervisor::Config {
+            worker_command: "sh".to_string(),
+            worker_args: vec!["-c".to_string(), worker_script],
+            warm_pool_size: 0,
+            max_processes: 2,
+            idle_reap_timeout: Duration::from_secs(300),
+            command_buffer: 16,
+            child_termination_deadline: Duration::from_millis(500),
+            extension_sock_path: std::path::PathBuf::new(),
+            extension_path: current_exe_path(),
+            worker_cwd: None,
+        })
+        .expect("pi-agent supervisor must start with fake worker");
+
+    let persistence_arc: Arc<dyn PersistenceStore> = Arc::new(persistence_handle.clone());
+    let spy_audit_sink = Arc::new(SpyAuditSink::default());
+    let periodic_dispatch_audit_sink = Arc::clone(&spy_audit_sink) as Arc<dyn AuditSink>;
+    let closure_audit_sink = Arc::clone(&spy_audit_sink) as Arc<dyn AuditSink>;
+    let snap_for_preflight = policy_snapshot.clone();
+
+    let (rh_cancel_tx, rh_cancel_rx) = watch::channel(false);
+    let (requests_handle, requests_join) = requests_handler::start_with(
+        requests_handler::Config {
+            request_queue_capacity: 16,
+            request_submit_timeout: Duration::from_secs(5),
+        },
+        move |(event, context)| {
+            let store = Arc::clone(&persistence_arc);
+            let audit = Arc::clone(&closure_audit_sink);
+            let snap = snap_for_preflight.clone();
+            async move {
+                if event.kind == DeliveryKind::Periodic {
+                    let _ = store
+                        .enqueue_with_job_id(event, context.context_id.clone())
+                        .await;
+                } else {
+                    requests_handler::run_preflight(
+                        event,
+                        Some(&context),
+                        &snap,
+                        store.as_ref(),
+                        audit.as_ref(),
+                    )
+                    .await;
+                }
+            }
+        },
+        rh_cancel_rx,
+    );
+
+    let (scheduler_handle, scheduler_join) =
+        scheduler_adapter::start(requests_handle.clone(), entries);
+
+    let (dispatcher_cancel_tx, dispatcher_cancel_rx) = watch::channel(false);
+    let dispatcher_join = start_inline_dispatcher(
+        persistence_handle.clone(),
+        supervisor_handle.clone(),
+        scheduler_handle.subscribe(),
+        periodic_dispatch_audit_sink,
+        dispatcher_cancel_rx,
+    );
+
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_secs(61)).await;
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_millis(200)).await;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::resume();
+
+    // Poll for the dispatched fire's event audit record using real-time delays.
+    let mut event_recorded = false;
+    let poll_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < poll_deadline {
+        if spy_audit_sink
+            .records()
+            .iter()
+            .any(|r| r.kind == AuditRecordKind::Event)
+        {
+            event_recorded = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    assert!(
+        event_recorded,
+        "a dispatched fire must append an event audit record"
+    );
+
+    let records = spy_audit_sink.records();
+    let event_records: Vec<_> = records
+        .iter()
+        .filter(|r| r.kind == AuditRecordKind::Event)
+        .collect();
+    assert_eq!(
+        event_records.len(),
+        1,
+        "expected exactly one event audit record, got {records:?}"
+    );
+
+    match &event_records[0].payload {
+        AuditRecordPayload::Event(payload) => {
+            assert_eq!(
+                payload.resolved_cwd,
+                Some(per_entry_cwd.clone()),
+                "the audit record must carry the concrete resolved per-entry cwd"
+            );
+        }
+        other => panic!("expected an Event payload for the dispatched fire, got: {other:?}"),
+    }
+    assert!(
+        event_records[0].session_id.is_some(),
+        "the dispatched fire's event audit record must carry a session id"
+    );
+
+    // ── Teardown ──────────────────────────────────────────────────────────────
+    let _ = dispatcher_cancel_tx.send(true);
+    let _ = rh_cancel_tx.send(true);
+    drop(scheduler_handle);
+    drop(supervisor_handle);
+    drop(requests_handle);
+    drop(persistence_handle);
+    drop(policy_snapshot);
+
+    let _ = tokio::time::timeout(Duration::from_millis(500), dispatcher_join).await;
+    let _ = tokio::time::timeout(Duration::from_millis(500), scheduler_join).await;
+    let _ = supervisor_join.await;
+    let _ = tokio::time::timeout(Duration::from_millis(500), requests_join).await;
+    let _ = tokio::time::timeout(Duration::from_millis(500), persistence_join).await;
+    let _ = tokio::time::timeout(Duration::from_millis(500), policy_join).await;
+}
