@@ -128,14 +128,101 @@ cd the-intern/service && cargo test -p pi-agent-supervisor
 
 ## Diagnosis Log
 
-<!-- Mandatory before implementation. Append one entry before changing production code. Format:
-### Diagnosis N — YYYY-MM-DD
-Reproduction status:
+### Diagnosis 1 — 2026-07-08
+
+Reproduction status: confirmed (static source-path trace, cross-checked independently against the
+bug report's evidence; additionally confirmed dynamically via a temporary, fully-reverted unit test
+run against the real InteractiveProcess::spawn code path — see Evidence captured).
+
 Evidence captured:
-Isolated fault:
-Root cause or fault hypothesis:
+- Read the-intern/service/crates/bob/src/cli/commands/chat.rs:57-62 — `session.interactive.open`
+  request hard-codes `"params": {}`; no cwd or any other field is sent by the client.
+- Read the-intern/service/crates/admin-rpc/src/dispatch.rs:218-249 — `Dispatcher::dispatch` routes
+  `"session.interactive.open" => self.handle_session_interactive_open(id).await` — note this call
+  passes only `id`, not `request.params`, so even if the client did send a cwd it would be discarded
+  at the dispatch layer before reaching the handler (this is a stronger/more specific finding than
+  what the bug report evidence section states, but consistent with and reinforcing its conclusion).
+- Read the-intern/service/crates/admin-rpc/src/lib.rs:95-113 — `InteractiveSessionConfig` fields:
+  command, args, child_termination_deadline, extension_sock_path, extension_path. No cwd field.
+- Read the-intern/service/crates/admin-rpc/src/lib.rs:480-491 — `handle_interactive_session_opening`
+  builds `interactive_cfg` purely from `dispatcher.interactive_session_config()` (server-side static
+  config) or hard-coded defaults; no per-connection/per-caller value is ever consulted.
+- Read the-intern/service/crates/pi-agent-supervisor/src/process.rs:262-273 — `InteractiveProcessConfig`
+  fields: command, args, child_termination_deadline, session_id, extension_sock_path, extension_path.
+  No cwd field (contrast with `WorkerProcessConfig` at line 15-29, which has `pub worker_cwd:
+  Option<PathBuf>`).
+- Read the-intern/service/crates/pi-agent-supervisor/src/process.rs:301-340 — `InteractiveProcess::spawn`
+  builds `tokio::process::Command` and never calls `.current_dir(...)` anywhere in the function body
+  (contrast with `RpcWorkerProcess::spawn` at line 50-82, which calls `cmd.current_dir(worker_cwd)`
+  at line 73-75 when `cfg.worker_cwd` is `Some`).
+- Read the-intern/service/crates/bob/src/serve.rs:151-152 and 304 — `build_interactive_session_config`
+  constructs `InteractiveSessionConfig` from static `BobConfig`/CLI flags only; no `pi_agent_cwd` or
+  any caller cwd is threaded in (confirms the bug report's claim that CR-005's `pi_agent_cwd` is
+  correctly never consulted for interactive sessions — that half of CR-005 does hold — but also that
+  nothing else fills the gap).
+- Ran `cargo test -p pi-agent-supervisor` and confirmed no existing test asserts interactive-session
+  cwd behavior (the only cwd-related test, `spawn_sets_current_dir_on_child_when_worker_cwd_is_configured`,
+  covers `RpcWorkerProcess`, not `InteractiveProcess`).
+- Dynamic confirmation: added a temporary test
+  `b021_diagnostic_interactive_spawn_inherits_parent_process_cwd_not_a_caller_cwd` in
+  crates/pi-agent-supervisor/src/process.rs (test module only), which spawned a real
+  `InteractiveProcess` running `sh -c pwd` via `InteractiveProcess::spawn` and asserted the child's
+  reported cwd equals the *test process's own launch cwd* (canonicalized). Ran via
+  `cargo test -p pi-agent-supervisor b021_diagnostic -- --nocapture`: PASSED, i.e. the child cwd is
+  provably always the spawning process's cwd — there is no field on InteractiveProcessConfig through
+  which a caller-supplied directory could even be threaded, so this holds regardless of which
+  directory `bob chat` is invoked from. The instrumentation was then reverted with
+  `git checkout -- crates/pi-agent-supervisor/src/process.rs`; `git status --short` on the file is
+  clean and the full `cargo test -p pi-agent-supervisor` suite (61 tests) passes with the reverted
+  tree, confirming no diagnostic residue remains.
+
+Isolated fault: three-way gap, all required for a fix:
+  1. the-intern/service/crates/bob/src/cli/commands/chat.rs — client never captures/sends
+     `std::env::current_dir()` in the `session.interactive.open` request params.
+  2. the-intern/service/crates/admin-rpc/src/dispatch.rs `Dispatcher::dispatch` /
+     `handle_session_interactive_open` and lib.rs `InteractiveSessionConfig` — server discards
+     `request.params` for this method entirely and has no field to carry a per-caller cwd through to
+     spawn config.
+  3. the-intern/service/crates/pi-agent-supervisor/src/process.rs — `InteractiveProcessConfig` has no
+     cwd field and `InteractiveProcess::spawn` never calls `Command::current_dir(..)`.
+
+Root cause: CR-005's amendment to S-002 states the pre-existing implementation already used the
+`bob chat` invocation cwd for interactive sessions ("no change" needed), but no such wiring exists or
+ever existed on the interactive-session path. The client-to-spawn chain for `session.interactive.open`
+was built (T-104/T-105/ADR-011) without a cwd concept at all — unlike the RPC worker path
+(WorkerProcessConfig.worker_cwd / T-121), which does have end-to-end cwd plumbing. This is confirmed
+root cause (not a hypothesis): the absence is structural and deterministic across all three layers,
+independently verified by direct code reading and by a passing dynamic test that proves the child
+cwd can only ever equal the server process's own launch cwd.
+
+Planned fix (fix contract): thread the `bob chat` invocation cwd end-to-end:
+  1. In chat.rs, capture `std::env::current_dir()` at the start of `run_interactive_session` and
+     include it in the `session.interactive.open` request params (e.g. `{"cwd": "<path>"}`), with a
+     clear error if the cwd cannot be resolved.
+  2. In dispatch.rs, pass `request.params` through to `handle_session_interactive_open` (mirroring
+     how `handle_sessions_kill`/`handle_report_submit` already receive `&Option<Value>`), parse an
+     optional `cwd` string field, and thread it into the spawn-config construction path in lib.rs
+     (`handle_interactive_session_opening`) instead of relying solely on the static
+     `InteractiveSessionConfig`.
+  3. Add a `cwd: Option<PathBuf>` field to `InteractiveProcessConfig` in
+     pi-agent-supervisor/src/process.rs, and call `cmd.current_dir(cwd)` in `InteractiveProcess::spawn`
+     when `Some`, mirroring `RpcWorkerProcess::spawn`'s existing `worker_cwd` handling exactly
+     (including leaving it unset — inherit launch cwd — when `None`, e.g. if resolving the client's
+     cwd fails or the field is absent for backward compatibility).
+  4. Per CR-005, `pi_agent_cwd` must continue to be never consulted for interactive sessions — the fix
+     must not introduce any read of `pi_agent_cwd` on this path.
+
 Planned verification:
--->
+  cd the-intern/service && cargo test -p pi-agent-supervisor
+  (add a new regression test asserting `InteractiveProcess::spawn` sets `current_dir` from a
+  caller-supplied cwd, mirroring `spawn_sets_current_dir_on_child_when_worker_cwd_is_configured`,
+  plus a companion test asserting the launch-cwd-inherited fallback behavior when `cwd` is `None`,
+  mirroring `spawn_inherits_launch_cwd_when_worker_cwd_is_not_configured`)
+  cd the-intern/service && cargo test -p admin-rpc
+  (add/extend a dispatch-level test asserting `session.interactive.open` params.cwd reaches the
+  spawn config)
+  cd the-intern/service && cargo test -p bob
+  (add/extend a chat.rs client test asserting the request includes the invocation cwd)
 
 ## Work Log
 
