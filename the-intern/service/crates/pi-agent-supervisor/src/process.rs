@@ -1009,8 +1009,8 @@ mod tests {
 
         let expected =
             std::fs::canonicalize(&interactive_cwd).expect("canonicalize expected interactive cwd");
-        let actual = std::fs::canonicalize(written.trim())
-            .expect("canonicalize child-reported current dir");
+        let actual =
+            std::fs::canonicalize(written.trim()).expect("canonicalize child-reported current dir");
 
         assert_eq!(
             actual, expected,
@@ -1055,10 +1055,7 @@ mod tests {
             extension_path: std::env::current_exe().expect("current executable should exist"),
             cwd: None,
         };
-        assert_eq!(
-            cfg.cwd, None,
-            "test setup expects cwd to default to None"
-        );
+        assert_eq!(cfg.cwd, None, "test setup expects cwd to default to None");
 
         let process = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
             .expect("interactive spawn should succeed");
