@@ -2664,6 +2664,106 @@ pub mod tests {
             std::fs::remove_dir_all(&configured_default_cwd).ok();
         }
 
+        // AC-2: when neither a per-entry `cwd` nor a service-wide
+        // `pi_agent_cwd` applies (the bottom precedence tier), the event
+        // audit record's `resolved_cwd` still carries a concrete absolute
+        // path — the dispatcher's own inherited launch cwd — rather than
+        // being left unset.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_records_inherited_launch_cwd_on_event_audit_record_when_pi_agent_cwd_unset(
+        ) {
+            let inherited_launch_cwd =
+                std::env::current_dir().expect("current dir should be available in tests");
+
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+            persistence_handle
+                .enqueue_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "inherited-cwd-audit-test".to_owned(),
+                    },
+                    None,
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            let schedule_rx = schedule_rx_with_entries(Vec::new());
+
+            let worker_script = "while IFS= read -r line; do \
+                 id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf '{\"id\":\"%s\",\"type\":\"response\",\"success\":true}\\n' \"$id\"; \
+                 done"
+                .to_string();
+            let (supervisor_handle, supervisor_join) =
+                pi_agent_supervisor::start(pi_agent_supervisor::Config {
+                    worker_command: "sh".to_string(),
+                    worker_args: vec!["-c".to_string(), worker_script],
+                    warm_pool_size: 0,
+                    max_processes: 2,
+                    extension_path: existing_extension_path(),
+                    ..pi_agent_supervisor::Config::default()
+                })
+                .expect("supervisor must start");
+
+            let audit_sink = Arc::new(SpyAuditSink::default());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            // default_worker_cwd is None — no pi_agent_cwd configured — so the
+            // bottom precedence tier (the dispatcher's own inherited launch
+            // cwd) applies.
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx,
+                None,
+                Arc::clone(&audit_sink) as Arc<dyn AuditSink>,
+                cancel_rx,
+            );
+
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if audit_sink
+                        .records()
+                        .iter()
+                        .any(|r| r.kind == AuditRecordKind::Event)
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect(
+                "dispatched fire with no configured default cwd must produce an event audit record",
+            );
+
+            let records = audit_sink.records();
+            let event_records: Vec<_> = records
+                .iter()
+                .filter(|r| r.kind == AuditRecordKind::Event)
+                .collect();
+            assert_eq!(
+                event_records.len(),
+                1,
+                "expected exactly one event audit record, got {records:?}"
+            );
+            match &event_records[0].payload {
+                AuditRecordPayload::Event(payload) => {
+                    assert_eq!(
+                        payload.resolved_cwd,
+                        Some(inherited_launch_cwd),
+                        "resolved_cwd must be the dispatcher's inherited launch cwd, not left unset"
+                    );
+                }
+                other => panic!("expected an Event payload, got {other:?}"),
+            }
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+        }
+
         // AC-2: a resolved per-entry `cwd` that does not exist at fire time is
         // skipped with a warning and a monitoring failure record. No worker is
         // ever acquired for the missing directory — proven here by pairing the
