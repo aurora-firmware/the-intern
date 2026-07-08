@@ -8,7 +8,7 @@ created: 2026-07-08
 
 ## Summary
 
-Active specs: 8. Pending tasks: 0. In progress tasks: 0. Completed tasks: 130. Blocked tasks: 0. Open bugs: 1. Bugs in progress: 0. Resolved bugs: 20. ADRs: 13. Latest integration result: chore(tasks): merge T-130 add end-to-end coverage for scheduled per-entry cwd execution.
+Active specs: 8. Pending tasks: 0. In progress tasks: 0. Completed tasks: 130. Blocked tasks: 0. Open bugs: 0. Bugs in progress: 0. Resolved bugs: 21. ADRs: 13. Latest integration result: chore(bugs): merge B-021 bob chat interactive session honours invocation cwd.
 
 ## Specifications
 
@@ -25,7 +25,7 @@ Active specs: 8. Pending tasks: 0. In progress tasks: 0. Completed tasks: 130. B
 
 ## Integration Evidence
 
-- Latest integration-test result: chore(tasks): merge T-130 add end-to-end coverage for scheduled per-entry cwd execution
+- Latest integration-test result: chore(bugs): merge B-021 bob chat interactive session honours invocation cwd
 - Source: git log --all --grep=merge|integration|verification|test -n 1
 - Date: 2026-07-08
 
@@ -180,7 +180,6 @@ Active specs: 8. Pending tasks: 0. In progress tasks: 0. Completed tasks: 130. B
 
 | Bug ID | Title | Severity | Status | Diagnosis Status |
 |---|---|---|---|---|
-| B-021 | bob chat interactive session does not use the bob chat invocation cwd as CR-005/S-002 specify | medium | open | n/a |
 | B-001 | bob serve does not answer status/sessions over admin socket | high | resolved | complete |
 | B-002 | pi-agent-supervisor terminate test flakes under load because spawn_config sets 50 ms deadline | high | resolved | complete |
 | B-003 | bob extension can grow memory without bound — pendingFrames uncapped and socket.write() return ignored | high | resolved | complete |
@@ -201,6 +200,7 @@ Active specs: 8. Pending tasks: 0. In progress tasks: 0. Completed tasks: 130. B
 | B-018 | stale second bob extension instance silently blocks all tool calls | medium | resolved | complete |
 | B-019 | bob.ts treats normal socket write backpressure as fatal and fail-closes the session | medium | resolved | complete |
 | B-020 | Remove legacy TOML write_schedule_entries schedule-store writer (dead code, would not persist cwd) | low | resolved | complete |
+| B-021 | bob chat interactive session does not use the bob chat invocation cwd as CR-005/S-002 specify | medium | resolved | complete |
 
 ## Decisions
 
