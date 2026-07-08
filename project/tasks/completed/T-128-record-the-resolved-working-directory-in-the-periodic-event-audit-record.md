@@ -1,7 +1,7 @@
 ---
 id: T-128
 title: Record the resolved working directory in the periodic event audit record
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-07-05'
