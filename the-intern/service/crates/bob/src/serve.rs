@@ -6,8 +6,8 @@ use std::sync::Arc;
 use bob_core::error::{ServiceError, ServiceResult};
 use bob_core::ports::{AuditSink, PersistenceStore};
 use bob_core::types::{
-    AuditRecord, AuditRecordKind, AuditRecordPayload, DeliveryKind, ExternalReportAuditPayload,
-    InternalEvent, ReportOutcome, ScheduleEntry, SessionId,
+    AuditRecord, AuditRecordKind, AuditRecordPayload, DeliveryKind, ExtensionEventAuditPayload,
+    ExternalReportAuditPayload, InternalEvent, ReportOutcome, ScheduleEntry, SessionId,
 };
 use tokio::{sync::watch, task::JoinHandle, time};
 use tracing::info;
@@ -321,6 +321,7 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         Arc::new(persistence_handle.clone()),
         pi_agent_supervisor_handle.clone(),
         scheduler_reload_handle.subscribe(),
+        cfg.pi_agent_cwd.clone(),
         periodic_dispatch_audit_sink,
         dispatcher_cancel_rx,
     );
@@ -673,6 +674,60 @@ async fn acquire_default_session_or_warn(
     }
 }
 
+/// Appends an `event`-kind audit record for a periodic firing that reached
+/// dispatch (T-128, AC-1/AC-2).
+///
+/// `resolved_cwd` is the concrete absolute working directory used for this
+/// firing — the outcome of the full precedence resolution (per-entry `cwd` →
+/// `pi_agent_cwd` → inherited launch cwd), not the raw per-entry field —
+/// recorded on `ExtensionEventAuditPayload::resolved_cwd` (T-123). It is
+/// `None` only in the rare case the inherited launch cwd itself could not be
+/// determined (`std::env::current_dir` failing); the fire still dispatches
+/// and the record is appended with the field left unset rather than blocking
+/// dispatch on audit metadata. A failure to append the record itself is
+/// logged as a warning and does not affect the already-dispatched fire.
+async fn record_periodic_fire_dispatched(
+    audit: &dyn AuditSink,
+    session_id: SessionId,
+    job_id: Option<&str>,
+    resolved_cwd: Option<PathBuf>,
+) {
+    let summary = match &resolved_cwd {
+        Some(cwd) => format!(
+            "job_id={}: dispatched with resolved cwd {}",
+            job_id.unwrap_or("<none>"),
+            cwd.display()
+        ),
+        None => format!(
+            "job_id={}: dispatched; resolved cwd unavailable",
+            job_id.unwrap_or("<none>")
+        ),
+    };
+
+    let record = AuditRecord {
+        id: format!(
+            "audit_periodic_fire_dispatched_{}",
+            chrono::Utc::now().timestamp_millis()
+        ),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        kind: AuditRecordKind::Event,
+        session_id: Some(session_id),
+        payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
+            name: "scheduler.periodic_fire_dispatched".to_owned(),
+            summary: Some(summary),
+            resolved_cwd,
+        }),
+    };
+
+    if let Err(err) = audit.append(record).await {
+        tracing::warn!(
+            error = %err,
+            job_id = job_id.unwrap_or("<none>"),
+            "periodic dispatcher: failed to append event audit record for dispatched fire"
+        );
+    }
+}
+
 /// Starts the periodic dispatcher task and returns its join handle.
 ///
 /// The dispatcher runs in a dedicated Tokio task.  On each iteration it
@@ -711,15 +766,31 @@ async fn acquire_default_session_or_warn(
 /// `max_processes` skips that fire with a warning (and, for the missing
 /// directory, a monitoring failure record via `audit_sink`) rather than
 /// blocking or evicting a worker.
+///
+/// T-128: `default_worker_cwd` is the service-wide `pi_agent_cwd` (the
+/// middle precedence tier); when unset, the bottom tier (the dispatcher's own
+/// inherited launch cwd, i.e. `std::env::current_dir()` at dispatcher
+/// startup) applies instead — this mirrors exactly what the plain
+/// `acquire_session` does when no per-entry cwd is used. Every fire that
+/// reaches dispatch (all three `PeriodicCwdResolution` outcomes) has its
+/// concrete resolved cwd recorded on an `event`-kind audit record via
+/// `record_periodic_fire_dispatched`, satisfying AC-1/AC-2.
 fn start_periodic_dispatcher(
     persistence: Arc<dyn PersistenceStore>,
     supervisor: pi_agent_supervisor::Handle,
     schedule_entries_rx: watch::Receiver<Vec<ScheduleEntry>>,
+    default_worker_cwd: Option<PathBuf>,
     audit_sink: Arc<dyn AuditSink>,
     mut cancel_rx: watch::Receiver<bool>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         info!("periodic dispatcher started");
+        // T-128: the concrete absolute path used when no per-entry cwd
+        // applies — the configured service-wide pi_agent_cwd, or (when unset)
+        // the dispatcher's own inherited launch cwd. Resolved once at startup
+        // since neither tier changes for the lifetime of this task.
+        let resolved_service_default_cwd =
+            default_worker_cwd.or_else(|| std::env::current_dir().ok());
         loop {
             // Check for a shutdown signal before each dequeue.
             if *cancel_rx.borrow() {
@@ -782,7 +853,7 @@ fn start_periodic_dispatcher(
                     let live_entries = schedule_entries_rx.borrow().clone();
                     let resolution = resolve_periodic_cwd(job_id.as_deref(), &live_entries);
 
-                    let session_id = match resolution {
+                    let (session_id, resolved_cwd) = match resolution {
                         PeriodicCwdResolution::PerEntry(cwd) => {
                             if !cwd.exists() {
                                 // AC-2: the resolved per-entry cwd does not exist at
@@ -807,7 +878,7 @@ fn start_periodic_dispatcher(
                                 continue;
                             }
                             match supervisor.acquire_session_with_cwd(cwd.clone()).await {
-                                Ok(id) => id,
+                                Ok(id) => (id, Some(cwd)),
                                 Err(e) => {
                                     // AC-4: a per-entry-cwd fire when the pool is at
                                     // max_processes is refused (not blocked or
@@ -840,16 +911,26 @@ fn start_periodic_dispatcher(
                             else {
                                 continue;
                             };
-                            id
+                            (id, resolved_service_default_cwd.clone())
                         }
                         PeriodicCwdResolution::ServiceDefault => {
                             let Some(id) = acquire_default_session_or_warn(&supervisor).await
                             else {
                                 continue;
                             };
-                            id
+                            (id, resolved_service_default_cwd.clone())
                         }
                     };
+                    // T-128 (AC-1/AC-2): record the resolved absolute working
+                    // directory used for this dispatched fire on an
+                    // `event`-kind audit record before forwarding the prompt.
+                    record_periodic_fire_dispatched(
+                        audit_sink.as_ref(),
+                        session_id,
+                        job_id.as_deref(),
+                        resolved_cwd,
+                    )
+                    .await;
                     // `send_prompt_and_drain` returns as soon as pi acknowledges
                     // *receipt* of the prompt over its RPC channel; the agent run
                     // (provider calls, tool execution) continues asynchronously
@@ -2215,6 +2296,7 @@ pub mod tests {
                 Arc::clone(&spy) as Arc<dyn PersistenceStore>,
                 supervisor_handle.clone(),
                 schedule_rx_with_entries(Vec::new()),
+                None,
                 Arc::new(SpyAuditSink::default()),
                 cancel_rx,
             );
@@ -2262,6 +2344,7 @@ pub mod tests {
                 Arc::clone(&spy) as Arc<dyn PersistenceStore>,
                 supervisor_handle.clone(),
                 schedule_rx_with_entries(Vec::new()),
+                None,
                 Arc::new(SpyAuditSink::default()),
                 cancel_rx,
             );
@@ -2344,6 +2427,7 @@ pub mod tests {
                 Arc::new(persistence_handle.clone()),
                 supervisor_handle.clone(),
                 schedule_rx,
+                None,
                 audit_sink,
                 cancel_rx,
             );
@@ -2369,6 +2453,110 @@ pub mod tests {
                 actual_cwd, expected_cwd,
                 "dedicated worker should run in the resolved per-entry cwd"
             );
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+            std::fs::remove_dir_all(&worker_cwd).ok();
+        }
+
+        // ── T-128: resolved-cwd population on the periodic-fire event audit
+        //    record ──
+
+        // AC-1/AC-2: when a periodic firing dispatched via a per-entry `cwd`
+        // reaches dispatch, an `event`-kind audit record is appended carrying
+        // the concrete resolved absolute path used (the per-entry `cwd`
+        // itself, the top precedence tier) on `resolved_cwd` — not left
+        // unset and not the raw per-entry field before resolution.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_records_resolved_cwd_on_event_audit_record_for_per_entry_cwd_fire(
+        ) {
+            let worker_cwd = std::env::temp_dir().join(format!(
+                "bob-serve-t128-per-entry-cwd-{}",
+                bob_core::types::SessionId::new()
+            ));
+            std::fs::create_dir_all(&worker_cwd).expect("create dedicated cwd should succeed");
+
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+            persistence_handle
+                .enqueue_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "per-entry-cwd-audit-test".to_owned(),
+                    },
+                    Some("cwd-audit-job".to_owned()),
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            let mut entry = ScheduleEntry::with_prompt("cwd-audit-job", "0 9 * * *", "unused");
+            entry.cwd = Some(worker_cwd.to_string_lossy().into_owned());
+            let schedule_rx = schedule_rx_with_entries(vec![entry]);
+
+            let worker_script = "while IFS= read -r line; do \
+                 id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf '{\"id\":\"%s\",\"type\":\"response\",\"success\":true}\\n' \"$id\"; \
+                 done"
+                .to_string();
+            let (supervisor_handle, supervisor_join) =
+                pi_agent_supervisor::start(pi_agent_supervisor::Config {
+                    worker_command: "sh".to_string(),
+                    worker_args: vec!["-c".to_string(), worker_script],
+                    warm_pool_size: 0,
+                    max_processes: 2,
+                    extension_path: existing_extension_path(),
+                    ..pi_agent_supervisor::Config::default()
+                })
+                .expect("supervisor must start");
+
+            let audit_sink = Arc::new(SpyAuditSink::default());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx,
+                None,
+                Arc::clone(&audit_sink) as Arc<dyn AuditSink>,
+                cancel_rx,
+            );
+
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if audit_sink
+                        .records()
+                        .iter()
+                        .any(|r| r.kind == AuditRecordKind::Event)
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("dispatched per-entry-cwd fire must produce an event audit record");
+
+            let records = audit_sink.records();
+            let event_records: Vec<_> = records
+                .iter()
+                .filter(|r| r.kind == AuditRecordKind::Event)
+                .collect();
+            assert_eq!(
+                event_records.len(),
+                1,
+                "expected exactly one event audit record, got {records:?}"
+            );
+            match &event_records[0].payload {
+                AuditRecordPayload::Event(payload) => {
+                    assert_eq!(
+                        payload.resolved_cwd,
+                        Some(worker_cwd.clone()),
+                        "resolved_cwd must be the concrete per-entry cwd used for this fire"
+                    );
+                }
+                other => panic!("expected an Event payload, got {other:?}"),
+            }
 
             let _ = cancel_tx.send(true);
             drop(supervisor_handle);
@@ -2417,6 +2605,7 @@ pub mod tests {
                 Arc::new(persistence_handle.clone()),
                 supervisor_handle.clone(),
                 schedule_rx,
+                None,
                 Arc::clone(&audit_sink) as Arc<dyn AuditSink>,
                 cancel_rx,
             );
@@ -2513,6 +2702,7 @@ pub mod tests {
                 Arc::new(persistence_handle.clone()),
                 supervisor_handle.clone(),
                 schedule_rx,
+                None,
                 audit_sink,
                 cancel_rx,
             );
@@ -2578,13 +2768,18 @@ pub mod tests {
                 Arc::new(persistence_handle.clone()),
                 supervisor_handle.clone(),
                 schedule_rx,
+                None,
                 Arc::clone(&audit_sink) as Arc<dyn AuditSink>,
                 cancel_rx,
             );
 
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
-                    if !audit_sink.records().is_empty() {
+                    if audit_sink
+                        .records()
+                        .iter()
+                        .any(|r| r.kind == AuditRecordKind::Report)
+                    {
                         break;
                     }
                     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -2593,13 +2788,23 @@ pub mod tests {
             .await
             .expect("stale job id fallback must produce a monitoring record");
 
+            // T-128: once the fallback is recorded, the dispatcher still
+            // proceeds to dispatch the fire via the default cwd, which now
+            // also appends an `event`-kind audit record (T-128) alongside
+            // this `report`-kind fallback record — filter to the report kind
+            // so this AC-3 (T-127) assertion stays independent of T-128's
+            // unrelated event record.
             let records = audit_sink.records();
+            let report_records: Vec<_> = records
+                .iter()
+                .filter(|r| r.kind == AuditRecordKind::Report)
+                .collect();
             assert_eq!(
-                records.len(),
+                report_records.len(),
                 1,
                 "expected exactly one fallback monitoring record, got {records:?}"
             );
-            match &records[0].payload {
+            match &report_records[0].payload {
                 AuditRecordPayload::Report(payload) => {
                     assert_eq!(payload.outcome, ReportOutcome::Error);
                     let summary = payload.summary.as_deref().unwrap_or("");
@@ -2679,6 +2884,7 @@ pub mod tests {
                 Arc::new(persistence_handle.clone()),
                 supervisor_handle.clone(),
                 schedule_rx,
+                None,
                 audit_sink,
                 cancel_rx,
             );
