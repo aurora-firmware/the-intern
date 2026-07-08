@@ -2,7 +2,7 @@
 id: T-129
 title: Document pi_agent_cwd, --cwd, precedence, and owner-only cwd trust in the
   operator guide
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-07-05'
