@@ -1183,6 +1183,7 @@ mod tests {
             payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
                 name: "test.event".to_owned(),
                 summary: Some("delivered via monitoring".to_owned()),
+                resolved_cwd: None,
             }),
         };
         mon_handle.append_record(record).await.expect("append");
@@ -1266,6 +1267,7 @@ mod tests {
             payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
                 name: "should.not.arrive".to_owned(),
                 summary: None,
+                resolved_cwd: None,
             }),
         };
         mon_handle.append_record(record).await.expect("append");
@@ -1405,6 +1407,7 @@ mod tests {
             payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
                 name: "post.close.event".to_owned(),
                 summary: None,
+                resolved_cwd: None,
             }),
         };
         mon_handle

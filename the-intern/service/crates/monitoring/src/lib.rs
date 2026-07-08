@@ -255,6 +255,7 @@ mod tests {
             payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
                 name: "extension.event.forwarded".to_owned(),
                 summary: Some("forwarded".to_owned()),
+                resolved_cwd: None,
             }),
         }
     }

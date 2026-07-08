@@ -109,6 +109,7 @@ impl MonitoringHandle for MonitoringBackedHandle {
             payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
                 name: event_name,
                 summary: None,
+                resolved_cwd: None,
             }),
         };
 

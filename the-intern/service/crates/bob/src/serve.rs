@@ -1635,6 +1635,7 @@ pub mod tests {
             payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
                 name: "test.wiring".to_owned(),
                 summary: None,
+                resolved_cwd: None,
             }),
         };
         runtime
