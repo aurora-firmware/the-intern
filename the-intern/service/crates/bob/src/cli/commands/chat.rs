@@ -43,6 +43,15 @@ pub(super) fn run(_json_output: bool, _session: Option<&str>) -> ServiceResult<(
 ///
 /// Returns a clear error when the socket is not reachable (AC-2).
 async fn run_interactive_session(cfg: &BobConfig) -> ServiceResult<()> {
+    // CR-005 / B-021: capture the directory bob chat was invoked from so it
+    // can be sent as params.cwd below. The interactive pi session must run
+    // here, not wherever the long-running bob serve process itself happens
+    // to be running — and per CR-005, pi_agent_cwd is never consulted for
+    // interactive sessions.
+    let cwd = std::env::current_dir().map_err(|e| {
+        invalid_request_error(format!("failed to resolve current working directory: {e}"))
+    })?;
+
     // AC-2: connect directly to the socket and surface a human-readable error
     // when the service is not running.  We do NOT fall back to launching pi.
     let stream = UnixStream::connect(&cfg.admin_sock_path)
@@ -57,7 +66,7 @@ async fn run_interactive_session(cfg: &BobConfig) -> ServiceResult<()> {
     let request = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "session.interactive.open",
-        "params": {},
+        "params": { "cwd": cwd.to_string_lossy() },
         "id": open_id,
     });
     let frame = serde_json::to_vec(&request).map_err(|e| {
@@ -364,6 +373,102 @@ mod tests {
             .await
             .expect("server must complete")
             .expect("server task must not panic");
+
+        let _ = std::fs::remove_file(&sock_path);
+    }
+
+    // B-021 / CR-005: run_interactive_session must send the bob chat client's
+    // own invocation cwd (not bob serve's launch cwd) as params.cwd on the
+    // session.interactive.open request, so bob serve can spawn the pi child
+    // there instead.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sends_invocation_cwd_in_session_interactive_open_request_params() {
+        let sock_path = unique_socket_path("interactive-cwd");
+        let listener = UnixListener::bind(&sock_path).expect("bind listener");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let (read_half, mut write_half) = tokio::io::split(stream);
+            let mut reader = BufReader::new(read_half);
+
+            // Read session.interactive.open request
+            let mut line = String::new();
+            reader
+                .read_line(&mut line)
+                .await
+                .expect("read open request");
+            let req: Value = serde_json::from_str(line.trim()).expect("parse open request");
+            let req_id = req["id"].clone();
+
+            // Send await_fds notification
+            write_half
+                .write_all(
+                    b"{\"jsonrpc\":\"2.0\",\"method\":\"session.interactive.await_fds\",\"params\":{\"session_id\":\"test-session\"}}\n",
+                )
+                .await
+                .expect("write await_fds");
+
+            // Consume the SCM_RIGHTS anchor byte (see the sibling test above
+            // for why this loop is needed).
+            let mut anchor = [0u8; 16];
+            let mut got = 0usize;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            while got == 0 && tokio::time::Instant::now() < deadline {
+                match reader.read(&mut anchor).await {
+                    Ok(n) if n > 0 => got = n,
+                    Ok(_) => break,
+                    Err(_) => break,
+                }
+            }
+
+            // Send success response
+            let resp = serde_json::to_vec(&json!({
+                "jsonrpc": "2.0",
+                "result": { "ok": true, "session_id": "test-session" },
+                "id": req_id,
+            }))
+            .expect("serialize response");
+            write_half.write_all(&resp).await.expect("write response");
+            write_half.write_all(b"\n").await.expect("write newline");
+
+            tokio::time::sleep(Duration::from_millis(20)).await;
+
+            // Send session.interactive.exited notification (AC-3).
+            write_half
+                .write_all(
+                    b"{\"jsonrpc\":\"2.0\",\"method\":\"session.interactive.exited\",\"params\":{\"session_id\":\"test-session\"}}\n",
+                )
+                .await
+                .expect("write exited notification");
+
+            req
+        });
+
+        let cfg = BobConfig {
+            admin_sock_path: sock_path.clone(),
+            ..BobConfig::test_base()
+        };
+
+        let result = timeout(Duration::from_secs(5), run_interactive_session(&cfg))
+            .await
+            .expect("run_interactive_session must complete within 5s");
+        assert!(
+            result.is_ok(),
+            "run_interactive_session must succeed; got: {result:?}"
+        );
+
+        let req = timeout(Duration::from_secs(2), server)
+            .await
+            .expect("server must complete")
+            .expect("server task must not panic");
+
+        let expected_cwd =
+            std::env::current_dir().expect("test process current dir should be available");
+        assert_eq!(
+            req["params"]["cwd"],
+            json!(expected_cwd.to_string_lossy()),
+            "session.interactive.open params.cwd must be the bob chat invocation cwd; got: {req:?}"
+        );
 
         let _ = std::fs::remove_file(&sock_path);
     }
