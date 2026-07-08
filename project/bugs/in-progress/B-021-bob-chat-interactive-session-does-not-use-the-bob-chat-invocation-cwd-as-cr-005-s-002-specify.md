@@ -249,3 +249,100 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-07-08
+
+PASS
+
+**Diagnosis→fix evidence chain (checked before Stage 1):** the Diagnosis Log ("Diagnosis 1 —
+2026-07-08") records reproduction status (confirmed, both static source-path trace and a dynamic
+diagnostic unit test against the real `InteractiveProcess::spawn`, since reverted and re-verified
+clean), extensive evidence captured (file:line citations across `chat.rs`, `dispatch.rs`, `lib.rs`
+(admin-rpc), `process.rs`, `serve.rs`), an isolated fault stated as a three-way gap across the three
+crates, and a root cause explicitly marked "confirmed (not a hypothesis)" with supporting reasoning.
+The Diagnosis Log's fix contract (4 numbered points) and planned verification (three `cargo test -p
+<crate>` commands) are complete. Evidence chain is sound; proceeded to Stage 1.
+
+**Stage 1 — Bug Criteria**
+
+- Diagnosis Log includes reproduction status and evidence: met (see above).
+- Fix addresses the isolated fault / root cause exactly as documented, across all three layers:
+  - `the-intern/service/crates/bob/src/cli/commands/chat.rs`: `run_interactive_session` now captures
+    `std::env::current_dir()` and sends it as `params: { "cwd": ... }` on `session.interactive.open`,
+    with a clear `invalid_request_error` if resolution fails — matches fix-contract point 1.
+  - `the-intern/service/crates/admin-rpc/src/dispatch.rs`: `Dispatcher::dispatch` now passes
+    `&request.params` to `handle_session_interactive_open`, which parses an optional `params.cwd`
+    string into `PathBuf` (non-string values safely fall back to `None`) and carries it on a new
+    `cwd` field of `DispatchOutcome::InteractiveSessionOpening` — matches fix-contract point 2.
+  - `the-intern/service/crates/admin-rpc/src/lib.rs`: `handle_interactive_session_opening` now
+    accepts and forwards `cwd` into `supervisor.start_interactive_session(...)`, ahead of/alongside
+    the untouched static `InteractiveSessionConfig` — matches fix-contract point 2.
+  - `the-intern/service/crates/pi-agent-supervisor/src/process.rs`: `InteractiveProcessConfig` gains
+    `cwd: Option<PathBuf>`, and `InteractiveProcess::spawn` calls `cmd.current_dir(cwd)` when `Some`,
+    mirroring `RpcWorkerProcess::spawn`'s `worker_cwd` handling exactly, including leave-unset-when-
+    `None` fallback — matches fix-contract point 3.
+  - Fix-contract point 4 (never read `pi_agent_cwd` on this path): verified independently via
+    `git diff dev-agent...bug/B-021-... | grep pi_agent_cwd` — the only four hits are doc-comment
+    mentions explaining the exclusion; no code reads the setting anywhere in the diff.
+- Fix Verification steps followed: ran all three commands from the Diagnosis Log's planned
+  verification (the bug file's own Fix Verification section only lists the
+  `pi-agent-supervisor` command, but the fuller diagnosis-log plan explicitly extends it to
+  `admin-rpc` and `bob`, and the Work Log confirms the same three crates were exercised):
+  `cd the-intern/service && cargo test -p pi-agent-supervisor` — 63 passed, including the two new
+  regression tests (`interactive_spawn_sets_current_dir_on_child_when_cwd_is_configured`,
+  `interactive_spawn_inherits_launch_cwd_when_cwd_is_not_configured`).
+  `cd the-intern/service && cargo test -p admin-rpc` — 112 passed, including three new tests: two
+  dispatch-level parsing tests and a strong end-to-end test
+  (`run_connection_session_interactive_open_with_params_cwd_spawns_child_in_that_directory`) that
+  drives the real ADR-011 SCM_RIGHTS protocol and asserts a real spawned child's cwd.
+  `cd the-intern/service && cargo test -p bob` — 5 chat-module tests passed, including the new
+  `sends_invocation_cwd_in_session_interactive_open_request_params`.
+  Also ran `cargo test --workspace` (all suites, 0 failed) and `cargo fmt --all -- --check` (clean)
+  and `cargo build -p bob` (clean, no warnings) on the bug branch in an isolated worktree, matching
+  the Work Log's claims.
+- No unrelated behavior added: `git diff dev-agent...bug/B-021-bob-chat-cwd-does-not-use-invocation-
+  directory --stat` touches only the six files implicated by the fix contract, all inside
+  `the-intern/service`; no changes outside that tree. The canonical bug file itself is untouched on
+  the branch (confirmed empty diff), consistent with the Work Log's Obstacles note about the branch
+  predating the Diagnosis Log commit.
+
+**Stage 2 — Code Quality**
+
+- Correctness: the `cwd`-threading logic in each layer mirrors the existing, already-tested
+  `worker_cwd` pattern (`RpcWorkerProcess::spawn` / `WorkerProcessConfig`) closely enough that no new
+  failure modes are introduced; non-string/absent `params.cwd` degrades gracefully to `None`
+  (inherit launch cwd) rather than erroring.
+- Tests: new tests cover both the configured-cwd and unset-cwd (fallback) paths at each of the three
+  layers, plus one true end-to-end test through the real socket/SCM_RIGHTS protocol. Tests use
+  unique temp directories/session IDs and clean up after themselves; no shared mutable state
+  observed.
+- Security: `params.cwd` is caller-supplied but the trust boundary here is the same as
+  `session.interactive.open` overall — a local, 0700-permissioned Unix socket restricted to the
+  invoking user (per the existing "no pre-flight admission" doc comment); this is not a new
+  privilege the client didn't already have. No secrets, no injection surface.
+- Readability: field and function names are descriptive (`cwd`, `interactive_cwd`, doc comments
+  cite CR-005/B-021 and explain the `None` fallback); no dead code or commented-out blocks.
+- Performance: no unnecessary loops, blocking calls, or resource leaks; the process-spawn path is
+  unchanged apart from the added `current_dir` call.
+
+**Bug Fix Addendum**
+
+- Fix is minimal for the isolated fault: the change touches exactly the three-layer plumbing chain
+  named in the fix contract (client → dispatch → supervisor/spawn), plus the unavoidable call-site
+  scaffolding (`None` cwd arguments added to pre-existing test constructors in `lib.rs`/`pool.rs`)
+  needed for the crate to compile with the new field. No unrelated refactor or feature code is
+  present in the diff.
+- Regression tests exist and are genuinely new: Work Log documents true RED-before-GREEN for the
+  `pi-agent-supervisor` and `bob` layers, and a retroactive RED verification (temporarily stubbing
+  the parser to always return `None`) for the `admin-rpc` dispatch test, where the field and parsing
+  landed together for compilation reasons — a reasonable, explicitly-documented exception, not an
+  unverified claim.
+- No unrelated refactoring/cleanup/feature code bundled in: confirmed by direct diff review of all
+  six touched files.
+- Diagnosis Log fix contract matches the implementation point-for-point (verified above).
+
+**Minor observation (non-blocking):** the Developer considered and explicitly rejected adding a test
+for the `current_dir()`-resolution-failure branch in `chat.rs`, reasoning that it would require
+mutating the OS-level cwd of the whole test binary (shared, concurrent global state) for one line of
+`map_err` wrapping with no independent logic. This is a reasonable, documented trade-off and not a
+gap that blocks the verdict.
