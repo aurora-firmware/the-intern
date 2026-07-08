@@ -1,7 +1,7 @@
 ---
 id: T-123
 title: Add optional resolved working-directory field to the event audit payload
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-07-05'
