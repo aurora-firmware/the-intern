@@ -670,12 +670,31 @@ impl Dispatcher {
         // `cwd` is an optional, independent field naming the working directory
         // the job should run from (T-118/T-124); it is not part of the
         // prompt/file mutual-exclusion above.
-        let raw_cwd = params_value
-            .get("cwd")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned);
+        let raw_cwd = match params_value.get("cwd") {
+            None => None,
+            Some(value) => {
+                let Some(cwd) = value.as_str() else {
+                    return DispatchOutcome::Err(ErrorResponse::error(
+                        id,
+                        CODE_INVALID_REQUEST,
+                        "schedule.add: params.cwd must be a non-blank absolute path string when present",
+                        Some(json!({ "category": "invalid_request" })),
+                    ));
+                };
+
+                let trimmed = cwd.trim();
+                if trimmed.is_empty() {
+                    return DispatchOutcome::Err(ErrorResponse::error(
+                        id,
+                        CODE_INVALID_REQUEST,
+                        "schedule.add: params.cwd must be a non-blank absolute path string when present",
+                        Some(json!({ "category": "invalid_request" })),
+                    ));
+                }
+
+                Some(trimmed.to_owned())
+            }
+        };
 
         // Validate the cron expression (must be a valid 5-field expression).
         let parser = CronParser::builder().seconds(Seconds::Disallowed).build();
@@ -922,7 +941,7 @@ impl Dispatcher {
         bob_core::types::schedule::read_schedule_store(path).map_err(|e| {
             DispatchOutcome::Err(ErrorResponse::error(
                 id.clone(),
-                CODE_METHOD_NOT_FOUND,
+                CODE_INVALID_REQUEST,
                 "schedule method: failed to read schedule store",
                 Some(json!({
                     "category": "persistence",
@@ -966,7 +985,7 @@ impl Dispatcher {
             |e| {
                 DispatchOutcome::Err(ErrorResponse::error(
                     id.clone(),
-                    CODE_METHOD_NOT_FOUND,
+                    CODE_INVALID_REQUEST,
                     "schedule method: failed to write schedule store",
                     Some(json!({
                         "category": "persistence",
@@ -2331,6 +2350,54 @@ mod tests {
         );
     }
 
+    // AC-2 (T-124): schedule.add with a blank cwd is rejected rather than
+    // silently dropping the field and persisting the entry without it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_with_blank_cwd_returns_error_and_writes_nothing() {
+        use bob_core::types::schedule::read_schedule_store;
+
+        let (_dir, store_path) = temp_schedule_store_path();
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_schedule_store_path(store_path.clone());
+
+        let req = make_request_with_params(
+            "schedule.add",
+            json!(352),
+            json!({
+                "id": "blank-cwd-job",
+                "cron": "0 9 * * *",
+                "prompt": "run",
+                "cwd": "   "
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(352));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+                assert!(
+                    resp.error.message.contains("cwd"),
+                    "error must mention cwd: {}",
+                    resp.error.message
+                );
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for blank cwd"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+
+        let entries = read_schedule_store(&store_path).expect("read store");
+        assert!(
+            entries.iter().all(|e| e.id != "blank-cwd-job"),
+            "entry with a blank cwd must not be persisted"
+        );
+    }
+
     // schedule.add with both prompt and file is rejected (mutually exclusive).
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_schedule_add_with_both_prompt_and_file_returns_error() {
@@ -2664,6 +2731,7 @@ mod tests {
         match outcome {
             DispatchOutcome::Err(resp) => {
                 assert_eq!(resp.id, json!(314));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
                 assert!(
                     resp.error.message.contains("failed to read schedule store"),
                     "unexpected error message: {}",
@@ -2671,6 +2739,72 @@ mod tests {
                 );
             }
             DispatchOutcome::Ok(resp) => panic!("expected parse error, got Ok: {resp:?}"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_store_write_error_returns_invalid_request() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store_path = dir.path().join("schedules.json");
+        bob_core::types::schedule::write_schedule_store(
+            &store_path,
+            &[bob_core::types::ScheduleEntry::with_prompt(
+                "existing-job",
+                "0 8 * * *",
+                "existing",
+            )],
+        )
+        .expect("seed readable store");
+        let mut permissions = std::fs::metadata(dir.path())
+            .expect("stat tempdir")
+            .permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(0o500);
+            std::fs::set_permissions(dir.path(), permissions).expect("make parent directory read-only");
+        }
+
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_schedule_store_path(store_path);
+        let req = make_request_with_params(
+            "schedule.add",
+            json!(315),
+            json!({
+                "id": "new-job",
+                "cron": "0 9 * * *",
+                "prompt": "Morning report"
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(dir.path())
+                .expect("stat tempdir")
+                .permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(dir.path(), permissions).expect("restore tempdir permissions");
+        }
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(315));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+                assert!(
+                    resp.error.message.contains("failed to write schedule store"),
+                    "unexpected error message: {}",
+                    resp.error.message
+                );
+            }
+            DispatchOutcome::Ok(resp) => panic!("expected write error, got Ok: {resp:?}"),
             _ => panic!("unexpected dispatch outcome variant"),
         }
     }

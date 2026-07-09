@@ -684,8 +684,10 @@ async fn acquire_default_session_or_warn(
 /// `None` only in the rare case the inherited launch cwd itself could not be
 /// determined (`std::env::current_dir` failing); the fire still dispatches
 /// and the record is appended with the field left unset rather than blocking
-/// dispatch on audit metadata. A failure to append the record itself is
-/// logged as a warning and does not affect the already-dispatched fire.
+/// dispatch on audit metadata. This record is appended only after pi
+/// acknowledges receipt of the prompt, so it does not overstate failed sends
+/// as successful dispatches. A failure to append the record itself is logged
+/// as a warning and does not affect the already-dispatched fire.
 async fn record_periodic_fire_dispatched(
     audit: &dyn AuditSink,
     session_id: SessionId,
@@ -921,16 +923,6 @@ fn start_periodic_dispatcher(
                             (id, resolved_service_default_cwd.clone())
                         }
                     };
-                    // T-128 (AC-1/AC-2): record the resolved absolute working
-                    // directory used for this dispatched fire on an
-                    // `event`-kind audit record before forwarding the prompt.
-                    record_periodic_fire_dispatched(
-                        audit_sink.as_ref(),
-                        session_id,
-                        job_id.as_deref(),
-                        resolved_cwd,
-                    )
-                    .await;
                     // `send_prompt_and_drain` returns as soon as pi acknowledges
                     // *receipt* of the prompt over its RPC channel; the agent run
                     // (provider calls, tool execution) continues asynchronously
@@ -950,20 +942,35 @@ fn start_periodic_dispatcher(
                     // On failure there is no run in flight to wait for (the
                     // prompt was never accepted), so the session is cleaned up
                     // immediately as before.
-                    if let Err(e) = supervisor
+                    match supervisor
                         .send_prompt_and_drain(session_id, event.payload)
                         .await
                     {
-                        tracing::warn!(
-                            error = %e,
-                            "periodic dispatcher: prompt send failed; continuing"
-                        );
-                        if let Err(e) = supervisor.kill_session(session_id).await {
+                        Ok(()) => {
+                            // T-128 (AC-1/AC-2): record the resolved absolute
+                            // working directory used for this dispatched fire
+                            // on an `event`-kind audit record only after pi
+                            // acknowledges receipt of the prompt.
+                            record_periodic_fire_dispatched(
+                                audit_sink.as_ref(),
+                                session_id,
+                                job_id.as_deref(),
+                                resolved_cwd,
+                            )
+                            .await;
+                        }
+                        Err(e) => {
                             tracing::warn!(
                                 error = %e,
-                                session_id = %session_id,
-                                "periodic dispatcher: session cleanup failed; continuing"
+                                "periodic dispatcher: prompt send failed; continuing"
                             );
+                            if let Err(e) = supervisor.kill_session(session_id).await {
+                                tracing::warn!(
+                                    error = %e,
+                                    session_id = %session_id,
+                                    "periodic dispatcher: session cleanup failed; continuing"
+                                );
+                            }
                         }
                     }
                 }
@@ -2757,6 +2764,67 @@ pub mod tests {
                 }
                 other => panic!("expected an Event payload, got {other:?}"),
             }
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_does_not_record_dispatched_event_when_prompt_send_fails() {
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+            persistence_handle
+                .enqueue_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "send-failure-audit-test".to_owned(),
+                    },
+                    Some("send-failure-job".to_owned()),
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            let schedule_rx = schedule_rx_with_entries(vec![ScheduleEntry::with_prompt(
+                "send-failure-job",
+                "0 9 * * *",
+                "unused",
+            )]);
+
+            let (supervisor_handle, supervisor_join) =
+                pi_agent_supervisor::start(pi_agent_supervisor::Config {
+                    worker_command: "sh".to_string(),
+                    worker_args: vec!["-c".to_string(), "exit 0".to_string()],
+                    warm_pool_size: 0,
+                    max_processes: 1,
+                    extension_path: existing_extension_path(),
+                    ..pi_agent_supervisor::Config::default()
+                })
+                .expect("supervisor must start");
+
+            let audit_sink = Arc::new(SpyAuditSink::default());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx,
+                None,
+                Arc::clone(&audit_sink) as Arc<dyn AuditSink>,
+                cancel_rx,
+            );
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+
+            let records = audit_sink.records();
+            let event_records: Vec<_> = records
+                .iter()
+                .filter(|r| r.kind == AuditRecordKind::Event)
+                .collect();
+            assert!(
+                event_records.is_empty(),
+                "failed prompt delivery must not append a dispatched event audit record: {records:?}"
+            );
 
             let _ = cancel_tx.send(true);
             drop(supervisor_handle);

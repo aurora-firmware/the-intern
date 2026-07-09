@@ -288,13 +288,14 @@ A job added without `--cwd` simply falls through to `pi_agent_cwd` (or, if
 that is also unset, to the inherited launch cwd) exactly as it did before
 this feature existed.
 
-### Interactive `bob chat` is unaffected
+### Interactive `bob chat` uses the caller's working directory
 
-`bob chat` does not consult `pi_agent_cwd` at all. Its supervised interactive
-`pi` session is spawned with no explicit working directory, so it always
-inherits whatever directory the `bob serve` process itself is currently
-running in — independent of `pi_agent_cwd`, any scheduled job's `cwd`, and the
-directory the `bob chat` command itself was run from.
+`bob chat` does not consult `pi_agent_cwd` at all. Instead, the CLI captures
+the current working directory where `bob chat` was invoked and sends it to the
+service in `session.interactive.open`; the supervised interactive `pi` session
+is then spawned in that directory. This keeps interactive chat independent of
+`pi_agent_cwd` and any scheduled job's `cwd`, while also avoiding the old
+behavior where chat silently inherited the launch cwd of `bob serve`.
 
 ---
 
@@ -645,9 +646,10 @@ Flags:
 
 Provide exactly one of `--prompt` or `--file`; they are mutually exclusive. A
 `--file` path is resolved to an absolute path against your shell's working
-directory (so relative paths work) and **must exist when you run the command** —
-a missing file is rejected immediately rather than stored. The absolute path is
-what gets recorded, and its contents are read fresh at each run.
+directory (so relative paths work). The absolute path is what gets recorded,
+and its contents are read fresh at each run. The file does **not** need to
+exist when you add the schedule entry; existence is checked only when that fire
+actually runs.
 
 `--cwd` is optional and independent of `--prompt`/`--file` — combine it with
 either. It must be an absolute path or the command fails immediately without

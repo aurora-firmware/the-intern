@@ -17,13 +17,14 @@ pub(super) enum AddSource {
 
 /// Resolve the `--prompt`/`--file` CLI arguments into an [`AddSource`].
 ///
-/// `--file` is canonicalised to an absolute path against the caller's working
+/// `--file` is resolved to an absolute path against the caller's working
 /// directory (so a relative path resolves against the operator's shell), and the
 /// absolute path is what gets stored — the `bob serve` process re-reads it from
 /// its own working directory at each fire, where only an absolute path resolves
-/// reliably. A missing path, a non-file, or a non-UTF-8 path is an error so the
-/// operator finds out at add time rather than silently at fire time. Exactly one
-/// of `--prompt`/`--file` must be present (clap also enforces this).
+/// reliably. File existence is intentionally a fire-time concern, so a missing
+/// path is still accepted here as long as the resulting path is absolute and
+/// UTF-8. Exactly one of `--prompt`/`--file` must be present (clap also
+/// enforces this).
 pub(super) fn resolve_add_source(
     prompt: Option<&str>,
     file: Option<&str>,
@@ -31,14 +32,13 @@ pub(super) fn resolve_add_source(
     match (prompt, file) {
         (Some(p), None) => Ok(AddSource::Prompt(p.to_owned())),
         (None, Some(f)) => {
-            let abs = std::fs::canonicalize(f).map_err(|e| {
-                invalid_request_error(format!("--file {f:?} could not be resolved: {e}"))
-            })?;
-            if !abs.is_file() {
-                return Err(invalid_request_error(format!(
-                    "--file {f:?} is not a regular file"
-                )));
-            }
+            let abs = if std::path::Path::new(f).is_absolute() {
+                std::path::PathBuf::from(f)
+            } else {
+                std::env::current_dir()
+                    .map_err(|e| invalid_request_error(format!("current directory unavailable: {e}")))?
+                    .join(f)
+            };
             let abs = abs.to_str().ok_or_else(|| {
                 invalid_request_error(format!("--file {f:?} resolves to a non-UTF-8 path"))
             })?;
@@ -575,13 +575,32 @@ mod tests {
     }
 
     #[test]
-    fn resolve_add_source_errors_on_missing_file() {
-        let err = resolve_add_source(None, Some("/nonexistent/abs/does-not-exist.txt"))
-            .expect_err("missing file must error");
-        assert!(
-            err.to_string().to_lowercase().contains("file"),
-            "message must mention the file: {err}"
+    fn resolve_add_source_accepts_an_absolute_path_even_when_the_file_does_not_exist_yet() {
+        let src = resolve_add_source(None, Some("/nonexistent/abs/does-not-exist.txt"))
+            .expect("absolute missing file path must be accepted");
+        assert_eq!(
+            src,
+            AddSource::File("/nonexistent/abs/does-not-exist.txt".to_owned())
         );
+    }
+
+    #[test]
+    fn resolve_add_source_resolves_a_relative_file_path_against_the_callers_working_directory() {
+        let src = resolve_add_source(None, Some("relative/prompt.txt"))
+            .expect("relative file path must resolve to an absolute path");
+        match src {
+            AddSource::File(abs) => {
+                assert!(
+                    std::path::Path::new(&abs).is_absolute(),
+                    "resolved path must be absolute: {abs}"
+                );
+                assert!(
+                    abs.ends_with("relative/prompt.txt"),
+                    "resolved path must preserve the caller-supplied suffix: {abs}"
+                );
+            }
+            other => panic!("expected AddSource::File, got {other:?}"),
+        }
     }
 
     #[test]
