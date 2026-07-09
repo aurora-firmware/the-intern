@@ -36,7 +36,9 @@ pub(super) fn resolve_add_source(
                 std::path::PathBuf::from(f)
             } else {
                 std::env::current_dir()
-                    .map_err(|e| invalid_request_error(format!("current directory unavailable: {e}")))?
+                    .map_err(|e| {
+                        invalid_request_error(format!("current directory unavailable: {e}"))
+                    })?
                     .join(f)
             };
             let abs = abs.to_str().ok_or_else(|| {

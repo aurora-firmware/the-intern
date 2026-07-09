@@ -160,7 +160,10 @@ mod tests {
         let registry = SessionRegistry::new();
         let session = SessionId::new();
 
-        assert_eq!(registry.register(session, 1), RegistrationOutcome::Registered);
+        assert_eq!(
+            registry.register(session, 1),
+            RegistrationOutcome::Registered
+        );
         assert_eq!(
             registry.register(session, 2),
             RegistrationOutcome::Duplicate {

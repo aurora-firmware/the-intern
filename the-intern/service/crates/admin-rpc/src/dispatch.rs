@@ -2763,7 +2763,8 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             permissions.set_mode(0o500);
-            std::fs::set_permissions(dir.path(), permissions).expect("make parent directory read-only");
+            std::fs::set_permissions(dir.path(), permissions)
+                .expect("make parent directory read-only");
         }
 
         let (reload_handle, scheduler_join) = make_scheduler_handle();
@@ -2799,7 +2800,9 @@ mod tests {
                 assert_eq!(resp.id, json!(315));
                 assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
                 assert!(
-                    resp.error.message.contains("failed to write schedule store"),
+                    resp.error
+                        .message
+                        .contains("failed to write schedule store"),
                     "unexpected error message: {}",
                     resp.error.message
                 );
