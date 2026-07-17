@@ -126,6 +126,83 @@ cd the-intern/service && cargo test --workspace
 
 ## Diagnosis Log
 
+### Diagnosis 1 — 2026-07-17
+
+Reproduction status: intermittent, confirmed via CI evidence only (not independently re-run this
+session; consistent with the bug file's own record of 15/15 local isolated runs and 3x concurrent
+local full-suite runs passing). Live reproduction was not attempted, since the defect is understood
+to be CI-load-dependent and not reproducible on demand locally.
+
+Evidence captured:
+- `git diff dev-agent -- crates/bob/src/serve.rs crates/pi-agent-supervisor/` on the bug branch
+  produced no output — the code read in this session is byte-identical to what CI executed for the
+  two reported failures.
+- Full read of the idle-reaper call chain: `crates/pi-agent-supervisor/src/reaper.rs` (pure/bounded
+  selection helpers), `crates/pi-agent-supervisor/src/pool.rs::reap_idle_and_surplus`/`kill_session`/
+  `send_prompt`, `crates/pi-agent-supervisor/src/lib.rs::Actor::run` (the `tokio::select!` loop with
+  `reap_tick = time::interval(idle_reap_timeout)`), and
+  `crates/pi-agent-supervisor/src/process.rs::terminate` (SIGTERM →
+  `time::timeout(child_termination_deadline, child.wait())` → SIGKILL fallback). All operations are
+  internally bounded (worst-case logical latency in this test's config: ~100ms tick granularity +
+  250ms termination deadline, well under the 5s test budget).
+- `grep -n "Duration::from_secs(5)\|flavor = " crates/bob/src/serve.rs`: `current_thread` flavor +
+  `Duration::from_secs(5)` outer timeouts are the standard convention across ~30+ tests in this file,
+  not a margin unique to the failing test.
+- `crates/pi-agent-supervisor/src/lib.rs:673-701`
+  (`idle_reaper_removes_session_after_idle_timeout_without_prompt_activity`) uses an even tighter,
+  non-polling pattern (fixed 180ms sleep vs. 40ms configured timeout, no retry), showing the B-025
+  test's polling-with-timeout style is already the more robust convention in this codebase.
+- `grep -rn "flavor = \"multi_thread\"" --include="*.rs" .`: precedent exists in
+  `crates/admin-rpc/src/lib.rs` and `crates/bob/src/cli/commands/chat.rs` for `multi_thread` test
+  runtimes.
+- `.github/workflows/build.yml`: the `tests` job has no explicit matrix; the workflow's
+  `on: pull_request` + `on: push: branches: [dev-agent, main]` triggers means a commit whose PR head
+  branch is `dev-agent` (PR #38, "Promote dev-agent → main") fires two independent workflow runs,
+  each with its own `Tests` job (`cargo test --workspace`) landing on the same self-hosted runner
+  concurrently — directly matching the bug report's "only one of two parallel Tests jobs failed, same
+  commit" observation as a CI-topology effect, not a defect in the code under test.
+- `grep -rn "idle reaper must eventually release" . --include="*.rs"`: the panic string is unique to
+  `crates/bob/src/serve.rs:2002` (`.expect(...)`). The CI panic cites `:2003:14`, a one-line
+  discrepancy against the byte-identical current file; noted as a minor, non-material evidence
+  caveat with no alternate candidate call site.
+
+Isolated fault: not a defect in `pi-agent-supervisor`'s reaper/pool/process logic — that code is
+deterministic and internally bounded. The fault is in the test itself:
+`serve::tests::periodic::periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt`
+(`crates/bob/src/serve.rs:1916-2005`), specifically the second
+`tokio::time::timeout(Duration::from_secs(5), ...)` block at lines 1987-2002, which polls
+`list_sessions()` for the idle-reaper release. Its fixed 5s wall-clock budget, combined with
+`#[tokio::test(flavor = "current_thread")]` (all of the test's async work — actor task, reap timer,
+20ms poll loop, real `sh` subprocess I/O — sharing one OS thread) and real subprocess spawn/
+SIGTERM/wait() I/O, has insufficient headroom when that one OS thread is denied scheduling for an
+extended stretch under CI-runner contention (a second, concurrently-triggered `Tests` job on the
+same commit per the `build.yml` trigger analysis above).
+
+Root cause / fault hypothesis: timing-margin defect in the test, not a logic bug in production code
+(evidence-backed via code reading rather than live reproduction). The reaper's own required work
+completes in well under 500ms of logical latency; the observed CI failures are explained by real
+wall-clock scheduling starvation of the test's single OS thread under contention from a second
+concurrent `Tests` job on the same self-hosted runner, which the fixed 5s `tokio::time::timeout`
+does not tolerate in the worst case. This does not weaken confidence in the reaper's correctness —
+every other reaper-related test passed in both failing CI runs.
+
+Planned fix: increase the outer timeout margin for the idle-reaper-release wait (the block at
+`serve.rs:1987-2002`) to a substantially larger fixed budget (e.g. 15-30s) to absorb realistic
+contention spikes while still failing fast in the ordinary case, and/or change the test's
+`#[tokio::test(...)]` attribute to `flavor = "multi_thread"` (with a small `worker_threads` count,
+matching the precedent in `crates/admin-rpc/src/lib.rs` / `crates/bob/src/cli/commands/chat.rs`) so
+the actor task, the poll loop, and subprocess I/O are not all serialized onto one potentially-starved
+OS thread. Either change preserves exactly what the test verifies (that the idle reaper eventually
+releases the one-shot session) — it only widens the margin/scheduling model, not the assertion.
+
+Planned verification:
+```bash
+cd the-intern/service
+cargo test -p bob --lib serve::tests::periodic::periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt -- --exact
+cargo test --workspace
+```
+Ideally also confirmed by two consecutive green CI runs on PR #38 after the change lands.
+
 ## Work Log
 
 ## Review
