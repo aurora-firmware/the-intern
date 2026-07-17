@@ -311,3 +311,77 @@ was available. No environment/setup issues in Session 2; the same `unshare --map
 used in diagnosis and Session 1 worked identically here.
 
 ## Review
+
+### Review Verdict — 2026-07-17
+
+PASS
+
+**Diagnosis→fix evidence chain:** Diagnosis 1 (2026-07-17) records reproduction status
+(confirmed, byte-for-byte match against the CI panic, reproduced locally via a validated
+`unshare --map-root-user` proxy since the sandbox has no passwordless root), evidence captured
+(read of `dispatch.rs:2746-2813` and `schedule.rs:356-455`, baseline non-root repro, namespaced-root
+repro, scope check for other permission-bit injection sites, and confirmation of a UID-independent
+EISDIR-on-rename alternative), an isolated fault (the test's `0o500`-chmod failure-injection
+mechanism, not the production write/error-mapping path), and a root cause (the injection assumes
+DAC enforcement the test process's `CAP_DAC_OVERRIDE`, held under real root, bypasses). Session 1's
+literal fix-contract attempt (turning `store_path` into a directory inside the dispatcher-level
+test) was found to trip `handle_schedule_add`'s read-before-write ordering instead of the intended
+write path, and was escalated rather than force a wrong fix. The Architect's directive (recorded in
+Work Log Session 2, per the correction note that no separate Diagnosis 2 entry was needed since the
+root cause diagnosis itself was correct) was to retire the dispatcher-level test and add a
+UID-independent unit test in bob-core exercising `write_schedule_store`'s real terminal-rename
+failure directly. This chain is complete and was verified before proceeding.
+
+**Stage 1 — Bug criteria:**
+- `dispatch_schedule_add_store_write_error_returns_invalid_request` was fully removed from
+  `the-intern/service/crates/admin-rpc/src/dispatch.rs` (confirmed via diff and a workspace-wide
+  `grep` — zero remaining references anywhere).
+- `dispatch_schedule_add_config_parse_error_preserves_request_id` is byte-for-byte unchanged and
+  still exercises the persistence-error → `CODE_INVALID_REQUEST` mapping (via the read/parse-error
+  branch, through the same generic `map_err(... CODE_INVALID_REQUEST ...)` wrapping structure that
+  `write_and_reload` uses for the write branch — confirmed by reading both call sites in
+  `dispatch.rs`).
+- The new bob-core test
+  `write_schedule_store_returns_persistence_error_when_rename_target_is_a_directory`
+  (`the-intern/service/crates/bob-core/src/types/schedule.rs`) genuinely exercises
+  `write_schedule_store`'s terminal `std::fs::rename(&tmp_path, path)` EISDIR failure: independently
+  verified non-tautological by commenting out its `std::fs::create_dir(&path)` call and re-running —
+  the test failed as expected (`rename onto an existing directory must fail: ()`); restored and
+  re-confirmed green. Independently verified UID-independence by running the test under
+  `unshare --map-root-user` (namespaced root) — identical `ok` result to the plain-user run.
+- No production code was modified — `write_schedule_store` (bob-core/src/types/schedule.rs) and all
+  dispatch.rs logic are byte-for-byte identical to `dev-agent`; `git diff dev-agent...bug/B-022-...`
+  touches only the two `#[cfg(test)] mod tests` blocks (69 lines removed from dispatch.rs, 27 lines
+  added to schedule.rs — a net test-only change).
+- No unrelated behavior was added; `git diff --stat` confirms only the two expected files changed.
+
+**Fix Verification — re-run on `bug/B-022-schedule-add-write-error-test-root-bypass`:**
+- `cargo test -p bob-core --lib schedule::` → 40 passed, 0 failed (includes the new test).
+- `cargo test -p admin-rpc --lib schedule` → 22 passed, 0 failed (retired test absent, sibling
+  read-error test present and passing).
+- `cargo test --workspace` → all crates green, 0 failed across all binaries (113 passed in the
+  largest suite plus the remaining crate suites, all `test result: ok`).
+- `cargo fmt --all -- --check` → clean (exit 0).
+
+**Stage 2 — Code quality:**
+- Correctness: the new test's assertions (`ServiceError::Persistence` variant, message substring
+  "failed to rename temp schedule store") match the exact error-construction site in
+  `write_schedule_store`'s terminal `rename` call (`schedule.rs`, `"failed to rename temp schedule
+  store to {}: {e}"`).
+- Tests: independent (own `tempfile::tempdir()` per test), covers a distinct failure path from
+  existing coverage, doubles as the regression test — confirmed to fail before the fix mechanism
+  (the `create_dir` call) is present and pass after.
+- Security: no secrets, no unvalidated external input introduced.
+- Readability: the new test's comment clearly explains why EISDIR was chosen over a permission-bit
+  approach (kernel type-conflict, not a DAC check root can bypass) — mirrors the Diagnosis Log's
+  reasoning. No dead code or debugging artifacts left behind.
+- Bug Fix Addendum: the fix is minimal (test-only, no production code, no unrelated refactoring);
+  the removed test's coverage gap for the write-branch-specific `CODE_INVALID_REQUEST` message at
+  the dispatch layer is a known, deliberate, Architect-approved tradeoff (structural mapping already
+  covered by the sibling read-error test; the write-specific failure mode itself is now covered
+  directly and reliably at the correct layer in bob-core) — not a gap introduced by this Developer
+  session.
+
+Both stages pass. No blocking issues found.
+
+Next owner: Bug-Fix Loop.
