@@ -3,7 +3,7 @@ id: B-023
 title: periodic dispatcher re-enqueues non-periodic events, reordering the 
   shared inbound persistence queue
 severity: high
-status: open
+status: in-progress
 created: '2026-07-17'
 ---
 
