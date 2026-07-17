@@ -3,6 +3,14 @@
 How bob launches `pi`, the ways to give it a system prompt, and the working
 directories that matter. Verified against the current source and `pi --help`.
 
+This doc covers the **launch-cwd fallback** — the directory `pi` gets when
+neither the service-wide `pi_agent_cwd` config key nor (for scheduled jobs) a
+per-entry `--cwd` is set. When either is set, it takes precedence over
+everything described here; see the [operator guide's "Working directory for
+pi-agent sessions"](the-intern/docs/src/operator-guide/index.md) section for
+the full precedence chain (per-entry `cwd` → `pi_agent_cwd` → inherited
+launch cwd).
+
 ## How bob launches pi
 
 bob spawns every RPC worker as:
@@ -15,7 +23,9 @@ pi <pi_agent_args…> --extension <bob.ts>
   `pi` **verbatim**.
 - bob appends `--extension <bob.ts>` itself and sets env `BOB_SESSION_ID` and
   `BOB_EXTENSION_SOCK_PATH`.
-- bob **never sets a working directory**, so `pi` inherits bob's cwd.
+- When `pi_agent_cwd` is unset, bob sets no working directory, so `pi`
+  inherits bob's cwd. When `pi_agent_cwd` **is** set, bob passes it as the
+  worker's `current_dir` instead (see [Working directories](#working-directories)).
 - `bob.ts` only forwards telemetry and gates tool calls — it does **not** touch
   prompts, so it is not a system-prompt mechanism.
 
@@ -73,13 +83,17 @@ cwd (see below). Useful but constrained by cwd:
 
 ## Working directories
 
-bob sets no cwd for pi, so pi inherits whatever cwd the `bob serve` process has.
-That cwd is decided by how you launch bob.
+When `pi_agent_cwd` (and, for a scheduled entry, its per-entry `cwd`) is
+unset, bob sets no cwd for pi, so pi inherits whatever cwd the `bob serve`
+process has. That cwd is decided by how you launch bob. If `pi_agent_cwd` or
+a per-entry `cwd` **is** set, it is passed as the worker's `current_dir`
+instead and this fallback never applies — see the operator guide's
+precedence chain.
 
-| Process | Working directory (dev helper scripts) | Why |
+| Process | Working directory (dev helper scripts, no `pi_agent_cwd`/`--cwd` set) | Why |
 |---|---|---|
 | `bob serve` (the service) | `the-intern/service` | `scripts/bob-dev.sh` runs `cd "$service_dir"` before `cargo run` |
-| `pi` workers | `the-intern/service` | inherited from `bob serve` (bob sets no `current_dir`) |
+| `pi` workers | `the-intern/service` | inherited from `bob serve` (bob sets no `current_dir` when `pi_agent_cwd` is unset) |
 | `bob <cmd>` (the CLI call) | `the-intern/service` | same script `cd`s to `service_dir` before `cargo run` |
 
 **Gotcha — relative paths on the CLI.** Because `scripts/bob-dev.sh` `cd`s to
@@ -106,21 +120,26 @@ discovery starts there.
 
 ### Scheduled runs
 
-A scheduled firing has **no special cwd** — it is dispatched to an ordinary RPC
-pool worker (`periodic dispatcher → supervisor.acquire_session() → RpcWorkerProcess`).
-Those workers (warm-pool and on-demand overflow alike) are spawned without a
-`current_dir`, so a scheduled run's cwd is exactly `bob serve`'s cwd —
-`the-intern/service` under the dev scripts. Schedules do not get their own
-directory, and neither the scheduler-adapter nor the dispatcher change it.
+A scheduled firing's cwd is resolved by the periodic dispatcher using the
+precedence chain documented in the operator guide's ["Working directory for
+pi-agent sessions"](the-intern/docs/src/operator-guide/index.md#working-directory-for-pi-agent-sessions)
+section: **per-entry `cwd`** (`--cwd` on `bob schedule add`), then
+**service-wide `pi_agent_cwd`**, then the **inherited launch cwd** of `bob
+serve` as the final fallback. Only in that last, no-config-set case is a
+scheduled run's cwd exactly `bob serve`'s cwd — `the-intern/service` under the
+dev scripts, since neither the scheduler-adapter nor the dispatcher change it
+on their own.
 
 Consequences for a scheduled job:
 
 - The stored prompt path is **absolute** (the `--file` option enforces this), so
   it resolves regardless of cwd.
 - But if the **prompt text** tells pi to read/write a **relative** path, pi
-  resolves it against `the-intern/service`, **not** `.tmp/bob-dev/…`. Use
-  absolute paths inside the prompt, or point bob's cwd at your workspace (the
-  built-binary launch above) if you want relative paths to land there.
+  resolves it against whichever cwd the precedence chain above resolved for
+  that entry — `the-intern/service` only if neither `--cwd` nor `pi_agent_cwd`
+  is set. Use absolute paths inside the prompt, or set `--cwd`/`pi_agent_cwd`
+  (or point bob's own cwd at your workspace, the built-binary launch above) if
+  you want relative paths to land somewhere specific.
 
 ## Recommendation
 
