@@ -196,4 +196,40 @@ Planned verification:
 
 ## Work Log
 
+### Session 1 — 2026-07-17
+
+Implemented the fix contract from the Diagnosis Log for B-024. `handle_session_interactive_open`
+(`the-intern/service/crates/admin-rpc/src/dispatch.rs`) previously parsed `params.cwd` with
+`.and_then(Value::as_str).map(PathBuf::from)` — zero validation. Replaced this with an explicit
+match that mirrors `schedule.add`'s dispatch-level checks: a non-string `cwd` value, a
+blank/whitespace-only string (after `.trim()`), or a non-absolute path
+(`Path::new(trimmed).is_absolute()` false) all return `DispatchOutcome::Err` with
+`CODE_INVALID_REQUEST` and the message "session.interactive.open: params.cwd must be a non-blank
+absolute path string when present". A valid absolute path is trimmed and wrapped in
+`Some(PathBuf::from(trimmed))` as before.
+
+Followed the tdd skill strictly: wrote four new failing tests first
+(`dispatch_session_interactive_open_with_empty_string_cwd_returns_invalid_request`,
+`..._with_whitespace_only_cwd_returns_invalid_request`,
+`..._with_relative_cwd_returns_invalid_request`, and a rewritten
+`..._with_non_string_params_cwd_returns_invalid_request` replacing the old
+`..._leaves_cwd_none` test that encoded the pre-fix, buggy contract). Confirmed all four failed
+against the unfixed handler, then implemented the minimal fix and confirmed green.
+
+Considered whether the absolute-path check should live downstream (as it does for `schedule.add`,
+in `validate_schedule_store`), but the Diagnosis Log's fix contract was explicit that
+`session.interactive.open` has no downstream validation layer (it goes straight to process spawn
+via `InteractiveProcess::spawn`), so both the type/blank check and the absolute-path check had to
+be added directly in the dispatch handler. No alternative design was pursued.
+
+Ran the full verification matrix: `cargo test -p admin-rpc dispatch::tests` (66 passed),
+`cargo test -p admin-rpc` full crate (116 passed, including the end-to-end
+`run_connection_session_interactive_open_with_params_cwd_spawns_child_in_that_directory` test using
+a valid absolute path, which remained green), `cargo test --workspace` (all binaries 0 failed), and
+`cargo fmt --all -- --check` (clean). Nothing remains outstanding for this bug. Only `dispatch.rs`
+was modified and committed (commit `1fec028`).
+
+**Obstacles Encountered:** None blocking. Pre-existing, unrelated working-tree state
+(`pr-35-review.md`/`pr-38-review.md`) was left untouched.
+
 ## Review
