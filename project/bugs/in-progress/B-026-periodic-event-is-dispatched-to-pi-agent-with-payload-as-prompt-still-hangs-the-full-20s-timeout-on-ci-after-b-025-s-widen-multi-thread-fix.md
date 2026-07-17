@@ -325,3 +325,147 @@ another timeout adjustment.
 working-tree state (`pr-35-review.md`/`pr-38-review.md`) left untouched.
 
 ## Review
+
+### Review Verdict — 2026-07-17
+
+PASS
+
+**Evidence chain.** Diagnosis Log contains a complete fix contract (isolated
+fault: `serve.rs:1924`'s `flavor = "multi_thread", worker_threads = 2)`
+attribute; planned fix: revert to `current_thread`, keep the 20s timeouts,
+update the justifying comment, no production changes; planned verification:
+target test, workspace test, fmt, plus CI observation). The Work Log's
+implementation matches the contract exactly — verified independently below,
+not inferred from the diff.
+
+**Stage 1 — Bug criteria.**
+- `git diff dev-agent...bug/B-026-idle-reaper-test-still-hangs-on-ci --stat`
+  shows exactly one file, `the-intern/service/crates/bob/src/serve.rs`
+  (16 insertions, 9 deletions), one diff hunk. No production code
+  (`pi-agent-supervisor`, `bob` non-test modules) was touched, matching the
+  contract's explicit exclusion.
+- The only functional change is
+  `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]` →
+  `#[tokio::test(flavor = "current_thread")]` on
+  `periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt`. Both
+  `Duration::from_secs(20)` outer timeouts (lines 1991, 2016 post-fix) are
+  byte-for-byte unchanged from B-025 — confirmed via `grep -n
+  "from_secs(20)"`. The remaining diff lines are the comment block, rewritten
+  to record B-026's finding instead of B-025's original justification.
+- No lifecycle file (`project/bugs/...`) was touched on the bug branch —
+  confirmed via `git diff dev-agent...bug/... --name-only -- project/`
+  (empty) and `git log --stat` on `dbc4cea`.
+- No unspecified behavior was added; nothing outside the fix contract's four
+  numbered steps appears in the diff.
+
+**Stage 2 — Code quality / bug-fix addendum.**
+- Fix is minimal: single attribute + accompanying comment, nothing else.
+- No unrelated refactor or feature code is bundled in.
+- Fix contract matches implementation exactly (checked point-by-point above).
+- Regression test: per the addendum, "a regression test exists that fails
+  before the fix and passes after it" is structurally unsatisfiable here —
+  the same as B-025 — because the failure is CI-container-specific and has
+  never reproduced locally across two independent, increasingly aggressive
+  investigation attempts (B-025's simulated background load, B-026's
+  `taskset`-based genuine CPU oversubscription up to single-core pinning
+  with competing busy loops). This is treated as a known, precedent-approved
+  exception rather than a gap, consistent with B-025's review.
+
+**Independent re-verification of the precedent audit.** The task asked me to
+scrutinize the precedent-audit reasoning rather than accept it at face
+value, so I independently re-derived its factual claims from the codebase
+rather than trusting the Diagnosis Log's numbers:
+- Post-fix, `grep -c '#\[tokio::test'` on `serve.rs` = 45, and `grep -o
+  'flavor = "[a-z_]*"'` shows all 45 as `current_thread`, 0 as
+  `multi_thread` — confirms the "44 current_thread siblings, this test was
+  the only multi_thread one" claim.
+- Whole-workspace `grep -rn 'flavor = "multi_thread"'` finds exactly 11
+  remaining occurrences (8 in `crates/admin-rpc/src/lib.rs`, 3 in
+  `crates/bob/src/cli/commands/chat.rs`) — confirms the "12 total, one of
+  which is the target" claim.
+- `chat.rs`'s three `multi_thread` tests are socket-only
+  (`UnixListener`/`UnixStream` with a hand-spawned server task, no
+  subprocess, no `start_subsystems()`) — confirmed by reading all three test
+  bodies.
+- `crates/admin-rpc/Cargo.toml` does not depend on the `bob` crate at all
+  (only `bob-core`), so `admin-rpc`'s tests are *structurally* incapable of
+  exercising the full 9-actor `start_subsystems()` stack — this is stronger
+  than the Diagnosis Log's own framing ("no working precedent"); it is not
+  merely unprecedented, it is impossible in that crate.
+- The "15 tests" figure attributed to `process.rs`'s termination-path
+  precedent is a loose approximation: `process.rs` alone has 17
+  `#[tokio::test]` fns (all `current_thread`), of which a narrower subset
+  specifically exercises `terminate()` directly; the crate-wide picture
+  (`process.rs` 17 + `lib.rs` 21 + `pool.rs` 12 = 50 tests, all
+  `current_thread`, 0 `multi_thread`) supports the qualitative point even if
+  "15" isn't an exact reproducible count. This is a minor imprecision in the
+  Diagnosis Log, not a materially misleading one — noted here for the
+  record, not blocking.
+- Conclusion: the precedent audit's arithmetic and structural claims hold up
+  under independent re-derivation. It is still circumstantial in the strict
+  sense (no live reproduction, no mechanistic proof that `multi_thread`
+  itself is the trigger rather than a correlated but incidental factor) —
+  the Diagnosis Log is explicit and honest about this, stating the
+  conclusion is "not fully proven" and giving a falsification condition.
+  But "circumstantial" is not the same as "weak": the asymmetry between a
+  100% failure rate (2/2 real CI opportunities) for the one-of-a-kind
+  `multi_thread` + full-actor-stack combination versus a 0% known-flakiness
+  rate across 45+50 structurally comparable `current_thread` tests in the
+  same CI runs is a legitimate, quantifiable basis for a decision, even
+  without a mechanistic explanation of *why* `multi_thread` would fail this
+  way under CI-specific conditions (the cgroup-throttling hypothesis is
+  offered as a plausible mechanism, correctly labeled as unconfirmable from
+  inside this repository).
+
+**Is revert-to-current_thread the right call despite no proof?** Yes, per
+the same standard applied to B-025: the fix is safe (reduces the test to a
+runtime configuration with a clean, extensive precedent, not a novel one),
+minimal (one attribute plus a comment), reversible (a single-line change),
+and is the best-justified option actually available given that live
+reproduction has now been attempted twice with escalating rigor and failed
+both times. It does not paper over the problem by further widening a
+timeout (which would have been the weaker move — retrying the same kind of
+fix that already failed) or reach for an out-of-scope production change.
+Retaining the 20s timeouts as a safety net independent of the fix mechanism
+is correct: it means the fix doesn't rely on the timeout margin to work, and
+doesn't regress the margin if the `multi_thread` hypothesis turns out to be
+wrong. The Diagnosis Log's falsification condition (a repeat failure under
+`current_thread` disproves hypothesis 2 and mandates a fresh, infrastructure-
+focused investigation rather than another timeout bump) is exactly the right
+next-step commitment for an unfalsifiable-locally fix, and the Work Log's
+honesty about what could and could not be demonstrated locally is
+appropriate, not a shortfall — repeating that honesty rather than
+overclaiming local proof is the correct behavior here.
+
+**Local re-verification performed independently in this review** (bug
+branch `bug/B-026-idle-reaper-test-still-hangs-on-ci`, commit `dbc4cea`):
+- `cd the-intern/service && cargo test -p bob --lib
+  serve::tests::periodic::periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt
+  -- --exact` — run 5 times, 5/5 passed, ~0.21-0.22s each.
+- `cd the-intern/service && cargo test --workspace` — 0 failures across
+  every crate (bob 158 passed, pi-agent-supervisor 63 passed, admin-rpc 116
+  passed, and all others green; doc-tests all 0/0).
+- `cargo fmt --all -- --check` — clean, exit 0.
+
+**Non-blocking suggestion (lower-risk/more-conclusive alternative for next
+time).** If this revert does not resolve the CI failure, the next
+investigation will again be starting from a bare `Elapsed(())` panic with no
+further detail. A cheap, in-scope improvement for a future session: replace
+the two `.expect("...")` calls at the timeout sites with messages (or a
+`match`/`unwrap_or_else`) that dump observable state at the moment of
+timeout — e.g., `runtime._pi_agent_supervisor.list_sessions()`'s length/ids,
+or elapsed-time checkpoints logged via `tracing`/`eprintln!` at each poll
+iteration. This is pure test-diagnostic instrumentation (no production code,
+no behavior change), would not have been required for this fix, but would
+substantially increase the evidentiary value of a third CI failure if the
+`multi_thread` hypothesis turns out to be wrong — worth proposing as a
+follow-up rather than blocking this fix on it.
+
+**Minor observation (non-blocking).** The Diagnosis Log's "15 tests" count
+for `process.rs`'s termination-path precedent doesn't exactly match my
+independent count (17 total tests in that file); the qualitative claim
+(extensive `current_thread` precedent, zero known flakiness) still holds
+under the broader, independently-verified count. Not a correctness issue,
+just a note for precision in future diagnosis logs.
+
+Next owner: active Bug-Fix Loop.
