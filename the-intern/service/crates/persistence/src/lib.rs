@@ -46,6 +46,19 @@ enum Command {
     DequeueNext {
         reply: Reply<Option<(InternalEvent, Option<String>)>>,
     },
+    /// B-023: enqueues onto the dedicated periodic queue, entirely separate
+    /// from the general inbound queue used by `Enqueue`/`DequeueNext`.
+    EnqueuePeriodic {
+        event: InternalEvent,
+        job_id: Option<String>,
+        reply: Reply<()>,
+    },
+    /// B-023: dequeues from the dedicated periodic queue only. Never
+    /// observes, and never disturbs the order of, events on the general
+    /// inbound queue.
+    DequeueNextPeriodic {
+        reply: Reply<Option<(InternalEvent, Option<String>)>>,
+    },
     PutSessionState {
         id: SessionId,
         state: SessionState,
@@ -143,6 +156,39 @@ impl PersistenceStore for Handle {
         self.send(|reply| Command::DequeueNext { reply }).await
     }
 
+    /// Appends `event` to the dedicated periodic queue (B-023), together
+    /// with its job-id correlator.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ServiceError::Persistence` when the periodic queue is at
+    /// capacity or the actor is down.
+    async fn enqueue_periodic_with_job_id(
+        &self,
+        event: InternalEvent,
+        job_id: Option<String>,
+    ) -> ServiceResult<()> {
+        self.send(|reply| Command::EnqueuePeriodic {
+            event,
+            job_id,
+            reply,
+        })
+        .await
+    }
+
+    /// Removes and returns the oldest event from the dedicated periodic
+    /// queue (B-023) together with its job-id correlator.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ServiceError::Persistence` when the actor is down.
+    async fn dequeue_next_periodic_with_job_id(
+        &self,
+    ) -> ServiceResult<Option<(InternalEvent, Option<String>)>> {
+        self.send(|reply| Command::DequeueNextPeriodic { reply })
+            .await
+    }
+
     /// Stores `state` for `id`, overwriting any existing entry.
     ///
     /// # Errors
@@ -172,16 +218,24 @@ struct Actor {
     cfg: Config,
     rx: mpsc::Receiver<Command>,
     inbound: InboundQueue,
+    /// B-023: a queue dedicated to `Periodic`-kind events, entirely separate
+    /// from `inbound`. The periodic dispatcher polls only this queue, so it
+    /// never dequeues (and potentially reorders) unrelated non-periodic
+    /// events, and its dispatch latency is never coupled to non-periodic
+    /// backlog depth.
+    periodic: InboundQueue,
     session_state: SessionStateStore,
 }
 
 impl Actor {
     fn new(cfg: Config, rx: mpsc::Receiver<Command>) -> Self {
         let inbound = InboundQueue::new(cfg.persistence_inbound_capacity);
+        let periodic = InboundQueue::new(cfg.persistence_inbound_capacity);
         Self {
             cfg,
             rx,
             inbound,
+            periodic,
             session_state: SessionStateStore::new(),
         }
     }
@@ -204,6 +258,18 @@ impl Actor {
                 }
                 Command::DequeueNext { reply } => {
                     let result = Ok(self.inbound.dequeue_next());
+                    let _ = reply.send(result);
+                }
+                Command::EnqueuePeriodic {
+                    event,
+                    job_id,
+                    reply,
+                } => {
+                    let result = self.periodic.enqueue(event, job_id);
+                    let _ = reply.send(result);
+                }
+                Command::DequeueNextPeriodic { reply } => {
+                    let result = Ok(self.periodic.dequeue_next());
                     let _ = reply.send(result);
                 }
                 Command::PutSessionState { id, state, reply } => {
@@ -434,6 +500,100 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(ServiceError::Persistence { .. })));
+        task.abort();
+    }
+
+    // B-023: the periodic queue is a distinct store from the general inbound
+    // queue — an event enqueued via enqueue_periodic_with_job_id round-trips
+    // through dequeue_next_periodic_with_job_id together with its correlator.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dequeue_next_periodic_with_job_id_returns_the_correlator_it_was_enqueued_with() {
+        let (handle, task) = start(small_cfg());
+        let event = InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "* * * * *".to_owned(),
+        };
+
+        handle
+            .enqueue_periodic_with_job_id(event.clone(), Some("job-1".to_owned()))
+            .await
+            .unwrap();
+        let got = handle.dequeue_next_periodic_with_job_id().await.unwrap();
+
+        assert_eq!(got, Some((event, Some("job-1".to_owned()))));
+        task.abort();
+    }
+
+    // B-023: events enqueued onto the periodic queue must never be
+    // observable from the general queue's dequeue methods.
+    #[tokio::test(flavor = "current_thread")]
+    async fn periodic_queue_events_are_not_visible_via_the_general_dequeue() {
+        let (handle, task) = start(small_cfg());
+        let event = InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "* * * * *".to_owned(),
+        };
+
+        handle
+            .enqueue_periodic_with_job_id(event, Some("job-1".to_owned()))
+            .await
+            .unwrap();
+
+        assert_eq!(handle.dequeue_next().await.unwrap(), None);
+        assert_eq!(handle.dequeue_next_with_job_id().await.unwrap(), None);
+        task.abort();
+    }
+
+    // B-023: events enqueued onto the general queue must never be
+    // observable from the periodic queue's dedicated dequeue method.
+    #[tokio::test(flavor = "current_thread")]
+    async fn general_queue_events_are_not_visible_via_the_periodic_dequeue() {
+        let (handle, task) = start(small_cfg());
+        let event = InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: "hello".to_owned(),
+        };
+
+        handle.enqueue(event).await.unwrap();
+
+        assert_eq!(
+            handle.dequeue_next_periodic_with_job_id().await.unwrap(),
+            None
+        );
+        task.abort();
+    }
+
+    // B-023: the two queues have independent FIFO ordering and independent
+    // capacity accounting — filling one does not affect the other.
+    #[tokio::test(flavor = "current_thread")]
+    async fn periodic_and_general_queues_have_independent_fifo_order_and_capacity() {
+        let (handle, task) = start(small_cfg()); // capacity = 3 for each queue
+        let general = |n: u32| InternalEvent {
+            kind: DeliveryKind::Sync,
+            payload: format!("general-{n}"),
+        };
+        let periodic = |n: u32| InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: format!("periodic-{n}"),
+        };
+
+        // Fill the general queue to capacity.
+        for i in 0..3 {
+            handle.enqueue(general(i)).await.unwrap();
+        }
+        // The periodic queue still has its own independent capacity.
+        for i in 0..3 {
+            handle
+                .enqueue_periodic_with_job_id(periodic(i), None)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(handle.dequeue_next().await.unwrap(), Some(general(0)));
+        assert_eq!(
+            handle.dequeue_next_periodic_with_job_id().await.unwrap(),
+            Some((periodic(0), None))
+        );
         task.abort();
     }
 
