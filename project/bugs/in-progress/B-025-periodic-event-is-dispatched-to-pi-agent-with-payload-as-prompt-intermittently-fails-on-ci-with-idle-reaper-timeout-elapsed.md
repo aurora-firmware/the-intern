@@ -205,4 +205,52 @@ Ideally also confirmed by two consecutive green CI runs on PR #38 after the chan
 
 ## Work Log
 
+### Session 1 — 2026-07-17
+
+Fixed the flaky-CI timing test diagnosed in B-025. Changed
+`periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt`
+(`the-intern/service/crates/bob/src/serve.rs`) from
+`#[tokio::test(flavor = "current_thread")]` to
+`#[tokio::test(flavor = "multi_thread", worker_threads = 2)]`, matching
+existing precedent in `crates/admin-rpc/src/lib.rs` and
+`crates/bob/src/cli/commands/chat.rs`, and widened both
+`tokio::time::timeout(Duration::from_secs(5), ...)` blocks in that test (the
+dispatch-forward wait and the idle-reaper-release wait) to
+`Duration::from_secs(20)`.
+
+Widened both waits, not just the one that actually failed in CI, since the
+diagnosis flagged that both share identical structural exposure (real
+subprocess I/O + poll loop previously serialized on one OS thread) — a
+partial fix leaving one wait fragile under the same failure mode would be
+inconsistent. Did not touch the ~30 other tests in `serve.rs` sharing the
+same `current_thread` + `Duration::from_secs(5)` convention, since the
+diagnosis scoped those as ordinary convention, not defects. Chose 20s
+(within the diagnosis's suggested 15-30s range) as a middle ground, and
+applied both the timeout widening and the runtime-flavor change together as
+complementary defenses, since the diagnosis's scheduling analysis suggested
+the flavor change addresses the actual starvation mechanism while the wider
+timeout absorbs residual contention neither fix alone would fully cover.
+
+Verification: `cargo test -p bob --lib serve::tests::periodic::periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt -- --exact`
+ran 13 times total (10 pre-commit + 3 post-commit), 13/13 passed, ~0.21-0.22s
+each — confirming the widened timeout doesn't slow normal execution, only
+worst-case headroom changed. Simulated contention: 20 concurrent runs of the
+target test overlapped with two background loops each running the full
+`serve::` suite (56 tests) three times — 20/20 target runs and 6/6 full-suite
+runs passed, 0 failures (a heavier simulation than the diagnosis's own 3x
+concurrent attempt). Local reproduction of the original CI failure was never
+achieved, consistent with the bug report — the sandbox doesn't match the
+self-hosted runner's contention profile, so this builds confidence but final
+confirmation requires green CI on the actual PR. `cargo test --workspace`
+all green, 0 failed. `cargo fmt --all -- --check` clean. Diff scope confirmed
+via `git diff dev-agent --stat`: only `serve.rs` changed (25 insertions, 3
+deletions), confined to the one diagnosed test function.
+
+**Obstacles Encountered:** Background subshell `cargo test` invocations
+initially failed with a cwd-propagation quirk specific to the sandboxed bash
+tool; worked around with absolute `--manifest-path` per subshell — local
+tooling friction only, unrelated to the bug. Local reproduction of the CI
+failure was not achieved; the contention simulation is a best-effort
+confidence builder, not proof under exact CI conditions.
+
 ## Review
