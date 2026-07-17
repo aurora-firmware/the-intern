@@ -232,4 +232,82 @@ Planned verification:
 
 ## Work Log
 
+### Session 1 — 2026-07-17
+
+Reproduced the diagnosed red state first, exactly as prescribed:
+`unshare --map-root-user -- bash -c 'cd the-intern/service && cargo test -p admin-rpc --lib
+dispatch::tests::dispatch_schedule_add_store_write_error_returns_invalid_request -- --exact'`
+failed with the same panic captured in the bug report and Diagnosis Log
+(`expected write error, got Ok: Response { ... id: Number(315) }`).
+
+Implemented the fix contract's planned fix literally: replaced the `0o500`/`0o700` chmod
+block with `std::fs::remove_file(&store_path)` followed by `std::fs::create_dir(&store_path)`
+after the seed `write_schedule_store` call, and removed the now-unneeded post-dispatch
+permission-restore block. This is UID-independent (fails identically under a plain user and
+under `unshare --map-root-user`), but it fails the test on the wrong assertion:
+`handle_schedule_add` reads `store_path` from disk via `load_schedule_entries_from_store` /
+`read_schedule_store` *before* calling `write_schedule_store`, so turning `store_path` into a
+directory makes `read_to_string` fail first with "failed to read schedule store" instead of
+the write path producing "failed to write schedule store" — a discrepancy the Diagnosis Log's
+evidence gathering did not surface, because it did not trace the earlier read call
+`handle_schedule_add` performs for `schedule.add` specifically.
+
+Also found that `dispatch_schedule_add_config_parse_error_preserves_request_id` (dispatch.rs:2707)
+already covers the exact "failed to read schedule store" path via a malformed-JSON file (also
+UID-independent, no permission bits involved) — so simply retargeting the assertion to match the
+read-failure message would make the write-error test redundant with that existing test and drop
+write-path coverage entirely.
+
+Reasoned through five alternative UID-independent mechanisms that would let the read succeed
+while only the write step fails (chattr +i / immutable attribute, a size-capped tmpfs bind-mounted
+over the parent directory for ENOSPC, RLIMIT_FSIZE via setrlimit, a symlink or symlink loop at
+store_path, deliberately filling the filesystem for ENOSPC) — none were coded, since each is
+disqualified by a hard constraint (privilege the plain-sandbox process doesn't hold, cross-test
+process-wide pollution, or non-hermetic host dependence).
+
+Escalated to the Architect rather than force either a redundant test or a change outside the
+"test-only fix" scope the fix contract authorized. No production code was touched this session;
+the literal fix-contract attempt was left uncommitted and was discarded by the loop before Session 2.
+
+### Session 2 — 2026-07-17
+
+The Architect's directive (Escalation Verdict: RESOLVED): retire the dispatcher-level test
+entirely — the dispatcher's persistence-error mapping is already structurally covered by
+`dispatch_schedule_add_config_parse_error_preserves_request_id` — and add a UID-independent
+unit test at the correct layer, bob-core, exercising `write_schedule_store`'s own terminal-rename
+failure directly, without any production code change.
+
+Executed exactly that. Removed `dispatch_schedule_add_store_write_error_returns_invalid_request`
+(the `#[cfg(unix)]`-gated 0o500-chmod test) from
+`the-intern/service/crates/admin-rpc/src/dispatch.rs` in full, leaving
+`dispatch_schedule_add_config_parse_error_preserves_request_id` as the sole, unmodified
+dispatcher-level test for the persistence-error → `CODE_INVALID_REQUEST` mapping.
+
+Added one new unit test, `write_schedule_store_returns_persistence_error_when_rename_target_is_a_directory`,
+to `the-intern/service/crates/bob-core/src/types/schedule.rs`. It creates a tempdir, creates a
+*directory* at the target store path, calls `write_schedule_store` with one seeded entry, and
+asserts the result is `Err(ServiceError::Persistence { .. })` whose message contains "failed to
+rename temp schedule store" — matching `write_schedule_store`'s real terminal-rename failure
+branch, which is unreachable from a preceding read (the writer never reads before writing) and is
+not gated behind any permission bit CAP_DAC_OVERRIDE could bypass.
+
+Verified genuineness of the assertion (not tautological) by temporarily removing the
+`create_dir` call and re-running the test: it failed as expected, confirming the assertion is
+actually exercised by the EISDIR condition. Restored the real test body. Verified the test passes
+both as the plain sandbox user and under `unshare --map-root-user` (uid=0 inside that namespace)
+— identical `ok` result both times, confirming UID-independence.
+
+Made no production code changes. Ran all required verification clean: `cargo test -p bob-core --lib
+schedule::` (40 passed, including the new test), `cargo test -p admin-rpc --lib schedule` (22
+passed — retired test absent, sibling read-error test still passing), `cargo test --workspace`
+(all 26 test binaries, 0 failed), and `cargo fmt --all -- --check` (clean). Committed a single
+commit (`92ec858`, `test(schedule): move write-error coverage to bob-core, drop UID-dependent
+test`) on `bug/B-022-schedule-add-write-error-test-root-bypass`, touching only `dispatch.rs` and
+`schedule.rs`. Nothing remains outstanding on this bug.
+
+**Obstacles Encountered:** Session 1's fix-contract attempt did not account for the read-before-write
+ordering in `handle_schedule_add`, requiring Architect escalation before a correct fix direction
+was available. No environment/setup issues in Session 2; the same `unshare --map-root-user` proxy
+used in diagnosis and Session 1 worked identically here.
+
 ## Review
