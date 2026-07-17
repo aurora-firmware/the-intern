@@ -148,6 +148,137 @@ cd the-intern/service && cargo test --workspace
 
 ## Diagnosis Log
 
+### Diagnosis 1 — 2026-07-17
+
+Reproduction status: unconfirmed locally (consistent with both prior investigation attempts on
+B-025). This session went further than either prior attempt: in addition to re-running the test in
+isolation (5/5 passed, ~0.21-0.22s each), I built the test binary directly and used `taskset` to
+force genuine CPU oversubscription that B-025's "run more copies of the suite" simulation could not
+achieve on this 20-core sandbox (which always left `worker_threads = 2` with real spare cores
+available regardless of background load):
+  - 6 pure-spin busy-loop processes pinned to the same 2 CPUs the test process was also pinned to:
+    5/5 runs still passed in 0.14-0.17s.
+  - The entire test process (both of its multi_thread worker OS threads) pinned to a single physical
+    CPU, alongside 3 competing busy loops on that same CPU: 3/3 runs still passed in 0.13-0.14s.
+  Ordinary preemptive CPU contention, even pushed to deliberate oversubscription of the exact thread
+  count this test's runtime now depends on, does not reproduce the failure on this hardware/kernel.
+  This is informative negative evidence, not proof of absence — it argues against "generic scheduling
+  delay" as sufficient and points toward something CI-container-specific (e.g. genuine cgroup CPU-quota
+  throttling, which pauses a cgroup for a bounded slice of an accounting period rather than merely
+  delaying it under fair round-robin contention — a qualitatively different mechanism `taskset`+busy-loop
+  contention cannot replicate).
+
+Evidence captured:
+- Read the full canonical B-026 bug file and B-025's resolved bug file, including B-025's Diagnosis
+  Log, Work Log, and Review Verdict.
+- Read the full failing test (`crates/bob/src/serve.rs:1909-2027`) on the bug branch. Confirmed
+  `git diff dev-agent --stat -- the-intern/service` is empty — no code changes made or needed.
+- Read the full idle-reaper call chain again, independently: `crates/pi-agent-supervisor/src/lib.rs`
+  (`Actor::run`'s single `tokio::select!` loop — commands, `interactive_exit_tick`, `reap_tick`, all
+  serialized within one task, so no cross-task lock contention is possible inside the actor itself),
+  `crates/pi-agent-supervisor/src/pool.rs::reap_idle_and_surplus`/`send_prompt_and_drain`/
+  `kill_session` (no `std::sync::Mutex` or other blocking primitives anywhere in this crate — confirmed
+  via grep, zero non-doc-comment hits), and `crates/pi-agent-supervisor/src/process.rs::terminate`
+  (SIGTERM → `time::timeout(child_termination_deadline, child.wait())` → `try_wait` → SIGKILL →
+  `wait()` again; operates directly parent→child, so the classic "PID-1-in-a-container doesn't reap
+  orphaned grandchildren" gotcha does not apply — the test process is the direct, live parent
+  throughout).
+- Precedent audit (hypothesis 1 — container/subprocess-reaping bug): `process.rs`'s own `#[cfg(test)]`
+  module exercises this exact `terminate()` code path (including force-kill-after-deadline scenarios)
+  in 15 tests, ALL `#[tokio::test(flavor = "current_thread")]`, including
+  `terminate_force_kills_when_child_exceeds_deadline` and
+  `actor_shutdown_terminates_active_and_warm_worker_processes` (2 processes reaped in one shutdown).
+  None of these — nor the tighter-margin `idle_reaper_removes_session_after_idle_timeout_without_prompt_activity`
+  (a fixed 180ms sleep with zero retry/polling margin) — has ever been reported flaky in CI, including
+  in the exact CI runs where the target test failed. If subprocess SIGTERM/wait/SIGKILL reaping were
+  unreliable in this container, the much tighter-margin sibling test would be the more likely first
+  casualty, not this one. This weakens hypothesis 1 considerably.
+- Precedent audit (hypothesis 2 — multi_thread regression): exactly 12 `flavor = "multi_thread"`
+  occurrences exist in the whole codebase: 8 in `crates/admin-rpc/src/lib.rs`, 3 in
+  `crates/bob/src/cli/commands/chat.rs`, and this 1 in `serve.rs`. Read all 11 non-target occurrences:
+  admin-rpc's 8 tests use `UnixStream::pair()`/`UnixListener` with a single hand-spawned "server" task
+  — pure in-process IPC, no real subprocess spawn/wait for most; the interactive-session subset does
+  spawn a real `sh` child but wires only the `pi-agent-supervisor` actor plus a directly-constructed
+  `Dispatcher`, never the full `start_subsystems()` actor stack; chat.rs's 3 tests are socket-only, no
+  subprocess. An `awk` scan of every `#[tokio::test(...)]` in `serve.rs` (44 matches) confirms ALL 44
+  other tests use `current_thread`; the target test is the ONLY `multi_thread` test in the entire file,
+  and the ONLY place in the whole codebase combining `multi_thread` with the full 9-actor
+  `start_subsystems()` stack (monitoring, persistence, policy-control, pi-agent-supervisor actor,
+  requests-handler, extension-ipc, admin-rpc, scheduler-adapter, periodic dispatcher) — a task topology
+  with zero precedent anywhere else `multi_thread` is used, competing for just `worker_threads = 2`.
+- Precedent audit (hypothesis 3 — CI-runner resource starvation): read `.github/workflows/build.yml`
+  in full. The `tests` job runs `podman run --rm ... sh -lc 'cargo test --workspace'` with no
+  `--cpus`/`--memory`/cgroup flags visible in the workflow, and no repository documentation of
+  self-hosted-runner resource caps. Cannot cite a discoverable, principled resource limit from
+  anything in this repository — if cgroup throttling is the true mechanism, confirming it requires
+  access to the runner host/container-runtime configuration outside this repo's visibility.
+- Read `Cargo.lock`: tokio `1.52.3` (current, modern release; no widely-known open multi_thread/process
+  reaping correctness bug at this version that would explain a deterministic-looking full-timeout hang
+  independent of this codebase's own task topology).
+
+Isolated fault: not a defect in `pi-agent-supervisor`'s reaper/pool/process code — re-confirmed
+deterministic, bounded, and free of any blocking/locking hazard, and its exact `terminate()` path is
+exercised successfully by many sibling tests in the same CI runs. The best-supported isolated variable
+is `serve.rs:1924`'s `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]` attribute (added by
+B-025), which is structurally unprecedented: it is the only place in the codebase combining
+`multi_thread` with the full 9-actor `start_subsystems()` stack, and the only `multi_thread` test in
+`serve.rs` (vs. 44 `current_thread` siblings with an unblemished CI record).
+
+Root cause / fault hypothesis (not fully proven — live reproduction not achieved despite this
+session's more aggressive attempts): B-025's runtime-flavor change is the most likely proximate cause
+of this failure's changed signature (full-timeout consumption instead of a near-miss). Under
+`current_thread`, all 9 of bob's background actors cooperatively round-robin on one OS thread with
+tokio's deterministic, fair scheduler — correctness only depends on the OS promptly scheduling that
+one thread at all, which this session's local CPU-starvation experiments (and 44 other current_thread
+`start_subsystems` tests' clean CI history) show is robust even under heavy contention. Under
+`multi_thread, worker_threads = 2`, correctness now additionally depends on the OS scheduler making
+genuine, concurrent progress on (up to) 2 specific OS threads together. Plain preemptive contention
+(even oversubscribed, per this session's `taskset` experiments) does not break that dependency on this
+hardware — but a self-hosted-runner-specific mechanism this sandbox cannot replicate (most plausibly
+cgroup CPU-quota throttling, which pauses a cgroup for a bounded slice of an accounting period rather
+than merely delaying it under fair scheduling) plausibly could, and would produce exactly the observed
+signature: a full, hard stop with zero partial progress, hitting the same ceiling every time. This
+reconciles hypotheses 2 and 3 rather than treating them as exclusive: `multi_thread` is the enabling
+regression (a new dependency on genuinely-concurrent multi-thread scheduling that 44 sibling tests and
+15 real-subprocess pi-agent-supervisor tests never had), and a CI-runner-specific throttling effect
+(not discoverable from this repository) is the plausible trigger. Hypothesis 1 (a genuine
+subprocess-reaping/termination defect) is not well supported: the exact same `terminate()` code path,
+including force-kill scenarios and multi-process shutdown, is exercised successfully by numerous
+`current_thread` tests in the same failing CI runs.
+
+Planned fix (test-only, no production code changes):
+1. Revert `serve.rs:1924`'s `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]` back to
+   `#[tokio::test(flavor = "current_thread")]` for
+   `periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt` — removing the one structurally
+   unprecedented variable B-025 introduced, restoring this test to the same runtime model as its 44
+   siblings in `serve.rs` and the real-subprocess tests in `pi-agent-supervisor` that have never shown
+   CI flakiness.
+2. Keep both `Duration::from_secs(20)` outer polling timeouts from B-025 as-is — they are a safety net
+   against a hung suite, not the fix mechanism, and narrowing them back to 5s is not warranted by any
+   evidence gathered.
+3. Update the B-025-authored comments justifying `multi_thread` to instead record B-026's finding:
+   `multi_thread` had no working precedent for this task topology anywhere in the codebase and is the
+   prime suspect for the changed failure signature, so it is reverted; the widened timeout is retained
+   only as a safety net.
+4. Do not add a new event-driven idle-release notification API to `pi-agent-supervisor` as part of this
+   fix — production code is out of this bug's scope, and the existing polling design is not the
+   isolated fault. Note for a possible future task: an event-driven idle-release notification mirroring
+   the existing `watch_interactive_session_exit` mechanism would be a strictly better long-term design
+   for this style of test and should be proposed as a separate enhancement, not folded into this fix.
+
+Planned verification:
+```bash
+cd the-intern/service
+cargo test -p bob --lib serve::tests::periodic::periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt -- --exact
+cargo test --workspace
+cargo fmt --all -- --check
+```
+Given local irreproducibility, the only real confirmation is observing at least two consecutive green
+CI `Tests` runs on both matrix jobs after the fix lands. Falsification condition: if this exact test
+fails again in CI under `current_thread` after this fix, that disproves hypothesis 2 as sufficient on
+its own and the next investigation (a fresh bug, not another timeout increase) must pursue
+infrastructure-level evidence outside this repository's visibility.
+
 ## Work Log
 
 ## Review
