@@ -121,6 +121,79 @@ cd the-intern/service && cargo test --workspace
 
 ## Diagnosis Log
 
+### Diagnosis 1 — 2026-07-17
+
+Reproduction status: confirmed (dynamic, via temporary diagnostic test — not just static
+inspection).
+
+Evidence captured:
+- Added a temporary test in `crates/admin-rpc/src/dispatch.rs`'s `dispatch::tests` module
+  dispatching `session.interactive.open` with `params.cwd` set to `""`, `"   "`, and
+  `"relative/dir"` in turn, and printing the resulting `DispatchOutcome`. All three malformed
+  values were accepted and forwarded as `Some(PathBuf)` in the `InteractiveSessionOpening`
+  outcome — no `CODE_INVALID_REQUEST` was ever produced. The temporary test was removed after
+  capturing this evidence.
+- Read `handle_session_interactive_open` (`crates/admin-rpc/src/dispatch.rs:456-485`, current
+  `dev-agent` tip): `cwd` is built with
+  `params.as_ref().and_then(|p| p.get("cwd")).and_then(Value::as_str).map(PathBuf::from)` — no
+  trim/blank check, no type-mismatch error, no absolute-path check.
+- Read `schedule.add`'s `cwd` parsing (`dispatch.rs:673-697`): rejects a non-string `params.cwd`
+  and a blank/whitespace-only string with `CODE_INVALID_REQUEST`. Precision beyond the bug
+  report's framing: this dispatch-level check only covers type and blank, not absolute-path-ness.
+  The absolute-path requirement for `schedule.add`'s `cwd` is actually enforced one layer
+  downstream, in `validate_schedule_store` (`crates/bob-core/src/types/schedule.rs:138-152`),
+  which runs during `write_and_reload` via `write_schedule_store`.
+- Traced the `session.interactive.open` cwd path end-to-end and found no equivalent downstream
+  validation layer exists for it: `DispatchOutcome::InteractiveSessionOpening` →
+  `handle_interactive_session_opening` (`crates/admin-rpc/src/lib.rs:326-341`) passes `cwd`
+  straight into the interactive-session start call → `InteractiveProcessConfig.cwd` →
+  `InteractiveProcess::spawn` (`crates/pi-agent-supervisor/src/process.rs:306-336`), where
+  `cmd.current_dir(cwd)` is called unconditionally whenever `cfg.cwd` is `Some`, with no re-check.
+- Found an existing test that currently encodes the pre-fix contract and will conflict with the
+  planned fix: `dispatch_session_interactive_open_with_non_string_params_cwd_leaves_cwd_none`
+  (`dispatch.rs:3011-3031`) asserts a non-string `params.cwd` (e.g. `42`) is silently treated as
+  `None` rather than erroring. Mirroring `schedule.add`'s type check means this test's expected
+  behavior must change to `CODE_INVALID_REQUEST` as part of the fix.
+
+Isolated fault: `Dispatcher::handle_session_interactive_open` in `crates/admin-rpc/src/dispatch.rs`,
+lines 470-474 (the `let cwd = ...` block). This is the sole point where `params.cwd` is parsed for
+this method, and it performs zero validation before constructing the `PathBuf` that is forwarded,
+unconditionally, all the way to `Command::current_dir`.
+
+Root cause: when `params.cwd` forwarding was added to `session.interactive.open` for CR-005/B-021,
+no validation was added alongside it — unlike `schedule.add`, whose `cwd` support (added later, in
+`82302c2`) got both a dispatch-level type/blank check and a downstream absolute-path check via
+`validate_schedule_store`. `session.interactive.open` has no downstream validation layer at all (it
+goes directly to process spawn), so the omission at the single parse site is a complete gap: blank
+strings, whitespace-only strings, relative paths, and non-string values are all silently accepted.
+
+Planned fix: in `handle_session_interactive_open`, replace the unconditional `.map(PathBuf::from)`
+parse with explicit validation mirroring `schedule.add`'s dispatch-level check plus the
+absolute-path check that, for `schedule.add`, currently lives downstream in
+`validate_schedule_store` — since `session.interactive.open` has no such downstream layer, both
+checks must live directly in the handler:
+- If `params.cwd` is present and not a JSON string → `CODE_INVALID_REQUEST`.
+- If present and, after trimming, empty → `CODE_INVALID_REQUEST`.
+- If present, non-blank, but not an absolute path (`Path::new(trimmed).is_absolute()` is `false`)
+  → `CODE_INVALID_REQUEST`.
+- Otherwise, construct `Some(PathBuf::from(trimmed))`.
+Use an error message in the style of `schedule.add`'s ("session.interactive.open: params.cwd must
+be a non-blank absolute path string when present"). Also update
+`dispatch_session_interactive_open_with_non_string_params_cwd_leaves_cwd_none` to assert
+`CODE_INVALID_REQUEST` instead of silent `None`, since the fix changes that contract.
+
+Planned verification:
+- New/updated tests in `crates/admin-rpc/src/dispatch.rs` asserting `CODE_INVALID_REQUEST` for
+  `params.cwd` = `""`, `"   "`, `"relative/dir"`, and a non-string value (e.g. `42`), and asserting
+  the existing valid-absolute-path case
+  (`dispatch_session_interactive_open_with_params_cwd_parses_it_into_outcome`) still parses into
+  `Some(PathBuf)` unchanged.
+- `cd the-intern/service && cargo test -p admin-rpc dispatch::tests` and
+  `cargo test -p admin-rpc` — both must pass with 0 failures.
+- `cd the-intern/service && cargo test --workspace`, to confirm no regression elsewhere (e.g. the
+  `run_connection_session_interactive_open_with_params_cwd_spawns_child_in_that_directory`
+  end-to-end test, which uses a valid absolute path and must remain green).
+
 ## Work Log
 
 ## Review
