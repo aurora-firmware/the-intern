@@ -122,11 +122,13 @@ fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Con
 /// (ADR-012 / ADR-013).
 ///
 /// The job id comes from `RequestContext::context_id` and is threaded through
-/// `PersistenceStore::enqueue_with_job_id` (T-120) so the periodic dispatcher
-/// can read it back via `dequeue_next_with_job_id` (see
-/// `start_periodic_dispatcher`). This function only carries the correlator
-/// through the queue; it does not resolve a per-job cwd or acquire a worker
-/// (T-127).
+/// `PersistenceStore::enqueue_periodic_with_job_id` (T-120 / B-023) onto the
+/// dedicated periodic queue, entirely separate from the general inbound
+/// queue, so the periodic dispatcher can read it back via
+/// `dequeue_next_periodic_with_job_id` (see `start_periodic_dispatcher`)
+/// without ever touching unrelated non-periodic traffic. This function only
+/// carries the correlator through the queue; it does not resolve a per-job
+/// cwd or acquire a worker (T-127).
 ///
 /// Enqueue failures (queue full or the persistence actor being down) are
 /// logged as a warning and otherwise swallowed, matching the pre-T-126
@@ -137,7 +139,7 @@ async fn admit_periodic_event(
     job_id: Option<String>,
 ) {
     if let Err(err) = persistence_store
-        .enqueue_with_job_id(event, job_id.clone())
+        .enqueue_periodic_with_job_id(event, job_id.clone())
         .await
     {
         tracing::warn!(
@@ -228,9 +230,11 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
                     //
                     // The request context (job id in context_id, channel/user ids)
                     // is preserved for audit attribution by the scheduler-adapter.
-                    // T-126 (ADR-013): the job id is threaded through the inbound
-                    // queue via enqueue_with_job_id so the periodic dispatcher can
-                    // read it back on dequeue.
+                    // T-126 (ADR-013): the job id is threaded through the
+                    // dedicated periodic queue (B-023) via
+                    // enqueue_periodic_with_job_id so the periodic dispatcher
+                    // can read it back on dequeue without ever touching the
+                    // general inbound queue.
                     admit_periodic_event(
                         persistence_store.as_ref(),
                         event,
@@ -733,22 +737,28 @@ async fn record_periodic_fire_dispatched(
 /// Starts the periodic dispatcher task and returns its join handle.
 ///
 /// The dispatcher runs in a dedicated Tokio task.  On each iteration it
-/// dequeues the oldest event from `persistence`.  If the event is a
-/// `DeliveryKind::Periodic` event the dispatcher acquires a pi-agent session
-/// via `supervisor` and forwards `event.payload` verbatim.  `send_prompt`
-/// returns once pi acknowledges *receipt* of the prompt, not once the agent
-/// run finishes, so the dispatcher does not close the session on success —
-/// the run continues asynchronously and the worker is released later by the
+/// dequeues the oldest event from the dedicated periodic queue (B-023,
+/// `PersistenceStore::dequeue_next_periodic_with_job_id`) — a queue entirely
+/// separate from the general inbound queue used by non-periodic (sync/async)
+/// traffic.  Every event this dispatcher observes is therefore already known
+/// to be `DeliveryKind::Periodic` by construction: it was placed there only
+/// by `admit_periodic_event`.  The dispatcher acquires a pi-agent session via
+/// `supervisor` and forwards `event.payload` verbatim.  `send_prompt` returns
+/// once pi acknowledges *receipt* of the prompt, not once the agent run
+/// finishes, so the dispatcher does not close the session on success — the
+/// run continues asynchronously and the worker is released later by the
 /// supervisor's existing idle reaper.  If the prompt is not accepted at all
 /// (`send_prompt` errors) the session is closed immediately since no run was
 /// started.  Any error during dequeue, session acquisition, prompt sending,
 /// or session cleanup is logged as a warning; processing then continues from
 /// the next event so a single failure does not stall the pipeline.
 ///
-/// Non-`Periodic` events are re-enqueued so they are not lost, and the
-/// dispatcher backs off for `PERIODIC_DISPATCH_POLL_INTERVAL` before the next
-/// poll.  The same back-off is applied when the queue is empty or when a
-/// dequeue error occurs.
+/// B-023: because the periodic queue is never shared with non-periodic
+/// traffic, this dispatcher never dequeues, reorders, or re-enqueues a
+/// non-periodic event, and its dispatch latency is never coupled to
+/// non-periodic backlog depth. The dispatcher backs off for
+/// `PERIODIC_DISPATCH_POLL_INTERVAL` before the next poll whenever the
+/// periodic queue is empty or a dequeue error occurs.
 ///
 /// The task exits when `cancel_rx` receives `true`, which is sent during
 /// shutdown phase 1.
@@ -799,11 +809,13 @@ fn start_periodic_dispatcher(
                 break;
             }
 
-            // T-126 (ADR-013): read back the job-id correlator the event was
-            // enqueued with. Non-periodic re-enqueues below intentionally keep
-            // using the plain `enqueue` (AC-4) — only the Periodic branch reads
-            // and (eventually, in T-127) acts on the job id.
-            match persistence.dequeue_next_with_job_id().await {
+            // B-023: read back the job-id correlator from the dedicated
+            // periodic queue, entirely separate from the general inbound
+            // queue used by non-periodic (sync/async) traffic. Every event
+            // observed here is Periodic by construction — it can only have
+            // arrived via `admit_periodic_event` — so no non-periodic branch
+            // or defensive re-enqueue is needed.
+            match persistence.dequeue_next_periodic_with_job_id().await {
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
@@ -817,25 +829,6 @@ fn start_periodic_dispatcher(
 
                 Ok(None) => {
                     // No event available; wait without busy-spinning.
-                    tokio::select! {
-                        _ = time::sleep(PERIODIC_DISPATCH_POLL_INTERVAL) => {}
-                        _ = cancel_rx.changed() => {}
-                    }
-                }
-
-                Ok(Some((event, _job_id))) if event.kind != DeliveryKind::Periodic => {
-                    // Non-periodic events are not dispatched by this task.
-                    // Re-enqueue so they are not silently discarded. AC-4
-                    // (T-126): this keeps using the plain `enqueue` unchanged —
-                    // no job-id correlator is required or preserved here.
-                    if let Err(e) = persistence.enqueue(event).await {
-                        tracing::warn!(
-                            error = %e,
-                            "periodic dispatcher: failed to return non-periodic event to queue"
-                        );
-                    }
-                    // Back off before the next poll to avoid busy-spinning on a
-                    // queue that only contains non-periodic events.
                     tokio::select! {
                         _ = time::sleep(PERIODIC_DISPATCH_POLL_INTERVAL) => {}
                         _ = cancel_rx.changed() => {}
@@ -1124,10 +1117,10 @@ pub mod tests {
         .await;
 
         let (got_event, got_job_id) = persistence_handle
-            .dequeue_next_with_job_id()
+            .dequeue_next_periodic_with_job_id()
             .await
             .expect("dequeue must not fail")
-            .expect("event must be present in the queue");
+            .expect("event must be present in the dedicated periodic queue");
 
         assert_eq!(got_event, event);
         assert_eq!(
@@ -1151,10 +1144,10 @@ pub mod tests {
         admit_periodic_event(&persistence_handle, event.clone(), None).await;
 
         let (got_event, got_job_id) = persistence_handle
-            .dequeue_next_with_job_id()
+            .dequeue_next_periodic_with_job_id()
             .await
             .expect("dequeue must not fail")
-            .expect("event must be present in the queue");
+            .expect("event must be present in the dedicated periodic queue");
 
         assert_eq!(got_event, event);
         assert_eq!(got_job_id, None);
@@ -1957,14 +1950,18 @@ pub mod tests {
 
             let runtime = start_subsystems(&cfg).expect("subsystems must start");
 
-            // Enqueue a Periodic event directly into persistence so the dispatcher
-            // picks it up without going through the requests-handler preflight.
+            // Enqueue a Periodic event directly onto the dedicated periodic
+            // queue (B-023) so the dispatcher picks it up without going
+            // through the requests-handler preflight.
             runtime
                 ._persistence
-                .enqueue(InternalEvent {
-                    kind: DeliveryKind::Periodic,
-                    payload: "periodic-test-prompt".to_owned(),
-                })
+                .enqueue_periodic_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "periodic-test-prompt".to_owned(),
+                    },
+                    None,
+                )
                 .await
                 .expect("enqueue must succeed");
 
@@ -2060,10 +2057,13 @@ pub mod tests {
 
             runtime
                 ._persistence
-                .enqueue(InternalEvent {
-                    kind: DeliveryKind::Periodic,
-                    payload: "deferred-side-effect-prompt".to_owned(),
-                })
+                .enqueue_periodic_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "deferred-side-effect-prompt".to_owned(),
+                    },
+                    None,
+                )
                 .await
                 .expect("enqueue must succeed");
 
@@ -2109,10 +2109,13 @@ pub mod tests {
             for _ in 0..3_u8 {
                 runtime
                     ._persistence
-                    .enqueue(InternalEvent {
-                        kind: DeliveryKind::Periodic,
-                        payload: "error-resilience-test".to_owned(),
-                    })
+                    .enqueue_periodic_with_job_id(
+                        InternalEvent {
+                            kind: DeliveryKind::Periodic,
+                            payload: "error-resilience-test".to_owned(),
+                        },
+                        None,
+                    )
                     .await
                     .expect("enqueue must succeed");
             }
@@ -2155,16 +2158,20 @@ pub mod tests {
             );
         }
 
-        // ── T-126: job-id correlator wiring through the periodic dispatcher ──
+        // ── T-126 / B-023: job-id correlator wiring through the periodic
+        //    dispatcher, and the dedicated-periodic-queue contract ─────────
 
         /// A `PersistenceStore` spy that records which methods were called and
-        /// serves at most one pre-loaded `(event, job_id)` pair, then reports an
-        /// empty queue forever after.
+        /// serves at most one pre-loaded `(event, job_id)` pair via the
+        /// dedicated periodic-queue methods, then reports an empty periodic
+        /// queue forever after. The general (shared) queue methods are
+        /// tracked but never serve `pending` — B-023 requires the periodic
+        /// dispatcher to never touch the general queue at all.
         ///
         /// Used to prove — deterministically, without racing the real queue or
         /// depending on process/tracing timing — which of the correlator-carrying
-        /// (T-120) methods `start_periodic_dispatcher` calls on dequeue and
-        /// re-enqueue.
+        /// (T-120) methods `start_periodic_dispatcher` calls on dequeue, and that
+        /// it never calls the general (shared) queue's methods.
         struct SpyPersistence {
             calls: std::sync::Mutex<Vec<&'static str>>,
             pending: std::sync::Mutex<Option<(InternalEvent, Option<String>)>>,
@@ -2192,12 +2199,7 @@ pub mod tests {
 
             async fn dequeue_next(&self) -> ServiceResult<Option<InternalEvent>> {
                 self.calls.lock().expect("calls lock").push("dequeue_next");
-                Ok(self
-                    .pending
-                    .lock()
-                    .expect("pending lock")
-                    .take()
-                    .map(|(event, _job_id)| event))
+                Ok(None)
             }
 
             async fn enqueue_with_job_id(
@@ -2219,6 +2221,28 @@ pub mod tests {
                     .lock()
                     .expect("calls lock")
                     .push("dequeue_next_with_job_id");
+                Ok(None)
+            }
+
+            async fn enqueue_periodic_with_job_id(
+                &self,
+                _event: InternalEvent,
+                _job_id: Option<String>,
+            ) -> ServiceResult<()> {
+                self.calls
+                    .lock()
+                    .expect("calls lock")
+                    .push("enqueue_periodic_with_job_id");
+                Ok(())
+            }
+
+            async fn dequeue_next_periodic_with_job_id(
+                &self,
+            ) -> ServiceResult<Option<(InternalEvent, Option<String>)>> {
+                self.calls
+                    .lock()
+                    .expect("calls lock")
+                    .push("dequeue_next_periodic_with_job_id");
                 Ok(self.pending.lock().expect("pending lock").take())
             }
 
@@ -2285,10 +2309,12 @@ pub mod tests {
             rx
         }
 
-        // AC-3 (T-126): the periodic dispatcher reads the job-id correlator back
-        // via `dequeue_next_with_job_id` (T-120), not the plain `dequeue_next`.
+        // AC-3 (T-126) / B-023: the periodic dispatcher reads the job-id
+        // correlator back via `dequeue_next_periodic_with_job_id` — the
+        // dedicated periodic queue — and never calls any of the general
+        // (shared) queue's methods at all.
         #[tokio::test(flavor = "current_thread")]
-        async fn periodic_dispatcher_calls_dequeue_next_with_job_id() {
+        async fn periodic_dispatcher_calls_dequeue_next_periodic_with_job_id() {
             let spy = Arc::new(SpyPersistence::with_pending(
                 InternalEvent {
                     kind: DeliveryKind::Periodic,
@@ -2310,18 +2336,24 @@ pub mod tests {
 
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
-                    if spy.calls().contains(&"dequeue_next_with_job_id") {
+                    if spy.calls().contains(&"dequeue_next_periodic_with_job_id") {
                         break;
                     }
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
             })
             .await
-            .expect("dispatcher must call dequeue_next_with_job_id to read the job id back");
+            .expect(
+                "dispatcher must call dequeue_next_periodic_with_job_id to read the job id back",
+            );
 
             assert!(
-                !spy.calls().contains(&"dequeue_next"),
-                "dispatcher must use the job-id-carrying dequeue, not the plain one; calls: {:?}",
+                !spy.calls().contains(&"dequeue_next")
+                    && !spy.calls().contains(&"dequeue_next_with_job_id")
+                    && !spy.calls().contains(&"enqueue")
+                    && !spy.calls().contains(&"enqueue_with_job_id"),
+                "dispatcher must exclusively use the dedicated periodic-queue methods, never the \
+                 general (shared) queue's methods; calls: {:?}",
                 spy.calls()
             );
 
@@ -2331,16 +2363,18 @@ pub mod tests {
             let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
         }
 
-        // AC-4 (T-126): the dispatcher's defensive re-enqueue of a wrongly-routed
-        // non-periodic event still uses the plain `enqueue` — no job-id
-        // correlator is required — so this path is unchanged by the periodic
-        // job-id wiring.
+        // B-023: supersedes the old
+        // `dispatcher_re_enqueues_non_periodic_event_via_plain_enqueue` test,
+        // which asserted the buggy destructive re-enqueue as the desired
+        // contract. The periodic dispatcher must never mutate the shared
+        // inbound queue at all — no plain `enqueue` call — regardless of what
+        // it observes there.
         #[tokio::test(flavor = "current_thread")]
-        async fn dispatcher_re_enqueues_non_periodic_event_via_plain_enqueue() {
+        async fn dispatcher_never_calls_plain_enqueue_on_the_shared_queue() {
             let spy = Arc::new(SpyPersistence::with_pending(
                 InternalEvent {
                     kind: DeliveryKind::Sync,
-                    payload: "should-be-re-enqueued".to_owned(),
+                    payload: "must-not-be-touched".to_owned(),
                 },
                 Some("stray-job-id".to_owned()),
             ));
@@ -2356,21 +2390,191 @@ pub mod tests {
                 cancel_rx,
             );
 
+            // Give the dispatcher several poll cycles to (mis)behave if it
+            // still treats the spy's pending item as something to dequeue
+            // and push back onto the shared queue.
+            tokio::time::sleep(PERIODIC_DISPATCH_POLL_INTERVAL * 3).await;
+
+            assert!(
+                !spy.calls().contains(&"enqueue"),
+                "the periodic dispatcher must never call the plain enqueue to push an event \
+                 back onto the shared inbound queue; calls: {:?}",
+                spy.calls()
+            );
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+        }
+
+        // ── B-023: periodic dispatcher must not reorder or be delayed by the
+        //    shared inbound persistence queue ──────────────────────────────
+
+        // Regression (a): non-periodic events queued through the shared
+        // inbound persistence queue must retain their original relative
+        // FIFO order even while the periodic dispatcher is running
+        // concurrently. Before the fix, the dispatcher dequeued the FIFO
+        // head regardless of DeliveryKind and re-enqueued non-Periodic items
+        // at the tail, rotating the queue on every poll tick.
+        #[tokio::test(flavor = "current_thread")]
+        async fn non_periodic_events_retain_fifo_order_while_periodic_dispatcher_runs_concurrently()
+        {
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+
+            let sync_event = |n: u32| InternalEvent {
+                kind: DeliveryKind::Sync,
+                payload: format!("sync-{n}"),
+            };
+            let non_periodic: Vec<InternalEvent> = (0..7).map(sync_event).collect();
+            for event in &non_periodic {
+                persistence_handle
+                    .enqueue(event.clone())
+                    .await
+                    .expect("enqueue must succeed");
+            }
+
+            // Admit real periodic work too, exactly the way production code
+            // does, so the dispatcher has something to actively poll for
+            // concurrently with the assertion below.
+            admit_periodic_event(
+                &persistence_handle,
+                InternalEvent {
+                    kind: DeliveryKind::Periodic,
+                    payload: "concurrent-tick".to_owned(),
+                },
+                Some("concurrent-tick-job".to_owned()),
+            )
+            .await;
+
+            let (supervisor_handle, supervisor_join) = failing_supervisor_handle();
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx_with_entries(Vec::new()),
+                None,
+                Arc::new(SpyAuditSink::default()),
+                cancel_rx,
+            );
+
+            // Let the dispatcher run concurrently for several poll cycles —
+            // long enough that, under the pre-fix behaviour, several
+            // non-periodic events would have been dequeued and re-enqueued
+            // at the tail, but not so long that a full rotation coincidentally
+            // restores the original order.
+            tokio::time::sleep(PERIODIC_DISPATCH_POLL_INTERVAL * 3 + Duration::from_millis(50))
+                .await;
+
+            let mut drained = Vec::new();
+            while let Some(event) = persistence_handle
+                .dequeue_next()
+                .await
+                .expect("dequeue must not fail")
+            {
+                drained.push(event);
+            }
+
+            assert_eq!(
+                drained, non_periodic,
+                "non-periodic events must retain their original relative FIFO order even while \
+                 the periodic dispatcher is running concurrently"
+            );
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+        }
+
+        // Regression (b): a periodic item's dispatch latency must be bounded
+        // by the periodic dispatcher's own poll cadence
+        // (PERIODIC_DISPATCH_POLL_INTERVAL), independent of the depth of
+        // unrelated non-periodic backlog queued ahead of it. Before the fix,
+        // the dispatcher paid one full PERIODIC_DISPATCH_POLL_INTERVAL
+        // back-off per non-periodic item ahead of the periodic one.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatch_latency_is_independent_of_non_periodic_backlog_depth() {
+            let tmp = tempfile::tempdir().expect("temp dir");
+            let record_file = tmp.path().join("received_prompt.txt");
+            let record_file_str = record_file.to_string_lossy().into_owned();
+
+            let worker_script = format!(
+                "while IFS= read -r line; do \
+                 id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf 'dispatched\\n' >> \"{}\"; \
+                 printf '{{\"id\":\"%s\",\"type\":\"response\",\"success\":true}}\\n' \"$id\"; \
+                 done",
+                record_file_str
+            );
+
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+
+            // Queue several unrelated non-periodic events ahead of the
+            // periodic one.
+            const BACKLOG_DEPTH: u32 = 10;
+            for i in 0..BACKLOG_DEPTH {
+                persistence_handle
+                    .enqueue(InternalEvent {
+                        kind: DeliveryKind::Sync,
+                        payload: format!("backlog-{i}"),
+                    })
+                    .await
+                    .expect("enqueue must succeed");
+            }
+
+            admit_periodic_event(
+                &persistence_handle,
+                InternalEvent {
+                    kind: DeliveryKind::Periodic,
+                    payload: "latency-probe".to_owned(),
+                },
+                Some("latency-probe-job".to_owned()),
+            )
+            .await;
+
+            let (supervisor_handle, supervisor_join) =
+                pi_agent_supervisor::start(pi_agent_supervisor::Config {
+                    worker_command: "sh".to_string(),
+                    worker_args: vec!["-c".to_string(), worker_script],
+                    warm_pool_size: 1,
+                    max_processes: 2,
+                    extension_path: existing_extension_path(),
+                    ..pi_agent_supervisor::Config::default()
+                })
+                .expect("supervisor must start");
+
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let started_at = Instant::now();
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx_with_entries(Vec::new()),
+                None,
+                Arc::new(SpyAuditSink::default()),
+                cancel_rx,
+            );
+
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
-                    if spy.calls().contains(&"enqueue") {
+                    if record_file.exists() {
                         break;
                     }
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
             })
             .await
-            .expect("dispatcher must re-enqueue the non-periodic event via plain enqueue");
+            .expect("periodic dispatcher must dispatch the periodic event within the timeout");
 
+            let elapsed = started_at.elapsed();
+            let bound = PERIODIC_DISPATCH_POLL_INTERVAL * 5;
             assert!(
-                !spy.calls().contains(&"enqueue_with_job_id"),
-                "non-periodic re-enqueue must not require a job-id correlator; calls: {:?}",
-                spy.calls()
+                elapsed < bound,
+                "periodic dispatch latency ({elapsed:?}) must be bounded by the dispatcher's \
+                 own poll cadence ({bound:?}), independent of the {BACKLOG_DEPTH} unrelated \
+                 non-periodic events queued ahead of it"
             );
 
             let _ = cancel_tx.send(true);
@@ -2395,7 +2599,7 @@ pub mod tests {
             let (persistence_handle, _persistence_join) =
                 persistence::start(persistence::Config::default());
             persistence_handle
-                .enqueue_with_job_id(
+                .enqueue_periodic_with_job_id(
                     InternalEvent {
                         kind: DeliveryKind::Periodic,
                         payload: "per-entry-cwd-test".to_owned(),
@@ -2488,7 +2692,7 @@ pub mod tests {
             let (persistence_handle, _persistence_join) =
                 persistence::start(persistence::Config::default());
             persistence_handle
-                .enqueue_with_job_id(
+                .enqueue_periodic_with_job_id(
                     InternalEvent {
                         kind: DeliveryKind::Periodic,
                         payload: "per-entry-cwd-audit-test".to_owned(),
@@ -2589,7 +2793,7 @@ pub mod tests {
             let (persistence_handle, _persistence_join) =
                 persistence::start(persistence::Config::default());
             persistence_handle
-                .enqueue_with_job_id(
+                .enqueue_periodic_with_job_id(
                     InternalEvent {
                         kind: DeliveryKind::Periodic,
                         payload: "service-default-cwd-audit-test".to_owned(),
@@ -2685,7 +2889,7 @@ pub mod tests {
             let (persistence_handle, _persistence_join) =
                 persistence::start(persistence::Config::default());
             persistence_handle
-                .enqueue_with_job_id(
+                .enqueue_periodic_with_job_id(
                     InternalEvent {
                         kind: DeliveryKind::Periodic,
                         payload: "inherited-cwd-audit-test".to_owned(),
@@ -2776,7 +2980,7 @@ pub mod tests {
             let (persistence_handle, _persistence_join) =
                 persistence::start(persistence::Config::default());
             persistence_handle
-                .enqueue_with_job_id(
+                .enqueue_periodic_with_job_id(
                     InternalEvent {
                         kind: DeliveryKind::Periodic,
                         payload: "send-failure-audit-test".to_owned(),
@@ -2850,7 +3054,7 @@ pub mod tests {
             let (persistence_handle, _persistence_join) =
                 persistence::start(persistence::Config::default());
             persistence_handle
-                .enqueue_with_job_id(
+                .enqueue_periodic_with_job_id(
                     InternalEvent {
                         kind: DeliveryKind::Periodic,
                         payload: "missing-cwd-test".to_owned(),
@@ -2938,7 +3142,7 @@ pub mod tests {
             let (persistence_handle, _persistence_join) =
                 persistence::start(persistence::Config::default());
             persistence_handle
-                .enqueue_with_job_id(
+                .enqueue_periodic_with_job_id(
                     InternalEvent {
                         kind: DeliveryKind::Periodic,
                         payload: "stale-job-id-test".to_owned(),
@@ -3000,7 +3204,7 @@ pub mod tests {
             let (persistence_handle, _persistence_join) =
                 persistence::start(persistence::Config::default());
             persistence_handle
-                .enqueue_with_job_id(
+                .enqueue_periodic_with_job_id(
                     InternalEvent {
                         kind: DeliveryKind::Periodic,
                         payload: "stale-job-id-record-test".to_owned(),
@@ -3130,7 +3334,7 @@ pub mod tests {
             // First fire: no per-entry cwd, occupies the sole max_processes
             // slot via the plain acquire_session path.
             persistence_handle
-                .enqueue_with_job_id(
+                .enqueue_periodic_with_job_id(
                     InternalEvent {
                         kind: DeliveryKind::Periodic,
                         payload: "first-fire".to_owned(),
@@ -3175,7 +3379,7 @@ pub mod tests {
             // Second fire: resolves to a per-entry cwd, but the pool is
             // already full.
             persistence_handle
-                .enqueue_with_job_id(
+                .enqueue_periodic_with_job_id(
                     InternalEvent {
                         kind: DeliveryKind::Periodic,
                         payload: "second-fire-should-be-skipped".to_owned(),
