@@ -233,3 +233,90 @@ was modified and committed (commit `1fec028`).
 (`pr-35-review.md`/`pr-38-review.md`) was left untouched.
 
 ## Review
+
+### Review Verdict — 2026-07-17
+
+PASS
+
+**Evidence chain (bug-fix specific checks):**
+- Diagnosis Log ("Diagnosis 1 — 2026-07-17") records reproduction status as
+  confirmed **dynamically**, via a temporary diagnostic test added to
+  `dispatch::tests` (dispatching `session.interactive.open` with
+  `params.cwd` = `""`, `"   "`, `"relative/dir"` and observing all three were
+  silently accepted as `Some(PathBuf)`), not just static code reading. The
+  temporary test was removed after capturing evidence — no leftover
+  diagnostic artifacts found in the diff.
+- Isolated fault, root cause, planned fix, and planned verification are all
+  present and specific (dispatch.rs:470-474, the unconditional
+  `.map(PathBuf::from)` parse site).
+- Implementation matches the fix contract exactly: `handle_session_interactive_open`
+  (`the-intern/service/crates/admin-rpc/src/dispatch.rs:470-497` on the bug
+  branch) now rejects a non-string `params.cwd`, a blank/whitespace-only
+  string (after `.trim()`), and a non-absolute path
+  (`Path::new(trimmed).is_absolute()` false) with `CODE_INVALID_REQUEST` and
+  message "session.interactive.open: params.cwd must be a non-blank absolute
+  path string when present"; a valid absolute path is trimmed and wrapped in
+  `Some(PathBuf::from(trimmed))` unchanged.
+- Error-message style matches `schedule.add`'s cwd validation
+  (`dispatch.rs:673-697` on `dev-agent`) exactly in wording and structure
+  (`match ... { None => None, Some(value) => { ... } }`), consistent with
+  the Diagnosis Log's stated rationale that both the type/blank check and
+  the absolute-path check had to live in the dispatch handler here (unlike
+  `schedule.add`, `session.interactive.open` has no downstream validation
+  layer before reaching `Command::current_dir`).
+
+**Stage 1 — Bug criteria:**
+- Blank (`""`), whitespace-only (`"   "`), relative (`"relative/dir"`), and
+  non-string (`42`) `params.cwd` values each verified (by test and by
+  reading the code) to return `CODE_INVALID_REQUEST`.
+- A valid absolute `params.cwd` still parses into `Some(PathBuf)` unchanged
+  — confirmed via `dispatch_session_interactive_open_with_params_cwd_parses_it_into_outcome`
+  (untouched) and the end-to-end
+  `run_connection_session_interactive_open_with_params_cwd_spawns_child_in_that_directory`
+  test in `lib.rs`, which uses `std::env::temp_dir().join(...)` (absolute)
+  and passed.
+- Only `the-intern/service/crates/admin-rpc/src/dispatch.rs` was modified
+  (confirmed via `git diff --stat dev-agent...bug/B-024-...`); no unrelated
+  changes present.
+- Grepped for other `session.interactive.open` callers/consumers
+  (`the-intern/service/crates`, `the-intern/extensions`, `the-intern/docs`):
+  the sole real client is `bob chat`
+  (`the-intern/service/crates/bob/src/cli/commands/chat.rs`), which builds
+  `params.cwd` from `std::env::current_dir()` — always an absolute path on
+  Unix — so nothing in the codebase relied on the old silent-`None`
+  treatment of blank/relative/non-string `cwd`. The downstream
+  `handle_interactive_session_opening` (`lib.rs`) still receives
+  `Option<PathBuf>` unchanged; the new rejection happens earlier, at
+  dispatch, so no downstream contract was altered.
+
+**Stage 2 — Code quality:**
+- Correctness: logic mirrors `schedule.add`'s validation; trims before both
+  the blank and absolute-path checks; only meaningfully-invalid inputs are
+  rejected.
+- Tests: four new focused tests
+  (`..._with_non_string_params_cwd_returns_invalid_request` [rewritten from
+  the old `..._leaves_cwd_none` test, which encoded the pre-fix contract and
+  now genuinely asserts `CODE_INVALID_REQUEST`, not a tautology],
+  `..._with_empty_string_cwd_...`, `..._with_whitespace_only_cwd_...`,
+  `..._with_relative_cwd_...`), each independent (fresh dispatcher/registry
+  per test), asserting response id, `CODE_INVALID_REQUEST` code, and that
+  the message mentions "cwd".
+- No debugging artifacts, dead code, or unrelated refactoring found in the
+  diff (`git diff dev-agent...bug/B-024-...` limited to the validation block
+  and its four new/updated tests).
+- Bug-fix addendum: fix is minimal (126 insertions / 16 deletions, all in
+  `dispatch.rs`); Diagnosis Log fix contract matches what was implemented,
+  including the explicit deviation from `schedule.add` (absolute-path check
+  inline rather than in a downstream validator) with a stated rationale.
+
+**Re-run verification (bug branch `bug/B-024-session-interactive-open-cwd-validation`, commit `1fec028`, via a temporary worktree):**
+- `cd the-intern/service && cargo test -p admin-rpc` — 116 passed, 0 failed
+  (includes all four new tests and the unchanged end-to-end
+  `run_connection_session_interactive_open_with_params_cwd_spawns_child_in_that_directory`).
+- `cd the-intern/service && cargo test --workspace` — all crates passed, 0
+  failed, 0 `FAILED`/panic lines in the full output.
+- `cargo fmt --all -- --check` — clean, no diff.
+
+No blocking issues found. Both review stages pass.
+
+Next owner: Bug-Fix Loop.
