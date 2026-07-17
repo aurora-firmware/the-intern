@@ -3,7 +3,7 @@ id: B-024
 title: session.interactive.open accepts blank or relative cwd values without 
   validation
 severity: medium
-status: in-progress
+status: resolved
 created: '2026-07-17'
 ---
 
