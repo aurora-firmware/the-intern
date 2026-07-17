@@ -158,6 +158,16 @@ Active specs: 8. Pending tasks: 5. In progress tasks: 1. Completed tasks: 124. B
 | T-124 | Surface per-entry cwd in schedule.add and schedule.list admin-RPC handlers | developer |
 | T-125 | Add --cwd flag to bob schedule add and render cwd in schedule list | developer |
 
+## Pending
+
+| Task ID | Title | Agent Role |
+|---|---|---|
+| T-123 | Add optional resolved working-directory field to the event audit payload | unassigned |
+| T-127 | Resolve per-entry scheduled cwd at dispatch with precedence and fire-time skip | unassigned |
+| T-128 | Record the resolved working directory in the periodic event audit record | unassigned |
+| T-129 | Document pi_agent_cwd, --cwd, precedence, and owner-only cwd trust in the operator guide | unassigned |
+| T-130 | Add end-to-end coverage for scheduled per-entry cwd execution | unassigned |
+
 ## In Progress
 
 | Task ID | Title | Agent Role | Notes |
