@@ -728,6 +728,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn write_schedule_store_returns_persistence_error_when_rename_target_is_a_directory() {
+        // The writer stages content in a temp file in the same parent directory
+        // and finishes with an atomic `rename(2)` onto `path`. If `path` is
+        // itself a directory, the rename fails with EISDIR — a type mismatch
+        // the kernel rejects regardless of caller privilege (unlike a bare
+        // permission check, root's CAP_DAC_OVERRIDE does not bypass it), so
+        // this exercises the writer's real failure path independent of the
+        // test process's UID.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedules.json");
+        std::fs::create_dir(&path).expect("create directory at store path");
+
+        let err = write_schedule_store(&path, &[entry("job-1")])
+            .expect_err("rename onto an existing directory must fail");
+
+        assert!(
+            matches!(err, crate::error::ServiceError::Persistence { .. }),
+            "expected Persistence error, got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("failed to rename temp schedule store"),
+            "unexpected error message: {msg}"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn new_json_store_file_is_created_with_mode_0600() {
