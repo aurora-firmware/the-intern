@@ -1913,15 +1913,22 @@ pub mod tests {
         // in-flight agent run) — release is left to the supervisor's idle
         // reaper, exercised here with a short `pi_agent_idle_reap_timeout` so
         // the backstop fires within the test window.
-        // B-025: multi_thread (not current_thread) so the actor task, the
-        // poll loops below, and the real `sh` subprocess I/O are not all
-        // serialized onto one OS thread — under CI-runner contention a
-        // single starved thread can delay observation of the idle reaper's
-        // release past a tight fixed budget even though the reaper's own
-        // work completes quickly. worker_threads = 2 matches the precedent
-        // in crates/admin-rpc/src/lib.rs and
-        // crates/bob/src/cli/commands/chat.rs for the same reason.
-        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        // B-025 tried switching this test to multi_thread (worker_threads =
+        // 2), theorizing that serializing the actor task, the poll loops
+        // below, and the real `sh` subprocess I/O onto one OS thread was
+        // starving observation of the idle reaper's release under CI
+        // contention. CI failed the exact same way immediately after that
+        // fix landed (B-026), and B-026's investigation found `multi_thread`
+        // had no working precedent for this task topology anywhere in the
+        // codebase: it was the only `multi_thread` test in this file (vs. 44
+        // `current_thread` siblings with a clean CI record) and the only
+        // place combining `multi_thread` with the full 9-actor
+        // `start_subsystems()` stack. That made `multi_thread` itself the
+        // prime suspect for the changed failure signature, so it is
+        // reverted here back to `current_thread`. The 20s timeout below is
+        // retained as a safety net against genuine CI-runner contention, but
+        // is not believed to be the fix mechanism.
+        #[tokio::test(flavor = "current_thread")]
         async fn periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt() {
             use bob_core::ports::PersistenceStore;
 
