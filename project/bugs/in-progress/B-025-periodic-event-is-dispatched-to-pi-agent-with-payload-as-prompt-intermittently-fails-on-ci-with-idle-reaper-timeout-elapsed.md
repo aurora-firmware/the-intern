@@ -254,3 +254,108 @@ failure was not achieved; the contention simulation is a best-effort
 confidence builder, not proof under exact CI conditions.
 
 ## Review
+
+### Review Verdict — 2026-07-17
+
+PASS
+
+**Evidence chain (bug-fix Stage 1).** The Diagnosis Log contains a complete
+fix contract: reproduction status (CI-only, evidence-backed, not
+independently re-reproduced — explicitly and correctly scoped as such),
+isolated fault (`serve.rs`'s test-only timing margin, not the
+`pi-agent-supervisor` reaper/pool/process logic), root-cause hypothesis
+(single-OS-thread scheduling starvation under concurrent CI-job contention,
+explained structurally by `build.yml`'s `pull_request` + `push` dual-trigger
+for a PR whose head is `dev-agent`), planned fix, and planned verification.
+The Work Log's implementation matches the fix contract exactly: runtime
+flavor changed to `multi_thread, worker_threads = 2` and both
+`Duration::from_secs(5)` timeouts in the one diagnosed test widened to `20s`
+— no drift between plan and implementation.
+
+**Re-verified the "not a production bug" claim independently** (did not take
+the Diagnosis Log's code-reading conclusion on faith): read
+`crates/pi-agent-supervisor/src/reaper.rs` (`select_idle_sessions`/
+`surplus_warm_worker_count` — pure, synchronous, no I/O),
+`pool.rs::reap_idle_and_surplus` (bounded iteration over a pure selection,
+each removal awaits `worker.terminate()`), `lib.rs::Actor::run` (single
+`tokio::select!` loop serializing one command/tick at a time — no unbounded
+wait, `reap_tick` fires every `idle_reap_timeout`, here 100ms), and
+`process.rs::terminate` (SIGTERM → `time::timeout(child_termination_deadline,
+child.wait())` → SIGKILL fallback, deadline 250ms in this test's config).
+Every operation in the reaper's call chain is deterministic and
+wall-clock-bounded well under the test's original 5s budget; nothing here is
+being masked by "giving it more time to get lucky." Confirms the diagnosis's
+conclusion.
+
+**Fix does not weaken the assertion.** Read the full test body on the bug
+branch: both `.expect(...)` calls (`"dispatcher must forward periodic event
+payload to pi-agent within timeout"` and `"idle reaper must eventually
+release the one-shot session"`) are unchanged — same polling loop, same
+positive assertion, same failure-on-timeout semantics. Only the timeout
+duration and runtime flavor changed; nothing was skipped, ignored, or
+softened.
+
+**Scope confirmed minimal.** `git diff dev-agent...bug/B-025-flaky-idle-reaper-timing-test`
+touches exactly one file (`the-intern/service/crates/bob/src/serve.rs`, 25
+insertions / 3 deletions) in three hunks, all inside
+`periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt`. Verified by
+count: `flavor = "current_thread"` occurrences drop from 45 (dev-agent) to 44
+(bug branch), and `Duration::from_secs(5)` occurrences drop from 17 to 15 (the
+two blocks in this one test) — the other ~30 tests sharing the same
+convention are untouched, matching the diagnosis's explicit scope decision.
+No production code touched (confirmed via the diff — only the `#[cfg(test)]
+pub mod tests` block in `serve.rs` is affected; `pi-agent-supervisor` and
+every other crate are untouched by this diff).
+
+**Proportionality of the combined fix.** `multi_thread, worker_threads = 2`
+has direct precedent for the same class of real-subprocess-I/O test in
+`crates/admin-rpc/src/lib.rs` and `crates/bob/src/cli/commands/chat.rs`
+(verified via `grep`). Applying both the flavor change and the widened
+timeout together is reasonable, not overkill: this is an unreproducible,
+CI-load-dependent flake where neither change alone can be proven sufficient
+in this environment, the widened timeout has no observed cost in the normal
+case (see below), and the Work Log's rationale for combining them
+(complementary defenses against the same starvation mechanism) is sound and
+specific rather than a vague "just in case." Widening the first (non-failing)
+wait alongside the second (the one that actually failed in CI) is justified
+on the documented basis that both share identical structural exposure (real
+subprocess I/O previously serialized on one OS thread) — acceptable
+consistency within the same test function, not scope creep.
+
+**Independent test verification (this review):**
+- `cargo fmt --all -- --check` — clean.
+- `cargo test -p bob --lib serve::tests::periodic::periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt -- --exact`,
+  run 10 times consecutively on the bug branch: 10/10 passed, ~0.21-0.22s
+  each — matches the Developer's reported timing, confirming the widened
+  timeout only changes worst-case headroom, not normal-case runtime.
+- `cargo test --workspace` on the bug branch: all crates green, 0 failed
+  (bob lib: 158 passed including the fixed test; full workspace grep for
+  `FAILED`/`error[` across the run: none).
+
+**Code quality.** The added comments on each changed block are specific,
+reference B-025 and the concrete mechanism (thread starvation under
+concurrent CI-job contention), and explain *why* each number was chosen — not
+generic filler. No debugging artifacts, no dead code, no unrelated
+refactoring.
+
+**Note on unfalsifiability.** Per the review brief, this is fundamentally a
+best-effort fix for a CI-load-dependent flake that cannot be proven correct
+in this (or any local) environment — local reproduction of the original
+failure was never achieved by either the Developer or this review, which is
+expected and consistent with the bug's own reproduction record. The verdict
+above is based on: (a) independently re-confirmed, sound bounded/race-free
+production code (ruling out a masked logic bug), (b) an unweakened assertion,
+(c) minimal, precedented, well-reasoned scope, and (d) clean local test runs.
+Final confirmation remains contingent on green CI on PR #38 after merge, as
+the bug file's own Fix Verification section anticipates.
+
+**Minor, non-blocking observation:** the CI panic location cited in the
+Evidence section (`serve.rs:2003:14`) is off by one line from the
+`.expect(...)` call's current location on `dev-agent` (line 2002) and on the
+bug branch. The Diagnosis Log already flags this as a minor, non-material
+caveat with no alternate candidate call site (the panic string is unique to
+this one `.expect`); most likely explained by intervening commits shifting
+line numbers between the two cited CI commits and the branch point. Does not
+affect the verdict.
+
+Next owner: Bug-Fix Loop.
