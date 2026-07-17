@@ -1913,7 +1913,15 @@ pub mod tests {
         // in-flight agent run) — release is left to the supervisor's idle
         // reaper, exercised here with a short `pi_agent_idle_reap_timeout` so
         // the backstop fires within the test window.
-        #[tokio::test(flavor = "current_thread")]
+        // B-025: multi_thread (not current_thread) so the actor task, the
+        // poll loops below, and the real `sh` subprocess I/O are not all
+        // serialized onto one OS thread — under CI-runner contention a
+        // single starved thread can delay observation of the idle reaper's
+        // release past a tight fixed budget even though the reaper's own
+        // work completes quickly. worker_threads = 2 matches the precedent
+        // in crates/admin-rpc/src/lib.rs and
+        // crates/bob/src/cli/commands/chat.rs for the same reason.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt() {
             use bob_core::ports::PersistenceStore;
 
@@ -1968,7 +1976,12 @@ pub mod tests {
             // Wait for the dispatcher to dequeue the event, acquire a one-shot
             // session, and forward the payload. The worker writes the message
             // to the record file upon receiving the prompt.
-            tokio::time::timeout(Duration::from_secs(5), async {
+            //
+            // B-025: 20s (not the file's usual 5s) — this wait, like the
+            // idle-reaper wait below, polls on real subprocess I/O, so it
+            // gets the same widened margin for consistency even though only
+            // the idle-reaper wait has actually failed in CI so far.
+            tokio::time::timeout(Duration::from_secs(20), async {
                 loop {
                     if record_file.exists() {
                         let content = std::fs::read_to_string(&record_file).unwrap_or_default();
@@ -1984,7 +1997,16 @@ pub mod tests {
 
             // The session is not closed synchronously after dispatch (B-017);
             // it is released once the idle reaper's backstop timeout elapses.
-            tokio::time::timeout(Duration::from_secs(5), async {
+            //
+            // B-025: 20s (not the file's usual 5s) budget to absorb realistic
+            // CI-runner contention spikes — the two CI failures this test
+            // produced were both `Elapsed(())` panics here under contention
+            // from a second concurrently-triggered CI job on the same
+            // commit, not a defect in the reaper itself (see B-025 Diagnosis
+            // Log). The reaper's own work still normally completes within a
+            // few hundred ms given the 100ms pi_agent_idle_reap_timeout
+            // configured above, so this only widens worst-case headroom.
+            tokio::time::timeout(Duration::from_secs(20), async {
                 loop {
                     if runtime
                         ._pi_agent_supervisor
