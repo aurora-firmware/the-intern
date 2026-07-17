@@ -3,7 +3,7 @@ id: B-026
 title: periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt still 
   hangs the full 20s timeout on CI after B-025's widen+multi_thread fix
 severity: high
-status: open
+status: in-progress
 created: '2026-07-17'
 ---
 
