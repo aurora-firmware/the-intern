@@ -467,11 +467,31 @@ impl Dispatcher {
             ));
         };
         let session_id = bob_core::types::SessionId::new();
-        let cwd = params
-            .as_ref()
-            .and_then(|p| p.get("cwd"))
-            .and_then(Value::as_str)
-            .map(PathBuf::from);
+        let cwd = match params.as_ref().and_then(|p| p.get("cwd")) {
+            None => None,
+            Some(value) => {
+                let Some(raw_cwd) = value.as_str() else {
+                    return DispatchOutcome::Err(ErrorResponse::error(
+                        id,
+                        CODE_INVALID_REQUEST,
+                        "session.interactive.open: params.cwd must be a non-blank absolute path string when present",
+                        Some(json!({ "category": "invalid_request" })),
+                    ));
+                };
+
+                let trimmed = raw_cwd.trim();
+                if trimmed.is_empty() || !std::path::Path::new(trimmed).is_absolute() {
+                    return DispatchOutcome::Err(ErrorResponse::error(
+                        id,
+                        CODE_INVALID_REQUEST,
+                        "session.interactive.open: params.cwd must be a non-blank absolute path string when present",
+                        Some(json!({ "category": "invalid_request" })),
+                    ));
+                }
+
+                Some(PathBuf::from(trimmed))
+            }
+        };
         tracing::debug!(
             session_id = %session_id,
             cwd = ?cwd,
@@ -3004,12 +3024,12 @@ mod tests {
         }
     }
 
-    // B-021 / CR-005: a non-string params.cwd is treated the same as an
-    // absent cwd (None) rather than causing an error — the client always
-    // sends a string, but the server must not panic or misparse malformed
-    // input from a non-conforming caller.
+    // B-024: a non-string params.cwd must be rejected with CODE_INVALID_REQUEST
+    // rather than silently treated as an absent cwd (None) — mirroring
+    // schedule.add's params.cwd type check.
     #[tokio::test(flavor = "current_thread")]
-    async fn dispatch_session_interactive_open_with_non_string_params_cwd_leaves_cwd_none() {
+    async fn dispatch_session_interactive_open_with_non_string_params_cwd_returns_invalid_request()
+    {
         let (dispatcher, sup_task) = make_dispatcher_with_supervisor();
         let req =
             make_request_with_params("session.interactive.open", json!(603), json!({ "cwd": 42 }));
@@ -3019,13 +3039,103 @@ mod tests {
 
         sup_task.abort();
         match outcome {
-            DispatchOutcome::InteractiveSessionOpening { cwd, .. } => {
-                assert_eq!(cwd, None, "non-string params.cwd must not be parsed");
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(603));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+                assert!(
+                    resp.error.message.contains("cwd"),
+                    "error must mention cwd: {}",
+                    resp.error.message
+                );
             }
-            DispatchOutcome::Err(e) => panic!(
-                "expected InteractiveSessionOpening, got error: {}",
-                e.error.message
-            ),
+            DispatchOutcome::Ok(_) => panic!("expected error for non-string cwd"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // B-024: an empty-string params.cwd must be rejected with
+    // CODE_INVALID_REQUEST rather than silently forwarded to spawn.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_session_interactive_open_with_empty_string_cwd_returns_invalid_request() {
+        let (dispatcher, sup_task) = make_dispatcher_with_supervisor();
+        let req =
+            make_request_with_params("session.interactive.open", json!(604), json!({ "cwd": "" }));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(604));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+                assert!(
+                    resp.error.message.contains("cwd"),
+                    "error must mention cwd: {}",
+                    resp.error.message
+                );
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for empty cwd"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // B-024: a whitespace-only params.cwd must be rejected with
+    // CODE_INVALID_REQUEST rather than silently forwarded to spawn.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_session_interactive_open_with_whitespace_only_cwd_returns_invalid_request() {
+        let (dispatcher, sup_task) = make_dispatcher_with_supervisor();
+        let req = make_request_with_params(
+            "session.interactive.open",
+            json!(605),
+            json!({ "cwd": "   " }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(605));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+                assert!(
+                    resp.error.message.contains("cwd"),
+                    "error must mention cwd: {}",
+                    resp.error.message
+                );
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for whitespace-only cwd"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // B-024: a relative-path params.cwd must be rejected with
+    // CODE_INVALID_REQUEST rather than silently forwarded to spawn.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_session_interactive_open_with_relative_cwd_returns_invalid_request() {
+        let (dispatcher, sup_task) = make_dispatcher_with_supervisor();
+        let req = make_request_with_params(
+            "session.interactive.open",
+            json!(606),
+            json!({ "cwd": "relative/dir" }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(606));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+                assert!(
+                    resp.error.message.contains("cwd"),
+                    "error must mention cwd: {}",
+                    resp.error.message
+                );
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for relative cwd"),
             _ => panic!("unexpected dispatch outcome variant"),
         }
     }
