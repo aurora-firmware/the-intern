@@ -234,6 +234,32 @@ Added unit-level coverage for the new persistence-crate building block itself (r
 
 **Obstacles Encountered:** The fix requires new `PersistenceStore` trait methods that don't exist pre-fix, which made a literal "regression tests use the new API" ordering impossible for TDD's red step — resolved by designing regression tests around pre-existing API surface so they compile and fail meaningfully pre-fix, then implementing the new trait methods in the green phase. The fix's correct scope turned out broader than `serve.rs` alone (~13 existing tests needed their periodic-event seed calls switched to the new method), anticipated by the Diagnosis Log's "Suspected Area" note.
 
+### Session 2 — 2026-07-17
+
+Addressed the Reviewer's FAIL finding: `the-intern/service/crates/bob/tests/scheduler_execution_e2e.rs`
+had not been updated as part of the B-023 fix, even though its `start_inline_dispatcher` helper and
+its doc comments explicitly claimed behavioral parity with the (now-fixed) production `serve.rs`
+dispatcher/admission functions.
+
+In `start_inline_dispatcher`, replaced the `persistence.dequeue_next_with_job_id()` call with
+`persistence.dequeue_next_periodic_with_job_id()` and deleted the destructive non-periodic branch
+(`Ok(Some((event, _job_id))) if event.kind != DeliveryKind::Periodic => { persistence.enqueue(event).await; ... }`)
+— the exact same branch removed from `start_periodic_dispatcher` in `serve.rs` during Session 1. All
+4 admission call sites were switched from `enqueue_with_job_id` to `enqueue_periodic_with_job_id`,
+matching the production `admit_periodic_event`. Updated the doc comments the review flagged to
+describe the dedicated-periodic-queue architecture instead of asserting blanket "identical"/
+"replicates" behavioral parity, and added short B-023 comments at each call site noting the routing
+is now onto the dedicated periodic queue, not the shared one.
+
+Verification: `cargo build -p bob --tests` clean, 0 warnings. `cargo test -p bob --test
+scheduler_execution_e2e` — 4 passed, run 6 times total with no flakiness. `cargo test --workspace` —
+all suites green, 0 failed, re-run twice with identical results. `cargo fmt --all -- --check` exits
+0. `git diff --stat` confirms only the one intended file changed (30 insertions, 20 deletions) —
+no production code touched this session.
+
+**Obstacles Encountered:** None blocking. The change was mechanical and matched the review's
+required-change description exactly.
+
 ## Review
 
 ### Review Verdict — 2026-07-17
