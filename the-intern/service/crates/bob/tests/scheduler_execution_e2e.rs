@@ -163,8 +163,16 @@ impl AuditSink for SpyAuditSink {
 // Replicates `serve::start_periodic_dispatcher` using only public crate APIs.
 //
 // The production function lives in `bob/src/serve.rs` (private). This inline
-// version is identical in behaviour and serves as the dispatcher under test for
-// the e2e path.
+// version mirrors its behaviour for the queue-routing/admission path under
+// test and serves as the dispatcher under test for the e2e path.
+//
+// B-023: reads back the job-id correlator from the dedicated periodic queue
+// (`dequeue_next_periodic_with_job_id`), entirely separate from the general
+// inbound queue used by non-periodic (sync/async) traffic. Every event
+// observed here is Periodic by construction — it can only have arrived via
+// the `enqueue_periodic_with_job_id` admission calls below — so, matching the
+// fixed production dispatcher, there is no non-periodic branch or defensive
+// re-enqueue onto the shared queue.
 //
 // T-130: `schedule_entries_rx` observes the live schedule table (via
 // `scheduler_adapter::ReloadHandle::subscribe`) so each fire's working
@@ -184,7 +192,7 @@ fn start_inline_dispatcher(
                 break;
             }
 
-            match persistence.dequeue_next_with_job_id().await {
+            match persistence.dequeue_next_periodic_with_job_id().await {
                 Err(_) => {
                     tokio::select! {
                         _ = tokio::time::sleep(DISPATCHER_POLL_INTERVAL) => {}
@@ -192,14 +200,6 @@ fn start_inline_dispatcher(
                     }
                 }
                 Ok(None) => {
-                    tokio::select! {
-                        _ = tokio::time::sleep(DISPATCHER_POLL_INTERVAL) => {}
-                        _ = cancel_rx.changed() => {}
-                    }
-                }
-                Ok(Some((event, _job_id))) if event.kind != DeliveryKind::Periodic => {
-                    // Re-enqueue non-periodic events so they are not lost.
-                    let _ = persistence.enqueue(event).await;
                     tokio::select! {
                         _ = tokio::time::sleep(DISPATCHER_POLL_INTERVAL) => {}
                         _ = cancel_rx.changed() => {}
@@ -365,7 +365,9 @@ async fn schedule_entry_from_json_store_is_delivered_when_admitted_users_is_empt
     // ── Requests handler (production-like: Periodic bypasses pre-flight) ──────
     //
     // Replicates the production closure from `serve.rs` (ADR-012 / T-117):
-    // - Periodic events are directly enqueued without UserId admission checks.
+    // - Periodic events are directly enqueued (B-023: onto the dedicated
+    //   periodic queue, via `enqueue_periodic_with_job_id`) without UserId
+    //   admission checks.
     // - Non-Periodic events continue to go through run_preflight.
     let persistence_arc: Arc<dyn PersistenceStore> = Arc::new(persistence_handle.clone());
     let audit_arc: Arc<dyn AuditSink> = Arc::new(monitoring::MonitoringAuditSink::new(
@@ -390,10 +392,12 @@ async fn schedule_entry_from_json_store_is_delivered_when_admitted_users_is_empt
                 if event.kind == DeliveryKind::Periodic {
                     // ADR-012/ADR-013: Periodic events bypass pre-flight and
                     // carry their job-id correlator (RequestContext::context_id,
-                    // set by scheduler-adapter) through to the queue so the
-                    // dispatcher can resolve the live schedule entry by id.
+                    // set by scheduler-adapter) through to the dedicated
+                    // periodic queue (B-023) so the dispatcher can resolve
+                    // the live schedule entry by id without ever touching
+                    // the general inbound queue used by non-periodic traffic.
                     let _ = store
-                        .enqueue_with_job_id(event, context.context_id.clone())
+                        .enqueue_periodic_with_job_id(event, context.context_id.clone())
                         .await;
                 } else {
                     requests_handler::run_preflight(
@@ -613,10 +617,12 @@ async fn scheduled_entry_with_per_entry_cwd_runs_pi_session_in_that_directory_ho
                 if event.kind == DeliveryKind::Periodic {
                     // ADR-012/ADR-013: Periodic events bypass pre-flight and
                     // carry their job-id correlator (RequestContext::context_id,
-                    // set by scheduler-adapter) through to the queue so the
-                    // dispatcher can resolve the live schedule entry by id.
+                    // set by scheduler-adapter) through to the dedicated
+                    // periodic queue (B-023) so the dispatcher can resolve
+                    // the live schedule entry by id without ever touching
+                    // the general inbound queue used by non-periodic traffic.
                     let _ = store
-                        .enqueue_with_job_id(event, context.context_id.clone())
+                        .enqueue_periodic_with_job_id(event, context.context_id.clone())
                         .await;
                 } else {
                     requests_handler::run_preflight(
@@ -777,8 +783,10 @@ async fn scheduled_entry_with_missing_per_entry_cwd_at_fire_time_skips_the_fire_
             let snap = snap_for_preflight.clone();
             async move {
                 if event.kind == DeliveryKind::Periodic {
+                    // B-023: enqueue onto the dedicated periodic queue, not
+                    // the general inbound queue used by non-periodic traffic.
                     let _ = store
-                        .enqueue_with_job_id(event, context.context_id.clone())
+                        .enqueue_periodic_with_job_id(event, context.context_id.clone())
                         .await;
                 } else {
                     requests_handler::run_preflight(
@@ -974,8 +982,10 @@ async fn scheduled_entry_firing_records_the_resolved_cwd_on_the_audit_record() {
             let snap = snap_for_preflight.clone();
             async move {
                 if event.kind == DeliveryKind::Periodic {
+                    // B-023: enqueue onto the dedicated periodic queue, not
+                    // the general inbound queue used by non-periodic traffic.
                     let _ = store
-                        .enqueue_with_job_id(event, context.context_id.clone())
+                        .enqueue_periodic_with_job_id(event, context.context_id.clone())
                         .await;
                 } else {
                     requests_handler::run_preflight(
