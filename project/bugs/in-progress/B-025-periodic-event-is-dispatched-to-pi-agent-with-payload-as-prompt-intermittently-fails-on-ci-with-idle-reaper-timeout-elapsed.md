@@ -3,7 +3,7 @@ id: B-025
 title: periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt 
   intermittently fails on CI with idle-reaper timeout elapsed
 severity: high
-status: open
+status: in-progress
 created: '2026-07-17'
 ---
 
