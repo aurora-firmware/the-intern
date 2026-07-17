@@ -3,7 +3,7 @@ id: B-022
 title: schedule.add write-error test fails in CI because root bypasses the 0o500
   permission check
 severity: high
-status: in-progress
+status: resolved
 created: '2026-07-17'
 ---
 
