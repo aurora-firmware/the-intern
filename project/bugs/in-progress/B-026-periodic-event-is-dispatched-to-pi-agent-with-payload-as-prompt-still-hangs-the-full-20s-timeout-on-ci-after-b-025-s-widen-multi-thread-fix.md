@@ -281,4 +281,47 @@ infrastructure-level evidence outside this repository's visibility.
 
 ## Work Log
 
+### Session 1 — 2026-07-17
+
+Implemented B-026's fix contract exactly as specified: reverted
+`periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt` in
+`the-intern/service/crates/bob/src/serve.rs` from
+`#[tokio::test(flavor = "multi_thread", worker_threads = 2)]` back to
+`#[tokio::test(flavor = "current_thread")]`. Left both `Duration::from_secs(20)`
+outer polling timeouts from B-025 untouched — they're a safety net, not the
+fix mechanism. Rewrote the B-025-authored comment block above the attribute
+to record B-026's finding: this was the only `multi_thread` test in
+`serve.rs` (versus 44 `current_thread` siblings with a clean CI record) and
+the only place in the codebase combining `multi_thread` with the full
+9-actor `start_subsystems()` stack, making it the prime suspect for the
+changed failure signature rather than a genuine defect in the reaper/pool/
+process code. Did not touch `pi-agent-supervisor` production code and did
+not add any event-driven notification API — both explicitly out of scope.
+`git diff dev-agent --stat -- the-intern/` confirms exactly one file changed
+(`serve.rs`, 16 insertions/9 deletions).
+
+Verification: ran the target test in isolation 8 times total, all passed in
+~0.21-0.22s, confirming reverting to `current_thread` causes no local
+regression. `cargo test --workspace` reports 0 failures across every crate.
+`cargo fmt --all -- --check` clean. Committed as `dbc4cea` on
+`bug/B-026-idle-reaper-test-still-hangs-on-ci`.
+
+Being explicit about what this session can and cannot claim, matching the
+diagnosis's own honesty: the original CI failure was never reproduced
+locally, not in B-025's investigation, not in B-026's more aggressive
+`taskset`-based CPU-oversubscription attempts, and not in this
+implementation session. Everything run here is consistency verification —
+it demonstrates the fix introduces no regression, but it cannot demonstrate
+the fix resolves the CI-specific hang, since that failure mode has no local
+reproduction to test against. Real confirmation requires observing at least
+two consecutive green CI `Tests` runs on both matrix jobs after this change
+lands. If this exact test fails again in CI under `current_thread`, that
+would disprove the `multi_thread`-regression hypothesis and the next
+investigation should pursue CI-infrastructure-level evidence (e.g. cgroup
+CPU-quota configuration) outside this repository's visibility, rather than
+another timeout adjustment.
+
+**Obstacles Encountered:** None blocking. Pre-existing, unrelated
+working-tree state (`pr-35-review.md`/`pr-38-review.md`) left untouched.
+
 ## Review
