@@ -268,3 +268,106 @@ for their own CI-only verification steps.
 verified locally, only on the next live CI runs.
 
 ## Review
+
+### Review Verdict — 2026-07-18
+
+PASS
+
+**Diagnosis→fix evidence chain (verified before Stage 1/2):** Complete. The Diagnosis Log
+contains reproduction status, independently re-verified evidence (`gh run list`/`gh run view`
+across all 4 recent `dev-agent` commits, job-level timing showing serialized back-to-back
+execution on the single `auroralab` runner, and confirmation PR #38 is the only open PR), an
+isolated fault (`build.yml`'s missing `concurrency` block, explicitly not `serve.rs` or
+`pi-agent-supervisor`, both already cleared by B-025/B-026), a planned fix (exact YAML block,
+with reasoning for group-key semantics and a rejected alternative), and planned verification
+(structural/behavioral/cross-branch-safety/local-sanity). This is a materially stronger evidence
+chain than B-025/B-026, which is the correct outcome given this bug exists specifically because
+those two treated the symptom rather than the CI-topology cause.
+
+**Stage 1 — Bug criteria:**
+- Diagnosis Log reproduction status and evidence: present and independently re-verified (4/4
+  push+pull_request pairs for the same SHA, consistent failure pattern on the later-queued run).
+- Fix addresses the isolated fault: yes — `git diff dev-agent..bug/B-027-ci-duplicate-trigger-contention -- .github/workflows/build.yml`
+  shows exactly the planned `concurrency` block (4 lines), placed immediately after `on:` and
+  before `permissions:`, matching the fix contract with no deviation (confirmed by the Work Log
+  and independently by re-reading the file).
+- Fix Verification steps followed: the local/structural-sanity portion (`cargo test --workspace`)
+  was run and passed; the structural/behavioral/cross-branch-safety portions require live GitHub
+  Actions observation on the next push and are explicitly and honestly flagged as outstanding in
+  the Work Log, consistent with the equivalent caveat this repo's process already accepted for
+  B-025/B-026's CI-only verification steps.
+- No unrelated behavior added: confirmed — `git diff <merge-base>..bug/B-027-ci-duplicate-trigger-contention --stat`
+  shows only `.github/workflows/build.yml | 4 ++++`, nothing else. The apparent 111-line diff
+  against the bug file itself (visible when diffing directly against `dev-agent`) is an artifact
+  of the Diagnosis/Work Log entries being committed on `dev-agent` per the repo's git model, not a
+  change made on the bug branch — the bug branch touches no lifecycle files, confirmed via
+  merge-base diff.
+
+**Stage 2 — Code quality:**
+- Correctness: parsed the modified `build.yml` with `python3`/`PyYAML` directly —
+  `concurrency` is a proper top-level sibling key of `name`/`on`/`permissions`/`env`/`jobs` (not
+  nested under `on:`), appears exactly once, and is syntactically valid. Group-key logic verified
+  against actual GitHub Actions context semantics: `github.head_ref` is populated only on
+  `pull_request` events (source branch name) and `github.ref_name` only on `push` events (short
+  ref name); for PR #38 (`dev-agent` -> `main`), both resolve to `dev-agent`, so the push and
+  pull_request runs for the same commit collapse into group `CI-dev-agent` as intended. `main`
+  pushes resolve to `CI-main`, a distinct group — confirmed no cross-branch collision.
+- Group-key scrutiny requested in the review brief: (1) the group key is per-branch, not
+  per-commit, so a newer push on `dev-agent` legitimately cancels an in-progress run for an
+  *older* commit on the same branch — this is standard, desired GitHub Actions behavior (stale CI
+  for a superseded commit is expected to be superseded), separate from and additive to the
+  push/pull_request-duplicate fix this bug targets; it does not conflate two "genuinely
+  unrelated" commits incorrectly, it correctly treats a later commit on the same branch as
+  superseding an earlier one. (2) `cancel-in-progress: true` cancelling a run mid-flight while
+  GitHub evaluates PR mergeability is a real, transient GitHub Actions characteristic — but it
+  self-resolves once the surviving (newer) run in the same group completes and reports the same
+  job name (`Tests`) for the same head SHA; it is not unique to this fix and is the standard,
+  widely-used idiom for exactly this push+pull_request-duplication problem (GitHub's own
+  documented pattern for it). The Diagnosis Log explicitly reasoned about this and about the
+  rejected alternative (dropping the `pull_request` trigger), correctly identifying the chosen
+  approach as lower-risk and reversible.
+- `deploy.yml`: read in full — `name: Release`, `on: push: tags: ['*']` only, no `concurrency`
+  key (untouched by this diff, correctly out of scope), distinct workflow name from `CI` and a
+  disjoint trigger surface (tag refs never coincide with `dev-agent`/`main` branch names even if
+  it had inherited a similarly-templated group key). No collision risk, confirmed directly rather
+  than assumed.
+- Branch protection / required-check-name concern: `tests` job's `name: Tests` is identical
+  regardless of triggering event (`push` or `pull_request`), so a required check keyed to
+  "Tests" for the head SHA is satisfied by whichever run in the group actually completes with a
+  success conclusion — this is the standard, well-established GitHub Actions pattern for
+  collapsing duplicate push/PR triggers and is why it's documented as GitHub's own recommended
+  idiom for this scenario, not a novel or risky construction. This cannot be proven from a local
+  sandbox; the bug's own Fix Verification section already accounts for this by requiring
+  observation of PR #38's checks on the next live push, which is the correct place to close the
+  loop, not this review.
+- Tests: no source code changed (confirmed via merge-base diff); `cargo test --workspace` was
+  run locally by the Developer and passed, which is the right and sufficient sanity check for a
+  CI-config-only change — not re-run in this review since the diff contains no source deltas to
+  re-verify.
+- Readability / minimalism: 4-line, additive, easily-reversible change; no dead code, no
+  unrelated refactoring, no lifecycle files touched on the bug branch.
+- Bug Fix Addendum — regression test: no automated regression test is possible for this class of
+  fault (GitHub Actions dual-trigger timing on a self-hosted runner cannot be exercised from this
+  repo's local test suite); the Diagnosis Log's structural/behavioral/cross-branch-safety Planned
+  Verification substitutes for it, consistent with the precedent already accepted for B-025/B-026
+  and with this review's explicit instruction to judge on reasoning/safety/minimalism rather than
+  unobtainable local proof.
+
+**Escalation consideration:** The review brief flagged this as a plausible ESCALATE candidate
+given repo-wide CI blast radius. Weighed against that: the fix is a single well-established,
+additive, and trivially reversible GitHub Actions idiom, squarely within the bug's own stated
+Suspected Area (`build.yml`'s trigger configuration), backed by a diagnosis that already
+considered and rejected a materially riskier alternative (dropping the `pull_request` trigger).
+It does not touch `deploy.yml`, application source, or any GitHub-side branch-protection
+configuration (which lives outside this repo and this diff regardless). This does not meet the
+bar for ESCALATE (no internally contradictory spec, no criterion unmeetable without a spec
+change, no root cause outside the bug's own scope) — it is a normal, well-reasoned, minimal,
+in-scope bug fix, so PASS stands rather than a process escalation.
+
+**Non-blocking observations:**
+- Real confirmation still depends on observing live GitHub Actions runs on the next push while
+  PR #38 is open, exactly as the bug's own Fix Verification section and Work Log already state.
+- Pre-existing, unrelated working-tree entries (`pr-35-review.md`/`pr-38-review.md`) were left
+  untouched by this review, consistent with the Developer's own note.
+
+Next owner: Bug-Fix Loop.
