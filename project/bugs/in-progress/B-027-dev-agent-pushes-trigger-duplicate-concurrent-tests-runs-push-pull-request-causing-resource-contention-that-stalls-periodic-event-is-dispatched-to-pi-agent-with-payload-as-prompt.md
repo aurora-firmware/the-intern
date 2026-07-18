@@ -233,4 +233,38 @@ Planned verification:
 
 ## Work Log
 
+### Session 1 — 2026-07-18
+
+Implemented the fix contract recorded in the Diagnosis Log without further diagnosis (it was
+already complete). Added a workflow-level `concurrency` block (`group: ${{ github.workflow }}-${{
+github.head_ref || github.ref_name }}`, `cancel-in-progress: true`) to
+`.github/workflows/build.yml`, placed immediately after the `on:` block and before `permissions:`
+— the same location and content specified in the fix contract, no deviation. This is a
+CI-config-only change; no source files were touched.
+
+Verified locally: (1) parsed the modified YAML with `python3 -c "import yaml;
+yaml.safe_load(...)"`, confirming `concurrency` sits as a proper top-level key alongside
+`on`/`permissions`/`env`/`jobs` rather than accidentally nesting under `on:`; (2) full manual
+re-read of the 235-line file confirming no duplication and correct indentation; (3)
+`cd the-intern/service && cargo test --workspace` passed cleanly (all suites `ok`, `0 failed`),
+confirming no source-level regression, as expected for a CI-config-only change.
+
+Committed as `fix(ci): add concurrency group to collapse duplicate CI runs` (commit `4df9c36`) on
+`bug/B-027-ci-duplicate-trigger-contention`. Deliberately staged only `.github/workflows/build.yml`
+— pre-existing unrelated dirty-tree entries (`pr-35-review.md`/`pr-38-review.md`) predate this
+session and were left untouched.
+
+What remains, and what cannot be done from this session: the structural, behavioral, and
+cross-branch-safety verification steps in the Diagnosis Log's Planned Verification all require
+observing real GitHub Actions runs (one `cancelled` + one `completed` run per commit via
+`gh run list`, absence of further contention-linked failures across 2-3 consecutive `dev-agent`
+pushes, and confirmation that `main` and `dev-agent` pushes never cancel each other). None of this
+is observable from a local sandbox — real confirmation can only happen on the next actual pushes to
+`dev-agent` in the live GitHub Actions environment, the same honesty caveat B-025 and B-026 recorded
+for their own CI-only verification steps.
+
+**Obstacles Encountered:** None blocking. Pre-existing, unrelated working-tree state
+(`pr-35-review.md`/`pr-38-review.md`) left untouched. This fix's real confirmation cannot be
+verified locally, only on the next live CI runs.
+
 ## Review
