@@ -259,4 +259,38 @@ Real end-to-end confirmation is observing CI on PR #38 go green on the next push
 
 ## Work Log
 
+### Session 1 — 2026-07-18
+
+Implemented the fix contract from Diagnosis 1 verbatim: added the B-028 explanatory comment block
+and `#[ignore = "B-028: fails deterministically in CI only, never locally; production code
+audited correct 3x (B-025/026/027); root cause unknown, see bug file"]` attribute directly above
+the pre-existing `#[tokio::test(flavor = "current_thread")]` attribute on
+`periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt` in
+`the-intern/service/crates/bob/src/serve.rs` (line 1931 pre-edit). The pre-existing B-025/B-026
+historical comment block immediately above was left untouched.
+
+No production logic was changed — a test-annotation-only change, consistent with the Diagnosis
+Log's conclusion that three independent prior sessions (B-025, B-026, B-027) had already ruled out
+the pi-agent-supervisor idle-reaper/pool/process-termination code as the fault, and that further
+blind fix attempts were not warranted without new CI-runner-level evidence.
+
+Verification, all run from `the-intern/service`:
+- `cargo test --workspace`: target test reports `... ignored, B-028: fails deterministically in
+  CI only, never locally; production code audited correct 3x (B-025/026/027); root cause unknown,
+  see bug file`; bob lib summary is `157 passed; 0 failed; 1 ignored`; every crate's test result
+  line in the run is `ok`.
+- `cargo test -p bob --lib serve::tests::periodic::periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt -- --ignored --exact`:
+  `test result: ok. 1 passed; 0 failed; 0 ignored ...` — confirms the test still runs and passes
+  on demand, unchanged from its historical local behavior.
+- `cargo fmt --all -- --check`: clean, no diff.
+
+Committed as `60d391c` (`test(bob): ignore CI-only flaky idle reaper dispatch test`) on
+`bug/B-028-ignore-flaky-idle-reaper-test`, touching only `serve.rs`.
+
+Nothing remains open for this fix beyond the loop's standard review/integration steps and
+observing the next CI run on PR #38 to confirm the test no longer blocks it.
+
+**Obstacles Encountered:** None blocking. Pre-existing, unrelated working-tree state
+(`pr-35-review.md`) left untouched.
+
 ## Review
