@@ -4,7 +4,7 @@ title: 'periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt fails de
   in CI with no local repro, even with contention eliminated - needs #[ignore] pending
   runner-level investigation'
 severity: medium
-status: in-progress
+status: resolved
 created: '2026-07-18'
 ---
 
