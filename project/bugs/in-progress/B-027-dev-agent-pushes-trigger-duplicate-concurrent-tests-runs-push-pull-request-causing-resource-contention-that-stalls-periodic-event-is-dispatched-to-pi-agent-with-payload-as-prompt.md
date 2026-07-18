@@ -154,6 +154,83 @@ cd the-intern/service && cargo test --workspace
 
 ## Diagnosis Log
 
+### Diagnosis 1 — 2026-07-18
+
+Reproduction status: confirmed, deterministic pattern (not intermittent as a CI-topology fact,
+though its downstream test-failure symptom is probabilistic). Independently re-verified beyond the
+bug report's single cited pair.
+
+Evidence captured:
+- `.github/workflows/build.yml:3-8` read directly: `on: pull_request:` (no filters) +
+  `on: push: branches: [dev-agent, main]`; no `concurrency:` key anywhere in the file (231 lines,
+  full read).
+- `.github/workflows/deploy.yml` read directly: `on: push: tags: ['*']` only, `name: Release`, no
+  `concurrency:` key. No overlap risk with build.yml.
+- `gh run list --repo aurora-firmware/the-intern --branch dev-agent --limit 15 --json
+  databaseId,event,createdAt,conclusion,headSha,status`: every one of the 4 most recent commits to
+  `dev-agent` (`1e1eb3a`, `47a539e`, `cec22e7`, `10c4f13`) produced exactly two runs, `push` then
+  `pull_request` created 2-3s apart, identical `headSha` each time.
+- `gh run view <id> --json event,createdAt,conclusion,jobs` on all 8 of those runs: in all 4 pairs
+  the `push` run's `Tests` job succeeded and the `pull_request` run's `Tests` job failed with the
+  identical panic in all 4 failing runs. 4/4 consistency, matching the bug report's claim.
+- `gh api repos/aurora-firmware/the-intern/actions/runs/<id>/jobs`: all jobs across all 4 pairs ran
+  on a single runner (`runner_name: auroralab`), with job start/end timestamps showing the two runs'
+  jobs execute strictly serially (zero wall-clock overlap) — e.g. push run's 5 jobs span
+  20:06:03-20:08:59, pull_request run's 5 jobs span 20:09:01-20:12:08 for the same commit,
+  back-to-back with no gap. This refines (not contradicts) the bug report: the mechanism is
+  queuing/serialization on a single-capacity self-hosted runner producing a redundant, delayed,
+  back-to-back-queued `Tests` execution — not literal simultaneous CPU contention between two
+  concurrently-running `cargo test` processes.
+- `gh pr view 38 --json number,baseRefName,headRefName,state,title` / `gh pr list --state open`:
+  confirms PR #38 is `dev-agent` -> `main`, OPEN, the only open PR — matches the promotion-PR
+  pattern in CLAUDE.md's git model, confirming every `dev-agent` push during this PR's lifetime pays
+  the double-run cost.
+
+Isolated fault: `.github/workflows/build.yml` trigger configuration (`on: pull_request` +
+`on: push: branches: [dev-agent, main]`, no `concurrency` block) — not `serve.rs` or
+`pi-agent-supervisor`, both already audited by B-025/B-026. Every commit landing on `dev-agent`
+while a `dev-agent`->`main` promotion PR is open produces two independent workflow runs for the
+identical SHA; because the repo has a single self-hosted runner (`auroralab`, confirmed via
+job-level `runner_name`), the second (redundant) run's 5 jobs queue fully behind the first run's 5
+jobs, and the delayed, back-to-back-queued `Tests` job execution has coincided with the periodic
+dispatcher's idle-reaper timeout on 4/4 observed opportunities across B-025/B-026.
+
+Planned fix: add a workflow-level `concurrency` block to `.github/workflows/build.yml`:
+
+```yaml
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+```
+
+`github.head_ref` (pull_request events only) and `github.ref_name` (push events) both resolve to
+the plain branch name (`dev-agent`), so the push and pull_request runs for the same branch/commit
+collapse into one concurrency group and the older (redundant) run is cancelled, leaving exactly one
+completed run per commit. `main` pushes and `dev-agent` pushes resolve to distinct groups
+(`CI-main` vs `CI-dev-agent`), so unrelated branches never cancel each other. `cancel-in-progress:
+true` is safe: the cancelled run is for an identical SHA (zero information loss), `podman run --rm`
+cleans up terminated containers, and branch-protection required checks match by job name against
+the SHA regardless of which run's event type posts them. Rejected alternative: restricting/dropping
+the `pull_request` trigger and relying on push-triggered checks appearing on the PR — larger blast
+radius (changes trigger semantics repo-wide) and its interaction with `main`'s branch-protection
+configuration was not verified, so it carries unquantified risk versus the additive, easily-
+reversible `concurrency` block. `deploy.yml` confirmed to share no group risk: separate workflow
+(`github.workflow` = `Release`, not `CI`), tag-only trigger, currently no `concurrency` block, tag
+ref names never coincide with `dev-agent`/`main`.
+
+Planned verification:
+- Structural: after the fix lands, push a commit to `dev-agent` while PR #38 is still open;
+  `gh run list --repo aurora-firmware/the-intern --branch dev-agent --limit 4` should show one
+  `cancelled` run and one `completed` run per commit (not two full completed runs).
+- Behavioral: confirm no further contention-linked failures of
+  `periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt` across at least 2-3 consecutive
+  pushes to `dev-agent` while PR #38 remains open.
+- Cross-branch safety: on the next `main` push occurring close in time to any `dev-agent` push,
+  confirm via `gh run list --branch main` / `--branch dev-agent` that neither run was cancelled by
+  the other (distinct `CI-main` / `CI-dev-agent` groups).
+- `cd the-intern/service && cargo test --workspace` locally as a sanity check that no source change
+  is needed/introduced (this is a CI-config-only fix).
+
 ## Work Log
 
 ## Review
