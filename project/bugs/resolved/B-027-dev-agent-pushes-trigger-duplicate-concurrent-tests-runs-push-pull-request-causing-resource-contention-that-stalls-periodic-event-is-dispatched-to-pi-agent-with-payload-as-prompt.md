@@ -4,7 +4,7 @@ title: dev-agent pushes trigger duplicate concurrent Tests runs (push +
   pull_request), causing resource contention that stalls 
   periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt
 severity: high
-status: in-progress
+status: resolved
 created: '2026-07-18'
 ---
 
