@@ -294,3 +294,85 @@ observing the next CI run on PR #38 to confirm the test no longer blocks it.
 (`pr-35-review.md`) left untouched.
 
 ## Review
+
+### Review Verdict — 2026-07-18
+
+PASS
+
+**Scope note:** per the user's explicit direction, this bug's accepted fix contract is
+"mark ignored, preserve the evidence trail, keep it runnable on demand" — not a root-cause
+fix. This review judges the work against that contract, not against root-cause resolution
+(which B-025/B-026/B-027 already established is out of scope pending CI-runner-level access).
+
+**Diagnosis→fix evidence chain:** complete. The Diagnosis Log (Diagnosis 1) carries forward
+the consolidated reproduction status from B-025/026/027 (5 CI failures, 4 configurations,
+never local, including B-026's `taskset` CPU-pinning), states an honest "root cause
+genuinely unknown" isolated fault/root-cause pairing per the user's explicit direction not
+to attempt a fourth blind fix, and gives a concrete, test-only planned fix and planned
+verification. What was implemented (commit `60d391c`, Work Log Session 1) matches the
+Diagnosis Log's plan verbatim.
+
+**Stage 1 — Bug criteria:**
+- Diagnosis Log reproduction status and evidence: present and complete (see above). PASS.
+- Fix addresses the isolated fault/fix contract as documented (mark `#[ignore]`, preserve
+  evidence trail, keep runnable on demand — not a production-code root-cause fix, which is
+  explicitly out of scope for B-028): yes. PASS.
+- Fix Verification steps followed: yes, re-ran independently in a fresh worktree at
+  `60d391c` (see Evidence below), results match Work Log Session 1's claims exactly. PASS.
+- Unrelated behavior added: none. PASS.
+
+**Stage 2 — Code quality:**
+- Correctness: `git diff dev-agent...bug/B-028-ignore-flaky-idle-reaper-test` shows exactly
+  one file changed (`the-intern/service/crates/bob/src/serve.rs`), 19 insertions, 0
+  deletions — a pure comment-block + `#[ignore = "..."]` addition. No production code
+  touched (confirmed: no changes under `crates/pi-agent-supervisor/` or any non-test path).
+  `git diff --name-status` and `git log --oneline dev-agent..bug/B-028-...` both confirm a
+  single commit (`60d391c`) touching only `serve.rs`.
+- Placement: `#[ignore = "..."]` sits directly below the pre-existing
+  `#[tokio::test(flavor = "current_thread")]` and directly above the `async fn` line —
+  matches the Diagnosis Log's planned placement and the documented `tokio-macros`
+  attribute-forwarding behavior audited in Diagnosis 1. The new B-028 comment block is
+  appended immediately after, not interleaved with, the pre-existing B-025/B-026 historical
+  comment block (verified via `git show bug/B-028-ignore-flaky-idle-reaper-test:.../serve.rs`
+  around lines 1909-1949) — the historical block is byte-identical to what B-027 left on
+  `dev-agent`.
+- Comment/message quality (explicit acceptance-criterion check): the inline
+  `#[ignore = "..."]` string references B-028, states the CI-only/never-local nature, and
+  notes production code audited correct 3x (B-025/026/027) — glanceable in `cargo test`
+  output. The doc comment block adds the falsified-hypothesis trail (B-025 timing margin,
+  B-026 multi_thread, B-027 duplicate-CI-trigger contention — each with its falsification
+  evidence), names the exact audited files
+  (`crates/pi-agent-supervisor/src/{reaper,pool,lib,process}.rs`), explicitly tells a future
+  reader not to re-audit that code without new evidence, states what kind of investigation
+  is pending (CI-runner shell access / richer instrumentation), and gives the exact re-run
+  command. This is sufficient for a future investigator to pick up cold without re-deriving
+  context from three prior bug files. PASS.
+- Tests: no new test was added (correctly — the acceptance criterion here is "stop the
+  bleeding without fabricating false signal," not a regression test for an unknown root
+  cause); the existing test is preserved and remains runnable on demand. Appropriate for
+  this bug's scope.
+- Security: N/A (test-annotation-only change).
+- Performance: N/A.
+- Bug Fix Addendum: fix is minimal (comment + one attribute, no unrelated refactoring or
+  cleanup bundled in); Diagnosis Log fix contract matches what was implemented, verbatim.
+
+**Independent re-verification (fresh worktree at `60d391c`, run from
+`the-intern/service`):**
+- `cargo test --workspace`: `serve::tests::periodic::periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt ... ignored, B-028: fails deterministically in CI only, never locally; production code audited correct 3x (B-025/026/027); root cause unknown, see bug file`.
+  `bob`'s lib test result line: `test result: ok. 157 passed; 0 failed; 1 ignored; ...`.
+  Every crate's test result line in the full run is `ok`.
+- `cargo test -p bob --lib serve::tests::periodic::periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt -- --ignored --exact`:
+  `test result: ok. 1 passed; 0 failed; 0 ignored; ...` — confirms the test still runs and
+  passes on demand.
+- `cargo fmt --all -- --check`: clean, no diff, exit 0.
+- Confirmed no lifecycle file was touched on the bug branch: `git diff --name-status
+  dev-agent...bug/B-028-ignore-flaky-idle-reaper-test` shows only
+  `M the-intern/service/crates/bob/src/serve.rs`.
+
+Both stages pass. This is a faithful implementation of the user-approved "stop the bleeding,
+document, defer" fix contract: the flaky test is ignored (no longer blocks CI), the full
+falsified-hypothesis trail is preserved in-source for a future investigator, and the test
+remains runnable on demand with an exact command. No production code was touched, no
+lifecycle file was touched on the bug branch, and no unrelated changes were bundled in.
+
+Next owner: Bug-Fix Loop.
