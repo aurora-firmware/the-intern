@@ -168,6 +168,95 @@ cd the-intern/service && cargo test -p bob --lib serve::tests::periodic::periodi
 
 ## Diagnosis Log
 
+### Diagnosis 1 — 2026-07-18
+
+Reproduction status: confirmed on CI (5 consecutive failures across 4 distinct configurations),
+never reproduced locally — carried forward unchanged from the canonical Summary/Evidence, which
+already consolidates B-025, B-026, and B-027's independent reproduction attempts (including
+B-026's `taskset` CPU-pinning oversubscription, the most aggressive local contention simulation
+attempted). Not re-verified live this session — re-running a test that fails only on the CI
+runner's specific container/process environment against this sandbox would add no new information.
+
+Evidence captured (this session, sanity-check only):
+- Read `periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt` in full
+  (`the-intern/service/crates/bob/src/serve.rs:1875-2034`). Structure is exactly as all three
+  prior diagnoses described. No divergence from what B-025/B-026/B-027 already audited.
+- `git diff dev-agent --stat -- the-intern/service` on this bug branch: empty. Code is
+  byte-identical to what B-027's fix left on `dev-agent`.
+- Re-read all three prior Diagnosis Log entries in full
+  (`project/bugs/resolved/B-025-...md`, `B-026-...md`, `B-027-...md` on `dev-agent`). Each
+  independently audited `crates/pi-agent-supervisor/src/{reaper,pool,lib,process}.rs` and found the
+  idle-reaper/pool/process-termination logic deterministic, fully time-bounded, and successfully
+  exercised by 15+ sibling tests in the same failing CI runs. Nothing in this re-read contradicts
+  or adds to that trail.
+- Confirmed `#[ignore]` / `cargo test --workspace` interaction empirically (isolated scratch
+  Cargo project, not this repository): a default `cargo test` run skips an
+  `#[ignore = "..."]`-annotated test, reports it in the `N ignored` tally, and the overall run
+  still reports `test result: ok`. `cargo test -- --ignored` runs only the ignored subset;
+  `cargo test -- --include-ignored` runs everything.
+- Confirmed via the vendored `tokio-macros` source (`tokio-macros-2.7.0/src/entry.rs:685-704`)
+  that `tokio::test`'s expansion forwards other attributes (like `#[ignore]`) onto the generated
+  test function — placing `#[ignore]` below `#[tokio::test(flavor = "current_thread")]` is safe
+  and standard.
+
+Isolated fault: not a fault in `pi-agent-supervisor`'s idle-reaper/pool/process-termination
+code — three independent audits (B-025, B-026, B-027) have already ruled that out conclusively.
+The observable failure site remains the second `tokio::time::timeout(...).expect("idle reaper must
+eventually release the one-shot session")` block, which is where all 5 CI failures panicked — this
+is the symptom location, not a defect location.
+
+Root cause: genuinely unknown, stated honestly. Three distinct, evidence-backed hypotheses (B-025:
+timing margin; B-026: `multi_thread` regression; B-027: duplicate-CI-trigger contention) were each
+proposed, implemented, and independently falsified by the next CI failure — most decisively by
+B-027, whose fix genuinely worked (confirmed via `gh run list` showing the redundant run as
+`cancelled`) yet the single, non-contended surviving run still failed identically. The remaining
+plausible explanations require CI-runner-level access (shell access to the self-hosted runner, or
+richer instrumentation than a black-box CI log) out of this repository's/session's reach. Per the
+user's explicit direction, a fourth blind fix is not being attempted.
+
+Planned fix (test-only, no production code change): mark the test `#[ignore]` with both an inline
+reason and a fuller explanatory comment block above it:
+
+```rust
+        // B-028: this test fails deterministically in CI (never locally, despite
+        // three independent sessions' increasingly aggressive local contention
+        // simulation, up to and including taskset CPU-pinning oversubscription).
+        // Three prior bugs (B-025: timing margin, B-026: multi_thread runtime,
+        // B-027: duplicate-CI-trigger contention) each proposed and implemented a
+        // plausible, evidence-backed hypothesis; each was independently falsified
+        // by the next CI failure. B-027's fix genuinely eliminated duplicate-run
+        // contention (confirmed via `gh run list`), yet the single, non-contended
+        // surviving run still failed identically. All three sessions independently
+        // audited crates/pi-agent-supervisor/src/{reaper,pool,lib,process}.rs and
+        // found the idle-reaper/pool/process-termination logic deterministic,
+        // bounded, and exercised successfully by numerous sibling tests in the same
+        // failing CI runs — do not re-audit that code without new evidence; see
+        // B-028 for the full trail. Ignored pending CI-runner-level investigation
+        // (e.g. shell access to the self-hosted runner, or richer instrumentation
+        // than a black-box CI log) that this repository's tooling cannot currently
+        // perform. Run explicitly with:
+        //   cargo test -p bob --lib serve::tests::periodic::periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt -- --ignored --exact
+        #[tokio::test(flavor = "current_thread")]
+        #[ignore = "B-028: fails deterministically in CI only, never locally; production code audited correct 3x (B-025/026/027); root cause unknown, see bug file"]
+        async fn periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt() {
+```
+
+The inline `#[ignore = "..."]` string stays short and glanceable (what `cargo test` prints per
+test); the doc comment above carries the fuller falsified-hypothesis trail for a source reader,
+without disturbing the pre-existing B-025/B-026 historical comment block that stays as accurate
+context on the test's design history.
+
+Planned verification:
+```bash
+cd the-intern/service
+cargo test --workspace
+# expected: the target test reports as "ignored" in the summary line; overall result is `ok`.
+cargo test -p bob --lib serve::tests::periodic::periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt -- --ignored --exact
+# expected: still runnable explicitly.
+cargo fmt --all -- --check
+```
+Real end-to-end confirmation is observing CI on PR #38 go green on the next push.
+
 ## Work Log
 
 ## Review
