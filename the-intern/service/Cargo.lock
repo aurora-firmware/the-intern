@@ -146,6 +146,7 @@ dependencies = [
  "admin-rpc",
  "async-trait",
  "bob-core",
+ "chrono",
  "clap",
  "extension-ipc",
  "figment",
@@ -176,7 +177,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
- "toml_edit",
  "uuid",
 ]
 

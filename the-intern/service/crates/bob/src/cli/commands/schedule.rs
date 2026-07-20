@@ -17,13 +17,14 @@ pub(super) enum AddSource {
 
 /// Resolve the `--prompt`/`--file` CLI arguments into an [`AddSource`].
 ///
-/// `--file` is canonicalised to an absolute path against the caller's working
+/// `--file` is resolved to an absolute path against the caller's working
 /// directory (so a relative path resolves against the operator's shell), and the
 /// absolute path is what gets stored — the `bob serve` process re-reads it from
 /// its own working directory at each fire, where only an absolute path resolves
-/// reliably. A missing path, a non-file, or a non-UTF-8 path is an error so the
-/// operator finds out at add time rather than silently at fire time. Exactly one
-/// of `--prompt`/`--file` must be present (clap also enforces this).
+/// reliably. File existence is intentionally a fire-time concern, so a missing
+/// path is still accepted here as long as the resulting path is absolute and
+/// UTF-8. Exactly one of `--prompt`/`--file` must be present (clap also
+/// enforces this).
 pub(super) fn resolve_add_source(
     prompt: Option<&str>,
     file: Option<&str>,
@@ -31,14 +32,15 @@ pub(super) fn resolve_add_source(
     match (prompt, file) {
         (Some(p), None) => Ok(AddSource::Prompt(p.to_owned())),
         (None, Some(f)) => {
-            let abs = std::fs::canonicalize(f).map_err(|e| {
-                invalid_request_error(format!("--file {f:?} could not be resolved: {e}"))
-            })?;
-            if !abs.is_file() {
-                return Err(invalid_request_error(format!(
-                    "--file {f:?} is not a regular file"
-                )));
-            }
+            let abs = if std::path::Path::new(f).is_absolute() {
+                std::path::PathBuf::from(f)
+            } else {
+                std::env::current_dir()
+                    .map_err(|e| {
+                        invalid_request_error(format!("current directory unavailable: {e}"))
+                    })?
+                    .join(f)
+            };
             let abs = abs.to_str().ok_or_else(|| {
                 invalid_request_error(format!("--file {f:?} resolves to a non-UTF-8 path"))
             })?;
@@ -51,19 +53,36 @@ pub(super) fn resolve_add_source(
     }
 }
 
+/// Validate the `--cwd` CLI argument. `cwd` is optional and independent of
+/// the prompt source; when given it must be an absolute path. The directory
+/// is not required to exist at add time (existence is a fire-time concern),
+/// so this only checks the path shape.
+pub(super) fn validate_cwd(cwd: Option<&str>) -> ServiceResult<()> {
+    if let Some(cwd) = cwd {
+        if !std::path::Path::new(cwd).is_absolute() {
+            return Err(invalid_request_error(format!(
+                "--cwd {cwd:?} must be an absolute path"
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn run_add(
     json_output: bool,
     id: &str,
     cron: &str,
     prompt: Option<&str>,
     file: Option<&str>,
+    cwd: Option<&str>,
 ) -> ServiceResult<()> {
-    // Resolve (and canonicalise a --file) before touching the service so a bad
-    // path fails fast, before any RPC round-trip.
+    // Resolve (and canonicalise a --file) and validate --cwd before touching
+    // the service so a bad path fails fast, before any RPC round-trip.
     let source = resolve_add_source(prompt, file)?;
+    validate_cwd(cwd)?;
     let cfg = load_config()?;
     let mut out = io::stdout();
-    run_add_with_config(json_output, id, cron, source, &cfg, &mut out)
+    run_add_with_config(json_output, id, cron, source, cwd, &cfg, &mut out)
 }
 
 pub(super) fn run_remove(json_output: bool, id: &str) -> ServiceResult<()> {
@@ -89,10 +108,11 @@ pub(super) fn run_add_with_config(
     id: &str,
     cron: &str,
     source: AddSource,
+    cwd: Option<&str>,
     cfg: &BobConfig,
     out: &mut impl Write,
 ) -> ServiceResult<()> {
-    run_add_with_caller(json_output, id, cron, source, out, |method, params| {
+    run_add_with_caller(json_output, id, cron, source, cwd, out, |method, params| {
         run_async(call_admin(cfg, method, params))
     })
 }
@@ -133,13 +153,17 @@ fn run_add_with_caller(
     id: &str,
     cron: &str,
     source: AddSource,
+    cwd: Option<&str>,
     out: &mut impl Write,
     mut caller: impl FnMut(&str, Value) -> ServiceResult<Value>,
 ) -> ServiceResult<()> {
-    let params = match &source {
+    let mut params = match &source {
         AddSource::Prompt(prompt) => json!({ "id": id, "cron": cron, "prompt": prompt }),
         AddSource::File(file) => json!({ "id": id, "cron": cron, "file": file }),
     };
+    if let Some(cwd) = cwd {
+        params["cwd"] = json!(cwd);
+    }
     let response = caller("schedule.add", params)?;
 
     if json_output {
@@ -219,8 +243,13 @@ fn write_human_schedule(out: &mut impl Write, response: &Value) -> ServiceResult
                 "job in schedule.list must have a prompt or file",
             ));
         };
-        writeln!(out, "{id}  {cron}  {source}")
-            .map_err(|e| invalid_request_error(format!("failed to write schedule output: {e}")))?;
+        // `cwd` is optional and independent of the prompt source; omitted
+        // when the entry has none.
+        match job.get("cwd").and_then(|v| v.as_str()) {
+            Some(cwd) => writeln!(out, "{id}  {cron}  {source}  cwd: {cwd}"),
+            None => writeln!(out, "{id}  {cron}  {source}"),
+        }
+        .map_err(|e| invalid_request_error(format!("failed to write schedule output: {e}")))?;
     }
     Ok(())
 }
@@ -231,7 +260,7 @@ mod tests {
 
     use super::{
         resolve_add_source, run_add_with_caller, run_list_with_caller, run_reload_with_caller,
-        run_remove_with_caller, AddSource,
+        run_remove_with_caller, validate_cwd, AddSource,
     };
 
     #[test]
@@ -242,6 +271,7 @@ mod tests {
             "foo",
             "* * * * *",
             AddSource::Prompt("check mail".to_owned()),
+            None,
             &mut out,
             |method, params| {
                 assert_eq!(method, "schedule.add");
@@ -268,6 +298,7 @@ mod tests {
             "foo",
             "* * * * *",
             AddSource::Prompt("check mail".to_owned()),
+            None,
             &mut out,
             |_, _| Ok(json!({"ok": true})),
         )
@@ -338,6 +369,61 @@ mod tests {
     }
 
     #[test]
+    fn schedule_list_human_output_includes_cwd_when_entry_has_one() {
+        let mut out = Vec::new();
+        run_list_with_caller(false, &mut out, |_, _| {
+            Ok(json!([
+                {
+                    "id": "job-1",
+                    "cron": "0 * * * *",
+                    "prompt": "check calendar",
+                    "cwd": "/srv/workspaces/a",
+                }
+            ]))
+        })
+        .expect("list succeeds");
+
+        let output = String::from_utf8(out).expect("utf8");
+        assert!(output.contains("/srv/workspaces/a"), "output was: {output}");
+    }
+
+    #[test]
+    fn schedule_list_human_output_omits_cwd_when_entry_has_none() {
+        let mut out = Vec::new();
+        run_list_with_caller(false, &mut out, |_, _| {
+            Ok(json!([{"id": "job-1", "cron": "0 * * * *", "prompt": "check calendar"}]))
+        })
+        .expect("list succeeds");
+
+        let output = String::from_utf8(out).expect("utf8");
+        assert!(
+            !output.to_lowercase().contains("cwd"),
+            "output was: {output}"
+        );
+    }
+
+    #[test]
+    fn schedule_list_json_output_includes_cwd_field_when_entry_has_one() {
+        let mut out = Vec::new();
+        run_list_with_caller(true, &mut out, |_, _| {
+            Ok(json!([
+                {
+                    "id": "job-1",
+                    "cron": "0 * * * *",
+                    "prompt": "check calendar",
+                    "cwd": "/srv/workspaces/a",
+                }
+            ]))
+        })
+        .expect("list succeeds");
+
+        assert_eq!(
+            String::from_utf8(out).expect("utf8"),
+            "[{\"cron\":\"0 * * * *\",\"cwd\":\"/srv/workspaces/a\",\"id\":\"job-1\",\"prompt\":\"check calendar\"}]\n"
+        );
+    }
+
+    #[test]
     fn schedule_reload_calls_schedule_reload_method() {
         let mut out = Vec::new();
         run_reload_with_caller(false, &mut out, |method, params| {
@@ -359,6 +445,56 @@ mod tests {
         assert_eq!(String::from_utf8(out).expect("utf8"), "{\"ok\":true}\n");
     }
 
+    // --- per-entry working directory (--cwd) ---
+
+    #[test]
+    fn schedule_add_sends_cwd_param_when_cwd_is_given() {
+        let mut out = Vec::new();
+        run_add_with_caller(
+            false,
+            "foo",
+            "* * * * *",
+            AddSource::Prompt("check mail".to_owned()),
+            Some("/srv/workspaces/a"),
+            &mut out,
+            |method, params| {
+                assert_eq!(method, "schedule.add");
+                assert_eq!(
+                    params,
+                    json!({
+                        "id": "foo",
+                        "cron": "* * * * *",
+                        "prompt": "check mail",
+                        "cwd": "/srv/workspaces/a",
+                    })
+                );
+                Ok(json!({"ok": true}))
+            },
+        )
+        .expect("add succeeds");
+    }
+
+    #[test]
+    fn schedule_add_omits_cwd_param_when_cwd_is_not_given() {
+        let mut out = Vec::new();
+        run_add_with_caller(
+            false,
+            "foo",
+            "* * * * *",
+            AddSource::Prompt("check mail".to_owned()),
+            None,
+            &mut out,
+            |_, params| {
+                assert!(
+                    params.get("cwd").is_none(),
+                    "cwd key must be omitted when --cwd is not given: {params}"
+                );
+                Ok(json!({"ok": true}))
+            },
+        )
+        .expect("add succeeds");
+    }
+
     // --- file-backed prompts (--file) ---
 
     #[test]
@@ -369,6 +505,7 @@ mod tests {
             "foo",
             "0 9 * * *",
             AddSource::File("/abs/prompt.txt".to_owned()),
+            None,
             &mut out,
             |method, params| {
                 assert_eq!(method, "schedule.add");
@@ -384,6 +521,29 @@ mod tests {
         assert_eq!(
             String::from_utf8(out).expect("utf8"),
             "schedule added: foo\n"
+        );
+    }
+
+    #[test]
+    fn validate_cwd_accepts_an_absolute_path() {
+        validate_cwd(Some("/srv/workspaces/a")).expect("absolute cwd must validate");
+    }
+
+    #[test]
+    fn validate_cwd_accepts_none() {
+        validate_cwd(None).expect("missing cwd must validate");
+    }
+
+    #[test]
+    fn validate_cwd_errors_on_a_relative_path() {
+        let err = validate_cwd(Some("relative/workspace")).expect_err("relative cwd must error");
+        assert!(
+            err.to_string().to_lowercase().contains("cwd"),
+            "message must mention cwd: {err}"
+        );
+        assert!(
+            err.to_string().contains("absolute"),
+            "message must mention absolute: {err}"
         );
     }
 
@@ -417,13 +577,32 @@ mod tests {
     }
 
     #[test]
-    fn resolve_add_source_errors_on_missing_file() {
-        let err = resolve_add_source(None, Some("/nonexistent/abs/does-not-exist.txt"))
-            .expect_err("missing file must error");
-        assert!(
-            err.to_string().to_lowercase().contains("file"),
-            "message must mention the file: {err}"
+    fn resolve_add_source_accepts_an_absolute_path_even_when_the_file_does_not_exist_yet() {
+        let src = resolve_add_source(None, Some("/nonexistent/abs/does-not-exist.txt"))
+            .expect("absolute missing file path must be accepted");
+        assert_eq!(
+            src,
+            AddSource::File("/nonexistent/abs/does-not-exist.txt".to_owned())
         );
+    }
+
+    #[test]
+    fn resolve_add_source_resolves_a_relative_file_path_against_the_callers_working_directory() {
+        let src = resolve_add_source(None, Some("relative/prompt.txt"))
+            .expect("relative file path must resolve to an absolute path");
+        match src {
+            AddSource::File(abs) => {
+                assert!(
+                    std::path::Path::new(&abs).is_absolute(),
+                    "resolved path must be absolute: {abs}"
+                );
+                assert!(
+                    abs.ends_with("relative/prompt.txt"),
+                    "resolved path must preserve the caller-supplied suffix: {abs}"
+                );
+            }
+            other => panic!("expected AddSource::File, got {other:?}"),
+        }
     }
 
     #[test]

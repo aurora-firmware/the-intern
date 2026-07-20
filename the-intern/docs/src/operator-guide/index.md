@@ -240,6 +240,65 @@ Bob's TOML configuration file is located at:
 
 ---
 
+## Working directory for pi-agent sessions
+
+`bob` controls the working directory (cwd) each supervised `pi` process runs
+in via the service-wide `pi_agent_cwd` config key and, for scheduled jobs, an
+optional per-entry `cwd` (see [Scheduled jobs](#scheduled-jobs)). This lets pi
+discover project context (`AGENTS.md`/`CLAUDE.md`), skills, and relative
+prompt-file paths from a predictable directory instead of whichever directory
+`bob serve` happened to be launched from.
+
+### `pi_agent_cwd` (service-wide)
+
+`pi_agent_cwd` is a top-level key in `config.toml` — not nested under any
+`[subsystem]` table — that sets the working directory for every `pi` RPC
+worker the supervisor spawns for the `bob serve` pool. Today that pool is
+exercised by the scheduler, the only shipped channel adapter (see
+[Channel adapters and interactive chat](#channel-adapters-and-interactive-chat)):
+
+```toml
+pi_agent_cwd = "/srv/workspaces/default"
+```
+
+- **Must be absolute.** A relative value fails configuration loading
+  immediately with a clear error naming `pi_agent_cwd`.
+- **Default: unset.** When `pi_agent_cwd` is not set, RPC workers inherit the
+  launch cwd of the `bob serve` process itself — the behavior bob has always
+  had. Set it explicitly so pi's context-file discovery, skills, and any
+  relative paths in prompts resolve predictably.
+- **Existence is not checked at config load.** A `pi_agent_cwd` naming a
+  directory that does not exist still loads successfully. A missing directory
+  only surfaces later, at worker-spawn time, as a logged (warned) spawn
+  failure; for a scheduled firing that would use it, the tick is skipped with
+  a warning rather than crashing the service.
+
+### Precedence
+
+When a scheduled job fires, bob resolves the working directory for that run
+using this precedence, highest priority first:
+
+1. **Per-entry `cwd`** on the schedule entry, if set (`--cwd` on
+   `bob schedule add`; see [Scheduled jobs](#scheduled-jobs)).
+2. **Service-wide `pi_agent_cwd`**, if set.
+3. **Inherited launch cwd** of the `bob serve` process, if neither of the
+   above is set.
+
+A job added without `--cwd` simply falls through to `pi_agent_cwd` (or, if
+that is also unset, to the inherited launch cwd) exactly as it did before
+this feature existed.
+
+### Interactive `bob chat` uses the caller's working directory
+
+`bob chat` does not consult `pi_agent_cwd` at all. Instead, the CLI captures
+the current working directory where `bob chat` was invoked and sends it to the
+service in `session.interactive.open`; the supervised interactive `pi` session
+is then spawned in that directory. This keeps interactive chat independent of
+`pi_agent_cwd` and any scheduled job's `cwd`, while also avoiding the old
+behavior where chat silently inherited the launch cwd of `bob serve`.
+
+---
+
 ## Audit log
 
 `bob` writes an append-only JSONL audit log. Each line is one JSON object
@@ -438,7 +497,8 @@ Or set it via environment variable: `BOB_SCHEDULE_STORE_PATH`.
     {
       "id": "daily-report",
       "cron": "0 9 * * *",
-      "file": "/opt/bob/prompts/daily-report.txt"
+      "file": "/opt/bob/prompts/daily-report.txt",
+      "cwd": "/srv/workspaces/reports"
     }
   ]
 }
@@ -463,21 +523,41 @@ Each entry has an `id`, a `cron`, and **exactly one** prompt source — either a
 | `cron`   | string | 5-field cron expression (see below)                                             |
 | `prompt` | string | Literal pi-agent prompt text run on each tick                                    |
 | `file`   | string | Absolute path to a file whose contents are the prompt, read fresh on each tick   |
+| `cwd`    | string | Optional absolute path: the working directory this entry's session runs in, overriding `pi_agent_cwd` for this entry only |
 
 Provide exactly one of `prompt` or `file`. Setting both, setting neither, or
 giving `file` a relative path is rejected when the store is loaded (the whole
-store fails to load rather than skipping the bad entry).
+store fails to load rather than skipping the bad entry). A `cwd` is always
+optional; when present it must also be an absolute path, or the store fails
+to load.
 
 **File-backed prompts.** When an entry uses `file`, bob reads that file's
 contents *fresh every time the job fires*, so editing the file changes what
 future runs send without touching the schedule. If the file is missing,
 unreadable, or blank at fire time, that tick is skipped and a warning is logged.
 
-> **Security:** unlike `schedules.json` itself, a `file` prompt is read with no
-> ownership or permission check — a deliberate relaxation of the ADR-012 trust
-> boundary. Because scheduled jobs bypass `[policy].admitted_users`, a prompt
-> file that another user can write is an injection path into a trusted job. Keep
-> prompt files under the same owner-only protection as the schedule store.
+**Per-entry working directory (`cwd`).** An entry may also carry an optional
+absolute `cwd`, naming the directory that entry's pi-agent session runs in
+when it fires. When present it takes precedence over the service-wide
+`pi_agent_cwd` for that entry only — see
+[Working directory for pi-agent sessions](#working-directory-for-pi-agent-sessions)
+for the full precedence rule. Like `file`, existence is not checked when the
+entry is added or when the store is loaded — only at fire time. If the
+resolved `cwd` does not exist when the job fires, that tick is skipped with a
+warning and a monitoring failure record, and the entry fires again on its next
+tick.
+
+> **Security:** unlike `schedules.json` itself, neither a `file` prompt nor a
+> `cwd` is read with any ownership or permission check — a deliberate
+> relaxation of the ADR-012 trust boundary. Because scheduled jobs bypass
+> `[policy].admitted_users`, a prompt file or working directory that another
+> user can write is an injection path into a trusted job. A writable `cwd` is
+> especially significant: pi automatically loads `AGENTS.md`/`CLAUDE.md` and
+> skills from a session's working directory, so a maliciously-writable `cwd`
+> can inject context and instructions the operator never intended the job to
+> run with. Keep both prompt files and every scheduled `cwd` under the same
+> owner-only protection as `schedules.json` itself — filesystem permissions,
+> not a bob-side ownership check, are the gate.
 
 #### Cron expression format
 
@@ -514,11 +594,22 @@ Print all currently active scheduled jobs:
 bob schedule list
 ```
 
+Each entry's line includes `cwd: <path>` at the end when the entry has one,
+and omits it entirely otherwise:
+
+```
+check-email   */15 * * * *  prompt: Check the inbox and summarise any unread messages.
+daily-report  0 9 * * *  file: /opt/bob/prompts/daily-report.txt  cwd: /srv/workspaces/reports
+```
+
 For machine-readable output:
 
 ```bash
 bob schedule list --json
 ```
+
+The same `cwd` field appears in the JSON output whenever the entry has one,
+and is omitted from the object otherwise.
 
 #### `bob schedule add`
 
@@ -532,29 +623,42 @@ bob schedule add \
   --prompt "Check the inbox and summarise any unread messages."
 ```
 
-Or read the prompt from a file, re-read fresh on every run:
+Or read the prompt from a file, re-read fresh on every run, and pin the job
+to a specific working directory:
 
 ```bash
 bob schedule add \
   --id "daily-report" \
   --cron "0 9 * * *" \
-  --file ./prompts/daily-report.txt
+  --file ./prompts/daily-report.txt \
+  --cwd /srv/workspaces/reports
 ```
 
 Flags:
 
-| Flag       | Required        | Description                                            |
-|------------|-----------------|--------------------------------------------------------|
-| `--id`     | yes             | Unique job identifier                                  |
-| `--cron`   | yes             | 5-field cron expression                                |
-| `--prompt` | one of these    | Literal pi-agent prompt text for each tick             |
-| `--file`   | one of these    | Path to a file whose contents are the prompt           |
+| Flag       | Required        | Description                                                     |
+|------------|-----------------|-------------------------------------------------------------------|
+| `--id`     | yes             | Unique job identifier                                            |
+| `--cron`   | yes             | 5-field cron expression                                          |
+| `--prompt` | one of these    | Literal pi-agent prompt text for each tick                       |
+| `--file`   | one of these    | Path to a file whose contents are the prompt                     |
+| `--cwd`    | no              | Absolute path: working directory the job runs in when it fires   |
 
 Provide exactly one of `--prompt` or `--file`; they are mutually exclusive. A
 `--file` path is resolved to an absolute path against your shell's working
-directory (so relative paths work) and **must exist when you run the command** —
-a missing file is rejected immediately rather than stored. The absolute path is
-what gets recorded, and its contents are read fresh at each run.
+directory (so relative paths work). The absolute path is what gets recorded,
+and its contents are read fresh at each run. The file does **not** need to
+exist when you add the schedule entry; existence is checked only when that fire
+actually runs.
+
+`--cwd` is optional and independent of `--prompt`/`--file` — combine it with
+either. It must be an absolute path or the command fails immediately without
+contacting the service. Unlike `--file`, the directory is **not** required to
+exist when you run the command, since directory existence is a fire-time
+concern (see
+[Working directory for pi-agent sessions](#working-directory-for-pi-agent-sessions)).
+When `--cwd` is omitted, the entry falls back to `pi_agent_cwd` and then to
+the inherited launch cwd, per the same precedence.
 
 #### `bob schedule remove`
 

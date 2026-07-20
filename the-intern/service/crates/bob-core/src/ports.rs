@@ -57,12 +57,89 @@ pub trait SessionPool: Send + Sync {
 pub trait PersistenceStore: Send + Sync {
     async fn enqueue(&self, event: InternalEvent) -> ServiceResult<()>;
     async fn dequeue_next(&self) -> ServiceResult<Option<InternalEvent>>;
+
+    /// Appends `event` to the inbound queue together with an optional
+    /// job-id correlator (ADR-013). The default implementation ignores the
+    /// correlator and delegates to `enqueue`, so implementors that only
+    /// provide the plain queue methods keep compiling unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as `enqueue`.
+    async fn enqueue_with_job_id(
+        &self,
+        event: InternalEvent,
+        job_id: Option<String>,
+    ) -> ServiceResult<()> {
+        let _ = job_id;
+        self.enqueue(event).await
+    }
+
+    /// Removes and returns the oldest inbound event together with the
+    /// job-id correlator it was enqueued with (ADR-013). The default
+    /// implementation delegates to `dequeue_next` and always reports an
+    /// absent correlator, since implementors that only provide the plain
+    /// queue methods have nowhere to store one.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as `dequeue_next`.
+    async fn dequeue_next_with_job_id(
+        &self,
+    ) -> ServiceResult<Option<(InternalEvent, Option<String>)>> {
+        Ok(self.dequeue_next().await?.map(|event| (event, None)))
+    }
+
+    /// Appends a `Periodic`-kind `event` to a dedicated periodic queue,
+    /// entirely separate from the general inbound queue (B-023), together
+    /// with an optional job-id correlator (ADR-013). Keeping periodic
+    /// admission on its own queue means the periodic dispatcher never has to
+    /// dequeue (and potentially reorder) unrelated non-periodic traffic on
+    /// the general queue, and non-periodic dispatch is never delayed by
+    /// periodic backlog or vice versa.
+    ///
+    /// The default implementation delegates to `enqueue_with_job_id`, so
+    /// implementors that only provide the general queue keep compiling
+    /// unchanged; note that under the default, such an event is only
+    /// observable via the general dequeue methods, not
+    /// `dequeue_next_periodic_with_job_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as `enqueue_with_job_id`.
+    async fn enqueue_periodic_with_job_id(
+        &self,
+        event: InternalEvent,
+        job_id: Option<String>,
+    ) -> ServiceResult<()> {
+        self.enqueue_with_job_id(event, job_id).await
+    }
+
+    /// Removes and returns the oldest event from the dedicated periodic
+    /// queue (B-023) together with the job-id correlator it was enqueued
+    /// with, or `None` when empty. The default implementation always
+    /// reports an empty periodic queue, matching implementors that do not
+    /// maintain one (their periodic events, enqueued via the default
+    /// `enqueue_periodic_with_job_id` above, remain reachable only through
+    /// the general dequeue methods).
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as `dequeue_next_with_job_id`.
+    async fn dequeue_next_periodic_with_job_id(
+        &self,
+    ) -> ServiceResult<Option<(InternalEvent, Option<String>)>> {
+        Ok(None)
+    }
+
     async fn put_session_state(&self, id: SessionId, state: SessionState) -> ServiceResult<()>;
     async fn get_session_state(&self, id: SessionId) -> ServiceResult<Option<SessionState>>;
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use async_trait::async_trait;
     use futures::executor::block_on;
 
@@ -303,5 +380,115 @@ mod tests {
         let result: ServiceResult<Option<SessionState>> = block_on(store.get_session_state(id));
         assert!(result.is_ok());
         assert!(result.expect("stub get_session_state must be ok").is_none());
+    }
+
+    /// A `PersistenceStore` implementor that only provides the plain
+    /// `enqueue`/`dequeue_next` methods, exercising the default
+    /// implementations of the correlator-carrying methods (ADR-013).
+    #[derive(Default)]
+    struct RecordingPersistenceStore {
+        events: Mutex<Vec<InternalEvent>>,
+    }
+
+    #[async_trait]
+    impl PersistenceStore for RecordingPersistenceStore {
+        async fn enqueue(&self, event: InternalEvent) -> ServiceResult<()> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+
+        async fn dequeue_next(&self) -> ServiceResult<Option<InternalEvent>> {
+            Ok(self.events.lock().unwrap().pop())
+        }
+
+        async fn put_session_state(
+            &self,
+            _id: SessionId,
+            _state: SessionState,
+        ) -> ServiceResult<()> {
+            Ok(())
+        }
+
+        async fn get_session_state(&self, _id: SessionId) -> ServiceResult<Option<SessionState>> {
+            Ok(None)
+        }
+    }
+
+    // AC-3: an implementor that does not override the correlator-carrying
+    // methods keeps compiling and `enqueue_with_job_id` delegates to the
+    // plain `enqueue`, ignoring the correlator.
+    #[test]
+    fn persistence_store_enqueue_with_job_id_default_delegates_to_plain_enqueue() {
+        let store = RecordingPersistenceStore::default();
+        let event = InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "* * * * *".to_owned(),
+        };
+
+        let result = block_on(store.enqueue_with_job_id(event.clone(), Some("job-1".to_owned())));
+
+        assert!(result.is_ok());
+        assert_eq!(store.events.lock().unwrap().as_slice(), [event]);
+    }
+
+    // AC-3: an implementor that does not override the correlator-carrying
+    // methods yields an absent correlator on dequeue, regardless of what was
+    // enqueued.
+    #[test]
+    fn persistence_store_dequeue_next_with_job_id_default_returns_absent_correlator() {
+        let store = RecordingPersistenceStore::default();
+        let event = InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "* * * * *".to_owned(),
+        };
+        block_on(store.enqueue(event.clone())).unwrap();
+
+        let result = block_on(store.dequeue_next_with_job_id());
+
+        assert!(result.is_ok());
+        assert_eq!(
+            result.expect("default dequeue_next_with_job_id must be ok"),
+            Some((event, None))
+        );
+    }
+
+    // B-023: an implementor that does not override the periodic-queue
+    // methods keeps compiling and `enqueue_periodic_with_job_id` delegates
+    // to `enqueue_with_job_id` (the general queue), ignoring the
+    // periodic/general distinction.
+    #[test]
+    fn persistence_store_enqueue_periodic_with_job_id_default_delegates_to_enqueue_with_job_id() {
+        let store = RecordingPersistenceStore::default();
+        let event = InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "* * * * *".to_owned(),
+        };
+
+        let result =
+            block_on(store.enqueue_periodic_with_job_id(event.clone(), Some("job-1".to_owned())));
+
+        assert!(result.is_ok());
+        assert_eq!(store.events.lock().unwrap().as_slice(), [event]);
+    }
+
+    // B-023: an implementor that does not maintain a dedicated periodic
+    // queue reports it as always empty, regardless of what was enqueued via
+    // the default `enqueue_periodic_with_job_id`.
+    #[test]
+    fn persistence_store_dequeue_next_periodic_with_job_id_default_returns_none() {
+        let store = RecordingPersistenceStore::default();
+        let event = InternalEvent {
+            kind: DeliveryKind::Periodic,
+            payload: "* * * * *".to_owned(),
+        };
+        block_on(store.enqueue_periodic_with_job_id(event, Some("job-1".to_owned()))).unwrap();
+
+        let result = block_on(store.dequeue_next_periodic_with_job_id());
+
+        assert!(result.is_ok());
+        assert_eq!(
+            result.expect("default dequeue_next_periodic_with_job_id must be ok"),
+            None
+        );
     }
 }

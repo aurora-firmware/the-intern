@@ -116,6 +116,13 @@ pub enum DispatchOutcome {
         id: serde_json::Value,
         /// A freshly-allocated session id to use for the spawned pi process.
         session_id: bob_core::types::SessionId,
+        /// The working directory the `bob chat` client was invoked from
+        /// (params.cwd), threaded through to the spawn-config construction
+        /// path (CR-005 / B-021). `None` when the client omitted it or the
+        /// field failed to parse as a string — the spawned child then
+        /// inherits `bob serve`'s own launch cwd. `pi_agent_cwd` is never
+        /// consulted for interactive sessions (CR-005).
+        cwd: Option<PathBuf>,
     },
 }
 
@@ -239,7 +246,10 @@ impl Dispatcher {
             "schedule.remove" => self.handle_schedule_remove(id, &request.params).await,
             "schedule.list" => self.handle_schedule_list(id).await,
             "schedule.reload" => self.handle_schedule_reload(id).await,
-            "session.interactive.open" => self.handle_session_interactive_open(id).await,
+            "session.interactive.open" => {
+                self.handle_session_interactive_open(id, &request.params)
+                    .await
+            }
             other => DispatchOutcome::Err(ErrorResponse::error(
                 id,
                 CODE_METHOD_NOT_FOUND,
@@ -438,7 +448,16 @@ impl Dispatcher {
     /// socket-access permission check performed at connection accept time.
     ///
     /// Returns `-32601 Method not found` when no supervisor handle is configured.
-    async fn handle_session_interactive_open(&self, id: Value) -> DispatchOutcome {
+    ///
+    /// Parses an optional `params.cwd` string (CR-005 / B-021): the `bob chat`
+    /// client sends its own invocation cwd here so the spawned pi child can run
+    /// in that directory instead of `bob serve`'s own launch cwd. Per CR-005,
+    /// `pi_agent_cwd` is never consulted on this path.
+    async fn handle_session_interactive_open(
+        &self,
+        id: Value,
+        params: &Option<Value>,
+    ) -> DispatchOutcome {
         let Some(_) = self.supervisor else {
             return DispatchOutcome::Err(ErrorResponse::error(
                 id,
@@ -448,11 +467,41 @@ impl Dispatcher {
             ));
         };
         let session_id = bob_core::types::SessionId::new();
+        let cwd = match params.as_ref().and_then(|p| p.get("cwd")) {
+            None => None,
+            Some(value) => {
+                let Some(raw_cwd) = value.as_str() else {
+                    return DispatchOutcome::Err(ErrorResponse::error(
+                        id,
+                        CODE_INVALID_REQUEST,
+                        "session.interactive.open: params.cwd must be a non-blank absolute path string when present",
+                        Some(json!({ "category": "invalid_request" })),
+                    ));
+                };
+
+                let trimmed = raw_cwd.trim();
+                if trimmed.is_empty() || !std::path::Path::new(trimmed).is_absolute() {
+                    return DispatchOutcome::Err(ErrorResponse::error(
+                        id,
+                        CODE_INVALID_REQUEST,
+                        "session.interactive.open: params.cwd must be a non-blank absolute path string when present",
+                        Some(json!({ "category": "invalid_request" })),
+                    ));
+                }
+
+                Some(PathBuf::from(trimmed))
+            }
+        };
         tracing::debug!(
             session_id = %session_id,
+            cwd = ?cwd,
             "session.interactive.open: allocated session id, awaiting fd receive"
         );
-        DispatchOutcome::InteractiveSessionOpening { id, session_id }
+        DispatchOutcome::InteractiveSessionOpening {
+            id,
+            session_id,
+            cwd,
+        }
     }
 
     /// Handle `report.submit`.
@@ -638,6 +687,35 @@ impl Dispatcher {
                 }
             };
 
+        // `cwd` is an optional, independent field naming the working directory
+        // the job should run from (T-118/T-124); it is not part of the
+        // prompt/file mutual-exclusion above.
+        let raw_cwd = match params_value.get("cwd") {
+            None => None,
+            Some(value) => {
+                let Some(cwd) = value.as_str() else {
+                    return DispatchOutcome::Err(ErrorResponse::error(
+                        id,
+                        CODE_INVALID_REQUEST,
+                        "schedule.add: params.cwd must be a non-blank absolute path string when present",
+                        Some(json!({ "category": "invalid_request" })),
+                    ));
+                };
+
+                let trimmed = cwd.trim();
+                if trimmed.is_empty() {
+                    return DispatchOutcome::Err(ErrorResponse::error(
+                        id,
+                        CODE_INVALID_REQUEST,
+                        "schedule.add: params.cwd must be a non-blank absolute path string when present",
+                        Some(json!({ "category": "invalid_request" })),
+                    ));
+                }
+
+                Some(trimmed.to_owned())
+            }
+        };
+
         // Validate the cron expression (must be a valid 5-field expression).
         let parser = CronParser::builder().seconds(Seconds::Disallowed).build();
         if let Err(err) = parser.parse(&entry_cron) {
@@ -679,12 +757,17 @@ impl Dispatcher {
             Ok(e) => e,
             Err(outcome) => return outcome,
         };
-        entries.push(ScheduleEntry {
+        let mut new_entry = ScheduleEntry {
             id: entry_id,
             cron: entry_cron,
             prompt: entry_prompt,
             file: entry_file,
-        });
+            cwd: None,
+        };
+        if let Some(cwd) = raw_cwd {
+            new_entry = new_entry.with_cwd(cwd);
+        }
+        entries.push(new_entry);
 
         if let Err(outcome) = self.write_and_reload(&id, schedule_store_path, entries, handle) {
             return outcome;
@@ -791,6 +874,9 @@ impl Dispatcher {
                 if let Some(file) = &e.file {
                     obj.insert("file".to_owned(), json!(file));
                 }
+                if let Some(cwd) = &e.cwd {
+                    obj.insert("cwd".to_owned(), json!(cwd));
+                }
                 Value::Object(obj)
             })
             .collect();
@@ -875,7 +961,7 @@ impl Dispatcher {
         bob_core::types::schedule::read_schedule_store(path).map_err(|e| {
             DispatchOutcome::Err(ErrorResponse::error(
                 id.clone(),
-                CODE_METHOD_NOT_FOUND,
+                CODE_INVALID_REQUEST,
                 "schedule method: failed to read schedule store",
                 Some(json!({
                     "category": "persistence",
@@ -919,7 +1005,7 @@ impl Dispatcher {
             |e| {
                 DispatchOutcome::Err(ErrorResponse::error(
                     id.clone(),
-                    CODE_METHOD_NOT_FOUND,
+                    CODE_INVALID_REQUEST,
                     "schedule method: failed to write schedule store",
                     Some(json!({
                         "category": "persistence",
@@ -2236,6 +2322,102 @@ mod tests {
         );
     }
 
+    // AC-2 (T-124): schedule.add with a relative cwd is rejected with a clear
+    // error and writes nothing to the store.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_with_relative_cwd_returns_error_and_writes_nothing() {
+        use bob_core::types::schedule::read_schedule_store;
+
+        let (_dir, store_path) = temp_schedule_store_path();
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_schedule_store_path(store_path.clone());
+
+        let req = make_request_with_params(
+            "schedule.add",
+            json!(351),
+            json!({
+                "id": "bad-cwd-job",
+                "cron": "0 9 * * *",
+                "prompt": "run",
+                "cwd": "relative/dir"
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(351));
+                let data = resp.error.data.expect("error data must be present");
+                let reason = data["reason"].as_str().expect("reason must be a string");
+                assert!(
+                    reason.contains("relative") || reason.contains("absolute"),
+                    "error must describe the path problem: {reason}"
+                );
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for relative cwd"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+
+        let entries = read_schedule_store(&store_path).expect("read store");
+        assert!(
+            entries.iter().all(|e| e.id != "bad-cwd-job"),
+            "entry with a relative cwd must not be persisted"
+        );
+    }
+
+    // AC-2 (T-124): schedule.add with a blank cwd is rejected rather than
+    // silently dropping the field and persisting the entry without it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_with_blank_cwd_returns_error_and_writes_nothing() {
+        use bob_core::types::schedule::read_schedule_store;
+
+        let (_dir, store_path) = temp_schedule_store_path();
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_schedule_store_path(store_path.clone());
+
+        let req = make_request_with_params(
+            "schedule.add",
+            json!(352),
+            json!({
+                "id": "blank-cwd-job",
+                "cron": "0 9 * * *",
+                "prompt": "run",
+                "cwd": "   "
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(352));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+                assert!(
+                    resp.error.message.contains("cwd"),
+                    "error must mention cwd: {}",
+                    resp.error.message
+                );
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for blank cwd"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+
+        let entries = read_schedule_store(&store_path).expect("read store");
+        assert!(
+            entries.iter().all(|e| e.id != "blank-cwd-job"),
+            "entry with a blank cwd must not be persisted"
+        );
+    }
+
     // schedule.add with both prompt and file is rejected (mutually exclusive).
     #[tokio::test(flavor = "current_thread")]
     async fn dispatch_schedule_add_with_both_prompt_and_file_returns_error() {
@@ -2298,6 +2480,47 @@ mod tests {
         }
     }
 
+    // AC-1 (T-124): schedule.add with an absolute cwd persists the cwd field
+    // on the created entry.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_add_with_absolute_cwd_persists_cwd_field() {
+        use bob_core::types::schedule::read_schedule_store;
+
+        let (_dir, store_path) = temp_schedule_store_path();
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        let dispatcher = make_dispatcher_no_handles()
+            .with_scheduler_handle(reload_handle)
+            .with_schedule_store_path(store_path.clone());
+
+        let req = make_request_with_params(
+            "schedule.add",
+            json!(350),
+            json!({
+                "id": "cwd-job",
+                "cron": "0 9 * * *",
+                "prompt": "run",
+                "cwd": "/srv/workspaces/a"
+            }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => assert_eq!(resp.result["ok"], json!(true)),
+            DispatchOutcome::Err(e) => panic!("expected Ok, got error: {}", e.error.message),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+
+        let entries = read_schedule_store(&store_path).expect("JSON store must be readable");
+        let job = entries
+            .iter()
+            .find(|e| e.id == "cwd-job")
+            .expect("entry must be persisted");
+        assert_eq!(job.cwd.as_deref(), Some("/srv/workspaces/a"));
+    }
+
     // schedule.list emits the `file` field (and omits `prompt`) for a
     // file-backed entry.
     #[tokio::test(flavor = "current_thread")]
@@ -2325,6 +2548,68 @@ mod tests {
                 assert!(
                     arr[0].get("prompt").is_none(),
                     "prompt key must be omitted for a file-backed entry"
+                );
+            }
+            DispatchOutcome::Err(e) => panic!("expected Ok, got error: {}", e.error.message),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-3 (T-124): schedule.list includes the cwd field for an entry that has one.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_list_emits_cwd_field_when_set() {
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        reload_handle
+            .reload(vec![bob_core::types::ScheduleEntry::with_prompt(
+                "cwd-job",
+                "0 9 * * *",
+                "run",
+            )
+            .with_cwd("/srv/workspaces/a")])
+            .expect("reload");
+        tokio::task::yield_now().await;
+
+        let dispatcher = make_dispatcher_no_handles().with_scheduler_handle(reload_handle);
+        let req = make_request("schedule.list", json!(352));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => {
+                let arr = resp.result.as_array().expect("result must be an array");
+                assert_eq!(arr[0]["cwd"], json!("/srv/workspaces/a"));
+            }
+            DispatchOutcome::Err(e) => panic!("expected Ok, got error: {}", e.error.message),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // AC-4 (T-124): schedule.list omits the cwd field for an entry that has none.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_schedule_list_omits_cwd_field_when_unset() {
+        let (reload_handle, scheduler_join) = make_scheduler_handle();
+        reload_handle
+            .reload(vec![bob_core::types::ScheduleEntry::with_prompt(
+                "no-cwd-job",
+                "0 9 * * *",
+                "run",
+            )])
+            .expect("reload");
+        tokio::task::yield_now().await;
+
+        let dispatcher = make_dispatcher_no_handles().with_scheduler_handle(reload_handle);
+        let req = make_request("schedule.list", json!(353));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+        scheduler_join.abort();
+        match outcome {
+            DispatchOutcome::Ok(resp) => {
+                let arr = resp.result.as_array().expect("result must be an array");
+                assert!(
+                    arr[0].get("cwd").is_none(),
+                    "cwd key must be omitted when unset"
                 );
             }
             DispatchOutcome::Err(e) => panic!("expected Ok, got error: {}", e.error.message),
@@ -2466,6 +2751,7 @@ mod tests {
         match outcome {
             DispatchOutcome::Err(resp) => {
                 assert_eq!(resp.id, json!(314));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
                 assert!(
                     resp.error.message.contains("failed to read schedule store"),
                     "unexpected error message: {}",
@@ -2683,7 +2969,11 @@ mod tests {
 
         sup_task.abort();
         match outcome {
-            DispatchOutcome::InteractiveSessionOpening { id, session_id } => {
+            DispatchOutcome::InteractiveSessionOpening {
+                id,
+                session_id,
+                cwd,
+            } => {
                 assert_eq!(id, json!(601));
                 // session_id must be a freshly-allocated non-nil UUID
                 assert_ne!(
@@ -2691,11 +2981,161 @@ mod tests {
                     bob_core::types::SessionId::default(),
                     "session_id must be freshly allocated"
                 );
+                assert_eq!(
+                    cwd, None,
+                    "cwd must be None when the request omits params.cwd"
+                );
             }
             DispatchOutcome::Err(e) => panic!(
                 "expected InteractiveSessionOpening, got error: {}",
                 e.error.message
             ),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // B-021 / CR-005: session.interactive.open with a params.cwd string parses
+    // it into the InteractiveSessionOpening outcome so the spawn-config
+    // construction path in admin-rpc's connection loop can thread it through
+    // to InteractiveProcess::spawn.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_session_interactive_open_with_params_cwd_parses_it_into_outcome() {
+        let (dispatcher, sup_task) = make_dispatcher_with_supervisor();
+        let req = make_request_with_params(
+            "session.interactive.open",
+            json!(602),
+            json!({ "cwd": "/tmp/bob-chat-invocation-dir" }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::InteractiveSessionOpening { id, cwd, .. } => {
+                assert_eq!(id, json!(602));
+                assert_eq!(cwd, Some(PathBuf::from("/tmp/bob-chat-invocation-dir")));
+            }
+            DispatchOutcome::Err(e) => panic!(
+                "expected InteractiveSessionOpening, got error: {}",
+                e.error.message
+            ),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // B-024: a non-string params.cwd must be rejected with CODE_INVALID_REQUEST
+    // rather than silently treated as an absent cwd (None) — mirroring
+    // schedule.add's params.cwd type check.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_session_interactive_open_with_non_string_params_cwd_returns_invalid_request()
+    {
+        let (dispatcher, sup_task) = make_dispatcher_with_supervisor();
+        let req =
+            make_request_with_params("session.interactive.open", json!(603), json!({ "cwd": 42 }));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(603));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+                assert!(
+                    resp.error.message.contains("cwd"),
+                    "error must mention cwd: {}",
+                    resp.error.message
+                );
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for non-string cwd"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // B-024: an empty-string params.cwd must be rejected with
+    // CODE_INVALID_REQUEST rather than silently forwarded to spawn.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_session_interactive_open_with_empty_string_cwd_returns_invalid_request() {
+        let (dispatcher, sup_task) = make_dispatcher_with_supervisor();
+        let req =
+            make_request_with_params("session.interactive.open", json!(604), json!({ "cwd": "" }));
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(604));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+                assert!(
+                    resp.error.message.contains("cwd"),
+                    "error must mention cwd: {}",
+                    resp.error.message
+                );
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for empty cwd"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // B-024: a whitespace-only params.cwd must be rejected with
+    // CODE_INVALID_REQUEST rather than silently forwarded to spawn.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_session_interactive_open_with_whitespace_only_cwd_returns_invalid_request() {
+        let (dispatcher, sup_task) = make_dispatcher_with_supervisor();
+        let req = make_request_with_params(
+            "session.interactive.open",
+            json!(605),
+            json!({ "cwd": "   " }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(605));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+                assert!(
+                    resp.error.message.contains("cwd"),
+                    "error must mention cwd: {}",
+                    resp.error.message
+                );
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for whitespace-only cwd"),
+            _ => panic!("unexpected dispatch outcome variant"),
+        }
+    }
+
+    // B-024: a relative-path params.cwd must be rejected with
+    // CODE_INVALID_REQUEST rather than silently forwarded to spawn.
+    #[tokio::test(flavor = "current_thread")]
+    async fn dispatch_session_interactive_open_with_relative_cwd_returns_invalid_request() {
+        let (dispatcher, sup_task) = make_dispatcher_with_supervisor();
+        let req = make_request_with_params(
+            "session.interactive.open",
+            json!(606),
+            json!({ "cwd": "relative/dir" }),
+        );
+        let mut registry = make_registry();
+
+        let outcome = dispatcher.dispatch(req, &mut registry).await;
+
+        sup_task.abort();
+        match outcome {
+            DispatchOutcome::Err(resp) => {
+                assert_eq!(resp.id, json!(606));
+                assert_eq!(resp.error.code, CODE_INVALID_REQUEST);
+                assert!(
+                    resp.error.message.contains("cwd"),
+                    "error must mention cwd: {}",
+                    resp.error.message
+                );
+            }
+            DispatchOutcome::Ok(_) => panic!("expected error for relative cwd"),
             _ => panic!("unexpected dispatch outcome variant"),
         }
     }

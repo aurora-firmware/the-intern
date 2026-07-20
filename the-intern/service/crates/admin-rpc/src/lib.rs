@@ -323,10 +323,15 @@ async fn read_loop(
                     }
                     // AC-1 / ADR-011: receive terminal fds via SCM_RIGHTS, start
                     // interactive pi session, set up AC-2 exit watcher.
-                    DispatchOutcome::InteractiveSessionOpening { id, session_id } => {
+                    DispatchOutcome::InteractiveSessionOpening {
+                        id,
+                        session_id,
+                        cwd,
+                    } => {
                         handle_interactive_session_opening(
                             id,
                             session_id,
+                            cwd,
                             &reader,
                             &dispatcher,
                             &out_tx,
@@ -391,6 +396,7 @@ async fn read_loop(
 async fn handle_interactive_session_opening(
     id: serde_json::Value,
     session_id: bob_core::types::SessionId,
+    cwd: Option<PathBuf>,
     reader: &BufReader<tokio::net::unix::OwnedReadHalf>,
     dispatcher: &Dispatcher,
     out_tx: &mpsc::Sender<OutboundMsg>,
@@ -491,6 +497,11 @@ async fn handle_interactive_session_opening(
             });
 
     // AC-1: start the supervised interactive pi session.
+    //
+    // `cwd` is the bob chat invocation cwd parsed from params.cwd (CR-005 /
+    // B-021) — it takes precedence over the static InteractiveSessionConfig,
+    // which has no cwd concept of its own. `pi_agent_cwd` is never consulted
+    // on this path (CR-005).
     let result = supervisor
         .start_interactive_session(
             interactive_cfg.command,
@@ -499,6 +510,7 @@ async fn handle_interactive_session_opening(
             session_id,
             interactive_cfg.extension_sock_path,
             interactive_cfg.extension_path,
+            cwd,
             stdin_fd,
             stdout_fd,
             stderr_fd,
@@ -1183,6 +1195,7 @@ mod tests {
             payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
                 name: "test.event".to_owned(),
                 summary: Some("delivered via monitoring".to_owned()),
+                resolved_cwd: None,
             }),
         };
         mon_handle.append_record(record).await.expect("append");
@@ -1266,6 +1279,7 @@ mod tests {
             payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
                 name: "should.not.arrive".to_owned(),
                 summary: None,
+                resolved_cwd: None,
             }),
         };
         mon_handle.append_record(record).await.expect("append");
@@ -1405,6 +1419,7 @@ mod tests {
             payload: AuditRecordPayload::Event(ExtensionEventAuditPayload {
                 name: "post.close.event".to_owned(),
                 summary: None,
+                resolved_cwd: None,
             }),
         };
         mon_handle
@@ -1508,14 +1523,48 @@ mod tests {
         stdout_fd: std::os::fd::RawFd,
         stderr_fd: std::os::fd::RawFd,
     ) {
+        open_interactive_session_with_params(
+            reader,
+            write_half,
+            client_raw_fd,
+            request_id,
+            None,
+            stdin_fd,
+            stdout_fd,
+            stderr_fd,
+        )
+        .await;
+    }
+
+    /// Like [`open_interactive_session`], but lets the caller supply
+    /// `params` on the `session.interactive.open` request (B-021 / CR-005:
+    /// used to exercise `params.cwd` threading end-to-end).
+    #[allow(clippy::too_many_arguments)]
+    async fn open_interactive_session_with_params(
+        reader: &mut tokio::io::BufReader<tokio::io::ReadHalf<UnixStream>>,
+        write_half: &mut tokio::io::WriteHalf<UnixStream>,
+        client_raw_fd: std::os::fd::RawFd,
+        request_id: u64,
+        params: Option<serde_json::Value>,
+        stdin_fd: std::os::fd::RawFd,
+        stdout_fd: std::os::fd::RawFd,
+        stderr_fd: std::os::fd::RawFd,
+    ) {
         use tokio::io::AsyncBufReadExt as _;
 
         // Step 1: send the JSON-RPC open request.
-        let req = format!(
-            "{{\"jsonrpc\":\"2.0\",\"method\":\"session.interactive.open\",\"id\":{request_id}}}\n"
-        );
+        let mut req_obj = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session.interactive.open",
+            "id": request_id,
+        });
+        if let Some(params) = params {
+            req_obj["params"] = params;
+        }
+        let mut req = serde_json::to_vec(&req_obj).expect("serialize open request");
+        req.push(b'\n');
         write_half
-            .write_all(req.as_bytes())
+            .write_all(&req)
             .await
             .expect("write session.interactive.open request");
 
@@ -1612,6 +1661,91 @@ mod tests {
             "AC-1: session_id must be non-empty; got: {resp:?}"
         );
 
+        sup_task.abort();
+    }
+
+    // B-021 / CR-005: session.interactive.open with params.cwd spawns the pi
+    // child in that directory (the bob chat invocation cwd) end-to-end
+    // through the dispatcher and pi-agent-supervisor, not bob serve's own
+    // launch cwd.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_connection_session_interactive_open_with_params_cwd_spawns_child_in_that_directory(
+    ) {
+        use std::fs::File;
+        use std::os::fd::{AsRawFd as _, RawFd};
+
+        let (_, sup_task, dispatcher) = make_supervisor_and_dispatcher("printf '%s' \"$(pwd)\"");
+        let bus = make_bus();
+
+        let (client, server) = UnixStream::pair().expect("UnixStream::pair");
+        tokio::spawn(run_connection(server, dispatcher, bus));
+
+        let client_raw_fd: RawFd = client.as_raw_fd();
+        let (read_half, mut write_half) = tokio::io::split(client);
+        let mut reader = tokio::io::BufReader::new(read_half);
+
+        let requested_cwd = std::env::temp_dir().join(format!(
+            "admin-rpc-interactive-cwd-{}",
+            bob_core::types::SessionId::new()
+        ));
+        std::fs::create_dir_all(&requested_cwd).expect("create requested cwd dir");
+
+        let out_file = std::env::temp_dir().join(format!(
+            "admin-rpc-interactive-cwd-out-{}.txt",
+            bob_core::types::SessionId::new()
+        ));
+        let _ = std::fs::remove_file(&out_file);
+
+        let stdin_file = File::open("/dev/null").expect("open /dev/null for stdin");
+        let stdout_file = File::create(&out_file).expect("create output file for stdout");
+        let stderr_file = File::open("/dev/null").expect("open /dev/null for stderr");
+
+        open_interactive_session_with_params(
+            &mut reader,
+            &mut write_half,
+            client_raw_fd,
+            701,
+            Some(serde_json::json!({ "cwd": requested_cwd.to_string_lossy() })),
+            stdin_file.as_raw_fd(),
+            stdout_file.as_raw_fd(),
+            stderr_file.as_raw_fd(),
+        )
+        .await;
+        drop(stdin_file);
+        drop(stdout_file);
+        drop(stderr_file);
+
+        let mut resp_line = String::new();
+        tokio::time::timeout(
+            Duration::from_millis(2000),
+            reader.read_line(&mut resp_line),
+        )
+        .await
+        .expect("timed out waiting for session.interactive.open response")
+        .expect("read response line");
+        let resp: serde_json::Value =
+            serde_json::from_str(resp_line.trim()).expect("valid JSON response");
+        assert_eq!(
+            resp["result"]["ok"], true,
+            "session.interactive.open must return ok:true; got: {resp:?}"
+        );
+
+        // Give the short-lived child time to run its printf and exit.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let written = std::fs::read_to_string(&out_file)
+            .expect("output file should have been written by child");
+        let expected =
+            std::fs::canonicalize(&requested_cwd).expect("canonicalize expected requested cwd");
+        let actual =
+            std::fs::canonicalize(written.trim()).expect("canonicalize child-reported cwd");
+        assert_eq!(
+            actual, expected,
+            "interactive child must run in params.cwd, not bob serve's own launch cwd"
+        );
+
+        std::fs::remove_dir_all(&requested_cwd).ok();
+        let _ = std::fs::remove_file(&out_file);
         sup_task.abort();
     }
 

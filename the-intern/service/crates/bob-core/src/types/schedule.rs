@@ -76,9 +76,12 @@ pub fn read_schedule_store(path: &Path) -> ServiceResult<Vec<ScheduleEntry>> {
 /// (minute hour day-of-month month day-of-week), and exactly one non-blank
 /// prompt source: either a `prompt` (literal text) or a `file` (an absolute
 /// path whose contents are read at fire time). Setting both, setting neither,
-/// or giving `file` a relative path is rejected. `id` values must be unique
-/// across the store. The store is validated as a whole — a single bad entry
-/// rejects the entire document rather than being silently skipped or deferred.
+/// or giving `file` a relative path is rejected. When present, `cwd` must also
+/// be a non-blank absolute path (CR-005); a blank or relative `cwd` rejects the
+/// entry the same way a bad `file` does — directory existence is a fire-time
+/// concern and is not checked here. `id` values must be unique across the
+/// store. The store is validated as a whole — a single bad entry rejects the
+/// entire document rather than being silently skipped or deferred.
 ///
 /// # Errors
 ///
@@ -129,6 +132,21 @@ pub fn validate_schedule_store(entries: &[ScheduleEntry]) -> ServiceResult<()> {
             _ => {
                 return Err(ServiceError::Configuration {
                     detail: format!("schedule entry {:?} has a blank prompt or file", entry.id),
+                });
+            }
+        }
+        if let Some(cwd) = entry.cwd.as_deref().map(str::trim) {
+            if cwd.is_empty() {
+                return Err(ServiceError::Configuration {
+                    detail: format!("schedule entry {:?} has a blank cwd", entry.id),
+                });
+            }
+            if !std::path::Path::new(cwd).is_absolute() {
+                return Err(ServiceError::Configuration {
+                    detail: format!(
+                        "schedule entry {:?} has a relative cwd {cwd:?}; an absolute path is required",
+                        entry.id
+                    ),
                 });
             }
         }
@@ -453,10 +471,16 @@ pub fn write_schedule_store(path: &Path, entries: &[ScheduleEntry]) -> ServiceRe
 ///   resolution happens in the scheduler-adapter).
 ///
 /// Exactly one of `prompt`/`file` must be present and non-blank, and `file`
-/// must be an absolute path — both enforced by [`validate_schedule_store`]. On
-/// disk an entry serialises to `{ "id", "cron", "prompt" }` or
-/// `{ "id", "cron", "file" }`; the unused field is omitted, so existing
-/// `prompt`-only stores continue to load unchanged (store version stays 1).
+/// must be an absolute path — both enforced by [`validate_schedule_store`].
+///
+/// `cwd` is an optional, independent field naming the working directory the
+/// job should run from (CR-005). When present it must also be a non-blank
+/// absolute path; resolving whether that directory still exists is deferred
+/// to fire time, not checked here. On disk an entry serialises to
+/// `{ "id", "cron", "prompt" }` or `{ "id", "cron", "file" }`, each optionally
+/// followed by `"cwd"` when set; unset fields are omitted, so existing stores
+/// written before `cwd` existed continue to load unchanged (store version
+/// stays 1).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScheduleEntry {
     pub id: String,
@@ -465,6 +489,8 @@ pub struct ScheduleEntry {
     pub prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 impl ScheduleEntry {
@@ -479,6 +505,7 @@ impl ScheduleEntry {
             cron: cron.into(),
             prompt: Some(prompt.into()),
             file: None,
+            cwd: None,
         }
     }
 
@@ -495,216 +522,27 @@ impl ScheduleEntry {
             cron: cron.into(),
             prompt: None,
             file: Some(file.into()),
-        }
-    }
-}
-
-/// Atomically replace the `[[schedule]]` array in the TOML file at `path` with
-/// `entries`, preserving all other config keys and comments.
-///
-/// This is the single writer shared by both the `bob` config layer and the
-/// admin-RPC `schedule.*` handlers, so the persistence behaviour cannot drift
-/// between the tested path and the live path.
-///
-/// # Atomicity
-///
-/// The new document is written to a temporary file in the same directory and
-/// then renamed over `path`, so an observer never sees a partial write: either
-/// the old file or the fully written new file is visible.
-///
-/// # Permissions
-///
-/// On Unix the temporary file is set to the original file's mode before the
-/// rename, so an operator-restricted config (e.g. `0600`) is not silently
-/// widened to the process umask default when it is rewritten.
-///
-/// # Errors
-///
-/// Returns `ServiceError::Configuration` when the existing file cannot be
-/// parsed and `ServiceError::Persistence` when it cannot be read, written, or
-/// renamed.
-pub fn write_schedule_entries(path: &Path, entries: &[ScheduleEntry]) -> ServiceResult<()> {
-    // Read and parse the existing TOML, or start with an empty document.
-    let content = if path.exists() {
-        std::fs::read_to_string(path).map_err(|e| ServiceError::Persistence {
-            detail: format!("failed to read config file {}: {e}", path.display()),
-        })?
-    } else {
-        String::new()
-    };
-
-    let mut doc: toml_edit::DocumentMut =
-        content.parse().map_err(|e| ServiceError::Configuration {
-            detail: format!("failed to parse config file {}: {e}", path.display()),
-        })?;
-
-    // Remove the existing [[schedule]] array (if any) and replace it.
-    doc.remove("schedule");
-
-    if !entries.is_empty() {
-        let mut arr = toml_edit::ArrayOfTables::new();
-        for entry in entries {
-            let mut table = toml_edit::Table::new();
-            table.insert("id", toml_edit::value(entry.id.as_str()));
-            table.insert("cron", toml_edit::value(entry.cron.as_str()));
-            if let Some(prompt) = entry.prompt.as_deref() {
-                table.insert("prompt", toml_edit::value(prompt));
-            }
-            if let Some(file) = entry.file.as_deref() {
-                table.insert("file", toml_edit::value(file));
-            }
-            arr.push(table);
-        }
-        doc.insert("schedule", toml_edit::Item::ArrayOfTables(arr));
-    }
-
-    // Write to a temp file in the same directory for an atomic rename.
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    if !parent.as_os_str().is_empty() {
-        std::fs::create_dir_all(parent).map_err(|e| ServiceError::Persistence {
-            detail: format!(
-                "failed to create config parent directory {}: {e}",
-                parent.display()
-            ),
-        })?;
-    }
-
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp_path = parent.join(format!(".bob-config-tmp-{unique}"));
-
-    std::fs::write(&tmp_path, doc.to_string()).map_err(|e| ServiceError::Persistence {
-        detail: format!(
-            "failed to write temp config file {}: {e}",
-            tmp_path.display()
-        ),
-    })?;
-
-    // Preserve the original file's permission bits across the atomic replace.
-    // `rename` installs the temp file's inode in place of the original, so
-    // without this the mode would reset to the process umask (e.g. a 0600
-    // config would be silently widened to 0644).
-    #[cfg(unix)]
-    if let Ok(meta) = std::fs::metadata(path) {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = meta.permissions().mode();
-        if let Err(e) = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(mode)) {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(ServiceError::Persistence {
-                detail: format!(
-                    "failed to set permissions on temp config file {}: {e}",
-                    tmp_path.display()
-                ),
-            });
+            cwd: None,
         }
     }
 
-    std::fs::rename(&tmp_path, path).map_err(|e| {
-        // Try to clean up the temp file; ignore errors.
-        let _ = std::fs::remove_file(&tmp_path);
-        ServiceError::Persistence {
-            detail: format!(
-                "failed to rename temp config file to {}: {e}",
-                path.display()
-            ),
-        }
-    })?;
-
-    Ok(())
+    /// Attach a working directory to an already-built schedule entry. `cwd`
+    /// should be a non-blank absolute path; [`validate_schedule_store`] rejects
+    /// blank or relative values.
+    pub fn with_cwd(mut self, cwd: impl Into<String>) -> Self {
+        self.cwd = Some(cwd.into());
+        self
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        read_schedule_store, validate_schedule_store, write_schedule_entries, write_schedule_store,
-        ScheduleEntry,
+        read_schedule_store, validate_schedule_store, write_schedule_store, ScheduleEntry,
     };
 
     fn entry(id: &str) -> ScheduleEntry {
         ScheduleEntry::with_prompt(id, "* * * * *", "do the thing")
-    }
-
-    #[test]
-    fn persists_entries_and_can_be_read_back() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("bob.toml");
-
-        write_schedule_entries(&path, &[entry("job-1")]).expect("write must succeed");
-
-        let content = std::fs::read_to_string(&path).expect("read back");
-        assert!(content.contains("[[schedule]]"), "schedule section present");
-        assert!(content.contains("job-1"), "entry id persisted");
-    }
-
-    #[test]
-    fn creates_missing_parent_directories() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("config").join("bob").join("config.toml");
-
-        write_schedule_entries(&path, &[entry("job-1")]).expect("write must succeed");
-
-        let content = std::fs::read_to_string(&path).expect("read back");
-        assert!(content.contains("[[schedule]]"), "schedule section present");
-        assert!(content.contains("job-1"), "entry id persisted");
-    }
-
-    #[test]
-    fn preserves_other_config_keys() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("bob.toml");
-        std::fs::write(
-            &path,
-            "tracing_level = \"debug\"\n\n[[schedule]]\nid = \"old\"\ncron = \"* * * * *\"\nprompt = \"old\"\n",
-        )
-        .expect("seed config");
-
-        write_schedule_entries(&path, &[entry("new")]).expect("write must succeed");
-
-        let content = std::fs::read_to_string(&path).expect("read back");
-        assert!(
-            content.contains("tracing_level = \"debug\""),
-            "non-schedule keys must be preserved"
-        );
-        assert!(content.contains("new"), "new entry present");
-        assert!(!content.contains("old"), "old entry replaced");
-    }
-
-    #[test]
-    fn empty_entries_removes_schedule_section() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("bob.toml");
-        std::fs::write(
-            &path,
-            "[[schedule]]\nid = \"old\"\ncron = \"* * * * *\"\nprompt = \"old\"\n",
-        )
-        .expect("seed config");
-
-        write_schedule_entries(&path, &[]).expect("write must succeed");
-
-        let content = std::fs::read_to_string(&path).expect("read back");
-        assert!(
-            !content.contains("[[schedule]]"),
-            "schedule section must be removed when entries are empty"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn preserves_restrictive_file_mode() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("bob.toml");
-        std::fs::write(&path, "tracing_level = \"info\"\n").expect("seed config");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-            .expect("restrict mode");
-
-        write_schedule_entries(&path, &[entry("job-1")]).expect("write must succeed");
-
-        let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "rewrite must preserve the original 0600 mode");
     }
 
     // --- JSON schedule store tests ---
@@ -887,6 +725,33 @@ mod tests {
         assert!(
             !loaded.iter().any(|e| e.id == "first"),
             "first entry must be gone after replacement"
+        );
+    }
+
+    #[test]
+    fn write_schedule_store_returns_persistence_error_when_rename_target_is_a_directory() {
+        // The writer stages content in a temp file in the same parent directory
+        // and finishes with an atomic `rename(2)` onto `path`. If `path` is
+        // itself a directory, the rename fails with EISDIR — a type mismatch
+        // the kernel rejects regardless of caller privilege (unlike a bare
+        // permission check, root's CAP_DAC_OVERRIDE does not bypass it), so
+        // this exercises the writer's real failure path independent of the
+        // test process's UID.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedules.json");
+        std::fs::create_dir(&path).expect("create directory at store path");
+
+        let err = write_schedule_store(&path, &[entry("job-1")])
+            .expect_err("rename onto an existing directory must fail");
+
+        assert!(
+            matches!(err, crate::error::ServiceError::Persistence { .. }),
+            "expected Persistence error, got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("failed to rename temp schedule store"),
+            "unexpected error message: {msg}"
         );
     }
 
@@ -1159,6 +1024,7 @@ mod tests {
             cron: "* * * * *".to_owned(),
             prompt: Some("p".to_owned()),
             file: Some("/abs/p.txt".to_owned()),
+            cwd: None,
         };
         let err =
             validate_schedule_store(&[bad]).expect_err("both prompt and file must be rejected");
@@ -1176,6 +1042,7 @@ mod tests {
             cron: "* * * * *".to_owned(),
             prompt: None,
             file: None,
+            cwd: None,
         };
         let err =
             validate_schedule_store(&[bad]).expect_err("neither prompt nor file must be rejected");
@@ -1214,6 +1081,102 @@ mod tests {
     fn validate_accepts_a_file_backed_entry_with_absolute_path() {
         validate_schedule_store(&[ScheduleEntry::with_file("x", "* * * * *", "/abs/p.txt")])
             .expect("absolute file-backed entry must pass");
+    }
+
+    // --- optional per-entry cwd (CR-005 / T-118) ---
+
+    #[test]
+    fn with_cwd_sets_the_cwd_field_on_a_built_entry() {
+        let built = ScheduleEntry::with_prompt("x", "* * * * *", "p").with_cwd("/srv/work");
+        assert_eq!(built.cwd.as_deref(), Some("/srv/work"));
+    }
+
+    #[test]
+    fn entry_without_cwd_omits_cwd_key_when_serialised() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+
+        write_schedule_store(&path, &[entry("no-cwd")]).expect("write must succeed");
+
+        let raw = std::fs::read_to_string(&path).expect("read raw");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+        assert!(
+            v["entries"][0].get("cwd").is_none(),
+            "cwd key must be omitted when unset"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_an_entry_with_an_absolute_cwd() {
+        let ok = ScheduleEntry::with_prompt("x", "* * * * *", "p").with_cwd("/srv/work");
+        validate_schedule_store(&[ok]).expect("absolute cwd must pass validation");
+    }
+
+    #[test]
+    fn validate_rejects_a_relative_cwd_and_names_the_entry_id() {
+        let bad =
+            ScheduleEntry::with_prompt("bad-cwd-job", "* * * * *", "p").with_cwd("relative/dir");
+        let err = validate_schedule_store(&[bad]).expect_err("relative cwd must be rejected");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bad-cwd-job"),
+            "error must identify the offending entry id: {msg}"
+        );
+        assert!(
+            msg.contains("relative") || msg.contains("absolute"),
+            "error must mention the path problem: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_a_blank_cwd() {
+        let bad = ScheduleEntry::with_prompt("x", "* * * * *", "p").with_cwd("   ");
+        let err = validate_schedule_store(&[bad]).expect_err("blank cwd must be rejected");
+        assert!(
+            matches!(err, crate::error::ServiceError::Configuration { .. }),
+            "expected Configuration error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn round_trips_an_entry_with_cwd_through_json_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+        let original =
+            vec![ScheduleEntry::with_prompt("job-cwd", "* * * * *", "run")
+                .with_cwd("/srv/workspaces/a")];
+
+        write_schedule_store(&path, &original).expect("write must succeed");
+        let loaded = read_schedule_store(&path).expect("read must succeed");
+
+        assert_eq!(loaded[0].cwd.as_deref(), Some("/srv/workspaces/a"));
+    }
+
+    #[test]
+    fn read_schedule_store_parses_entries_written_before_cwd_existed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schedule.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"entries":[{"id":"legacy","cron":"* * * * *","prompt":"p"}]}"#,
+        )
+        .expect("seed store written without a cwd key");
+
+        let raw = std::fs::read_to_string(&path).expect("read raw seed");
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+        assert_eq!(v["version"].as_u64(), Some(1), "store version stays 1");
+
+        let loaded =
+            read_schedule_store(&path).expect("store written without a cwd key must still parse");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(
+            loaded[0].cwd, None,
+            "cwd must be unset when the key is absent"
+        );
     }
 
     #[test]

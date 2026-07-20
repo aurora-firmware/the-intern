@@ -740,6 +740,7 @@ fn client_cfg(admin_sock_path: PathBuf) -> BobConfig {
         pi_agent_warm_pool_size: 1,
         pi_agent_max_processes: 8,
         pi_agent_idle_reap_timeout: Duration::from_secs(300),
+        pi_agent_cwd: None,
         tracing_level: "info".to_string(),
         tracing_format: "pretty".to_string(),
         policy: PolicyConfig::default(),

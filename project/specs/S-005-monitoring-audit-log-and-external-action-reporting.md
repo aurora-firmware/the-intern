@@ -71,6 +71,12 @@ What this specification explicitly does NOT cover:
   not a gate (ADR-005). The report body carries attribution, not authentication.
 - **Schema beats blobs.** External tool reports use bob-defined structured
   fields so review, rendering, and later querying can rely on stable shapes.
+- **Scheduled runs record their resolved working directory.** When a scheduled
+  (`periodic`) job fires, its event audit record carries the **resolved**
+  working directory the pi-agent session ran in — the concrete absolute path
+  after precedence is applied (per-entry `cwd` → `pi_agent_cwd` → inherited),
+  not the raw per-entry field. This makes it auditable which workspace a
+  scheduled agent session executed against.
 
 ### System Diagram
 
@@ -112,7 +118,7 @@ What this specification explicitly does NOT cover:
 
 **Purpose:** Define the canonical envelope and kind-specific payloads for extension events, policy verdicts, and external tool reports.
 **Estimated size:** Medium.
-**Interfaces:** Exposes bob-core domain types consumed by Monitoring, Admin-RPC, extension-ipc, policy-control, and the CLI renderer.
+**Interfaces:** Exposes bob-core domain types consumed by Monitoring, Admin-RPC, extension-ipc, policy-control, and the CLI renderer. The event audit payload (`ExtensionEventAuditPayload`) gains an **optional** resolved working-directory field: it is populated with the absolute cwd actually used when the event records a `periodic` (scheduled) firing, and omitted for events that have no execution directory (for example forwarded pi-agent extension events). No new audit record kind is added — the record-kind set stays `event`/`report`/`verdict`, and the field lives on the existing event payload; `report` and `verdict` payloads are unchanged.
 
 ### Component 2: Monitoring actor
 
@@ -285,3 +291,4 @@ matching future records stream until disconnect or service shutdown
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-06-13 | Reconciled `report.submit`'s admission description with ADR-005: the admin socket's filesystem-permission gate is the connection gate and `SO_PEERCRED` is audit-only (Design Principles, system diagram, Component 4, and the external-report workflow). Same-uid access remains the authentication boundary; only the "peer-credential gate" wording changed. | ADR-005 (accepted 2026-05-22) demoted `SO_PEERCRED` from gate to audit; S-005's wording was never updated. PR #22 reconciles the artifact set. | None (documentation reconciliation). |
+| 2026-07-05 | The event audit payload gains an optional resolved-working-directory field, populated for `periodic` firings with the absolute cwd used after per-entry → service-wide → inherited precedence. No new record kind is introduced. | CR-005. | T-123, T-128 |

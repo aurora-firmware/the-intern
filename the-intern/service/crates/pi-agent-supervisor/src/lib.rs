@@ -34,6 +34,10 @@ pub struct Config {
     pub extension_sock_path: PathBuf,
     /// Resolved path to the pi extension that enforces tool-call authorization.
     pub extension_path: PathBuf,
+    /// Service-wide working directory set on the child process when spawning
+    /// a pool worker. `None` means workers inherit the launch cwd of `bob
+    /// serve` unchanged.
+    pub worker_cwd: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -48,6 +52,7 @@ impl Default for Config {
             child_termination_deadline: Duration::from_secs(10),
             extension_sock_path: PathBuf::new(),
             extension_path: PathBuf::new(),
+            worker_cwd: None,
         }
     }
 }
@@ -55,6 +60,14 @@ impl Default for Config {
 #[derive(Debug)]
 enum Command {
     AcquireSession {
+        response_tx: oneshot::Sender<ServiceResult<SessionId>>,
+    },
+    /// Like [`Command::AcquireSession`], but binds the spawned worker to a
+    /// caller-supplied working directory via
+    /// `pool::SessionPool::acquire_session_with_cwd` (T-122), for the periodic
+    /// dispatcher's per-entry `cwd` resolution (T-127).
+    AcquireSessionWithCwd {
+        cwd: PathBuf,
         response_tx: oneshot::Sender<ServiceResult<SessionId>>,
     },
     ListSessions {
@@ -84,6 +97,10 @@ enum Command {
         session_id: SessionId,
         extension_sock_path: PathBuf,
         extension_path: PathBuf,
+        /// Working directory captured from the `bob chat` invocation cwd
+        /// (CR-005 / B-021). `None` means the interactive child inherits the
+        /// launch cwd unchanged.
+        cwd: Option<PathBuf>,
         stdin: OwnedFd,
         stdout: OwnedFd,
         stderr: OwnedFd,
@@ -125,6 +142,23 @@ impl Handle {
         let (response_tx, response_rx) = oneshot::channel();
         self.tx
             .send(Command::AcquireSession { response_tx })
+            .await
+            .map_err(|_| ServiceError::Shutdown)?;
+
+        response_rx.await.map_err(|_| ServiceError::Shutdown)?
+    }
+
+    /// Acquires a dedicated worker bound to `cwd` rather than a warm-pool
+    /// worker (T-122's `pool::SessionPool::acquire_session_with_cwd`).
+    ///
+    /// Bound by `max_processes` exactly like [`Self::acquire_session`]: when
+    /// active plus warm workers already fill the limit, the acquisition is
+    /// refused (`ServiceError::ChildProcess`) rather than evicting a live
+    /// worker or exceeding the bound.
+    pub async fn acquire_session_with_cwd(&self, cwd: PathBuf) -> ServiceResult<SessionId> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.tx
+            .send(Command::AcquireSessionWithCwd { cwd, response_tx })
             .await
             .map_err(|_| ServiceError::Shutdown)?;
 
@@ -241,6 +275,7 @@ impl Handle {
         session_id: SessionId,
         extension_sock_path: PathBuf,
         extension_path: PathBuf,
+        cwd: Option<PathBuf>,
         stdin: OwnedFd,
         stdout: OwnedFd,
         stderr: OwnedFd,
@@ -254,6 +289,7 @@ impl Handle {
                 session_id,
                 extension_sock_path,
                 extension_path,
+                cwd,
                 stdin,
                 stdout,
                 stderr,
@@ -301,6 +337,20 @@ impl Actor {
                                 tracing::debug!(
                                     session_id = %session_id,
                                     "pi-agent-supervisor session acquired"
+                                );
+                            }
+                            let _ = response_tx.send(result);
+                        }
+                        Command::AcquireSessionWithCwd { cwd, response_tx } => {
+                            tracing::debug!(
+                                cwd = %cwd.display(),
+                                "pi-agent-supervisor acquire cwd-scoped session command received"
+                            );
+                            let result = self.pool.acquire_session_with_cwd(cwd);
+                            if let Ok(session_id) = &result {
+                                tracing::debug!(
+                                    session_id = %session_id,
+                                    "pi-agent-supervisor cwd-scoped session acquired"
                                 );
                             }
                             let _ = response_tx.send(result);
@@ -378,6 +428,7 @@ impl Actor {
                             session_id,
                             extension_sock_path,
                             extension_path,
+                            cwd,
                             stdin,
                             stdout,
                             stderr,
@@ -394,6 +445,7 @@ impl Actor {
                                 session_id,
                                 extension_sock_path,
                                 extension_path,
+                                cwd,
                             };
                             let result =
                                 self.pool.start_interactive_session(cfg, stdin, stdout, stderr);
@@ -471,6 +523,7 @@ mod tests {
             child_termination_deadline: Duration::from_millis(2000),
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
+            worker_cwd: None,
         }
     }
 
@@ -487,6 +540,32 @@ mod tests {
         assert!(cfg.max_processes > 0);
         assert!(cfg.idle_reap_timeout > Duration::from_secs(0));
         assert!(cfg.child_termination_deadline > Duration::from_secs(0));
+    }
+
+    // AC-1 (T-121): Config carries an optional service-wide worker working
+    // directory, unset by default so workers inherit the launch cwd.
+    #[test]
+    fn default_config_leaves_worker_cwd_unset() {
+        let cfg = Config::default();
+
+        assert_eq!(
+            cfg.worker_cwd, None,
+            "worker_cwd should be unset by default so workers inherit the launch cwd"
+        );
+    }
+
+    // AC-1 (T-121): Config can carry a configured worker working directory.
+    #[test]
+    fn config_carries_configured_worker_cwd() {
+        let cfg = Config {
+            worker_cwd: Some(std::path::PathBuf::from("/opt/bob/workspace")),
+            ..test_config("sh", &["-c", "exit 0"], 1, 2)
+        };
+
+        assert_eq!(
+            cfg.worker_cwd,
+            Some(std::path::PathBuf::from("/opt/bob/workspace"))
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -560,6 +639,35 @@ mod tests {
 
         assert_eq!(sessions, vec![session_id]);
         task.abort();
+    }
+
+    // AC-1 (T-127): Handle::acquire_session_with_cwd is a thin passthrough to
+    // pool::SessionPool::acquire_session_with_cwd (T-122) — the returned
+    // session id must be tracked exactly like a plain acquire_session, so the
+    // periodic dispatcher can rely on the usual list_sessions/kill_session/
+    // send_prompt lifecycle for a cwd-scoped dedicated worker.
+    #[tokio::test(flavor = "current_thread")]
+    async fn acquire_session_with_cwd_returns_a_session_id_tracked_by_list_sessions() {
+        let (handle, task) =
+            start(test_config("sh", &["-c", "exit 0"], 1, 2)).expect("startup should succeed");
+        let worker_cwd = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-handle-cwd-{}",
+            SessionId::new()
+        ));
+        std::fs::create_dir_all(&worker_cwd).expect("create dedicated cwd should succeed");
+
+        let session_id = handle
+            .acquire_session_with_cwd(worker_cwd.clone())
+            .await
+            .expect("cwd-scoped session acquire should succeed");
+        let sessions = handle
+            .list_sessions()
+            .await
+            .expect("list sessions should succeed");
+
+        assert_eq!(sessions, vec![session_id]);
+        task.abort();
+        std::fs::remove_dir_all(&worker_cwd).ok();
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -858,6 +966,7 @@ mod tests {
                 SessionId::new(),
                 std::path::PathBuf::new(),
                 std::env::current_exe().expect("current executable should exist"),
+                None,
                 stdin_fd,
                 stdout_fd,
                 stderr_fd,
@@ -902,6 +1011,7 @@ mod tests {
                 SessionId::new(),
                 std::path::PathBuf::new(),
                 std::env::current_exe().expect("current executable should exist"),
+                None,
                 stdin_fd,
                 stdout_fd,
                 stderr_fd,
@@ -954,6 +1064,7 @@ mod tests {
                 SessionId::new(),
                 std::path::PathBuf::new(),
                 std::env::current_exe().expect("current executable should exist"),
+                None,
                 stdin_fd,
                 stdout_fd,
                 stderr_fd,
@@ -1016,6 +1127,7 @@ mod tests {
             child_termination_deadline: Duration::from_millis(25),
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
+            worker_cwd: None,
         };
 
         let (handle, task) = start(cfg).expect("startup should succeed");

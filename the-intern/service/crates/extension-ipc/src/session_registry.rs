@@ -26,10 +26,12 @@ pub enum RegistrationOutcome {
     Duplicate { existing_connection_id: u64 },
 }
 
-/// Tracks which connection id currently owns each live `SessionId`.
+/// Tracks the live claimant connections for each session id, in registration
+/// order. The first claimant is the current owner; later claimants remain
+/// tracked so ownership can fall forward if the original owner disconnects.
 #[derive(Default)]
 pub struct SessionRegistry {
-    owners: Mutex<HashMap<SessionId, u64>>,
+    owners: Mutex<HashMap<SessionId, Vec<u64>>>,
 }
 
 impl SessionRegistry {
@@ -49,12 +51,20 @@ impl SessionRegistry {
     /// having panicked while holding it.
     pub fn register(&self, session: SessionId, connection_id: u64) -> RegistrationOutcome {
         let mut owners = self.owners.lock().expect("session registry lock poisoned");
-        match owners.get(&session) {
-            Some(existing) if *existing != connection_id => RegistrationOutcome::Duplicate {
-                existing_connection_id: *existing,
-            },
-            _ => {
-                owners.insert(session, connection_id);
+        match owners.get_mut(&session) {
+            Some(existing) => {
+                if existing.contains(&connection_id) {
+                    RegistrationOutcome::Registered
+                } else {
+                    let current_owner = existing[0];
+                    existing.push(connection_id);
+                    RegistrationOutcome::Duplicate {
+                        existing_connection_id: current_owner,
+                    }
+                }
+            }
+            None => {
+                owners.insert(session, vec![connection_id]);
                 RegistrationOutcome::Registered
             }
         }
@@ -70,8 +80,11 @@ impl SessionRegistry {
     /// having panicked while holding it.
     pub fn release(&self, session: SessionId, connection_id: u64) {
         let mut owners = self.owners.lock().expect("session registry lock poisoned");
-        if owners.get(&session) == Some(&connection_id) {
-            owners.remove(&session);
+        if let Some(claimants) = owners.get_mut(&session) {
+            claimants.retain(|claimant| *claimant != connection_id);
+            if claimants.is_empty() {
+                owners.remove(&session);
+            }
         }
     }
 }
@@ -139,6 +152,32 @@ mod tests {
         assert_eq!(
             registry.register(session, 2),
             RegistrationOutcome::Registered
+        );
+    }
+
+    #[test]
+    fn releasing_the_original_owner_promotes_a_surviving_duplicate_connection() {
+        let registry = SessionRegistry::new();
+        let session = SessionId::new();
+
+        assert_eq!(
+            registry.register(session, 1),
+            RegistrationOutcome::Registered
+        );
+        assert_eq!(
+            registry.register(session, 2),
+            RegistrationOutcome::Duplicate {
+                existing_connection_id: 1
+            }
+        );
+
+        registry.release(session, 1);
+
+        assert_eq!(
+            registry.register(session, 3),
+            RegistrationOutcome::Duplicate {
+                existing_connection_id: 2
+            }
         );
     }
 }

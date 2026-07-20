@@ -56,7 +56,7 @@ impl Default for Config {
     }
 }
 
-#[doc = "scaffold — see project/docs/roadmap.md phase 3"]
+#[doc = "scaffold placeholder for the phase-3 extension IPC surface"]
 #[derive(Clone)]
 pub struct Handle {
     // Kept to control the actor channel lifetime: the actor loop exits when
@@ -65,7 +65,7 @@ pub struct Handle {
     tx: mpsc::Sender<std::convert::Infallible>,
 }
 
-#[doc = "scaffold — see project/docs/roadmap.md phase 3"]
+#[doc = "scaffold placeholder for the phase-3 extension IPC surface"]
 pub struct Actor {
     cfg: Config,
     rx: mpsc::Receiver<std::convert::Infallible>,
