@@ -30,10 +30,17 @@ jobs:
     # env context isn't available under jobs.<job_id>.container, so the image
     # tag and cache dir are hardcoded in every job's container block below
     # rather than pulled from workflow env.
+    #
+    # The cache dir is mounted one level above github.workspace (a sibling of
+    # the checkout, not inside it) because container volumes attach before
+    # actions/checkout runs, and checkout's default `clean` step deletes
+    # untracked dirs in the repo root — which would rip out this mount from
+    # under itself if it lived inside the workspace, breaking every later
+    # step that touches CARGO_HOME with ENOENT.
     container:
       image: localhost:5000/rust-dev:1.0.1
       volumes:
-        - ${{ github.workspace }}/.cargo-ci:/ci-cargo
+        - ${{ github.workspace }}/../.cargo-ci:/ci-cargo
       env:
         CARGO_HOME: /ci-cargo
     steps:
@@ -52,7 +59,7 @@ jobs:
     container:
       image: localhost:5000/rust-dev:1.0.1
       volumes:
-        - ${{ github.workspace }}/.cargo-ci:/ci-cargo
+        - ${{ github.workspace }}/../.cargo-ci:/ci-cargo
       env:
         CARGO_HOME: /ci-cargo
     env:
@@ -73,7 +80,7 @@ jobs:
     container:
       image: localhost:5000/rust-dev:1.0.1
       volumes:
-        - ${{ github.workspace }}/.cargo-ci:/ci-cargo
+        - ${{ github.workspace }}/../.cargo-ci:/ci-cargo
       env:
         CARGO_HOME: /ci-cargo
     env:
@@ -104,7 +111,7 @@ jobs:
     container:
       image: localhost:5000/rust-dev:1.0.1
       volumes:
-        - ${{ github.workspace }}/.cargo-ci:/ci-cargo
+        - ${{ github.workspace }}/../.cargo-ci:/ci-cargo
       env:
         CARGO_HOME: /ci-cargo
     env:
@@ -167,7 +174,7 @@ jobs:
     container:
       image: localhost:5000/rust-dev:1.0.1
       volumes:
-        - ${{ github.workspace }}/.cargo-ci:/ci-cargo
+        - ${{ github.workspace }}/../.cargo-ci:/ci-cargo
       env:
         CARGO_HOME: /ci-cargo
     env:
