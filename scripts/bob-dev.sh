@@ -24,5 +24,4 @@ export BOB_EXTENSION_PATH="${BOB_EXTENSION_PATH:-$extension_path}"
 install -d -m 700 "$BOB_TEST_RUNTIME_DIR" "$XDG_RUNTIME_DIR"
 mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
 
-cd "$service_dir"
-exec cargo run -p bob -- "$@"
+exec cargo run --manifest-path "$service_dir/Cargo.toml" -p bob -- "$@"

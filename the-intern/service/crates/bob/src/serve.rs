@@ -411,7 +411,7 @@ async fn wait_for_shutdown_signal() {
 /// 5. Flush audit records (no-op for scaffold).
 /// 6. Remove socket files.
 async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
-    info!("shutdown: phase 1 — stopping new admin connections");
+    info!("shutdown: stopping new admin connections");
     // Destructure the runtime, dropping all handles.  This closes the command
     // channel on each actor, causing their recv loops to exit.
     let Runtime {
@@ -455,11 +455,11 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
     // close and exits cleanly.
     drop(_scheduler_adapter);
 
-    info!("shutdown: phase 2 — cancelling subsystem workers");
+    info!("shutdown: cancelling subsystem workers");
     // Actors exit when their channel is drained and closed — no explicit cancel needed.
 
     info!(
-        "shutdown: phase 3 — draining queues (deadline: {:?})",
+        "shutdown: draining queues (deadline: {:?})",
         cfg.shutdown_drain_deadline
     );
     // Collect all non-supervisor join handles including the scheduler-adapter
@@ -469,12 +469,12 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
     all_joins.push(dispatcher_join);
     let drain_result = time::timeout(cfg.shutdown_drain_deadline, drain_joins(all_joins)).await;
     match drain_result {
-        Ok(()) => info!("shutdown: phase 3 — all queues drained"),
-        Err(_) => info!("shutdown: phase 3 — drain deadline exceeded; proceeding"),
+        Ok(()) => info!("shutdown: all queues drained"),
+        Err(_) => info!("shutdown: drain deadline exceeded; proceeding"),
     }
 
     info!(
-        "shutdown: phase 4 — reaping pi-agent children (deadline: {:?})",
+        "shutdown: reaping pi-agent children (deadline: {:?})",
         cfg.shutdown_reap_deadline
     );
     // Await the supervisor actor's join handle so that shutdown_all (which
@@ -487,17 +487,17 @@ async fn run_shutdown_protocol(runtime: Runtime, cfg: &BobConfig) {
     })
     .await;
     match reap_result {
-        Ok(()) => info!("shutdown: phase 4 — pi-agent children reaped"),
-        Err(_) => info!("shutdown: phase 4 — reap deadline exceeded; proceeding"),
+        Ok(()) => info!("shutdown: pi-agent children reaped"),
+        Err(_) => info!("shutdown: reap deadline exceeded; proceeding"),
     }
 
-    info!("shutdown: phase 5 — flushing audit records");
+    info!("shutdown: flushing audit records");
     // Audit flush is a no-op in the scaffold.
-    info!("shutdown: phase 5 — audit records flushed");
+    info!("shutdown: audit records flushed");
 
-    info!("shutdown: phase 6 — removing socket files");
+    info!("shutdown: removing socket files");
     remove_socket_files(&admin_sock_path, &extension_sock_path);
-    info!("shutdown: phase 6 — socket files removed; shutdown complete");
+    info!("shutdown: socket files removed; shutdown complete");
 }
 
 /// Awaits every actor join handle to completion.

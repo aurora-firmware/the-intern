@@ -18,7 +18,8 @@ static SUBSCRIBER_SET: OnceLock<()> = OnceLock::new();
 /// The subscriber uses `EnvFilter`, which honours the `RUST_LOG` environment
 /// variable at startup as an override of `cfg.tracing_level`. When
 /// `cfg.tracing_format` is `"json"` the subscriber emits JSON-formatted
-/// records to stderr; otherwise a human-readable (pretty) format is used.
+/// records to stderr; otherwise a single-line human-readable format is used,
+/// with each record's source file and line number inlined into that line.
 ///
 /// # Errors
 ///
@@ -55,7 +56,8 @@ where
         tracing_subscriber::registry().with(layer).try_init()
     } else {
         let layer = fmt::layer()
-            .pretty()
+            .with_file(true)
+            .with_line_number(true)
             .with_writer(make_writer)
             .with_filter(filter);
         tracing_subscriber::registry().with(layer).try_init()
