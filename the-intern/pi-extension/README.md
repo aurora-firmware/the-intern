@@ -1,4 +1,4 @@
-# the-intern/extensions
+# the-intern/pi-extension
 
 TypeScript extensions for the pi-agent coding agent. This package hosts the
 **bob extension** (`bob.ts`), which is the event-forwarding membrane described
@@ -14,7 +14,7 @@ only to talk to the service — but they are **distinct artifacts**:
 | | bob service | bob extension |
 |---|---|---|
 | **Artifact** | Rust binary `bob` | TypeScript file `bob.ts` |
-| **Location** | `the-intern/service/` | `the-intern/extensions/` |
+| **Location** | `the-intern/service/` | `the-intern/pi-extension/` |
 | **Runtime** | Managed by the OS / systemd / docker | Loaded inside each `pi` process by pi's own extension loader |
 | **Lifecycle** | Long-running server process | One instance per `pi` session, torn down with the pi process |
 | **Install path** | System PATH or container image | Resolved by bob at startup (see Installation below) |
@@ -97,7 +97,7 @@ Place the extension file at the resolved path before starting `bob serve`:
 ```sh
 # Linux example (default path)
 mkdir -p ~/.local/share/bob/extensions
-cp /path/to/the-intern/extensions/bob.ts ~/.local/share/bob/extensions/bob.ts
+cp /path/to/the-intern/pi-extension/bob.ts ~/.local/share/bob/extensions/bob.ts
 ```
 
 ### Overriding the Extension Path

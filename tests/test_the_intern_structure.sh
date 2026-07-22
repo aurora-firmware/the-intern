@@ -5,7 +5,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ROOT_DIR="$REPO_ROOT/the-intern"
 SERVICE_DIR="$ROOT_DIR/service"
-EXTENSIONS_DIR="$ROOT_DIR/extensions"
+EXTENSIONS_DIR="$ROOT_DIR/pi-extension"
 ROOT_README="$ROOT_DIR/README.md"
 SERVICE_README="$SERVICE_DIR/README.md"
 EXTENSIONS_README="$EXTENSIONS_DIR/README.md"
@@ -72,14 +72,15 @@ test_ac4_extensions_readme_mentions_external_pi_agent_and_not_vendored() {
   run_test "AC-4: extensions README includes external pi-agent and not-vendored note" "$ok"
 }
 
-# No additional top-level package/crate directories beyond service and extensions.
+# No additional top-level package/crate directories beyond service, pi-extension,
+# and bob-companion (the Claude plugin family).
 test_ac5_no_additional_top_level_code_directories() {
   local ok=0
   local extra_dirs
   if [ ! -d "$ROOT_DIR" ]; then
     ok=1
   else
-    extra_dirs=$(find "$ROOT_DIR" -mindepth 1 -maxdepth 1 -type d ! -name service ! -name extensions)
+    extra_dirs=$(find "$ROOT_DIR" -mindepth 1 -maxdepth 1 -type d ! -name service ! -name pi-extension ! -name bob-companion ! -name docs)
   fi
 
   if [ -n "${extra_dirs:-}" ]; then

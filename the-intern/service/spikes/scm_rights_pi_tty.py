@@ -138,7 +138,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--extension",
         type=Path,
-        default=repository_root / "extensions" / "bob.ts",
+        default=repository_root / "pi-extension" / "bob.ts",
         help="path to bob.ts",
     )
     return parser.parse_args(argv)

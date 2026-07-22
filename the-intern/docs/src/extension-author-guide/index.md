@@ -1,14 +1,14 @@
 # Extension & Channel-Adapter Author Guide
 
 This guide is for developers building on top of `bob`'s public surfaces: the
-extension protocol used by `the-intern/extensions/bob.ts`, the pi-agent
+extension protocol used by `the-intern/pi-extension/bob.ts`, the pi-agent
 compatibility contract, and the channel-adapter interface. A reader who works
 through each section will know which sockets to talk to, which framing to use,
 and which architectural decisions they must respect.
 
 ## JS Extension Protocol
 
-The bob extension (`the-intern/extensions/bob.ts`) is a pi-agent extension.
+The bob extension (`the-intern/pi-extension/bob.ts`) is a pi-agent extension.
 pi loads it once per session. When loaded, `bob.ts` connects to a Unix domain
 socket whose path is given in the `BOB_EXTENSION_SOCK_PATH` environment
 variable, using the session id carried in `BOB_SESSION_ID`. Both variables
@@ -124,12 +124,12 @@ package:
 **`@earendil-works/pi-coding-agent@0.75.3`**
 
 This version is declared as a pinned (no caret, no tilde) `devDependency` in
-`the-intern/extensions/package.json`.
+`the-intern/pi-extension/package.json`.
 
 ### How the compatibility test works
 
-`the-intern/extensions/pi-agent-compat.test.ts` runs as part of `npm test` in
-the extensions package. It checks three things:
+`the-intern/pi-extension/pi-agent-compat.test.ts` runs as part of `npm test` in
+the pi-extension package. It checks three things:
 
 1. The declared dependency in `package.json` is exactly `0.75.3` with no
    semver range prefix.

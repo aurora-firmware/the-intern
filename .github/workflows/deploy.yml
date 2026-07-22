@@ -11,7 +11,7 @@ permissions:
 env:
   SERVICE_DIR: the-intern/service
   DOCS_DIR: the-intern/docs
-  EXTENSIONS_DIR: the-intern/extensions
+  EXTENSIONS_DIR: the-intern/pi-extension
   MDBOOK_VERSION: 0.4.52
   MDBOOK_MERMAID_VERSION: 0.14.0
 

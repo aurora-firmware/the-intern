@@ -126,7 +126,10 @@ Two things live here, and they must not be confused:
 │   └── agents/                  # Mirror role definitions for the codex toolchain (*.toml)
 ├── the-intern/
 │   ├── docs/                    # User manual (mdBook source; shipped with releases)
-│   ├── extensions/              # JS extension for pi-agent (`bob.ts`)
+│   ├── pi-extension/            # JS extension for pi-agent (`bob.ts`)
+│   ├── bob-companion/
+│   │   └── claude/              # Claude Code plugin: skills for setting up, running, and
+│   │                            #   troubleshooting bob (separate from the gitignored .claude/ tree)
 │   └── service/                 # Rust service workspace (`bob` and subsystem crates)
 └── project/                     # Source of truth for product lifecycle state
     ├── docs/                    # Product design (system_overview.md, the-intern-architecture.md)

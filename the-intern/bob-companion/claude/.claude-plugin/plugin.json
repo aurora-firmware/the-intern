@@ -1,0 +1,12 @@
+{
+  "name": "bob-companion",
+  "description": "Teaches Claude how to set up, run, drive, and troubleshoot bob — the-intern's Rust admin service and CLI.",
+  "version": "0.1.0",
+  "author": {
+    "name": "aurora-firmware"
+  },
+  "homepage": "https://github.com/aurora-firmware/the-intern",
+  "repository": "https://github.com/aurora-firmware/the-intern",
+  "license": "UNLICENSED",
+  "keywords": ["bob", "the-intern", "cli", "admin-rpc", "pi-agent"]
+}

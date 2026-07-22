@@ -23,7 +23,7 @@ const SUPPORTED_PI_AGENT_VERSION = "0.75.3";
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Resolve a path relative to the extensions package root. */
+/** Resolve a path relative to the pi-extension package root. */
 function extensionsPath(...segments: string[]): string {
   return path.resolve(import.meta.dirname, ...segments);
 }
@@ -131,15 +131,15 @@ describe("AC-4: README files document supported pi-agent version and incompatibi
     ).toMatch(/unsupported/i);
   });
 
-  it("extensions README.md mentions the supported pi-agent version and incompatibility signal", () => {
+  it("pi-extension README.md mentions the supported pi-agent version and incompatibility signal", () => {
     const extReadme = fs.readFileSync(extensionsPath("README.md"), "utf8");
     expect(
       extReadme,
-      `extensions/README.md must mention the supported pi-agent version "${SUPPORTED_PI_AGENT_VERSION}"`
+      `pi-extension/README.md must mention the supported pi-agent version "${SUPPORTED_PI_AGENT_VERSION}"`
     ).toContain(SUPPORTED_PI_AGENT_VERSION);
     expect(
       extReadme,
-      "extensions/README.md must describe the incompatibility signal (npm test failing)"
+      "pi-extension/README.md must describe the incompatibility signal (npm test failing)"
     ).toMatch(/npm test|incompatib/i);
   });
 });
