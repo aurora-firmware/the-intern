@@ -1,6 +1,6 @@
 # Node.js Coding Guidelines
 
-These conventions apply to TypeScript code in `the-intern/extensions/`. The
+These conventions apply to TypeScript code in `the-intern/pi-extension/`. The
 extension runs inside each pi-agent process, so code in this package must be
 small, explicit, fail-closed, and easy to audit.
 

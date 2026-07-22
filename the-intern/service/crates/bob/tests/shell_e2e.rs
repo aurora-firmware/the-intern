@@ -27,7 +27,7 @@ const AUDIT_TAIL_DELIVERY_DEADLINE: Duration = Duration::from_secs(2);
 const LARGE_REPORT_SUMMARY_BYTES: usize = 9_000;
 
 fn extension_fixture_path() -> PathBuf {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../extensions/bob.ts");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../pi-extension/bob.ts");
     assert!(
         path.is_file(),
         "extension fixture must exist at {}",

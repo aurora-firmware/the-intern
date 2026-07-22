@@ -103,7 +103,7 @@ For a source checkout on Linux:
 
 ```bash
 mkdir -p ~/.local/share/bob/extensions
-cp the-intern/extensions/bob.ts ~/.local/share/bob/extensions/bob.ts
+cp the-intern/pi-extension/bob.ts ~/.local/share/bob/extensions/bob.ts
 ```
 
 To use another location, set the top-level `extension_path` key in

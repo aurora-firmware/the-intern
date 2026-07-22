@@ -14,7 +14,7 @@ also runs:
   queue-borne requests plus the blocking `tool_call` authorization gate.
 - **Monitoring** — an append-only JSONL audit log with live `audit.tail`
   subscriptions and a `report.submit` intake.
-- **JS extension** — `extensions/bob.ts`, which forwards pi-agent runtime
+- **JS extension** — `pi-extension/bob.ts`, which forwards pi-agent runtime
   events into `extension.sock` and hosts the `tool_call` authorization hook.
 - **Interactive chat** — `bob chat` opens a supervised, directly-launched
   interactive `pi` session on the user's terminal (ADR-010/ADR-011).
@@ -36,11 +36,12 @@ to the agent) are not yet implemented.
 │   ├── agents/                   #   bug-loop, tdd, code-review, integrate,
 │   └── skills/                   #   spec-breakdown, etc.)
 ├── .codex/agents/                # Mirror role definitions for codex
-├── claude-plugins/bob-companion/ # Claude Code plugin: skills for bob setup, CLI usage,
-│                                 #   health checks, and troubleshooting
 ├── the-intern/
 │   ├── service/                  # Rust workspace — the `bob` binary lives here
-│   ├── extensions/               # JS extension for pi-agent (bob.ts)
+│   ├── pi-extension/             # JS extension for pi-agent (bob.ts)
+│   ├── bob-companion/
+│   │   └── claude/               # Claude Code plugin: skills for bob setup, CLI usage,
+│   │                             #   health checks, and troubleshooting
 │   └── docs/                     # User manual (mdbook source; shipped with releases)
 └── project/                      # Source of truth for product lifecycle
     ├── docs/                     # Architecture and coding guidelines
@@ -70,7 +71,7 @@ tested against. **No backwards compatibility is guaranteed** — when the
 pi-agent version in use changes, update this section (specs and ADRs
 deliberately do not pin pi-agent versions).
 
-- **Extension API** — the bob extension (`the-intern/extensions/bob.ts`) has
+- **Extension API** — the bob extension (`the-intern/pi-extension/bob.ts`) has
   been tested against `@earendil-works/pi-coding-agent` **version 0.75.3**
   only. This is the only supported pi-agent API version for the bob extension
   until a future task updates the compatibility record.
@@ -79,7 +80,7 @@ deliberately do not pin pi-agent versions).
   (T-103).
 
 If a different version of `@earendil-works/pi-coding-agent` is installed,
-`npm test` in `the-intern/extensions` will fail with a clear incompatibility
+`npm test` in `the-intern/pi-extension` will fail with a clear incompatibility
 error. Other installed versions are **unsupported** until both the
 compatibility test (`pi-agent-compat.test.ts`) and this documentation are
 updated to reflect the new tested version.

@@ -19,10 +19,10 @@ the tools it already has (Bash, Read, Grep).
 From a Claude Code session with access to this repository:
 
 ```
-/plugin install claude-plugins/bob-companion
+/plugin install the-intern/bob-companion/claude
 ```
 
-or add `claude-plugins/bob-companion` as a plugin source per your
+or add `the-intern/bob-companion/claude` as a plugin source per your
 Claude Code plugin-marketplace configuration.
 
 ## Scope note

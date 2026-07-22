@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 service_dir="$repo_root/the-intern/service"
 dev_home="${BOB_DEV_HOME:-$repo_root/.tmp/bob-dev}"
-extension_path="$repo_root/the-intern/extensions/bob.ts"
+extension_path="$repo_root/the-intern/pi-extension/bob.ts"
 
 if ! command -v pi >/dev/null 2>&1; then
   echo "error: pi must be available on PATH" >&2

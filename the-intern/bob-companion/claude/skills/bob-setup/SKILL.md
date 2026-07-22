@@ -25,7 +25,7 @@ Version compatibility is pinned, not aspirational — check the root
 `README.md` "pi-agent Version Compatibility" section for the exact
 supported versions before assuming a mismatch is your bug:
 - Extension API (`@earendil-works/pi-coding-agent`): tested against
-  **0.75.3** only — `npm test` in `the-intern/extensions` fails loudly with
+  **0.75.3** only — `npm test` in `the-intern/pi-extension` fails loudly with
   the exact fix command if the installed version differs.
 - Interactive `pi` binary (used by `bob chat`): last verified against
   **0.79.10**.
@@ -51,7 +51,7 @@ or add the `target/debug` or `target/release` dir to `PATH`.
 
 ## 4. Install the pi-agent extension
 
-The extension (`the-intern/extensions/bob.ts`) is separate from the `bob`
+The extension (`the-intern/pi-extension/bob.ts`) is separate from the `bob`
 binary and must be installed where `bob serve` expects it, or **bob will
 refuse to spawn any `pi` process at all** ("pi extension file does not
 exist at expected path '<resolved_path>'").
@@ -60,7 +60,7 @@ Default resolved path (XDG data dir):
 - Linux: `~/.local/share/bob/extensions/bob.ts` (or `$XDG_DATA_HOME/bob/extensions/bob.ts`)
 - macOS: `~/Library/Application Support/bob/extensions/bob.ts`
 
-Copy `the-intern/extensions/bob.ts` there, or override the path with
+Copy `the-intern/pi-extension/bob.ts` there, or override the path with
 `extension_path` in `config.toml` or the `BOB_EXTENSION_PATH` env var.
 
 **Common install mistake**: if pi's own `~/.pi/agent/settings.json`

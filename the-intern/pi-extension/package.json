@@ -1,5 +1,5 @@
 {
-  "name": "@the-intern/extensions",
+  "name": "@the-intern/pi-extension",
   "version": "0.1.0",
   "private": true,
   "description": "TypeScript extensions for pi-agent, starting with the bob event-forwarding extension.",
