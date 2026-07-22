@@ -36,6 +36,8 @@ to the agent) are not yet implemented.
 │   ├── agents/                   #   bug-loop, tdd, code-review, integrate,
 │   └── skills/                   #   spec-breakdown, etc.)
 ├── .codex/agents/                # Mirror role definitions for codex
+├── claude-plugins/bob-companion/ # Claude Code plugin: skills for bob setup, CLI usage,
+│                                 #   health checks, and troubleshooting
 ├── the-intern/
 │   ├── service/                  # Rust workspace — the `bob` binary lives here
 │   ├── extensions/               # JS extension for pi-agent (bob.ts)

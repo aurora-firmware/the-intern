@@ -124,6 +124,9 @@ Two things live here, and they must not be confused:
 │                                #   merge-conflicts, new-{task,bug,spec,adr}, status-report)
 ├── .codex/
 │   └── agents/                  # Mirror role definitions for the codex toolchain (*.toml)
+├── claude-plugins/
+│   └── bob-companion/           # Claude Code plugin: skills for setting up, running, and
+│                                #   troubleshooting bob (separate from the gitignored .claude/ tree)
 ├── the-intern/
 │   ├── docs/                    # User manual (mdBook source; shipped with releases)
 │   ├── extensions/              # JS extension for pi-agent (`bob.ts`)
