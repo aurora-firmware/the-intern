@@ -121,6 +121,7 @@ If you need to run `bob serve` manually instead of via the scripts (e.g. to
 point at a specific runtime dir):
 
 ```bash
+cd the-intern/service
 export BOB_TEST_RUNTIME_DIR="$(mktemp -d)"
 BOB_ADMIN_SOCK_PATH="$BOB_TEST_RUNTIME_DIR/admin.sock" \
 BOB_EXTENSION_SOCK_PATH="$BOB_TEST_RUNTIME_DIR/extension.sock" \
