@@ -80,7 +80,7 @@ test_ac5_no_additional_top_level_code_directories() {
   if [ ! -d "$ROOT_DIR" ]; then
     ok=1
   else
-    extra_dirs=$(find "$ROOT_DIR" -mindepth 1 -maxdepth 1 -type d ! -name service ! -name pi-extension ! -name bob-companion)
+    extra_dirs=$(find "$ROOT_DIR" -mindepth 1 -maxdepth 1 -type d ! -name service ! -name pi-extension ! -name bob-companion ! -name docs)
   fi
 
   if [ -n "${extra_dirs:-}" ]; then
