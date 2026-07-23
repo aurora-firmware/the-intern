@@ -4,9 +4,10 @@ This guide is for anyone who installs, configures, runs, and observes `bob` in a
 real environment. It covers prerequisites, building the binary, socket layout,
 configuration, the audit log, policy basics, and how to stop the service cleanly.
 
-For how to use `bob` subcommands once the service is up, see the
-[End-User Guide](../end-user-guide/index.md).
-For the architectural rationale behind the service design, see the
+New to `bob`? Start with the [Quickstart](../quickstart/index.md) for the
+fastest path to a running service. For how to use `bob` subcommands once the
+service is up, see the [End-User Guide](../end-user-guide/index.md). For the
+architectural rationale behind the service design, see the
 [Architecture Overview](../architecture-overview/index.md).
 
 ---

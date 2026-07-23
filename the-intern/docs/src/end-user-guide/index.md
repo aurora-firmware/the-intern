@@ -4,7 +4,9 @@ This guide is for anyone who has `bob` installed and wants to use it to drive
 the Intern service. It covers what each subcommand does and walks through
 concrete examples so you know what to expect.
 
-If you need to install `bob` or configure the runtime directory, see the
+New to `bob`? Start with the [Quickstart](../quickstart/index.md) for the
+shortest path to a working `bob chat` session. If you need to install `bob`
+or configure the runtime directory, see the
 [Operator & Deployer Guide](../operator-guide/index.md). If you want a full
 listing of every flag and option, see the [CLI Reference](../cli-reference/index.md).
 
