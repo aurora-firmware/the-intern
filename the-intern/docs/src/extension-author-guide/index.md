@@ -168,7 +168,7 @@ types. For each trigger, an adapter constructs:
 Adapters do not evaluate admission or action policy. The Requests Handler owns
 pre-flight admission for *admission-gated* queue-borne requests, while the
 extension and policy engine enforce tool-call authorization inside supervised pi
-sessions. Not every adapter is admission-gated: under ADR-012 the scheduler's
+sessions. Not every adapter is admission-gated: the scheduler's
 `Periodic` events are admitted by trusted schedule-store membership and skip
 pre-flight admission (see below).
 
@@ -186,11 +186,11 @@ per entry in the JSON schedule store (`schedules.json`) and, on each cron tick, 
 Reloading the schedule rebuilds the live job table. A failed intake submission
 is logged and does not terminate the scheduler loop.
 
-Under ADR-012 the scheduler is **not admission-gated**: a job present in the
+The scheduler is **not admission-gated**: a job present in the
 trusted schedule store is admitted for firing, so its `Periodic` events bypass
 pre-flight admission and do **not** require a `[policy].admitted_users` entry.
 The stable `UserId` is retained only for audit attribution, not for admission.
-Every resulting `tool_call` is still subject to the S-004 action gate.
+Every resulting `tool_call` is still subject to the tool-call action gate.
 
 ### Application identity
 
@@ -217,17 +217,17 @@ Any new channel adapter must:
 This guide intentionally summarizes the externally visible adapter contract
 without linking back into the internal project specifications.
 
-## Pointers to ADRs
+## Design rules extension and adapter authors must respect
 
-These three internal decisions directly constrain extension and adapter authors:
+These three rules directly constrain extension and adapter authors:
 
-**ADR-001 — Admin-RPC framing: newline-delimited JSON over UDS**
+**Admin-RPC framing: newline-delimited JSON over UDS**
 The wire framing rule — one JSON object per line, `\n` terminated, no literal
 newlines inside JSON values — applies to both `admin.sock` (JSON-RPC 2.0) and
 `extension.sock`. Any new client or adapter that writes to these sockets must
 follow this framing.
 
-**ADR-004 — Inbound request interface typed by delivery kind (sync/async/periodic)**
+**Inbound request interface typed by delivery kind (sync/async/periodic)**
 The core recognizes requests by their delivery and response semantics, not by
 their channel of origin. An adapter must classify each inbound event as one of
 three kinds and produce an `InternalEvent` accordingly:
@@ -242,7 +242,7 @@ three kinds and produce an `InternalEvent` accordingly:
 
 The core never enumerates channel types.
 
-**ADR-005 — Application-level request identity is self-asserted within the local-socket trust boundary**
+**Application-level request identity is self-asserted within the local-socket trust boundary**
 Transport trust is enforced by socket filesystem permissions (the `0o700`
 parent directory). Application-level identity is declared inside each request,
 not derived from the OS uid. Every request must carry a non-empty, structurally

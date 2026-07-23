@@ -125,7 +125,7 @@ pi loads extensions from two independent sources: the `--extension <path>`
 flag bob passes on every spawn, and pi's own `~/.pi/agent/settings.json`
 `packages` list. These are additive, not deduplicated against each other. If
 `packages` still references an old, manually installed copy of `bob.ts` (for
-example from a pre-CR-003 install, or an extracted release archive left over
+example from an older manual install, or an extracted release archive left over
 from an earlier upgrade), pi loads **two** bob extension instances into the
 same session. Both connect to `extension.sock` under the same session id and
 both register a blocking `tool_call` hook.
@@ -379,7 +379,7 @@ traffic:
 
 - **Pre-flight admission** applies to *admission-gated* queue-borne requests
   (e.g. external channel adapters). It does **not** apply to scheduled jobs —
-  under ADR-012 scheduler `Periodic` events are admitted by trusted
+  scheduler `Periodic` events are admitted by trusted
   schedule-store membership and are not checked against `admitted_users`, so an
   empty `admitted_users` list does not block scheduled prompt delivery.
   Interactive `bob chat` likewise does not run pre-flight admission.
@@ -453,7 +453,7 @@ inside the bob process — no system cron entries (crontab, systemd timers, or
 similar) are needed or created.
 
 **If bob is stopped when a job is due to fire, that job is skipped and will not
-be replayed when the service restarts.** This is by design (ADR-006): jobs only
+be replayed when the service restarts.** This is by design: jobs only
 fire while the service is running, so every execution has a full audit trail.
 Operators who need guaranteed delivery across restarts should keep bob running
 under a process supervisor such as systemd.
@@ -550,7 +550,7 @@ tick.
 
 > **Security:** unlike `schedules.json` itself, neither a `file` prompt nor a
 > `cwd` is read with any ownership or permission check — a deliberate
-> relaxation of the ADR-012 trust boundary. Because scheduled jobs bypass
+> relaxation of the trust boundary used for schedule-store admission. Because scheduled jobs bypass
 > `[policy].admitted_users`, a prompt file or working directory that another
 > user can write is an injection path into a trusted job. A writable `cwd` is
 > especially significant: pi automatically loads `AGENTS.md`/`CLAUDE.md` and
@@ -691,8 +691,8 @@ sufficient authorization for a periodic prompt to reach the agent.
 jobs.** Empty or absent `admitted_users` does not block scheduled prompt
 delivery.
 
-Every `tool_call` produced during a scheduled session still goes through S-004
-action authorization: the bob extension intercepts each tool invocation and
+Every `tool_call` produced during a scheduled session still goes through
+tool-call action authorization: the bob extension intercepts each tool invocation and
 sends it to the policy engine for evaluation against `[[policy.action_rules]]`.
 Only explicitly allowed tools execute; everything else is blocked. This gate is
 independent of admission and cannot be bypassed by the scheduler.
@@ -702,7 +702,7 @@ independent of admission and cannot be bypassed by the scheduler.
 Bob provides four observation points for scheduled-job execution. There is no
 dedicated schedule run-history store and no per-job success or failure counter;
 all observability flows through the existing monitoring layer (consistent with
-the fire-and-forget semantics of the `periodic` delivery kind per ADR-006).
+the fire-and-forget semantics of the `periodic` delivery kind).
 
 **Service logs** — the scheduler emits structured `INFO` log lines when each job
 is registered at startup and on reload. Warnings are logged when a cron
