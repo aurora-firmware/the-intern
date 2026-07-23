@@ -1,77 +1,81 @@
 # Quickstart
 
-This page gets a new machine from zero to a working `bob chat` session as
-fast as possible. It links out to the [Operator & Deployer
-Guide](../operator-guide/index.md) and the [End-User
-Guide](../end-user-guide/index.md) for anything more detailed than "make it
-run."
+This page gets you to a working `bob chat` session using the **released
+binary** — no Rust toolchain and no source build required. It links out to
+the [Operator & Deployer Guide](../operator-guide/index.md) and the
+[End-User Guide](../end-user-guide/index.md) for anything more detailed than
+"make it run." If you'd rather build from source (for example, to run on a
+platform other than Linux x86_64), see
+[Build and install](../operator-guide/index.md#build-and-install) in the
+Operator & Deployer Guide instead.
+
+Repository: [aurora-firmware/the-intern](https://github.com/aurora-firmware/the-intern)
+· Releases: [aurora-firmware/the-intern/releases](https://github.com/aurora-firmware/the-intern/releases/latest)
 
 ---
 
 ## 1. Prerequisites
 
-- **Rust (stable).** Pinned in `the-intern/service/rust-toolchain.toml`;
-  `rustup` installs the right channel automatically on first build.
 - **The `pi` binary on `PATH`.** This is a hard precondition — `bob` will not
-  start without it. Verify with:
+  start without it. Install it from the official pi-agent
+  [quickstart guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/quickstart.md)
+  (project site: [pi.dev](https://pi.dev/)), then verify it resolves:
 
   ```bash
   which pi
   ```
 
-  If this comes back empty, stop here and install/escalate for `pi` before
-  continuing. Do not substitute a mock or wrapper script. See the
-  repository `README.md`'s "pi-agent Version Compatibility" section for the
-  tested versions.
+  If this comes back empty, stop here and install `pi` before continuing. Do
+  not substitute a mock or wrapper script. See the repository `README.md`'s
+  "pi-agent Version Compatibility" section for the tested versions.
 
 ---
 
-## 2. Build `bob`
+## 2. Download `bob`
+
+Grab the `bob` binary from the
+[latest release](https://github.com/aurora-firmware/the-intern/releases/latest)
+and put it on your `PATH`:
 
 ```bash
-cd the-intern/service
-cargo build -p bob
+curl -fL -o bob \
+  https://github.com/aurora-firmware/the-intern/releases/latest/download/bob
+chmod +x bob
+sudo mv bob /usr/local/bin/bob   # or any directory already on PATH
 ```
 
-The binary lands at `the-intern/service/target/debug/bob`. Add that
-directory to `PATH`, or prefix every command below with the full path.
+The released binary is built for Linux x86_64. Confirm it runs:
+
+```bash
+bob status --help
+```
 
 ---
 
 ## 3. Install the bob extension
 
 `bob` hands every `pi` process its extension via `pi --extension
-<path>` — it never relies on pi's own extension search path. Install it
-once:
+<path>` — it never relies on pi's own extension search path. Download the
+extension archive from the same [release page](https://github.com/aurora-firmware/the-intern/releases/latest)
+(named `the-intern-bob-extension-<version>.tar.gz`) and install `bob.ts`:
 
 ```bash
 mkdir -p ~/.local/share/bob/extensions
-cp the-intern/pi-extension/bob.ts ~/.local/share/bob/extensions/bob.ts
+curl -fL -o bob-extension.tar.gz \
+  https://github.com/aurora-firmware/the-intern/releases/download/<version>/the-intern-bob-extension-<version>.tar.gz
+tar -xzf bob-extension.tar.gz -C ~/.local/share/bob/extensions bob.ts
 ```
 
-(macOS default is `~/Library/Application Support/bob/extensions/bob.ts`
-instead. Use `extension_path` in `config.toml` or `BOB_EXTENSION_PATH` to
-put it somewhere else.) Full details:
+Replace `<version>` with the tag shown on the releases page (for example
+`0.5.0`). (macOS default install path is
+`~/Library/Application Support/bob/extensions/bob.ts` instead. Use
+`extension_path` in `config.toml` or `BOB_EXTENSION_PATH` to put it
+somewhere else.) Full details:
 [Install the bob extension](../operator-guide/index.md#install-the-bob-extension).
 
 ---
 
 ## 4. Start the service
-
-Fastest path — the repo's dev helper scripts keep sockets, config, and state
-under `.tmp/bob-dev` for you:
-
-```bash
-# Terminal A
-./scripts/run-bob-dev.sh
-```
-
-```bash
-# Terminal B
-./scripts/bob-dev.sh status
-```
-
-Prefer to run it yourself with an isolated runtime directory:
 
 ```bash
 export BOB_TEST_RUNTIME_DIR="$(mktemp -d)"
@@ -93,7 +97,7 @@ Expect:
 
 ```
 ok: true
-version: 0.3.0
+version: 0.5.0
 uptime_seconds: 2
 ```
 
@@ -217,8 +221,12 @@ bob sessions kill <session-id>
 
 ## Where to go next
 
+- The `bob` binary, docs archive, and bob extension for every version —
+  [GitHub Releases](https://github.com/aurora-firmware/the-intern/releases)
+- The `pi` coding agent itself — [install guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/quickstart.md), [pi.dev](https://pi.dev/)
 - Every subcommand with worked examples — [End-User Guide](../end-user-guide/index.md)
-- Socket layout, the audit log, policy, and scheduling in depth —
+- Socket layout, the audit log, policy, and scheduling in depth, plus
+  building from source —
   [Operator & Deployer Guide](../operator-guide/index.md)
 - Why the service is shaped this way — [Architecture Overview](../architecture-overview/index.md)
 - Every flag, exhaustively — [CLI Reference](../cli-reference/index.md)
