@@ -27,8 +27,8 @@ At startup `bob serve` binds two Unix-domain sockets:
 | `extension.sock` | The JS extension inside each pi-agent process | Authorization verdict requests and agent event forwarding |
 
 These two sockets have different trust profiles and evolve independently. `admin.sock`
-uses JSON-RPC 2.0; `extension.sock` carries the authorization and event-forwarding
-protocol from S-001.
+uses JSON-RPC 2.0; `extension.sock` carries its own authorization and event-forwarding
+protocol.
 
 Internally `bob serve` uses an **in-process bounded request queue** to decouple the
 channel adapters from the Requests Handler. Each bounded channel is a typed
@@ -37,7 +37,7 @@ backpressure point — a full queue is observable, not a silent stall.
 Persistence in v1 is **in-memory** for the inbound queue and session state. Durable
 on-disk state is limited to two stores: the **audit log** (an append-only JSONL file)
 and the scheduler's **JSON schedule store** (`schedules.json`), which is the source of
-truth for scheduled jobs and survives restart (see ADR-012).
+truth for scheduled jobs and survives restart.
 
 ---
 
@@ -45,7 +45,7 @@ truth for scheduled jobs and survives restart (see ADR-012).
 
 Every **admission-gated** queue-borne request follows the same path through `bob
 serve`; future external adapters use it too. The shipped scheduler adapter is the one
-exception: under ADR-012 its `Periodic` events are admitted by trusted schedule-store
+exception: its `Periodic` events are admitted by trusted schedule-store
 membership and **bypass pre-flight admission** (they are not checked against
 `[policy].admitted_users`), but they otherwise follow the same routing and remain
 subject to the action gate on every resulting `tool_call`.
@@ -64,7 +64,7 @@ sequenceDiagram
     Source->>CA: inbound trigger
     CA->>Q: submit InternalEvent + RequestContext
     Q->>RH: dequeue
-    Note over Q,RH: Scheduler Periodic events are pre-admitted by trusted<br/>schedule-store membership (ADR-012) and skip this step
+    Note over Q,RH: Scheduler Periodic events are pre-admitted by trusted<br/>schedule-store membership and skip this step
     RH->>RH: evaluate_admission(sender)
     alt sender not admitted
         Note over RH: drop event; write denial verdict to audit log
@@ -158,10 +158,10 @@ look identical once they leave their adapters.
 reads entries from the JSON schedule store (`schedules.json` under the XDG state
 directory), maintains the active cron job table, and submits a `Periodic` event
 when a job fires. Each job has stable sender and channel identities derived from
-its id. `Periodic` events bypass pre-flight admission (ADR-012): the trusted
+its id. `Periodic` events bypass pre-flight admission: the trusted
 schedule store is the admission gate, so no per-job UUID entry in
 `[policy].admitted_users` is required. Every resulting `tool_call` still goes
-through S-004 action authorization inside the supervised pi session.
+through tool-call action authorization inside the supervised pi session.
 
 Interactive `bob chat` is not a channel adapter: it opens the direct supervised
 session described above. Email and other external adapters are not yet implemented.
