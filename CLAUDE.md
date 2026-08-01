@@ -96,9 +96,9 @@ Two things live here, and they must not be confused:
 
 1. **The product being designed — "the Intern".** A logical architecture for an
    intelligent office-assistant agent, with architecture in
-   `project/docs/system_overview.md` and
-   `project/docs/the-intern-architecture.md`, and current Rust service code in
-   `the-intern/service/`.
+   `docs/ai-team/docs/system_overview.md` and
+   `docs/ai-team/docs/the-intern-architecture.md`, and current Rust service code
+   in `the-intern/service/`.
 2. **The AI-team process that builds it.** Role definitions in
    `.claude/agents/` (mirrored in `.codex/agents/`) and the slash-skills in
    `.claude/skills/`, backed by the `ai-team` CLI.
@@ -131,14 +131,17 @@ Two things live here, and they must not be confused:
 │   │   └── claude/              # Claude Code plugin: skills for setting up, running, and
 │   │                            #   troubleshooting bob (separate from the gitignored .claude/ tree)
 │   └── service/                 # Rust service workspace (`bob` and subsystem crates)
-└── project/                     # Source of truth for product lifecycle state
-    ├── docs/                    # Product design (system_overview.md, the-intern-architecture.md)
-    │                            # Coding guidance lives here too; archive/ holds retired docs
-    ├── specs/                   # Approved specifications (input to spec-breakdown)
-    ├── decisions/               # ADRs
-    ├── reports/                 # Generated status and gate reports
-    ├── tasks/{pending,in-progress,completed,blocked}/
-    └── bugs/{open,in-progress,resolved}/
+└── docs/
+    └── ai-team/                 # Source of truth for product lifecycle state (project.dir
+                                  #   in .ai-team.toml)
+        ├── docs/                # Product design (system_overview.md, the-intern-architecture.md)
+        │                        #   Coding guidance lives here too; archive/ holds retired docs;
+        │                        #   reports/ holds generated status and gate reports
+        ├── specs/                # Approved specifications (input to spec-breakdown)
+        ├── decisions/            # ADRs
+        ├── change-requests/      # Proposed spec amendments
+        ├── tasks/{pending,in-progress,completed,blocked}/
+        └── bugs/{open,in-progress,resolved}/
 ```
 
 Directory *is* the status for tasks and bugs — moving a file is how state transitions.
@@ -171,12 +174,12 @@ Hard rules: no `--no-verify`, no `--force` on `dev-agent`/`main`, no amending pu
 ### Working in this repo
 
 - When asked to do product work, route it through the framework (spec → tasks → loop), don't
-  free-hand implementation against `project/docs/`.
+  free-hand implementation against `docs/ai-team/docs/`.
 - Editing process itself (agents/skills) is direct repo work — but keep agent and skill
   definitions internally consistent (each agent's `skills:` frontmatter must match real skills).
 - Keep the `.claude/` and `.codex/` agent definitions in sync when changing roles.
 
 ### Pointers
 
-- Coding guidelines: `project/docs/coding-guidelines-node.md`, `project/docs/coding-guidelines-rust.md`
+- Coding guidelines: `docs/ai-team/docs/coding-guidelines-node.md`, `docs/ai-team/docs/coding-guidelines-rust.md`
 - Local Rust verification details: `the-intern/service/README.md`
