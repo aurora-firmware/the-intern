@@ -1,0 +1,124 @@
+---
+id: T-139
+title: Validate the deployed package against a live scheduled job happy path
+status: pending  # pending | in-progress | completed | blocked
+priority: high  # critical | high | medium | low
+assigned-role: developer
+created: '2026-08-01'
+spec: S-010
+---
+
+# Validate the deployed package against a live scheduled job happy path
+
+## Description
+
+S-010 Phase 4, first half: prove the shipped package actually works when driven
+by the real S-009 scheduler, and capture the two deployment facts the operator
+documentation (T-141) needs.
+
+Deploy a copy of `the-intern/email-skills/` to an owner-only workspace outside
+the repository checkout (S-010 requires this: the workspace also holds mutable
+runtime state — `config/email-triage.toml` and `worklog/` — and a shared git
+working tree cannot guarantee owner-only permissions). Fill in
+`config/email-triage.toml` with the manager address. Add S-004 action allow rules
+admitting **every** tool call the package makes — the himalaya `bash` calls *and*
+the config read, worklog read/append, and on-demand reference reads T-135 named,
+since S-004 is default-deny over all tool calls — each scoped by `arg_matchers`
+(`field_path` + glob `pattern`), not a blanket `bash` allow. Then
+`bob policy reload`. Add the job with `bob schedule add --cwd <workspace>`.
+`./scripts/run-bob-dev.sh` and `./scripts/bob-dev.sh` are the local harness; the
+dev config it reads lives under `.tmp/bob-dev/config/`.
+
+Then place an unseen test message the taxonomy classifies confidently, wait for
+a tick, and confirm the message was handled and recorded.
+
+Record in the package README the two facts discovered here: the exact working
+allow-rule entry, and the deployment procedure that produces an owner-only
+workspace copy. Prerequisites (himalaya account, manager address, test mailbox)
+are assumed present per S-010's Exclusions — escalate if any is missing rather
+than mocking it.
+
+## Acceptance Criteria
+
+AC-1: WHEN a job added with `bob schedule add --cwd <workspace>` fires against a
+      mailbox holding an unseen, confidently-classifiable test message THE SYSTEM
+      SHALL handle that message and append a worklog entry for it, evidenced by
+      the worklog file and the firing's audit record.
+AC-2: The system shall record in the package README the exact S-004 action-rule
+      entries — tool name plus `arg_matchers` field paths and patterns — that
+      admit every tool call this package makes, covering the himalaya calls and
+      the config read and worklog read/append, without being a blanket `bash`
+      allow, verified by observing the same calls blocked before the rules and
+      allowed after them.
+AC-3: The system shall record in the package README the deployment procedure
+      that produces an owner-only workspace copy, stating the required mode and
+      ownership and that the repository checkout is never used as a job's `--cwd`.
+AC-4: IF validation exposes a defect in either skill THEN THE SYSTEM SHALL
+      correct the skill file and re-run the validation rather than recording a
+      known-failing behaviour as passing.
+
+## Dependencies
+
+- `T-131` — package README this task extends
+- `T-137` — file-without-reply category workflows (transitively T-132–T-136)
+- `T-138` — correspondence category workflows
+
+## Files to Touch
+
+- `the-intern/email-skills/README.md` — add the verified allow-rule entry and the
+  owner-only deployment procedure
+- `the-intern/email-skills/.pi/skills/email-triage/SKILL.md` — fix-ups if
+  validation exposes defects
+- `the-intern/email-skills/.pi/skills/himalaya/SKILL.md` — fix-ups if validation
+  exposes defects
+
+## Verification
+
+```bash
+# Manual, against a live service (prerequisites: pi, himalaya with a configured
+# account, a test mailbox, and a manager address).
+
+# 1. Deploy an owner-only copy outside the checkout and fill in the config.
+install -d -m 700 "$HOME/workspaces/email"
+cp -r the-intern/email-skills/. "$HOME/workspaces/email/"
+chmod -R go-rwx "$HOME/workspaces/email"
+cp "$HOME/workspaces/email/config/email-triage.example.toml" \
+   "$HOME/workspaces/email/config/email-triage.toml"   # then set manager_address
+
+# 2. Start the service, add the scoped allow rule, reload policy.
+./scripts/run-bob-dev.sh            # terminal A
+./scripts/bob-dev.sh policy reload  # terminal B, after editing the policy section
+
+# 3. Add the job and let it fire.
+./scripts/bob-dev.sh schedule add --id check-email --cron "*/5 * * * *" \
+  --prompt "Check email" --cwd "$HOME/workspaces/email"
+
+# 4. Send an unseen test message, wait one tick, then confirm handling.
+ls "$HOME/workspaces/email/worklog/" && cat "$HOME/workspaces/email/worklog/$(date +%F).md"
+./scripts/bob-dev.sh audit tail
+
+# Paste the blocked-then-allowed verdict records and the worklog entry into the
+# Work Log as evidence for AC-1 and AC-2.
+```
+
+## Work Log
+
+<!-- Mandatory. Append one entry per session boundary. Format:
+### Session N — YYYY-MM-DD
+Free-prose body: what was done this session, what was tried and
+rejected, decisions made, what remains for next session.
+
+Start every session by reading the entries below.
+The final entry serves as the handoff to the reviewer. -->
+
+## Review
+
+<!-- Reviewer: append verdict here after each review cycle.
+
+### Review Verdict — YYYY-MM-DD
+PASS | FAIL | ESCALATE
+
+- For FAIL: file, location, what is wrong, what should change.
+- For PASS: brief confirmation that both stages passed.
+- For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
+-->
