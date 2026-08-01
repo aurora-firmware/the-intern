@@ -41,8 +41,12 @@ What this specification explicitly does NOT cover:
 - **Blocking `tool_call` hook.** Authorization decisions, the `Authz` frame
   family already declared in `extension-ipc/src/framing.rs`, and any
   bidirectional verdict flow are S-001 Phase 4 work and out of scope here.
-- **Agent skills (S-001 Component 3, third bullet).** Providing pi-agent
-  with skills is bundled with Phase 4 alongside the authorization hook.
+- **Agent skills.** Originally described in S-001 Component 3's third bullet
+  as bundled with Phase 4 alongside the authorization hook; that turned out
+  not to hold — skills reach pi-agent via its own cwd-relative auto-discovery
+  (ADR-012 §7), independent of the extension and of this spec. S-010
+  delivers the concrete skill package; S-001 Component 3 is corrected
+  accordingly (see S-001's 2026-08-01 amendment).
 - **Monitoring subsystem.** The append-only audit log, the inbound report
   interface, and any admin-RPC subscription for events (`events.tail` or
   similar) are S-001 Phase 5 work. Phase 3 sinks events to `tracing` only.
@@ -308,3 +312,4 @@ across the supervisor and `bob::serve`.
 |------|-------------|-----|----------------|
 | 2026-06-13 | System diagram updated: the `extension-ipc` actor "accepts UDS connections (perms + SO_PEERCRED)" is now "accepts UDS connections (filesystem-gated)". | ADR-005 (accepted 2026-05-22) made filesystem permissions the sole connection gate and demoted `SO_PEERCRED` to audit; this diagram label was never updated. PR #22 reconciles the artifact set. | None (documentation reconciliation). |
 | 2026-06-23 | Bob now owns and supplies the extension by path (`pi --extension`), default `$XDG_DATA_HOME/bob/extensions/bob.ts` (override `extension_path`), required and fail-closed. The obsolete pi-discovery-path model was removed from the active spec text. | CR-003 (depends on ADR-009 layout; the extension is the S-004 authz membrane so it must load). | T-100, T-101, T-102, T-108 |
+| 2026-08-01 | Exclusions' "Agent skills" bullet corrected: skills were never bundled with Phase 4/the extension; they reach pi-agent via cwd-relative auto-discovery (ADR-012 §7), delivered concretely by S-010. | Architecture Consistency Review of S-010 found this bullet stale against ADR-012 §7 and against S-001's corrected Component 3 (2026-08-01 amendment). | None (documentation reconciliation). |

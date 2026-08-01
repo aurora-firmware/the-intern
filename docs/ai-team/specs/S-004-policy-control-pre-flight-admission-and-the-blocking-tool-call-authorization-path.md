@@ -43,10 +43,13 @@ What this specification explicitly does NOT cover:
   a `UserId` is an opaque UUID. Scoping action rules by user or role is
   deferred until a real identity/role model exists, and is a separately
   justified later spec.
-- **Agent skills.** S-001 Component 3's third bullet (providing pi-agent with
-  skills) and S-003 both park skills "alongside the Phase 4 authorization
-  hook". This spec delivers the authorization hook only; agent skills remain
-  deferred to a later spec.
+- **Agent skills.** S-001 Component 3's third bullet and S-003 both parked
+  skills "alongside the Phase 4 authorization hook"; that turned out not to
+  hold — skills reach pi-agent via its own cwd-relative auto-discovery
+  (ADR-012 §7), independent of this spec's authorization hook. This spec
+  still delivers the authorization hook only; the deferred skills work was
+  ultimately delivered as S-010, and every `bash` call a skill makes still
+  passes through this spec's action gate.
 - **Deny / exception rules.** The action model is allow-only: a rule grants,
   and the absence of a matching rule denies. There are no deny rules and no
   allow-with-exception rules. A narrow restriction is expressed by writing an
@@ -362,3 +365,4 @@ The deliverable rests on a policy section in bob's existing TOML configuration
 |------|-------------|-----|----------------|
 | 2026-06-23 | Interactive chat exempted from pre-flight admission; admission scoped to queue-borne requests. | CR-002 routes interactive chat through a supervised direct `pi` session that bypasses the Requests-Handler queue; gated instead by the socket trust boundary + the `tool_call` action gate (ADR-010). | T-103, T-104, T-105, T-106, T-107, T-108 |
 | 2026-06-30 | Scheduler jobs exempted from scheduler-derived UUID admission; `[policy].admitted_users` applies only to admission-gated requests. | ADR-012 / CR-004 make local scheduler admission depend on trusted schedule-store membership under the Unix trust boundary, while preserving the global `tool_call` action gate. | Scheduler amendment tasks TBD |
+| 2026-08-01 | Exclusions' "Agent skills" bullet corrected: skills were never bundled with Phase 4/the authorization hook; they reach pi-agent via cwd-relative auto-discovery (ADR-012 §7), delivered concretely by S-010, whose `bash` calls remain subject to this spec's action gate. | Architecture Consistency Review of S-010 found this bullet stale against ADR-012 §7 and against S-001's corrected Component 3 (2026-08-01 amendment). | None (documentation reconciliation). |

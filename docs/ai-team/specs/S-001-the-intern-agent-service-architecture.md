@@ -101,7 +101,7 @@ What this specification explicitly does NOT cover:
 | Policy Control | Decide per-user authorization for actions raised mid-run by the agent | Part of the Rust service; never inside the agent |
 | Monitoring | Maintain an append-only audit log; expose an inbound interface for external tools to report actions | Part of the Rust service |
 | pi-agent process | Run one user-session's agent | Spawned on demand, idle-reaped, drawn from a warm pool |
-| JS extension | Host the blocking `tool_call` hook, forward events to Monitoring, provide skills | Only component inside the agent process; carries no policy logic |
+| JS extension | Host the blocking `tool_call` hook, forward events to Monitoring | Only component inside the agent process; carries no policy logic. Skills reach pi-agent through its own cwd-relative auto-discovery, not through the extension (ADR-012 §7; see the 2026-08-01 amendment below) |
 | Actions (CLI tools) | Perform external side effects | Separate processes invoked via the `bash` tool; may self-report to Monitoring |
 
 ## Components
@@ -153,7 +153,11 @@ events, holds no policy logic.
   asynchronous verdict, and returns allow/block to pi-agent.
 - *Subscribes* to pi-agent's event stream and forwards events to Monitoring over
   the Unix socket.
-- *Provides* skills to the agent.
+- Skills reach pi-agent by its own cwd-relative auto-discovery — `AGENTS.md`/
+  `CLAUDE.md` and skill files found in the process working directory — not
+  through the extension. ADR-012 §7 records this as a deliberate trust
+  relaxation (the working directory is a trusted, un-checked input); S-010 is
+  the first concrete skill package built on it.
 - All extension instances connect to the same Unix socket; every message is
   tagged with a session identifier so the Rust service can multiplex them.
 
@@ -231,7 +235,7 @@ configurable:
 | 4 | Policy Control: pre-flight checks and the blocking `tool_call` authorization path over the Unix socket | Phase 2, Phase 3 |
 | 5 | Monitoring: append-only audit log and the inbound report interface for external tools (transport decision from S-002 must land before this phase starts) | Phase 1b, Phase 3 |
 | 6 | Channel adapters: chat (interactive chat is a supervised, directly-launched `pi` session per CR-002 / ADR-010 — no longer an `admin.sock` chat subscription), email, scheduler | Phase 1b |
-| 7 | Actions: skill definitions and the CLI invocation/reporting contract | Phase 4, Phase 5 |
+| 7 | Actions: skill definitions and the CLI invocation/reporting contract (skill definitions partially delivered by S-010; the CLI invocation/reporting contract remains open) | Phase 4, Phase 5 |
 
 ## Open Questions
 
@@ -257,3 +261,4 @@ All original open questions are resolved:
 | 2026-06-23 | Phase 6 chat clause updated: interactive chat is a supervised, directly-launched `pi` session (CR-002 / ADR-010), not an `admin.sock` chat subscription. | CR-002 redefines `bob chat`; the S-002 interactive-chat-adapter path is superseded for interactive use (S-006 amended, S-008 archived as superseded). | T-103, T-104, T-105, T-106, T-107, T-108 |
 | 2026-06-30 | Requests Handler language narrowed from universal pre-flight identity checks to per-channel admission models; scheduler admission now references ADR-012. | CR-004 / ADR-012 remove scheduler-derived UUID admission and use the Unix trust boundary plus trusted schedule store for scheduled work. | Scheduler amendment tasks TBD |
 | 2026-07-04 | System diagram label corrected from "single OS-agnostic binary" to "Unix-likes (Linux and macOS)", matching the 2026-05-16 OS-scope amendment; Component 1 report-interface transport marked decided (`report.submit` on `admin.sock`, S-005/ADR-007); the three Open Questions marked resolved. | Documentation-consistency review: the diagram and Open Questions had not been updated after the amendments and after S-004/S-005 delivery answered them. | None (documentation reconciliation). |
+| 2026-08-01 | Component 3's third bullet and the JS-extension Responsibility Separation row corrected: skills reach pi-agent through its own cwd-relative auto-discovery, not through the JS extension providing them. Implementation Order Phase 7 annotated: the skill-definitions half is now partially delivered by S-010; the CLI invocation/reporting contract half remains open. | Architecture Consistency Review of S-010 (draft) found this stale against ADR-012 §7, which already established cwd auto-discovery as the mechanism, and against S-003/S-004's Exclusions, which both parked "agent skills" as deferred to a later spec. S-010 is that later spec. | None (documentation reconciliation; no tasks in flight against this component). |
