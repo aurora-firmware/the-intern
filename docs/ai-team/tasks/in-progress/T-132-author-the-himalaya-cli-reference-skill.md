@@ -116,3 +116,113 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-02
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1 (every triage operation documented): `SKILL.md`'s Operation Index and
+  `references/command-reference.md` cover list/search, the unseen-flag
+  filter, reading, replying, forwarding, composing/sending, moving,
+  copying, deleting, adding/removing/setting flags, attachments, and
+  account selection. Every Operation Index anchor
+  (`references/command-reference.md#...`) matches an actual `##` header in
+  the reference file — no dangling links.
+- AC-2 (verified against the installed binary, version recorded): both
+  files record `himalaya v1.2.0 +maildir +smtp +wizard +sendmail
+  +pgp-commands +imap` (build linux musl x86_64), matching this machine's
+  installed `himalaya --version` exactly. Independently re-ran
+  `himalaya --help` and every documented subcommand's own `--help`
+  (`envelope list`, `message read/reply/forward/write/edit`,
+  `template reply/forward/write/send/save`, `message move/copy/delete`,
+  `flag add/set/remove`, `attachment download`, `account list`,
+  `folder list`, `message send/save`) — every documented flag, default, and
+  behavior description (e.g. `message reply/forward/write/edit` requiring
+  `$EDITOR` vs. `template *` not requiring it) matches the real `--help`
+  text verbatim. Also independently re-ran the "Observed" live-execution
+  claims against the real configured account: `envelope list -s 1 flag
+  unseen` returns zero rows (real pitfall confirmed), `envelope list not
+  flag seen -s 3` fails to parse while `-s 3 not flag seen` succeeds
+  (argument-order pitfall confirmed), `-o json` output shape matches the
+  documented example exactly (including envelope id `89`), and
+  `template write --header ... --header ... "Hello world"` produces
+  byte-for-byte the same output shown in the reference doc. No command was
+  found written from memory.
+- AC-3 (no triage policy): grepped both files for
+  escalation/manager/taxonomy/worklog/categor* — the only hits are the two
+  explicit "this skill carries no policy" disclaimers in `SKILL.md`'s
+  `description` and body. No escalation address, taxonomy, or worklog
+  instruction present.
+- AC-4 (frontmatter convention): `SKILL.md`'s frontmatter
+  (`name`/`description`/`compatibility`/`allowed-tools`) matches the shape
+  of pi's own installed skills (`~/.pi/agent/skills/{gh-cli,git-conventions,
+  pr-review}/SKILL.md`) field-for-field; `description` names himalaya and
+  email-CLI triggers; `allowed-tools: Read Bash` matches the skill's actual
+  needs.
+- AC-5 (escalate if himalaya absent): N/A this session — `himalaya` and
+  `pi` were both confirmed on PATH before any content was written (Work
+  Log Session 1), and independently confirmed present in this review
+  session too. No escalation was warranted or skipped.
+
+**Stage 2 — Code Quality**
+
+- Correctness: command shapes and flags are accurate per the independent
+  re-verification above. The `template`-vs-`message` distinction
+  (non-interactive scriptability) is correctly and consistently applied
+  throughout.
+- Tests: not applicable — a docs-only skill package; the task's own manual
+  Verification block is the closest analog (see note below).
+- Security: no secrets, no real account/manager details beyond the
+  already-non-secret account name and version string.
+- Readability: consistent structure across both files, anchors line up,
+  "Observed" vs. "`--help`-only" provenance is called out explicitly
+  wherever it matters (e.g. compose/send's "not verified by live
+  execution" caveat).
+- Scope: exactly the two Files to Touch were added
+  (`the-intern/email-skills/.pi/skills/himalaya/SKILL.md` and
+  `references/command-reference.md`), across two commits
+  (`560214e`, `2138b82`) with no unrelated files touched.
+
+**Verification-block note (independently investigated, not taken on
+faith).** Reproduced the Developer's finding directly: the task's literal
+Verification block command —
+`pi -p "Which himalaya command lists unseen mail? ... Do not run any
+tool."` — does not work with *any* implementation, correct or not.
+Reproduced end-to-end against a fresh export of the task branch's
+`the-intern/email-skills/`:
+- Bare `-p` (as literally written) → `"I don't have an available skill for
+  himalaya/email commands, so I can't answer from skills only."`
+  (contradicts its own preceding sentence, "Use the non-interactive
+  invocation form T-131 recorded" — T-131 recorded `-p -a`, not bare `-p`,
+  so the block's own command doesn't match its own stated intent).
+- `-p -a` (T-131's recorded form) with the same "do not run any tool"
+  wording → still fails, but differently each run: hallucinated
+  `himalaya envelope list --query UNSEEN`, then on a second run
+  `himalaya envelope list --filter unseen` — neither is a real flag.
+- `-p -a` with the tool restriction relaxed to permit `read` while still
+  forbidding himalaya/shell execution → correctly and reproducibly answers
+  `` `himalaya envelope list not flag seen` `` (twice), matching this
+  skill's own documented correct command, with no mention of escalation,
+  categories, or worklog.
+- `-p -a` with no tool restriction at all → same correct answer.
+
+This isolates the cause to the Verification block's "Do not run any tool"
+phrasing, not to the skill content or the `-p`/`-a` distinction alone: it
+blocks pi's own on-demand skill-reference-loading step (which apparently
+needs a tool, most likely `read`) regardless of whether the skill content
+is correct. Judgment: this is a **task-file Verification-block wording
+defect** (an unsatisfiable literal command, compounded by not actually
+using the invocation form its own prose says to reuse from T-131), not a
+gap in the skill content — the skill content is independently confirmed
+correct and skill-sourced the moment it's actually given a fair chance to
+be consulted. This does not block AC-1/AC-2/AC-3, which were verified
+directly against the files rather than through this one probe command, so
+it is not treated as a Stage 1 failure. Flagging for whoever next edits
+this task file's canonical Verification block (out of the Reviewer's edit
+scope on this pass, which is verdict/feedback only) to fix the command —
+at minimum add `-a` to match the block's own stated intent, and either
+drop "do not run any tool" or explicitly permit `read`.
+
+Both stages pass. No blocking issues.
