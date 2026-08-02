@@ -136,3 +136,12 @@ This rubric is deliberately conservative: when in doubt between acting and
 escalating, escalate. A missed escalation costs a manager a few minutes of
 review; an incorrect autonomous action on a misclassified message does not
 have that same cheap undo.
+
+## No confident match
+
+If no category matches confidently, escalate the message per
+`references/escalation.md` — do not fall back to choosing the closest category
+and acting on it anyway. "Closest" is not "confident": the confidence rubric
+above, not proximity to any one category, is what gates autonomous action,
+so a message that fails the confident-match test above always escalates
+rather than being forced into whichever category scored highest.
