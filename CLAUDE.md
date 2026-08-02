@@ -130,6 +130,8 @@ Two things live here, and they must not be confused:
 │   ├── bob-companion/
 │   │   └── claude/              # Claude Code plugin: skills for setting up, running, and
 │   │                            #   troubleshooting bob (separate from the gitignored .claude/ tree)
+│   ├── email-skills/            # himalaya + email-triage pi-agent skills package (S-010),
+│   │                            #   discovered cwd-relative from a scheduled job's deployed copy
 │   └── service/                 # Rust service workspace (`bob` and subsystem crates)
 └── docs/
     └── ai-team/                 # Source of truth for product lifecycle state (project.dir
