@@ -116,3 +116,89 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-02
+
+PASS
+
+**Stage 1 — Acceptance criteria**, checked against
+`the-intern/email-skills/.pi/skills/email-triage/references/categories/{newsletter-bulk,automated-notification,suspected-spam}.md`
+(branch `task/T-137-add-the-file-without-reply-category-workflows`, diff
+scoped to exactly the three `Files to Touch` entries, task file itself
+untouched on the branch):
+
+- AC-1: met. `newsletter-bulk.md` files via the `himalaya` skill's named
+  move operation ("Move a message", no restated flags/syntax), forbids
+  composing/sending/forwarding a reply, and appends a worklog entry.
+- AC-2: met. `automated-notification.md` files the same way, and adds a
+  "Flagging a failure that needs attention" section plus worklog-entry
+  guidance so a failure-reporting notification is named in the entry for
+  operator follow-up. See the judgment-call assessment below.
+- AC-3: met. `suspected-spam.md` moves (never deletes) into a `Spam`
+  folder, and explicitly forbids replying, forwarding, and
+  following/opening any link or attachment.
+- AC-4: met. All three files name only the `himalaya` skill's Operation
+  Index entry ("Move a message") without restating command shape/flags,
+  defer the worklog entry format to `references/worklog.md` without
+  restating its `Done/Left/Next` syntax, and defer blocked-call handling
+  to `references/escalation.md`'s existing rule. Re-ran the task's own
+  `rg -n "himalaya|worklog.md|escalation.md"` check against all three
+  files (3–5 hits each) and a supplementary grep for leaked
+  `himalaya message/template/envelope/flag/attachment` syntax (zero
+  hits) — both confirm the Work Log's claims.
+
+No unexpected files were modified (`git diff dev-agent...HEAD --stat`
+shows only the three new category files) and no unspecified behavior
+(e.g. reply/forward instructions) was added.
+
+**AC-2 vs. `worklog.md`'s "exactly two causes" model — assessed in
+detail per the review brief.** The Work Log's own flagged tension is
+real: AC-2 asks for "a follow-up item," and T-133's canonical
+`references/worklog.md` defines exactly two causes for a worklog item
+staying open (escalation, S-004 block), each with its own defined
+closing mechanism, with no automatic expiry otherwise. A
+content-triggered failure flag on an otherwise fully-filed message
+matches neither cause and has no defined way to ever close — so
+treating it as a `worklog.md`-model open item would not just be
+under-specified, it would actively break that model (an item that is
+carried forward at every first-run reconciliation forever, contradicting
+S-010's own Workflow section, which states an open item closes only via
+one of those same two causes). Editing `worklog.md` to add a third cause
+is out of this task's `Files to Touch` and would reopen an
+already-completed task's canonical file. Given that, recording the
+failure inside a normally-closed (`Left: nothing`) entry, explicitly
+named as an operator-facing note and explicitly stated as not an open
+item under `worklog.md`'s reconciliation model, is the only resolution
+that satisfies AC-2's plain-language requirement (a human reading the
+worklog does see the failure surfaced) without silently breaking or
+requiring an out-of-scope change to the already-canonical closing model.
+This is reinforced by the task's own Description text, which uses "open
+worklog item" specifically for the S-004-block case (mirroring
+`escalation.md`'s own vocabulary) while AC-2 uses the distinct term
+"follow-up item" — supporting that the task author did not intend this
+to be the same kind of tracked-open-item construct. This is a sound,
+in-scope judgment call on a genuine spec-level ambiguity, not a gap in
+AC-2's intent — ESCALATE is not warranted since AC-2 was met without
+requiring any spec or canonical-file change.
+
+**Stage 2 — Code quality.** Prose is clear and consistently structured
+across the three files (mirrors `newsletter-bulk.md`'s section shape in
+the other two, as AC-2/AC-3 build on AC-1's filing mechanism). No dead
+content, no hardcoded secrets, nothing security-relevant in a docs-only
+package. Folder-name choices (`Newsletters`/`Notifications`/`Spam`)
+are each explicitly framed as adjustable starter defaults, consistent
+with T-136 README's "adjustable sketch" framing, and don't conflict
+with any existing folder-name convention elsewhere in the package
+(checked — the only pre-existing folder name in the repo, `Archive`, is
+an unrelated CLI-reference example in the `himalaya` skill, not a
+naming convention this task needed to follow). Commit messages
+(`docs(email-triage): ...`, 56–64 chars) follow `git-conventions`.
+
+Minor, non-blocking observation: the exact worklog field (`Done` vs. a
+freeform note) that should carry the failure-follow-up text in
+`automated-notification.md` is left implicit — consistent with AC-4's
+"restate none of them" instruction, but a future reader implementing
+this by hand will need to infer placement. Not a blocking issue given
+this package's established defer-rather-than-restate pattern.
+
+Next owner: Development Loop.
