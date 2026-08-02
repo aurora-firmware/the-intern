@@ -16,6 +16,16 @@ One file per calendar day, at:
 per-entry `--cwd`). `<YYYY-MM-DD>` is today's date in the local calendar day
 the run executes in.
 
+## Creating the worklog file
+
+Before appending an entry, check whether `<workspace>/worklog/` and today's
+`<YYYY-MM-DD>.md` file inside it exist. If either does not exist — the first
+run against a freshly deployed workspace has no `worklog/` directory at all,
+and any run is the first to write on a given calendar day — create whatever
+is missing (the directory, the file, or both) first, then append. Never skip
+an entry because the directory or file was missing; missing is the normal
+state for a brand-new day or a brand-new deployment, not an error condition.
+
 ## Per-message entry format
 
 Append one entry to today's file for every unseen message handled this run —
