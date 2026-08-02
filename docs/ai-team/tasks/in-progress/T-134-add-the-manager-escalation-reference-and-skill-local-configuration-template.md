@@ -131,3 +131,37 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-02
+
+PASS
+
+**Stage 1 — Acceptance Criteria:**
+
+- AC-1 (config template + `manager_address` key, no real address): met. `config/email-triage.example.toml` documents the single required `manager_address` key with placeholder `manager@example.invalid` (RFC 2606 `.invalid` TLD, unambiguously non-real). `escalation.md`'s "Configuration" section names the runtime path (`<workspace>/config/email-triage.toml`) and states the real file is deployed-workspace-only, never committed. Verified TOML parses via `tomllib` and the task's `cat` verification.
+- AC-2 (escalate on low confidence, one email, no further action, required content): met. "When to escalate" ties escalation to classification confidence per S-010 Design Principles (not reversibility/allowlist), requires exactly one escalation email then no further action, explicitly rules out also acting "just in case," and lists all three required email contents (what the message is, why it's uncertain, the concrete question).
+- AC-3 (S-004 block → worklog open item, never autonomous fallback): met. "If the escalation send is blocked (S-004)" records the block as an open worklog item and states in bold "do **not** fall back to acting on the message autonomously because the escalation didn't go through."
+- AC-4 (missing/malformed `manager_address` → hard stop, no autonomous action): met. "If `manager_address` is missing or malformed" covers all three failure shapes (key missing, file missing, value not well-formed) and states in bold "do **not** attempt to guess, fabricate, or otherwise proceed... and do **not** fall back to acting on the message autonomously instead."
+- AC-5 (no synchronous reply expected; manager's reply returns as ordinary unseen mail): met. "No synchronous reply is expected" states the ADR-004 fire-and-forget framing and that the reply arrives as ordinary unseen mail that re-enters triage on a later run, deferring to `worklog.md` for how the open item closes rather than restating its entry format (per the task's explicit instruction).
+
+No unspecified behavior added; only the two `Files to Touch` were modified (`git diff --stat` against `dev-agent`: 2 files, 132 insertions, 0 deletions). No canonical task file or unrelated files touched on the task branch.
+
+**Independent verification performed (not just re-reading claimed evidence):**
+
+- Ran the task's own `rg` pattern against `escalation.md` — all five terms (`manager_address`, `blocked`, `hard stop`, `worklog.md`, `periodic`) present in context.
+- Parsed the example TOML with `tomllib` — valid, single key, placeholder value.
+- Checked both relative-path references resolve correctly: `escalation.md`'s `../../../../README.md` → package-root `README.md`; the example TOML's `../.pi/skills/email-triage/references/escalation.md` → the reference file. Both confirmed via `realpath -m`.
+- Rebuilt the task's exact behavioral probe in a fresh scratch copy (`config/email-triage.toml` absent) and ran the literal Verification-block prompt against `pi -p` (v0.80.3): response was "Hard stop: record an open item in the day's worklog entry for that message. Do not send mail, do not guess an address, and do not act on the message autonomously." — matches the Work Log's claimed evidence.
+- Ran an additional probe not in the task's own Verification block, specifically targeting this review's escalation-failure-ambiguity concern: with a valid `manager_address` present but the escalation send itself blocked by S-004, asked what happens to the original message. Response: "Record the S-004 block as an open item... do not send mail, act on the original message autonomously, or fall back to another category workflow. A blocked escalation is a hard stop for that message." No ambiguity found — the "never fall back to autonomous action" language holds independently for all three paths the reference distinguishes (normal escalation completing, S-004 block, missing/malformed address), each with its own explicit bolded "do **not** ... autonomously" statement rather than one hedged general rule that a reader could construe as conditional.
+
+**Stage 2 — Code Quality:**
+
+- Correctness: content is consistent with S-010 (Design Principles, Configuration Requirements, Exclusions), ADR-004 (periodic/fire-and-forget, no caller), and ADR-008 §5 (actions use their own configuration; no secrets custodied by bob) — checked each citation against the source documents, no misstatement found.
+- Readability: five clearly headed, single-concern sections; consistent with `worklog.md`'s section-per-concern style noted in the Work Log.
+- No dead content, no scope creep, no restating of `worklog.md`'s entry format (correctly deferred by reference per the task description's explicit instruction).
+- Security: no real address or secret committed; example value uses the RFC 2606 reserved `.invalid` TLD.
+- Commits: seven commits on the task branch, each `docs(email-triage): ...` — type/scope/imperative/lowercase/no-period/length all conform to `git-conventions`; no task/bug ID repeated in the subject.
+
+Both stages pass. No blocking issues found.
+
+Next owner: active Development Loop.
