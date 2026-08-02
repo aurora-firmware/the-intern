@@ -153,6 +153,20 @@ seen. A final retry needs a fresh unseen test notification, a restarted clean
 runtime, and scoped glob matchers broad enough for the documented commands'
 benign formatting variants.
 
+### Session 4 — 2026-08-02
+
+The fresh isolated validation completed successfully. In the owner-only
+deployed copy the automated-notification target was configured as
+`INBOX.Notifications`; message `58` was restored to unseen, then the scheduled
+job processed it after the scoped policy reload. It left `INBOX`, appeared in
+`INBOX.Notifications` as folder-local id `1`, and the deployed
+`worklog/2026-08-02.md` records `Done: Moved the automated notification to
+INBOX.Notifications.` The audit file contains both the earlier denial evidence
+and the successful dispatch for the deployed cwd. The isolated service was
+stopped cleanly. Remaining work is repository-only: document the verified
+deployment and allow-rule facts in the package README, then commit the task
+branch for review.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
