@@ -136,3 +136,17 @@ For every envelope the previous step returned, in turn:
 
 Escalating and acting are mutually exclusive outcomes for a given message
 on a given run — never do both.
+
+### 4. Record a worklog entry for the message
+
+Whatever the outcome above — acted, escalated, or blocked at either
+step — append one entry to today's worklog file for this message, in the
+format `references/worklog.md` defines (`Done`/`Left`/`Next`; creating
+`worklog/` and today's file first if either is still missing — do not skip
+the entry because either was missing). Do this before moving on to the
+next unseen message, so a run interrupted partway still leaves a complete
+record for every message it did handle before stopping.
+
+A completed run leaves no unseen message from step 2 without exactly one
+of: an action taken, an escalation sent, or a block recorded as an open
+item — never silently skipped.
