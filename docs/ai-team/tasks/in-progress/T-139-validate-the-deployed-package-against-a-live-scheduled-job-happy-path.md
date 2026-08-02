@@ -189,6 +189,17 @@ and captured live evidence; `read.path` entries remain unchanged. Grep
 red/green checks and `git diff --check` passed. No other repository files
 changed.
 
+### Session 7 — 2026-08-02
+
+Diagnosed review-cycle-2's contradiction and corrected it in task commit
+`5fc84a8` (`docs(email-skills): restore live bash command matcher`). The
+successful live configuration uses `field_path = "command"` for bash because
+runtime matching evaluates `arguments.command`; parser-level `cmd` examples
+are opaque/stale and do not establish the tool payload field. The README now
+uses `command` throughout and explains that distinction. Grep verification
+confirmed no bash `cmd` entries remain, and `cargo test -p policy-control`
+passed (45 tests). No bob runner remains active.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
