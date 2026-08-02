@@ -96,3 +96,43 @@ Signals:
   availability.
 - A calendar invite attachment (`.ics`) or a request to confirm attendance
   at a previously proposed time.
+
+## Confidence rubric
+
+The gate below decides autonomous action versus escalation for one message.
+It is always confidence in *this message's* classification — never the
+matched category's action reversibility, and never a sender allowlist
+(S-010 Design Principles; the same rule `SKILL.md` and
+`references/escalation.md` state).
+
+**Confident (act autonomously).** All of the following hold:
+- The message matches most of one category's signals above, clearly enough
+  that a second, independent read of the same message would reach the same
+  category.
+- No signal from a *different* category is also present strongly enough to
+  put that other category in contention — a single stray signal from
+  another category (for example a newsletter that happens to contain a
+  question in passing) does not by itself break confidence, but two or
+  more categories each having a strong signal match does.
+- Nothing about the sender, subject, or body contradicts the matched
+  category (for example, a message with heavy urgency/pressure language
+  is never confidently `direct-request` even if it is addressed
+  personally — that pressure language is itself a `suspected-spam` signal
+  in contention).
+
+**Not confident (escalate).** Any of the following holds:
+- **Ambiguous match.** Two or more categories each have a strong signal
+  match for the same message, with no single category clearly dominant.
+  An ambiguous match between two categories is, by definition, not
+  confident — this is the rule the confidence gate exists to enforce, not
+  an edge case of it.
+- **Weak or no match.** The message does not clearly satisfy most of any
+  one category's signals.
+- **Contradicting signals.** The message matches a category's surface
+  signals but also carries a signal that undercuts trusting that match
+  (see the `direct-request`-with-pressure-language example above).
+
+This rubric is deliberately conservative: when in doubt between acting and
+escalating, escalate. A missed escalation costs a manager a few minutes of
+review; an incorrect autonomous action on a misclassified message does not
+have that same cheap undo.
