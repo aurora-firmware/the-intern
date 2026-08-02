@@ -127,15 +127,21 @@ For every envelope the previous step returned, in turn:
      block as an open worklog item in step 4 below (`Left`: the blocked
      action; `Next`: retried at the next first-run reconciliation once an
      admitting allow rule exists). The message is not treated as handled.
-3. **Low confidence:** escalate per `references/escalation.md` — send
+3. **No confident match** (including an ambiguous match between two
+   categories, which `references/categories/README.md`'s confidence rubric
+   treats as not confident, and a message that does not clearly satisfy any
+   one category's signals): escalate per `references/escalation.md` — send
    exactly one escalation email to the configured manager address and take
-   no further action on this message this run. `references/escalation.md`
-   defines the full policy (the email's required content, what happens if
-   the send is blocked by S-004, and what happens if `manager_address` is
-   missing or malformed); do not restate it here. Never fall back to acting
-   on the message autonomously because escalation failed or could not be
-   attempted — a blocked or unaddressable escalation is a hard stop for
-   that message, exactly as `references/escalation.md` requires.
+   no further action on this message this run. Never fall back to choosing
+   the closest category and acting on it anyway — "closest" is not
+   "confident" (`references/categories/README.md`'s "No confident match"
+   section). `references/escalation.md` defines the full escalation policy
+   (the email's required content, what happens if the send is blocked by
+   S-004, and what happens if `manager_address` is missing or malformed);
+   do not restate it here. Never fall back to acting on the message
+   autonomously because escalation failed or could not be attempted — a
+   blocked or unaddressable escalation is a hard stop for that message,
+   exactly as `references/escalation.md` requires.
 
 Escalating and acting are mutually exclusive outcomes for a given message
 on a given run — never do both.
