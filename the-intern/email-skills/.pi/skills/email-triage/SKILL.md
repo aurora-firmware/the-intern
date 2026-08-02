@@ -108,17 +108,20 @@ listing returns.
 For every envelope the previous step returned, in turn:
 
 1. Read the message (a `himalaya` `bash` call, S-004-gated like any other)
-   and classify it: form a judgment of what it needs and how confident you
-   are in that judgment for *this specific* message. (A category taxonomy
-   and per-category reference workflows live under `references/categories/`
-   once added on top of this loop — when that taxonomy exists, classify
-   against it and follow the matched category's workflow; until then, use
-   your own judgment of what the message needs.) The gate below is always
-   confidence in that judgment for this message — never the action's
-   reversibility, and never a sender allowlist (S-010 Design Principles).
-2. **High confidence:** act on the message via whichever `himalaya` `bash`
-   call(s) it needs — reply, forward, compose, move, flag, delete, whatever
-   is appropriate — per the `himalaya` skill.
+   and classify it against the starter category taxonomy in
+   `references/categories/README.md`: check the message against each
+   category's listed matching signals, then apply that index's confidence
+   rubric to decide whether this *specific* message is a confident match
+   for exactly one category. The gate below is always confidence in that
+   judgment for this message — never the action's reversibility, and never
+   a sender allowlist (S-010 Design Principles).
+2. **Confident match:** follow the matched category's own workflow file,
+   `references/categories/<category>.md` (for example
+   `references/categories/newsletter-bulk.md`), for what to do with this
+   message — do not restate that workflow's steps here. Acting on it means
+   whichever `himalaya` `bash` call(s) the matched workflow calls for —
+   reply, forward, compose, move, flag, delete, whatever is appropriate —
+   per the `himalaya` skill.
    - If any of those calls is blocked by S-004: stop acting on this
      message, do not substitute some other action instead, and record the
      block as an open worklog item in step 4 below (`Left`: the blocked
