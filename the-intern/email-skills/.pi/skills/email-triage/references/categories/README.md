@@ -64,12 +64,17 @@ Signals:
 - Sender domain is unrecognized and unrelated to any known contact or
   vendor, or the display name does not match the underlying address
   (spoofing-style mismatch).
-- Urgency or threat language pushing immediate action ("act now", "your
-  account will be suspended", "verify immediately").
+- Urgency or threat language pushing immediate action ("act now", "action
+  required", "your account will be suspended", "verify immediately").
 - Unsolicited sales pitch, prize/lottery framing, or a request to click a
   link or open an attachment with no prior context establishing why.
 - Generic, mass-market phrasing with no reference to any shared context
   with the recipient.
+- A billing/invoice-style message from a generic or unfamiliar sender
+  (`billing@`, `accounts@`) that pairs urgency wording with no specific,
+  independently verifiable detail (no account number, no invoice number,
+  no prior relationship) — a common phishing pattern that mimics
+  `automated-notification`'s surface shape.
 
 ### `direct-request`
 
@@ -125,7 +130,12 @@ matched category's action reversibility, and never a sender allowlist
   match for the same message, with no single category clearly dominant.
   An ambiguous match between two categories is, by definition, not
   confident — this is the rule the confidence gate exists to enforce, not
-  an edge case of it.
+  an edge case of it. Worked example: a message from `billing@` with the
+  subject "Action required on your invoice" carries `automated-notification`
+  signals (system-style sender, transactional subject) and `suspected-spam`
+  signals (urgency wording, no specific/verifiable invoice detail) at once
+  — straddling both categories rather than clearly matching one, so it is
+  not confident and escalates rather than being filed as either.
 - **Weak or no match.** The message does not clearly satisfy most of any
   one category's signals.
 - **Contradicting signals.** The message matches a category's surface
