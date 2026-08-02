@@ -88,3 +88,17 @@ avoids a skill-owned last-seen file for detecting new mail (step 2 below).
   next run repeats this same first-run check, which is harmless —
   reconciliation itself is idempotent when there is nothing open to carry
   forward.)
+
+### 2. List unseen mail
+
+List unseen envelopes using the `himalaya` skill's own documented command
+for filtering on the unseen flag (see its Operation Index → "Filter for
+unseen mail") — do not restate the command or its syntax here; it belongs
+to that skill, not this one. This is a `bash` call like every other
+himalaya invocation, gated by S-004 the same way (see "Tool usage" above).
+If it is blocked, no message has yet been identified as unseen, so there is
+nothing to record a per-message worklog entry against yet — treat the block
+as a run-ending problem for this run rather than a per-message open item.
+
+Everything the rest of this loop does operates on the envelopes this
+listing returns.
