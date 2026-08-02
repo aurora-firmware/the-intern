@@ -2,7 +2,7 @@
 id: T-136
 title: Define the starter category taxonomy and wire classification into the
   email-triage skill
-status: pending  # pending | in-progress | completed | blocked
+status: completed  # pending | in-progress | completed | blocked
 priority: medium  # critical | high | medium | low
 assigned-role: developer
 created: '2026-08-01'
