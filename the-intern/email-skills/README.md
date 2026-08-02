@@ -17,11 +17,14 @@ pi-agent auto-discovers skills relative to the session's working directory
 .pi/skills/<name>/SKILL.md
 ```
 
-This is the layout every skill file under this package uses. It was verified
-against the installed `pi --version` **0.80.3** with a throwaway probe skill
-placed at `.pi/skills/probe-marker/SKILL.md` in a scratch copy of this
-package, using its directory as `pi`'s `cwd`. The full transcript is recorded
-in T-131's Work Log.
+This is the layout every skill file under this package uses. It was first
+verified with a throwaway probe skill placed at
+`.pi/skills/probe-marker/SKILL.md` in a scratch copy of this package, using
+that directory as `pi`'s `cwd`. The later live scheduled-job validation in
+T-139 re-verified the same layout against the installed `pi --version`
+**0.65.2**, which is now the repository's current recorded pi version for
+this package. The full transcript of the initial probe is recorded in T-131's
+Work Log.
 
 **Invocation form.** `pi`'s default mode is an interactive `ink` TUI that
 needs a real TTY, so verification (and later manual checks against this
@@ -84,3 +87,166 @@ checkout. The deployed copy also holds mutable runtime state — the
 skill-local `config/email-triage.toml` and the `worklog/` diary — that must
 be owner-only permissioned (S-010 Configuration Requirements), which a shared
 git working tree cannot guarantee.
+
+## Verified deployed-workspace procedure
+
+The live T-139 happy-path validation used a deployed workspace at
+`/tmp/t139-email-workspace-s4`, while the bob runtime and audit state lived
+separately at `/tmp/t139-bob-dev-s4`. The package checkout itself was **not**
+used as the scheduled job's `--cwd`.
+
+Create the deployed workspace outside this repository and make the workspace
+directories owner-only before adding the job:
+
+```bash
+WORKSPACE=/absolute/path/outside/the-repo/email-skills
+
+install -d -m 700 "$WORKSPACE"
+cp -r the-intern/email-skills/. "$WORKSPACE/"
+install -d -m 700 "$WORKSPACE/worklog"
+chmod 700 "$WORKSPACE" "$WORKSPACE/.pi" "$WORKSPACE/config" "$WORKSPACE/worklog"
+cp "$WORKSPACE/config/email-triage.example.toml" \
+   "$WORKSPACE/config/email-triage.toml"
+# then edit only the deployed copy's config/email-triage.toml and set
+# manager_address there
+```
+
+The required ownership boundary is that the deployed workspace and its mutable
+subdirectories are owned by the job user and mode `700`, so other local users
+cannot read or modify the package, the local config, or the worklog. Keep the
+job's `--cwd` pointed at that deployed copy only:
+
+```bash
+./scripts/bob-dev.sh schedule add --id check-email --cron "* * * * *" \
+  --prompt "Check email" --cwd "$WORKSPACE"
+```
+
+Do not point `--cwd` at this repository checkout. The deployed copy is where
+the mutable `config/email-triage.toml` and `worklog/*.md` live, and it is the
+path the S-004 policy rules must match.
+
+## Verified S-004 action rules for the happy path
+
+T-139 first observed the same scheduled-job run denied by default policy, then
+allowed after adding scoped action rules. The validated matcher surface was:
+
+- `tool = "read"` with `field_path = "path"`
+- `tool = "bash"` with `field_path = "command"`
+
+The live happy-path rules that admitted every tool call used by the deployed
+package were:
+
+```toml
+[[policy.action_rules]]
+tool = "read"
+arg_matchers = [
+  { field_path = "path", pattern = "/abs/workspace/.pi/skills/email-triage/SKILL.md" },
+]
+
+[[policy.action_rules]]
+tool = "read"
+arg_matchers = [
+  { field_path = "path", pattern = "/abs/workspace/.pi/skills/himalaya/SKILL.md" },
+]
+
+[[policy.action_rules]]
+tool = "read"
+arg_matchers = [
+  { field_path = "path", pattern = "/abs/workspace/.pi/skills/email-triage/references/*.md" },
+]
+
+[[policy.action_rules]]
+tool = "read"
+arg_matchers = [
+  { field_path = "path", pattern = "/abs/workspace/.pi/skills/email-triage/references/categories/*.md" },
+]
+
+[[policy.action_rules]]
+tool = "read"
+arg_matchers = [
+  { field_path = "path", pattern = "/abs/workspace/.pi/skills/himalaya/references/*.md" },
+]
+
+[[policy.action_rules]]
+tool = "read"
+arg_matchers = [
+  { field_path = "path", pattern = "/abs/workspace/config/email-triage.toml" },
+]
+
+[[policy.action_rules]]
+tool = "read"
+arg_matchers = [
+  { field_path = "path", pattern = "/abs/workspace/worklog/*.md" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "himalaya --version*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "himalaya account list*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "himalaya folder list*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "himalaya*envelope list*not flag seen*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "himalaya*message read*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "himalaya*message move*INBOX.Notifications*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "*find worklog*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "mkdir -p worklog*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "*>> worklog/*.md*" },
+]
+```
+
+Replace `/abs/workspace` with the absolute path to your deployed copy. Do not
+collapse these into a blanket `tool = "bash"` rule: the T-139 denial evidence
+showed the job blocked until the shell commands were admitted one scoped shape
+at a time, and the successful retry used the narrowed patterns above.
+
+## Account-specific folder names matter
+
+The category workflow starter docs use human-readable destination names such as
+`Notifications`, but the live T-139 account did not expose that folder name.
+The successful validation had to move the automated notification from `INBOX`
+to **`INBOX.Notifications`**, where it appeared as folder-local message id `1`.
+
+Before copying the move rule above, verify the exact destination folder name
+for your mailbox with `himalaya folder list`, then scope the `message move`
+pattern to that exact folder. Do not assume the bare folder name from the
+starter taxonomy if the account exposes a prefixed IMAP path instead.
