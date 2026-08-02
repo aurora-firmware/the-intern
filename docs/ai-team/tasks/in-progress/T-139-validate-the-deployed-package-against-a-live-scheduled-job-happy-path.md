@@ -180,6 +180,15 @@ the live validation environment's `0.65.2`. README assertions and
 scheduled run successfully moved the automated notification and appended the
 deployed worklog entry.
 
+### Session 6 — 2026-08-02
+
+Addressed review-cycle-1's AC-2 defect in task commit `f383495`
+(`docs(email-skills): correct bash cmd matcher path`). Every README bash
+example and summary now uses `field_path = "cmd"`, matching the policy parser
+and captured live evidence; `read.path` entries remain unchanged. Grep
+red/green checks and `git diff --check` passed. No other repository files
+changed.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
