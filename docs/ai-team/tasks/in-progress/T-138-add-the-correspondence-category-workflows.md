@@ -223,3 +223,75 @@ sibling files, and no dead or unrelated content was added.
 
 Next owner: Development Loop. Developer should add the tie-breaker
 sentence described above to `meeting-scheduling.md` and resubmit.
+
+### Review Verdict — 2026-08-02
+
+PASS
+
+**Stage 1 — Acceptance criteria.**
+
+- AC-1 (direct-request draft/send + worklog entry naming the reply): met,
+  unchanged from cycle 1. `direct-request.md` was not modified this cycle
+  (`git diff` between cycle-1 HEAD and cycle-2 HEAD touches only
+  `meeting-scheduling.md`), and its "Draft and send a reply" / "Worklog
+  entry" / escalation-yield sections still satisfy this criterion.
+- AC-2 (meeting-scheduling concrete steps for proposing/confirming a time
+  and replying): still met as a defensible reading, for the same reasons
+  recorded in the cycle-1 verdict — the "Confirm or acknowledge a stated
+  time, and reply" branch is unchanged and still gives a genuine,
+  non-escalating reply path.
+- AC-3 (escalate rather than guess when acting needs unavailable
+  information): **now met.** The new paragraph appended to the end of
+  "## What this workflow can and cannot decide" states that when a
+  message "does not clearly and unambiguously fall into one section or
+  the other, treat it as needing the owner's decision: follow the second
+  section below and escalate rather than replying," and explicitly walks
+  through the cycle-1 FAIL's own boundary example ("I'll pencil in
+  Thursday at 3pm — let me know if that's a problem") to show it lands on
+  the escalate side. Independently re-verified with `rg` for tie-breaker
+  language (`ambiguous|unclear|unsure|doubt|default|tie-break`) against
+  the file — now 4 matches, all inside the new paragraph. Independently
+  re-ran the cycle-1 FAIL's exact boundary example through `pi -p -a`
+  against a scratch copy of the branch's files: the run correctly quoted
+  the new tie-breaker paragraph, classified the message as needing
+  escalation, and did not draft or send a reply. Also ran an unambiguous
+  "already confirmed" message through the same setup to confirm the new
+  paragraph does not cause over-escalation of the clean acknowledge case
+  — it correctly resolved to the "Confirm or acknowledge a stated time"
+  branch and did not escalate.
+- AC-4 (defer himalaya syntax and worklog format, restate neither): met,
+  unchanged. Re-ran an `rg` check for himalaya subcommand syntax
+  (`template reply`, `template send`, `envelope list`, `message read`,
+  `--folder`, `--account`) against both category files — zero matches.
+  The new paragraph introduces no himalaya or worklog-format detail of
+  its own.
+- No unexpected files were modified: `git diff --stat` against
+  `dev-agent` shows only the two `Files to Touch` entries
+  (`direct-request.md`, `meeting-scheduling.md`); the cycle-2 commit
+  touches only `meeting-scheduling.md` (10 lines, one paragraph). The
+  canonical task file is untouched on the task branch, as expected. No
+  unspecified functionality was added.
+
+**Stage 2 — Code quality.**
+
+- The new paragraph is correctly placed (end of the shared "What this
+  workflow can and cannot decide" section, ahead of both branches it
+  governs), textually accurate about which branch is "the second section
+  below," and its quoted mirroring of `references/categories/README.md`'s
+  "when in doubt between acting and escalating, escalate" default was
+  checked verbatim against that file — exact match.
+- The fix is minimal: 10 lines, one new paragraph, no changes to either
+  branch's existing (already-correct) behavior, no unrelated
+  refactoring, and `direct-request.md` was left untouched.
+- Readability: consistent in tone, terminology, and structure with the
+  rest of the file and with T-137's sibling category files. No dead code
+  or leftover placeholder text.
+- No tests apply to this documentation-only task; the task's own
+  structural Verification block was re-run and passes, and the
+  behavioral evidence above supplements it.
+- No security concerns; no unrelated content added.
+
+No other Stage 2 issues found. This closes out both the cycle-1 FAIL
+finding and all four acceptance criteria for T-138.
+
+Next owner: Development Loop.
