@@ -114,3 +114,81 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-02
+
+PASS
+
+**Stage 1 — Acceptance criteria.** All five criteria met, checked directly
+against `references/categories/README.md` and `SKILL.md` on the task branch
+(`61e4ec5`), diffed against `dev-agent`:
+
+- AC-1: all five categories (`newsletter-bulk`, `automated-notification`,
+  `suspected-spam`, `direct-request`, `meeting-scheduling`) present with
+  concrete matching signals (sender shape, subject/body patterns, headers).
+- AC-2: "Confidence rubric" section states confident/not-confident
+  conditions and explicitly names ambiguous two-category match as not
+  confident by definition, not an edge case.
+- AC-3: `SKILL.md` step 3.2 ("Confident match") follows
+  `references/categories/<category>.md` for the matched category, replacing
+  T-135's placeholder judgment step.
+- AC-4: both the index's "No confident match" section and `SKILL.md` step
+  3.3 escalate per `references/escalation.md` rather than choosing the
+  closest category; "closest is not confident" is stated explicitly in
+  both files.
+- AC-5: "Adding a category" section states the two-addition rule (one
+  workflow file, one index entry) and confirms no `himalaya`-skill change;
+  confirmed independently — `git diff dev-agent..task/T-136-...` touches
+  only `SKILL.md` and `references/categories/README.md`, nothing under
+  `.pi/skills/himalaya/`.
+
+Only the two `Files to Touch` entries were modified; no unspecified
+behavior or functionality was added; `rg` checks from the task's
+Verification block reproduced as specified (23 taxonomy/confidence hits in
+the index, 5 `categories/` references in `SKILL.md`, zero leaked raw
+`himalaya <subcommand>` CLI syntax in either file).
+
+**Stage 2 — Code quality.** Readable, focused sections; cross-references
+route to the single source of truth (index for rubric detail, escalation.md
+for escalation policy, per-category workflow files for action detail)
+without restating them, consistent with S-010's Design Principles. No dead
+text or unresolved placeholders. N/A: security, performance (docs-only
+change).
+
+**Independent verification of the two flagged items:**
+
+1. **Ambiguity-escalation behavior, reproduced independently.** Built two
+   scratch copies of the full package (task branch tip, `pi 0.80.3`, `-p -a`
+   per the package README's verified invocation form) — one with the
+   pre-fix `suspected-spam` signals (`git show 61e4ec5^:...README.md`), one
+   with the current, fixed signals — and ran the task's own Verification
+   probe (three-message classification prompt) against both, independent of
+   the Developer's transcript. Pre-fix copy: message 2 (`billing@example.com`
+   / "Action required on your invoice") returned `automated-notification`,
+   confidence Medium, no escalation. Post-fix copy: same message returned
+   "No confident category: ambiguous `automated-notification` vs
+   `suspected-spam`", confidence Low, action `escalate`. Messages 1 and 3
+   classified confidently and correctly in both copies. This independently
+   reproduces the Work Log's claim exactly (both the pre-fix failure and the
+   post-fix escalation), confirming the confidence rubric's ambiguous-match
+   rule actually functions as S-010's confidence-gated autonomy model
+   requires, not just as asserted narrative.
+
+2. **Rewritten commit history, verified without the deleted backup branch.**
+   The pre-rewrite commit chain was still recoverable from the local reflog
+   (`git reflog show --all`) and unreachable-but-ungarbage-collected objects
+   (`git fsck --unreachable`) — the backup branch's deletion did not remove
+   the underlying commits yet. Located the pre-rewrite tip (`58ec792`,
+   "sharpen spam-vs-notification ambiguity signals and example") and its
+   6 ancestors back to the same base commit as the current branch
+   (`7a14dbb`, "move T-136 to in-progress"; confirmed via `git merge-base`).
+   `git diff 58ec792 61e4ec5` is empty — the rewritten tree is byte-identical
+   to the pre-rewrite tree, independently confirming the Developer's claim.
+   Commit count (7), order, and base match between the two chains. All 7
+   final subjects are ≤72 chars (max 67), type `docs`, scope `email-triage`,
+   imperative/lowercase/no period — compliant with `git-conventions`. The
+   task branch has no remote tracking ref and was never pushed
+   (`git ls-remote --heads origin` has no `T-136` ref), so amending local
+   commits does not violate the "no amending pushed commits" hard rule.
+
+No blocking issues found.
