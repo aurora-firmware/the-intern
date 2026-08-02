@@ -1,5 +1,11 @@
 # Manager Escalation
 
+Manager escalation is the addressable "ask for guidance" path for a message
+the `email-triage` skill cannot classify with confidence. A `periodic`
+scheduler firing has no caller to answer synchronously (ADR-004), so
+escalating never means pausing this run for a reply — it means sending one
+email and moving on, as defined below.
+
 ## Configuration
 
 The escalation address is skill-local configuration, not bob's TOML config
