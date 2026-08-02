@@ -80,3 +80,36 @@ other than "nothing" is what marks it open. Never infer that a message still
 needs attention from its `Seen`/unseen state, and never rely on toggling
 `Seen` back off as a way to mark something open; the worklog entry is the
 sole record.
+
+## How an open item closes
+
+An open item has exactly two causes, and each closes differently:
+
+- **Escalation.** Closes when the manager's reply arrives — as ordinary
+  unseen mail in the mailbox, addressed back through normal delivery, with
+  no separate reply channel. It re-enters triage like any other unseen
+  message on a later run and is classified and handled from there; nothing
+  about the original entry auto-resolves it.
+- **S-004 block.** Closes once an admitting allow rule is added to bob's
+  action ruleset so the previously-blocked `bash`/himalaya call is no longer
+  denied. There is nothing to do inside this skill to close a block — it
+  closes only when the S-004 configuration changes, and the next run's
+  attempt then succeeds.
+
+Until one of those conditions is met, the item is not closed. During
+first-run reconciliation, every entry still found open in the most recent
+worklog file with open items is re-checked against these two conditions:
+
+- if resolved, note the resolution in today's file (e.g. "Left: nothing —
+  manager reply received and handled" or "Left: nothing — allow rule now
+  admits this call, retried and succeeded") and the item is done;
+- if not yet resolved, append an entry to today's file recording it as still
+  open (`Left` unchanged from the source item, `Next` restating what would
+  close it) — this is what "carried forward" means concretely. Because that
+  entry lands in *today's* file, today's file becomes the most recent
+  worklog file with open items, so the next day's first-run reconciliation
+  finds it without needing to look further back.
+
+Unresolved items are carried forward this way at every subsequent day's
+first-run reconciliation until whichever condition above actually closes
+them — there is no automatic expiry.
