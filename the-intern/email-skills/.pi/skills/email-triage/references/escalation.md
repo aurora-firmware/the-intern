@@ -74,3 +74,21 @@ If S-004 blocks the escalation send:
 - do **not** fall back to acting on the message autonomously because the
   escalation didn't go through. A blocked escalation is a hard stop for that
   message, not a license to proceed some other way.
+
+## If `manager_address` is missing or malformed
+
+Before sending, `manager_address` must be present in
+`config/email-triage.toml` and must be a single well-formed email address.
+If it is missing, the file itself is missing, or the value is not a
+well-formed address:
+
+- treat the message as a hard stop, recorded as an open item in the day's
+  worklog entry exactly as an S-004 block would be (`references/worklog.md`
+  defines the entry format);
+- do **not** attempt to guess, fabricate, or otherwise proceed without a
+  valid address, and do **not** fall back to acting on the message
+  autonomously instead.
+
+This is a hard stop for every message this run that needs escalation, not
+just the one being classified when the problem is first discovered — without
+a valid `manager_address`, no message can be escalated this run.
