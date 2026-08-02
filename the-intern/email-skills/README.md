@@ -131,7 +131,15 @@ T-139 first observed the same scheduled-job run denied by default policy, then
 allowed after adding scoped action rules. The validated matcher surface was:
 
 - `tool = "read"` with `field_path = "path"`
-- `tool = "bash"` with `field_path = "cmd"`
+- `tool = "bash"` with `field_path = "command"`
+
+The live T-139 runtime under `/tmp/t139-bob-dev-s4` only succeeded with
+`field_path = "command"` in both `config.toml` and `config.full.toml`. This
+matches the policy-control runtime matcher semantics: the bash action gate
+matches against the JSON `arguments.command` string. Older local parser examples
+and tests still use `cmd` only because `field_path` is treated as an opaque
+string at config-parse time; those examples do not prove the runtime bash
+payload shape and should not be copied into live S-004 policy rules.
 
 The live happy-path rules that admitted every tool call used by the deployed
 package were:
@@ -182,55 +190,55 @@ arg_matchers = [
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
-  { field_path = "cmd", pattern = "himalaya --version*" },
+  { field_path = "command", pattern = "himalaya --version*" },
 ]
 
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
-  { field_path = "cmd", pattern = "himalaya account list*" },
+  { field_path = "command", pattern = "himalaya account list*" },
 ]
 
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
-  { field_path = "cmd", pattern = "himalaya folder list*" },
+  { field_path = "command", pattern = "himalaya folder list*" },
 ]
 
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
-  { field_path = "cmd", pattern = "himalaya*envelope list*not flag seen*" },
+  { field_path = "command", pattern = "himalaya*envelope list*not flag seen*" },
 ]
 
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
-  { field_path = "cmd", pattern = "himalaya*message read*" },
+  { field_path = "command", pattern = "himalaya*message read*" },
 ]
 
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
-  { field_path = "cmd", pattern = "himalaya*message move*INBOX.Notifications*" },
+  { field_path = "command", pattern = "himalaya*message move*INBOX.Notifications*" },
 ]
 
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
-  { field_path = "cmd", pattern = "*find worklog*" },
+  { field_path = "command", pattern = "*find worklog*" },
 ]
 
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
-  { field_path = "cmd", pattern = "mkdir -p worklog*" },
+  { field_path = "command", pattern = "mkdir -p worklog*" },
 ]
 
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
-  { field_path = "cmd", pattern = "*>> worklog/*.md*" },
+  { field_path = "command", pattern = "*>> worklog/*.md*" },
 ]
 ```
 
