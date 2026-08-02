@@ -1,7 +1,7 @@
 ---
 id: T-139
 title: Validate the deployed package against a live scheduled job happy path
-status: pending  # pending | in-progress | completed | blocked
+status: completed  # pending | in-progress | completed | blocked
 priority: high  # critical | high | medium | low
 assigned-role: developer
 created: '2026-08-01'
