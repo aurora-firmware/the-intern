@@ -100,6 +100,26 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-02
+
+Read the Work Log first (empty — first session on this task) and the full task file, then, per the task's context note, T-131's `the-intern/email-skills/README.md` (verified skill-discovery path, package layout, `pi -p -a` invocation form) and T-133's `references/worklog.md` (diary format and skip-tolerant reconciliation), plus S-010 (Design Principles, Workflow, Configuration Requirements, Exclusions), ADR-004 (periodic delivery kind — no caller, fire-and-forget), ADR-008 §5 (actions use their own configuration; no secrets custodied by bob), and S-004 (default-deny action gate, allow-only rules) before writing anything, so the escalation reference would use consistent terminology and correctly defer to `worklog.md` rather than restating its entry format.
+
+Implemented the two `Files to Touch` in seven small red→green→refactor cycles, each checked with `rg` before (confirming absence/failure) and after (confirming presence) writing content, committed individually:
+
+1. `config/email-triage.example.toml` — the shipped template with a commented `manager_address` key and a placeholder using the RFC 2606 `.invalid` TLD (`manager@example.invalid`) so it reads unambiguously as a non-real address; verified as parseable TOML with `python3 -c "import tomllib; ..."` in addition to the `rg` check.
+2. `escalation.md` "Configuration" section — location `config/email-triage.toml` under the job's `--cwd`, the single required `manager_address` key, and a note that the real file is deployed-workspace-only per the README (AC-1's reference-side half).
+3. "When to escalate" — confidence-gated escalation trigger (not action-reversibility or an allowlist, per S-010 Design Principles), "send one email then take no further action this run," and the three required email contents: what the message is, why it's uncertain, and the concrete question (AC-2).
+4. "If the escalation send is blocked (S-004)" — ties the escalation send to the same S-004 `bash` gate as every other call, records the block as a worklog open item, and explicitly forbids falling back to autonomous action (AC-3).
+5. "If `manager_address` is missing or malformed" — same hard-stop/worklog-open-item/no-autonomous-fallback treatment for a missing file, missing key, or malformed address (AC-4).
+6. "No synchronous reply is expected" — `periodic`/ADR-004 fire-and-forget framing, and the manager's reply returning only as ordinary unseen mail that re-enters triage on a later run, with the open item staying open until "the reply's own per-message entry marks the matter handled" — deferring to `worklog.md` for the actual entry format rather than restating it, per the task description's explicit instruction (AC-5).
+7. Refactor: added a short orienting paragraph under the H1 (mirroring `worklog.md`'s own opening-paragraph style) restating the escalation path's purpose and the ADR-004 no-synchronous-reply framing up front; re-ran every prior `rg` check afterward to confirm nothing regressed before committing the refactor separately.
+
+Ran the task's full Verification block end-to-end as a final check: `cat` on the example TOML confirmed the documented key and placeholder address; the task's own combined `rg` pattern (`manager_address|blocked|hard stop|worklog.md|periodic`) matched throughout `escalation.md`; and the behavioral check was run in a fresh `/tmp/email-skills-probe` scratch copy of the whole package (mirroring T-131/T-132/T-133's setup) with `config/email-triage.toml` deliberately absent. Ran the exact prompt from the Verification block three times — twice with bare `pi -p` as literally specified, once more with `pi -p -a` as a cross-check — and all three responses correctly and consistently answered "hard stop, record an open worklog item, send no mail, do not act autonomously," with no variation in the substantive answer. Removed the scratch copy afterward.
+
+Considered whether to fold "Configuration" and the missing/malformed-address section into one combined cycle (they're related) but kept them as separate AC-1/AC-4 cycles instead, since they correspond to distinct acceptance criteria with distinct verification patterns, matching T-133's one-cycle-per-AC precedent. Also considered writing a longer, single monolithic "Escalation" section rather than five headed subsections, but split them to keep each testable in isolation and to mirror `worklog.md`'s section-per-concern structure for consistency across the two reference files.
+
+Nothing remains for this task as scoped: both `Files to Touch` entries exist, all five acceptance criteria have supporting `rg`/`cat`/TOML-parse/behavioral-probe evidence above, and the working tree is clean with seven commits on the task branch, none touching the canonical task file. `escalation.md` is self-contained reference content only — like `worklog.md`, it isn't wired into an `email-triage/SKILL.md` yet, since that skill file is T-135's job per this task's own description.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
