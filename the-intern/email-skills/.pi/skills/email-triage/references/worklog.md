@@ -98,28 +98,23 @@ An open item has exactly two causes, and each closes differently:
 - **Escalation.** Closes when the manager's reply arrives — as ordinary
   unseen mail in the mailbox, addressed back through normal delivery, with
   no separate reply channel. It re-enters triage like any other unseen
-  message on a later run and is classified and handled from there; nothing
-  about the original entry auto-resolves it.
+  message on some later run and is classified and handled from there;
+  nothing about the original entry auto-resolves it — the reply's own
+  per-message entry is what marks the matter handled.
 - **S-004 block.** Closes once an admitting allow rule is added to bob's
-  action ruleset so the previously-blocked `bash`/himalaya call is no longer
-  denied. There is nothing to do inside this skill to close a block — it
-  closes only when the S-004 configuration changes, and the next run's
-  attempt then succeeds.
+  action ruleset, so a retry of the previously-blocked `bash`/himalaya call
+  is no longer denied.
 
-Until one of those conditions is met, the item is not closed. During
-first-run reconciliation, every entry still found open in the most recent
-worklog file with open items is re-checked against these two conditions:
+Until whichever condition applies is met, the item stays open. At each day's
+first-run reconciliation, every entry still open in the most recent worklog
+file with open items is carried forward: append a corresponding entry to
+today's file noting it is still open (`Left` unchanged from the source
+item, `Next` restating what would close it — for an S-004 block, this is
+also the point at which the blocked action is retried, since no other point
+in the workflow revisits it). Because that carried-forward entry lands in
+*today's* file, today's file becomes the new "most recent worklog file with
+open items," so the next day's first-run reconciliation finds it directly
+rather than needing to look further back.
 
-- if resolved, note the resolution in today's file (e.g. "Left: nothing —
-  manager reply received and handled" or "Left: nothing — allow rule now
-  admits this call, retried and succeeded") and the item is done;
-- if not yet resolved, append an entry to today's file recording it as still
-  open (`Left` unchanged from the source item, `Next` restating what would
-  close it) — this is what "carried forward" means concretely. Because that
-  entry lands in *today's* file, today's file becomes the most recent
-  worklog file with open items, so the next day's first-run reconciliation
-  finds it without needing to look further back.
-
-Unresolved items are carried forward this way at every subsequent day's
-first-run reconciliation until whichever condition above actually closes
-them — there is no automatic expiry.
+There is no automatic expiry. An item stays open, carried forward this way
+day after day, until whichever condition above genuinely closes it.
