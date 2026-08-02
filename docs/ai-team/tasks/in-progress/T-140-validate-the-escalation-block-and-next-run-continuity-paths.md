@@ -101,6 +101,21 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-02
+
+Prepared a fresh owner-only deployed copy and isolated bob runtime under
+`/tmp`, with the configured test manager address, known-good T-139 policy, and
+a one-minute `check-email` schedule. The test mailbox was reachable and had no
+unseen messages; the service and temporary runtime were stopped and removed
+cleanly after the attempt. AC-1 through AC-3 could not run because no safe,
+deliberately ambiguous fixture could be placed in the mailbox. Himalaya's
+non-interactive send paths failed (`template send` could not parse its
+template; `message send` panicked), host `mail` did not result in IMAP mail,
+and reusing a historical message was rejected as sensitive-content exposure.
+No repository files changed. Resume after the human supplies one safe
+ambiguous email in the `daneel` test inbox, or explicitly authorizes a named
+safe existing fixture.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
