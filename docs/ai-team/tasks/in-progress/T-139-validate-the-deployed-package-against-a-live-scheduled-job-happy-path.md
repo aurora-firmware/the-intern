@@ -128,6 +128,31 @@ recreate the prepared environment and complete the scheduled validation.
 Also observed environment drift: `pi --version` reports `0.65.2`, whereas the
 package README records `0.80.3`; reconcile this after live validation.
 
+### Session 2 — 2026-08-02
+
+Recreated the isolated deployment and captured the required blocked-then-allowed
+audit evidence. Deny-all session `b451455d-6de7-4539-b639-d54d031d04ac` denied
+`read` and `bash`; with scoped `read.path` rules for the deployed config,
+worklog, and skill references, session `cd809037-52df-4010-8cbe-42229fe844c4`
+allowed those reads before correctly denying `bash`. This confirmed the
+matcher surfaces (`read.path` and `bash.cmd`). The direct-request route was
+rejected because it required recurring outbound mail authorization. A safe
+automated-notification route found that this account requires
+`INBOX.Notifications`, not the workflow's starter `Notifications` name. The
+Architect confirmed configuring that name in the deployed copy is in scope.
+
+### Session 3 — 2026-08-02
+
+The deployed copy was configured with `INBOX.Notifications`, but repeated
+scheduled runs varied harmless Himalaya command formatting, so overly exact
+`bash.cmd` rules continued to deny preliminary health/worklog checks. The
+worker pool then saturated after blocked runs. The isolated service was stopped
+cleanly; no worklog or successful message move was produced. The candidate
+automated-notification is now seen, likely because direct inspection marked it
+seen. A final retry needs a fresh unseen test notification, a restarted clean
+runtime, and scoped glob matchers broad enough for the documented commands'
+benign formatting variants.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
