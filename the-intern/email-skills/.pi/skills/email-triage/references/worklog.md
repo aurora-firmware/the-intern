@@ -64,3 +64,19 @@ opening each file until one is found containing at least one entry whose
 If no such file exists (every prior day was fully closed out, or no prior
 worklog exists at all), there is nothing to reconcile and the run proceeds
 straight to listing unseen mail.
+
+## Open items live in the worklog only, never in mailbox flag state
+
+Classifying a message requires reading it, and reading a message sets its
+`\Seen` flag as a side effect regardless of what the classification decides
+to do — acting, escalating, or hitting an S-004 block all mark the message
+`Seen` the same way. That means the mailbox itself cannot be used to tell
+"still needs attention" apart from "fully handled": once read, a message
+never reappears as unseen on a later tick no matter how the run left it.
+
+Because of this, an escalated or blocked message is carried forward as an
+open item through the worklog **only** — its `Left` field staying anything
+other than "nothing" is what marks it open. Never infer that a message still
+needs attention from its `Seen`/unseen state, and never rely on toggling
+`Seen` back off as a way to mark something open; the worklog entry is the
+sole record.
