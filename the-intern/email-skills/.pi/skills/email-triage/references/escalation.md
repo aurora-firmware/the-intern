@@ -92,3 +92,19 @@ well-formed address:
 This is a hard stop for every message this run that needs escalation, not
 just the one being classified when the problem is first discovered — without
 a valid `manager_address`, no message can be escalated this run.
+
+## No synchronous reply is expected
+
+Escalating never blocks the run waiting for an answer. Scheduled firings are
+`periodic` requests — fire-and-forget, with no caller retained to route a
+response back to (ADR-004) — so the escalation email is sent and the run
+continues (or ends) without waiting for anything synchronous.
+
+The manager's reply, when it comes, is not a response bob routes back to
+anything: it arrives later as ordinary unseen mail in the same mailbox,
+addressed back through normal delivery like any other message. It re-enters
+triage on whatever later run first lists unseen mail, and is classified and
+handled from there — nothing about the original escalation auto-resolves
+it. Per `references/worklog.md`, the escalated message's open worklog item
+stays open, carried forward at each day's first-run reconciliation, until
+the reply's own per-message entry marks the matter handled.
