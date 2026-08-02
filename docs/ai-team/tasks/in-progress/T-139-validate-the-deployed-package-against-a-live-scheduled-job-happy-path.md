@@ -205,3 +205,8 @@ PASS | FAIL | ESCALATE
 FAIL
 
 - `the-intern/email-skills/README.md:133-234` — AC-2 is not met. The README records the validated `bash` action rules as `field_path = "command"`, but the task's own live-validation log identifies the matcher surface as `bash.cmd` and the policy parser test in `the-intern/service/crates/policy-control/src/ruleset.rs:116-129` also uses `field_path = "cmd"`. As written, the documented rule entries are not the exact working S-004 entries the task requires and would mislead an operator configuring policy from the README. Update the README to use the actual validated `bash` matcher field path and re-verify that every documented bash rule shape still matches the successful happy-path configuration. Stage 2 was not reviewed because Stage 1 failed.
+
+### Review Verdict — 2026-08-02
+FAIL
+
+- `the-intern/email-skills/README.md:131-213` — AC-2 is still not met after commit `f383495`. The README now documents every validated `bash` action rule with `field_path = "cmd"`, but the captured happy-path configuration that actually admitted the successful scheduled run still uses `field_path = "command"` in `/tmp/t139-bob-dev-s4/config/bob/config.toml:39-81` and `/tmp/t139-bob-dev-s4/config/bob/config.full.toml:39-81`. AC-2 requires the exact working S-004 entries that were observed blocked-before and allowed-after; the branch now documents a different matcher field than the live evidence it cites. Reconcile the documentation with the real validation artifact: either re-run the live validation with `cmd` rules and capture fresh allowed evidence, or restore the documented field path to the value proven by the successful run and correct the contradictory task log notes. Stage 2 was not reviewed because Stage 1 failed.
