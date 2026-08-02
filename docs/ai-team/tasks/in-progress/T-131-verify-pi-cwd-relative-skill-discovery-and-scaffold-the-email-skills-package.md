@@ -131,6 +131,52 @@ Added `the-intern/email-skills/` to `CLAUDE.md`'s folder-structure tree (AGENTS.
 
 Re-ran the task's full Verification block end-to-end after committing (fresh `/tmp` probe copy, bare `-p` vs `-p -a`, and the `git check-ignore` command from the repo root) — all outcomes match what's recorded in the README. Nothing remains for this task; all five acceptance criteria are implemented and independently re-verified. Three commits on the task branch, one per Files-to-Touch item: `32f35e1` (`.gitignore` fix, AC-4), `9c64243` (README, AC-1/2/3), `cdbdcd0` (`CLAUDE.md` tree, AC-5).
 
+### Session 2 — 2026-08-02
+
+Addressed the Reviewer's FAIL: AC-1 requires the discovery result to be "evidenced by a transcript in the Work Log," and Session 1's entry only narrated the finding in prose without the literal transcript. Re-ran both probe invocations from the task's Verification block against a fresh `/tmp/email-skills-probe` scratch copy (rebuilt via the same `rm -rf` / `mkdir -p` / `cp -r` / `printf` steps as before) and captured the raw commands and stdout below.
+
+Confirmed `pi --version`:
+
+```
+$ pi --version
+0.80.3
+```
+
+Bare `-p` probe run (the form given literally in the task's Verification block):
+
+```
+$ cd /tmp/email-skills-probe && pi -p "List the names of every skill available to you. Do not use any tools."
+gh-cli  
+git-conventions  
+pr-review
+```
+
+`probe-marker` does not appear — only the three globally-installed skills.
+
+`-p -a` probe run (the corrected invocation form, `--approve`/`-a` = "trust project-local files for this run"):
+
+```
+$ cd /tmp/email-skills-probe && pi -p -a "List the names of every skill available to you. Do not use any tools."
+probe-marker
+gh-cli
+git-conventions
+pr-review
+```
+
+`probe-marker` appears alongside the three global skills, confirming `.pi/skills/<name>/SKILL.md` relative to `cwd` is the correct discovery path and `-p -a` is the required invocation form.
+
+Also re-confirmed the AC-4 `git check-ignore` verification from the repo root, unchanged from Session 1:
+
+```
+$ cd "$OLDPWD" && git check-ignore -v the-intern/email-skills/.pi/skills/probe-marker/SKILL.md
+$ echo $?
+1
+```
+
+(No output, exit 1 — no match, as required.)
+
+These transcripts match Session 1's narrated finding and the Reviewer's own independent reproduction exactly, so no change was needed to the substantive finding, the verified discovery path, or `the-intern/email-skills/README.md`'s content — its cross-reference to "T-131's Work Log" for the full transcript is now accurate. Removed the throwaway `/tmp/email-skills-probe` copy afterward (Verification block's own guidance: the probe belongs in a throwaway copy, never committed). No files under `the-intern/email-skills/`, `.gitignore`, or `CLAUDE.md` changed this session; the task branch remains at `cdbdcd0` (no new commit needed, since Files to Touch content is unchanged — only Work Log evidence, which is canonical-file-only and out of scope for the task branch, was added).
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
