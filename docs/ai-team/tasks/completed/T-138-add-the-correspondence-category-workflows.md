@@ -1,7 +1,7 @@
 ---
 id: T-138
 title: Add the correspondence category workflows
-status: pending  # pending | in-progress | completed | blocked
+status: completed  # pending | in-progress | completed | blocked
 priority: medium  # critical | high | medium | low
 assigned-role: developer
 created: '2026-08-01'
