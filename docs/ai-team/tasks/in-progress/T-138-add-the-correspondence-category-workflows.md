@@ -109,3 +109,107 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-02
+
+FAIL
+
+**Stage 1 — Acceptance criteria.**
+
+- AC-1 (direct-request draft/send + worklog entry naming the reply): met.
+  `direct-request.md`'s "Draft and send a reply" and "Worklog entry"
+  sections satisfy this, and its "If the answer needs information this
+  run doesn't have" section correctly yields to AC-3 rather than
+  contradicting AC-1.
+- AC-2 (meeting-scheduling concrete steps for proposing/confirming a time
+  and replying): met as a defensible reading. Independently confirmed the
+  Developer's finding that this package has no calendar/availability
+  source: the `himalaya` skill's Operation Index and
+  `references/command-reference.md` cover mailbox operations only (list,
+  read, reply, forward, compose/send, move/copy, delete, flags,
+  attachments, account selection) with no calendar or availability
+  operation of any kind, and `config/email-triage.example.toml` defines
+  only `manager_address` — no calendar/availability key exists anywhere
+  in this package. Given that, a workflow branch that autonomously
+  "proposes" a brand-new candidate time would necessarily be guessing at
+  availability, which AC-3 and the task's own Description already require
+  to escalate instead — so mapping all genuine time-proposal/decision
+  cases to escalation and reserving direct reply for restating a time the
+  message itself already states is a correct, harmonized reading of AC-2
+  and AC-3 together, not a gap.
+- AC-3 (escalate rather than guess when acting needs unavailable
+  information): **not reliably met** by `meeting-scheduling.md` — see
+  Stage 2 finding below, which is a Stage 1 failure because it is a
+  concrete scenario where the file's own instructions do not force the
+  AC-3-required escalation.
+- AC-4 (defer himalaya syntax and worklog format, restate neither): met.
+  Verified independently with `rg` against both files for himalaya
+  subcommand syntax (`template reply`, `template send`, `envelope list`,
+  `message read`, `--folder`, etc.) — zero matches in either file. Both
+  files point to the `himalaya` skill's Operation Index and to
+  `references/worklog.md`/`references/escalation.md` by name without
+  restating their content, matching T-137's precedent style.
+- No unexpected files were modified (`git diff --stat` against
+  `dev-agent` shows only the two `Files to Touch` entries); no
+  unspecified functionality was added.
+
+**Stage 2 — Code quality.**
+
+- File and location: `the-intern/email-skills/.pi/skills/email-triage/references/categories/meeting-scheduling.md`,
+  the "## What this workflow can and cannot decide" section (the sentence
+  "Which of the two sections below applies depends on which the message
+  is actually asking for.") together with the two branch sections that
+  follow it ("Confirm or acknowledge a stated time, and reply" and "If
+  the request needs the owner's availability").
+- What is wrong: the file introduces a new, judgment-based split — does
+  this message ask the owner to decide something availability-dependent,
+  or does it merely state/report a settled time — that determines whether
+  the workflow replies directly or escalates. Both branches are correct
+  and safe on their own (branch (a) never invents a time value or asserts
+  availability; branch (b) escalates whenever a real decision is needed),
+  and I confirmed with `rg` that neither branch nor the section between
+  them contains any tie-breaking language ("ambiguous", "unclear",
+  "unsure", "doubt", "default", etc. — zero matches in the file). Unlike
+  `direct-request.md`, whose reply/escalate split is anchored to a
+  checkable, factual condition (does the run literally possess the
+  answering information — so any doubt about possession already falls to
+  "does not have it" → escalate, per that file's "anything not contained
+  in the message or otherwise available to the run" catch-all),
+  `meeting-scheduling.md`'s two branches are defined by soft, mirror-image
+  language with no stated default for messages that do not cleanly
+  announce which bucket they belong in. A real message can plausibly sit
+  on that boundary — for example an opt-out-style notice such as "I'll
+  pencil in Thursday at 3pm for our call — let me know if that's a
+  problem," which states a specific time (branch (a) surface shape: "a
+  reschedule ... the sender is simply reporting") while functionally
+  soliciting an owner decision only on the condition of an objection
+  (branch (b)'s substance: a decision that commits the calendar unless the
+  owner is heard from). As written, an executing agent resolving that
+  ambiguity toward branch (a) would reply and record the message as fully
+  handled — nothing left outstanding, no worklog open item — without the
+  owner ever actually being asked, which is exactly the "acting on
+  information the run does not have" failure AC-3 exists to prevent, and
+  the task's own Description explicitly extends the confidence gate's
+  "escalate when in doubt" conservatism (already stated as a general
+  principle in `references/categories/README.md`'s confidence rubric) to
+  decisions made inside an already-confident classification.
+- What should change: add one explicit tie-breaker sentence — either in
+  the "What this workflow can and cannot decide" section or at the top of
+  each branch's opening condition — stating that when it is not clearly
+  one or the other, the message is treated as needing the owner's
+  decision and escalates per `references/escalation.md`. This mirrors the
+  conservative default this package already states elsewhere
+  (`references/categories/README.md`: "when in doubt between acting and
+  escalating, escalate") and closes the one boundary the two branches
+  currently leave undefined, without requiring any change to either
+  branch's already-correct core behavior or to any other file.
+
+No other Stage 2 issues found: correctness elsewhere is sound, no tests
+apply to this documentation-only task (verified structurally via the
+task's own `rg` Verification block, independently re-run against a
+worktree checkout of the task branch — matched as claimed), no security
+concerns, naming/structure is readable and consistent with T-137's
+sibling files, and no dead or unrelated content was added.
+
+Next owner: Development Loop. Developer should add the tie-breaker
+sentence described above to `meeting-scheduling.md` and resubmit.
