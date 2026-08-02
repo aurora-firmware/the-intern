@@ -102,3 +102,37 @@ as a run-ending problem for this run rather than a per-message open item.
 
 Everything the rest of this loop does operates on the envelopes this
 listing returns.
+
+### 3. For each unseen message, act on it or escalate it
+
+For every envelope the previous step returned, in turn:
+
+1. Read the message (a `himalaya` `bash` call, S-004-gated like any other)
+   and classify it: form a judgment of what it needs and how confident you
+   are in that judgment for *this specific* message. (A category taxonomy
+   and per-category reference workflows live under `references/categories/`
+   once added on top of this loop — when that taxonomy exists, classify
+   against it and follow the matched category's workflow; until then, use
+   your own judgment of what the message needs.) The gate below is always
+   confidence in that judgment for this message — never the action's
+   reversibility, and never a sender allowlist (S-010 Design Principles).
+2. **High confidence:** act on the message via whichever `himalaya` `bash`
+   call(s) it needs — reply, forward, compose, move, flag, delete, whatever
+   is appropriate — per the `himalaya` skill.
+   - If any of those calls is blocked by S-004: stop acting on this
+     message, do not substitute some other action instead, and record the
+     block as an open worklog item in step 4 below (`Left`: the blocked
+     action; `Next`: retried at the next first-run reconciliation once an
+     admitting allow rule exists). The message is not treated as handled.
+3. **Low confidence:** escalate per `references/escalation.md` — send
+   exactly one escalation email to the configured manager address and take
+   no further action on this message this run. `references/escalation.md`
+   defines the full policy (the email's required content, what happens if
+   the send is blocked by S-004, and what happens if `manager_address` is
+   missing or malformed); do not restate it here. Never fall back to acting
+   on the message autonomously because escalation failed or could not be
+   attempted — a blocked or unaddressable escalation is a hard stop for
+   that message, exactly as `references/escalation.md` requires.
+
+Escalating and acting are mutually exclusive outcomes for a given message
+on a given run — never do both.
