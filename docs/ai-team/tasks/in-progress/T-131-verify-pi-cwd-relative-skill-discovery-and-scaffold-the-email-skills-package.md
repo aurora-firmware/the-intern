@@ -241,3 +241,52 @@ AC-1 fails on one specific, narrow point:
 
 Stage 2 (code quality) was not evaluated per the code-review skill's
 instruction to skip Stage 2 when a Stage 1 criterion fails.
+
+### Review Verdict — 2026-08-02
+
+PASS
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1: Now met. Work Log Session 2 appends the literal transcript (raw
+  commands and stdout) for both the bare `-p` probe run and the `-p -a`
+  probe run, plus the `pi --version` and `git check-ignore` transcripts.
+  Independently reproduced against a fresh scratch copy of the task branch's
+  `the-intern/email-skills/` (via `git worktree add`) on `pi --version`
+  `0.80.3`: bare `-p` listed only `gh-cli`, `git-conventions`, `pr-review`;
+  `-p -a` listed `probe-marker`, `gh-cli`, `git-conventions`, `pr-review`;
+  `git check-ignore -v the-intern/email-skills/.pi/skills/probe-marker/SKILL.md`
+  printed nothing and exited 1. This matches the Work Log transcript exactly,
+  and `the-intern/email-skills/README.md`'s cross-reference to "T-131's Work
+  Log" for the full transcript is now accurate.
+- AC-2 through AC-5: unchanged from the prior cycle's independent
+  verification (still hold — no README, `.gitignore`, or `CLAUDE.md` content
+  changed this session; only the missing Work Log transcript was added).
+
+All five acceptance criteria are met with evidence.
+
+**Stage 2 — Code Quality**
+
+- Correctness: the `.gitignore` anchoring fix (`.pi` → `/.pi`) is scoped
+  correctly — re-verified a repo-root `.pi/...` path still matches (exit 0)
+  while the package's nested `.pi/skills/.../SKILL.md` path no longer does
+  (exit 1); the other three agent-config lines (`.codex`, `.claude`,
+  `.agents`) are untouched.
+- Tests: no automated tests apply to this docs/config task; the task's own
+  manual Verification block was followed and independently reproduced by
+  the reviewer with matching output.
+- Security: no secrets or real addresses in `README.md`; the config template
+  path is explicitly documented as containing no real manager address.
+  Runtime state (`config/email-triage.toml`, `worklog/`) is documented as
+  deployed-copy-only, never committed.
+- Readability: README is well-organized (purpose, verified path/invocation,
+  layout, deployment note); `.gitignore` change has a clear explanatory
+  comment; `CLAUDE.md` tree entry matches the formatting and pipe-alignment
+  convention of sibling entries (e.g. `bob-companion/claude/`).
+- Performance: not applicable.
+- Scope: each of the three task-branch commits (`32f35e1`, `9c64243`,
+  `cdbdcd0`) touches exactly one file, and together they cover exactly the
+  three files listed in Files to Touch — no unexpected files modified, no
+  unspecified functionality added.
+
+Both stages pass. No blocking issues. Minor non-blocking observation: none.
