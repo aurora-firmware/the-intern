@@ -1,7 +1,9 @@
 # Remove the agent configuration
 .codex
 .claude
-.pi
+# Anchored to repo root: the-intern/email-skills/.pi/ is tracked package
+# content (pi's cwd-relative skill discovery path), not local agent config.
+/.pi
 .agents
 .ai-team.toml
 
