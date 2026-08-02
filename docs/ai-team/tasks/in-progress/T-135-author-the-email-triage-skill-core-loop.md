@@ -119,3 +119,133 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-02
+
+PASS
+
+**Stage 1 — Acceptance Criteria.** Reviewed
+`the-intern/email-skills/.pi/skills/email-triage/SKILL.md` (the only file the
+diff touches, matching Files to Touch — `git diff dev-agent...task/T-135-...
+--stat`: 1 file, 152 insertions) against each AC:
+
+- AC-1 (detect new mail via the unseen flag through the `himalaya` skill's
+  documented command, no skill-owned last-seen file): met. Step "2. List
+  unseen mail" delegates to the `himalaya` skill's Operation Index entry
+  "Filter for unseen mail" by name, with no restated command. `rg -n
+  "himalaya (envelope|message|template|flag|attachment)"` against the file
+  returns zero matches — confirmed no himalaya syntax leaked in. The only
+  file-existence check the loop performs is against the worklog (already a
+  required artifact per Component 4), not a second, purpose-built last-seen
+  file.
+- AC-2 (first-run reconciliation before processing new mail): met. Step "1.
+  Determine whether this is the day's first executed run, and reconcile"
+  precedes step 2 (mail listing) in reading order and in the loop's own
+  numbering, and on the file-does-not-exist branch explicitly says "Before
+  doing anything else — before listing unseen mail — follow
+  `references/worklog.md`'s 'First-run reconciliation' section."
+- AC-3 (act or escalate per `references/escalation.md`, gated on
+  per-message classification confidence, never reversibility or a sender
+  allowlist): met. Step 3 states the gate is "always confidence in that
+  judgment for this message — never the action's reversibility, and never a
+  sender allowlist (S-010 Design Principles)," and delegates the escalation
+  mechanics (email content, S-004-block and missing-address hard stops) to
+  `references/escalation.md` without restating them.
+- AC-4 (worklog entry per handled message; no unseen message left without
+  an action, escalation, or recorded block): met. Step 4 requires an entry
+  "whatever the outcome" (acted, escalated, or blocked), and the loop's
+  closing sentence states this explicitly: "A completed run leaves no
+  unseen message from step 2 without exactly one of: an action taken, an
+  escalation sent, or a block recorded as an open item — never silently
+  skipped."
+- AC-5 (frontmatter declares `name`/`description`/tools per the pi SKILL.md
+  convention; body delegates himalaya syntax rather than restating it):
+  met. Frontmatter has `name: email-triage`, a trigger-rich `description`,
+  and `allowed-tools: Read Bash` — the same shape and casing as pi's own
+  installed skills (`~/.pi/agent/skills/{gh-cli,pr-review}/SKILL.md`) and as
+  the sibling `himalaya` skill this task depends on. Delegation confirmed by
+  the zero-match `rg` check above.
+
+No unspecified behavior was added, and no files outside Files to Touch were
+modified.
+
+**Stage 2 — Code Quality, with the extra scrutiny the task called for:**
+
+- **Delegation to T-132/T-133/T-134 (no restating, no contradiction).**
+  Cross-read `SKILL.md` against `references/worklog.md` (T-133),
+  `references/escalation.md` (T-134), and the `himalaya` skill (T-132)
+  line-by-line. Every mechanics-level rule (worklog entry format, first-run
+  walk-back algorithm, escalation email content, S-004/missing-address hard
+  stops, himalaya command shapes) is delegated by reference, not restated.
+  The few places `SKILL.md` repeats a rule in its own words — "never fall
+  back to acting on the message autonomously" (step 3) and "creating
+  `worklog/` and today's file first if either is still missing" (step 4) —
+  are brief outcome-level reminders, not mechanics, and mirror how
+  `escalation.md` itself repeats the same "no autonomous fallback" rule
+  across its own three subsections; no drift or contradiction found against
+  any of the three reference files. The S-004-block handling for the
+  *acting* path (step 3.2) is new content this task correctly had to write
+  itself, since T-134's `escalation.md` only covers the escalation send's
+  block — verified its `Left`/`Next` phrasing ("retried at the next
+  first-run reconciliation once an admitting allow rule exists") is
+  consistent with `worklog.md`'s own "How an open item closes" section for
+  S-004 blocks.
+- **Tool-usage naming — uniform and complete.** The "Tool usage" section
+  names `read` for every read-only load (config, worklog file contents,
+  any `references/*.md` load including the `himalaya` skill's own
+  reference) and `bash` for every himalaya invocation and every worklog
+  filesystem mutation (existence checks, creation, per-message append),
+  with an explicit rationale for keeping all mutation on `bash` rather than
+  `write`/`edit`. Checked every inline `` `bash` ``/`` `read` `` mention in
+  the loop body against this table — all four loop steps' tool uses fall
+  under one of the two named categories; none is left unnamed or
+  ambiguous. `allowed-tools: Read Bash` in the frontmatter matches exactly
+  the two tools the body ever names — no third tool implied anywhere.
+  Independently reproduced the full structural check
+  (`rg -n "unseen|reconcil|escalat|worklog|himalaya"`, 14–20 hits per term,
+  matching the Work Log's reported counts) and the zero-match himalaya-
+  syntax check in a worktree of the task branch.
+- **Taxonomy placeholder does not commit to T-136's content.** Step 3.1's
+  parenthetical ("A category taxonomy and per-category reference workflows
+  live under `references/categories/` once added on top of this loop —
+  when that taxonomy exists, classify against it and follow the matched
+  category's workflow; until then, use your own judgment") is the only
+  taxonomy-related text in the file. `grep -n -i
+  "categor|taxonomy|newsletter|spam|notification"` finds only this one
+  generic placeholder — no category names, no per-category policy content
+  invented ahead of T-136.
+- **Behavioral verification, reproduced independently.** Confirmed `pi`
+  (0.80.3) and `himalaya` (v1.2.0) on PATH. Ran the task's literal `pi -p
+  "..."` Verification-block command from a fresh scratch copy: reproduced
+  the same class of non-skill-sourced-answer finding T-131/T-132/T-134
+  already recorded for bare `-p` (a known task-file Verification-block
+  invocation-form defect, not a defect in this task's content). Cross-
+  checked with T-131's recorded `-p -a` form: produced a fully skill-
+  sourced walkthrough naming all four loop steps in the correct order
+  (load `himalaya` + `email-triage`, list unseen mail via `himalaya`,
+  reconcile first on the day's first run, per-message confidence gate →
+  act or escalate, worklog entry per message). Ran two additional targeted
+  probes: one on the acting-path S-004-block outcome, one on first-run
+  detection — an initial attempt with an overly restrictive "do not run
+  any tool" instruction produced a hallucinated, incorrect answer for the
+  block-outcome probe (the same known invocation-form pitfall T-132's
+  review isolated: that phrasing blocks `pi`'s own on-demand `read` of
+  skill content), so it was rerun explicitly permitting `read` while still
+  forbidding himalaya/shell execution — the corrected run reproduced the
+  Work Log's claimed result verbatim, quoting the file's own "stop acting
+  on this message... The message is not treated as handled" language
+  correctly. The first-run-detection probe correctly named the worklog
+  file's presence as the sole signal, with no separate state file.
+- **Commit hygiene.** Five commits, each `docs(email-triage): ...`,
+  imperative/lowercase/no-period, none touching the canonical task file
+  (`git diff dev-agent...task/T-135-... --
+  docs/ai-team/tasks/in-progress/T-135-...md` is empty). Minor, non-
+  blocking, consistent with T-133's own precedent for the same class of
+  issue: two of the five subject lines run over the ≤72-char convention
+  (73 and 75 chars) — `docs(email-triage): add unseen-mail detection step
+  delegating to himalaya` and `docs(email-triage): add SKILL.md frontmatter
+  and explicit tool-usage naming`. Not worth a review cycle on its own.
+
+Both stages pass. No blocking issues.
+
+Next owner: active Development Loop.
