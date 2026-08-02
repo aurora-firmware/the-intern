@@ -116,6 +116,22 @@ No repository files changed. Resume after the human supplies one safe
 ambiguous email in the `daneel` test inbox, or explicitly authorizes a named
 safe existing fixture.
 
+### Session 2 — 2026-08-02
+
+The supplied fixture was message `91` ("Documents"), the sole unseen message.
+AC-2 passed in isolated workspace `/tmp/t140-email-workspace-K45uDh`: with
+only the outbound escalation send denied, its worklog recorded an open item
+and the audit session `e4f5f0d4-6f4a-486f-899f-2d2b10114ad1` captured the
+denied bash-send verdict; no autonomous fallback occurred. AC-1 could not run
+because the approval boundary rejected a scheduled email containing
+message-derived content to the manager address without a fresh explicit human
+approval. AC-3 remains inconclusive: retries against a seeded
+`2026-07-29.md` open worklog hit additional denied bash/read calls before a
+new daily worklog was created. The service was stopped cleanly; no repository
+files changed. Resume needs explicit approval for exactly one escalation email
+derived from message 91 to the configured test manager, then a continuity
+retry with scoped rules for the recorded denied calls.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
