@@ -167,6 +167,19 @@ stopped cleanly. Remaining work is repository-only: document the verified
 deployment and allow-rule facts in the package README, then commit the task
 branch for review.
 
+### Session 5 — 2026-08-02
+
+Completed the repository-side handoff in task commit `bc945ed`
+(`docs(email-skills): record live deployment validation`). The package README
+now documents the verified owner-only external-workspace procedure, explicit
+creation of its mutable worklog directory, `read.path` and scoped
+`bash.command` allow-rule shapes, and the account-specific
+`INBOX.Notifications` target. It also reconciles the recorded pi version to
+the live validation environment's `0.65.2`. README assertions and
+`git diff --check` passed. No skill-file changes were needed: the Session 4
+scheduled run successfully moved the automated notification and appended the
+deployed worklog entry.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
