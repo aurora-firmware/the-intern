@@ -1,7 +1,7 @@
 ---
 id: T-131
 title: Verify pi cwd-relative skill discovery and scaffold the email-skills package
-status: pending  # pending | in-progress | completed | blocked
+status: completed  # pending | in-progress | completed | blocked
 priority: high  # critical | high | medium | low
 assigned-role: developer
 created: '2026-08-01'
