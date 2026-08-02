@@ -57,3 +57,20 @@ The escalation email must describe:
 Sending the escalation email is a `himalaya` `bash` call like any other this
 package makes, so it is gated by S-004's action gate exactly the same way —
 see "If the escalation send is blocked" below.
+
+## If the escalation send is blocked (S-004)
+
+Every `bash` call this package makes — including the escalation send — is
+gated by bob's existing S-004 default-deny action gate; an admitting allow
+rule is a deployment prerequisite, not something this reference or spec
+grants (S-010 Design Principles: "every action this package takes remains
+subject to S-004").
+
+If S-004 blocks the escalation send:
+
+- record the block as an open item in the day's worklog entry for that
+  message (`references/worklog.md` defines the entry format and how a
+  worklog-tracked open item closes — refer to it, do not restate it here);
+- do **not** fall back to acting on the message autonomously because the
+  escalation didn't go through. A blocked escalation is a hard stop for that
+  message, not a license to proceed some other way.
