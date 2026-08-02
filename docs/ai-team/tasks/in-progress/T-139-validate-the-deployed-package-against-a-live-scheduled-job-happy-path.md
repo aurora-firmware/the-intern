@@ -191,3 +191,8 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-02
+FAIL
+
+- `the-intern/email-skills/README.md:133-234` — AC-2 is not met. The README records the validated `bash` action rules as `field_path = "command"`, but the task's own live-validation log identifies the matcher surface as `bash.cmd` and the policy parser test in `the-intern/service/crates/policy-control/src/ruleset.rs:116-129` also uses `field_path = "cmd"`. As written, the documented rule entries are not the exact working S-004 entries the task requires and would mislead an operator configuring policy from the README. Update the README to use the actual validated `bash` matcher field path and re-verify that every documented bash rule shape still matches the successful happy-path configuration. Stage 2 was not reviewed because Stage 1 failed.
