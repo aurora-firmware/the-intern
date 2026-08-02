@@ -61,3 +61,30 @@ the same way an unconfigured `himalaya` account is a run-ending problem.
 ---
 
 ## The loop
+
+### 1. Determine whether this is the day's first executed run, and reconcile
+
+Check whether today's worklog file, `worklog/<YYYY-MM-DD>.md` (today's local
+calendar date), already exists (`bash`, e.g. `test -f`). Its absence is the
+signal that no run has written to today's file yet — reuse that existing
+file's presence as "is this the day's first executed run" rather than
+adding a second, skill-owned last-run marker file, the same way this loop
+avoids a skill-owned last-seen file for detecting new mail (step 2 below).
+
+- **File does not exist yet:** treat this as the day's first executed run.
+  Before doing anything else — before listing unseen mail — follow
+  `references/worklog.md`'s "First-run reconciliation" section to find the
+  most recent worklog file with open items and carry every still-open entry
+  forward into today's file, including any pending manager escalation (an
+  open item left by a previous low-confidence classification) and any open
+  S-004 block, which this is also the point at which to retry.
+  `references/worklog.md` defines the full mechanics — which file to walk
+  back to, the entry format, how each kind of open item closes; do not
+  re-derive or restate them here.
+- **File already exists:** some run has already written to today's file
+  (whether or not that run needed reconciliation) — skip reconciliation and
+  go straight to listing unseen mail. (If an earlier run today reconciled
+  nothing and saw no unseen mail, today's file may still be absent; the
+  next run repeats this same first-run check, which is harmless —
+  reconciliation itself is idempotent when there is nothing open to carry
+  forward.)
