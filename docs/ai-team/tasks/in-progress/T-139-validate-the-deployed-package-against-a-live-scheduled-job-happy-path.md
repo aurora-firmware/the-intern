@@ -221,3 +221,28 @@ FAIL
 FAIL
 
 - `the-intern/email-skills/README.md:131-213` — AC-2 is still not met after commit `f383495`. The README now documents every validated `bash` action rule with `field_path = "cmd"`, but the captured happy-path configuration that actually admitted the successful scheduled run still uses `field_path = "command"` in `/tmp/t139-bob-dev-s4/config/bob/config.toml:39-81` and `/tmp/t139-bob-dev-s4/config/bob/config.full.toml:39-81`. AC-2 requires the exact working S-004 entries that were observed blocked-before and allowed-after; the branch now documents a different matcher field than the live evidence it cites. Reconcile the documentation with the real validation artifact: either re-run the live validation with `cmd` rules and capture fresh allowed evidence, or restore the documented field path to the value proven by the successful run and correct the contradictory task log notes. Stage 2 was not reviewed because Stage 1 failed.
+
+### Review Verdict — 2026-08-02
+PASS
+
+Stage 1 passed. AC-1 is satisfied by the successful scheduled-fire audit for
+job `check-email` against resolved cwd `/tmp/t139-email-workspace-s4`
+(`audit.jsonl`) and the deployed worklog entry in
+`/tmp/t139-email-workspace-s4/worklog/2026-08-02.md`. AC-2 is satisfied
+because the README now matches the exact working live S-004 entries observed in
+`/tmp/t139-bob-dev-s4/config/bob/config.toml` and
+`config.full.toml`, including `tool = "bash"` with
+`field_path = "command"`, and the audit still shows blocked-before/allowed-after
+evidence for the same `read`/`bash` surfaces. AC-3 is satisfied by the README's
+owner-only external deployment procedure and its explicit prohibition on using
+the repository checkout as job `--cwd`; the captured deployed workspace
+directories are mode `700` and owned by the job user. AC-4 is satisfied because
+validation did not expose a remaining skill defect and the branch scope is
+limited to the README change required to document the verified behavior.
+
+Stage 2 passed. The change is documentation-only, limited to the reviewed
+README section, and it aligns with the runtime matcher tests in
+`policy-control` that evaluate bash rules against JSON `arguments.command`.
+`cargo test -p policy-control` passed (45/45). Minor note: parser examples in
+`ruleset.rs` still use `cmd`, but the README now correctly explains that those
+examples are parse-level and not the runtime bash payload shape.
