@@ -142,3 +142,56 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-02
+
+FAIL
+
+**Stage 1 — Acceptance Criteria**
+
+AC-2 through AC-5 were independently checked and pass:
+- AC-2 (full intended layout documented): README's "Package layout" section
+  names `himalaya` and `email-triage` skill directories, `references/categories/`,
+  `config/email-triage.example.toml`, and `worklog/`, cross-referenced to
+  T-132–T-138 — matches those pending tasks' own `Files to Touch` paths.
+- AC-3 (N/A case): verified path matched the expected
+  `.pi/skills/<name>/SKILL.md` on the first try; README correctly states no
+  deviation to report.
+- AC-4 (git-trackability): independently re-verified —
+  `git check-ignore -v the-intern/email-skills/.pi/skills/probe-marker/SKILL.md`
+  exits 1 (no match) on the task branch, while a repo-root `.pi/skills/foo/SKILL.md`
+  still matches `.gitignore:6:/.pi` and `.claude/foo` still matches
+  `.gitignore:3:.claude` — the anchoring fix is correct and scoped.
+- AC-5 (CLAUDE.md tree entry): `the-intern/email-skills/` is listed as a
+  sibling of `bob-companion` with a one-line purpose, formatting consistent
+  with the rest of the tree.
+
+AC-1 fails on one specific, narrow point:
+
+- **File and location:** `docs/ai-team/tasks/in-progress/T-131-....md`, Work
+  Log, Session 1; and `the-intern/email-skills/README.md`, "Verified skill
+  discovery path and invocation form" section.
+- **What is wrong:** AC-1 requires the discovery result to be "evidenced by a
+  transcript in the Work Log," and the task's own Verification block says
+  explicitly: "Paste the transcript into the Work Log." Session 1's entry only
+  narrates the finding in prose (e.g. "`pi -p "<prompt>"` alone ... never
+  surfaced `probe-marker`" / "`pi -p -a "<prompt>"` ... consistently surfaced
+  `probe-marker`") — it does not contain the actual pasted transcript (the
+  literal commands run and their raw stdout). The README compounds this by
+  asserting "The full transcript is recorded in T-131's Work Log," which is
+  not currently true — there is no transcript there, only a summary.
+- **What should change:** Append the literal transcript (commands plus raw
+  stdout) for both the bare `-p` probe run and the `-p -a` probe run to the
+  Work Log, so AC-1's "evidenced by a transcript" clause is actually met and
+  the README's cross-reference to the Work Log becomes accurate.
+- **Independent verification note:** I re-ran both invocations myself against
+  a fresh `/tmp/email-skills-probe` copy built exactly per the task's
+  Verification block, on `pi --version` `0.80.3`. Bare `-p` listed only
+  `gh-cli`, `git-conventions`, `pr-review`; `-p -a` listed `probe-marker`,
+  `gh-cli`, `git-conventions`, `pr-review`. This reproduces the developer's
+  finding exactly, so no change to the substantive finding, the verified
+  path, or the README's content is needed — only the missing transcript
+  evidence in the Work Log.
+
+Stage 2 (code quality) was not evaluated per the code-review skill's
+instruction to skip Stage 2 when a Stage 1 criterion fails.
