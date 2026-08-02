@@ -1,0 +1,16 @@
+# email-triage skill-local configuration template.
+#
+# This file lives at <workspace>/config/email-triage.toml, in the scheduled
+# job's own working directory (S-010 Configuration Requirements) — never in
+# bob's TOML config. Copy this template to config/email-triage.toml in the
+# deployed workspace and set manager_address to a real address there. This
+# example ships in the repository and must never hold a real address; the
+# real file exists only in the owner-only deployed workspace copy (see
+# ../README.md).
+
+# manager_address (required): a single well-formed email address that
+# receives escalation emails when a message's classification is not
+# confident. See ../.pi/skills/email-triage/references/escalation.md for the
+# full escalation policy, including what happens if this key is missing or
+# malformed.
+manager_address = "manager@example.invalid"
