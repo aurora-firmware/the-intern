@@ -1,7 +1,7 @@
 ---
 id: T-135
 title: Author the email-triage skill core loop
-status: pending  # pending | in-progress | completed | blocked
+status: completed  # pending | in-progress | completed | blocked
 priority: high  # critical | high | medium | low
 assigned-role: developer
 created: '2026-08-01'
