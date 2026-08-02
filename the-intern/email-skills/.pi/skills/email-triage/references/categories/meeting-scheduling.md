@@ -18,6 +18,16 @@ or judging anything about the owner's availability, but it can never decide whet
 works for the owner, because there is nothing in this package that could tell it. Which of
 the two sections below applies depends on which the message is actually asking for.
 
+Some messages sit ambiguously between the two — for example one that states a time but
+frames it as contingent on the owner's silence ("I'll pencil in Thursday at 3pm — let me
+know if that's a problem"): it states a time (surface shape of the first section below) but
+functionally asks the owner to decide whether to object (substance of the second). When a
+message does not clearly and unambiguously fall into one section or the other, treat it as
+needing the owner's decision: follow the second section below and escalate rather than
+replying. This is the same conservative default `references/categories/README.md`'s
+confidence rubric already states for classification itself — when in doubt between acting
+and escalating, escalate — applied here to the choice between this workflow's two branches.
+
 ## Confirm or acknowledge a stated time, and reply
 
 Some `meeting-scheduling` messages don't ask the owner to decide anything: the sender states
