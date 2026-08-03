@@ -186,3 +186,10 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-03
+FAIL
+
+- **File and location** — `docs/ai-team/tasks/in-progress/T-140-validate-the-escalation-block-and-next-run-continuity-paths.md:73-91,164-176`
+  **What is wrong** — AC-1 requires exactly one escalation email evidenced by the received mail and the worklog, and the Verification section requires the audit records, worklog contents, and received escalation mail to be pasted into the Work Log. The canonical task file still contains only prose summaries. Session 6 explicitly says the exact-one receipt evidence was still missing, and Session 7 adds only the AC-3 continuity summary. The surviving live artifact at `/tmp/t140-email-workspace-ac1-final/worklog/2026-08-03.md` shows the open item, but no canonical review artifact proves a single manager-side receipt for fixture `92`.
+  **What should change** — Re-run or recover AC-1 so the canonical task evidence includes the concrete manager-side receipt (or another durable exact-one proof), the matching worklog entry, and the relevant audit excerpt for the successful AC-1 run. Then update the Work Log and README so the exact-one escalation claim can be verified end-to-end.
