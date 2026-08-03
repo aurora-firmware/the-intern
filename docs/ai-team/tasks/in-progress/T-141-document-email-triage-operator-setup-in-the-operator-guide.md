@@ -104,3 +104,27 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-03
+FAIL
+
+Stage 1 passed. AC-1 through AC-4 are satisfied by the new operator-guide
+section in `the-intern/docs/src/operator-guide/index.md`: it documents the
+owner-only deployed workspace outside the repository checkout, the required
+skill-local `config/email-triage.toml` with `manager_address`, the exact
+validated `read.path` and `bash.command` allow-rule shapes carried forward from
+T-139/T-140, `bob policy reload`, and `bob schedule add --cwd` plus the
+expected worklog, audit, and escalation-mail outcomes. AC-5 is satisfied by a
+clean `mdbook build` from `the-intern/docs/`, which renders the new section in
+the generated operator guide.
+
+- **File and location** — `the-intern/docs/src/operator-guide/index.md:741-743`
+  **What is wrong** — Stage 2 correctness failed because the new introductory
+  link to ``../../email-skills/README.md`` renders as
+  `../../email-skills/README.html` in `the-intern/docs/book/operator-guide/index.html`,
+  but that target is not generated anywhere in the book output. The change
+  therefore adds a dead link to the shipped operator guide.
+  **What should change** — Replace that repository-relative markdown link with
+  non-link prose or with a target that exists in the rendered docs experience.
+  Rebuild the book and confirm the operator-guide page no longer contains a
+  broken `email-skills` link.
