@@ -132,6 +132,18 @@ files changed. Resume needs explicit approval for exactly one escalation email
 derived from message 91 to the configured test manager, then a continuity
 retry with scoped rules for the recorded denied calls.
 
+### Session 3 — 2026-08-03
+
+Recreated an owner-only isolated AC-1 workspace and runtime with a targeted
+escalation-send matcher, and reset test fixture message `91` ("Documents") to
+unseen. The external approval layer rejected both adding a new recurring
+schedule and activating the existing isolated T-140 schedule because it can
+send email and mutate mailbox state, despite the general test-email approval.
+No repository defect was exposed and no bob service remains running. Resume
+requires explicit informed approval to activate the recurring live-mailbox job
+for this task, with its bounded effect: exactly one escalation email to the
+configured test manager and mailbox state changes required by T-140.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
