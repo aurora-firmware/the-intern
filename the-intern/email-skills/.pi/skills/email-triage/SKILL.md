@@ -150,8 +150,8 @@ For every envelope the previous step returned, in turn:
    (for example `cat config/email-triage.toml`) before attempting the
    escalation send, rather than using the `read` tool for that file.
    For the escalation email itself, use one explicit non-interactive
-   `template write` -> `template send` shell command, for example:
-   `himalaya template send "$(himalaya template write -H "To:<manager_address>" -H "Subject:Escalation: <subject>" "<body>")"`.
+   `template write` -> `template send` pipe, for example:
+   `himalaya template write -H "To:<manager_address>" -H "Subject:Escalation: <subject>" "<body>" | himalaya template send`.
    Do not switch to the editor-based `message write`/`message reply` family,
    and do not spread the escalation across an editor session or temporary
    draft workflow.

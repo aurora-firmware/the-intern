@@ -226,6 +226,12 @@ arg_matchers = [
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
+  { field_path = "command", pattern = "himalaya template write -H 'To:*' -H 'Subject:Escalation:*' *| himalaya template send*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
   { field_path = "command", pattern = "*find worklog*" },
 ]
 
