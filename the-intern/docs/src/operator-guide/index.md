@@ -739,8 +739,8 @@ externally (for example, by shipping the JSONL file to a log aggregator).
 ## Deploying the `email-triage` scheduled job
 
 This section shows the validated operator procedure for turning the shipped
-[`the-intern/email-skills/`](../../email-skills/README.md) package into a live
-scheduled `email-triage` job. It assumes the general policy model, `cwd`
+`the-intern/email-skills/` package into a live scheduled `email-triage` job.
+It assumes the general policy model, `cwd`
 precedence, and schedule-store behavior already described in
 [Policy basics](#policy-basics),
 [Working directory for pi-agent sessions](#working-directory-for-pi-agent-sessions),
