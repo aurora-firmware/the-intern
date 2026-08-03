@@ -1,7 +1,7 @@
 ---
 id: T-140
 title: Validate the escalation, block, and next-run continuity paths
-status: pending  # pending | in-progress | completed | blocked
+status: completed  # pending | in-progress | completed | blocked
 priority: high  # critical | high | medium | low
 assigned-role: developer
 created: '2026-08-01'
