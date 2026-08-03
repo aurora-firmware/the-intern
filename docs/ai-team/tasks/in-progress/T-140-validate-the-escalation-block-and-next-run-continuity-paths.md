@@ -155,6 +155,17 @@ mail was delivered. The audit omits the denied command payload, preventing a
 precise final matcher. Scheduled sessions were stopped and bob shut down
 cleanly. AC-2 and AC-3 await a focused safe diagnosis of that send shape.
 
+### Session 6 — 2026-08-03
+
+Committed `28d4e1a` to document and align the cwd-relative
+`read.path = "worklog/*.md"` reconciliation surface, alongside the earlier
+blocked-escalation wording fixes. A live policy reload confirmed that later
+runs passed the former relative-read denial. AC-2 has transcript/audit evidence
+of blocked sends and open worklog items. AC-1 still lacks recoverable
+exact-one receipt evidence, and clean continuity fixtures did not produce a
+new daily worklog before shutdown. Resume with clean fixtures for those two
+remaining proofs.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
