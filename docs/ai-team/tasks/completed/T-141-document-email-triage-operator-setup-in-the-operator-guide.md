@@ -1,7 +1,7 @@
 ---
 id: T-141
 title: Document email triage operator setup in the operator guide
-status: pending  # pending | in-progress | completed | blocked
+status: completed  # pending | in-progress | completed | blocked
 priority: medium  # critical | high | medium | low
 assigned-role: developer
 created: '2026-08-01'
