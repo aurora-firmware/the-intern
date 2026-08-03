@@ -178,13 +178,13 @@ arg_matchers = [
 [[policy.action_rules]]
 tool = "read"
 arg_matchers = [
-  { field_path = "path", pattern = "/abs/workspace/config/email-triage.toml" },
+  { field_path = "path", pattern = "/abs/workspace/worklog/*.md" },
 ]
 
 [[policy.action_rules]]
 tool = "read"
 arg_matchers = [
-  { field_path = "path", pattern = "/abs/workspace/worklog/*.md" },
+  { field_path = "path", pattern = "worklog/*.md" },
 ]
 
 [[policy.action_rules]]
@@ -226,13 +226,37 @@ arg_matchers = [
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
-  { field_path = "command", pattern = "himalaya template write -H 'To:*' -H 'Subject:Escalation:*' *| himalaya template send*" },
+  { field_path = "command", pattern = "himalaya template write -H *To:* -H *Subject:Escalation:* *| himalaya template send*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "cat config/email-triage.toml*" },
 ]
 
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
   { field_path = "command", pattern = "*find worklog*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "*ls worklog*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "test -f worklog/*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "cat worklog/*.md*" },
 ]
 
 [[policy.action_rules]]
@@ -251,7 +275,36 @@ arg_matchers = [
 Replace `/abs/workspace` with the absolute path to your deployed copy. Do not
 collapse these into a blanket `tool = "bash"` rule: the T-139 denial evidence
 showed the job blocked until the shell commands were admitted one scoped shape
-at a time, and the successful retry used the narrowed patterns above.
+at a time, and the successful retry used the narrowed patterns above. In
+particular, the deployed package's runtime surface is broader than "himalaya
+commands plus append": the skill reads `config/email-triage.toml` through
+`bash`, checks and lists today's `worklog/` files through `bash`, opens prior
+worklog contents through `read`, and uses one pipe-shaped escalation send.
+The first-run reconciliation read was later observed in T-140 as a
+`cwd`-relative `read.path` such as `worklog/2026-07-29.md`, so the deployed
+allow rules must admit that relative shape as well as any absolute
+workspace-qualified paths used elsewhere.
+
+## Validation outcomes
+
+T-139 established the happy path on the live deployed copy. T-140 then
+validated the remaining continuity and failure-path behaviors against the
+same mailbox and scheduled-job setup.
+
+- Escalation: on 2026-08-03, an ambiguous message still produced exactly one
+  escalation email when the send rule was admitted, and the worklog kept the
+  message open awaiting manager reply. The blocked-send wording in the skill
+  and worklog reference was tightened so a denied escalation send is recorded
+  as blocked, not as a successful escalation.
+- S-004 block: with the himalaya allow rule removed but worklog access left
+  in place, the run recorded the blocked escalation as an open worklog item
+  and took no fallback action on the message.
+- Skipped-tick continuity: on 2026-08-03 at 15:34 CEST, the live run against
+  `/tmp/t140-email-workspace-s4` reached first-run reconciliation and then
+  failed on a denied `read` because the carried-forward worklog open was read
+  through a relative `worklog/*.md` path. The validated allow-rule set now
+  includes that relative `read` matcher so the next deployed retry can carry
+  open items forward across skipped days.
 
 ## Account-specific folder names matter
 

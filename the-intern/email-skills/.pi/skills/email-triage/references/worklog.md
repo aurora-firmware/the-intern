@@ -42,6 +42,8 @@ three things about that message:
 
 - **Done** — the concrete action taken this run: acted per a category
   workflow, sent an escalation email, or attempted and was blocked by S-004.
+  When the blocked call was the escalation send itself, `Done` must say the
+  escalation attempt was blocked — not that an escalation email was sent.
 - **Left** — what remains open, if anything. "Nothing" for a fully-handled
   message; otherwise a short description of the open condition (e.g.
   "awaiting manager reply", "blocked by S-004 — no admitting allow rule").
@@ -90,6 +92,11 @@ other than "nothing" is what marks it open. Never infer that a message still
 needs attention from its `Seen`/unseen state, and never rely on toggling
 `Seen` back off as a way to mark something open; the worklog entry is the
 sole record.
+
+That applies equally to a blocked escalation send. Once the message has been
+read, it may already be `Seen`, but the open blocked-escalation item still
+lives only in the worklog entry. The entry must not be rewritten as a
+successful escalation just because the intended action was to escalate.
 
 ## How an open item closes
 

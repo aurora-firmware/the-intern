@@ -38,9 +38,10 @@ allow-rule set can admit the whole package (S-010 Configuration
 Requirements):
 
 - **`read`** — reference material and prior worklog contents only: any
-  `worklog/*.md` file's contents (used during reconciliation), and any
-  `references/*.md` file — this skill's own references, and the `himalaya`
-  skill's own reference file when that skill is in play.
+  `worklog/*.md` file's contents (used during reconciliation, via the job's
+  own `cwd`-relative path), and any `references/*.md` file — this skill's
+  own references, and the `himalaya` skill's own reference file when that
+  skill is in play.
 - **`bash`** — every himalaya CLI invocation (per the `himalaya` skill), and
   the skill-local config read plus every worklog filesystem mutation:
   loading `config/email-triage.toml` from the job's own `cwd` (for example
@@ -151,10 +152,15 @@ For every envelope the previous step returned, in turn:
    escalation send, rather than using the `read` tool for that file.
    For the escalation email itself, use one explicit non-interactive
    `template write` -> `template send` pipe, for example:
-   `himalaya template write -H "To:<manager_address>" -H "Subject:Escalation: <subject>" "<body>" | himalaya template send`.
+   `himalaya template write -H 'To:<manager_address>' -H 'Subject:Escalation: <subject>' '<body>' | himalaya template send`.
    Do not switch to the editor-based `message write`/`message reply` family,
    and do not spread the escalation across an editor session or temporary
    draft workflow.
+   If that explicit send command is blocked by S-004, treat this message's
+   outcome as **blocked**, not **escalated**: no escalation email was sent,
+   so step 4's worklog entry must say the escalation attempt was blocked,
+   leave the message open, and point the retry to the next first-run
+   reconciliation after an admitting allow rule exists.
 
 Escalating and acting are mutually exclusive outcomes for a given message
 on a given run — never do both.
@@ -168,6 +174,13 @@ format `references/worklog.md` defines (`Done`/`Left`/`Next`; creating
 the entry because either was missing). Do this before moving on to the
 next unseen message, so a run interrupted partway still leaves a complete
 record for every message it did handle before stopping.
+
+The entry must describe the actual outcome from step 3, not the intended one.
+If an escalation send was blocked by S-004, do **not** write that an
+escalation email was sent. Record a blocked open item instead, with `Done`
+describing the blocked escalation attempt, `Left` describing the still-open
+message, and `Next` pointing to retry at the next first-run reconciliation
+after the allow rule is fixed.
 
 A completed run leaves no unseen message from step 2 without exactly one
 of: an action taken, an escalation sent, or a block recorded as an open
