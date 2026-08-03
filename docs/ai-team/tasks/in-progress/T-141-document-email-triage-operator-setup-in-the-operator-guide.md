@@ -136,3 +136,24 @@ the generated operator guide.
   non-link prose or with a target that exists in the rendered docs experience.
   Rebuild the book and confirm the operator-guide page no longer contains a
   broken `email-skills` link.
+
+### Review Verdict — 2026-08-03
+PASS
+
+Stage 1 passed on re-review. AC-1 through AC-4 remain satisfied by the
+`Deploying the email-triage scheduled job` section in
+`the-intern/docs/src/operator-guide/index.md`, including the owner-only
+deployed workspace guidance, the skill-local `config/email-triage.toml`
+`manager_address` requirement, the validated `field_path = "path"` /
+`field_path = "command"` allow-rule examples plus `bob policy reload`, and the
+`bob schedule add --cwd` workflow with the expected worklog, audit, and
+escalation-mail outcomes.
+
+Stage 2 passed. The review-cycle-2 change in task commit `1001ef3`
+(`docs(operator): remove dead email skills link`) removes the dead
+`email-skills/README` markdown link without adding unrelated behavior, and a
+fresh `mdbook build .` from the correct book root (`the-intern/docs/`) against
+that commit rendered `book/operator-guide/index.html` without any
+`email-skills/README.html` target. No additional correctness, readability,
+security, or performance issues were introduced by this documentation-only
+change.
