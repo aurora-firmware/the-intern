@@ -93,6 +93,14 @@ relative continuity reads, `bob policy reload`, and scheduling with `--cwd`.
 `mdbook build` passed from `the-intern/docs/`, the book root required by its
 relative preprocessor configuration.
 
+### Session 2 — 2026-08-03
+
+Fixed review-cycle-1's dead rendered link in task commit `1001ef3`
+(`docs(operator): remove dead email skills link`). The guide now references the
+package as plain code-formatted prose. `mdbook build .` from `the-intern/docs/`
+passed, and the source and generated operator-guide page contain no
+`email-skills/README` rendered target.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
