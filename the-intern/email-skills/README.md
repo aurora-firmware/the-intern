@@ -178,13 +178,13 @@ arg_matchers = [
 [[policy.action_rules]]
 tool = "read"
 arg_matchers = [
-  { field_path = "path", pattern = "/abs/workspace/config/email-triage.toml" },
+  { field_path = "path", pattern = "/abs/workspace/worklog/*.md" },
 ]
 
 [[policy.action_rules]]
 tool = "read"
 arg_matchers = [
-  { field_path = "path", pattern = "/abs/workspace/worklog/*.md" },
+  { field_path = "path", pattern = "worklog/*.md" },
 ]
 
 [[policy.action_rules]]
@@ -226,7 +226,37 @@ arg_matchers = [
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
+  { field_path = "command", pattern = "himalaya template write -H *To:* -H *Subject:Escalation:* *| himalaya template send*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "cat config/email-triage.toml*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
   { field_path = "command", pattern = "*find worklog*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "*ls worklog*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "test -f worklog/*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "cat worklog/*.md*" },
 ]
 
 [[policy.action_rules]]
@@ -245,7 +275,47 @@ arg_matchers = [
 Replace `/abs/workspace` with the absolute path to your deployed copy. Do not
 collapse these into a blanket `tool = "bash"` rule: the T-139 denial evidence
 showed the job blocked until the shell commands were admitted one scoped shape
-at a time, and the successful retry used the narrowed patterns above.
+at a time, and the successful retry used the narrowed patterns above. In
+particular, the deployed package's runtime surface is broader than "himalaya
+commands plus append": the skill reads `config/email-triage.toml` through
+`bash`, checks and lists today's `worklog/` files through `bash`, opens prior
+worklog contents through `read`, and uses one pipe-shaped escalation send.
+The first-run reconciliation read was later observed in T-140 as a
+`cwd`-relative `read.path` such as `worklog/2026-07-29.md`, so the deployed
+allow rules must admit that relative shape as well as any absolute
+workspace-qualified paths used elsewhere.
+
+## Validation outcomes
+
+T-139 established the happy path on the live deployed copy. T-140 then
+validated the remaining continuity and failure-path behaviors against the
+same mailbox and scheduled-job setup.
+
+- Escalation: on 2026-08-03, fixture `92` (`Unclear task`) was picked up by
+  the live `check-email` run and recorded in
+  `worklog/2026-08-03.md` at `15:51 CEST` as an open item after sending one
+  escalation email to `manager_address`. In this live account the local
+  Himalaya config runs with `message.send.save-copy = false`, so the worklog
+  entry is the retained local evidence while the manager-side receipt is
+  observed in the addressed mailbox, not in `INBOX.Sent`. The blocked-send
+  wording in the skill and worklog reference was tightened so a denied
+  escalation send is recorded as blocked, not as a successful escalation.
+- S-004 block: with the himalaya allow rule removed but worklog access left
+  in place, the run recorded the blocked escalation as an open worklog item
+  and took no fallback action on the message.
+- Skipped-tick continuity: the continuity setup left
+  `/tmp/t140-email-workspace-cont-YZdrii/worklog/2026-07-29.md` holding an
+  open José Moreno `Documents` item whose `Next` line said to "re-check at the
+  next first-run reconciliation." The next executed run on 2026-08-03 reached
+  that reconciliation path through a relative `read.path =
+  worklog/2026-07-29.md` lookup (observed in the live
+  `/tmp/t140-bob-dev-MupzJI` audit), which proves the triage loop looked back
+  to the carried item instead of assuming the previous run was "yesterday." In
+  the resulting `2026-08-03.md` worklog continuation for the same validation
+  flow, the item remained open and its follow-up advanced to retrying the
+  escalation send once the command succeeds. The validated allow-rule set now
+  includes the relative `read` matcher required for this cross-day
+  carry-forward path.
 
 ## Account-specific folder names matter
 
