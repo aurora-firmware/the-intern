@@ -175,6 +175,17 @@ audit trace of the relative reconciliation read establish that the loop carried
 the item forward across skipped days. The README now states that evidence and
 the required relative worklog matcher. T-140 branch work is ready for review.
 
+### Session 8 — 2026-08-03
+
+Manager-side receipt confirmation: the human verified that
+`jose.moreno@aurorafw.com` received the escalation email for the authorized
+AC-1 test. This completes the recipient-side proof for successful admitted run
+`d04411c6-db1a-4f8b-97ba-beda2a6c4bcc` and its matching `Unclear task` open
+worklog entry. The sender account does not retain a sent copy
+(`message.send.save-copy = false`), so this confirmation is the canonical
+receipt evidence. The pipe-form send contract remains because it delivered the
+received escalation.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
