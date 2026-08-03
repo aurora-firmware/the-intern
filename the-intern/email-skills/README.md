@@ -291,11 +291,15 @@ T-139 established the happy path on the live deployed copy. T-140 then
 validated the remaining continuity and failure-path behaviors against the
 same mailbox and scheduled-job setup.
 
-- Escalation: on 2026-08-03, an ambiguous message still produced exactly one
-  escalation email when the send rule was admitted, and the worklog kept the
-  message open awaiting manager reply. The blocked-send wording in the skill
-  and worklog reference was tightened so a denied escalation send is recorded
-  as blocked, not as a successful escalation.
+- Escalation: on 2026-08-03, fixture `92` (`Unclear task`) was picked up by
+  the live `check-email` run and recorded in
+  `worklog/2026-08-03.md` at `15:51 CEST` as an open item after sending one
+  escalation email to `manager_address`. In this live account the local
+  Himalaya config runs with `message.send.save-copy = false`, so the worklog
+  entry is the retained local evidence while the manager-side receipt is
+  observed in the addressed mailbox, not in `INBOX.Sent`. The blocked-send
+  wording in the skill and worklog reference was tightened so a denied
+  escalation send is recorded as blocked, not as a successful escalation.
 - S-004 block: with the himalaya allow rule removed but worklog access left
   in place, the run recorded the blocked escalation as an open worklog item
   and took no fallback action on the message.
