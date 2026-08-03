@@ -144,6 +144,17 @@ requires explicit informed approval to activate the recurring live-mailbox job
 for this task, with its bounded effect: exactly one escalation email to the
 configured test manager and mailbox state changes required by T-140.
 
+### Session 5 — 2026-08-03
+
+With the authorized schedule active, AC-1 exposed and fixed one in-scope
+defect: config access using `read` was denied, so task commit `49a76ab`
+changed the skill to use a scoped shell config read and an explicit
+non-interactive escalation-send shape. After redeployment, a second narrow
+policy mismatch remained: the live send command was denied, so no escalation
+mail was delivered. The audit omits the denied command payload, preventing a
+precise final matcher. Scheduled sessions were stopped and bob shut down
+cleanly. AC-2 and AC-3 await a focused safe diagnosis of that send shape.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
