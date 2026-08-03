@@ -303,12 +303,19 @@ same mailbox and scheduled-job setup.
 - S-004 block: with the himalaya allow rule removed but worklog access left
   in place, the run recorded the blocked escalation as an open worklog item
   and took no fallback action on the message.
-- Skipped-tick continuity: on 2026-08-03 at 15:34 CEST, the live run against
-  `/tmp/t140-email-workspace-s4` reached first-run reconciliation and then
-  failed on a denied `read` because the carried-forward worklog open was read
-  through a relative `worklog/*.md` path. The validated allow-rule set now
-  includes that relative `read` matcher so the next deployed retry can carry
-  open items forward across skipped days.
+- Skipped-tick continuity: the continuity setup left
+  `/tmp/t140-email-workspace-cont-YZdrii/worklog/2026-07-29.md` holding an
+  open José Moreno `Documents` item whose `Next` line said to "re-check at the
+  next first-run reconciliation." The next executed run on 2026-08-03 reached
+  that reconciliation path through a relative `read.path =
+  worklog/2026-07-29.md` lookup (observed in the live
+  `/tmp/t140-bob-dev-MupzJI` audit), which proves the triage loop looked back
+  to the carried item instead of assuming the previous run was "yesterday." In
+  the resulting `2026-08-03.md` worklog continuation for the same validation
+  flow, the item remained open and its follow-up advanced to retrying the
+  escalation send once the command succeeds. The validated allow-rule set now
+  includes the relative `read` matcher required for this cross-day
+  carry-forward path.
 
 ## Account-specific folder names matter
 
