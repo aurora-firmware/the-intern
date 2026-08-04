@@ -275,7 +275,7 @@ reconciliation.
   run an addressable way to request guidance instead of blocking. **Where:**
   skill-local configuration within the job's `cwd`, not bob's TOML config —
   consistent with keeping channel/action specifics out of bob-core and with
-  ADR-008 §5's "actions use their own configuration" precedent.
+  ADR-008 §5's precedent that actions use their own configuration.
   **Constraints:** must be a single well-formed email address. **Default
   behavior:** a missing/invalid address, or an escalation send blocked by
   S-004, are both hard stops for that message — the skill must record the

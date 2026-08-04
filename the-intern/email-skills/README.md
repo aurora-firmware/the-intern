@@ -22,9 +22,11 @@ verified with a throwaway probe skill placed at
 `.pi/skills/probe-marker/SKILL.md` in a scratch copy of this package, using
 that directory as `pi`'s `cwd`. The later live scheduled-job validation in
 T-139 re-verified the same layout against the installed `pi --version`
-**0.65.2**, which is now the repository's current recorded pi version for
-this package. The full transcript of the initial probe is recorded in T-131's
-Work Log.
+**0.65.2**. This package does not keep its own separate version record —
+see the root `README.md`'s "pi-agent Version Compatibility" section (the
+project's canonical record) for the currently supported version of the
+scheduled/periodic `pi` invocation this package relies on. The full
+transcript of the initial probe is recorded in T-131's Work Log.
 
 **Invocation form.** `pi`'s default mode is an interactive `ink` TUI that
 needs a real TTY, so verification (and later manual checks against this
@@ -271,6 +273,17 @@ arg_matchers = [
   { field_path = "command", pattern = "*>> worklog/*.md*" },
 ]
 ```
+
+**This is the happy-path rule set only.** It admits every tool call used by
+the live T-139/T-140 validation runs — `automated-notification` (file, no
+reply), escalation, S-004 block handling, and skipped-tick continuity — but
+it does **not** include a rule for the `himalaya template reply` -> `himalaya
+template send` shape that `direct-request` and `meeting-scheduling` need to
+send a reply. T-139's Session 2 explicitly deferred the direct-request route
+rather than validate it; that gap was never closed. Deploying with only the
+rules above leaves those two categories permanently blocked by S-004. See
+`B-029` for the tracked fix; do not assume `direct-request` or
+`meeting-scheduling` replies work until it is resolved.
 
 Replace `/abs/workspace` with the absolute path to your deployed copy. Do not
 collapse these into a blanket `tool = "bash"` rule: the T-139 denial evidence

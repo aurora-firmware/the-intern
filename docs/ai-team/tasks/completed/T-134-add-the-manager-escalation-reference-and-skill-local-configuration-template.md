@@ -27,8 +27,8 @@ rooted at the layout T-131 verified):
   workspace, not in the repository.
 
 Configuration lives in the job's own working directory, not bob's TOML config,
-per S-010's Configuration Requirements and ADR-008 §5 ("actions use their own
-configuration"). Manager-address provisioning itself is out of scope.
+per S-010's Configuration Requirements and ADR-008 §5 (actions use their own
+configuration). Manager-address provisioning itself is out of scope.
 
 Hard rules from S-010 that this reference must carry: the escalation send is a
 `bash` call and is therefore gated by S-004 like every other call; if it is

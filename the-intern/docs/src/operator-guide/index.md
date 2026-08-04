@@ -426,7 +426,7 @@ Add action rules under `[[policy.action_rules]]`:
 tool = "bash"
 
 [[policy.action_rules]]
-tool = "read_file"
+tool = "read"
 ```
 
 A rule with no argument matchers allows that tool for any arguments. The model is
@@ -934,6 +934,19 @@ package-specific setup that T-139 and T-140 verified end to end.
      { field_path = "command", pattern = "*>> worklog/*.md*" },
    ]
    ```
+
+   **This rule set only covers the live-validated paths:**
+   `automated-notification` (file, no reply), escalation, S-004 block
+   handling, and skipped-tick continuity (T-139, T-140). It does **not**
+   include an allow-rule for the `himalaya template reply` -> `himalaya
+   template send` command shape that the `direct-request` and
+   `meeting-scheduling` categories use to send a reply. Deploying with only
+   the rules above leaves those two categories permanently blocked by
+   S-004's default-deny, contradicting the category workflow docs. Adding a
+   scoped rule for that command shape and live-validating it end to end
+   (the same way T-139/T-140 validated the paths above) is tracked as
+   `B-029` and not yet done — do not assume `direct-request` or
+   `meeting-scheduling` replies work until that is resolved.
 
    After editing the policy section, reload it without restarting bob:
 
