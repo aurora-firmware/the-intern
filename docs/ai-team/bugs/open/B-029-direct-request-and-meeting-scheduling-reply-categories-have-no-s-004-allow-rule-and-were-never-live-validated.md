@@ -100,6 +100,19 @@ docs that this is expected or that additional configuration is required.
   `T-140` (escalation/block/continuity validation — did not cover this
   path), `T-141` (operator guide — ships the incomplete rule list)
 - Specification: `S-010-email-skills-for-pi-agent-himalaya-cli-reference-and-classification-driven-triage.md`
+- Bug: `B-030` — cross-linked. A separate review finding identified that the
+  `template reply`/`template forward` command shape this bug's fix will need
+  a rule for was, until `B-030`'s fix, vulnerable to command injection from
+  untrusted email content (naive literal-text splicing into shell arguments,
+  no escaping). `B-030` established a safe heredoc-based pattern for this
+  exact command family in
+  `the-intern/email-skills/.pi/skills/himalaya/references/command-reference.md`'s
+  "Embedding message-derived text safely" section. **Whoever resolves this
+  bug must build the new `direct-request`/`meeting-scheduling` S-004 rule
+  against that hardened pattern** (`"$SUBJECT"`/`"$BODY"` loaded via quoted
+  heredoc, `--` before the body argument) — not against the vulnerable
+  pattern that existed in the docs before `B-030`'s fix. Both bugs
+  ultimately need the same kind of live T-139/T-140-style validation pass.
 
 ## Suspected Area
 
