@@ -889,7 +889,7 @@ package-specific setup that T-139 and T-140 verified end to end.
    [[policy.action_rules]]
    tool = "bash"
    arg_matchers = [
-     { field_path = "command", pattern = "himalaya template write -H *To:* -H *Subject:Escalation:* *| himalaya template send*" },
+     { field_path = "command", pattern = "SUBJECT=$(cat <<'*SUBJECT=\"${SUBJECT//*BODY=$(cat <<'*himalaya template write -H *To:* -H \"Subject:Escalation: $SUBJECT\" -- \"$BODY\" | himalaya template send*" },
    ]
 
    [[policy.action_rules]]
@@ -947,6 +947,20 @@ package-specific setup that T-139 and T-140 verified end to end.
    (the same way T-139/T-140 validated the paths above) is tracked as
    `B-029` and not yet done — do not assume `direct-request` or
    `meeting-scheduling` replies work until that is resolved.
+
+   **The escalation rule above matches a hardened command shape, not the
+   originally live-validated one.** The subject/body are now loaded through
+   the heredoc pattern in the `himalaya` skill's "Embedding message-derived
+   text safely" reference (`references/command-reference.md`) rather than
+   typed as literal quoted text, closing a command-injection path from
+   untrusted email content. The pattern was checked against the real
+   `wildmatch` crate (the exact library `bob`'s S-004 matcher uses) for both
+   the intended safe shape and several unsafe variants, but the *command
+   itself* — a multi-line shell script containing heredocs, run via pi's
+   `bash` tool — has not been re-run against a live mailbox and `bob`
+   instance the way T-139/T-140 validated the original one-liner. Treat this
+   rule and command shape as hardened-but-unvalidated until that live pass
+   is done; tracked as a follow-up bug cross-linked with `B-029`.
 
    After editing the policy section, reload it without restarting bob:
 

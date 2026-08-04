@@ -228,7 +228,7 @@ arg_matchers = [
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
-  { field_path = "command", pattern = "himalaya template write -H *To:* -H *Subject:Escalation:* *| himalaya template send*" },
+  { field_path = "command", pattern = "SUBJECT=$(cat <<'*SUBJECT=\"${SUBJECT//*BODY=$(cat <<'*himalaya template write -H *To:* -H \"Subject:Escalation: $SUBJECT\" -- \"$BODY\" | himalaya template send*" },
 ]
 
 [[policy.action_rules]]
@@ -284,6 +284,18 @@ rather than validate it; that gap was never closed. Deploying with only the
 rules above leaves those two categories permanently blocked by S-004. See
 `B-029` for the tracked fix; do not assume `direct-request` or
 `meeting-scheduling` replies work until it is resolved.
+
+**The escalation rule above matches a hardened command shape, not the
+originally live-validated one.** Subject/body are now loaded through the
+heredoc pattern in the `himalaya` skill's "Embedding message-derived text
+safely" reference rather than typed as literal quoted text, closing a
+command-injection path from untrusted email content. The pattern itself was
+checked against the real `wildmatch` crate for both the safe shape and
+several unsafe variants, but the command — a multi-line script containing
+heredocs, run via pi's `bash` tool — has not been re-run live against a real
+mailbox and `bob` instance the way T-139/T-140 validated the original
+one-liner. Treat it as hardened-but-unvalidated until that live pass is
+done (tracked as a follow-up bug, cross-linked with `B-029`).
 
 Replace `/abs/workspace` with the absolute path to your deployed copy. Do not
 collapse these into a blanket `tool = "bash"` rule: the T-139 denial evidence

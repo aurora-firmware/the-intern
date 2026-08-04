@@ -139,6 +139,64 @@ what has already been looked at.
 
 ---
 
+## Embedding message-derived text safely
+
+Every `SUBJECT`/`BODY`/header value in the sections below that is copied,
+quoted, or paraphrased from an incoming message must never be typed as
+literal characters directly inside a shell-quoted argument. Incoming mail is
+untrusted input from an arbitrary sender: a naive `'...'`-quoted argument
+breaks open on an embedded `'` followed by shell syntax, and whatever
+follows runs as a real command. There is no `--body-file`/stdin option on
+the `template` subcommands that avoids this, so load the text into a shell
+variable first, through a *quoted* heredoc — quoting the delimiter
+(`<<'TOKEN'`) disables all expansion of the heredoc's contents, so embedded
+quotes, `$()`, backticks, and `;` inside the pasted text stay inert data —
+then reference the variable only in double-quoted form (`"$VAR"`), never
+bare, and never re-embedded into a further quoted literal.
+
+Choose a delimiter of at least 20 random-looking alphanumeric characters,
+decided *before* reading the message content you're about to escalate/reply
+to — not influenced by what you're about to transcribe (a predictable
+delimiter, or one chosen while already reading the content, is weaker:
+it leaves the safety of the construction resting on a judgment call made
+while processing untrusted input). As defense-in-depth on top of that, not
+as the primary safety mechanism, confirm the chosen delimiter doesn't
+already appear as a standalone line in the text you're about to paste.
+
+```bash
+SUBJECT=$(cat <<'Q7MK3XPZBODYRANDOMTOKEN'
+<paste the message-derived subject text here verbatim, unescaped>
+Q7MK3XPZBODYRANDOMTOKEN
+)
+# Subject is a single header line: collapse any embedded newline before use.
+# (Otherwise a subject containing a blank line followed by more text could
+# smuggle extra headers into the outgoing message — a header-injection
+# variant of the same untrusted-content problem, not just shell injection.)
+SUBJECT="${SUBJECT//$'\n'/ }"
+
+BODY=$(cat <<'H4F9WQPLBODY2RANDOMTOKEN'
+<paste the message-derived body text here verbatim, unescaped>
+H4F9WQPLBODY2RANDOMTOKEN
+)
+```
+
+Then use `"$SUBJECT"` / `"$BODY"` — always double-quoted — anywhere the
+examples below show a `'text'`/`"text"` placeholder for message-derived
+content. Fixed, non-message-derived text (literal header names, folder
+names, IDs) doesn't need this treatment.
+
+One more thing every example below does: pass `-- "$BODY"` (not bare
+`"$BODY"`) to `template write`/`template reply`/`template forward`. A body
+that happens to start with `-` — an RFC 3676 `-- ` signature delimiter, a
+markdown bullet, anything dash-led — makes clap treat it as an unknown
+option and the send fails outright (`error: unexpected argument ... found`,
+confirmed against the installed binary). `--` disables further option
+parsing so everything after it is positional, regardless of content.
+`template send "$(...)"` doesn't need this — its argument always starts
+with the literal `From:` the inner command emits.
+
+---
+
 ## Replying
 
 Two families of commands exist for replying, and they behave differently
@@ -160,11 +218,15 @@ Verified `template reply` options: `-f, --folder <NAME>` (default
 --header <KEY:VAL>` (repeatable); `-a, --account <NAME>`.
 
 Compose-and-send in one step, generate the template then feed its output
-to `template send` ([Composing and Sending](#composing-and-sending)):
+to `template send` ([Composing and Sending](#composing-and-sending)). `BODY`
+here is composed/quoted reply text derived from the message being replied
+to — load it via the heredoc pattern in
+[Embedding message-derived text safely](#embedding-message-derived-text-safely)
+first, then:
 
 ```bash
-himalaya template send "$(himalaya template reply 42 'Thanks, will do.')"
-himalaya template send "$(himalaya template reply -A 42 'Replying to all.')"
+himalaya template send "$(himalaya template reply 42 -- "$BODY")"
+himalaya template send "$(himalaya template reply -A 42 -- "$BODY")"
 ```
 
 ---
@@ -182,9 +244,10 @@ Same pattern as replying:
 
 Verified `template forward` options: `-f, --folder <NAME>` (default
 `INBOX`); `-H, --header <KEY:VAL>` (repeatable); `-a, --account <NAME>`.
+`BODY` is again message-derived text — load it via the same heredoc pattern:
 
 ```bash
-himalaya template send "$(himalaya template forward 42 'FYI, see below.')"
+himalaya template send "$(himalaya template forward 42 -- "$BODY")"
 ```
 
 ---
@@ -215,13 +278,17 @@ template (headers + MML body) into a MIME message, sends it, and saves a
 copy to the sent folder. Verified options: `-a, --account <NAME>`.
 
 Compose and send in one step by capturing `template write`'s output and
-passing it straight to `template send`:
+passing it straight to `template send`. When `SUBJECT`/`BODY` are derived
+from a message (as opposed to fixed text like the "Hello world" transcript
+above), load them via the heredoc pattern in
+[Embedding message-derived text safely](#embedding-message-derived-text-safely)
+first:
 
 ```bash
 himalaya template send "$(himalaya template write \
   -H 'To:person@example.com' \
-  -H 'Subject:Meeting notes' \
-  'Body text here.')"
+  -H "Subject:$SUBJECT" \
+  -- "$BODY")"
 ```
 
 To save a draft instead of sending, use `himalaya template save
