@@ -228,6 +228,12 @@ arg_matchers = [
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
+  { field_path = "command", pattern = "BODY=$(cat <<'*himalaya template send \"$(himalaya template reply *-- \"$BODY\")\"*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
   { field_path = "command", pattern = "SUBJECT=$(cat <<'*SUBJECT=\"${SUBJECT//*BODY=$(cat <<'*himalaya template write -H *To:* -H \"Subject:Escalation: $SUBJECT\" -- \"$BODY\" | himalaya template send*" },
 ]
 
@@ -274,16 +280,27 @@ arg_matchers = [
 ]
 ```
 
-**This is the happy-path rule set only.** It admits every tool call used by
-the live T-139/T-140 validation runs — `automated-notification` (file, no
-reply), escalation, S-004 block handling, and skipped-tick continuity — but
-it does **not** include a rule for the `himalaya template reply` -> `himalaya
-template send` shape that `direct-request` and `meeting-scheduling` need to
-send a reply. T-139's Session 2 explicitly deferred the direct-request route
-rather than validate it; that gap was never closed. Deploying with only the
-rules above leaves those two categories permanently blocked by S-004. See
-`B-029` for the tracked fix; do not assume `direct-request` or
-`meeting-scheduling` replies work until it is resolved.
+**This rule set covers the live T-139/T-140 validation runs** —
+`automated-notification` (file, no reply), escalation, S-004 block handling,
+and skipped-tick continuity — **plus one additional rule** admitting the
+`himalaya template reply` -> `himalaya template send` shape that
+`direct-request` and `meeting-scheduling` need to send a reply (`B-029`).
+T-139's Session 2 explicitly deferred the direct-request route rather than
+validate it; that rule gap is now closed, built on `B-030`'s hardened
+heredoc pattern (`"$BODY"` loaded via a quoted heredoc, `--` before the body
+argument) and checked against the real `wildmatch` crate: it matches the
+intended safe plain-reply and reply-all (`-A`) shapes — including when the
+message-derived body itself contains adversarial shell metacharacters — and
+correctly rejects an unquoted-heredoc bypass, a bare/unquoted `$BODY`
+regression, a missing-`--` variant, and the pre-`B-030` naive literal-splice
+shape. The rule has **not** been re-run against a live mailbox and `bob`
+instance the way T-139/T-140 validated the paths above — that live pass
+(deploying per the operator guide, feeding the job a message that classifies
+as `direct-request` or `meeting-scheduling`, and confirming the reply is
+actually sent) remains outstanding. Treat this rule as statically verified
+but not yet live-validated; do not assume `direct-request` or
+`meeting-scheduling` replies work end to end in a live deployment until that
+pass is done.
 
 **The escalation rule above matches a hardened command shape, not the
 originally live-validated one.** Subject/body are now loaded through the
