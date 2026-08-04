@@ -8,7 +8,7 @@ slash-skills that wrap it. New entries at the top.
 **Symptom.** `ai-team validate` reports `task-spec-missing` ("Task spec
 reference 'S-NNN' does not resolve to an existing spec file") for a large
 share of existing tasks, including references to S-002, S-005, S-007, and
-S-009 — all real, approved specs present in `project/specs/`. The same code
+S-009 — all real, approved specs present in `docs/ai-team/specs/`. The same code
 fired immediately for four brand-new tasks referencing the freshly-approved
 S-010, even though `ai-team show S-010` resolves it without issue. 112 of 114
 total findings in a full-repo `ai-team validate` run were this one code.
@@ -20,7 +20,7 @@ which resolves successfully.
 **Impact.** The check is currently too noisy to use as a real signal —
 `task-spec-missing` cannot currently be trusted to mean "this task references
 a spec that doesn't exist"; every occurrence needs manual cross-checking
-against `ai-team show`/`project/specs/` instead.
+against `ai-team show`/`docs/ai-team/specs/` instead.
 
 **Suggested fix.** The false positive looks like a lookup-key mismatch (for
 example matching on full filename/slug rather than the frontmatter `id`
