@@ -134,14 +134,114 @@ the reply-send command shape, plus live validation of the
 
 ## Diagnosis Log
 
-<!-- Mandatory before implementation. Append one entry before changing production code. Format:
-### Diagnosis N — YYYY-MM-DD
-Reproduction status:
+### Diagnosis 1 — 2026-08-04
+
+Reproduction status: confirmed, by static inspection of the current `dev-agent`
+docs (not live reproduction). The shipped `the-intern/docs/src/operator-guide/index.md`
+(Step 4 of "Deploying the email-triage scheduled job," lines 796-963) and
+`the-intern/email-skills/README.md` ("Verified S-004 action rules for the happy
+path," lines 130-298) both ship the identical S-004 `[[policy.action_rules]]`
+list covering only `automated-notification`, escalation (hardened per B-030),
+S-004-block handling, and skipped-tick continuity. Both files' own prose
+(introduced by B-030's commit `af5132a`) states outright: "it does not include
+an allow-rule for the `himalaya template reply` -> `himalaya template send`
+command shape that the `direct-request` and `meeting-scheduling` categories
+use... tracked as `B-029` and not yet done." Live infra (`pi`, a configured
+`himalaya` IMAP/SMTP account, and a built `bob` 0.1.0 debug binary) is present
+in this environment, but a full live deployment/cron-tick/mailbox pass was not
+run in this diagnosis session — a single before/after run (old rule set denies,
+new rule set admits) is deferred to the implementation cycle so it can be done
+once the fix exists, mirroring the T-139/B-030 methodology.
+
 Evidence captured:
-Isolated fault:
-Root cause or fault hypothesis:
+- `the-intern/docs/src/operator-guide/index.md:796-963` and
+  `the-intern/email-skills/README.md:130-298` — full S-004 rule lists plus
+  explicit self-documented gap acknowledgment citing `B-029` by name
+  (`grep -n "B-029"` hits at README.md:285,298 and index.md:948,963).
+- `the-intern/email-skills/.pi/skills/himalaya/references/command-reference.md:200-231`
+  ("Replying") and `:142-196` ("Embedding message-derived text safely," the
+  B-030 hardened heredoc pattern) — confirms the exact required command shape:
+  `himalaya template send "$(himalaya template reply <ID> [-A] -- "$BODY")"`,
+  `$BODY` loaded via a quoted heredoc (`<<'TOKEN'`), never bare.
+- `the-intern/email-skills/.pi/skills/himalaya/SKILL.md:76` — Operation Index
+  confirms "Reply to a message" maps to that same shape.
+- `the-intern/email-skills/.pi/skills/email-triage/references/categories/direct-request.md`
+  and `meeting-scheduling.md` — both confirm a confident match sends a reply
+  via the himalaya skill's reply operation and both independently define the
+  S-004-block fallback (record as open worklog item, do not treat as
+  handled), matching the bug's Actual Behavior.
+- `git show af5132a --stat` — confirms B-030's fix commit is what introduced
+  the explicit "tracked as B-029" callouts into both files while replacing
+  the escalation rule with the hardened shape, without adding a reply-send
+  rule (correctly out of that commit's scope).
+- `the-intern/service/crates/policy-control/src/matcher.rs` — confirmed
+  runtime semantics: `WildMatch::new(&pattern).matches(arguments.command)`,
+  allow-only (absent tool/pattern is denied), consistent with the documented
+  default-deny model.
+- Scratchpad-only Rust harness (not part of the repo) reproducing that exact
+  matcher call against the real vendored `wildmatch = 2.6.1` crate (same
+  version pinned in `the-intern/service/Cargo.lock`). Result: 7/7 checks
+  passed — candidate pattern
+  `BODY=$(cat <<'*himalaya template send "$(himalaya template reply *-- "$BODY")"*`
+  matches the safe plain and `-A` (reply-all) shapes, and correctly rejects
+  an unquoted-heredoc bypass, a bare/unquoted `$BODY` regression, a
+  missing-`--` variant, and the pre-B-030-style naive literal-splice shape.
+  Also confirmed this wildmatch version's `*` spans embedded newlines
+  (load-bearing for any multi-line heredoc rule, matching the property the
+  shipped escalation rule already depends on).
+
+Isolated fault: `the-intern/docs/src/operator-guide/index.md`'s Step 4
+`[[policy.action_rules]]` list and `the-intern/email-skills/README.md`'s
+"Verified S-004 action rules for the happy path" list — both are missing a
+`tool = "bash"` allow-rule with `field_path = "command"` admitting the
+`himalaya template reply <ID> [-A] -- "$BODY"` -> `himalaya template send
+"$(...)"` command shape. This is a documentation/deployment-configuration
+completeness gap, not a defect in `bob`'s policy-engine code (`matcher.rs`'s
+glob matching behaves correctly against a well-formed rule, per the wildmatch
+harness above).
+
+Root cause or fault hypothesis: T-139's live happy-path validation substituted
+`automated-notification` for `direct-request` specifically because
+`direct-request` "required recurring outbound mail authorization" (T-139 Work
+Log, Session 2), and the team never returned to add the missing rule or
+validate `direct-request`/`meeting-scheduling`. T-140 covered only
+escalation/block/continuity. B-030's later fix touched the same rule lists to
+harden the escalation shape and correctly flagged (in prose, in both files)
+that this exact gap remained unresolved, but scoped adding the reply-send
+rule to this bug (`B-029`) rather than fixing it inline.
+
 Planned verification:
--->
+1. Add one new `[[policy.action_rules]]` `tool = "bash"` entry to both
+   `the-intern/docs/src/operator-guide/index.md` (Step 4's rule list, using
+   that file's `/srv/workspaces/email-skills`-style path convention where
+   relevant) and `the-intern/email-skills/README.md` ("Verified S-004 action
+   rules for the happy path," using that file's `/abs/workspace` convention),
+   with `field_path = "command"` and a pattern built on the validated
+   candidate above, admitting the `himalaya template reply <ID> [-A] --
+   "$BODY"` piped through `template send` command-substitution shape — built
+   on B-030's hardened heredoc pattern, not the pre-B-030 literal-splicing
+   shape, per this bug's explicit cross-link requirement.
+2. Update the now-stale "does not include a rule... tracked as B-029 and not
+   yet done" prose callouts in both files (index.md ~938-949, README.md
+   ~277-286) to reflect that the rule now exists, while still noting (mirroring
+   B-030's own framing) that the rule/pattern has been checked against the
+   real `wildmatch` crate and representative command strings.
+3. No `bob` source code changes are required — this is a docs-only fix; the
+   policy engine already behaves correctly against a well-formed rule.
+4. Static verification: re-run the wildmatch harness (or an equivalent check
+   performed during the TDD cycle) against the exact pattern text as it will
+   appear in both files, confirming it matches the intended safe shape and
+   rejects the same unsafe variants already checked, and confirming the two
+   files' new rule blocks and updated prose stay consistent with each other.
+5. Live verification (this bug's own Fix Verification): deploy per the
+   updated operator guide, feed the scheduled job a message that confidently
+   classifies as `direct-request` (or `meeting-scheduling`), and confirm the
+   reply is actually sent (not blocked) and recorded as such in the worklog —
+   the same live-validation shape T-139/T-140 used. `pi`, a configured
+   `himalaya` account, and a `bob` debug binary are present in this
+   environment, so this pass should be attempted directly in the
+   implementation cycle if time allows, rather than deferred to a separate
+   follow-on bug.
 
 ## Work Log
 
