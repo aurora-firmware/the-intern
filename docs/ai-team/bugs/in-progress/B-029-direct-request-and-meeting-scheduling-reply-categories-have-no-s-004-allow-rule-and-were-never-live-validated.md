@@ -3,7 +3,7 @@ id: B-029
 title: direct-request and meeting-scheduling reply categories have no S-004 
   allow-rule and were never live-validated
 severity: high
-status: open
+status: in-progress
 created: '2026-08-04'
 task: T-139
 ---
