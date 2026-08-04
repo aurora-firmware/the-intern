@@ -245,13 +245,76 @@ Planned verification:
 
 ## Work Log
 
-<!-- Mandatory. Append one entry per session boundary. Format:
-### Session N — YYYY-MM-DD
-Free-prose body: what was done this session, what was tried and
-rejected, decisions made, what remains for next session.
+### Session 1 — 2026-08-04
 
-Start every session by reading the entries below.
-The final entry serves as the handoff to the reviewer. -->
+Implemented the fix from the Diagnosis Log without needing to revisit
+reproduction or root cause — both were already fully established. Added one
+new `tool = "bash"` action rule to both
+`the-intern/docs/src/operator-guide/index.md` and
+`the-intern/email-skills/README.md`, matching the `himalaya template reply`
+-> `himalaya template send` command shape via B-030's hardened heredoc
+embedding pattern (`"$BODY"` loaded through a quoted heredoc, `--` before the
+body argument). Placed it immediately before the escalation rule in both
+files' `[[policy.action_rules]]` lists, mirroring the SKILL.md act-then-escalate
+workflow order.
+
+Before writing the docs, I built and ran a throwaway verification harness.
+First a standalone Cargo scratch project pinned to `wildmatch = 2.6.1` (the
+exact version in `Cargo.lock`) to sanity-check the candidate glob against
+hand-built safe/unsafe command strings. Then, for stronger fidelity, I wrote
+a temporary integration test directly in `policy-control`
+(`tests/tmp_b029_verify.rs`) that writes the actual TOML rule text to a temp
+file, parses it through `load_policy_config_from_file` — the exact function
+`bob policy reload` uses — and calls the real `ArgMatcher::matches`. Both
+confirmed the pattern matches the intended safe plain-reply and `-A`
+reply-all shapes (including one where the message body itself contains
+adversarial shell metacharacters, since those are inert inside the quoted
+heredoc) and correctly rejects an unquoted-heredoc bypass, a bare/unquoted
+`$BODY` regression, a missing-`--` variant, and the pre-B-030 naive
+literal-splice shape. Deleted the temp test file immediately after
+(`git status` confirmed clean) since the diagnosis was explicit that no
+`bob` source changes are needed for this bug — I did not want to leave any
+source-tree footprint from an exploratory verification step.
+
+I considered adding a permanent regression test to `policy-control` that
+reads the shipped docs file and asserts the rule still matches, to guard
+against future doc edits silently breaking the pattern. I rejected this for
+now: there's no existing precedent in this repo for tests that read markdown
+docs content (B-030's own fix shipped with no tests either), and it would
+expand this bug's file footprint beyond the two docs files the diagnosis
+scoped it to. If the team wants durable regression coverage for these S-004
+doc-shipped patterns going forward, that would be a reasonable follow-up
+task, not part of this bug.
+
+I updated the stale "does not include... tracked as B-029 and not yet done"
+callouts in both files to state the rule now exists, describe what it was
+checked against (real `wildmatch` crate, both safe and unsafe shapes), and —
+importantly — to be explicit that the live end-to-end pass (actually
+deploying and sending a reply) has not been done, so nobody reads the doc
+update as claiming full live validation.
+
+I deliberately did not attempt the live Fix Verification pass this session.
+The diagnosis found `pi`, a configured `himalaya` account, and a built `bob`
+binary present, and it's true they're all there — I confirmed the same. But
+that account is a real IMAP/SMTP mailbox (`daneel@aurorafw.com` via a real
+hosting relay, `lin119.loading.es`), and actually running the scheduled job
+live means composing and sending a real outbound email over the internet,
+potentially interacting with whatever unseen mail is currently sitting in
+that mailbox. That's a materially different kind of action from editing
+files, and the diagnosis itself anticipated this exact judgment call,
+explicitly permitting me to stop and document the gap rather than force it.
+I made that call rather than attempt a live SMTP send autonomously as part
+of a docs-fix task.
+
+What remains: the bug's own Fix Verification criterion (deploy, feed a
+`direct-request`/`meeting-scheduling` message, confirm the reply is actually
+sent and recorded) is still open. The docs and static verification are
+complete and solid — the next session (or a human-supervised pass) should
+perform the live E2E validation, likely following the same
+deployed-workspace-under-`/tmp` pattern T-139/T-140/B-030 used, and record
+the outcome. If that pass isn't done before this bug is otherwise closed,
+recommend spinning it out as its own tracked follow-up bug, the same way
+B-030 now tracks the escalation shape's live-validation gap.
 
 ## Review
 
