@@ -224,6 +224,53 @@ Committed the completed red→green cycle as a single commit
 `f903cae`) on the bug branch. Nothing remains outstanding for this bug's
 implementation.
 
+### Session 2 — 2026-08-05
+
+Addressed the Reviewer's FAIL verdict (below): the production fix from
+Session 1 was confirmed sound, but the new regression test was flaky under
+plain `cargo test -p extension-ipc` due to a `tracing-core`
+callsite-interest race — a brand-new callsite's `Interest` is a global,
+process-wide cache decided by whichever thread touches it first; several
+pre-existing tests in the same file drive `handle_frame`'s `Authz` arm
+with no subscriber at all, and under the parallel test harness one of
+those can win the race and permanently cache "not interested" for the new
+callsite before the `TracingCapture`-based test's thread-local override
+ever gets consulted.
+
+Reproduced the flake empirically against the as-committed code (`f903cae`)
+before touching anything: 30 repeated runs of `cargo test -p
+extension-ipc` produced 11 failures (~37% on this machine), always on the
+same test and assertion — a solid red baseline matching the Reviewer's
+report.
+
+Implemented the Reviewer's second suggested remediation: added
+`ensure_global_test_subscriber()` in `multiplex.rs`'s test module, guarded
+by a `static std::sync::Once`, installing a permissive `tracing_subscriber::fmt`
+subscriber (writing to `io::sink`, `TRACE` max level) as the process-wide
+*global* default via `tracing::subscriber::set_global_default`. Called
+once, as the first line of the existing shared `TracingCapture::new()`
+helper, so both the new test and the pre-existing `TracingCapture`-based
+test benefit identically, without touching any other test in this file or
+`lib.rs`. Confirmed race-free by reading `tracing-core` 0.1.36's actual
+source: installing a new global default unconditionally triggers a full
+rebuild of every already-registered callsite's cached interest against
+every currently-alive dispatcher, so the race is closed deterministically
+regardless of scheduling order.
+
+Verified: single run → 39 passed, 0 failed. Then 40 repeated invocations
+(exceeding the requested 30+) → 40/40 clean, 0 failures. `cargo fmt --all
+-- --check` stayed clean throughout. `cargo test --workspace` surfaced 3
+unrelated failures in `pi-agent-supervisor` (process/signal-kill tests);
+isolated and confirmed pre-existing and out of scope — that crate passes
+64/64 in isolation and is untouched by this diff, consistent with this
+repo's documented sandbox caveat about process/signal tests. Re-confirmed
+`records.rs` untouched across the whole bug branch after the fix.
+
+Committed the fix as a second cycle on the bug branch
+(`test(extension-ipc): fix authz tracing test flake under parallel
+harness`, `e78cf8a`), on top of the Session 1 fix commit (`f903cae`).
+Nothing else remains outstanding; ready for re-review.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
