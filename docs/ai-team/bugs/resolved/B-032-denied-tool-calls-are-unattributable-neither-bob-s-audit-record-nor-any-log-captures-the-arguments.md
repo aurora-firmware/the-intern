@@ -3,7 +3,7 @@ id: B-032
 title: denied tool calls are unattributable — neither bob's audit record nor any
   log captures the arguments
 severity: medium
-status: in-progress
+status: resolved
 created: '2026-08-05'
 task: T-139
 ---
