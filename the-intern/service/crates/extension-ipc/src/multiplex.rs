@@ -221,6 +221,11 @@ impl SessionMultiplexer {
                 let snapshot = self.snapshot.load();
                 let verdict = PolicyEngine::evaluate_action(&snapshot, &tool, &arguments);
 
+                // Diagnostic-only: the audit record and deny-reason string only carry
+                // the tool name, so surface the full call here for post-hoc S-004 rule
+                // diagnosis (B-032). Never persisted — tracing output only.
+                tracing::debug!(session = %session, tool = %tool, arguments = ?arguments, "extension authz call");
+
                 // Record the verdict to monitoring before sending the wire reply.  A
                 // monitoring failure is logged but never changes the policy outcome.
                 self.monitoring
@@ -378,6 +383,50 @@ mod tests {
         assert!(
             info_line.contains("session.started"),
             "INFO event must carry event field value; line: {info_line}"
+        );
+    }
+
+    /// B-032: a denied `Authz` frame must leave the denied tool call's
+    /// arguments recoverable from `DEBUG`-level tracing, since the audit
+    /// record and the fixed deny-reason string only carry the tool name.
+    #[tokio::test(flavor = "current_thread")]
+    async fn authz_frame_debug_tracing_captures_session_tool_and_arguments_for_denied_call() {
+        let capture = TracingCapture::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let monitoring: Arc<dyn MonitoringHandle> = Arc::new(TracingMonitoringHandle);
+        let mut mux = SessionMultiplexer::new(monitoring, deny_all_snapshot(), tx);
+        let session = SessionId::new();
+        let command = "rm -rf /some/denied/path";
+
+        mux.handle_frame(InboundFrame::Authz {
+            session,
+            tool: "bash".to_owned(),
+            arguments: serde_json::json!({"command": command}),
+        })
+        .await
+        .expect("frame should process");
+
+        // Sanity check: the call was actually denied.
+        let sent = rx.recv().await.expect("reply frame");
+        match sent {
+            OutboundFrame::AuthzVerdict { verdict, .. } => {
+                assert!(!verdict.allow, "deny-all snapshot must deny the call");
+            }
+        }
+
+        let lines = capture.captured();
+        let session_str = session.to_string();
+        let debug_lines: Vec<&String> = lines.iter().filter(|l| l.contains(" DEBUG ")).collect();
+        assert!(
+            !debug_lines.is_empty(),
+            "expected at least one DEBUG line for the denied authz call; captured: {lines:?}"
+        );
+        let matching_line = debug_lines
+            .iter()
+            .find(|l| l.contains(&session_str) && l.contains("bash") && l.contains(command));
+        assert!(
+            matching_line.is_some(),
+            "expected a DEBUG line carrying session, tool, and the denied command; captured: {lines:?}"
         );
     }
 
