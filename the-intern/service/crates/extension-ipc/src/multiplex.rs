@@ -304,6 +304,41 @@ mod tests {
 
     // ---- TracingMonitoringHandle tests (AC-1, AC-2) ----
 
+    /// Installs a permissive, process-wide default `tracing` subscriber
+    /// exactly once for the whole test binary.
+    ///
+    /// B-032 follow-up: a brand-new `tracing` callsite's `Interest` is
+    /// cached globally the first time it is ever invoked, based on
+    /// whichever thread happens to reach it first. Under `cargo test`'s
+    /// default parallel harness, many other tests in this file (and in
+    /// `lib.rs`) drive an `Authz` frame through `handle_frame` without any
+    /// subscriber override. If one of those wins the race to be the very
+    /// first caller of a new callsite, its thread has no subscriber at
+    /// all, so the callsite gets permanently cached "not interested" —
+    /// silently no-oping the event for every later caller, including a
+    /// `TracingCapture`-based test with an interested subscriber active
+    /// via a thread-local override. Installing one real (if silent) global
+    /// default subscriber removes that "nobody is listening" fallback
+    /// entirely: every thread's first touch of any callsite now resolves
+    /// through a subscriber that is actually interested at `TRACE` level.
+    /// Per `tracing-core`'s documented rebuild-on-register behavior,
+    /// installing a new subscriber also retroactively re-evaluates any
+    /// callsite a racing thread already poisoned before this runs, so
+    /// timing relative to other tests does not matter.
+    fn ensure_global_test_subscriber() {
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(std::io::sink)
+                .finish();
+            // Ignore failure: a prior global default (installed by a
+            // concurrently-started test hitting this same call_once) means
+            // the process is already covered.
+            let _ = tracing::subscriber::set_global_default(subscriber);
+        });
+    }
+
     /// Captures tracing events emitted while the guard is alive.
     struct TracingCapture {
         lines: Arc<Mutex<Vec<String>>>,
@@ -312,6 +347,8 @@ mod tests {
 
     impl TracingCapture {
         fn new() -> Self {
+            ensure_global_test_subscriber();
+
             let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
             let lines_clone = Arc::clone(&lines);
 
