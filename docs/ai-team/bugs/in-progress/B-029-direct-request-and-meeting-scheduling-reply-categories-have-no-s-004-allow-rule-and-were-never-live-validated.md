@@ -113,6 +113,12 @@ docs that this is expected or that additional configuration is required.
   heredoc, `--` before the body argument) — not against the vulnerable
   pattern that existed in the docs before `B-030`'s fix. Both bugs
   ultimately need the same kind of live T-139/T-140-style validation pass.
+- Bug: `B-031` — filed at review time to track this bug's own outstanding
+  live end-to-end validation (see Fix Verification below) as a separate,
+  tracked follow-up, the same way `B-030` already tracks the live-validation
+  gap for the hardened escalation-send shape. The rule fix in this bug is
+  statically verified (real `wildmatch` crate, real config parser) but has
+  not been run against a live mailbox and scheduled `bob` instance.
 
 ## Suspected Area
 
@@ -327,3 +333,99 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-05
+
+PASS
+
+**Diagnosis→fix evidence chain.** The Diagnosis Log (Diagnosis 1, 2026-08-04)
+records reproduction status (confirmed by static inspection), evidence
+captured (line-level citations into `operator-guide/index.md`,
+`email-skills/README.md`, `command-reference.md`, `SKILL.md`,
+`direct-request.md`/`meeting-scheduling.md`, `matcher.rs`, and a scratchpad
+wildmatch harness), an isolated fault (both docs' S-004 rule lists missing
+the `template reply`/`template send` allow-rule), and a root-cause hypothesis
+(T-139's deferral of `direct-request`, never revisited; B-030's fix correctly
+scoped adding this rule to this bug rather than fixing it inline). Complete
+fix contract present — evidence chain check passes.
+
+**Stage 1 — bug criteria.** Verified the diff directly
+(`git diff dev-agent...HEAD -- the-intern/docs/src/operator-guide/index.md
+the-intern/email-skills/README.md`, bug branch
+`bug/B-029-direct-request-and-meeting-scheduling-reply-categories-have-no-s-004-allow-rule-and-were-never-live-validated`).
+Both files gained an identical new `[[policy.action_rules]]` `tool = "bash"`
+entry with `field_path = "command"` and pattern
+`BODY=$(cat <<'*himalaya template send "$(himalaya template reply *-- "$BODY")"*`,
+placed immediately before the escalation rule as the Work Log states. This
+is the isolated fault from the Diagnosis Log, addressed directly — no
+unrelated behavior added, no unexpected files touched (`git diff
+dev-agent...HEAD --stat` shows only the two docs files, 40/37 lines
+changed; `git status` on the bug branch is clean, no stray temp-file
+artifacts).
+
+**Pattern correctness — independently re-verified.** The Work Log's claim
+(checked via a deleted, uncommitted integration test against the real
+`wildmatch` crate and `load_policy_config_from_file`) was material, so I
+re-verified it independently rather than taking it on faith: wrote a fresh
+temporary integration test in `policy-control/tests/` loading the exact
+TOML pattern text as it appears in both shipped docs files through the real
+`load_policy_config_from_file` parser and the real `ArgMatcher::matches`
+(`wildmatch = "2.6.1"`, confirmed pinned in `Cargo.lock`, matching the
+Diagnosis Log's claim), then deleted it after
+(`git status` clean before and after). All 8 checks passed: admits the safe
+plain-reply and `-A` reply-all shapes, including one where the
+message-derived body itself contains adversarial shell metacharacters
+embedded inside the quoted heredoc; correctly rejects an unquoted-heredoc
+bypass, a bare/unquoted `$BODY` regression, a missing-`--` variant, the
+pre-`B-030` naive literal-splice shape, and an unrelated command. This also
+directly confirms the specific claim that this wildmatch version's `*`
+spans embedded newlines (load-bearing for the multi-line heredoc pattern) —
+my test command strings contained real embedded newlines and matched
+correctly via the real matcher path. Manual reasoning over the pattern's
+literal/wildcard segmentation independently supports the same conclusions:
+the pattern is unanchored-by-wildcard only at both ends and around the two
+literal anchors (`BODY=$(cat <<'` at the start, `-- "$BODY")"` before the
+trailing `*`), so any variant missing the quoted-heredoc opener or the
+`-- "$BODY")"` closing shape fails to match.
+
+**Docs quality and consistency.** The two files' new rule blocks are
+character-identical (aside from each file's own pre-existing indentation
+convention). The updated prose in both files consistently: (a) states the
+rule now exists and is built on B-030's hardened heredoc pattern, (b)
+describes what it was checked against, (c) is explicit that the rule has
+**not** been live-validated, so an operator reading either file cannot
+mistake static verification for a live-validated guarantee. `cargo fmt --all
+-- --check` passes (no Rust source changed on this branch, consistent with
+the diagnosis's conclusion that no `bob` source changes were needed).
+
+**Live Fix Verification — deferred, judged acceptable for this cycle.**
+This bug's own Fix Verification step (deploy, feed the job a
+`direct-request`/`meeting-scheduling` message, confirm the reply is
+actually sent and recorded) was not attempted. The Work Log's rationale is
+specific and well-reasoned, not a corner-cut: it requires composing and
+sending a real outbound email over a live SMTP relay from a real configured
+mailbox (`daneel@aurorafw.com`), a materially less reversible action than
+editing files, and the Diagnosis Log's own Planned Verification step 5
+already anticipated this exact judgment call as legitimate ("this pass
+should be attempted directly in the implementation cycle **if time
+allows**"). This is not a novel exception — it is the identical judgment
+call already made for `B-030` (the hardened escalation-send fix, `af5132a`,
+landed on `dev-agent` with its own live-validation gap tracked separately
+rather than blocking the fix). Following that precedent rather than
+diverging from it, I filed `B-031` (`docs/ai-team/bugs/open/B-031-...md`)
+to track this bug's own outstanding live end-to-end validation as a
+separate, explicitly tracked follow-up, and added a cross-link to it in
+this bug's Related section. This keeps the requirement from silently
+evaporating while not blocking the (correctly scoped, independently
+verified) rule fix on an unsupervised live email send.
+
+Minor observation (non-blocking): consider, as a future durable-coverage
+task (already flagged as out of scope by the Work Log, and I agree it's out
+of scope for this bug), adding a `policy-control` regression test that
+reads these shipped docs' rule patterns and asserts they still match the
+intended command shapes, so a future docs edit can't silently break the
+pattern without a red test.
+
+Next owner: Bug-Fix Loop — merge the bug branch, move `B-029` to
+`resolved/`, keep `B-031` open in `bugs/open/` to track the live-validation
+follow-up.
