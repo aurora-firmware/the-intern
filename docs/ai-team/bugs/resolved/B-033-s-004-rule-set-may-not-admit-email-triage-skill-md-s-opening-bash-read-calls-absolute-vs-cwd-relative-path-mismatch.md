@@ -3,7 +3,7 @@ id: B-033
 title: S-004 rule set may not admit email-triage SKILL.md's opening bash/read 
   calls (absolute vs cwd-relative path mismatch)
 severity: high
-status: in-progress
+status: resolved
 created: '2026-08-05'
 task: T-139
 ---
