@@ -235,3 +235,102 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-05
+
+FAIL
+
+Diagnosis→fix evidence chain: complete and verified. The Diagnosis Log
+records confirmed reproduction (source inspection plus a dynamic scratch
+test), concrete evidence (grep results, `MonitoringVerdict`'s field list,
+`PolicyVerdictAuditPayload`'s field list, the deny-reason `format!` call),
+an isolated fault (the `Authz` arm of `handle_frame` never traces
+`tool`/`arguments`), a confirmed root cause (missing instrumentation,
+mirroring the existing `Event`-path pattern), and a planned fix/verification
+contract. This matches what was implemented: one `tracing::debug!(session =
+%session, tool = %tool, arguments = ?arguments, "extension authz call")`
+call added in the `InboundFrame::Authz` arm of `multiplex.rs::handle_frame`
+(`multiplex.rs:224-227`), placed after `PolicyEngine::evaluate_action` runs
+and before `record_verdict`/the wire reply — `tool` and `arguments` are
+still in scope and only borrowed here (`%tool`, `?arguments`), so nothing is
+moved out from under the later `record_verdict`/`evaluate_action` calls.
+`git diff dev-agent...HEAD -- the-intern/service/crates/bob-core/src/types/records.rs`
+is empty — `PolicyVerdictAuditPayload` is untouched, honoring the bug's hard
+constraint. The diff is minimal: one file, +49/-0, one commit
+(`f903cae`), no unrelated changes. `cargo fmt --all -- --check` is clean and
+`git status` is clean on the bug branch.
+
+Blocking issue — Stage 2, Tests (independence):
+
+- **File and location**: `the-intern/service/crates/extension-ipc/src/multiplex.rs`,
+  new test `authz_frame_debug_tracing_captures_session_tool_and_arguments_for_denied_call`
+  (added at ~line 392), and its production counterpart, the new
+  `tracing::debug!` call at `multiplex.rs:227`.
+- **What is wrong**: the new regression test is flaky under the bug's own
+  Fix Verification command, `cargo test -p extension-ipc` (default, parallel
+  test-threads — the same invocation CI uses via `cargo test --workspace`).
+  I ran `cargo test -p extension-ipc` 50 times in a row (20 + 30, unmodified
+  working tree, `git status` clean throughout) and observed 10 failures
+  (~20%), always and only on this new test, always on the assertion
+  `"expected at least one DEBUG line for the denied authz call"` — the DEBUG
+  line the fix emits is intermittently entirely absent from the test's
+  captured tracing output, even though `handle_frame` unconditionally
+  executes the `tracing::debug!` call on every `Authz` frame. Re-running
+  with `cargo test -p extension-ipc -- --test-threads=1` (serial), the same
+  test passed 5/5 times, and the pre-existing analogous test
+  (`tracing_monitoring_handle_record_event_emits_one_info_event_with_session_and_event_fields`,
+  which also uses `TracingCapture`) never failed once in 30 parallel runs —
+  isolating the flake to the new test/callsite, not the file's existing
+  pattern.
+
+  Root mechanism (verified against `tracing-core` 0.1.36 source,
+  `~/.cargo/registry/.../tracing-core-0.1.36/src/callsite.rs` and
+  `dispatcher.rs`): a `tracing` callsite's `Interest` is a *global*,
+  process-wide cache, computed once on that callsite's first-ever
+  invocation and reused thereafter unless explicitly rebuilt. `TracingCapture`
+  uses `tracing::subscriber::set_default(...)`, a *thread-local* override —
+  but many other tests in this same file (`authz_frame_returns_deny_...`,
+  `distinct_sessions_do_not_cross_deliver_replies`,
+  `route_for_session_reflects_new_default_...`, etc.) also unconditionally
+  drive an `Authz` frame through `handle_frame`, without any subscriber
+  override, and `cargo test`'s default harness runs all of these in
+  parallel across OS threads. Because the new `tracing::debug!` callsite at
+  `multiplex.rs:227` did not exist before this fix, whichever test thread
+  happens to trigger it *first*, process-wide, decides its cached interest;
+  if a concurrently-running plain test (no subscriber) wins that race while
+  this test's `TracingCapture` dispatcher isn't visible to that thread at
+  that instant, the callsite gets cached "not interested" and the DEBUG
+  event silently no-ops for the rest of the process — including for this
+  test's own later, correctly-scoped assertion. This is a known category of
+  gotcha with `tracing::subscriber::set_default` + brand-new callsites in
+  multi-threaded test binaries; it is not a defect in the production fix
+  itself (the tracing call is correctly placed and correctly worded), it is
+  a test-isolation defect in how the new test observes it.
+
+- **What should change**: make the new test deterministic under the
+  project's real `cargo test -p extension-ipc` invocation (no
+  `--test-threads=1` workaround, since that isn't how the bug's Fix
+  Verification or CI actually runs it). Acceptable approaches, in order of
+  robustness:
+  1. Serialize this test against any other test that can reach
+     `handle_frame`'s `Authz` arm (e.g. a module-level
+     `static AUTHZ_TRACING_TEST_LOCK: std::sync::Mutex<()>` held for the
+     duration of `TracingCapture`-based tests), removing the cross-thread
+     race window outright, or
+  2. Replace the per-test `tracing::subscriber::set_default` +
+     format-string-matching pattern with a subscriber/layer installed once
+     for the whole test binary (e.g. via `std::sync::Once` at module load),
+     that captures events into a buffer keyed by a per-test correlation id
+     (the test already generates a unique `session` UUID and a unique
+     command string — key the capture buffer on that instead of relying on
+     which thread's tracing macro invocation gets dispatched), avoiding the
+     runtime enable/disable interest-cache race entirely.
+  Whichever approach is chosen, re-verify with repeated (30+) runs of plain
+  `cargo test -p extension-ipc` — a single green run, or even 5, is not
+  enough evidence given the ~20% observed failure rate.
+
+Everything else evaluated cleanly (diagnosis chain, fix placement and
+wording, `arguments` logged via `?arguments` consistent with the existing
+`?event.payload` pattern, `records.rs` untouched, no unrelated changes,
+clean `cargo fmt`, clean `git status`) — the only outstanding work is
+closing this test-independence gap.
