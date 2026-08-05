@@ -199,6 +199,18 @@ duplicate Architect consultation for an identical procedural question
 already answered same-day — documented here for auditability rather than
 silently skipped.
 
+**Authorization update (2026-08-05, human):** The human confirmed both
+`daneel@aurorafw.com` (the environment's configured `himalaya` sender
+account) and `jose.moreno@aurorafw.com` (the human's own address) are test
+addresses, and authorized live reply-send tests between them. For the
+retry, the test `direct-request`/`meeting-scheduling` message should
+arrive as if from `jose.moreno@aurorafw.com` (or another controlled test
+sender) so the agent's reply is sent from `daneel@aurorafw.com` back to
+`jose.moreno@aurorafw.com`, rather than using `daneel@aurorafw.com` for
+both ends the way `B-030`'s initial (interrupted) attempt did. This does
+not change the S-004 rule or fix content under test — only the live
+test's message routing.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:

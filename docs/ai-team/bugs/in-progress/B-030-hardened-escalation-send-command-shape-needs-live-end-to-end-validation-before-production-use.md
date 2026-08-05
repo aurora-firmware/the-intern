@@ -247,6 +247,17 @@ only once a retry produces an `allow=true` verdict on the escalation `bash`
 call, exactly one delivered escalation email, and a worklog entry recording
 it.
 
+**Authorization update (2026-08-05, human):** The human confirmed both
+`daneel@aurorafw.com` (the environment's configured `himalaya` sender
+account) and `jose.moreno@aurorafw.com` (the human's own address) are test
+addresses, and authorized live escalation-send tests between them. For the
+retry, send the live test escalation from `daneel@aurorafw.com` to
+`jose.moreno@aurorafw.com` as the recipient/manager address, rather than
+using `daneel@aurorafw.com` as both sender and recipient the way the
+initial (interrupted) attempt did. This does not change anything else
+about the documented setup above — only the recipient address the
+escalation rule's `manager_address`-equivalent config should target.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
