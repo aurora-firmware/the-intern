@@ -103,6 +103,16 @@ live policy engine + real himalaya send).
   Both B-029 and this bug ultimately need the same kind of live
   T-139/T-140-style validation pass before the package's full category set
   can be trusted in production.
+- Bug: `B-031` (B-029's own live-validation follow-up — same kind of gap,
+  different command shape), `B-032` (spin-off, filed 2026-08-05: denied
+  tool calls from this bug's live session were unattributable — audit
+  record and logging both omit arguments; must land before B-030's retry
+  so the retry's denials, if any, are attributable), `B-033` (spin-off,
+  filed 2026-08-05: this bug's live session denied 2 bash + 1 read calls
+  before reaching the escalation step, suggesting a possible absolute-vs-
+  cwd-relative path mismatch in the shipped S-004 rule set's opening-step
+  coverage — statically checkable during the wait, independent of live
+  model access)
 - Specification: `S-010-email-skills-for-pi-agent-himalaya-cli-reference-and-classification-driven-triage.md`
 
 ## Suspected Area
