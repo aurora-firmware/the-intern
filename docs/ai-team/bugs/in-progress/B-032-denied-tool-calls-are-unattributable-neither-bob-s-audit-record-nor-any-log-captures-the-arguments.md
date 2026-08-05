@@ -381,3 +381,104 @@ wording, `arguments` logged via `?arguments` consistent with the existing
 `?event.payload` pattern, `records.rs` untouched, no unrelated changes,
 clean `cargo fmt`, clean `git status`) — the only outstanding work is
 closing this test-independence gap.
+
+### Review Verdict — 2026-08-05 (cycle 2)
+
+PASS
+
+Re-reviewed commit `e78cf8a` (on top of `f903cae`) against the previous
+FAIL's blocking issue and re-checked everything from cycle 1.
+
+Cycle-1 items re-confirmed, briefly: `git diff f903cae..e78cf8a --
+crates/extension-ipc/src/multiplex.rs` shows only additive lines inside
+`mod tests` (starting at line 304, well inside the `#[cfg(test)]` block) —
+no production code above the test module was touched, so the cycle-1 fix
+(`multiplex.rs:224-227`, the single `tracing::debug!` call in the `Authz`
+arm) is byte-for-byte unchanged; diagnosis→fix evidence chain, fix
+placement (before `arguments`/`tool` are consumed by anything else), and
+wording (`?arguments` mirroring `?event.payload`) all still hold as
+verified in cycle 1. `git diff dev-agent...HEAD --
+the-intern/service/crates/bob-core/src/types/records.rs` is still empty —
+the hard constraint holds across both cycles. Cumulative diff is still one
+file only (`multiplex.rs`), two commits, no unrelated changes. `cargo fmt
+--all -- --check` → clean. `git status --porcelain` → clean on the bug
+branch.
+
+Blocking issue from cycle 1 (flaky regression test): resolved. The fix
+adds `ensure_global_test_subscriber()`, a `std::sync::Once`-guarded helper
+that installs a permissive (`TRACE`, `io::sink`-backed)
+`tracing_subscriber::fmt` subscriber as the process-wide *global* default,
+called as the first line of the existing shared `TracingCapture::new()`
+helper — so it covers both `TracingCapture`-based tests uniformly, without
+touching any other test. Diff is 37 insertions, 0 deletions, scoped
+entirely to the `#[cfg(test)] mod tests` block.
+
+1. Independent flake verification: ran `cargo test -p extension-ipc`
+   (the bug's own Fix Verification command, default parallel harness) 50
+   times myself (35 + 15, two separate batches, unmodified working tree,
+   `git status` clean throughout) — 0/50 failures. This exceeds the
+   requested 30+ runs and corroborates the Developer's reported 40/40.
+2. Sanity-checked the `tracing-core` mechanism claim against the actual
+   0.1.36 source
+   (`~/.cargo/registry/.../tracing-core-0.1.36/src/{callsite,dispatcher}.rs`),
+   not just the reported numbers:
+   - `tracing::subscriber::set_global_default` and `...::set_default` both
+     construct a `Dispatch::new(subscriber)` internally, which calls
+     `callsite::register_dispatch`, which does an unconditional full
+     rebuild (`CALLSITES.rebuild_interest`, `Rebuilder::Write`, iterating
+     *every* already-registered callsite against the complete live
+     dispatcher list) — so, contrary to what I'd have guessed, both
+     `set_default` (cycle 1) and `set_global_default` (cycle 2) trigger
+     this same retroactive full-rebuild path identically; that alone does
+     not explain the improvement.
+   - The actual differentiator is a callsite's *first-ever* invocation,
+     handled by a separate lazy path in `DefaultCallsite::register`
+     (`callsite.rs:308-320`), which — when `Dispatchers::has_just_one` is
+     true — takes a fast path (`Rebuilder::JustOne =>
+     dispatcher::get_default(f)`, `callsite.rs:562-566`) that consults
+     only the *calling thread's own* thread-local default, falling back to
+     `GLOBAL_DISPATCH` if none is set. Under cycle 1 (thread-local
+     `set_default` only), a concurrently-running plain test with no
+     override that happens to be the first, process-wide, to invoke the
+     new `multiplex.rs:227` callsite sees an empty thread-local *and* an
+     unset (`Dispatch::none()`) global fallback, so the callsite
+     permanently caches `Interest::never()` for the callsite — even though
+     the `TracingCapture` test's own thread-local dispatcher is alive and
+     present in the global dispatcher list at that exact moment, because
+     the fast path never looks at that list, only at the calling thread's
+     own default. Under cycle 2, once the global default is set (once,
+     process-wide, before any `mux.handle_frame()` call can run inside
+     either `TracingCapture`-based test, since `ensure_global_test_subscriber()`
+     runs synchronously as the first line of `TracingCapture::new()`), a
+     plain test's `get_default()` fallback now resolves to a genuinely
+     `TRACE`-interested subscriber instead of `Dispatch::none()`, so no
+     thread can compute `Interest::never()` for this callsite anymore,
+     regardless of scheduling order. This holds up: the claim is correct
+     and precisely targets the mechanism I identified in cycle 1.
+3. `git diff dev-agent...HEAD -- the-intern/service/crates/bob-core/src/types/records.rs`
+   → empty. `cargo fmt --all -- --check` → clean. `git status --porcelain`
+   → clean on the bug branch (both confirmed above).
+4. Cycle-1 items re-confirmed (see paragraph above) — diagnosis→fix
+   evidence chain, fix placement, and wording all still hold; nothing in
+   the approved cycle-1 fix changed.
+
+Minor, non-blocking observations: the Work Log's claim of 3 unrelated
+`pi-agent-supervisor` failures under `cargo test --workspace` is outside
+this bug's Fix Verification scope (`cargo test -p extension-ipc`, `cargo
+fmt --all -- --check` only) and I did not chase it in depth, but I spot
+checked `cargo test -p pi-agent-supervisor` in isolation and got 64/64
+clean, consistent with the Developer's claim that it's environmental
+(matches this repo's documented sandbox caveat about process/signal
+tests) rather than caused by this diff, which touches only
+`extension-ipc`. `ensure_global_test_subscriber`'s `let _ =
+set_global_default(...)` silently ignoring failure is intentional and
+safe here — it's the only call site installing a global default anywhere
+in this crate's `--lib` test binary (confirmed via grep), so the ignored
+error path (a second concurrent racer losing the `Once`) is the only
+realistic outcome, not a mask for a real problem.
+
+Both stages pass. Diagnosis→fix evidence chain, bug-criteria fix
+(unchanged from cycle 1), and code quality (correctness, test
+independence — now closed, security n/a, readability — the new helper is
+clearly documented with the exact B-032 rationale, performance n/a) all
+check out.
