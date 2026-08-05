@@ -889,6 +889,12 @@ package-specific setup that T-139 and T-140 verified end to end.
    [[policy.action_rules]]
    tool = "bash"
    arg_matchers = [
+     { field_path = "command", pattern = "BODY=$(cat <<'*himalaya template send \"$(himalaya template reply *-- \"$BODY\")\"*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
      { field_path = "command", pattern = "SUBJECT=$(cat <<'*SUBJECT=\"${SUBJECT//*BODY=$(cat <<'*himalaya template write -H *To:* -H \"Subject:Escalation: $SUBJECT\" -- \"$BODY\" | himalaya template send*" },
    ]
 
@@ -935,18 +941,28 @@ package-specific setup that T-139 and T-140 verified end to end.
    ]
    ```
 
-   **This rule set only covers the live-validated paths:**
-   `automated-notification` (file, no reply), escalation, S-004 block
-   handling, and skipped-tick continuity (T-139, T-140). It does **not**
-   include an allow-rule for the `himalaya template reply` -> `himalaya
-   template send` command shape that the `direct-request` and
-   `meeting-scheduling` categories use to send a reply. Deploying with only
-   the rules above leaves those two categories permanently blocked by
-   S-004's default-deny, contradicting the category workflow docs. Adding a
-   scoped rule for that command shape and live-validating it end to end
-   (the same way T-139/T-140 validated the paths above) is tracked as
-   `B-029` and not yet done — do not assume `direct-request` or
-   `meeting-scheduling` replies work until that is resolved.
+   **This rule set covers the live-validated paths** — `automated-notification`
+   (file, no reply), escalation, S-004 block handling, and skipped-tick
+   continuity (T-139, T-140) — **plus one additional rule** admitting the
+   `himalaya template reply` -> `himalaya template send` command shape that
+   the `direct-request` and `meeting-scheduling` categories use to send a
+   reply (`B-029`). That rule is built on `B-030`'s hardened heredoc pattern
+   (`references/command-reference.md`'s "Embedding message-derived text
+   safely": `"$BODY"` loaded via a quoted heredoc, `--` before the body
+   argument) and was checked against the real `wildmatch` crate (the exact
+   library `bob`'s S-004 matcher uses): it matches the intended safe
+   plain-reply and reply-all (`-A`) shapes — including when the
+   message-derived body itself contains adversarial shell metacharacters —
+   and correctly rejects an unquoted-heredoc bypass, a bare/unquoted `$BODY`
+   regression, a missing-`--` variant, and the pre-`B-030` naive
+   literal-splice shape. The rule has **not** been re-run against a live
+   mailbox and scheduled `bob` instance the way T-139/T-140 validated the
+   paths above — that live pass (deploying per this guide, feeding the job a
+   message that classifies as `direct-request` or `meeting-scheduling`, and
+   confirming the reply is actually sent) remains outstanding. Treat this
+   rule as statically verified but not yet live-validated; do not assume
+   `direct-request` or `meeting-scheduling` replies work end to end in a
+   live deployment until that pass is done.
 
    **The escalation rule above matches a hardened command shape, not the
    originally live-validated one.** The subject/body are now loaded through
