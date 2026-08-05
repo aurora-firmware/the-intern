@@ -3,7 +3,7 @@ id: B-031
 title: direct-request/meeting-scheduling reply-send S-004 rule needs live 
   end-to-end validation before production use
 severity: high
-status: open
+status: in-progress
 created: '2026-08-05'
 task: T-139
 ---
