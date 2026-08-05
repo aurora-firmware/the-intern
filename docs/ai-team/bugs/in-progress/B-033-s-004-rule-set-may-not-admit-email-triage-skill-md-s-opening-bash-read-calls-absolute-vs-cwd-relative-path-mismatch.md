@@ -130,14 +130,69 @@ exact command/path shapes those opening steps prescribe).
 
 ## Diagnosis Log
 
-<!-- Mandatory before implementation. Append one entry before changing production code. Format:
-### Diagnosis N — YYYY-MM-DD
-Reproduction status:
+### Diagnosis 1 — 2026-08-05
+
+Reproduction status: **not reproduced.** Every `bash`/`read` call shape
+`SKILL.md`'s opening steps (config read, `worklog/<date>.md` existence
+check, worklog reconciliation reads, envelope-list) actually prescribe is
+admitted by both `the-intern/docs/src/operator-guide/index.md` and
+`the-intern/email-skills/README.md`'s current shipped S-004 rule lists, in
+exactly the path convention `SKILL.md` uses for each.
+
 Evidence captured:
-Isolated fault:
-Root cause or fault hypothesis:
-Planned verification:
--->
+- `SKILL.md:30-104` and `references/worklog.md`: confirmed the exact
+  opening-step shapes and prescribed path convention. Worklog content reads
+  go through the `read` tool via the job's own cwd-relative path (the only
+  such explicit qualifier in the doc); config-read and worklog-existence
+  `bash` calls are also written cwd-relative. Reference-file reads carry no
+  such qualifier (fixed skill-directory/absolute resolution).
+- `operator-guide/index.md:796-965` and `README.md:130-298` read in full
+  (not just the `812-845` window this bug's own filing cited): both ship an
+  identical `bash` rule set (cwd-relative throughout) and a `read` rule set
+  that includes **both** an absolute rule
+  (`/srv/workspaces/email-skills/worklog/*.md` /
+  `/abs/workspace/worklog/*.md`) **and** a cwd-relative rule
+  (`worklog/*.md`) for worklog files.
+- `git log -p -S'{ field_path = "path", pattern = "worklog/*.md" }' --
+  the-intern/email-skills/README.md` and `git show 28d4e1a`: traced the
+  cwd-relative worklog `read` rule's origin to **T-140 Session 6
+  (2026-08-03)**, which diagnosed and fixed exactly this class of gap live
+  ("the carried-forward worklog open was read through a relative
+  `worklog/*.md` path... The validated allow-rule set now includes that
+  relative `read` matcher"), predating this bug's filing.
+- Static harness (temporary, deleted after use): extracted the actual
+  shipped `[[policy.action_rules]]` TOML block verbatim from both doc
+  files, loaded it through the real `load_policy_config_from_file` +
+  `RulesetSnapshot::from_config`, and drove it through the real
+  `PolicyEngine::evaluate_action` (`wildmatch` 2.6.1, pinned in
+  `Cargo.lock`) with the exact SKILL.md-prescribed opening-step shapes.
+  2/2 checks passed: `cat config/email-triage.toml` → `allow=true`; `test
+  -f worklog/2026-08-05.md` → `allow=true`; cwd-relative `read` on
+  `worklog/2026-08-04.md` → `allow=true`; absolute `read` on
+  `/srv/workspaces/email-skills/worklog/2026-08-04.md` → `allow=true`;
+  `read` on the skill's own absolute reference path → `allow=true`;
+  `himalaya envelope list not flag seen` → `allow=true`.
+
+Isolated fault: none present in the current shipped rule set.
+
+Root cause or fault hypothesis: **hypothesis refuted, not confirmed.** The
+absolute-vs-cwd-relative mismatch this bug suspected was a real defect
+once, but it was already found and fixed by T-140 (commit `28d4e1a`,
+2026-08-03) before this bug was filed. This bug's own static-inspection
+evidence cited only `operator-guide/index.md:812-845` (the block of
+absolute-path `read` rules), which happens to end 2 lines before the
+cwd-relative `worklog/*.md` `read` rule at lines 847-851 — an artifact of
+where the quoted line range was cut, not of the actual shipped rule set,
+which does include that rule.
+
+Planned verification: none required — the static check this bug's Fix
+Verification specifies (run the wildmatch/`load_policy_config_from_file`
+harness against every SKILL.md-prescribed opening-step shape, confirm each
+is admitted) has been run and passed against the real shipped text. No
+code or doc change is needed. Recommend closing as "not reproduced —
+already fixed by T-140/commit 28d4e1a" rather than an implementation
+cycle. Durable regression coverage against future doc drift, if wanted, is
+a separate follow-up task, not part of this bug.
 
 ## Work Log
 
