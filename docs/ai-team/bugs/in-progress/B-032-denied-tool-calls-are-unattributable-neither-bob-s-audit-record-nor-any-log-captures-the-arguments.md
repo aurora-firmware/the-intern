@@ -112,14 +112,79 @@ cargo fmt --all -- --check
 
 ## Diagnosis Log
 
-<!-- Mandatory before implementation. Append one entry before changing production code. Format:
-### Diagnosis N — YYYY-MM-DD
-Reproduction status:
+### Diagnosis 1 — 2026-08-05
+
+Reproduction status: Confirmed — via source inspection and a dynamic
+(temporary, uncommitted) instrumented test.
+
 Evidence captured:
-Isolated fault:
-Root cause or fault hypothesis:
+- `grep -n "tracing::debug\|InboundFrame::Authz\|InboundFrame::Event"
+  the-intern/service/crates/extension-ipc/src/multiplex.rs` shows
+  `tracing::debug!` calls only at lines 61 and 102, both inside
+  `record_event` (`Event` frame path). The `InboundFrame::Authz` arm of
+  `handle_frame` (lines 215-238) contains no tracing call at any level.
+- `MonitoringVerdict` (multiplex.rs:19-24) carries only `session`,
+  `allow`, `reason` — no `tool`/`arguments` field — so `record_verdict`'s
+  existing `tracing::info!` structurally cannot log the denied call's
+  arguments even though it already logs `session`/`allow`/`reason`.
+- `bob_core::types::records::PolicyVerdictAuditPayload`
+  (`bob-core/src/types/records.rs:69-74`) is `{ allow: bool, reason:
+  Option<String> }` — confirmed unchanged and out of scope for the fix.
+- `policy_control::PolicyEngine::evaluate_action`'s deny branch
+  (`policy-control/src/engine.rs:53-60`) builds `reason` via
+  `format!("no action rule permits tool '{tool}' with the supplied
+  arguments")` — only `tool` is interpolated; `arguments` never appears
+  anywhere on the deny path.
+- Dynamic confirmation: temporary integration test (written, run, deleted
+  — not committed) built a deny-all `RulesetSnapshot`, called
+  `SessionMultiplexer::handle_frame` with an `Authz` frame whose
+  `arguments` contained a unique telltale command string, captured all
+  tracing output at `TRACE` level, and asserted the telltale string does
+  not appear anywhere in captured output. `cargo test -p extension-ipc
+  --test b032_repro -- --nocapture` → 1 passed, confirming the command
+  text is unrecoverable from tracing output.
+- Baseline (pre-fix) gate state: `cargo test -p extension-ipc` → 38
+  passed, 0 failed. `cargo fmt --all -- --check` → clean. `git status
+  --porcelain` → empty after scratch test removal.
+
+Isolated fault: `SessionMultiplexer::handle_frame`'s `InboundFrame::Authz`
+arm in `the-intern/service/crates/extension-ipc/src/multiplex.rs` (lines
+215-238). `tool` and `arguments` are destructured from the inbound frame
+and passed to `PolicyEngine::evaluate_action`, but neither value is ever
+passed to any tracing call or into `MonitoringVerdict` before the arm
+returns.
+
+Root cause or fault hypothesis: Confirmed root cause — a plain
+missing-instrumentation omission. The `Event` frame path already has a
+working diagnostic pattern (`tracing::debug!(session = %session, payload =
+?event.payload, ...)` at lines 61/102) for exactly this purpose, but
+equivalent instrumentation was never added to the `Authz` path when it was
+written. `tool`/`arguments` are fully in scope at the fault location; they
+are simply never emitted anywhere.
+
 Planned verification:
--->
+1. Add a test in `multiplex.rs`'s existing `#[cfg(test)]` module
+   (mirroring the existing `TracingCapture`-based test) asserting that
+   after a denied `Authz` frame is handled, a captured `DEBUG`-level
+   tracing line contains the frame's `session`, `tool`, and `arguments`
+   values.
+2. `cargo test -p extension-ipc` — full suite, including the new test,
+   passes.
+3. `cargo fmt --all -- --check` — passes.
+4. `git diff` shows no change to `bob-core/src/types/records.rs`
+   (`PolicyVerdictAuditPayload` untouched).
+5. (Manual, optional) Run under `RUST_LOG=extension_ipc=debug` against a
+   live denial and confirm the full command/arguments string appears in
+   the log — not required for the automated gate.
+
+Planned fix (not yet implemented): In the `InboundFrame::Authz` arm of
+`multiplex.rs::handle_frame`, add one `tracing::debug!` call — mirroring
+the `Event`-path pattern at lines 61/102 — emitting `session` (`%session`),
+`tool`, and `arguments` (`?arguments`), placed where `tool`/`arguments` are
+already in scope. Do not add `tool`/`arguments` fields to
+`MonitoringVerdict` or `PolicyVerdictAuditPayload`, and do not route them
+through `record_verdict` into persisted monitoring — this stays pure
+tracing-only diagnostic output local to the `Authz` arm.
 
 ## Work Log
 
