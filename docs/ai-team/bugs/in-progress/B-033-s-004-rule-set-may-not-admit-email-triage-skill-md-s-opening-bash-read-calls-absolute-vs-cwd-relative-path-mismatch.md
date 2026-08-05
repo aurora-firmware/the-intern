@@ -239,3 +239,91 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-05
+PASS
+
+This closes as **not reproduced — already resolved**, with no branch content to
+merge. `bug/B-033-...` carries zero source/doc diff against `dev-agent`
+(`git diff dev-agent...HEAD` is empty; the only difference is that `dev-agent`
+has since gained the diagnosis and work-log lifecycle commits that post-date
+the branch cut). The bug-fix loop should move B-033 straight to `resolved/`
+without invoking the `integrate` skill.
+
+Evidence-chain and diagnosis-quality checks (all independently re-verified,
+not taken on the Developer's word):
+
+- **Both doc files ship the cwd-relative worklog `read` rule.** Read
+  `the-intern/email-skills/README.md` and
+  `the-intern/docs/src/operator-guide/index.md` directly off `dev-agent`:
+  both ship an identical `[[policy.action_rules]]` block that includes
+  **both** an absolute `read` rule
+  (`/srv/workspaces/email-skills/worklog/*.md` /
+  `/abs/workspace/worklog/*.md`) **and** a cwd-relative `read` rule
+  (`worklog/*.md`) for worklog files, and every `bash` rule covering the
+  same opening-step files (`cat config/email-triage.toml*`, `test -f
+  worklog/*`, `*find worklog*`, `*ls worklog*`, `cat worklog/*.md*`, `*>>
+  worklog/*.md*`) is cwd-relative throughout. Confirmed by reading the full
+  ranges (`README.md:130-298`, `operator-guide/index.md:796-965`), not just
+  the window the bug itself cited.
+- **The cwd-relative rule traces to T-140, predating this bug's filing.**
+  `git log -S'pattern = "worklog/*.md" }' -- the-intern/email-skills/README.md`
+  isolates exactly one commit, `28d4e1a` ("docs(email): clarify triage
+  runtime rules", 2026-08-03 15:39). `git show 28d4e1a` confirms the diff
+  turns the second worklog `read` rule from an absolute path into
+  `worklog/*.md`. `28d4e1a` is an ancestor of `dfe409b` ("chore(tasks): merge
+  T-140 validate escalation continuity paths"), and T-140's own Session 6
+  work-log entry independently corroborates committing `28d4e1a` "to
+  document and align the cwd-relative `read.path = \"worklog/*.md\"`
+  reconciliation surface" after a live run hit exactly that denial. All of
+  this predates B-033's 2026-08-05 filing date. Separately,
+  `operator-guide/index.md` did not exist until commit `83e4c2f` (2026-08-03
+  20:42, after `28d4e1a`), so that file was created already carrying the
+  fixed rule set — it never shipped the gap.
+- **Every SKILL.md-prescribed opening-step shape is admitted, in the
+  convention SKILL.md actually uses.** Read `SKILL.md`'s "Tool usage"
+  section and steps 1-2 (lines ~30-104) plus `references/worklog.md` in
+  full to enumerate the exact shapes: `test -f worklog/<date>.md` (bash,
+  cwd-relative), backward-walking `worklog/*.md` via listing (bash,
+  cwd-relative) and opening each candidate's contents (`read`,
+  cwd-relative — the specific shape this bug worried about), `cat
+  config/email-triage.toml` (bash, cwd-relative), and the unseen-envelope
+  listing (bash). Rather than treat the Diagnosis Log's harness description
+  as fact, I reconstructed it independently: a temporary integration test
+  in `policy-control` (`tests/b033_review_harness.rs`, deleted after the
+  run — no trace left on any branch) loaded the exact TOML block shipped in
+  `README.md` through `toml::from_str` + `RulesetSnapshot::from_config` and
+  drove it through the real `PolicyEngine::evaluate_action`
+  (`wildmatch` 2.6.1, confirmed pinned in `Cargo.lock`, matching the
+  Diagnosis Log's claim). All 7 SKILL.md-prescribed shapes returned
+  `allow=true`, including the cwd-relative `read` on `worklog/2026-08-04.md`
+  and on an older carried-forward file `worklog/2026-07-29.md`. A negative
+  control (an absolute-path `bash` worklog call, a shape SKILL.md never
+  submits) correctly returned `allow=false`, confirming the harness
+  discriminates real gaps rather than rubber-stamping everything.
+- **The originally-filed evidence window is a real truncation artifact, not
+  a rationalization.** `operator-guide/index.md` lines 812-845 (the range
+  B-033's own filing cited) contain only the five absolute-path `read`
+  rules plus the absolute worklog rule, ending at line 845/`]` on line 845 —
+  the cwd-relative `worklog/*.md` rule sits immediately after, at lines
+  847-851. Confirmed by direct inspection with line numbers; the cited
+  range is exactly two lines short of the rule that would have refuted the
+  suspicion.
+
+Stage 1 (bug criteria): the Diagnosis Log records reproduction status ("not
+reproduced"), captured evidence, an isolated-fault statement ("none present"),
+and a root-cause disposition ("hypothesis refuted, not confirmed") — a
+complete, evidenced fix contract for the not-reproduced case. The Work Log
+correctly reports no code/doc change was made, consistent with there being no
+fault. Nothing outside the bug's scope was touched.
+
+Stage 2 (code quality): not applicable in the usual sense — there is no diff
+to review. The Bug Fix Addendum criteria (minimal fix, matching regression
+test) are vacuously satisfied by the absence of any fix, and the decision to
+leave a durable regression-test-against-doc-drift out of scope as a separate
+follow-up (rather than bundling it into this bug) is reasonable and correctly
+flagged as such.
+
+No further action needed on this bug; recommend closing to `resolved/` as
+"not reproduced — already fixed by T-140/commit 28d4e1a," per the Developer's
+own recommendation.
