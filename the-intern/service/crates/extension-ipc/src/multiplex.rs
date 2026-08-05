@@ -221,6 +221,11 @@ impl SessionMultiplexer {
                 let snapshot = self.snapshot.load();
                 let verdict = PolicyEngine::evaluate_action(&snapshot, &tool, &arguments);
 
+                // Diagnostic-only: the audit record and deny-reason string only carry
+                // the tool name, so surface the full call here for post-hoc S-004 rule
+                // diagnosis (B-032). Never persisted — tracing output only.
+                tracing::debug!(session = %session, tool = %tool, arguments = ?arguments, "extension authz call");
+
                 // Record the verdict to monitoring before sending the wire reply.  A
                 // monitoring failure is logged but never changes the policy outcome.
                 self.monitoring
@@ -299,6 +304,41 @@ mod tests {
 
     // ---- TracingMonitoringHandle tests (AC-1, AC-2) ----
 
+    /// Installs a permissive, process-wide default `tracing` subscriber
+    /// exactly once for the whole test binary.
+    ///
+    /// B-032 follow-up: a brand-new `tracing` callsite's `Interest` is
+    /// cached globally the first time it is ever invoked, based on
+    /// whichever thread happens to reach it first. Under `cargo test`'s
+    /// default parallel harness, many other tests in this file (and in
+    /// `lib.rs`) drive an `Authz` frame through `handle_frame` without any
+    /// subscriber override. If one of those wins the race to be the very
+    /// first caller of a new callsite, its thread has no subscriber at
+    /// all, so the callsite gets permanently cached "not interested" —
+    /// silently no-oping the event for every later caller, including a
+    /// `TracingCapture`-based test with an interested subscriber active
+    /// via a thread-local override. Installing one real (if silent) global
+    /// default subscriber removes that "nobody is listening" fallback
+    /// entirely: every thread's first touch of any callsite now resolves
+    /// through a subscriber that is actually interested at `TRACE` level.
+    /// Per `tracing-core`'s documented rebuild-on-register behavior,
+    /// installing a new subscriber also retroactively re-evaluates any
+    /// callsite a racing thread already poisoned before this runs, so
+    /// timing relative to other tests does not matter.
+    fn ensure_global_test_subscriber() {
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(std::io::sink)
+                .finish();
+            // Ignore failure: a prior global default (installed by a
+            // concurrently-started test hitting this same call_once) means
+            // the process is already covered.
+            let _ = tracing::subscriber::set_global_default(subscriber);
+        });
+    }
+
     /// Captures tracing events emitted while the guard is alive.
     struct TracingCapture {
         lines: Arc<Mutex<Vec<String>>>,
@@ -307,6 +347,8 @@ mod tests {
 
     impl TracingCapture {
         fn new() -> Self {
+            ensure_global_test_subscriber();
+
             let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
             let lines_clone = Arc::clone(&lines);
 
@@ -378,6 +420,50 @@ mod tests {
         assert!(
             info_line.contains("session.started"),
             "INFO event must carry event field value; line: {info_line}"
+        );
+    }
+
+    /// B-032: a denied `Authz` frame must leave the denied tool call's
+    /// arguments recoverable from `DEBUG`-level tracing, since the audit
+    /// record and the fixed deny-reason string only carry the tool name.
+    #[tokio::test(flavor = "current_thread")]
+    async fn authz_frame_debug_tracing_captures_session_tool_and_arguments_for_denied_call() {
+        let capture = TracingCapture::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let monitoring: Arc<dyn MonitoringHandle> = Arc::new(TracingMonitoringHandle);
+        let mut mux = SessionMultiplexer::new(monitoring, deny_all_snapshot(), tx);
+        let session = SessionId::new();
+        let command = "rm -rf /some/denied/path";
+
+        mux.handle_frame(InboundFrame::Authz {
+            session,
+            tool: "bash".to_owned(),
+            arguments: serde_json::json!({"command": command}),
+        })
+        .await
+        .expect("frame should process");
+
+        // Sanity check: the call was actually denied.
+        let sent = rx.recv().await.expect("reply frame");
+        match sent {
+            OutboundFrame::AuthzVerdict { verdict, .. } => {
+                assert!(!verdict.allow, "deny-all snapshot must deny the call");
+            }
+        }
+
+        let lines = capture.captured();
+        let session_str = session.to_string();
+        let debug_lines: Vec<&String> = lines.iter().filter(|l| l.contains(" DEBUG ")).collect();
+        assert!(
+            !debug_lines.is_empty(),
+            "expected at least one DEBUG line for the denied authz call; captured: {lines:?}"
+        );
+        let matching_line = debug_lines
+            .iter()
+            .find(|l| l.contains(&session_str) && l.contains("bash") && l.contains(command));
+        assert!(
+            matching_line.is_some(),
+            "expected a DEBUG line carrying session, tool, and the denied command; captured: {lines:?}"
         );
     }
 
