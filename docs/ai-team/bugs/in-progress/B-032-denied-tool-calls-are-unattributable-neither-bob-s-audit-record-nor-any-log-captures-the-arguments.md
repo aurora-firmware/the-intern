@@ -188,13 +188,41 @@ tracing-only diagnostic output local to the `Authz` arm.
 
 ## Work Log
 
-<!-- Mandatory. Append one entry per session boundary. Format:
-### Session N — YYYY-MM-DD
-Free-prose body: what was done this session, what was tried and
-rejected, decisions made, what remains for next session.
+### Session 1 — 2026-08-05
 
-Start every session by reading the entries below.
-The final entry serves as the handoff to the reviewer. -->
+Implemented the fix per the Diagnosis Log's fix contract, using TDD. Wrote
+a failing test first:
+`authz_frame_debug_tracing_captures_session_tool_and_arguments_for_denied_call`
+in `multiplex.rs`'s existing `#[cfg(test)]` module, reusing the file's
+existing `TracingCapture` helper. The test builds a deny-all
+`RulesetSnapshot`, drives `SessionMultiplexer::handle_frame` with a
+`TracingMonitoringHandle` and an `Authz` frame carrying a distinctive
+command string, and asserts a captured `DEBUG`-level line contains the
+session id, tool name, and the denied command text. Confirmed red against
+pre-fix code: only the pre-existing INFO `"extension authz verdict"` line
+appeared, no DEBUG line at all.
+
+Implemented the minimal fix: one `tracing::debug!(session = %session, tool
+= %tool, arguments = ?arguments, "extension authz call")` call added in
+the `InboundFrame::Authz` arm of `handle_frame`, placed right after
+`PolicyEngine::evaluate_action` runs (where `tool`/`arguments` are already
+in scope) and before the existing `record_verdict`/wire-reply logic —
+mirroring the `Event`-path pattern at lines 61/102. Added a short comment
+noting this is diagnostic-only tracing (B-032), never persisted. Re-ran
+the new test: green. No refactor was needed — the diff is a single
+tracing line plus a comment in production code.
+
+Ran the bug's full Fix Verification block: `cargo test -p extension-ipc`
+(39 passed, 0 failed), `cargo fmt --all -- --check` (clean), and confirmed
+via `git diff --name-only` that `bob-core/src/types/records.rs`
+(`PolicyVerdictAuditPayload`) was not touched. Also ran `cargo build -p
+bob` and `cargo test --workspace` as an extra sanity pass; both clean, no
+regressions elsewhere in the workspace.
+
+Committed the completed red→green cycle as a single commit
+(`fix(extension-ipc): trace denied authz call session, tool, arguments`,
+`f903cae`) on the bug branch. Nothing remains outstanding for this bug's
+implementation.
 
 ## Review
 
