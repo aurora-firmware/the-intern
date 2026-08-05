@@ -131,14 +131,73 @@ suspected of being wrong, just never exercised live.
 
 ## Diagnosis Log
 
-<!-- Mandatory before implementation. Append one entry before changing production code. Format:
-### Diagnosis N — YYYY-MM-DD
-Reproduction status:
+### Diagnosis 1 — 2026-08-05
+
+Reproduction status: **Blocked — external provider quota, same class of
+blocker as `B-030`, earliest retry ~2026-08-08.** Live validation cannot
+be attempted at all (not even started) because pi's only authenticated
+model provider is fully quota-exhausted.
+
 Evidence captured:
-Isolated fault:
-Root cause or fault hypothesis:
-Planned verification:
--->
+- Fresh, independent direct probe, outside `bob` entirely:
+  `date -u +"%Y-%m-%dT%H:%M:%SZ"` → `2026-08-05T15:44:02Z`, then `timeout
+  60 pi -p "Say the single word: ping"` → `You have hit your ChatGPT
+  usage limit (plus plan). Try again in ~4174 min.` (exit code 1).
+- `pi --version` → `0.80.3`, confirming the binary itself is present and
+  runs — the failure is the provider's usage-limit response, not a
+  tool/install error.
+- The ~4174 min figure (≈69.6h from 15:44 UTC ≈ 2026-08-08 ~13:18 UTC) is
+  consistent with, and slightly decayed from, `B-030`'s own independently
+  captured ETA of ~72h from 2026-08-05T13:28 UTC and a separate
+  orchestrator probe (~4175 min) taken minutes earlier — three
+  independent samples over ~2h16m all point to the same single quota
+  window, not three different outages.
+- Confirmed B-031's fix content needs no further code-level attention
+  before it can be live-validated: `git log --oneline f303848..HEAD --
+  the-intern/docs/src/operator-guide/index.md
+  the-intern/email-skills/README.md` shows no commits have touched either
+  file since B-029's fix landed. The S-004 allow-rule for the `himalaya
+  template reply` -> `himalaya template send` shape
+  (`operator-guide/index.md:892`, `email-skills/README.md:231`) is
+  present, identical between both files, and unchanged. No re-run of the
+  wildmatch harness was needed — B-029's own review already covered that
+  exhaustively.
+
+Isolated fault: Not applicable — no code-level fault. The blocking
+condition is entirely external: pi's only authenticated model provider
+(`openai-codex`, ChatGPT Plus) has no completions available at all, for
+any prompt, inside or outside `bob`, until the quota window resets.
+
+Root cause or fault hypothesis: External infrastructure blocker — the
+same ChatGPT Plus usage-limit exhaustion already diagnosed for `B-030`
+(~2026-08-08 ETA), now independently re-confirmed for `B-031` rather than
+merely inherited. No live validation of the S-004 reply-send rule can be
+attempted while this holds.
+
+Planned verification: Deferred until the provider quota resets
+(~2026-08-08). At that point, follow B-031's existing Fix Verification
+section: deploy `email-skills` per the operator guide's current
+(post-B-029) S-004 rule set, feed the scheduled job a message that
+confidently classifies as `direct-request` or `meeting-scheduling`, and
+confirm the reply is actually composed, admitted by S-004, sent, and
+recorded in the worklog. `B-030` and `B-031` can reasonably be
+validated together in one live session once the blocker clears.
+
+**Escalation disposition note (2026-08-05):** The Developer returned
+ESCALATE (no code-level fault, external blocker only) with a structured
+escalation request asking whether B-031 should stay in
+`bugs/in-progress/` and be validated together with `B-030` once the
+quota clears. This is the identical class of blocker, and the identical
+procedural question, that the Architect already resolved for `B-030` via
+Phase 1 escalation-review earlier today (2026-08-05): stay in
+`in-progress/` (no `blocked/` lifecycle state exists for bugs; `open/`
+would invite a fresh pickup that re-hits the same lockout), no ADR or
+design change is warranted, and no Phase 2 human escalation is needed for
+a pure ~72h infrastructure wait. The bug-fix loop applied that
+already-established precedent directly here rather than spawning a
+duplicate Architect consultation for an identical procedural question
+already answered same-day — documented here for auditability rather than
+silently skipped.
 
 ## Work Log
 
