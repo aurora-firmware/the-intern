@@ -62,6 +62,11 @@ What this specification explicitly does NOT cover:
   directory. Only skill discovery moves.
 - **A bob-side reader or parser of skill content.** bob supplies a path. It does
   not read, validate, or understand skill files.
+- **Supplying skills as command-line arguments to the agent process.**
+  Considered and rejected in `ADR-014` Alternative A: it adds a second delivery
+  mechanism alongside the one the service already owns for its extension,
+  requires the same logic on three spawn paths, and carries more version
+  exposure than the extension event this specification uses.
 - **Relaxing the action-authorization gate.** Every tool call a skill makes
   still passes the existing gate. This specification grants no new authority.
 
@@ -107,15 +112,24 @@ What this specification explicitly does NOT cover:
                         v
             skill install path (XDG data bucket)
                         │
-                        │ bob resolves path, passes to pi
+                        │ bob resolves path → environment
                         v
     ┌───────────────────┴───────────────────┐
     │            bob spawn paths            │
     │  RPC worker   interactive chat   scheduled job
+    │   (all three already carry the extension)
     └───────────────────┬───────────────────┘
                         v
                  pi-agent session
-                   (skills present regardless of cwd)
+                        │
+                        │ pi fires resources_discover at session init
+                        v
+              bob extension answers with the skill path
+                        │
+                        │ pi extends resources, rebuilds system prompt
+                        v
+                 skills in effect before the first turn
+                   (regardless of cwd)
                         │
                         │ writes, relative to its own cwd
                         v
@@ -128,8 +142,9 @@ What this specification explicitly does NOT cover:
 |---|---|---|
 | Canonical skill source | Holds every skill's content exactly once, vendor-neutral | Consumed by all packaging targets; carries no vendor-specific layout |
 | Packaging targets | Present the canonical content in each vendor's expected layout | Manifests and layout only; must contain no content of their own |
-| Skill install path | The deployed, read-only location bob resolves and hands to pi | A trusted, un-checked input; operator-protected by filesystem permissions |
-| bob spawn paths | Resolve the install path and supply it to every session spawned | All three paths behave identically; bob never reads skill content |
+| Skill install path | The deployed, read-only location bob resolves and makes available to its extension | A trusted, un-checked input; operator-protected by filesystem permissions |
+| bob service | Resolve the install path and make it available to the extension on every session spawned | Uses the existing per-session environment contract; bob never reads skill content |
+| bob extension | Answer pi's resource-discovery event with the resolved skill path | Already supplied on all three spawn paths and already subscribed to the event; governed by `ADR-014` |
 | `worklog` skill | Owns the entire diary discipline: location, entry format, creation, first-run detection, reconciliation, and how an open item closes | Domain-free; consumed by any work that needs continuity |
 | `email-triage` skill | Owns detection, classification, and the act-or-escalate decision | Delegates all diary mechanics to `worklog`; retains retry of a carried-forward blocked action |
 | `himalaya` skill | Owns CLI reference knowledge | Carries no triage policy; unchanged in role |
@@ -159,10 +174,12 @@ content.
 
 ### Component 3: bob-side skill supply
 
-**Purpose:** Resolve the configured skill install path and supply it to pi on
-every session the service spawns.
-**Estimated size:** Medium — one configuration key, path resolution with the
-absence behaviour, and uniform application across three existing spawn paths.
+**Purpose:** Resolve the configured skill install path, make it available to
+the extension on every session the service spawns, and have the extension
+answer pi's resource-discovery event with it.
+**Estimated size:** Small — one configuration key with its absence behaviour,
+one addition to the existing per-session environment contract, and answering an
+event the extension already subscribes to.
 **Interfaces:** Consumes service configuration and the installed skill path;
 exposes no new external interface. Governed by `ADR-014`.
 
@@ -199,7 +216,12 @@ bob starts and resolves the skill install path
   ↓
 A session is requested — scheduled firing, interactive chat, or queued work
   ↓
-bob spawns pi, supplying the resolved skill path, whatever the session's cwd
+bob spawns pi with its extension, whatever the session's cwd
+  ↓
+pi fires resource discovery; the extension answers with the skill path
+  → path missing or empty: contribute nothing, session continues without skills
+  ↓
+pi extends its resources and rebuilds the system prompt before the first turn
   ↓
 Session has himalaya, email-triage, and worklog available regardless of cwd
   ↓
@@ -222,7 +244,10 @@ A later session reconciles carried-forward open items from that same directory
   directory, which is this specification's core requirement.
 - **Where it lives:** the service's existing configuration file, as a flat
   top-level key consistent with the project's established configuration
-  convention (`ADR-002`) — not a new subsystem table.
+  convention (`ADR-002`) — not a new subsystem table. The resolved value
+  reaches the extension through the existing per-session environment contract,
+  alongside the session identifier and extension socket path already supplied
+  there.
 - **Constraints:** must be an absolute path when set, consistent with how the
   service's other path settings are constrained. Its contents are loaded into
   every session the service spawns, so it is security-relevant: it must be
@@ -232,9 +257,9 @@ A later session reconciles carried-forward open items from that same directory
 - **Missing-value behaviour:** unset falls back to a default location in the
   read-only application-asset area of the service's filesystem layout
   (`ADR-009`), alongside the extension. A set-but-missing or empty path is
-  **fail-open**: the service logs a warning and starts the session without
-  skills (`ADR-014` §3). It must not prevent the session from starting, and it
-  must not fail service startup.
+  **fail-open** (`ADR-014` §4): the extension contributes no skill paths and
+  warns. It must not prevent the session from starting, and it must not fail
+  service startup.
 
 **Action rules admitting skill tool calls**
 
@@ -270,25 +295,30 @@ A later session reconciles carried-forward open items from that same directory
 **pi-agent version**
 
 - **What must exist:** a recorded, validated pi-agent version providing the
-  path-based skill-loading capability this specification depends on.
+  extension resource-discovery capability this specification depends on, and a
+  reconciled record of the versions actually in use.
 - **Where it lives:** the repository README's compatibility section, which is
   the project's canonical version record. Specifications and decision records
-  deliberately do not pin versions.
-- **Constraints:** the version validated for the scheduled invocation path must
-  actually provide the capability. The version currently recorded for that path
-  predates it.
-- **Missing-value behaviour:** if the installed version does not provide it,
-  this specification's core requirement cannot be met and the work is blocked
-  rather than worked around.
+  deliberately do not pin versions. The extension's own automated compatibility
+  test enforces the pinned extension API version independently.
+- **Constraints:** three version records currently disagree — the pinned and
+  test-enforced extension API version, the installed agent CLI version, and the
+  older version recorded as validated for the scheduled invocation path. The
+  capability is present in both the pinned extension API version and the
+  installed CLI, so the requirement is reconciliation and revalidation rather
+  than an upgrade blocker.
+- **Missing-value behaviour:** if the version actually in use does not provide
+  the capability, this specification's core requirement cannot be met and the
+  work is blocked rather than worked around.
 
 ## Implementation Order
 
 | Phase | What | Depends On |
 |---|---|---|
-| 1 | Validate the path-based skill-loading capability against the pi-agent version actually installed, and update the README compatibility record. Resolves whether one path carries multiple skills or one path is needed per skill. | Nothing |
+| 1 | Reconcile the three disagreeing pi-agent version records and update the README compatibility section. Confirm the extension resource-discovery event fires and its contributed skills reach the system prompt on all three spawn paths, including the non-interactive scheduled path. | Nothing |
 | 2 | Restructure the package into a canonical vendor-neutral source with per-vendor packaging targets carrying no duplicated content. Includes removing the one frontmatter field whose format differs between vendors. | Nothing |
 | 3 | Extract the `worklog` skill as a domain-free skill and reduce `email-triage` to delegate its diary mechanics. | Phase 2 |
-| 4 | Add the service-side skill install path setting, its resolution and fail-open absence behaviour, and supply it uniformly on all three spawn paths. | Phase 1 |
+| 4 | Add the service-side skill install path setting with its resolution and fail-open absence behaviour, extend the per-session environment contract with the resolved path, and answer the resource-discovery event in the extension. | Phase 1 |
 | 5 | Update the operator-facing deployment procedure and the action-rule guidance to the install-path model, and re-validate the previously live-validated paths against the new deployment shape. | Phases 3, 4 |
 
 ## Amendment Log
