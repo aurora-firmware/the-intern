@@ -43,13 +43,13 @@ What this specification explicitly does NOT cover:
   a `UserId` is an opaque UUID. Scoping action rules by user or role is
   deferred until a real identity/role model exists, and is a separately
   justified later spec.
-- **Agent skills.** S-001 Component 3's third bullet and S-003 both parked
-  skills "alongside the Phase 4 authorization hook"; that turned out not to
-  hold — skills reach pi-agent via its own cwd-relative auto-discovery
-  (ADR-012 §7), independent of this spec's authorization hook. This spec
-  still delivers the authorization hook only; the deferred skills work was
-  ultimately delivered as S-010, and every `bash` call a skill makes still
-  passes through this spec's action gate.
+- **Agent skills.** How skills reach pi-agent is not this spec's concern: bob
+  resolves a skill install path and its extension supplies it to pi (ADR-014,
+  S-011), while the skill content itself belongs to S-010 and S-011. This spec
+  still delivers the authorization hook only. Skill delivery grants no
+  authority — every `bash` call a skill makes still passes through this spec's
+  action gate, and the rules admitting reads of skill reference content are
+  scoped to the install path rather than to each job's working directory.
 - **Deny / exception rules.** The action model is allow-only: a rule grants,
   and the absence of a matching rule denies. There are no deny rules and no
   allow-with-exception rules. A narrow restriction is expressed by writing an
@@ -366,3 +366,4 @@ The deliverable rests on a policy section in bob's existing TOML configuration
 | 2026-06-23 | Interactive chat exempted from pre-flight admission; admission scoped to queue-borne requests. | CR-002 routes interactive chat through a supervised direct `pi` session that bypasses the Requests-Handler queue; gated instead by the socket trust boundary + the `tool_call` action gate (ADR-010). | T-103, T-104, T-105, T-106, T-107, T-108 |
 | 2026-06-30 | Scheduler jobs exempted from scheduler-derived UUID admission; `[policy].admitted_users` applies only to admission-gated requests. | ADR-012 / CR-004 make local scheduler admission depend on trusted schedule-store membership under the Unix trust boundary, while preserving the global `tool_call` action gate. | Scheduler amendment tasks TBD |
 | 2026-08-01 | Exclusions' "Agent skills" bullet corrected: skills were never bundled with Phase 4/the authorization hook; they reach pi-agent via cwd-relative auto-discovery (ADR-012 §7), delivered concretely by S-010, whose `bash` calls remain subject to this spec's action gate. | Architecture Consistency Review of S-010 found this bullet stale against ADR-012 §7 and against S-001's corrected Component 3 (2026-08-01 amendment). | None (documentation reconciliation). |
+| 2026-08-06 | Exclusions' "Agent skills" bullet rewritten: skill delivery is bob's (ADR-014 / S-011), skill content is S-010's, and neither grants authority. Noted that rules admitting reads of skill reference content are now scoped to the install path rather than to each job's working directory. | ADR-014 accepted 2026-08-06. Also records the accepted risk that always-active journaling requires a rule broad enough to cover arbitrary working directories, departing from this spec's narrowly-matched rule shape. | S-011 breakdown tasks (Gate 2 pending). |

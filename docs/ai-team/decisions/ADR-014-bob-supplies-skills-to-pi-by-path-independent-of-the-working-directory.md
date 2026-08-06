@@ -1,7 +1,7 @@
 ---
 id: ADR-014
 title: bob supplies skills to pi by path independent of the working directory
-status: proposed
+status: accepted
 created: '2026-08-06'
 ---
 

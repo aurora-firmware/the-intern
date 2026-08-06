@@ -101,7 +101,7 @@ What this specification explicitly does NOT cover:
 | Policy Control | Decide per-user authorization for actions raised mid-run by the agent | Part of the Rust service; never inside the agent |
 | Monitoring | Maintain an append-only audit log; expose an inbound interface for external tools to report actions | Part of the Rust service |
 | pi-agent process | Run one user-session's agent | Spawned on demand, idle-reaped, drawn from a warm pool |
-| JS extension | Host the blocking `tool_call` hook, forward events to Monitoring | Only component inside the agent process; carries no policy logic. Skills reach pi-agent through its own cwd-relative auto-discovery, not through the extension (ADR-012 §7; see the 2026-08-01 amendment below) |
+| JS extension | Host the blocking `tool_call` hook, forward events to Monitoring, supply skill paths to pi-agent | Only component inside the agent process; carries no policy logic and reads no skill content — it supplies a path bob resolved (ADR-014) |
 | Actions (CLI tools) | Perform external side effects | Separate processes invoked via the `bash` tool; may self-report to Monitoring |
 
 ## Components
@@ -153,11 +153,15 @@ events, holds no policy logic.
   asynchronous verdict, and returns allow/block to pi-agent.
 - *Subscribes* to pi-agent's event stream and forwards events to Monitoring over
   the Unix socket.
-- Skills reach pi-agent by its own cwd-relative auto-discovery — `AGENTS.md`/
-  `CLAUDE.md` and skill files found in the process working directory — not
-  through the extension. ADR-012 §7 records this as a deliberate trust
-  relaxation (the working directory is a trusted, un-checked input); S-010 is
-  the first concrete skill package built on it.
+- *Supplies* skills to pi-agent: bob resolves a configured skill install path
+  and the extension answers pi's resource-discovery event with it, so every
+  session bob spawns carries the same skills regardless of its working
+  directory (ADR-014). `AGENTS.md`/`CLAUDE.md` context files are still
+  discovered from the working directory, which ADR-012 §7 records as a
+  deliberate trust relaxation (the working directory is a trusted, un-checked
+  input); the skill install path is a trusted, un-checked input on the same
+  terms (ADR-014 §7). S-010 was the first concrete skill package; S-011
+  restructures it and moves skill delivery here.
 - All extension instances connect to the same Unix socket; every message is
   tagged with a session identifier so the Rust service can multiplex them.
 
@@ -262,3 +266,4 @@ All original open questions are resolved:
 | 2026-06-30 | Requests Handler language narrowed from universal pre-flight identity checks to per-channel admission models; scheduler admission now references ADR-012. | CR-004 / ADR-012 remove scheduler-derived UUID admission and use the Unix trust boundary plus trusted schedule store for scheduled work. | Scheduler amendment tasks TBD |
 | 2026-07-04 | System diagram label corrected from "single OS-agnostic binary" to "Unix-likes (Linux and macOS)", matching the 2026-05-16 OS-scope amendment; Component 1 report-interface transport marked decided (`report.submit` on `admin.sock`, S-005/ADR-007); the three Open Questions marked resolved. | Documentation-consistency review: the diagram and Open Questions had not been updated after the amendments and after S-004/S-005 delivery answered them. | None (documentation reconciliation). |
 | 2026-08-01 | Component 3's third bullet and the JS-extension Responsibility Separation row corrected: skills reach pi-agent through its own cwd-relative auto-discovery, not through the JS extension providing them. Implementation Order Phase 7 annotated: the skill-definitions half is now partially delivered by S-010; the CLI invocation/reporting contract half remains open. | Architecture Consistency Review of S-010 (draft) found this stale against ADR-012 §7, which already established cwd auto-discovery as the mechanism, and against S-003/S-004's Exclusions, which both parked "agent skills" as deferred to a later spec. S-010 is that later spec. | None (documentation reconciliation; no tasks in flight against this component). |
+| 2026-08-06 | Component 3's third bullet and the JS-extension Responsibility Separation row corrected again: bob resolves a skill install path and its extension supplies it to pi, so skills no longer reach pi-agent through cwd-relative auto-discovery. Context-file discovery from the working directory is unchanged. | ADR-014 accepted 2026-08-06. The 2026-08-01 amendment recorded cwd-relative discovery as the mechanism; pi's extension API exposes a resource-discovery event that lets an extension supply skill paths, which S-011 adopts so a session's skills stop depending on its working directory. | S-011 breakdown tasks (Gate 2 pending). |

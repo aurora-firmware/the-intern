@@ -85,13 +85,13 @@ What this specification explicitly does NOT cover:
 
 ### Design Principles
 
-- **No bob-core or bob-service changes.** All triage logic stays entirely on
-  the pi-agent side of the existing periodic delivery path; this work adds no
-  new bob channel adapter, admin-RPC method, or core type. Skills reach
-  pi-agent through its own cwd-relative auto-discovery (ADR-012 §7), which
-  S-003 and S-004 both anticipated and deferred to this spec; S-001 is
-  amended alongside this spec to correct its stale "the extension provides
-  skills" statement.
+- **All triage logic stays on the pi-agent side.** This spec adds no bob
+  channel adapter, admin-RPC method, or core type: what the skills *do* is
+  decided entirely in skill content, not in the service. It no longer claims
+  that skills require no bob-service change at all — S-011 and ADR-014 move
+  skill delivery into bob, which resolves a skill install path and supplies it
+  through its extension, so skills no longer depend on the working directory.
+  This spec's scope remains the triage policy carried by that content.
 - **New-mail detection relies on IMAP-native state, not a second persistence
   mechanism** — but classifying a message requires reading it, which sets
   `\Seen` regardless of outcome. The design must not introduce its own
@@ -394,8 +394,6 @@ reconciliation.
 
 ## Amendment Log
 
-<!-- Optional. Use when an approved spec is amended after tasks are in flight.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| YYYY-MM-DD | Description of change | Reason for amendment | T-XXX, T-YYY |
--->
+| 2026-08-06 | The "No bob-core or bob-service changes" design principle replaced by "All triage logic stays on the pi-agent side": this spec still adds no channel adapter, admin-RPC method, or core type, but no longer claims skills require no bob-service change, since skill delivery moves into bob. | ADR-014 accepted 2026-08-06 / S-011. Skills are supplied by bob through its extension and no longer resolve from the working directory. | S-011 breakdown tasks (Gate 2 pending). |

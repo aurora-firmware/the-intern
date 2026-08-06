@@ -1,7 +1,7 @@
 ---
 title: Vendor-neutral skills package and bob-side skill loading
 version: '0.1'
-status: draft  # draft | review | approved | superseded
+status: approved  # draft | review | approved | superseded
 created: '2026-08-06'
 author: planner
 id: S-011
@@ -49,12 +49,12 @@ What this specification explicitly does NOT cover:
   authorization rules against it.
 - **Two skill sets split by delivery kind.** A configuration separating
   always-on skills from scheduled-only skills was considered and rejected in
-  favour of a single always-active set; see `ADR-014` Alternative B.
+  favour of a single always-active set; see `ADR-014` Alternative C.
 - **Runtime delivery-kind detection inside a skill.** A skill does not inspect
   its environment to decide whether it is running under a scheduled firing. What
   a session was given is decided at spawn time.
 - **Installing skills into a vendor's own global discovery directory.**
-  Rejected in `ADR-014` Alternative A: it gives the Intern's operating
+  Rejected in `ADR-014` Alternative B: it gives the Intern's operating
   instructions to every session of that vendor on the machine, including
   sessions the service neither supervises nor authorizes.
 - **Moving worklog storage out of the working directory.** Considered and
@@ -90,7 +90,7 @@ What this specification explicitly does NOT cover:
   not stop a session from starting.
 - **The skill install path is a trusted, un-checked input.** The design must
   state this exposure explicitly rather than implying a check the service does
-  not perform (`ADR-014` §6).
+  not perform (`ADR-014` §7).
 - **Skill content must not reference this project's internal artifacts.**
   Consumers have no access to its specifications, decision records, tasks, or
   bugs, so skill text must be intelligible without them.
@@ -253,7 +253,7 @@ A later session reconciles carried-forward open items from that same directory
   every session the service spawns, so it is security-relevant: it must be
   under the same owner-only protection the working directory already requires,
   enforced by filesystem permissions rather than a service-side check
-  (`ADR-014` §6).
+  (`ADR-014` §7).
 - **Missing-value behaviour:** unset falls back to a default location in the
   read-only application-asset area of the service's filesystem layout
   (`ADR-009`), alongside the extension. A set-but-missing or empty path is
