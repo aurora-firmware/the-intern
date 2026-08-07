@@ -1,7 +1,7 @@
 ---
 id: T-142
 title: Reconcile the himalaya skill against the CLI's own help output
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-06'
