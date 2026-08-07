@@ -1,7 +1,7 @@
 ---
 id: T-145
 title: Rewrite the worklog reference free of internal identifiers
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-07'
