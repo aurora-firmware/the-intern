@@ -102,4 +102,132 @@ whether the skill matched or was corrected.
 
 ## Work Log
 
+### Session 1 — 2026-08-07
+
+Reconciled `the-intern/email-skills/.pi/skills/himalaya/SKILL.md` and its
+`references/command-reference.md` against the installed CLI's own `--help`
+output, confirmed at loop start to be `himalaya v1.2.0 +maildir +smtp
++wizard +sendmail +pgp-commands +imap` (build: linux musl x86_64) — the
+same version both files already claimed, so no version-string update was
+needed (AC-1).
+
+For every subcommand the skill documents, I captured `himalaya <subcommand>
+--help` fresh from the installed binary and diff'd it against the skill
+prose, then cross-checked pitfall/behavior claims by running the live
+commands against the configured `daneel` IMAP/SMTP account. Per-command
+result (AC-2/AC-4 evidence):
+
+- `himalaya account list --help` — Usage `himalaya account list [OPTIONS]`;
+  options `-w/--max-width`, `-c/--config`, `-o/--output`, `--quiet`,
+  `--debug`, `--trace` (no `-a/--account`). Skill text matched; confirmed
+  live (`himalaya account list` / `-o json`) that output is limited to
+  name, backend(s), default flag — no correction needed.
+- `himalaya account doctor --help` — Usage `himalaya account doctor
+  [OPTIONS] [ACCOUNT]`; only option beyond globals is `-f/--fix`. Skill
+  text (documents it only as "out of scope", doesn't claim a shape)
+  matched; confirmed live (`himalaya account doctor`) output is 3
+  integrity-check lines, no address — no correction needed.
+- `himalaya folder list --help` — Usage `himalaya folder list [OPTIONS]`;
+  options `-a/--account`, `-w/--max-width`, plus globals. Skill text
+  matched exactly — no correction needed.
+- `himalaya envelope list --help` — Usage `himalaya envelope list
+  [OPTIONS] [QUERY]...`; options `-f/--folder`, `-p/--page`,
+  `-s/--page-size`, `-a/--account`, `-w/--max-width`, plus globals; query
+  grammar (3 operators, 8 conditions, `order by` sort clause) matches the
+  skill's transcription verbatim. Skill text matched — no correction
+  needed. Also re-ran the two documented pitfalls live: `envelope list not
+  flag seen -s 3` still errors with "expected space between filters...";
+  `envelope list -s 3 not flag seen` (options first) succeeds; `envelope
+  list -s 1 flag unseen` still silently returns zero rows instead of
+  erroring. All match the skill's claims exactly.
+- `himalaya message read --help` — Usage `himalaya message read [OPTIONS]
+  <ID>...`; options `-f/--folder`, `-p/--preview`, `--no-headers`,
+  `-H/--header` (verified repeatable live with two `-H` flags), plus
+  `-a/--account`. Skill text matched — no correction needed.
+- `himalaya message move --help` / `message copy --help` — Usage `himalaya
+  message move|copy [OPTIONS] <TARGET> <ID>...`; options `-f/--folder
+  <SOURCE>`, `-a/--account`. Skill text matched — no correction needed.
+- `himalaya message write --help` — confirms it drives `$EDITOR` and is
+  unsuitable for scripted use, exactly as the skill states. No correction
+  needed.
+- `himalaya message reply --help` / `message forward --help` — same
+  `$EDITOR` behavior as `message write`; `template reply`/`template
+  forward` are the scriptable counterparts, options `-f/--folder`,
+  `-A/--all` (reply only), `-H/--header`, `-a/--account`. Skill text
+  matched, and I re-ran `template reply`/`template forward` live against a
+  real message to confirm the "prefilled From, quoted body with `>`" /
+  "prefixed by a separator" claims — output matched exactly. No correction
+  needed.
+- `himalaya template write --help` — Usage `himalaya template write
+  [OPTIONS] [BODY]...`; options `-H/--header`, `-a/--account`. Re-ran the
+  documented "Hello world" transcript and the dash-led-body failure
+  (`error: unexpected argument '- ' found`) live — both matched character
+  for character. No correction needed.
+- `himalaya template send --help` — Usage `himalaya template send
+  [OPTIONS] [TEMPLATE]...`; only `-a/--account` beyond globals. Skill text
+  matched — no correction needed.
+- `himalaya attachment download --help` — Usage `himalaya attachment
+  download [OPTIONS] <ID>...`; options `-f/--folder`, `-a/--account`,
+  `-d/--downloads-dir`. Skill text matched — no correction needed. Also
+  confirmed via `himalaya attachment --help` that `download` is the only
+  subcommand, as the skill claims.
+
+I also spot-checked commands the skill references but that weren't in the
+task's explicit list (`message delete`, `flag add/set/remove`, `template
+save`, `message send`/`save`) against their own `--help` output; all
+matched the skill's documented shapes with no discrepancies. I did not find
+a single command shape, flag, or subcommand name in either file that
+`--help` contradicts — AC-2 and AC-4 are satisfied with zero corrections;
+every acceptance criterion's evidence is the match confirmations above.
+
+The one real gap the reconciliation surfaced was AC-3: the two established
+facts (that `account list`/`account doctor` don't expose the account's
+address, and that `template write` with no args does via its first-line
+`From:` header) were stated in the task but not actually written into the
+skill anywhere — I grepped both files first and confirmed the word
+"address" appeared only in the "no triage policy" disclaimers, not as
+documented CLI behavior. I fixed this by adding a new "Finding the
+Account's Own Address" section to `command-reference.md` (with the live
+`template write`/`account doctor` transcripts as evidence, and a
+cross-reference from "Selecting an Account"), plus an Operation Index row
+and an intro bullet in `SKILL.md` pointing to it. I kept the wording
+strictly about the CLI mechanism (parsing the `From:` header's address out
+of `template write`'s first line) and did not mention escalation, the
+manager address, or any triage-specific use of the address, to respect
+AC-5 — I re-grepped both files afterward for "categor|escalat|triage" and
+confirmed nothing leaked in.
+
+Rejected approach: I considered restating the whole account-list/doctor
+non-exposure story only inside `SKILL.md`'s intro bullets to keep
+`command-reference.md` untouched, but the Files-to-Touch note explicitly
+expects the address route to land in `command-reference.md` as a corrected
+shape too, and the reference file is where every other operation's full
+detail already lives (consistent with the Operation Index's link-out
+pattern), so I put the substantive content there and kept SKILL.md to an
+index row plus a short pointer bullet, matching how every other operation
+is split between the two files.
+
+Verification run: `himalaya --version` plus a fresh `<subcommand> --help`
+capture for all 12 commands listed in the task's verification script, plus
+live execution of `himalaya template write` (no args) confirming the first
+line is still `From: Daneel AFW <daneel@aurorafw.com>`, exactly as AC-3
+requires and as the task's established facts state. All commands were run
+directly (no `pi` wrapper needed — this is CLI-only doc verification, not
+a bob/pi-extension change), from a normal local shell against the
+already-configured `daneel` account, so no sandbox socket/permission
+issues applied here.
+
+Nothing remains outstanding against T-142's acceptance criteria. Two
+adjacent, out-of-scope items surfaced during review that a reader should
+be aware of but that this task deliberately does not touch: (1) the
+skill's `-H` "repeatable" claims for `message read`/`template
+write`/`template reply`/`template forward` aren't stated as repeatable in
+`--help` text itself but were verified repeatable by live execution here,
+consistent with how the skill already marks other Observed-only claims;
+(2) `himalaya folder`, `himalaya message`, and `himalaya attachment` each
+expose additional subcommands (`folder add/expunge/purge/delete`,
+`message export/thread/edit/mailto`) that neither this skill nor the
+triage workflow uses — left undocumented per AC-5's "don't add operations
+the triage workflow does not use."
+
 ## Review
