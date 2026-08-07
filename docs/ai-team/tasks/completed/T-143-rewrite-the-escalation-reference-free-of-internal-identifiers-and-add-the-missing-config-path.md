@@ -1,7 +1,7 @@
 ---
 id: T-143
 title: Rewrite the escalation reference free of internal identifiers and add the missing-config path
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-07'
