@@ -160,3 +160,124 @@ Commits on `task/T-146-rewrite-category-taxonomy`:
 - `606e80f` docs(email-triage): add terminal self-escalation category
 
 ## Review
+
+### Review Verdict — 2026-08-07
+
+PASS
+
+Both review stages passed. This is review cycle 1 for T-146; no prior verdict
+existed (the earlier reviewer session was terminated before recording
+anything, so every acceptance criterion below was re-verified from scratch,
+including AC-5, which the prior session had only partially checked).
+
+**Stage 1 — Acceptance Criteria** (checked against `task/T-146-rewrite-category-taxonomy`,
+commits `6d12bce`, `165f3ee`, `606e80f`, diffed against `dev-agent`):
+
+- **AC-1 (no identifiers under `categories/`):** Ran the task's own verification
+  grep from a checked-out worktree of the branch —
+  `grep -rnE '\b(S-0[0-9]{2}|T-[0-9]{3}|B-0[0-9]{2}|ADR-0[0-9]{2}|CR-0[0-9]{3})\b' .`
+  inside `references/categories/` — no output. Met.
+- **AC-2 (no add-a-category procedure/invitation):** Ran
+  `grep -rniE 'adding a category|add a category|extend the list' .` — no
+  output. Confirmed by reading the diff: the "Adding a category" section in
+  `README.md` was deleted outright (18 lines removed in `165f3ee`), with no
+  "do not edit" or similar notice added in its place, and no other file
+  reintroduces any add-a-category guidance. Met.
+- **AC-3 (self-escalation is genuinely terminal):** Read `self-escalation.md`
+  in full. Its "Never escalate this message" section states the terminal
+  rule explicitly and its "If the move is blocked" section explicitly
+  overrides the generic block-handling delegation to
+  `references/escalation.md` with "a blocked filing is never a reason to send
+  an escalation for this message instead." Verified there is no implicit
+  escalation path: checked the five existing categories' own "If the
+  move/reply is blocked" sections (`newsletter-bulk.md`,
+  `automated-notification.md`, `suspected-spam.md`, `direct-request.md`,
+  `meeting-scheduling.md`) — none of them contain the word "escalate" in
+  their blocked-handling sections, confirming the generic "block-handling
+  rule" they and `self-escalation.md` all delegate to
+  (`references/escalation.md`'s "record the denial as an open item... do not
+  fall back to acting... a call denied by policy is recorded and never
+  worked around") never itself routes to sending an escalation — it only
+  ever means "record as an open worklog item, do not treat as handled." So
+  neither the explicit text nor the block-handling delegation offers any
+  path back to another escalation. Met.
+- **AC-3 signal grounding:** Cross-checked each claimed matching signal
+  against `SKILL.md` and `references/escalation.md` as currently merged on
+  `dev-agent` (T-143/T-144, unmodified by this task):
+  - Self-addressed `From:`/`To:` — `escalation.md`'s missing-configuration
+    fallback sends to the account's own address (obtained from
+    `himalaya template write`'s default `From:` header per the `himalaya`
+    skill's "Finding the Account's Own Address" section) via
+    `-H 'To:<own address>'`, and `template write` fills `From:` with that
+    same account address by default when not overridden — so the resulting
+    message is self-addressed on both headers exactly as claimed.
+  - `Escalation: ` subject prefix — `SKILL.md`'s escalation-composition
+    command is literally
+    `-H "Subject:Escalation: $SUBJECT"`, an exact match for the claimed
+    literal prefix.
+  - Missing-config body text — `escalation.md`'s fallback "additionally
+    state[s] that the configuration file was missing... and the directory
+    where the file was expected: `<workspace>/config/`", matching the claim
+    that the body "names the workspace's `config/` directory." All three
+    signals are accurately grounded. Met.
+- **AC-4 (index entry, same shape, matching signals):** The new entry
+  (`### \`self-escalation\`` — description paragraph — `Signals:` bullet
+  list) in `README.md` has the identical internal shape to each of the five
+  existing entries. It is placed in its own new `## The skill's own
+  escalation mail` H2 section rather than as a sixth `###` entry under `##
+  Starter categories and their matching signals`. Judged this satisfies
+  AC-4: the criterion's text is "in the same shape as the existing
+  entries," which is about entry format, not section placement, and the
+  entry format matches exactly. The Dependencies note confirms `SKILL.md`
+  "consults this index by name and enumerates no categories itself," so
+  placement elsewhere in the same `README.md` index file does not affect
+  discoverability — `SKILL.md` step 3.1 reads the whole index file, not a
+  specific heading. The separate-section placement is also substantively
+  justified: folding it into "Starter categories" would misrepresent a
+  fixed, terminal infrastructure category as part of the "adjustable
+  sketch" the starter-category intro paragraph describes. Met.
+- **AC-5 (five existing categories and confidence rubric unchanged
+  behaviourally):** Diffed all five existing workflow files individually —
+  every changed line is identifier-scrub-only (dropping `(S-004)` from
+  "If the move/reply is blocked" headings, dropping `S-010` prose
+  references). No `Signals:` bullet, confidence-rubric line, or any other
+  behavioural text was touched in any of the five files or in `README.md`'s
+  "Confidence rubric" / "No confident match" sections. Met.
+- **Unspecified behaviour / unexpected files:** `git diff --stat`
+  `dev-agent`..branch touches exactly the seven files named in the task
+  (`README.md`, five existing category files, `self-escalation.md`); the
+  task file itself also appears in the raw `dev-agent`-vs-branch diff, but
+  confirmed via `git show --stat` on each of the three commits that the
+  Developer never touched it — that diff is solely because `dev-agent`
+  moved the task to `in-progress/` and appended the work log after the
+  branch was cut. No unspecified behaviour added.
+- **Commit subjects vs. `git-conventions` 72-char limit:** `6d12bce` (60
+  chars), `165f3ee` (54 chars), `606e80f` (57 chars) — all well under the
+  limit, correct `docs(email-triage): <description>` format, imperative,
+  lowercase, no trailing period.
+
+**Stage 2 — Code Quality** (documentation-only change; applied the checklist
+as it maps to reference-doc content):
+
+- **Correctness:** The new category's signals and terminal-loop logic are
+  internally consistent and accurately grounded against the actual merged
+  `SKILL.md`/`escalation.md` behaviour they describe (see AC-3 signal
+  grounding above). The "If the move is blocked" edge case is handled
+  explicitly rather than left implicit.
+- **Readability:** Prose style, heading shape, and cross-reference
+  conventions (`references/escalation.md`, `references/worklog.md`, the
+  `himalaya` skill) match the five existing category files throughout;
+  `self-escalation.md`'s section structure mirrors
+  `newsletter-bulk.md`'s (intro, file-without-reply, worklog entry, blocked
+  section) plus the one new "Never escalate this message" section the
+  terminal behaviour requires. No dead text or leftover placeholders.
+- **Security/Performance:** Not applicable — no code, no external input,
+  no secrets.
+- **Tests:** Not applicable in the code-test sense; the task's own
+  verification block is grep-based and every command was re-run
+  independently against the branch with the expected (empty/matching)
+  output, as recorded above.
+
+No issues found. No unrelated files were touched.
+
+Next owner: Development Loop.
