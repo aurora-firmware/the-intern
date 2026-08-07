@@ -26,9 +26,9 @@ Replace `daneel` with `my_user` in that table row.
 
 Keep the transcript's structure byte-identical apart from the account name —
 including the table's column alignment, which is padded with spaces. `my_user`
-is two characters longer than `daneel`, so the row's padding must be adjusted so
-the table's columns still line up with the header and separator rows. The
-transcript's value is that it shows the exact output shape.
+is one character longer than `daneel`, so the NAME column's width must be
+adjusted across the header, separator, and data rows so the table's columns
+still line up. The transcript's value is that it shows the exact output shape.
 
 Do not change any command, flag, or explanatory prose in this file.
 
@@ -70,5 +70,45 @@ git diff --stat -- references/command-reference.md
 ```
 
 ## Work Log
+
+### Session 1 — 2026-08-07
+
+Implemented T-148 as a single documentation edit. Read the task file and confirmed the
+only prior history was the T-147 lifecycle-move commits (no existing Work Log entries
+to build on). Located the target transcript at
+`the-intern/email-skills/.pi/skills/himalaya/references/command-reference.md:458-460`,
+the `himalaya account list` table under "Selecting an Account".
+
+Followed the tdd cycle with the task's grep-based verification as the test surface:
+first confirmed the red state (AC-1's grep for the real account name matched, AC-2's
+`my_user` grep found nothing), then applied the minimal fix, then confirmed green
+(AC-1 grep empty, AC-2 grep matches, AC-3 diff stat shows a single 3-line change
+confined to the table).
+
+The one wrinkle called out in the task — column realignment — required care: `daneel`
+(6 chars) versus `my_user` (7 chars) meant the NAME column's original width of 8
+(padded to match `daneel` plus one space each side) needed to grow to 9 to fit
+`my_user` with equivalent padding. Widened the NAME column consistently across the
+header (`| NAME    |`), separator (`|---------|`), and data row (`| my_user |`),
+leaving the BACKENDS and DEFAULT columns' widths and contents completely untouched.
+Verified the fix by checking that all three rows have identical pipe-character
+positions (0, 10, 23, 33) with a small Python one-liner, rather than trusting
+eyeballing alone.
+
+**Tried and rejected:** nothing substantive was rejected — the only judgment call was
+whether to trust the task Description's stated character delta or measure directly.
+Measured directly, which turned out to matter: the task file's prose said `my_user`
+was "two characters longer" than `daneel`, but by count it is one character longer.
+Deriving the padding from direct measurement rather than the stated figure produced
+the correct result regardless. (The task file's prose has since been corrected on
+`dev-agent`; the discrepancy never reached the implementation.)
+
+**Remaining:** nothing outstanding. All three acceptance criteria verified passing on
+the committed state; no other part of the file was touched, confirmed via
+`git diff dev-agent -- references/command-reference.md`.
+
+Commits on `task/T-148-replace-account-name`:
+
+- `cb37302` docs(himalaya-skill): replace maintainer account name in transcript
 
 ## Review
