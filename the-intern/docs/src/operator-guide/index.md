@@ -990,6 +990,19 @@ package-specific setup that T-139 and T-140 verified end to end.
    rule and command shape as hardened-but-unvalidated until that live pass
    is done; tracked as a follow-up bug cross-linked with `B-029`.
 
+   **Two more rules admit paths T-143 and T-146 added.** The bare `himalaya
+   template write` rule is an exact pattern with no trailing wildcard — it
+   admits only the no-argument invocation the missing-configuration
+   escalation fallback uses to read the account's own address from the
+   `From:` header, not any variant carrying arguments. Appending a trailing
+   `*` to that pattern would also admit further arguments such as `-H
+   "To:..." ... | himalaya template send`, i.e. arbitrary outbound email,
+   so none was added. The `Escalations` move rule mirrors the
+   `INBOX.Notifications` rule's shape for the `self-escalation` category's
+   filing step; `Escalations` is a starter default the skill's own
+   reference treats as renameable, so update the pattern above to the
+   folder name the deployment actually uses if it differs.
+
    After editing the policy section, reload it without restarting bob:
 
    ```bash
