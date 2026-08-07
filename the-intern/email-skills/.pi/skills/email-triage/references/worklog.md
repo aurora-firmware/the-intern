@@ -41,12 +41,14 @@ three things about that message:
 ```
 
 - **Done** — the concrete action taken this run: acted per a category
-  workflow, sent an escalation email, or attempted and was blocked by S-004.
-  When the blocked call was the escalation send itself, `Done` must say the
-  escalation attempt was blocked — not that an escalation email was sent.
+  workflow, sent an escalation email, or attempted and was blocked by the
+  action-authorization gate. When the blocked call was the escalation send
+  itself, `Done` must say the escalation attempt was blocked — not that an
+  escalation email was sent.
 - **Left** — what remains open, if anything. "Nothing" for a fully-handled
   message; otherwise a short description of the open condition (e.g.
-  "awaiting manager reply", "blocked by S-004 — no admitting allow rule").
+  "awaiting manager reply", "blocked by the action-authorization gate — no
+  admitting allow rule").
 - **Next** — what will resolve the item and how it will be noticed (e.g.
   "closes when the manager's reply arrives as unseen mail", "closes once an
   allow rule admits this call — re-check at the next first-run
@@ -62,11 +64,11 @@ entirely and goes straight to listing unseen mail.
 Do not assume the previous run was yesterday. Any of the following can
 eliminate an entire day's runs with no trace in this workspace:
 
-- bob was stopped across a scheduled tick (ADR-006) — the tick is skipped
-  silently, no process and no record;
-- the schedule entry's per-entry `cwd` was missing at fire time (S-009);
+- bob was stopped across a scheduled tick — the tick is skipped silently,
+  no process and no record;
+- the schedule entry's per-entry `cwd` was missing at fire time;
 - `max_processes` was exhausted, so no dedicated worker was available for a
-  per-entry-`cwd` job (S-002).
+  per-entry-`cwd` job.
 
 Because of this, first-run reconciliation must read **the most recent
 worklog file that still contains open items** — found by walking
@@ -80,11 +82,12 @@ straight to listing unseen mail.
 ## Open items live in the worklog only, never in mailbox flag state
 
 Classifying a message requires reading it, and reading a message sets its
-`\Seen` flag as a side effect regardless of what the classification decides
-to do — acting, escalating, or hitting an S-004 block all mark the message
-`Seen` the same way. That means the mailbox itself cannot be used to tell
-"still needs attention" apart from "fully handled": once read, a message
-never reappears as unseen on a later tick no matter how the run left it.
+`\Seen` flag as a side effect regardless of what the classification decides to
+do — acting, escalating, or hitting a block from the action-authorization gate
+all mark the message `Seen` the same way. That means the mailbox itself cannot
+be used to tell "still needs attention" apart from "fully handled": once read,
+a message never reappears as unseen on a later tick no matter how the run left
+it.
 
 Because of this, an escalated or blocked message is carried forward as an
 open item through the worklog **only** — its `Left` field staying anything
@@ -108,20 +111,20 @@ An open item has exactly two causes, and each closes differently:
   message on some later run and is classified and handled from there;
   nothing about the original entry auto-resolves it — the reply's own
   per-message entry is what marks the matter handled.
-- **S-004 block.** Closes once an admitting allow rule is added to bob's
-  action ruleset, so a retry of the previously-blocked `bash`/himalaya call
-  is no longer denied.
+- **Denied by the action-authorization gate.** Closes once an admitting
+  allow rule is added to bob's action ruleset, so a retry of the
+  previously-blocked `bash`/himalaya call is no longer denied by policy.
 
 Until whichever condition applies is met, the item stays open. At each day's
 first-run reconciliation, every entry still open in the most recent worklog
 file with open items is carried forward: append a corresponding entry to
-today's file noting it is still open (`Left` unchanged from the source
-item, `Next` restating what would close it — for an S-004 block, this is
-also the point at which the blocked action is retried, since no other point
-in the workflow revisits it). Because that carried-forward entry lands in
-*today's* file, today's file becomes the new "most recent worklog file with
-open items," so the next day's first-run reconciliation finds it directly
-rather than needing to look further back.
+today's file noting it is still open (`Left` unchanged from the source item,
+`Next` restating what would close it — for a block from the
+action-authorization gate, this is also the point at which the blocked action
+is retried, since no other point in the workflow revisits it). Because that
+carried-forward entry lands in *today's* file, today's file becomes the new
+"most recent worklog file with open items," so the next day's first-run
+reconciliation finds it directly rather than needing to look further back.
 
 There is no automatic expiry. An item stays open, carried forward this way
 day after day, until whichever condition above genuinely closes it.
