@@ -2,7 +2,7 @@
 id: T-148
 title: Replace the maintainer account name in the himalaya account list 
   transcript
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-07'
