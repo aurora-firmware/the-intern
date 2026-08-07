@@ -455,9 +455,9 @@ List configured accounts (Observed, no config secrets shown):
 
 ```bash
 $ himalaya account list
-| NAME   | BACKENDS   | DEFAULT |
-|--------|------------|---------|
-| daneel | IMAP, SMTP | yes     |
+| NAME    | BACKENDS   | DEFAULT |
+|---------|------------|---------|
+| my_user | IMAP, SMTP | yes     |
 ```
 
 `himalaya account list --help` confirms the same global options as other
