@@ -164,3 +164,88 @@ Commits on `task/T-143-rewrite-escalation-reference`:
 - `c6c514a` docs(email-skills): degrade to account address when escalation config is missing
 
 ## Review
+
+### Review Verdict — 2026-08-07
+
+FAIL
+
+**Stage 1 — Acceptance criteria: all pass.**
+
+Reviewed `the-intern/email-skills/.pi/skills/email-triage/references/escalation.md`
+on `task/T-143-rewrite-escalation-reference` against `dev-agent`. Diff touches
+exactly this one file (41 insertions, 42 deletions), matching Files to Touch.
+
+- AC-1 (no ai-team artifact identifier): PASS. `grep -nE
+  '\b(S-0[0-9]{2}|T-[0-9]{3}|B-0[0-9]{2}|ADR-0[0-9]{2}|CR-0[0-9]{3})\b'
+  escalation.md` on the task-branch file produces no output. A broader
+  `grep -niE 'ADR|S-0|T-1|B-0|CR-0|spec'` pass turns up only the substring
+  "spec" inside "specific"/"classification"-adjacent prose — no artifact
+  identifier survives.
+- AC-2 (denial rule retained in behavioural language): PASS. "S-004" is
+  replaced throughout with "the action-authorization gate" and the denial
+  rule is stated as its own explicit sentence: "A call denied by policy is
+  recorded and never worked around" (line 64). The heading and body under
+  "If the escalation send is denied" preserve the full worklog/no-fallback
+  rule.
+- AC-3 (no repository-packaging description): PASS. The paragraph on which
+  config file is committed vs. templated (`config/email-triage.example.toml`
+  vs. the deployed-workspace copy) is deleted in full. A follow-up grep for
+  `committed|example\.toml|repository|owner-only|deployed workspace|source
+  of truth` on the new file returns nothing.
+- AC-4 (degrade to account's own address on missing/malformed config): PASS.
+  The rewritten "If the escalation configuration is missing or malformed"
+  section escalates instead of hard-stopping, sources the address from "the
+  `From:` header on the first line of `himalaya template write`, invoked
+  with no arguments," and states in the escalation email that the config was
+  missing/malformed and the expected directory (`<workspace>/config/`).
+  Cross-checked against `the-intern/email-skills/.pi/skills/himalaya/references/command-reference.md`
+  lines 261-274: `template write` with no positional body/headers does print
+  a `From:`-first template, consistent with what the reference now claims.
+- AC-5 (undeterminable address → worklog + no further action, no hard stop,
+  no guess): PASS. Covered verbatim by the paragraph starting "If the
+  account's own address cannot be determined either... do not hard-stop the
+  run and do not guess an address. Record the problem in the worklog and
+  take no further action on that message this run." Matches the task's
+  instruction not to over-specify a worklog format for this case.
+
+No unspecified behaviour or cross-references to project artifacts were
+added in place of the removed identifiers. Checked the four `references/categories/*.md`
+files and `SKILL.md` that mention `escalation.md`/"blocked" — none link to
+the file by heading anchor, so the heading renames ("If the escalation send
+is blocked" → "...is denied", "If `manager_address` is missing or
+malformed" → "If the escalation configuration is missing or malformed") do
+not break any cross-reference; those other files are out of this task's
+Files to Touch and were correctly left untouched.
+
+**Stage 2 — Code quality: one failure.**
+
+**FAIL — two of three commit messages exceed the git-conventions 72-character
+limit.**
+
+- **Where:** commits on `task/T-143-rewrite-escalation-reference` (`git log
+  --format='%s' dev-agent..task/T-143-rewrite-escalation-reference`).
+- **What is wrong:** `git-conventions` (`.claude/skills/git-conventions/SKILL.md`,
+  "Commit Message Format") and `CLAUDE.md` ("Git model") both specify the
+  full commit message (`<type>(<component>): <description>`) must be
+  ≤ 72 chars total. Two of the three commits exceed that:
+  - `159248d docs(email-skills): drop repository-packaging paragraph from escalation reference` — 81 chars.
+  - `c6c514a docs(email-skills): degrade to account address when escalation config is missing` — 80 chars.
+  The third, `5b754ca docs(email-skills): scrub ai-team identifiers from escalation reference`, is 71 chars and compliant.
+- **What should change:** Shorten both subject lines to ≤ 72 chars total,
+  e.g. `docs(email-skills): drop repository-packaging paragraph` and
+  `docs(email-skills): degrade to account address on missing config`
+  (illustrative — Developer's wording call). Neither commit has been pushed
+  to a shared branch, so amending in place is fine per the "no amending
+  pushed commits" rule; a rebase/`commit --amend` sequence on the task
+  branch is sufficient. No content changes are needed — content review
+  above is otherwise a full PASS.
+
+**Minor observations (non-blocking):**
+
+- The Work Log's "Tried and rejected" and per-change rationale sections are
+  a good record of judgment calls (e.g. "does not grant" vs. keeping "not
+  something this reference or spec grants" verbatim) — kept for reference,
+  no action needed.
+- `references/worklog.md` and `SKILL.md` in the same skill package still
+  carry action-gate/spec identifiers; correctly left untouched as out of
+  this task's scope (covered by T-144/T-145 per the Work Log).
