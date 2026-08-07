@@ -297,3 +297,77 @@ limit.**
 - `references/worklog.md` and `SKILL.md` in the same skill package still
   carry action-gate/spec identifiers; correctly left untouched as out of
   this task's scope (covered by T-144/T-145 per the Work Log).
+
+### Review Verdict — 2026-08-07 (cycle 2)
+
+PASS
+
+**Scope of this cycle.** Cycle 1 was a full Stage 1 PASS with a single Stage 2
+finding: two of the three commit subjects on
+`task/T-143-rewrite-escalation-reference` exceeded the git-conventions
+72-character limit. Session 2's Work Log describes a non-interactive
+`reset --hard` + `cherry-pick --no-commit` + `commit -m` reword (`git rebase -i`
+being blocked in this environment). Verified that fix independently, plus a
+re-check of Stage 1 to the depth warranted by a claimed no-content-change
+history rewrite.
+
+**History-rewrite integrity — verified.**
+
+- Commit SHA mapping matches the Work Log exactly: `git log --format='%H %s'
+  dev-agent..task/T-143-rewrite-escalation-reference` shows `5b754ca`
+  (unchanged), `349acf9` (was `159248d`), `eed3d48` (was `c6c514a`), in that
+  order.
+- Subject-line lengths, measured directly (`${#subj}` per commit): `5b754ca`
+  71 chars, `349acf9` 55 chars, `eed3d48` 64 chars. All three ≤ 72 chars —
+  the sole cycle-1 finding is resolved.
+- Content identity: `git rev-parse task/T-143-rewrite-escalation-reference^{tree}`
+  = `5451aa8fbcfaceb61c4e04f39ef699c8fff9014f`, matching the Work Log's
+  claimed pre-reword tree hash exactly. `git diff c6c514a
+  task/T-143-rewrite-escalation-reference` (old tip vs. new tip) is empty.
+  Confirms no file content changed as a side effect of the reword — the tree
+  is byte-identical to what cycle 1 reviewed.
+- File scope: `git log --stat` on each of the three commits, and `git diff
+  --name-only dev-agent...task/T-143-rewrite-escalation-reference` for the
+  branch as a whole, touch only
+  `the-intern/email-skills/.pi/skills/email-triage/references/escalation.md`.
+  No task lifecycle file or other path was touched. Overall diff stat (41
+  insertions, 42 deletions) matches cycle 1's recorded figure exactly, and a
+  content hash of the full `dev-agent...tip` diff was taken for the record
+  (`a5e7b98705c2438c8241cbc3867d63301bca86bb` via `git hash-object`).
+- Shared-history safety: `git ls-remote --heads origin
+  task/T-143-rewrite-escalation-reference` returns nothing and the branch has
+  no configured upstream, confirming the branch was never pushed before the
+  rewrite (rewriting in place was safe, matching the Work Log's own check).
+  The two superseded commit objects (`159248d`, `c6c514a`) are no longer
+  reachable from any local branch (`git branch --contains` returns empty for
+  both) — no orphaned reference to the old subjects remains on the branch.
+
+**Stage 1 re-confirmation.** Given the tree-hash equivalence above proves the
+working-tree content is byte-for-byte what cycle 1 already reviewed line by
+line, a full re-review was not warranted; re-ran the task's own
+Verification block against the file as checked out from the new tip as an
+independent spot check rather than relying solely on the hash match:
+
+- AC-1: `grep -nE '\b(S-0[0-9]{2}|T-[0-9]{3}|B-0[0-9]{2}|ADR-0[0-9]{2}|CR-0[0-9]{3})\b' escalation.md` — no output. PASS.
+- AC-2: `grep -niE 'denied|blocked|authorization gate' escalation.md` — the
+  action-authorization-gate language and "A call denied by policy is
+  recorded and never worked around" are present. PASS.
+- AC-3: no repository-packaging paragraph present (confirmed by cycle 1;
+  unaffected by the reword since it only touched commit messages). PASS.
+- AC-4/AC-5: `grep -niE "template write|account's own|worklog" escalation.md`
+  shows the `From:`-header-via-`himalaya template write` degrade path, the
+  "record ... in the day's worklog" language, and the "cannot be determined
+  either ... do not fall back" no-hard-stop/no-guess language all intact.
+  PASS.
+
+**Stage 2 — Code quality: no remaining failures.** The sole finding from
+cycle 1 (commit-subject length) is resolved as shown above. No new Stage 2
+issues identified: the reword touched only commit messages via a documented,
+justified non-interactive procedure (with the standard `rebase -i` path
+correctly ruled out and explained), and left tree content untouched.
+
+**Minor observations (non-blocking):**
+
+- The Work Log's documentation of the blocked `rebase -i` path, the
+  alternative procedure used, and the exact SHA mapping is thorough and
+  made this cycle's independent verification straightforward.
