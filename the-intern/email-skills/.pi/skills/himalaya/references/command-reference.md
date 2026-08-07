@@ -263,7 +263,7 @@ template (prefilled `From` + signature) and prints it — Observed directly:
 
 ```bash
 $ himalaya template write --header "To:someone@example.com" --header "Subject:Test Subject" "Hello world"
-From: Daneel AFW <daneel@aurorafw.com>
+From: Example User <user@example.invalid>
 To: someone@example.com
 Subject: Test Subject
 
@@ -323,7 +323,7 @@ world" transcript above, run with nothing supplied):
 
 ```bash
 $ himalaya template write
-From: Daneel AFW <daneel@aurorafw.com>
+From: Example User <user@example.invalid>
 To:
 Subject:
 
