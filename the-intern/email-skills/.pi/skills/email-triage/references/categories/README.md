@@ -153,21 +153,3 @@ and acting on it anyway. "Closest" is not "confident": the confidence rubric
 above, not proximity to any one category, is what gates autonomous action,
 so a message that fails the confident-match test above always escalates
 rather than being forced into whichever category scored highest.
-
-## Adding a category
-
-Adding a category to this taxonomy means exactly two additions, and no
-change to any other skill in this package:
-
-1. **One workflow file** at `references/categories/<category>.md`,
-   describing what a confident match in that category does (the same shape
-   as the starter categories' own workflow files).
-2. **One index entry** here, in "Starter categories and their matching
-   signals" above, naming the category and its matching signals.
-
-`SKILL.md`'s classification step consults this index by name and follows
-whichever workflow file the index points to — it does not enumerate
-categories itself, so it needs no edit when a category is added or
-removed. The `himalaya` skill carries no category- or triage-specific
-content at all — it stays free of any single job's triage policy — so it
-likewise needs no change for a new category.
