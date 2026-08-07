@@ -96,6 +96,21 @@ classify confidently it escalates again, to itself, indefinitely.
 The taxonomy needs a terminal category that recognises the skill's own
 escalation mail, files it, and never re-escalates it.
 
+### 7. Remove the maintainer's real email address from shipped skill content
+
+The `himalaya` skill's command reference contains a maintainer's real personal
+email address in two command transcripts. One predates T-142; the second was
+added by it, which copied the existing pattern rather than sanitising it.
+
+Replace both with a clearly non-routable example address, consistent with the
+rule the shipped configuration template already states — that examples must
+never carry a real address. This matters more once the package is published to
+vendor marketplaces (S-011), where the transcripts ship to consumers.
+
+This item was not raised in the PR #42 review. It was found while verifying
+T-142 and is grouped here because it is the same class of problem as item 1:
+content that must not ship to a skill consumer.
+
 ## Context
 
 Five inline review comments on PR #42 identified content that must not ship to
