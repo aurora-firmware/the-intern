@@ -72,23 +72,31 @@ If the action-authorization gate denies the escalation send:
   escalation didn't go through. A denied escalation is a hard stop for that
   message, not a license to proceed some other way.
 
-## If `manager_address` is missing or malformed
+## If the escalation configuration is missing or malformed
 
 Before sending, `manager_address` must be present in
 `config/email-triage.toml` and must be a single well-formed email address.
-If it is missing, the file itself is missing, or the value is not a
-well-formed address:
+If the configuration file itself is missing, or `manager_address` is absent
+or not well-formed, do not hard-stop the message — escalate anyway, addressed
+to the mail account's own address instead of `manager_address`:
 
-- treat the message as a hard stop, recorded as an open item in the day's
-  worklog entry exactly as an S-004 block would be (`references/worklog.md`
-  defines the entry format);
-- do **not** attempt to guess, fabricate, or otherwise proceed without a
-  valid address, and do **not** fall back to acting on the message
-  autonomously instead.
+- Obtain the account's own address from the `From:` header on the first
+  line of `himalaya template write`, invoked with no arguments (see the
+  `himalaya` skill's command reference for the exact output shape).
+- Send the escalation email as usual — see "When to escalate" above — and
+  additionally state that the configuration file was missing (or its
+  address was malformed, whichever applies) and the directory where the
+  file was expected: `<workspace>/config/`.
 
-This is a hard stop for every message this run that needs escalation, not
-just the one being classified when the problem is first discovered — without
-a valid `manager_address`, no message can be escalated this run.
+If the account's own address cannot be determined either — `himalaya
+template write` fails, or its output has no usable `From:` header — do not
+hard-stop the run and do not guess an address. Record the problem in the
+worklog and take no further action on that message this run. Do not fall
+back to acting on the message autonomously.
+
+This fallback path applies to every message this run that needs escalation,
+for as long as the configuration remains missing or malformed — not just
+the one message being classified when the problem is first discovered.
 
 ## No synchronous reply is expected
 
