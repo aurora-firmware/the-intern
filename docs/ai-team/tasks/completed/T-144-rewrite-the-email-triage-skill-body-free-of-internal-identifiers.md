@@ -1,7 +1,7 @@
 ---
 id: T-144
 title: Rewrite the email-triage skill body free of internal identifiers
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-07'
