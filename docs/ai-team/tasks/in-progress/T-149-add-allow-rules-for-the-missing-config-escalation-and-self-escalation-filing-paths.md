@@ -159,3 +159,119 @@ Commits on `task/T-149-add-escalation-allow-rules`:
 - `a97ee16` docs(email-skills): note the new rules and folder renaming
 
 ## Review
+
+### Review Verdict — 2026-08-07
+
+FAIL
+
+Reviewed `task/T-149-add-escalation-allow-rules` at `deeb820` (rules) and `a97ee16`
+(prose) against this task's five acceptance criteria and the code-review skill's
+Stage 2 quality checklist.
+
+**Stage 1 — Acceptance Criteria**
+
+- **AC-1** (admit bare `himalaya template write`) — PASS. Both files add
+  `{ field_path = "command", pattern = "himalaya template write" }`
+  (`operator-guide/index.md:910`, `email-skills/README.md:249`). Confirmed this is
+  the real invocation shape: `.pi/skills/himalaya/references/command-reference.md`
+  ("Finding the Account's Own Address") shows `$ himalaya template write` (Observed,
+  no arguments), and `references/escalation.md`'s missing-configuration fallback
+  invokes exactly that.
+- **AC-2** (must NOT admit any `template write` invocation carrying arguments) —
+  PASS, independently verified rather than taken on the Developer's word. Confirmed
+  `the-intern/service/crates/policy-control/src/matcher.rs` calls
+  `wildmatch::WildMatch::new(&self.pattern).matches(s)`, and that `wildmatch = "2.6.1"`
+  is the exact version pinned in `the-intern/service/Cargo.lock` — matches the
+  Developer's claimed verification dependency. Read the pinned crate's own source
+  (`wildmatch-2.6.1/src/lib.rs`): `matches()` is documented and implemented as a
+  full-string anchored match ("Returns true only when `p` matches the entirety of
+  `s`") — a literal, wildcard-free pattern cannot match an input with any trailing
+  (or leading) characters. Built and ran a standalone harness against the exact
+  pinned `wildmatch = "=2.6.1"` and confirmed: `"himalaya template write"` matches
+  only the bare invocation and rejects the adversarial shape this task calls out
+  (`himalaya template write -H "To:anyone@example.com" -- "body" | himalaya
+  template send`), a trailing-space variant, a leading-space variant, and a
+  `writex` variant. The Developer's verification claim is corroborated by an
+  independent run against the real dependency, not just plausible on inspection.
+- **AC-3** (admit the `Escalations` move, same pattern shape as `INBOX.Notifications`)
+  — PASS. `{ field_path = "command", pattern = "himalaya*message move*Escalations*" }`
+  mirrors `"himalaya*message move*INBOX.Notifications*"` exactly in shape. Confirmed
+  against `.pi/skills/himalaya/references/command-reference.md` ("Moving and
+  Copying": `himalaya message move <TARGET> <ID>...`, e.g. `himalaya message move
+  Archive 42 43`) and `references/categories/self-escalation.md` ("File the message
+  by moving it out of `INBOX` into an `Escalations` folder") that the pattern
+  admits the real invocation shape — verified `himalaya message move Escalations 42
+  43` matches against the pinned `wildmatch` crate.
+- **AC-4** (identical rule sets apart from workspace prefix) — PASS. Ran this
+  task's own AC-4 verification command against both files as committed: the
+  path-normalised pattern diff produced `rule sets match`.
+- **AC-5** (no pre-existing rule changed) — PASS. `git diff deeb820~1 a97ee16 --
+  the-intern/docs/src/operator-guide/index.md` and the equivalent for
+  `email-skills/README.md` show zero removed or modified lines in the rule
+  set — additions only.
+
+**Stage 2 — Code Quality**
+
+One defect, blocking:
+
+- **File/location**: `the-intern/docs/src/operator-guide/index.md`, line 993
+  (added by `a97ee16`).
+- **What is wrong**: the new paragraph opens with "**Two more rules admit paths
+  T-143 and T-146 added.**", citing internal task-tracker IDs (`T-143`, `T-146`) in
+  the shipped mdBook operator manual — the exact artifact `deploy.yml` attaches to
+  every GitHub Release. This is the same class of reference commit `cbc0144`
+  ("docs: remove internal spec/ADR/task ID references from user docs") already
+  purged from this exact file, for the same reason CR-006 item 1 gives for skill
+  content: "consumers have no access to this project's specifications, decision
+  records, tasks, or bugs." CR-006 item 1's exemption is scoped explicitly to "the
+  package README" (`the-intern/email-skills/README.md`) as "maintainer and
+  operator documentation recording validation provenance" — it does not reach the
+  mdBook manual, which is a distinct, more widely distributed artifact than either
+  the package README or the skill content the agent consumes. This session's own
+  T-143–T-146 batch (CR-006 item 1) removed exactly this class of reference from
+  skill content; this new sentence reintroduces it into the one shipped file that
+  already has a dedicated precedent commit against it. Ruling: this is a defect,
+  not a stylistic nit — reword it.
+  (Noted for context, not part of this defect and not something T-149 needs to
+  fix: an earlier, unrelated commit `059cded` already reintroduced `T-139`/`T-140`/
+  `B-029`/`B-030`/`S-004` references elsewhere in this same file after `cbc0144`'s
+  cleanup. That is a pre-existing, out-of-scope issue — it is not license to add
+  more.)
+- **What should change**: reword the sentence to describe what the two rules admit
+  in plain behavioral language, with no `T-NNN` citation — e.g. "Two more rules
+  admit the missing-configuration escalation fallback and the self-escalation
+  filing move." — consistent with how CR-006 item 1 required rewriting
+  behaviorally-load-bearing references into plain language rather than deleting
+  them outright. The rest of the paragraph (the safety rationale for the exact
+  `template write` pattern, the `Escalations`-is-renameable note) cites no task
+  IDs and can stand unchanged.
+
+**Non-blocking observations** (do not block this task; recorded for the record):
+
+1. Commit `deeb820` is typed `feat(email-skills): admit bare template write and
+   Escalations move`. Both commits touch only the two markdown docs — no
+   service/skill code changed. This repo's own history for the same class of
+   change to these two files — adding a previously-missing action rule so
+   already-specified behavior becomes admitted — has consistently used `fix`
+   (`f303848 fix(email-triage): add S-004 rule for direct-request/
+   meeting-scheduling reply-send`, `af5132a fix(email-triage): close command
+   injection in escalation send`), not `feat`. `feat` is a valid type per
+   `git-conventions` and this is not a hard-rule violation, but `fix(email-skills):
+   ...` (or `docs(email-skills): ...`) would be more consistent with established
+   precedent for this "unblock already-specified behavior" class of change. Both
+   commit subjects are within the 72-character limit: `feat(email-skills): admit
+   bare template write and Escalations move` is 66 chars; `docs(email-skills):
+   note the new rules and folder renaming` is 58 chars.
+2. The `Escalations` move rule (`"himalaya*message move*Escalations*"`) is exactly
+   as loose as the `INBOX.Notifications` rule it mirrors: the surrounding `*`s mean
+   the pattern isn't anchored to a whole-command boundary, so a command string that
+   merely contains `message move` and `Escalations` as substrings anywhere
+   (including after a `;`/`&&`/`|`) would also match. AC-3 explicitly requires
+   mirroring `INBOX.Notifications`'s shape, so this is not a defect T-149
+   introduced — it is a pre-existing weakness in the shape being mirrored,
+   unrelated to the safety-critical `template write` rule (which is exact and does
+   not share this problem). Worth a follow-up bug against the underlying move-rule
+   shape if tighter anchoring is wanted; out of scope for this task.
+
+Verdict: FAIL. Developer reworks the one Stage 2 defect (task-ID citation in the
+operator-guide prose) and resubmits; nothing else needs to change.
