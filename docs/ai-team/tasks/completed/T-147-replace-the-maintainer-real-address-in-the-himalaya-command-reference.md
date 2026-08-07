@@ -1,7 +1,7 @@
 ---
 id: T-147
 title: Replace the maintainer real address in the himalaya command reference
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-07'
