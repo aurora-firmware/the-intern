@@ -17,9 +17,9 @@ allowed-tools: Read Bash
 
 # Email Triage
 
-This is the policy skill S-010 describes: it decides what to do with a
-mailbox, not how to drive `himalaya`. Every run of this loop follows the
-same four steps — reconcile (first executed run of the day only), detect
+This is the triage-policy skill: it decides what to do with a mailbox, not
+how to drive `himalaya`. Every run of this loop follows the same four
+steps — reconcile (first executed run of the day only), detect
 unseen mail, act on or escalate each unseen message, and record a worklog
 entry for it — and delegates the CLI mechanics and reference detail to the
 `himalaya` skill and this skill's own `references/` files rather than
@@ -30,12 +30,11 @@ restating them here.
 ## Tool usage
 
 Every tool call this skill or the `himalaya` skill makes is subject to
-bob's S-004 action gate — not only the himalaya invocations. S-004 gates
-every pi-agent tool call, so the config read, the worklog reads and
-appends, and any on-demand `references/*.md` load are all gated the same
-way. This skill keeps that surface uniform and explicit, so one narrow
-allow-rule set can admit the whole package (S-010 Configuration
-Requirements):
+bob's action-authorization gate — not only the himalaya invocations. The
+action-authorization gate governs every pi-agent tool call, so the config
+read, the worklog reads and appends, and any on-demand `references/*.md`
+load are all gated the same way. This skill keeps that surface uniform and
+explicit, so one narrow allow-rule set can admit the whole package:
 
 - **`read`** — reference material and prior worklog contents only: any
   `worklog/*.md` file's contents (used during reconciliation, via the job's
@@ -55,11 +54,11 @@ Requirements):
 
 If the `bash` call that reads `config/email-triage.toml`, a `read` for a
 worklog file, or a `bash` call to create or append to the worklog is itself
-blocked by S-004, that is a
-deployment gap in the admitting allow rule (S-010 Configuration
-Requirements), not a per-message condition — there is no lower-level record
-left to write for that run. Treat it as a run-ending problem for this run,
-the same way an unconfigured `himalaya` account is a run-ending problem.
+denied by the action-authorization gate, that is a deployment gap in the
+admitting allow rule, not a per-message condition — there is no
+lower-level record left to write for that run. Treat it as a run-ending
+problem for this run, the same way an unconfigured `himalaya` account is a
+run-ending problem.
 
 ---
 
@@ -80,7 +79,8 @@ avoids a skill-owned last-seen file for detecting new mail (step 2 below).
   most recent worklog file with open items and carry every still-open entry
   forward into today's file, including any pending manager escalation (an
   open item left by a previous low-confidence classification) and any open
-  S-004 block, which this is also the point at which to retry.
+  block from the action-authorization gate, which this is also the point
+  at which to retry.
   `references/worklog.md` defines the full mechanics — which file to walk
   back to, the entry format, how each kind of open item closes; do not
   re-derive or restate them here.
@@ -98,10 +98,11 @@ List unseen envelopes using the `himalaya` skill's own documented command
 for filtering on the unseen flag (see its Operation Index → "Filter for
 unseen mail") — do not restate the command or its syntax here; it belongs
 to that skill, not this one. This is a `bash` call like every other
-himalaya invocation, gated by S-004 the same way (see "Tool usage" above).
-If it is blocked, no message has yet been identified as unseen, so there is
-nothing to record a per-message worklog entry against yet — treat the block
-as a run-ending problem for this run rather than a per-message open item.
+himalaya invocation, gated by the action-authorization gate the same way
+(see "Tool usage" above). If it is denied, no message has yet been
+identified as unseen, so there is nothing to record a per-message worklog
+entry against yet — treat the block as a run-ending problem for this run
+rather than a per-message open item.
 
 Everything the rest of this loop does operates on the envelopes this
 listing returns.
@@ -110,14 +111,15 @@ listing returns.
 
 For every envelope the previous step returned, in turn:
 
-1. Read the message (a `himalaya` `bash` call, S-004-gated like any other)
-   and classify it against the starter category taxonomy in
+1. Read the message (a `himalaya` `bash` call, subject to the
+   action-authorization gate like any other) and classify it against the
+   starter category taxonomy in
    `references/categories/README.md`: check the message against each
    category's listed matching signals, then apply that index's confidence
    rubric to decide whether this *specific* message is a confident match
    for exactly one category. The gate below is always confidence in that
    judgment for this message — never the action's reversibility, and never
-   a sender allowlist (S-010 Design Principles).
+   a sender allowlist.
 2. **Confident match:** follow the matched category's own workflow file,
    `references/categories/<category>.md` (for example
    `references/categories/newsletter-bulk.md`), for what to do with this
@@ -125,11 +127,12 @@ For every envelope the previous step returned, in turn:
    whichever `himalaya` `bash` call(s) the matched workflow calls for —
    reply, forward, compose, move, flag, delete, whatever is appropriate —
    per the `himalaya` skill.
-   - If any of those calls is blocked by S-004: stop acting on this
-     message, do not substitute some other action instead, and record the
-     block as an open worklog item in step 4 below (`Left`: the blocked
-     action; `Next`: retried at the next first-run reconciliation once an
-     admitting allow rule exists). The message is not treated as handled.
+   - If any of those calls is denied by the action-authorization gate: stop
+     acting on this message, do not substitute some other action instead,
+     and record the block as an open worklog item in step 4 below (`Left`:
+     the blocked action; `Next`: retried at the next first-run
+     reconciliation once an admitting allow rule exists). The message is
+     not treated as handled.
 3. **No confident match** (including an ambiguous match between two
    categories, which `references/categories/README.md`'s confidence rubric
    treats as not confident, and a message that does not clearly satisfy any
@@ -138,13 +141,15 @@ For every envelope the previous step returned, in turn:
    no further action on this message this run. Never fall back to choosing
    the closest category and acting on it anyway — "closest" is not
    "confident" (`references/categories/README.md`'s "No confident match"
-   section). `references/escalation.md` defines the full escalation policy
-   (the email's required content, what happens if the send is blocked by
-   S-004, and what happens if `manager_address` is missing or malformed);
-   do not restate it here. Never fall back to acting on the message
-   autonomously because escalation failed or could not be attempted — a
-   blocked or unaddressable escalation is a hard stop for that message,
-   exactly as `references/escalation.md` requires.
+   section). `references/escalation.md` defines the full escalation
+   policy — the email's required content, what happens if the send is
+   denied by the action-authorization gate, and what happens if
+   `manager_address` is missing or malformed, including the fallback path
+   for that missing-configuration case; do not restate any of it here.
+   Never fall back to acting on the message autonomously because
+   escalation failed or could not be attempted for any reason —
+   `references/escalation.md` governs the outcome in every one of those
+   cases.
 
    The `manager_address` lookup comes from the skill-local
    `config/email-triage.toml` in this job's own `cwd`; load it with `bash`
@@ -161,11 +166,12 @@ For every envelope the previous step returned, in turn:
    Do not switch to the editor-based `message write`/`message reply` family,
    and do not spread the escalation across an editor session or temporary
    draft workflow.
-   If that explicit send command is blocked by S-004, treat this message's
-   outcome as **blocked**, not **escalated**: no escalation email was sent,
-   so step 4's worklog entry must say the escalation attempt was blocked,
-   leave the message open, and point the retry to the next first-run
-   reconciliation after an admitting allow rule exists.
+   If that explicit send command is denied by the action-authorization
+   gate, treat this message's outcome as **blocked**, not **escalated**:
+   no escalation email was sent, so step 4's worklog entry must say the
+   escalation attempt was blocked, leave the message open, and point the
+   retry to the next first-run reconciliation after an admitting allow
+   rule exists.
 
 Escalating and acting are mutually exclusive outcomes for a given message
 on a given run — never do both.
@@ -181,11 +187,11 @@ next unseen message, so a run interrupted partway still leaves a complete
 record for every message it did handle before stopping.
 
 The entry must describe the actual outcome from step 3, not the intended one.
-If an escalation send was blocked by S-004, do **not** write that an
-escalation email was sent. Record a blocked open item instead, with `Done`
-describing the blocked escalation attempt, `Left` describing the still-open
-message, and `Next` pointing to retry at the next first-run reconciliation
-after the allow rule is fixed.
+If an escalation send was denied by the action-authorization gate, do
+**not** write that an escalation email was sent. Record a blocked open
+item instead, with `Done` describing the blocked escalation attempt,
+`Left` describing the still-open message, and `Next` pointing to retry at
+the next first-run reconciliation after the allow rule is fixed.
 
 A completed run leaves no unseen message from step 2 without exactly one
 of: an action taken, an escalation sent, or a block recorded as an open
