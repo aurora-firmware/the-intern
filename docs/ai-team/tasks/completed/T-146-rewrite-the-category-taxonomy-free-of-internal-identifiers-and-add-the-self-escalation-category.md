@@ -1,7 +1,7 @@
 ---
 id: T-146
 title: Rewrite the category taxonomy free of internal identifiers and add the self-escalation category
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-07'
