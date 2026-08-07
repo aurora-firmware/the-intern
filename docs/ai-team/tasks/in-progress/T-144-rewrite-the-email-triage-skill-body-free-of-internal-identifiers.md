@@ -155,3 +155,103 @@ Commits on `task/T-144-rewrite-skill-body`:
 - `e359d3a` docs(email-triage): scrub spec ids and delegate config policy
 
 ## Review
+
+### Review Verdict — 2026-08-07
+
+PASS
+
+Both stages passed. Diff reviewed: `git diff dev-agent task/T-144-rewrite-skill-body` touches
+only the two files listed in "Files to Touch"
+(`.pi/skills/email-triage/SKILL.md`, `config/email-triage.example.toml`); no
+unspecified files or behaviour were added.
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1 (no ai-team identifiers): re-ran the task's grep in a clean worktree of
+  `task/T-144-rewrite-skill-body` — no output, exit 1 (no match), confirming
+  all 14 identifier occurrences (`S-010`, `S-004`) are gone from both files. A
+  broader case-insensitive sweep for the same identifier families found
+  nothing further. Met.
+- AC-2 (denial-outcome rules preserved, load-bearing): compared the diff
+  hunk-by-hunk against the pre-change file
+  (`git show dev-agent:.../SKILL.md`). Every denial rule survives with only
+  the identifier swapped for behavioural language ("denied by the
+  action-authorization gate" / "blocked"), and none was dropped, weakened, or
+  merged into another rule:
+  - Step 3.2: "If any of those calls is denied by the action-authorization
+    gate: stop acting on this message, **do not substitute some other action
+    instead**, and record the block as an open worklog item" — identical in
+    meaning to the pre-change text, identifier only swapped.
+  - Step 3.3: "If that explicit send command is denied by the
+    action-authorization gate, treat this message's outcome as **blocked**,
+    not **escalated**: no escalation email was sent…" — preserved verbatim
+    apart from the identifier swap.
+  - Step 4: "If an escalation send was denied by the action-authorization
+    gate, do **not** write that an escalation email was sent. Record a
+    blocked open item instead…" — preserved verbatim apart from the
+    identifier swap.
+  - Re-ran the task's AC-2 grep in the clean worktree: 13 matching lines
+    pre-change vs 17 post-change (task's own count in the Work Log — 15 — was
+    for an intermediate cycle; final state is 17, still a superset covering
+    every original denial rule). Met.
+- AC-3 (delegate missing-configuration path, no automated grep — read against
+  the current merged `references/escalation.md`, T-143's output already on
+  `dev-agent`): the rewritten step-3 paragraph now reads "`references/escalation.md`
+  defines the full escalation policy — the email's required content, what
+  happens if the send is denied by the action-authorization gate, and what
+  happens if `manager_address` is missing or malformed, including the
+  fallback path for that missing-configuration case; do not restate any of it
+  here." This is accurate against `references/escalation.md`'s actual
+  sections ("If the escalation send is denied", "If the escalation
+  configuration is missing or malformed") and does not restate the specifics
+  of any of them — it correctly stops short of asserting *what* the fallback
+  path is. This fixes the stale claim the task flagged: the old text asserted
+  "a blocked or unaddressable escalation is a hard stop for that message,
+  exactly as `references/escalation.md` requires," which is now false — under
+  T-143's policy a missing/malformed `manager_address` degrades to escalating
+  to the mailbox's own address (via `himalaya template write`'s `From:`
+  header) rather than hard-stopping; only an undeterminable own-address
+  hard-stops. The new closing sentence ("`references/escalation.md` governs
+  the outcome in every one of those cases") no longer makes that false claim.
+  The one untouched sentence in this paragraph — "escalate per
+  `references/escalation.md` — send exactly one escalation email to the
+  configured manager address and take no further action on this message this
+  run" — was present before this task (verified against
+  `dev-agent`'s pre-change `SKILL.md`) and describes the primary escalation
+  trigger, not the missing-configuration path AC-3 scopes to; leaving it
+  in place is consistent with the task's Description, which calls out only
+  the hard-stop sentence as needing rewriting. Met.
+- AC-4 (config template key/explanation unchanged apart from identifier
+  removal): diffed `config/email-triage.example.toml` pre- and post-change —
+  only the header comment's `(S-010 Configuration Requirements)` parenthetical
+  was removed, with surrounding prose rewrapped; the `manager_address`
+  required/explanation block and the example value are byte-identical. Met.
+
+**Stage 2 — Code Quality**
+
+- Correctness: behavioural substitutions are accurate paraphrases of what was
+  removed; no rule's meaning changed except the one AC-3 explicitly asked to
+  fix (the stale hard-stop claim).
+- Tests: this task's test surface is the Verification section's grep
+  commands (no unit-test framework applies to skill-text files, per the
+  Work Log's framing, which matches the task's own Verification section
+  containing only greps). All three commands were independently re-run in a
+  clean `git worktree` of `task/T-144-rewrite-skill-body` and match the
+  Work Log's claims exactly.
+- Security: N/A (documentation-only change, no secrets, no external input).
+- Readability: prose reads cleanly; no leftover line-wrap artifacts found on
+  inspection of the diff.
+- Scope: `git diff --stat dev-agent task/T-144-rewrite-skill-body` shows only
+  the two files in "Files to Touch" modified by the branch (the task file's
+  own diff entry is an artifact of the branch predating this task's Work Log
+  commits on `dev-agent`, not a change made by the Developer).
+- Commit hygiene (git-conventions, flagged specifically for this review):
+  both commit subjects checked for length and format —
+  `docs(email-triage): drop spec id from config header comment` (59 chars)
+  and `docs(email-triage): scrub spec ids and delegate config policy`
+  (61 chars) — both well under the 72-character limit, correct `docs(email-triage):`
+  type/scope, lowercase imperative description, no trailing period, no task ID
+  repeated. No commit-message issues found (unlike the prior task in this
+  loop).
+
+No blocking issues found. No minor observations beyond the above.
