@@ -6,7 +6,7 @@ category — this file does not re-derive that decision, only what happens once 
 
 Like `direct-request`, and unlike the file-without-reply categories, a confident
 `meeting-scheduling` match gets a reply: this is one of the two starter categories where
-S-010's read-and-act scope means composing and sending real mail back to the sender.
+this skill's read-and-act scope means composing and sending real mail back to the sender.
 
 ## What this workflow can and cannot decide
 
@@ -71,7 +71,7 @@ entry stays open waiting for. When the message was escalated instead, this workf
 nothing to `references/escalation.md`'s and `references/worklog.md`'s already-defined
 open-item handling.
 
-## If the reply is blocked (S-004)
+## If the reply is blocked
 
 If drafting or sending the reply is blocked, follow the block-handling rule
 `references/escalation.md` already establishes: record the block as an open worklog item

@@ -9,12 +9,11 @@ category's own workflow file at `references/categories/<category>.md`, not
 here; this file is the index that routes to those workflow files, not a
 restatement of them.
 
-S-010 states this taxonomy is an initial, adjustable sketch, not committed
-final policy for every kind of email a user might receive (S-010
-Exclusions: "Exhaustive per-category business logic"). Expect the category
-list, signals, and rubric below to be revised as real mail is triaged
-against them — see "Adding a category" at the end of this file for how to
-extend the list without touching any other skill.
+This taxonomy is an initial, adjustable sketch, not committed final policy
+for every kind of email a user might receive — exhaustive per-category
+business logic is deliberately out of scope. Expect the category list,
+signals, and rubric below to be revised as real mail is triaged against
+them.
 
 ## Starter categories and their matching signals
 
@@ -106,9 +105,8 @@ Signals:
 
 The gate below decides autonomous action versus escalation for one message.
 It is always confidence in *this message's* classification — never the
-matched category's action reversibility, and never a sender allowlist
-(S-010 Design Principles; the same rule `SKILL.md` and
-`references/escalation.md` state).
+matched category's action reversibility, and never a sender allowlist —
+the same rule `SKILL.md` and `references/escalation.md` state.
 
 **Confident (act autonomously).** All of the following hold:
 - The message matches most of one category's signals above, clearly enough
@@ -171,6 +169,5 @@ change to any other skill in this package:
 whichever workflow file the index points to — it does not enumerate
 categories itself, so it needs no edit when a category is added or
 removed. The `himalaya` skill carries no category- or triage-specific
-content at all (S-010 Design Principles: "The CLI-reference skill stays
-free of any single job's triage policy"), so it likewise needs no change
-for a new category.
+content at all — it stays free of any single job's triage policy — so it
+likewise needs no change for a new category.
