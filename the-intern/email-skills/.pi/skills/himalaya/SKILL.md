@@ -43,6 +43,11 @@ In Pi, prefer this workflow:
 - This skill has no opinion on *what* to do with mail (no escalation
   address, category rules, or worklog format) — that policy, if any, lives
   in a separate skill that a session may also have loaded.
+- The account's own configured email address is not exposed by `account
+  list` or `account doctor` — obtain it from the `From:` header on the
+  first line of `himalaya template write`'s output (no arguments); see the
+  Operation Index and
+  `references/command-reference.md#finding-the-accounts-own-address`.
 
 ---
 
@@ -82,6 +87,7 @@ its full detail:
 | Add / remove / set flags | `himalaya flag add\|set\|remove <ID-OR-FLAG>...` | [`references/command-reference.md#managing-flags`](references/command-reference.md#managing-flags) |
 | Download attachments | `himalaya attachment download <ID>...` | [`references/command-reference.md#handling-attachments`](references/command-reference.md#handling-attachments) |
 | Select an account | `-a/--account <NAME>` on any command; `himalaya account list` | [`references/command-reference.md#selecting-an-account`](references/command-reference.md#selecting-an-account) |
+| Find the account's own address | `himalaya template write` (no args) → first line is `From: <name> <address>` | [`references/command-reference.md#finding-the-accounts-own-address`](references/command-reference.md#finding-the-accounts-own-address) |
 
 All commands above accept `-o json` (in place of the default `plain`
 table/text output) for machine-parseable results — verified as a global
