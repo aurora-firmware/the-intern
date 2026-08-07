@@ -1,7 +1,7 @@
 ---
 title: 'Email Skills for pi-agent: Himalaya CLI Reference and Classification-Driven
   Triage'
-version: '0.1'
+version: '0.2'
 status: approved  # draft | review | approved | superseded
 created: '2026-08-01'
 author: planner
@@ -172,9 +172,9 @@ pi-agent session (runs in <workspace>)
 |---|---|---|
 | `himalaya` skill | Teaches pi-agent the himalaya CLI's commands and flags | Generic; carries no email-specific policy; reusable outside this job |
 | `email-triage` skill | Defines new-mail detection, classification, per-category action policy, escalation policy, and diary discipline | The only component that is triage-policy-aware |
-| Category reference workflows | One file per taxonomy category describing what a confident match in that category should do | Referenced by the `email-triage` skill; extensible by adding a new reference file |
+| Category reference workflows | One file per taxonomy category describing what a confident match in that category should do | Referenced by the `email-triage` skill; the taxonomy is fixed per release, not a user extension point |
 | Daily worklog | Record of what was done, what's left, and what's next per calendar day | Read at the start of each day's first executed run; appended to after every handled message |
-| Manager escalation channel | The addressable "ask for guidance" path for low-confidence classifications | An email sent via himalaya to an operator-configured address; no synchronous response expected within the run |
+| Manager escalation channel | The addressable "ask for guidance" path for low-confidence classifications | An email sent via himalaya to an operator-configured address, falling back to the mail account's own address when that configuration is missing or malformed; no synchronous response expected within the run |
 | S-004 action ruleset (existing) | Default-deny allow-list gating every `bash` tool call this package makes | Unmodified by this spec; an allow rule admitting the package's himalaya invocations is a deployment prerequisite |
 | bob scheduler (S-009, existing) | Fires the periodic pi-agent session that discovers and runs these skills | Unmodified; this spec adds no bob-core or bob-service changes |
 
@@ -195,8 +195,9 @@ pi-agent session (runs in <workspace>)
 ### Component 3: Category reference workflows
 
 **Purpose:** One reference file per taxonomy category, describing the concrete steps to take once a message is confidently classified into that category.
+**Terminal category:** Beyond the starter taxonomy, one category recognizes the skill's own escalation mail — a self-addressed escalation, produced by the fallback in Configuration Requirements, that arrives back in the same mailbox as unseen mail and re-enters triage on a later run. A confident match there is filed and neither replied to nor escalated again, so the fallback cannot re-escalate its own output indefinitely. Unlike the starter categories, this one is a structural guard on the escalation path rather than adjustable business policy: if filing it is blocked by S-004, the block is recorded as an open worklog item and the message is still never escalated.
 **Estimated size:** Small per file; the starter taxonomy is a handful of files.
-**Interfaces:** Referenced by the `email-triage` skill; extensible — adding a category means adding a reference file, with no change required to the other skill.
+**Interfaces:** Referenced by the `email-triage` skill; the taxonomy is fixed at release time — adding or changing a category means shipping a new version of the package, because a deployed workspace's skill content is replaced on upgrade and local additions would not survive it.
 
 ### Component 4: Daily worklog
 
@@ -234,6 +235,13 @@ For each unseen message, classify against the taxonomy:
   → ★ low confidence: send an escalation email to the configured manager
     address via a himalaya `bash` call, describing the situation and the
     question; take no further action on this message this run
+    → escalation configuration missing or its address malformed: send the
+      same escalation to the mail account's own address instead, also
+      stating that the configuration was missing and where it was
+      expected; that mail returns as unseen mail on a later run, matches
+      the terminal category, and is filed rather than escalated again
+      → account's own address undeterminable: record it in the worklog
+        and take no further action on this message this run
     → S-004 blocks the send: record the block as an open worklog item;
       never fall back to acting on the message autonomously because
       escalation failed
@@ -277,10 +285,27 @@ reconciliation.
   consistent with keeping channel/action specifics out of bob-core and with
   ADR-008 §5's precedent that actions use their own configuration.
   **Constraints:** must be a single well-formed email address. **Default
-  behavior:** a missing/invalid address, or an escalation send blocked by
-  S-004, are both hard stops for that message — the skill must record the
-  block in the day's worklog and must never fall back to acting
-  autonomously because escalation didn't go through.
+  behavior:** an escalation send blocked by S-004 is a hard stop for that
+  message — the skill must record the block in the day's worklog and must
+  never fall back to acting autonomously because escalation didn't go
+  through. A missing configuration file, or an address that is absent or
+  malformed, is *not* a hard stop: the run must still escalate, addressed
+  instead to the mail account's own address, so the escalation surfaces in
+  the mailbox the human already reads. That address must come from what
+  the himalaya CLI already reports for the configured account — the
+  `From:` header on the first line of the draft `himalaya template write`
+  emits when invoked with no arguments — so this path requires no new
+  configuration key. Like every other himalaya invocation this package
+  makes, that call is subject to the S-004 action ruleset and an allow rule
+  admitting it is a deployment prerequisite. An escalation sent this way
+  must additionally state that the
+  configuration was missing or malformed and name the directory where the
+  file was expected, and this substitution applies to every message
+  needing escalation for as long as the configuration stays missing or
+  malformed. If the account's own address cannot be determined either, the
+  skill must record that in the day's worklog and take no further action
+  on that message this run — never hard-stopping the run, guessing an
+  address, or acting on the message autonomously instead.
 
 - **himalaya account.** A working IMAP/SMTP account already known to the
   himalaya CLI. **Why:** both skills assume himalaya can already read and
@@ -397,3 +422,4 @@ reconciliation.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-08-06 | The "No bob-core or bob-service changes" design principle replaced by "All triage logic stays on the pi-agent side": this spec still adds no channel adapter, admin-RPC method, or core type, but no longer claims skills require no bob-service change, since skill delivery moves into bob. | ADR-014 accepted 2026-08-06 / S-011. Skills are supplied by bob through its extension and no longer resolve from the working directory. | S-011 breakdown tasks (Gate 2 pending). |
+| 2026-08-07 | Three escalation- and taxonomy-related changes: (a) the category taxonomy is no longer a user extension point — it is fixed per release (Component 3 and the Responsibility Separation row); (b) a missing or malformed escalation configuration no longer hard-stops the message — the run escalates to the mail account's own address, stating that the configuration was missing and where it was expected, and records the message in the worklog without further action only when that address is undeterminable, while an escalation send blocked by S-004 remains a hard stop (Workflow, Configuration Requirements); (c) the taxonomy gains a terminal category for the skill's own escalation mail, which is filed and never escalated again (Component 3). | CR-006 items 3, 5, and 6, driven by the PR #42 review. Skill content ships with releases, so invited local category edits would be overwritten on upgrade; an escalation must still reach a human when its address configuration is absent, rather than stopping every message that needs one; and the self-addressed escalation that creates would otherwise re-escalate itself indefinitely. | T-143, T-144, T-145, T-146 |
