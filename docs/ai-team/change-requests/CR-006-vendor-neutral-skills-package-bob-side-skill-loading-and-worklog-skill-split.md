@@ -68,8 +68,24 @@ skill's general journaling discipline already records it.
 This replaces the current behaviour, which treats a missing or malformed
 address as a hard stop for every message needing escalation in that run.
 
-`[TODO: confirm how the account's own address is obtained from the himalaya
-CLI without introducing new configuration.]`
+**How the account's own address is obtained.** Verified against himalaya
+v1.2.0: `template write`, invoked with no arguments, emits a draft whose first
+line is a `From:` header carrying the account's display name and configured
+email address. The address is parsed from that line. This uses a command the
+skill already invokes, so it needs no new allow-rule family, no configuration
+key, and no read of himalaya's own configuration file.
+
+Two routes were checked and rejected: `account list` reports only account name,
+backend, and default flag — in both table and JSON output — and `account
+doctor` reports integrity checks without the address.
+
+**If the address cannot be determined**, record it in the worklog and take no
+further action on that message this run. Do not hard-stop the run, do not
+guess an address, and do not fall back to acting on the message autonomously.
+The worklog entry is the record; the operator discovers it there. This
+deliberately accepts that an escalation may go nowhere rather than adding a
+recovery mechanism for a case that should not occur once an account is
+configured.
 
 ### 6. Self-escalation must not loop
 
