@@ -27,13 +27,6 @@ manager_address = "someone@example.com"
 - `manager_address` (required) — a single well-formed email address that
   receives every escalation this skill sends.
 
-This repository ships only the documented template,
-`config/email-triage.example.toml`, with no real address filled in. The real
-`config/email-triage.toml` exists only in the owner-only deployed workspace
-copy of this package (`../../../../README.md`'s "This package is the
-repository source of truth only") — it is never committed, and provisioning
-the real address is out of scope for this reference (S-010 Exclusions).
-
 ## When to escalate
 
 Escalate a message when its classification is not confident — whichever
