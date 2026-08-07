@@ -153,3 +153,28 @@ and acting on it anyway. "Closest" is not "confident": the confidence rubric
 above, not proximity to any one category, is what gates autonomous action,
 so a message that fails the confident-match test above always escalates
 rather than being forced into whichever category scored highest.
+
+## The skill's own escalation mail
+
+Unlike the five categories above, this last category is not adjustable business-logic
+sketch. It exists because `references/escalation.md`'s missing-configuration fallback
+addresses an escalation to the mail account's own address, so that escalation mail can
+arrive back in this same mailbox as unseen mail and re-enter this same classification step.
+
+### `self-escalation`
+
+The skill's own earlier escalation mail, sent by `references/escalation.md`'s
+missing-configuration fallback and arrived back in the mailbox as unseen mail.
+
+Signals:
+- The message is self-addressed: both its `From:` and its `To:` name the mail account's own
+  configured address — the same address `himalaya template write`'s `From:` header reports
+  (see the `himalaya` skill's command reference, "Finding the Account's Own Address").
+  Ordinary escalation mail is addressed to a separately configured `manager_address`, so a
+  message the account sent to itself is a decisive, exact match — no other category's mail
+  is self-addressed this way.
+- Subject begins with the literal prefix `Escalation: ` — the fixed prefix `SKILL.md`'s
+  escalation-composition step puts in front of the original subject.
+- Body states that the escalation configuration file was missing or malformed and names the
+  workspace's `config/` directory — the content `references/escalation.md`'s
+  missing-configuration fallback adds to every escalation it sends this way.
