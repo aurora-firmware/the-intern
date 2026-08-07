@@ -231,3 +231,79 @@ triage workflow uses — left undocumented per AC-5's "don't add operations
 the triage workflow does not use."
 
 ## Review
+
+### Review Verdict — 2026-08-07
+
+PASS
+
+**Scope confirmed.** `git diff dev-agent...task/T-142-reconcile-himalaya-skill`
+(merge-base `5c0632e`) touches exactly the two files in "Files to Touch":
+`the-intern/email-skills/.pi/skills/himalaya/SKILL.md` (+6/-0) and
+`references/command-reference.md` (+40/-0). Single commit `5886898`. No
+unspecified files, no code, no unrelated content.
+
+**Independent spot-check of the "zero corrections" claim (the central thing
+worth verifying, per review instructions).** `himalaya --version` on this
+machine is exactly `himalaya v1.2.0 +maildir +smtp +wizard +sendmail
++pgp-commands +imap` (build: linux musl x86_64), matching both files'
+recorded version string verbatim (AC-1). I independently ran
+`himalaya <subcommand> --help` for every command in the task's own
+verification list — `account list`, `account doctor`, `folder list`,
+`envelope list`, `message read`, `message move`, `message write`,
+`message reply`, `message forward`, `template write`, `template reply`,
+`template send`, `attachment download` (plus its parent `attachment`) —
+and additionally `message delete`, `flag add`, `flag set`, `flag remove`,
+and the `folder`/`message` parent commands (to confirm the "no
+undocumented operations" claim). Every usage line, option name/shorthand,
+and default documented in the skill text matched the live `--help` output
+character-for-character; I found no discrepancy anywhere (AC-2). I also
+re-ran four of the Observed/pitfall claims live: the argument-order error
+(`envelope list not flag seen -s 3` → `expected space between filters...`),
+the `flag unseen` silent-zero-match pitfall, `template write` with a
+dash-led body without `--` (`error: unexpected argument '- ' found`), and
+the same body with `--` (succeeds) — all four reproduced exactly as
+documented. On this evidence the Developer's "no command shape needed
+correction" claim holds; AC-4 is correctly satisfied vacuously (no
+corrections occurred, so none needed to be logged).
+
+**AC-3 (address route).** Ran `himalaya template write` live: first line
+is `From: Daneel AFW <daneel@aurorafw.com>`, matching the new "Finding the
+Account's Own Address" section in `command-reference.md` and the new
+`SKILL.md` intro bullet/Operation Index row verbatim. Also ran
+`himalaya account list` (plain and `-o json`) and `himalaya account
+doctor` live: neither output contains an email address (JSON:
+`[{"name":"daneel","backend":"IMAP, SMTP","default":true}]`; doctor:
+three integrity-check lines), confirming the section's claim that
+`template write` is the only route to the account's own address.
+
+**AC-5 (no triage policy leakage).** Grepped both files for
+`escalat|categor|triage|worklog`: the only hits are the pre-existing
+disclaimer bullets ("no escalation address, category taxonomy, or worklog
+instruction... that policy... lives in a separate skill") and one
+pre-existing, unrelated use of "escalate" in the shell-injection-safety
+section's delimiter-selection advice (not part of this diff, not policy
+content). The new AC-3 content added by this diff describes only the CLI
+mechanism for obtaining the account's own configured address — no
+escalation address, category taxonomy, or triage policy was introduced.
+
+**No added operations.** Confirmed live via `himalaya folder --help` and
+`himalaya message --help` that `folder add/expunge/purge/delete` and
+`message export/thread/edit/mailto` exist on the CLI but are correctly
+left undocumented, matching the Work Log's stated scope decision.
+
+**Anchors resolve.** The diff adds a new `## Finding the Account's Own
+Address` heading in `command-reference.md`; its GitHub-slug is
+`finding-the-accounts-own-address` (apostrophe dropped, spaces to
+hyphens), matching both new links to it (`SKILL.md` intro bullet and
+Operation Index row). The diff's other new link,
+`[Selecting an Account](#selecting-an-account)`, resolves to the
+pre-existing `## Selecting an Account` heading. All four link/anchor pairs
+introduced by this diff resolve correctly.
+
+**Stage 2 (quality).** This is documentation-only; no logic, tests,
+security, or performance surface applies. Readability and formatting are
+consistent with the rest of both files (same Observed/`--help`-sourced
+citation style, same table/link conventions). No dead content, no
+placeholder text.
+
+Both stages pass. No corrections requested.
