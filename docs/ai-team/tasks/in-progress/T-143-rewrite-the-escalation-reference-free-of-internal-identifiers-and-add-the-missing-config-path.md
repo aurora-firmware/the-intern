@@ -163,6 +163,54 @@ Commits on `task/T-143-rewrite-escalation-reference`:
 - `159248d` docs(email-skills): drop repository-packaging paragraph from escalation reference
 - `c6c514a` docs(email-skills): degrade to account address when escalation config is missing
 
+### Session 2 — 2026-08-07
+
+Addressed the sole Stage 2 finding from review cycle 1 (Stage 1 content review
+was a full PASS and required no changes to `escalation.md`). Two of the three
+commit subjects on `task/T-143-rewrite-escalation-reference` exceeded the
+git-conventions 72-character limit for the full
+`<type>(<component>): <description>` line.
+
+Verified via `git ls-remote --heads origin task/T-143-rewrite-escalation-reference`
+(empty output) and `git rev-parse @{u}` ("no upstream configured") that the
+branch had never been pushed, confirming rewriting history in place was
+permitted.
+
+Tried the obvious approach first — `git rebase -i` against the base commit,
+marking the two long-subject commits as `reword` — but this environment blocks
+any git command with the `-i` flag, including `rebase -i`, even when scripted
+non-interactively via `GIT_SEQUENCE_EDITOR`/`GIT_EDITOR`, since it is treated
+as requiring interactive input that is not supported here. Rejected that path
+and used an equivalent non-interactive sequence instead: `git reset --hard` to
+the compliant base commit, then `git cherry-pick --no-commit` each of the two
+non-compliant commits in original order, recommitting each with a shortened
+subject and no other changes.
+
+Old to new commit SHA mapping:
+
+- `5b754ca` (`docs(email-skills): scrub ai-team identifiers from escalation reference`,
+  71 chars) — unchanged, still `5b754ca`.
+- `159248d` (`docs(email-skills): drop repository-packaging paragraph from escalation reference`,
+  81 chars) → `349acf9` (`docs(email-skills): drop repository-packaging paragraph`,
+  55 chars).
+- `c6c514a` (`docs(email-skills): degrade to account address when escalation config is missing`,
+  80 chars) → `eed3d48` (`docs(email-skills): degrade to account address on missing config`,
+  64 chars).
+
+Verified afterward: `git diff c6c514a HEAD` is empty and
+`git rev-parse HEAD^{tree}` (`5451aa8fbcfaceb61c4e04f39ef699c8fff9014f`)
+matches the pre-reword tip's tree hash exactly, confirming no file content
+changed. All three commit subjects are now ≤72 chars (71, 55, 64). Confirmed
+via `git log --stat dev-agent..HEAD` that each of the three commits touches
+only `the-intern/email-skills/.pi/skills/email-triage/references/escalation.md`
+— no task lifecycle file was touched on the task branch. The two original
+over-length commit objects (`159248d`, `c6c514a`) remain reachable as dangling
+objects in the local repo but are no longer on the branch tip; since nothing
+was ever pushed, this has no shared-history impact.
+
+Nothing remains for this task; ready for review cycle 2 (Stage 2 recheck only
+— content/Stage 1 already passed and is unchanged).
+
 ## Review
 
 ### Review Verdict — 2026-08-07
