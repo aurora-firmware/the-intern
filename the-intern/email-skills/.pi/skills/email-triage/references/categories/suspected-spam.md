@@ -40,7 +40,7 @@ Append one entry to today's worklog file in the format `references/worklog.md` d
 file does not restate the entry format itself). Record the filing as fully handled: nothing
 is left outstanding and nothing further happens for this message.
 
-## If the move is blocked (S-004)
+## If the move is blocked
 
 If the move is blocked, follow the block-handling rule `references/escalation.md` already
 establishes: record the block as an open worklog item and do not treat the message as

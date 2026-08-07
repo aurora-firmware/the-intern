@@ -9,12 +9,11 @@ category's own workflow file at `references/categories/<category>.md`, not
 here; this file is the index that routes to those workflow files, not a
 restatement of them.
 
-S-010 states this taxonomy is an initial, adjustable sketch, not committed
-final policy for every kind of email a user might receive (S-010
-Exclusions: "Exhaustive per-category business logic"). Expect the category
-list, signals, and rubric below to be revised as real mail is triaged
-against them — see "Adding a category" at the end of this file for how to
-extend the list without touching any other skill.
+This taxonomy is an initial, adjustable sketch, not committed final policy
+for every kind of email a user might receive — exhaustive per-category
+business logic is deliberately out of scope. Expect the category list,
+signals, and rubric below to be revised as real mail is triaged against
+them.
 
 ## Starter categories and their matching signals
 
@@ -106,9 +105,8 @@ Signals:
 
 The gate below decides autonomous action versus escalation for one message.
 It is always confidence in *this message's* classification — never the
-matched category's action reversibility, and never a sender allowlist
-(S-010 Design Principles; the same rule `SKILL.md` and
-`references/escalation.md` state).
+matched category's action reversibility, and never a sender allowlist —
+the same rule `SKILL.md` and `references/escalation.md` state.
 
 **Confident (act autonomously).** All of the following hold:
 - The message matches most of one category's signals above, clearly enough
@@ -156,21 +154,27 @@ above, not proximity to any one category, is what gates autonomous action,
 so a message that fails the confident-match test above always escalates
 rather than being forced into whichever category scored highest.
 
-## Adding a category
+## The skill's own escalation mail
 
-Adding a category to this taxonomy means exactly two additions, and no
-change to any other skill in this package:
+Unlike the five categories above, this last category is not adjustable business-logic
+sketch. It exists because `references/escalation.md`'s missing-configuration fallback
+addresses an escalation to the mail account's own address, so that escalation mail can
+arrive back in this same mailbox as unseen mail and re-enter this same classification step.
 
-1. **One workflow file** at `references/categories/<category>.md`,
-   describing what a confident match in that category does (the same shape
-   as the starter categories' own workflow files).
-2. **One index entry** here, in "Starter categories and their matching
-   signals" above, naming the category and its matching signals.
+### `self-escalation`
 
-`SKILL.md`'s classification step consults this index by name and follows
-whichever workflow file the index points to — it does not enumerate
-categories itself, so it needs no edit when a category is added or
-removed. The `himalaya` skill carries no category- or triage-specific
-content at all (S-010 Design Principles: "The CLI-reference skill stays
-free of any single job's triage policy"), so it likewise needs no change
-for a new category.
+The skill's own earlier escalation mail, sent by `references/escalation.md`'s
+missing-configuration fallback and arrived back in the mailbox as unseen mail.
+
+Signals:
+- The message is self-addressed: both its `From:` and its `To:` name the mail account's own
+  configured address — the same address `himalaya template write`'s `From:` header reports
+  (see the `himalaya` skill's command reference, "Finding the Account's Own Address").
+  Ordinary escalation mail is addressed to a separately configured `manager_address`, so a
+  message the account sent to itself is a decisive, exact match — no other category's mail
+  is self-addressed this way.
+- Subject begins with the literal prefix `Escalation: ` — the fixed prefix `SKILL.md`'s
+  escalation-composition step puts in front of the original subject.
+- Body states that the escalation configuration file was missing or malformed and names the
+  workspace's `config/` directory — the content `references/escalation.md`'s
+  missing-configuration fallback adds to every escalation it sends this way.

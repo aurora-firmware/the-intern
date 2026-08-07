@@ -6,8 +6,9 @@ category — this file does not re-derive that decision, only what happens once 
 
 Unlike the file-without-reply categories, a confident `direct-request` match gets a reply:
 the sender asked a specific, answerable question or made a specific ask, and this is one of
-the two starter categories (with `meeting-scheduling`) where S-010's read-and-act scope
-means composing and sending real mail back to the sender, not just filing the message.
+the two starter categories (with `meeting-scheduling`) where this skill's read-and-act
+scope means composing and sending real mail back to the sender, not just filing the
+message.
 
 ## Draft and send a reply
 
@@ -42,7 +43,7 @@ fully handled: nothing is left outstanding and nothing further happens for this 
 the same "fully handled" outcome the file-without-reply categories record, just reached by
 replying instead of filing.
 
-## If the reply is blocked (S-004)
+## If the reply is blocked
 
 If drafting or sending the reply is blocked, follow the block-handling rule
 `references/escalation.md` already establishes: record the block as an open worklog item

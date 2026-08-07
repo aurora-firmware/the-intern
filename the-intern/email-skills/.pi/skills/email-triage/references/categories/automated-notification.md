@@ -24,14 +24,14 @@ confirmation — a failed build, a declined payment, a service alert reporting a
 error, as opposed to a routine receipt or shipping confirmation. When the notification
 being filed reports this kind of failure, record that in the worklog entry (below) so a
 human reviewing the day's worklog notices it — this skill does not itself investigate or
-act on the failure; per S-010, that stays out of this skill's per-category business logic.
+act on the failure; that stays out of this skill's per-category business logic.
 
 This is a note for the operator's own attention, not an open item under
 `references/worklog.md`'s reconciliation model: it does not close via a manager reply or a
-retried S-004 call the way that model's two defined open-item causes do, so it is not
-carried forward at first-run reconciliation the way an escalation or a block is. The
-message itself is still fully handled by filing it — the flag exists only so the failure
-does not go unnoticed once the message leaves `INBOX`.
+retried call previously denied by the action-authorization gate, the way that model's two
+defined open-item causes do, so it is not carried forward at first-run reconciliation the
+way an escalation or a block is. The message itself is still fully handled by filing it —
+the flag exists only so the failure does not go unnoticed once the message leaves `INBOX`.
 
 ## Worklog entry
 
@@ -43,7 +43,7 @@ message. For a notification that reports a failure needing attention (previous s
 name that failure in the entry as the reason for a follow-up, distinct from the entry's own
 "nothing left" filing outcome.
 
-## If the move is blocked (S-004)
+## If the move is blocked
 
 If the move is blocked, follow the block-handling rule `references/escalation.md` already
 establishes: record the block as an open worklog item and do not treat the message as
