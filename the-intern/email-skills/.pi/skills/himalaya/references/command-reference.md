@@ -314,6 +314,42 @@ output but has not itself been Observed end-to-end.
 
 ---
 
+## Finding the Account's Own Address
+
+`himalaya template write`, invoked with no arguments, emits a draft whose
+first line is a `From:` header carrying the account's display name and
+configured email address (Observed — the same command as the "Hello
+world" transcript above, run with nothing supplied):
+
+```bash
+$ himalaya template write
+From: Daneel AFW <daneel@aurorafw.com>
+To:
+Subject:
+
+
+```
+
+This is the CLI's route to the account's own configured address: nothing
+else covered in this reference exposes it. `himalaya account list` (see
+[Selecting an Account](#selecting-an-account)) reports only account name,
+backend(s), and default flag, in both `plain` and `-o json` output, and
+`himalaya account doctor` reports only integrity-check results (Observed):
+
+```bash
+$ himalaya account doctor
+Checking TOML configuration integrity for default account… OK
+Checking IMAP integrity… OK
+Checking SMTP integrity… OK
+```
+
+Neither command's output contains an email address. To recover just the
+address (not the display name) from `template write`'s output, parse the
+`From:` line: the address is the text inside the trailing `<...>` angle
+brackets.
+
+---
+
 ## Moving and Copying
 
 ```bash
@@ -428,3 +464,7 @@ $ himalaya account list
 read commands (`-w, --max-width`, `-o, --output`, `-c, --config`). Account
 *creation* (`account configure`) and diagnostics (`account doctor`) are
 out of scope for this skill — account setup is assumed to already exist.
+
+Neither `account list` nor `account doctor` exposes the account's
+configured email address — to obtain that, use `himalaya template write`
+instead; see [Finding the Account's Own Address](#finding-the-accounts-own-address).
