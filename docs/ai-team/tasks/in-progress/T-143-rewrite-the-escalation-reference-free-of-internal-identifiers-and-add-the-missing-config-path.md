@@ -99,4 +99,68 @@ grep -niE "template write|account's own|worklog" escalation.md
 
 ## Work Log
 
+### Session 1 — 2026-08-07
+
+Rewrote `the-intern/email-skills/.pi/skills/email-triage/references/escalation.md`
+end to end, in three commits mapping to the task's three described changes, each
+verified with the task's grep-based acceptance checks before and after.
+
+**Identifier scrub (AC-1, AC-2).** Removed all 13 ai-team artifact identifiers
+(`ADR-004` x2, the config citation, the design-principles citations x2, the
+action-gate spec x5, and the exclusions citation — the last one landed in the
+packaging-paragraph deletion below). Where an identifier only cited a spec or
+ADR to justify a design choice to an internal reader, the citation was dropped
+and the substantive instruction kept in plain prose. Where the identifier named
+the action-authorization gate itself, the reference was rewritten in
+behavioural language throughout: the heading "If the escalation send is blocked
+(S-004)" became "If the escalation send is denied"; "gated by bob's existing
+S-004 default-deny action gate" became "gated by the action-authorization gate,
+which denies by default"; and the core safety rule — a denied tool call is
+recorded and never worked around — was made explicit as its own sentence ("A
+call denied by policy is recorded and never worked around") rather than left
+implicit across the surrounding bullets, since this is the single most
+safety-relevant behaviour in the package.
+
+**Packaging paragraph deletion (AC-3).** Deleted the paragraph stating which
+configuration file is committed versus templated and where the real file lives
+— pure repository-packaging detail the consuming agent cannot act on. It also
+happened to carry the last artifact identifier.
+
+**Missing-config degrade path (AC-4, AC-5).** Replaced the "hard stop the run"
+behaviour under `## If manager_address is missing or malformed` (renamed `## If
+the escalation configuration is missing or malformed`) with: (1) escalate
+anyway, addressed to the mail account's own address obtained from the `From:`
+header on the first line of `himalaya template write` invoked with no
+arguments, citing the `himalaya` skill's command reference for the output
+shape; (2) state in that escalation email, in addition to the usual escalation
+content, that the configuration file was missing (or its address malformed) and
+the directory where it was expected (`<workspace>/config/`); (3) if the
+account's own address cannot be determined either (`template write` fails or
+has no usable `From:` header), record that in the worklog and take no further
+action on that message this run — no hard stop, no guessed address, no
+autonomous fallback action. Per the task's instruction not to over-specify a
+worklog format for this case, the text says only "record the problem in the
+worklog", relying on `worklog.md`'s general journaling discipline rather than
+restating entry-format rules.
+
+**Tried and rejected:** considered keeping "not something this reference or spec
+grants" verbatim (dropping only the identifier) but simplified to "does not
+grant", since the word "spec" without an identifier is still a dangling
+reference to an artifact the skill consumer has no access to. Considered
+leaving the closing sentence of the missing-config section as a literal "hard
+stop" callout (matching the old prose structure) but rewrote it as a "fallback
+path applies to every message this run" statement, since the new behaviour is
+explicitly not a hard stop.
+
+**Remaining:** nothing outstanding against this task's scope. `worklog.md` and
+`SKILL.md` in the same skill package still carry action-gate identifiers, but
+they are out of this task's Files to Touch and were left untouched (they are
+covered by T-144 and T-145).
+
+Commits on `task/T-143-rewrite-escalation-reference`:
+
+- `5b754ca` docs(email-skills): scrub ai-team identifiers from escalation reference
+- `159248d` docs(email-skills): drop repository-packaging paragraph from escalation reference
+- `c6c514a` docs(email-skills): degrade to account address when escalation config is missing
+
 ## Review
