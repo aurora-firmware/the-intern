@@ -258,6 +258,131 @@ initial (interrupted) attempt did. This does not change anything else
 about the documented setup above — only the recipient address the
 escalation rule's `manager_address`-equivalent config should target.
 
+### Diagnosis 2 — 2026-08-08
+
+Reproduction status: **Confirmed — live end-to-end validation completed
+successfully.** pi's provider quota reset as anticipated (confirmed via a
+direct `pi -p "Say the single word: ping"` probe before starting). Both
+outstanding unknowns this bug exists to close — (a) how pi's `bash` tool
+executes a real heredoc-bearing multi-line command, (b) whether the live
+S-004 `wildmatch` engine admits the real agent-composed escalation
+command — were reached and resolved this cycle.
+
+Evidence captured:
+- Deployed an owner-only (mode 700) workspace copy of `email-skills` under
+  a scratch directory outside the repo checkout (not
+  `/srv/workspaces/email-skills`, matching the operator guide's caveat that
+  path is only an example), with `manager_address =
+  "jose.moreno@aurorafw.com"` in `config/email-triage.toml` per the human's
+  2026-08-05 authorization update. Ran an isolated `bob` instance
+  (dedicated `XDG_*`/socket dirs) with the full `[[policy.action_rules]]`
+  set copied verbatim from `the-intern/docs/src/operator-guide/index.md`,
+  path-substituted for the deployed workspace, and started with
+  `RUST_LOG=extension_ipc=debug` from the first tick per `B-032`'s tracing
+  fix.
+- Before touching the real mailbox: the 7 pre-existing unseen PR #42
+  thread messages (ids 96–102, from José Moreno) were relocated to
+  `INBOX.Trash` and later restored to `INBOX` with their unseen flag
+  verified intact (one, message id 106 post-restore, briefly lost its
+  unseen flag as a side effect of an unrelated manual `himalaya template
+  reply` diagnostic probe during this session's `B-034` investigation —
+  explicitly restored via `himalaya flag remove 106 seen` and re-verified
+  before finishing cleanup).
+- Injected one synthetic, self-controlled trigger message (`daneel` account
+  sending to itself via `himalaya template write | himalaya template send`)
+  worded to straddle `automated-notification`/`suspected-spam`/
+  `meeting-scheduling` signals (an "account statement" notice with urgency
+  language *and* a scheduling callback offer) and containing adversarial
+  shell metacharacters — a backtick (`` `confirm` ``), two `$(...)`
+  expansions (`$(whoami)`, `$(id)`), a semicolon, and a leading-dash body
+  line (`- URGENT: ...`) — as a live injection-safety check on top of the
+  static proof already on file.
+- **First attempt (before the fix below) reproduced a new, distinct
+  blocker, not the escalation-command shape this bug tests:** the deployed
+  workspace's own `.pi/skills/email-triage`/`.pi/skills/himalaya` content
+  was never loaded into the agent's context at all (`before_provider_request`
+  payloads showed only the operator's global skills in
+  `<available_skills>`), so the agent behaved as a generic assistant
+  issuing denied, non-`SKILL.md` exploratory commands (`ls`, `pwd && ls
+  -la`, `find . -maxdepth 2 -type f`) for 5 consecutive ticks, and none of
+  the cwd-scoped worker processes those ticks spawned were ever reaped by
+  `bob`, eventually approaching `max_processes`. Root-caused to pi's own
+  documented non-interactive project-trust model (project-local
+  `.pi/skills/` loads only after the project is trusted, and `--mode rpc` —
+  what `bob` always uses — never prompts). **Filed as new bugs `B-035`**
+  (the trust gate) **and `B-036`** (the worker-reaping gap), independent of
+  this bug's own scope; cross-linked below. Worked around for the rest of
+  this live-validation session by adding the deployed workspace's canonical
+  path to `~/.pi/agent/trust.json` (the same file interactive `/trust`
+  writes) — a legitimate one-time operator/environment action, not a
+  source or doc change to anything this bug's fix touches — and restarting
+  `bob` with a clean process tree. `~/.pi/agent/trust.json` was reverted to
+  its pre-session content as part of this session's cleanup.
+- **With trust established, the escalation-send step was reached and fully
+  exercised.** Live session `9377acc6-0aba-429b-a7eb-4f5c3281d6cf` (tick at
+  2026-08-08T15:44:08Z) correctly classified the synthetic trigger message
+  as having no confident category match (automated-notification,
+  suspected-spam, and meeting-scheduling signals all in contention — the
+  intended straddling design worked) and composed the escalation exactly
+  per `SKILL.md`/`command-reference.md`'s hardened pattern as one `bash`
+  tool call:
+  ```
+  SUBJECT=$(cat <<'Q8W2E4R6T8Y0U2I4O6P8'
+  Action required: verify your statement; $(whoami) - schedule a callback?
+  Q8W2E4R6T8Y0U2I4O6P8
+  )
+  SUBJECT="${SUBJECT//$'\n'/ }"
+  BODY=$(cat <<'A1S3D5F7G9H2J4K6L8Z0'
+  Escalation request for message ID 104. ...
+  A1S3D5F7G9H2J4K6L8Z0
+  )
+  himalaya template write -H 'To:jose.moreno@aurorafw.com' -H "Subject:Escalation: $SUBJECT" -- "$BODY" | himalaya template send
+  ```
+  Confirmed via `bob`'s own `extension_ipc` debug trace: `extension authz
+  call ... tool=bash arguments=Object {"command": "SUBJECT=$(cat <<..."}`
+  immediately followed by `extension authz verdict ... allow=true
+  reason=None` — S-004 admitted the real, live-composed command exactly as
+  intended, and the adversarial metacharacters embedded in the subject/body
+  never executed (they appear verbatim, inert, in the captured command
+  text). `tool_execution_end` for that call captured himalaya's own stdout:
+  `... sending smtp message` followed by `Message successfully sent!`,
+  `isError: false`.
+- The workspace's `worklog/2026-08-08.md` recorded this message correctly:
+  `## 15:44 — Action required: verify your statement; $(whoami) - schedule
+  a callback? (from Account Alerts <daneel@aurorafw.com>)` /
+  `- Done: Read the message, found no confident category ..., and sent an
+  escalation email to jose.moreno@aurorafw.com asking how to handle it.` /
+  `- Left: awaiting manager reply.` / `- Next: closes when the manager's
+  reply arrives as unseen mail ...` — matching `references/worklog.md`'s
+  format and the actual outcome exactly (no false "blocked" or false
+  "handled" claim).
+- Environment fully cleaned up afterward: schedule entry removed, `bob`
+  shut down gracefully (six-phase shutdown confirmed in its own log, zero
+  leftover processes), the synthetic trigger message moved to
+  `INBOX.Trash` (soft-deleted, not purged), the 7 real PR #42 messages
+  restored to `INBOX` with unseen flag verified intact,
+  `~/.pi/agent/trust.json` reverted, deployed workspace and isolated `bob`
+  home directories removed, `git status` on the repo checkout clean
+  throughout (no source/doc files touched by this diagnosis session).
+
+Isolated fault: none. The hardened heredoc-based escalation command and its
+S-004 allow-rule both work correctly end to end against the real `bob`
+policy engine, pi's real `bash` tool, and the real configured `himalaya`
+account.
+
+Root cause or fault hypothesis: not applicable — this closes as validated,
+not as a defect. The three defects this session's setup work did surface
+(project-trust gate, worker-reaping gap, and a `himalaya` CLI template-
+parsing defect encountered while investigating `B-031`) are unrelated to
+this bug's own hypothesis and are tracked separately as `B-035`, `B-036`,
+and `B-034`.
+
+Planned verification: none further required. This bug's Fix Verification
+criteria (heredoc command runs without a pi `bash`-tool syntax/execution
+error; S-004 admits it; exactly one escalation email arrives at
+`manager_address`; the worklog records it correctly) are all met with
+direct evidence above.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
@@ -267,6 +392,69 @@ rejected, decisions made, what remains for next session.
 
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
+
+### Session 1 — 2026-08-08
+
+Ran the live end-to-end validation this bug has been blocked on since
+2026-08-05, now that pi's provider quota reset. Reused Diagnosis 1's
+documented setup (isolated `bob` instance, deployed workspace copy,
+`manager_address = "jose.moreno@aurorafw.com"` per the human's
+authorization update, full S-004 rule set copied from the operator guide,
+adversarial-metacharacter synthetic trigger message) as the procedural
+template, and validated `B-031` (reply-send) in the same combined session
+per both bugs' own cross-linked note that they could reasonably be
+validated together.
+
+Along the way, the very first ticks reproduced a *different* blocker than
+the one this bug tracks: the deployed workspace's project-local
+`.pi/skills/` content was never loaded into the agent's context at all,
+because pi's non-interactive (`--mode rpc`) sessions never establish
+project trust for a never-before-seen workspace, and `bob` never passes
+`--approve`. This produced the same "denied calls before reaching anything
+SKILL.md-prescribed" symptom the original 2026-08-05 session hit, and which
+`B-033` investigated (and, based on the evidence available at the time,
+reasonably refuted as an S-004 rule gap) — this session's direct evidence
+now points at project trust as the much more likely real cause of those
+original denials, though that can't be retroactively proven since the
+original denied-command text was never recovered. Filed `B-035` (the trust
+gate) and `B-036` (a related discovery: cwd-scoped worker processes are
+never reaped by `bob`, eventually exhausting `max_processes` and silently
+skipping every subsequent scheduled tick) as new, independent bugs rather
+than patching either inline, per this session's explicit instructions.
+Worked around both for the remainder of this session by pre-seeding
+`~/.pi/agent/trust.json` (a legitimate one-time operator action, reverted
+afterward) and restarting `bob` with a clean process tree between rounds.
+
+With trust established, the escalation-send step was reached and fully
+exercised: the synthetic trigger message correctly failed to classify
+confidently (by design), the agent composed the exact hardened heredoc
+escalation command `SKILL.md`/`command-reference.md` prescribe, `bob`'s
+S-004 policy engine admitted it (`allow=true`), himalaya reported `Message
+successfully sent!`, and the workspace's worklog recorded the outcome
+correctly. This closes the two unknowns this bug was filed to resolve.
+Full evidence, including the exact captured command text and audit
+verdicts, is in Diagnosis 2 above.
+
+Also discovered and filed `B-034` (a `himalaya` CLI defect: `template
+send`/`save` cannot parse a template passed as a positional argument,
+only via stdin pipe) while validating `B-031` in the same session — that
+defect does **not** affect this bug, because the escalation command shape
+this bug validates already uses the pipe form, not the positional-argument
+form.
+
+Cleaned up fully: schedule entry removed, `bob` shut down gracefully, the
+synthetic trigger moved to `INBOX.Trash`, the 7 real relocated messages
+restored to `INBOX` with unseen flag intact (including a brief incidental
+flag loss on one message from an unrelated diagnostic probe, caught and
+corrected before finishing), `~/.pi/agent/trust.json` reverted, and all
+scratch directories removed. `git status` on the repo checkout stayed clean
+throughout — no source or doc files were touched by this session beyond
+this bug's own lifecycle file and the two sibling bug files
+(`B-031`, plus new bugs `B-034`/`B-035`/`B-036`).
+
+Recommend the Reviewer confirm this Diagnosis Log's evidence chain and move
+`B-030` to `resolved/` — the live-validation gap this bug exists to close
+has been closed with a clean pass, and no code or doc fix is needed.
 
 ## Review
 
