@@ -3,7 +3,7 @@ id: B-034
 title: himalaya template send/save cannot parse a template passed as a 
   positional CLI argument (works via stdin pipe)
 severity: high
-status: open
+status: in-progress
 created: '2026-08-08'
 ---
 
