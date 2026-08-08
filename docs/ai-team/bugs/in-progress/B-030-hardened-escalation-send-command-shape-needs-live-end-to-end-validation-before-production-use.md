@@ -678,3 +678,131 @@ whoever closes this out on a future PASS should still skip the `integrate`
 skill and move the file straight to `resolved/`, exactly as `B-033` did —
 this FAIL is about the completeness of the evidence recorded, not about any
 branch content needing to be merged.
+
+### Review Verdict — 2026-08-08 (cycle 2)
+PASS
+
+This cycle re-reads the full bug file and independently checks, rather than
+assumes, that the two new entries close the exact gap the cycle-1 FAIL
+identified — recipient-side confirmation that the escalation email
+Diagnosis 2 sent actually arrived at `jose.moreno@aurorafw.com` — and that
+they do so honestly.
+
+**Cross-checking the new entries against Diagnosis 2, not taken on trust:**
+
+- Session ID: Diagnosis 3 cites live session
+  `9377acc6-0aba-429b-a7eb-4f5c3281d6cf`. Diagnosis 2 (line 322) records the
+  identical ID for the tick that composed and sent the escalation. Match.
+- Timestamp: Diagnosis 3 cites tick `2026-08-08T15:44:08Z`. Diagnosis 2
+  (line 322) records the identical timestamp. Match.
+- Subject: Diagnosis 3 quotes the raw `$SUBJECT` heredoc content, `Action
+  required: verify your statement; $(whoami) - schedule a callback?`. This
+  is character-for-character identical to the heredoc body Diagnosis 2
+  captured at lines 330-332. The final sent subject (with the agent's
+  `"Subject:Escalation: $SUBJECT"` prefix from the captured command,
+  line 339) is `Escalation: Action required: verify your statement;
+  $(whoami) - schedule a callback?`, which is exactly what my own cycle-1
+  verdict quoted as the criterion to satisfy (line 652 of this file) and
+  what Session 2 refers to as "the same subject line." No drift or
+  paraphrase-induced mismatch anywhere in this chain.
+- Recipient/sender: Diagnosis 3 states the email was "sent from
+  `daneel@aurorafw.com` to `jose.moreno@aurorafw.com`." Diagnosis 2's setup
+  (`manager_address = "jose.moreno@aurorafw.com"`, line 276) and the
+  captured command's `-H 'To:jose.moreno@aurorafw.com'` (line 339) confirm
+  the recipient; the sender account is established by the 2026-08-05
+  Authorization update on file (`daneel@aurorafw.com` as the environment's
+  configured `himalaya` sender account) and matches what I independently
+  found configured in this sandbox (see below). Consistent, not invented.
+- No new mechanism-level claims were smuggled in under cover of the
+  delivery-confirmation entry — Diagnosis 3 and Session 2 both explicitly
+  scope themselves to the one open evidence gap and say so plainly, and
+  neither touches the heredoc-execution, S-004-admission, or worklog
+  findings my cycle-1 review already verified.
+
+**Independent environment check (new this cycle, not just re-reading the
+file):**
+
+- I confirmed this sandbox genuinely has no IMAP credentials for
+  `jose.moreno@aurorafw.com`: `~/.config/himalaya/config.toml` here defines
+  exactly one account, `daneel@aurorafw.com` (IMAP host
+  `lin119.loading.es`), and no second account for the recipient address
+  exists anywhere I could find on this machine. This corroborates Diagnosis
+  3's/Session 2's claim that an `envelope list`/IMAP check against the
+  recipient account was not mechanically available here — it is not a
+  convenient excuse, it is an accurate description of this sandbox.
+- I also confirmed `message.send.save-copy = false` in that same config and
+  that both `INBOX.Sent` and `INBOX.Elementos enviados` on the `daneel`
+  account contain no trace of this session's send (the latter holds only
+  three unrelated, much older test messages) — consistent with (does not
+  contradict) the claim that no further server-side corroboration is
+  obtainable from this sandbox for either the send or its delivery.
+
+**Diff re-verification (independently re-run, not assumed from cycle 1):**
+
+- `git diff dev-agent...bug/B-030-hardened-escalation-send-command-shape-needs-live-end-to-end-validation-before-production-use`
+  produces zero output (`wc -l` = 0) and `git log dev-agent..bug/B-030-...`
+  lists no commits — the bug branch's tip is now an ancestor of `dev-agent`
+  (`git merge-base` returns the branch tip itself), because all of this
+  bug's diagnosis/session/review commits landed directly on `dev-agent` per
+  this project's git model for non-Developer lifecycle-file commits. There
+  is, and remains, no branch content to merge. This matches `B-033`'s
+  precedent exactly, as both the prior verdict and this cycle's Work Log
+  entry already concluded.
+- The three new commits since cycle 1 (`fb715b5`, `440d879`, `9a68940`)
+  each touch only this bug's own file, are purely additive (no deletions,
+  no other files), and their sizes/timestamps are consistent with the
+  sequence described (review verdict at 18:10, Diagnosis 3 at 18:16,
+  Session 2 at 18:17, same day) — no sign of file tampering or content
+  fabricated out of sequence.
+
+**Judgment on sufficiency of first-party recipient confirmation:**
+
+Treating `jose.moreno@aurorafw.com`'s own direct, verbatim "yes, I received
+it" as sufficient recipient-side evidence is reasonable here, specifically
+because:
+- The claimed environmental constraint (no IMAP access to that mailbox from
+  this sandbox) is independently verified true, not asserted and taken on
+  faith — there is no better mechanically-obtainable alternative available
+  in this sandbox for this specific bug.
+- The confirmation is tied to a uniquely identifying set of details (exact
+  session ID, exact tick timestamp, exact subject text) that only someone
+  who actually received and read that specific message could speak to —
+  it is not a generic "yes I got some email" but a match against the
+  precise artifact Diagnosis 2 captured.
+- The recipient is the real, named human party who controls that mailbox,
+  not a proxy or an inferred party, and the question was put to them
+  directly and immediately after the FAIL verdict, not reconstructed after
+  the fact.
+- This bug's own stated purpose is live end-to-end validation of real
+  mailbox delivery; a genuine human confirming genuine receipt of the
+  specific artifact under test is stronger, not weaker, evidence for that
+  purpose than a same-account IMAP `envelope list` would have been (which
+  would still only prove a message with matching headers exists in that
+  mailbox, not that a human actually saw it delivered).
+- I do not require anything further beyond what is already on file. Had the
+  sandbox had IMAP credentials for the recipient account, an
+  `envelope list`/message-ID check against `jose.moreno@aurorafw.com`
+  would have been the stronger, preferred artifact-based evidence, and I
+  would have required that instead of a verbal confirmation. It does not,
+  and the alternative actually used is a reasonable, honestly-documented
+  substitute, not a silent downgrade.
+
+**Stage 1 / Fix Verification:** all four criteria (heredoc command runs
+without a pi `bash`-tool syntax/execution error; S-004 admits it with
+`allow=true`; exactly one escalation email arrives at `manager_address`;
+the worklog records it correctly) are now met with direct, cross-checked
+evidence — three sender-side/mechanism-side (from Diagnosis 2, already
+verified in cycle 1) and the fourth (arrival) now recipient-side (from
+Diagnosis 3/Session 2, verified this cycle).
+
+**Stage 2 (code quality / bug-fix addendum):** not separately applicable,
+same reasoning as cycle 1 — there is no diff on this branch to review,
+`af5132a` remains old already-integrated code outside this bug's own scope,
+and no regression test is expected for a live-infrastructure validation
+bug.
+
+**Disposition:** this bug is ready to move to `resolved/`. Given the
+re-verified empty branch diff, the bug-fix loop should move `B-030`
+straight to `resolved/` **without invoking `integrate`** — there is no
+source or doc content on the bug branch to merge, exactly matching `B-033`'s
+precedent.
