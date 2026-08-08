@@ -192,8 +192,8 @@ markdown bullet, anything dash-led — makes clap treat it as an unknown
 option and the send fails outright (`error: unexpected argument ... found`,
 confirmed against the installed binary). `--` disables further option
 parsing so everything after it is positional, regardless of content.
-`template send "$(...)"` doesn't need this — its argument always starts
-with the literal `From:` the inner command emits.
+`template send` doesn't need this — piped in (see below), it takes no
+`TEMPLATE` argument of its own to protect.
 
 ---
 
@@ -217,16 +217,17 @@ Verified `template reply` options: `-f, --folder <NAME>` (default
 `INBOX`); `-A, --all` (reply to all recipients, adds To/Cc); `-H,
 --header <KEY:VAL>` (repeatable); `-a, --account <NAME>`.
 
-Compose-and-send in one step, generate the template then feed its output
-to `template send` ([Composing and Sending](#composing-and-sending)). `BODY`
-here is composed/quoted reply text derived from the message being replied
-to — load it via the heredoc pattern in
+Compose-and-send in one step: generate the template and pipe its output
+straight into `template send` ([Composing and Sending](#composing-and-sending)
+covers why it must be a pipe, not a captured-and-spliced `$(...)`
+substitution — `B-034`). `BODY` here is composed/quoted reply text derived
+from the message being replied to — load it via the heredoc pattern in
 [Embedding message-derived text safely](#embedding-message-derived-text-safely)
 first, then:
 
 ```bash
-himalaya template send "$(himalaya template reply 42 -- "$BODY")"
-himalaya template send "$(himalaya template reply -A 42 -- "$BODY")"
+himalaya template reply 42 -- "$BODY" | himalaya template send
+himalaya template reply -A 42 -- "$BODY" | himalaya template send
 ```
 
 ---
@@ -244,10 +245,12 @@ Same pattern as replying:
 
 Verified `template forward` options: `-f, --folder <NAME>` (default
 `INBOX`); `-H, --header <KEY:VAL>` (repeatable); `-a, --account <NAME>`.
-`BODY` is again message-derived text — load it via the same heredoc pattern:
+`BODY` is again message-derived text — load it via the same heredoc pattern,
+then pipe the template straight into `template send`, the same corrected
+shape [Composing and Sending](#composing-and-sending) explains (`B-034`):
 
 ```bash
-himalaya template send "$(himalaya template forward 42 -- "$BODY")"
+himalaya template forward 42 -- "$BODY" | himalaya template send
 ```
 
 ---
@@ -277,24 +280,35 @@ Verified `template write` options: `-H, --header <KEY:VAL>` (repeatable,
 template (headers + MML body) into a MIME message, sends it, and saves a
 copy to the sent folder. Verified options: `-a, --account <NAME>`.
 
-Compose and send in one step by capturing `template write`'s output and
-passing it straight to `template send`. When `SUBJECT`/`BODY` are derived
-from a message (as opposed to fixed text like the "Hello world" transcript
-above), load them via the heredoc pattern in
+**Positional-argument pitfall (Observed, `B-034`).** Despite `--help`
+advertising `[TEMPLATE]...` as a positional argument, `template send`
+cannot actually parse a template handed to it that way: capturing another
+command's output and splicing it in via `$(...)` —
+`himalaya template send "$(himalaya template write ...)"` — fails outright
+with `Error: 0: cannot parse template`, confirmed against the installed
+binary. Piping the identical content on stdin instead works. Always
+compose with a pipe, never a captured-and-spliced `$(...)` substitution.
+`template save` fails the same way for the same reason, so the same rule
+applies there too (see below).
+
+Compose and send in one step by piping `template write`'s output straight
+into `template send`. When `SUBJECT`/`BODY` are derived from a message (as
+opposed to fixed text like the "Hello world" transcript above), load them
+via the heredoc pattern in
 [Embedding message-derived text safely](#embedding-message-derived-text-safely)
 first:
 
 ```bash
-himalaya template send "$(himalaya template write \
+himalaya template write \
   -H 'To:person@example.com' \
   -H "Subject:$SUBJECT" \
-  -- "$BODY")"
+  -- "$BODY" | himalaya template send
 ```
 
-To save a draft instead of sending, use `himalaya template save
-[OPTIONS] [TEMPLATE]...` (same shape as `template send`, plus
-`-f, --folder <NAME>`, default `INBOX` — point it at the account's Drafts
-folder).
+To save a draft instead of sending, pipe the same way into `himalaya
+template save [OPTIONS]` (same corrected pipe shape as `template send`,
+plus `-f, --folder <NAME>`, default `INBOX` — point it at the account's
+Drafts folder).
 
 Two lower-level, raw-message counterparts also exist for cases where the
 message body is already a fully-formed MIME message rather than an MML
@@ -303,14 +317,19 @@ template: `himalaya message send [OPTIONS] [MESSAGE]...` and
 `-f, --folder <NAME>`). Prefer the `template` commands above when
 composing from headers/body text — they build the MIME message for you.
 
-**Not verified by live execution.** No test send was performed against
-the configured account — sending a real message was out of scope for
-checking CLI shape (himalaya account setup, and exercising a real send,
-are both out of scope per this skill's task). The command shapes and
-flags above are confirmed from `--help`; `template write`'s output format
-was confirmed directly, `template send`'s argument-composition pattern
-above follows from its own `--help` and `template write`'s Observed
-output but has not itself been Observed end-to-end.
+**Composition pattern corrected and live-exercised (`B-034`).** An earlier
+revision of this reference showed the composition above built with `$(...)`
+capture-and-splice rather than a pipe. That shape was tried against the
+installed binary and failed outright — `Error: 0: cannot parse template` —
+because `template send`/`template save` cannot parse a template supplied as
+a positional CLI argument, even though `--help` advertises `[TEMPLATE]...`
+as accepting one. The pipe form shown above is the corrected, working
+shape: this was confirmed twice in the same session, once by a manual
+control test isolating the positional-vs-pipe behavior directly, and once
+by a live escalation-send that actually completed using the pipe form.
+`template write`'s own output format was Observed directly (the "Hello
+world" transcript above); the remaining command shapes and flags are
+confirmed from `--help`.
 
 ---
 

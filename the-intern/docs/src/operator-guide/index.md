@@ -895,7 +895,7 @@ package-specific setup that T-139 and T-140 verified end to end.
    [[policy.action_rules]]
    tool = "bash"
    arg_matchers = [
-     { field_path = "command", pattern = "BODY=$(cat <<'*himalaya template send \"$(himalaya template reply *-- \"$BODY\")\"*" },
+     { field_path = "command", pattern = "BODY=$(cat <<'*himalaya template reply *-- \"$BODY\" | himalaya template send*" },
    ]
 
    [[policy.action_rules]]
@@ -961,20 +961,29 @@ package-specific setup that T-139 and T-140 verified end to end.
    reply (`B-029`). That rule is built on `B-030`'s hardened heredoc pattern
    (`references/command-reference.md`'s "Embedding message-derived text
    safely": `"$BODY"` loaded via a quoted heredoc, `--` before the body
-   argument) and was checked against the real `wildmatch` crate (the exact
-   library `bob`'s S-004 matcher uses): it matches the intended safe
-   plain-reply and reply-all (`-A`) shapes — including when the
-   message-derived body itself contains adversarial shell metacharacters —
-   and correctly rejects an unquoted-heredoc bypass, a bare/unquoted `$BODY`
-   regression, a missing-`--` variant, and the pre-`B-030` naive
-   literal-splice shape. The rule has **not** been re-run against a live
-   mailbox and scheduled `bob` instance the way T-139/T-140 validated the
-   paths above — that live pass (deploying per this guide, feeding the job a
-   message that classifies as `direct-request` or `meeting-scheduling`, and
-   confirming the reply is actually sent) remains outstanding. Treat this
-   rule as statically verified but not yet live-validated; do not assume
-   `direct-request` or `meeting-scheduling` replies work end to end in a
-   live deployment until that pass is done.
+   argument), and, per `B-034`, admits the pipe form of the composition
+   rather than the `$()` capture-and-splice form it originally shipped
+   with: `himalaya v1.2.0`'s `template send` cannot actually parse a
+   template passed as a positional CLI argument (`Error: 0: cannot parse
+   template`), though stdin-piped input of the identical content works, so
+   the correct shape is `himalaya template reply <ID> [-A] -- "$BODY" |
+   himalaya template send`, not the earlier `himalaya template send
+   "$(himalaya template reply <ID> [-A] -- "$BODY")"` shape. It was checked
+   against the real `wildmatch` crate (the exact library `bob`'s S-004
+   matcher uses): it matches the intended safe plain-reply and reply-all
+   (`-A`) pipe shapes — including when the message-derived body itself
+   contains adversarial shell metacharacters — and correctly rejects an
+   unquoted-heredoc bypass, a bare/unquoted `$BODY` regression, a
+   missing-`--` variant, the pre-`B-030` naive literal-splice shape, and the
+   now-removed `B-029`-era `$()` capture-and-splice shape that `B-034` found
+   himalaya cannot actually parse. The rule has **not** been re-run against a
+   live mailbox and scheduled `bob` instance the way T-139/T-140 validated
+   the paths above — that live pass (deploying per this guide, feeding the
+   job a message that classifies as `direct-request` or `meeting-scheduling`,
+   and confirming the reply is actually sent) remains outstanding, tracked
+   as `B-031`. Treat this rule as statically verified but not yet
+   live-validated; do not assume `direct-request` or `meeting-scheduling`
+   replies work end to end in a live deployment until that pass is done.
 
    **The escalation rule above matches a hardened command shape, not the
    originally live-validated one.** The subject/body are now loaded through
