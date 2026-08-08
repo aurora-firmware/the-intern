@@ -383,6 +383,115 @@ on `B-034`. Recommend the Reviewer confirm this Diagnosis Log's evidence
 chain, keep `B-031` in `bugs/in-progress/` (not `resolved/`), and treat
 `B-034`'s resolution as the prerequisite for this bug's next retry cycle.
 
+### Diagnosis 3 — 2026-08-08
+
+Reproduction status: **Confirmed — full live end-to-end success this cycle.**
+Re-ran this bug's live validation now that `B-034`'s fix (pipe-form
+composition) is live on `dev-agent` (verified directly before starting:
+`the-intern/email-skills/.pi/skills/himalaya/references/command-reference.md`'s
+"Replying" section now shows `himalaya template reply <ID> [-A] -- "$BODY" |
+himalaya template send`, and the S-004 rule in both
+`the-intern/docs/src/operator-guide/index.md` and
+`the-intern/email-skills/README.md` matches that pipe shape verbatim). Every
+outstanding unknown Diagnosis 2 left open — whether the real live-composed
+reply-send command actually completes through `himalaya` now, not just gets
+admitted by S-004 — is resolved this cycle.
+
+Evidence captured:
+- Reused the established procedure from `B-030`'s Diagnosis 2/Session 1-2
+  (owner-only mode-700 scratch workspace outside the repo checkout, isolated
+  `bob` instance with dedicated `XDG_*`/socket dirs, full S-004 rule set
+  copied verbatim from the operator guide and path-substituted,
+  `RUST_LOG=extension_ipc=debug` from the first tick, `~/.pi/agent/trust.json`
+  pre-seeded for the deployed workspace per `B-035`'s still-open workaround).
+- Before touching the real mailbox: the 8 pre-existing unseen PR #42 thread
+  messages were relocated to `INBOX.Trash` and restored to `INBOX` afterward
+  with their unseen flag verified intact.
+- Injected one synthetic trigger message appearing to be **from
+  `jose.moreno@aurorafw.com` to `daneel@aurorafw.com`** per the human's
+  2026-08-05 authorization update: subject "Confirming our sync Friday at
+  10am PT [B031-RETRY-20260808T1658Z]", body confirming an already-arranged
+  meeting time and carrying an explicit test marker
+  (`B031-RETRY-20260808T1658Z`) — a clean, unambiguous `meeting-scheduling`
+  "confirm a stated time" case. Landed as message id 114.
+- Live session `f8d4d5de-0d96-4b21-a9fb-2506c58fa899` (tick 2026-08-08
+  17:00Z) read message 114, correctly classified it as a confident
+  `meeting-scheduling` acknowledgement, and composed the reply-send exactly
+  per `command-reference.md`'s documented pipe-form pattern as one `bash`
+  tool call:
+  ```
+  BODY=$(cat <<'F8N2KQ7R4P6X1Z9M3L0A'
+  Confirmed — we're still on for Friday, August 14 at 10:00am PT to review the Q3 rollout plan.
+  F8N2KQ7R4P6X1Z9M3L0A
+  )
+  himalaya template reply 114 -- "$BODY" | himalaya template send
+  ```
+  Confirmed via `bob`'s `extension_ipc` debug trace: `extension authz call
+  ... tool=bash arguments=Object {"command": "BODY=$(cat
+  <<'F8N2KQ7R4P6X1Z9M3L0A'...himalaya template reply 114 -- \"$BODY\" |
+  himalaya template send"}` (2026-08-08T17:00:38.212198Z) immediately
+  followed by `extension authz verdict ... allow=true reason=None` — S-004's
+  reply-send rule correctly admitted the real, live-composed pipe-form
+  command, the specific thing this bug exists to validate.
+- **`himalaya` itself now succeeded**, unlike Diagnosis 2: `tool_result` for
+  that exact call captured `"content": [{"text": "Message successfully
+  sent!\n"}]`, `"isError": false` (2026-08-08T17:00:40.231387Z). Cross-checked
+  across the entire ~5-minute run (12 total `bash` authz calls): exactly
+  **one** authz call whose command contains `template send` — no duplicate
+  or accidental second send. The reply's headers: `From: Daneel AFW
+  <daneel@aurorafw.com>`, `To: Jose Moreno <jose.moreno@aurorafw.com>`,
+  `Subject: Re: Confirming our sync Friday at 10am PT
+  [B031-RETRY-20260808T1658Z]`.
+- The workspace's `worklog/2026-08-08.md` recorded the message correctly as
+  fully handled: `## 17:00 — Confirming our sync Friday at 10am PT
+  [B031-RETRY-20260808T1658Z] (from Jose Moreno <jose.moreno@aurorafw.com>)`
+  / `- Done: Read message 114, classified it as meeting-scheduling, and sent
+  a reply confirming Friday, August 14 at 10:00am PT for the Q3 rollout plan
+  sync.` / `- Left: nothing` / `- Next: no further action for this message;
+  any later scheduling update arrives as a new unseen message.` — matching
+  `references/worklog.md`'s format and `meeting-scheduling.md`'s
+  fully-handled instruction exactly, no false claim.
+- **Incidental finding, out of this bug's own scope:** the agent's own
+  first-choice worklog-append command (a double-quoted, variable-interpolated
+  path) was denied by S-004 because the shipped rule's literal substring
+  doesn't survive the interposed `"`; the agent recovered on its own with a
+  differently-shaped, unquoted command that matched, and the worklog was
+  still written correctly. This denial happened *after* the reply-send had
+  already succeeded, so it has no bearing on this bug's own conclusion.
+  Filed as new bug `B-037` (open) rather than fixed inline.
+- Environment cleaned up fully: schedule entry removed, `bob` shut down
+  gracefully, synthetic trigger message moved to `INBOX.Trash` (not purged),
+  the 8 real PR #42 messages restored to `INBOX` with unseen flag verified
+  intact, `~/.pi/agent/trust.json` reverted, all scratch directories and
+  runtime sockets removed, no leftover `bob`/pi processes. `git status` on
+  the repo checkout confirmed clean throughout except for the new `B-037`
+  bug file, filed separately.
+
+Isolated fault: **none — validated, not a defect.** The S-004 reply-send
+rule this bug exists to validate, the heredoc/pipe-form command construction
+`B-034` corrected, and the end-to-end mailbox/worklog outcome all work
+correctly together in a real live deployment.
+
+Root cause or fault hypothesis: not applicable — this bug's own hypothesis
+(that the reply-send rule and command shape might not actually work end to
+end against a real live agent-composed, real-`himalaya` send) is refuted:
+they do, with `B-034`'s fix in place.
+
+Planned verification: **Recipient-side delivery confirmation is still
+outstanding** — everything captured above is sender-side (bob's authz trace
+plus himalaya's own SMTP-accepted stdout), the same evidence class that
+`B-030`'s Reviewer initially rejected as insufficient for "exactly one
+[email] arrives," per that bug's own precedent. This needs the orchestrating
+loop to ask the real recipient, `jose.moreno@aurorafw.com`, directly whether
+they received this specific test reply: an email dated 2026-08-08 from
+`daneel@aurorafw.com`, subject `Re: Confirming our sync Friday at 10am PT
+[B031-RETRY-20260808T1658Z]`, body confirming "Friday, August 14 at 10:00am
+PT" for the Q3 rollout plan, sent around 17:00:40 UTC. If confirmed, all of
+this bug's Fix Verification criteria (heredoc/pipe command runs without a pi
+`bash`-tool syntax/execution error; S-004 admits it with `allow=true`;
+exactly one reply email arrives; the worklog records it correctly) are met
+and this bug is ready for Reviewer sign-off toward `resolved/`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
