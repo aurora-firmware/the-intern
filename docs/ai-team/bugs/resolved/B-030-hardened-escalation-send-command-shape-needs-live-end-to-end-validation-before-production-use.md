@@ -3,7 +3,7 @@ id: B-030
 title: hardened escalation-send command shape needs live end-to-end validation 
   before production use
 severity: high
-status: in-progress
+status: resolved
 created: '2026-08-04'
 task: T-139
 ---
