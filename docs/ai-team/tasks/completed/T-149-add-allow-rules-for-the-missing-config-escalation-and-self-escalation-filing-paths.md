@@ -2,7 +2,7 @@
 id: T-149
 title: Add allow rules for the missing-config escalation and self-escalation 
   filing paths
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-07'
