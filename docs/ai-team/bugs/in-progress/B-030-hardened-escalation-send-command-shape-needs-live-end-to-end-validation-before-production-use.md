@@ -383,6 +383,53 @@ error; S-004 admits it; exactly one escalation email arrives at
 `manager_address`; the worklog records it correctly) are all met with
 direct evidence above.
 
+### Diagnosis 3 — 2026-08-08
+
+Reproduction status: **Confirmed — recipient-side delivery now evidenced,
+closing the one gap the 2026-08-08 Review Verdict identified.** This entry
+adds no new mechanism-level evidence; it closes the delivery leg of the
+Fix Verification bar that Diagnosis 2 left open.
+
+Evidence captured:
+- The Review Verdict's Stage 1 finding was that Diagnosis 2's evidence for
+  "exactly one escalation email arrives" was exclusively sender-side
+  (`bob`'s `extension_ipc` authz trace plus himalaya's own SMTP-accepted
+  stdout for live session `9377acc6-0aba-429b-a7eb-4f5c3281d6cf`, tick
+  2026-08-08T15:44:08Z, subject `Action required: verify your statement;
+  $(whoami) - schedule a callback?`, sent from `daneel@aurorafw.com` to
+  `jose.moreno@aurorafw.com`) — with no independent confirmation that the
+  message actually arrived in the recipient's mailbox.
+- `jose.moreno@aurorafw.com` is the human operator of this project and the
+  same authorized test recipient address Diagnosis 2 used (per the
+  2026-08-05 Authorization update on file). The orchestrating loop asked
+  the recipient directly, in conversation, immediately after the FAIL
+  verdict was reported, whether they received that specific escalation
+  email. Their exact reply, verbatim: **"yes, I received it."**
+- This is first-party recipient-side confirmation, not something
+  reconstructable from any log in this sandbox: the sandbox has no IMAP
+  access to the `jose.moreno@aurorafw.com` mailbox (only the `daneel`
+  sender account is configured locally), so an `envelope list`/IMAP check
+  against the recipient account — option (a) in the Review Verdict's
+  remediation — was not mechanically available here; the recipient's own
+  direct word about their own inbox is the strongest available
+  substitute, and stronger evidence than any artifact this sandbox could
+  produce for a live receipt check.
+
+Isolated fault: none — same conclusion as Diagnosis 2. This entry closes an
+evidence gap, not a defect.
+
+Root cause or fault hypothesis: not applicable — this bug closes as
+validated. With this confirmation on file, all four of the bug's Fix
+Verification criteria (heredoc command runs without a pi `bash`-tool
+syntax/execution error; S-004 admits it with `allow=true`; exactly one
+escalation email arrives at `manager_address`; the worklog records it
+correctly) are now met with recipient-side, not merely sender-side,
+evidence.
+
+Planned verification: none further required. Recommend Reviewer re-check
+specifically the delivery-confirmation point raised in the prior FAIL
+verdict; if satisfied, this bug is ready to move to `resolved/`.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
