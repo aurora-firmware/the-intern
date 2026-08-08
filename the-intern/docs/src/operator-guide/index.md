@@ -990,8 +990,9 @@ package-specific setup that T-139 and T-140 verified end to end.
    rule and command shape as hardened-but-unvalidated until that live pass
    is done; tracked as a follow-up bug cross-linked with `B-029`.
 
-   **Two more rules admit paths T-143 and T-146 added.** The bare `himalaya
-   template write` rule is an exact pattern with no trailing wildcard — it
+   **Two more rules admit the missing-configuration escalation fallback and
+   the self-escalation filing move.** The bare `himalaya template write`
+   rule is an exact pattern with no trailing wildcard — it
    admits only the no-argument invocation the missing-configuration
    escalation fallback uses to read the account's own address from the
    `From:` header, not any variant carrying arguments. Appending a trailing
