@@ -8,7 +8,7 @@ created: 2026-08-08
 
 ## Summary
 
-Active specs: 10. Pending tasks: 0. In progress tasks: 0. Completed tasks: 149. Blocked tasks: 0. Open bugs: 3. Bugs in progress: 1. Resolved bugs: 32. ADRs: 14. Latest integration result: chore(tasks): merge T-149 add missing escalation allow rules.
+Active specs: 10. Pending tasks: 0. In progress tasks: 0. Completed tasks: 149. Blocked tasks: 0. Open bugs: 3. Bugs in progress: 0. Resolved bugs: 34. ADRs: 14. Latest integration result: chore(bugs): file B-037 from B-031 live-validation retest.
 
 ## Specifications
 
@@ -27,7 +27,7 @@ Active specs: 10. Pending tasks: 0. In progress tasks: 0. Completed tasks: 149. 
 
 ## Integration Evidence
 
-- Latest integration-test result: chore(tasks): merge T-149 add missing escalation allow rules
+- Latest integration-test result: chore(bugs): file B-037 from B-031 live-validation retest
 - Source: git log --all --grep=merge|integration|verification|test -n 1
 - Date: 2026-08-08
 
@@ -201,10 +201,9 @@ Active specs: 10. Pending tasks: 0. In progress tasks: 0. Completed tasks: 149. 
 
 | Bug ID | Title | Severity | Status | Diagnosis Status |
 |---|---|---|---|---|
-| B-034 | himalaya template send/save cannot parse a template passed as a positional CLI argument (works via stdin pipe) | high | open | n/a |
 | B-035 | pi's non-interactive project-trust gate silently prevents scheduled-job sessions from loading workspace-local .pi/skills | high | open | n/a |
 | B-036 | bob's pi-agent-supervisor never reaps cwd-scoped dedicated worker processes, eventually exhausting max_processes and silently skipping scheduled ticks | high | open | n/a |
-| B-031 | direct-request/meeting-scheduling reply-send S-004 rule needs live end-to-end validation before production use | high | in-progress | in progress |
+| B-037 | S-004 worklog-append action rule denies a legitimate quoted-path heredoc append during live email-triage validation | low | open | n/a |
 | B-001 | bob serve does not answer status/sessions over admin socket | high | resolved | complete |
 | B-002 | pi-agent-supervisor terminate test flakes under load because spawn_config sets 50 ms deadline | high | resolved | complete |
 | B-003 | bob extension can grow memory without bound — pendingFrames uncapped and socket.write() return ignored | high | resolved | complete |
@@ -235,8 +234,10 @@ Active specs: 10. Pending tasks: 0. In progress tasks: 0. Completed tasks: 149. 
 | B-028 | periodic_event_is_dispatched_to_pi_agent_with_payload_as_prompt fails deterministically in CI with no local repro, even with contention eliminated - needs #[ignore] pending runner-level investigation | medium | resolved | complete |
 | B-029 | direct-request and meeting-scheduling reply categories have no S-004 allow-rule and were never live-validated | high | resolved | complete |
 | B-030 | hardened escalation-send command shape needs live end-to-end validation before production use | high | resolved | complete |
+| B-031 | direct-request/meeting-scheduling reply-send S-004 rule needs live end-to-end validation before production use | high | resolved | complete |
 | B-032 | denied tool calls are unattributable — neither bob's audit record nor any log captures the arguments | medium | resolved | complete |
 | B-033 | S-004 rule set may not admit email-triage SKILL.md's opening bash/read calls (absolute vs cwd-relative path mismatch) | high | resolved | complete |
+| B-034 | himalaya template send/save cannot parse a template passed as a positional CLI argument (works via stdin pipe) | high | resolved | complete |
 
 ## Decisions
 
@@ -259,9 +260,8 @@ Active specs: 10. Pending tasks: 0. In progress tasks: 0. Completed tasks: 149. 
 
 ## Next Actions
 
-1. Triage B-034: himalaya template send/save cannot parse a template passed as a positional CLI argument (works via stdin pipe)
-2. Triage B-035: pi's non-interactive project-trust gate silently prevents scheduled-job sessions from loading workspace-local .pi/skills
-3. Triage B-036: bob's pi-agent-supervisor never reaps cwd-scoped dedicated worker processes, eventually exhausting max_processes and silently skipping scheduled ticks
+1. Triage B-035: pi's non-interactive project-trust gate silently prevents scheduled-job sessions from loading workspace-local .pi/skills
+2. Triage B-036: bob's pi-agent-supervisor never reaps cwd-scoped dedicated worker processes, eventually exhausting max_processes and silently skipping scheduled ticks
 
 ## Risks and Concerns
 
