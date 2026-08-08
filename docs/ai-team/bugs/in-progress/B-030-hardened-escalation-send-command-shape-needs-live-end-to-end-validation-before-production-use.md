@@ -467,3 +467,124 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-08
+FAIL
+
+Confirmed independently, not taken on the Developer's word:
+
+- `git diff dev-agent...bug/B-030-...` is genuinely empty (`git diff
+  dev-agent...bug/B-030-hardened-escalation-send-command-shape-needs-live-end-to-end-validation-before-production-use
+  --stat` produced no output). The only three commits the bug branch carries
+  ahead of `dev-agent` (`23879ee`, `b7b48be`, `0174a11`) each touch only bug
+  lifecycle files — this bug's own file, `B-031`'s file, and the newly filed
+  `B-034`/`B-035`/`B-036` files — no source or doc file anywhere in the repo.
+  This matches `B-033`'s precedent case exactly: there is no branch content
+  to merge.
+- `af5132a` (`fix(email-triage): close command injection in escalation
+  send`) genuinely addresses the isolated cause this bug's Summary
+  describes: read the full diff directly off `dev-agent`. It replaces the
+  naive single-quoted literal-splice command with the quoted-heredoc
+  pattern (`SUBJECT=$(cat <<'TOKEN' ... )`, `SUBJECT="${SUBJECT//$'\n'/ }"`,
+  `-- "$BODY"`) in `command-reference.md`/`SKILL.md`, and replaces the S-004
+  escalation `bash` rule in `operator-guide/index.md`/`README.md` to match
+  the new shape. `af5132a` predates B-030's filing by minutes (`b681507`,
+  the commit that files B-030, is the very next commit after it) and landed
+  directly off an external "PR #42 review" finding, not through this
+  project's task/bug branch+integrate cycle — there is no separate T-NNN/
+  B-NNN review record for `af5132a` itself, and none is owed here: this
+  review's scope is B-030's own live-validation gap, not a retroactive audit
+  of already-integrated pre-existing code, consistent with how `B-033`
+  treated `T-140`/`28d4e1a`. A regression test is neither practical nor
+  expected for this fix: it is old, already-shipped code, and this bug's own
+  Fix Verification is explicitly a live manual validation (real mailbox,
+  real `bob`, real policy engine), not something a unit/integration test in
+  this repo could exercise.
+- The current shipped S-004 escalation pattern on `dev-agent`
+  (`operator-guide/index.md:904`, `README.md:243`) is byte-identical to what
+  `af5132a` landed, and the exact command text Diagnosis 2 claims was
+  captured (lines 330-339) matches that glob pattern segment-by-segment
+  (`SUBJECT=$(cat <<'` → `SUBJECT="${SUBJECT//` → `BODY=$(cat <<'` →
+  `himalaya template write -H ` → `To:` → ` -H "Subject:Escalation:
+  $SUBJECT" -- "$BODY" | himalaya template send`) — the claimed `allow=true`
+  verdict is plausible and internally consistent with the real matcher, not
+  a description invented to fit the narrative.
+- The claimed trace format (`extension authz call ... tool=... arguments=...`
+  at debug level, immediately followed by `extension authz verdict ...
+  allow=... reason=...` at info level) matches the real, current
+  implementation in
+  `the-intern/service/crates/extension-ipc/src/multiplex.rs:69,132,227`
+  exactly, including that verdicts are logged for both `allow=true` and
+  `allow=false` (not only denials) — consistent with `B-032`'s already-
+  resolved tracing fix. The quoted-heredoc shell-injection-safety mechanism
+  described (a `<<'TOKEN'` delimiter disables all expansion inside the
+  heredoc body, so the adversarial `` ` ``/`$(...)` payload stays inert
+  literal text) is correct bash behavior, not a hand-waved claim.
+- Diagnosis 1 and Diagnosis 2 both carry complete fix-contract sections
+  (reproduction status, evidence captured, isolated fault, root cause/fault
+  hypothesis, planned verification), and Diagnosis 2's account of what
+  happened is consistent with the Work Log's Session 1 entry — same trace
+  ID, same command text, same B-034/B-035/B-036 spin-offs, same cleanup
+  steps, no contradictions between the two.
+
+**Stage 1/Fix Verification finding — not met as evidenced:**
+
+- **File and location**: this bug file, Diagnosis Log → Diagnosis 2 →
+  the "With trust established, the escalation-send step was reached and
+  fully exercised" bullet, lines 321-349.
+- **What is wrong**: this bug's own Fix Verification section (line 67,
+  Reproduction Steps step 4) and Diagnosis 2's own "Planned verification"
+  paragraph both state the closing criterion as "**exactly one escalation
+  email arrives** with the expected subject/body" — arrival at the
+  recipient, not submission by the sender. The evidence actually presented
+  for this criterion is exclusively sender-side: `bob`'s `extension_ipc`
+  authz trace (command text + `allow=true` verdict) and `tool_execution_end`
+  capturing **himalaya's own stdout** (`... sending smtp message` /
+  `Message successfully sent!`, `isError: false`) — i.e., confirmation that
+  the `daneel@aurorafw.com` account's SMTP submission was accepted. Nowhere
+  in Diagnosis 2 (or the Work Log) is there any check of the recipient
+  mailbox (`jose.moreno@aurorafw.com`) for an actually-arrived message —
+  no `envelope list` scoped to that account, no message-ID/IMAP receipt
+  check, no explicit human confirmation of receipt recorded. I grepped the
+  full bug file for `delivered|arrive|received|inbox|INBOX|jose.moreno` and
+  found no such confirmation anywhere outside the criterion's own wording.
+  "SMTP accepted the message for delivery" and "the message arrived in the
+  recipient's mailbox" are not the same claim, and only the weaker one is
+  evidenced here. This matters specifically for this bug: the 2026-08-05
+  Architect escalation note on file for this same bug is explicit that it
+  "closes only once a retry produces an `allow=true` verdict on the
+  escalation `bash` call, **exactly one delivered escalation email**, and a
+  worklog entry recording it" — the delivery leg of that three-part bar is
+  not yet evidenced.
+- **What should change**: before re-submitting for review, either (a)
+  obtain and record independent recipient-side confirmation that exactly
+  one email matching this session's captured subject
+  (`Escalation: Action required: verify your statement; $(whoami) -
+  schedule a callback?`) and body (referencing message ID 104) arrived in
+  `jose.moreno@aurorafw.com`'s mailbox — an `envelope list`/IMAP check
+  against that account if credentials are available, or an explicit,
+  recorded confirmation from the human recipient — and add that as
+  evidence in the Diagnosis Log (a Diagnosis 3 entry or an explicit
+  amendment noting what was added and why), or (b) if recipient-mailbox
+  access is genuinely unavailable to the diagnosis session, say so
+  explicitly in the Diagnosis Log and record an explicit, reasoned
+  justification for treating himalaya's own SMTP-accepted confirmation as
+  sufficient equivalent evidence for this bug's "arrives" criterion, rather
+  than silently substituting the weaker claim. Everything else in this
+  bug's evidence chain (heredoc command execution with no syntax/tool
+  error, live S-004 `allow=true`, worklog recording) is solid and does not
+  need to be redone.
+
+Stage 2 (code quality / bug-fix addendum): not separately applicable — there
+is no diff on this branch to review, `af5132a` is old already-integrated
+code outside this bug's own scope, and a regression test is neither
+practical nor required for a live-infrastructure validation bug (matching
+the `B-033` precedent).
+
+This bug should remain in `bugs/in-progress/` for one more cycle — do not
+move it to `resolved/` yet. Given the branch's diff is (and will very likely
+remain) empty even after the delivery-confirmation evidence is added,
+whoever closes this out on a future PASS should still skip the `integrate`
+skill and move the file straight to `resolved/`, exactly as `B-033` did —
+this FAIL is about the completeness of the evidence recorded, not about any
+branch content needing to be merged.
