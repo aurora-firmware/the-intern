@@ -237,3 +237,106 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-08
+
+PASS
+
+**Diagnosis Log** (Diagnosis 1): complete fix contract present — reproduction
+status (confirmed, reproduced independently twice: manual CLI outside `bob`,
+and a live `bob` + pi-agent session), evidence captured (exact error
+locations `send.rs:77`/`save.rs:87`, control tests, byte offsets of the
+affected sections in all three files), isolated fault (external
+`himalaya v1.2.0` positional-argument parsing defect; downstream, this
+repo's own docs/policy examples encode the broken shape), and root cause /
+fault hypothesis (external dependency defect; this repo's fault is the
+downstream documentation and rule pattern) are all present and consistent
+with the bug's own Evidence section.
+
+**Fix matches the isolated cause.** Diffed `dev-agent` against
+`bug/B-034-...` for all three diagnosed files:
+- `command-reference.md`: "Replying", "Forwarding", and "Composing and
+  Sending" switched from `$()` capture-and-splice to the pipe form; new
+  "Positional-argument pitfall (Observed, B-034)" callout added; `template
+  save`'s cross-reference updated to the same corrected shape; the stale
+  "Not verified by live execution" caveat replaced with a caveat recording
+  the pattern as now live-exercised. No stray positional-form example
+  remains anywhere in the file except inside the new callout itself,
+  correctly describing it as the (now-avoided) failure mode.
+- `README.md` / `operator-guide/index.md`: reply-send S-004 `arg_matchers`
+  glob updated from the positional-splice pattern to
+  `BODY=$(cat <<'*himalaya template reply *-- "$BODY" | himalaya template
+  send*`. Confirmed this new pattern string is byte-identical between both
+  files (only the surrounding TOML-block indentation differs, matching the
+  same pre-existing indentation convention the old pattern already used).
+  Confirmed via diff that the escalation rule and the bare `himalaya
+  template write` rule are untouched and remain byte-identical between both
+  files — no lines around them changed.
+
+**Fix Verification scoping is reasonable and transparently documented, not
+silently narrowed.** The bug file's original "Fix Verification" section
+(predating Diagnosis 1) describes a live-account re-run of the chosen
+pattern; the Diagnosis Log's own Planned verification step 3 also mentions
+re-running "against a real configured account." That literal ask was
+already satisfied before this implementation cycle started: the bug's own
+pre-Diagnosis-1 Evidence section already records a manual control test
+piping the identical template content into both `template save` and
+`template send` against the real configured account, both succeeding. The
+remaining, larger live pass — a real classified `direct-request`/
+`meeting-scheduling` message driving a scheduled `bob` + pi-agent session
+end-to-end, with S-004 admitting the live command and the send actually
+completing — is explicitly out of scope here and tracked separately under
+`B-031`, which the bug file's own Related section already designates as
+owning that live validation ("this defect is the specific reason B-031's
+live send did not complete"). The Work Log states the deferral explicitly
+("Did not attempt any live himalaya/email send — that is explicitly
+B-031's job, not this bug's"), and the updated `README.md`/
+`operator-guide/index.md` prose itself cross-references `B-031` as owning
+the outstanding live pass. This is a documented, traceable scope boundary,
+not a silent one.
+
+Minor non-blocking observation: the bug file's own "Fix Verification"
+section text was not itself edited to point at this scoping rationale, so
+a reader skimming only that section in isolation (rather than the Work Log
+or Related section) could momentarily expect a live run from this bug
+specifically. Does not block the verdict — the deferral is explained
+elsewhere in the same file and in the shipped docs.
+
+**Regression-test precedent confirmed real.** Checked both
+`docs/ai-team/bugs/resolved/B-029-...md` and
+`docs/ai-team/bugs/resolved/B-030-...md`: both Work Logs describe the
+identical throwaway-integration-test methodology (a scratch test exercising
+the real `wildmatch` crate via `load_policy_config_from_file`, run RED
+before the fix / GREEN after, deleted and never committed) — B-030's own
+Reviewer independently reproduced the same harness during that review. This
+bug's Work Log follows the same pattern.
+
+I independently re-verified this myself rather than taking the Work Log's
+word for it: checked out the bug branch into a disposable git worktree,
+confirmed `git status --porcelain` was clean (no stray test file left
+behind), confirmed `git diff --name-status` against the branch's
+merge-base with `dev-agent` touches exactly the three diagnosed files (no
+`policy-control` crate source changed), ran `cargo fmt --all -- --check`
+and `cargo test -p policy-control` (45 tests, all green — the crate's own
+permanent suite is untouched and unaffected), then wrote and ran my own
+equivalent throwaway test using the same technique (real `wildmatch` via
+`load_policy_config_from_file`) against the exact old and new glob strings
+pulled from both files. Result matched the claimed RED/GREEN outcome: the
+OLD glob does not admit the corrected pipe-form command (plain or `-A`)
+but does admit the old splice shape it was written for; the NEW glob admits
+the corrected pipe-form command (plain, `-A`, and with adversarial
+shell-metacharacter body content) and still rejects an unquoted-heredoc
+bypass, a bare/unquoted `$BODY` regression, a missing-`--` variant, and the
+now-removed splice shape. Deleted my test file and removed the worktree
+after use; `git status` on `dev-agent` confirmed clean throughout.
+
+**Code quality:** fix is minimal — only the three diagnosed files touched
+across both commits, no unrelated refactoring bundled in. Commit messages
+follow `type(scope): description` (`docs(himalaya)`, `fix(email-triage)`);
+the `fix` type/scope choice for the S-004 rule commit matches the
+established precedent set by B-029's own `fix(email-triage): add S-004
+rule for direct-request/meeting-scheduling reply-send` commit for the same
+kind of rule-example change. No secrets, no source-code changes, no scope
+creep.
+
+Both review stages pass. Next owner: active Bug-Fix Loop.
