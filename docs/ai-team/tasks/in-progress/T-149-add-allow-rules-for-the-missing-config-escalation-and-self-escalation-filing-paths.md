@@ -325,3 +325,104 @@ One defect, blocking:
 
 Verdict: FAIL. Developer reworks the one Stage 2 defect (task-ID citation in the
 operator-guide prose) and resubmits; nothing else needs to change.
+
+### Review Verdict — 2026-08-07 (cycle 2)
+
+PASS
+
+Reviewed `task/T-149-add-escalation-allow-rules` at `f05cb66` against this task's five
+acceptance criteria and the code-review skill's Stage 2 quality checklist, focused on the
+one cycle-1 blocking defect (task-ID citation in operator-guide prose) and an independent
+re-confirmation that the two action rules themselves are untouched.
+
+**Fix verification**
+
+- `git diff a97ee16 f05cb66` shows exactly one hunk in
+  `the-intern/docs/src/operator-guide/index.md`: the paragraph's opening sentence changed
+  from "**Two more rules admit paths T-143 and T-146 added.**" to "**Two more rules admit
+  the missing-configuration escalation fallback and the self-escalation filing move.**",
+  plus a line re-flow of the following clause ("The bare `himalaya template write` /
+  rule is..."). 3 insertions, 2 deletions, one file. No other content changed.
+- `grep -n 'T-143 and T-146'` against both shipped files returns no match (exit 1); the
+  task-ID citation is gone from the shipped prose.
+- Read the full paragraph as shipped (`the-intern/docs/src/operator-guide/index.md`,
+  lines 993–1005): the AC-2 safety rationale ("Appending a trailing `*` to that pattern
+  would also admit further arguments such as `-H "To:..." ... | himalaya template send`,
+  i.e. arbitrary outbound email, so none was added") and the `Escalations`-is-renameable
+  note ("`Escalations` is a starter default the skill's own reference treats as
+  renameable, so update the pattern above to the folder name the deployment actually uses
+  if it differs.") both survive byte-for-byte, confirmed by diffing against the cycle-1
+  reviewed text — only the two lines shown in the commit diff above changed.
+- `mdbook build` over `the-intern/docs` ran clean (only the pre-existing, unrelated
+  mdbook-mermaid version-mismatch warning). Grepped the generated
+  `book/operator-guide/index.html`: no `T-143 and T-146` text, and the reworded sentence
+  ("missing-configuration escalation fallback and") renders correctly.
+- `the-intern/email-skills/README.md` — untouched by `f05cb66` (commit stat: 1 file
+  changed, `operator-guide/index.md` only). This matches Session 1's finding that neither
+  rule references a workspace path in the README, so the README never carried the flagged
+  sentence to begin with; the defect and its fix are both operator-guide-only, as
+  expected.
+
+**Action rules confirmed untouched (security-relevant)**
+
+- `git diff a97ee16 f05cb66` and `git diff a97ee16 f05cb66 -- the-intern/email-skills/README.md`
+  both confirm zero changes to either `[[policy.action_rules]]` block in either file —
+  `f05cb66` is prose-only, exactly as the Developer reported.
+- Independently reproduced `git diff deeb820~1 deeb820` and confirmed the two rules were
+  added, unmodified since, in both files: `{ field_path = "command", pattern = "himalaya
+  template write" }` (no trailing wildcard) and `{ field_path = "command", pattern =
+  "himalaya*message move*Escalations*" }`.
+- Diffed the full task branch against its merge-base with `dev-agent`
+  (`git diff b251d81 f05cb66 -- the-intern/email-skills/README.md`): the entire cumulative
+  change to the README across all three commits is exactly the two rule additions — no
+  prose, no other edits. Confirms AC-4 (mirrored rule sets) and AC-5 (no pre-existing rule
+  changed) hold across the full branch, not just the latest commit.
+
+**Five acceptance criteria re-confirmed** (task's own Verification block, run on the
+task branch at `f05cb66`):
+
+- AC-1/AC-3: `grep -rn 'himalaya template write"'` and `grep -rn 'message
+  move\*Escalations'` each return exactly one hit per file (`operator-guide/index.md`,
+  `README.md`) — PASS.
+- AC-2: `grep -rn 'himalaya template write\*'` returns no output (exit 1) — the
+  safety-critical bare-write pattern still has no trailing wildcard — PASS.
+- AC-4: the path-normalised pattern diff outputs "rule sets match" — PASS.
+- AC-5: no removed/modified lines in either file's rule set relative to the merge-base —
+  PASS.
+
+Given cycle 1 already independently verified the `wildmatch` matching semantics for AC-2
+against the pinned crate and confirmed no rule pattern differs between this review and
+that one, re-running the grep-based checks (rather than re-deriving the matcher proof)
+was the appropriate depth here — the rules are byte-for-byte identical to what cycle 1
+already verified at the matcher level.
+
+**Pre-existing citation left alone, as instructed**
+
+- `B-029` at operator-guide/index.md:991 (a different paragraph, predating this task) is
+  present and unchanged; confirmed via `git diff b251d81 f05cb66` that no commit on this
+  branch ever touched that line. The Developer correctly declined to fix it in this
+  review cycle — it's a separate, pre-existing defect outside T-149's Files-to-Touch
+  scope, and folding it in here would have widened a scoped review-cycle fix into
+  unrelated cleanup.
+
+**Commit hygiene**
+
+- `f05cb66` subject: `docs(email-skills): drop task-ID citation from operator guide
+  prose` — 67 characters, within the 72-character limit. Type/scope/imperative-mood/
+  no-period conventions followed, consistent with `a97ee16`'s scope.
+
+**Observation for human triage (non-blocking, not a finding against this task)**
+
+- The shipped operator guide (`the-intern/docs/src/operator-guide/index.md`) carries 13
+  artifact-ID citation locations in total (counting `T-nnn`/`B-nnn`/`S-nnn`/`ADR-nnn`
+  references by line, since some lines cite more than one ID together, e.g. `T-139` and
+  `T-140` paired). This task introduced one (in `a97ee16`) and removed it again (in
+  `f05cb66`), netting zero new citations. The remaining 12 are pre-existing (lines 748,
+  796, 803, 957, 958, 961, 965, 969, 971, 985, 989, 1039) and out of T-149's scope —
+  whether/how to remove them under CR-006 item 1 (which exempts "maintainer and operator
+  documentation," a category the mdBook manual may or may not fall under) is a decision
+  for the human, not something either review cycle should adjudicate unilaterally.
+
+Verdict: PASS. Both stages pass. The sole cycle-1 blocking defect is resolved by a
+minimal, prose-only commit that leaves both action rules, the rest of the paragraph's
+substance, and the pre-existing `B-029` citation untouched.
