@@ -1,7 +1,7 @@
 ---
 id: CR-006
 title: Email-triage skill content corrections and missing-configuration escalation
-status: pending
+status: completed
 created: '2026-08-06'
 ---
 
@@ -14,6 +14,22 @@ created: '2026-08-06'
 > amendment to `S-010`, and they were routed to a new specification with a
 > supporting ADR. What remains here is the `S-010` content and behaviour
 > amendment driven by the PR #42 review.
+
+> **Completed (2026-08-07).** Items 1–4 and 6–7 landed as T-143 through T-147;
+> item 5 landed as T-143. `S-010` was amended to version 0.2 with an Amendment
+> Log entry covering items 3, 5, and 6.
+>
+> **One claim in item 5 proved wrong.** It states that obtaining the account's
+> own address via `himalaya template write` "needs no new allow-rule family"
+> because the skill already invokes that command. It does not: the only
+> existing `template write` allow rule matches the full escalation pipeline
+> shape, so a bare invocation was denied by the action gate, and the
+> `Escalations` move the item-6 category performs was not admitted either.
+> Neither path could execute as shipped. Both fail safe — denied, recorded,
+> never worked around — so no unsafe behaviour resulted. T-149 added the two
+> missing rules and `S-010` now states that an admitting allow rule is a
+> deployment prerequisite for this path like every other himalaya invocation.
+> The original claim is left as written above; this note is the correction.
 
 ## Desired Changes
 
