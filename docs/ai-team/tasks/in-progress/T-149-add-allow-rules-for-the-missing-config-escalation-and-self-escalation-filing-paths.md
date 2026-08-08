@@ -158,6 +158,56 @@ Commits on `task/T-149-add-escalation-allow-rules`:
 - `deeb820` feat(email-skills): admit bare template write and Escalations move
 - `a97ee16` docs(email-skills): note the new rules and folder renaming
 
+### Session 2 — 2026-08-07
+
+Picked up review cycle 2 on `task/T-149-add-escalation-allow-rules`, which was clean at
+its original two commits (`deeb820`, `a97ee16`) since the prior attempt had been
+terminated by an infrastructure error before touching anything. Read the Review Verdict
+on the canonical task file: FAIL, one blocking Stage 2 defect, all five acceptance
+criteria independently confirmed PASS including AC-2's safety-critical wildmatch
+behaviour. Per instructions, left both action rules themselves untouched.
+
+Applied the single scoped fix in `the-intern/docs/src/operator-guide/index.md`:
+reworded the opening sentence of the paragraph at line 993 to name the two paths in
+plain behavioural language instead of citing internal task-tracker IDs, removing those
+IDs from the shipped mdBook operator manual. Also re-flowed the following line break so
+the bolded sentence and the `himalaya template write` code span read naturally
+together; no wording beyond the opening sentence was changed. The rest of the paragraph
+— the safety rationale for the exact `template write` pattern and the
+`Escalations`-is-renameable note — was left byte-for-byte identical.
+
+Deliberately did not touch the immediately preceding paragraph's pre-existing bug-ID
+citation (line 991) — it predates this task and is out of scope. Confirmed via
+`git diff deeb820~1 a97ee16` that this task's own two commits never modified that line,
+so it is a true pre-existing issue, consistent with the Reviewer's note that the
+`cbc0144` cleanup commit did not purge it (or it resurfaced afterwards, similar to the
+`059cded` reintroduction the Reviewer separately flagged nearby).
+
+Re-ran the task's full Verification block after the edit: AC-1/AC-3 patterns present
+once per file as before, AC-2's trailing-wildcard grep returned no output (confirming
+the safety-critical bare `template write` pattern still has no trailing `*`), AC-4's
+normalised-pattern diff still reports "rule sets match", and AC-5's diff against the
+pre-T-149 baseline still shows zero removed or modified pre-existing rule lines. Ran
+`mdbook build` over `the-intern/docs` — clean build (only an unrelated mdbook-mermaid
+preprocessor version-mismatch warning) — and grepped the generated HTML to confirm the
+reworded paragraph renders correctly with no task-ID text.
+
+**Tried and rejected:** considered fixing the neighbouring pre-existing citation while
+in the same paragraph, since it is one line away and the same class of defect. Rejected
+— it is outside this task's Files-to-Touch intent and would widen a review-cycle fix
+into unrelated cleanup. Reported for separate triage instead.
+
+**Remaining:** nothing for this task. Separately, the shipped operator guide still
+carries 13 artifact-ID citations in total; scoping their removal is a decision for the
+human, since CR-006 item 1 covered skill content and exempted maintainer/operator
+documentation, and it is not obvious the mdBook manual falls under that exemption.
+
+Commits on `task/T-149-add-escalation-allow-rules`:
+
+- `deeb820` feat(email-skills): admit bare template write and Escalations move
+- `a97ee16` docs(email-skills): note the new rules and folder renaming
+- `f05cb66` docs(email-skills): drop task-ID citation from operator guide prose
+
 ## Review
 
 ### Review Verdict — 2026-08-07
