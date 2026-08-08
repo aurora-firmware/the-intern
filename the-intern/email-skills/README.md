@@ -228,6 +228,12 @@ arg_matchers = [
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
+  { field_path = "command", pattern = "himalaya*message move*Escalations*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
   { field_path = "command", pattern = "BODY=$(cat <<'*himalaya template send \"$(himalaya template reply *-- \"$BODY\")\"*" },
 ]
 
@@ -235,6 +241,12 @@ arg_matchers = [
 tool = "bash"
 arg_matchers = [
   { field_path = "command", pattern = "SUBJECT=$(cat <<'*SUBJECT=\"${SUBJECT//*BODY=$(cat <<'*himalaya template write -H *To:* -H \"Subject:Escalation: $SUBJECT\" -- \"$BODY\" | himalaya template send*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "himalaya template write" },
 ]
 
 [[policy.action_rules]]
