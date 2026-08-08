@@ -598,3 +598,129 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-08
+
+PASS
+
+This is a live-infrastructure-validation-only bug (the underlying code
+defect it was blocked on, `B-034`, was already diagnosed, fixed, reviewed,
+and merged separately). Everything below was independently checked, not
+taken on the Diagnosis Log's or Work Log's word.
+
+**1. Branch diff — confirmed empty, matching `B-030`/`B-033` precedent.**
+`git diff dev-agent...bug/B-031-direct-request-meeting-scheduling-reply-send-s-004-rule-needs-live-end-to-end-validation-before-production-use`
+produced zero output (`wc -l` = 0), and `git log dev-agent..bug/B-031-...`
+also produced zero output — the bug branch's tip is an ancestor of
+`dev-agent` (all of this bug's diagnosis/session commits landed directly on
+`dev-agent` per this project's git model for non-Developer lifecycle-file
+commits). There is no branch content to merge, exactly as `B-030`
+(cycle-2 verdict) and `B-033` already established for this bug class.
+
+**2. `B-034` genuinely resolved and merged; shipped docs reflect the
+pipe-form fix.** `docs/ai-team/bugs/resolved/B-034-himalaya-template-send-save-...md`
+exists with a `PASS` Review Verdict (2026-08-08) recording an independent
+reviewer re-verification (disposable worktree, own throwaway `wildmatch`
+test, `cargo test -p policy-control` green). On `dev-agent` right now:
+- `the-intern/email-skills/.pi/skills/himalaya/references/command-reference.md`'s
+  "Replying" section documents the pipe form: `himalaya template reply 42
+  -- "$BODY" | himalaya template send` (and the `-A` variant) — no
+  positional-splice form remains outside the file's own "Observed, B-034"
+  pitfall callout describing the old broken shape.
+- `the-intern/email-skills/README.md:237` and
+  `the-intern/docs/src/operator-guide/index.md:898` both carry the
+  byte-identical reply-send `arg_matchers` pattern: `BODY=$(cat
+  <<'*himalaya template reply *-- "$BODY" | himalaya template send*` — read
+  both directly; confirmed identical apart from surrounding indentation.
+
+**3. Diagnosis 3's claimed command text is plausible against the current
+shipped rule — checked mechanically, the same way `B-030`'s cycle-1
+Reviewer cross-checked its own Diagnosis 2.** Wrote and ran a throwaway
+`policy-control` integration test (`tests/scratch_check_b031.rs`, deleted
+immediately after use — `git status --porcelain` on the service tree
+confirmed clean before and after) that loads the exact pattern string
+copied verbatim from `README.md`/`operator-guide/index.md` into an
+`ArgMatcher` and checks it against the real `wildmatch` crate `bob`'s
+policy-control actually uses:
+- Diagnosis 3's claimed composed command
+  (`BODY=$(cat <<'F8N2KQ7R4P6X1Z9M3L0A' ... himalaya template reply 114 --
+  "$BODY" | himalaya template send`) — **admitted** (matches the shipped
+  pattern).
+- The `-A` reply-all pipe-form variant — **admitted**.
+- The pre-`B-034` positional-splice shape Diagnosis 2 reported as admitted
+  by the *old* rule (`himalaya template send "$(himalaya template reply
+  105 -- "$BODY")"`) — **rejected** by the *current* rule, confirming the
+  rule was genuinely tightened to the new shape, not left permissive of
+  both.
+- A bare `himalaya template reply 105 -- "$BODY"` inspection call with no
+  `template send` pipe — **rejected**, consistent with Diagnosis 2's
+  account of the agent's follow-up debugging call being denied.
+  `cargo test -p policy-control --test scratch_check_b031` → 4/4 passed.
+  The claimed `allow=true` verdict for Diagnosis 3's command is genuinely
+  plausible against the real matcher, not a description invented to fit
+  the narrative.
+
+**4. Recipient-confirmation evidence (Diagnosis 4) held to `B-030`'s own
+cycle-2 standard.** The confirmation is tied to a uniquely identifying set
+of details — not a generic "yes I got an email": sender
+(`daneel@aurorafw.com`), exact subject line including the explicit,
+single-use test marker (`Re: Confirming our sync Friday at 10am PT
+[B031-RETRY-20260808T1658Z]`), exact confirmed content ("Friday, August 14
+at 10:00am PT"), and an approximate send timestamp (~17:00:40 UTC) — all of
+which match Diagnosis 3's own captured evidence (session
+`f8d4d5de-0d96-4b21-a9fb-2506c58fa899`, tick 2026-08-08T17:00:38–
+17:00:40Z) exactly, with no drift or paraphrase mismatch between the two
+entries. `jose.moreno@aurorafw.com` is confirmed (via this session's own
+system context) to be the real human operator's own address, the same
+authorized test recipient the 2026-08-05 Authorization update on file
+names — not a proxy. The claimed environmental constraint is independently
+checkable and checks out: read `~/.config/himalaya/config.toml` in this
+sandbox directly — it defines exactly one account, `daneel@aurorafw.com`
+(IMAP host `lin119.loading.es`); no second account for
+`jose.moreno@aurorafw.com` exists anywhere on this machine, corroborating
+that an `envelope list`/IMAP check against the recipient account was not
+mechanically available here and that the recipient's own direct word is
+the strongest available substitute — exactly the same finding `B-030`'s
+Reviewer independently made on this same environment.
+
+**5. `B-037` — real, well-formed, and independent of B-031's conclusion.**
+`docs/ai-team/bugs/open/B-037-s-004-worklog-append-action-rule-denies-a-legitimate-quoted-path-heredoc-append-during-live-email-triage-validation.md`
+exists with all required sections populated (Summary, Reproduction
+Status/Steps, Evidence with the exact denied and admitted commands and the
+`extension_ipc` verdict text, Expected/Actual Behavior, Environment,
+Related, Suspected Area, Fix Verification). Its own Related section
+correctly scopes it as "independent of and does not affect `B-031`'s own
+conclusion — the reply-send rule and command shape validated there are
+unaffected by this worklog-append-only gap," and separately distinguishes
+itself from the refuted `B-033` hypothesis. This is a genuine, narrowly
+scoped worklog-append rule-coverage gap discovered incidentally, not a
+disguised admission that reply-send itself is unvalidated.
+
+**6. No regression test expected — reasoning re-confirmed, not just
+inherited.** This bug's own scope is live-infrastructure validation with no
+code change on its own branch (confirmed empty diff, above); the one
+code-level defect surfaced along the way (`B-034`'s arg_matchers pattern)
+already received the equivalent of a regression test via the
+`load_policy_config_from_file` + real-`wildmatch` throwaway-test technique
+in `B-034`'s own Work Log, independently reproduced and re-verified by
+`B-034`'s Reviewer (RED against the old pattern, GREEN against the new).
+There is nothing left uncovered here that a unit/integration test in this
+repo could exercise — the remaining open question was strictly "does a
+real deployed agent session + real `himalaya` + real mailbox actually
+complete the send and get received," which by definition cannot be
+represented as an automated test in this repository. Same reasoning as
+`B-030`, correctly applied rather than used to paper over a gap.
+
+**Stage 2 (code quality):** not separately applicable — no diff on this
+branch to review, and `B-034`'s own fix was already reviewed as `fix`/`docs`
+scoped changes in that bug's own cycle.
+
+**Disposition:** all four of this bug's Fix Verification criteria (heredoc
+pipe-form command runs without a pi `bash`-tool syntax/execution error;
+S-004 admits it with `allow=true`; exactly one reply email arrives at the
+recipient; the worklog records it correctly) are met with direct,
+cross-checked, independently-verified evidence. Per the `B-030`/`B-033`
+precedent for this class of live-validation-only bug with an empty branch
+diff, the bug-fix loop should move `B-031` straight to `resolved/`
+**without invoking `integrate`** — there is no source or doc content on the
+bug branch to merge.
