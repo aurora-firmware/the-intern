@@ -328,61 +328,6 @@ changes), re-run this bug's live validation end to end and confirm a real
 reply email is delivered and the worklog records the message as fully
 handled — the same evidence standard `B-030` just met.
 
-## Work Log
-
-<!-- Mandatory. Append one entry per session boundary. Format:
-### Session N — YYYY-MM-DD
-Free-prose body: what was done this session, what was tried and
-rejected, decisions made, what remains for next session.
-
-Start every session by reading the entries below.
-The final entry serves as the handoff to the reviewer. -->
-
-### Session 1 — 2026-08-08
-
-Ran the live end-to-end validation this bug has been blocked on since
-2026-08-05, combined with `B-030` in one session per both bugs' own
-cross-linked note, now that pi's provider quota reset. Full shared setup
-detail (deployment, the project-trust gate and worker-reaping gap
-discovered and worked around, cleanup) is recorded once in `B-030`'s
-Session 1 entry rather than duplicated here.
-
-Injected a synthetic `meeting-scheduling` confirmation message appearing to
-be from `jose.moreno@aurorafw.com` to `daneel@aurorafw.com`, per the
-human's authorization update. The live agent session classified it
-correctly (confident `meeting-scheduling` acknowledgement) and composed the
-reply-send command exactly per `command-reference.md`'s documented
-"Replying" pattern. `bob`'s S-004 `B-029` reply-send rule admitted the real
-command (`allow=true`) — the specific thing this bug exists to validate,
-and it passed cleanly. However, the actual `himalaya template send
-"$(...)"` call then failed at the `himalaya` CLI level with `cannot parse
-template`, a defect unrelated to `bob`/S-004/the heredoc pattern. Confirmed
-this independently by reproducing the identical failure manually outside
-`bob`, and confirmed the same content piped via stdin instead of passed
-positionally succeeds. Filed this as new bug `B-034` rather than patching
-anything inline, per this session's explicit instructions not to attempt
-an on-the-spot fix. `B-030`'s escalation command, run in the same session
-against the same `himalaya` binary, succeeded, because it already uses the
-working pipe form — so this is specifically a defect in the reply-send
-pattern's documented composition, not a general `himalaya`/environment
-failure.
-
-The agent's own worklog entry safely recorded the message as blocked (not
-falsely as sent or handled) and left it open for retry, matching
-`SKILL.md`'s block-handling contract, even though its stated reason
-("blocked by the action-authorization gate") slightly mis-attributes the
-failure to S-004 rather than to the himalaya-level parse error — noted in
-Diagnosis 2 as a minor observation, not a defect requiring action, since
-the functional safety outcome (no autonomous fallback, no false "handled"
-claim) is correct either way.
-
-This bug does not close this cycle: the S-004 rule hypothesis it was filed
-to test is now proven correct, but the overall live-validation success
-criteria (a delivered reply, worklog "fully handled") remain unmet, blocked
-on `B-034`. Recommend the Reviewer confirm this Diagnosis Log's evidence
-chain, keep `B-031` in `bugs/in-progress/` (not `resolved/`), and treat
-`B-034`'s resolution as the prerequisite for this bug's next retry cycle.
-
 ### Diagnosis 3 — 2026-08-08
 
 Reproduction status: **Confirmed — full live end-to-end success this cycle.**
@@ -491,6 +436,156 @@ this bug's Fix Verification criteria (heredoc/pipe command runs without a pi
 `bash`-tool syntax/execution error; S-004 admits it with `allow=true`;
 exactly one reply email arrives; the worklog records it correctly) are met
 and this bug is ready for Reviewer sign-off toward `resolved/`.
+
+### Diagnosis 4 — 2026-08-08
+
+Reproduction status: **Confirmed — recipient-side delivery now evidenced,
+closing the one gap Diagnosis 3 left open.** This entry adds no new
+mechanism-level evidence; it closes the delivery leg of the Fix Verification
+bar, exactly mirroring how `B-030`'s own Diagnosis 3 closed the identical
+gap for the escalation-send path.
+
+Evidence captured:
+- `jose.moreno@aurorafw.com` is the human operator of this project and the
+  authorized test recipient address Diagnosis 3 used (per the 2026-08-05
+  Authorization update on file). The orchestrating loop asked the recipient
+  directly, in conversation, immediately after Diagnosis 3 was recorded,
+  whether they received the specific test reply: an email dated 2026-08-08
+  from `daneel@aurorafw.com`, subject `Re: Confirming our sync Friday at
+  10am PT [B031-RETRY-20260808T1658Z]`, confirming "Friday, August 14 at
+  10:00am PT", sent around 17:00:40 UTC. Their answer: **"Yes, I received
+  it."**
+- This is first-party recipient-side confirmation, not reconstructable from
+  any log in this sandbox: the sandbox has no IMAP access to the
+  `jose.moreno@aurorafw.com` mailbox (only the `daneel` sender account is
+  configured locally, per `B-030`'s own independently-verified finding on
+  this same environment), so an `envelope list`/IMAP check against the
+  recipient account was not mechanically available here; the recipient's
+  own direct word about their own inbox is the strongest available
+  substitute.
+
+Isolated fault: none — same conclusion as Diagnosis 3. This entry closes an
+evidence gap, not a defect.
+
+Root cause or fault hypothesis: not applicable — this bug closes as
+validated. With this confirmation on file, all four of the bug's Fix
+Verification criteria (heredoc/pipe command runs without a pi `bash`-tool
+syntax/execution error; S-004 admits it with `allow=true`; exactly one
+reply email arrives at the recipient; the worklog records it correctly) are
+now met with recipient-side, not merely sender-side, evidence.
+
+Planned verification: none further required. Recommend the Reviewer confirm
+this Diagnosis Log's evidence chain, including the delivery-confirmation
+entry; if satisfied, this bug is ready to move to `resolved/`.
+
+## Work Log
+
+<!-- Mandatory. Append one entry per session boundary. Format:
+### Session N — YYYY-MM-DD
+Free-prose body: what was done this session, what was tried and
+rejected, decisions made, what remains for next session.
+
+Start every session by reading the entries below.
+The final entry serves as the handoff to the reviewer. -->
+
+### Session 1 — 2026-08-08
+
+Ran the live end-to-end validation this bug has been blocked on since
+2026-08-05, combined with `B-030` in one session per both bugs' own
+cross-linked note, now that pi's provider quota reset. Full shared setup
+detail (deployment, the project-trust gate and worker-reaping gap
+discovered and worked around, cleanup) is recorded once in `B-030`'s
+Session 1 entry rather than duplicated here.
+
+Injected a synthetic `meeting-scheduling` confirmation message appearing to
+be from `jose.moreno@aurorafw.com` to `daneel@aurorafw.com`, per the
+human's authorization update. The live agent session classified it
+correctly (confident `meeting-scheduling` acknowledgement) and composed the
+reply-send command exactly per `command-reference.md`'s documented
+"Replying" pattern. `bob`'s S-004 `B-029` reply-send rule admitted the real
+command (`allow=true`) — the specific thing this bug exists to validate,
+and it passed cleanly. However, the actual `himalaya template send
+"$(...)"` call then failed at the `himalaya` CLI level with `cannot parse
+template`, a defect unrelated to `bob`/S-004/the heredoc pattern. Confirmed
+this independently by reproducing the identical failure manually outside
+`bob`, and confirmed the same content piped via stdin instead of passed
+positionally succeeds. Filed this as new bug `B-034` rather than patching
+anything inline, per this session's explicit instructions not to attempt
+an on-the-spot fix. `B-030`'s escalation command, run in the same session
+against the same `himalaya` binary, succeeded, because it already uses the
+working pipe form — so this is specifically a defect in the reply-send
+pattern's documented composition, not a general `himalaya`/environment
+failure.
+
+The agent's own worklog entry safely recorded the message as blocked (not
+falsely as sent or handled) and left it open for retry, matching
+`SKILL.md`'s block-handling contract, even though its stated reason
+("blocked by the action-authorization gate") slightly mis-attributes the
+failure to S-004 rather than to the himalaya-level parse error — noted in
+Diagnosis 2 as a minor observation, not a defect requiring action, since
+the functional safety outcome (no autonomous fallback, no false "handled"
+claim) is correct either way.
+
+This bug does not close this cycle: the S-004 rule hypothesis it was filed
+to test is now proven correct, but the overall live-validation success
+criteria (a delivered reply, worklog "fully handled") remain unmet, blocked
+on `B-034`. Recommend the Reviewer confirm this Diagnosis Log's evidence
+chain, keep `B-031` in `bugs/in-progress/` (not `resolved/`), and treat
+`B-034`'s resolution as the prerequisite for this bug's next retry cycle.
+
+### Session 2 — 2026-08-08
+
+Re-ran this bug's live end-to-end validation now that `B-034` (the
+`himalaya` positional-argument template-parsing defect that blocked Session
+1) is fixed and merged to `dev-agent` (`6621ee6`). Confirmed the fix was
+actually live before starting: `command-reference.md`'s "Replying" section
+now documents the pipe form, and the S-004 reply-send rule in both
+`README.md` and `operator-guide/index.md` matches it.
+
+Reused the same live-deployment procedure as Session 1 / `B-030` (isolated
+`bob` instance, deployed scratch workspace, the `B-035` trust-gate and
+`B-036` worker-reaping workarounds — both bugs remain open and out of this
+bug's scope, worked around as legitimate one-time operator actions, not
+fixed). Injected a synthetic `meeting-scheduling` confirmation message
+appearing to be from `jose.moreno@aurorafw.com` to `daneel@aurorafw.com`,
+per the human's standing authorization. The live agent classified it
+correctly, composed the corrected pipe-form reply-send command
+(`himalaya template reply 114 -- "$BODY" | himalaya template send`), S-004
+admitted it (`allow=true`), and — unlike Session 1 — `himalaya` itself
+completed the send this time (`Message successfully sent!`). Exactly one
+send occurred across the run. The workspace's worklog recorded the message
+as fully handled. Full evidence (session ID, exact command, trace
+timestamps, worklog text) is in Diagnosis 3 above.
+
+Incidentally found and filed `B-037` (open): a legitimate, differently-quoted
+worklog-append command was denied by S-004 due to a rule-coverage gap
+unrelated to this bug; the agent recovered on its own and the worklog was
+still written correctly, so this does not affect this bug's conclusion.
+
+The one remaining gap after Session 1's sender-side evidence was recipient-side
+delivery confirmation — the same evidence class `B-030`'s Reviewer initially
+rejected as insufficient. Rather than submit for review with that gap open
+and risk a FAIL cycle identical to `B-030`'s, asked the recipient,
+`jose.moreno@aurorafw.com`, directly in conversation for confirmation,
+citing the exact subject line, body content, and send timestamp. Their
+answer: "Yes, I received it." Recorded as Diagnosis 4 above.
+
+Cleaned up fully: schedule entry removed, `bob` shut down gracefully,
+synthetic trigger moved to `INBOX.Trash`, the 8 real relocated messages
+restored to `INBOX` with unseen flag intact, `~/.pi/agent/trust.json`
+reverted, scratch directories removed. `git status` and
+`git diff dev-agent...bug/B-031-...` both confirmed clean/empty — no source
+or doc file was touched by this session; this bug's own fix was `B-034`'s,
+already merged.
+
+All four of this bug's Fix Verification criteria are now met with direct
+evidence: heredoc/pipe command runs without a pi `bash`-tool syntax/execution
+error; S-004 admits it with `allow=true`; exactly one reply email arrives
+(sender-side plus recipient-confirmed); the worklog records it correctly.
+Recommend the Reviewer confirm the Diagnosis Log evidence chain (Diagnosis
+1 through 4) and, given the empty branch diff, move `B-031` straight to
+`resolved/` without invoking `integrate` — the same precedent `B-030` and
+`B-033` already established for this class of live-validation-only bug.
 
 ## Review
 
