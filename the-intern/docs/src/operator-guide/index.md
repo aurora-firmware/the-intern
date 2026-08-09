@@ -958,7 +958,15 @@ package-specific setup that T-139 and T-140 verified end to end.
    continuity (T-139, T-140) — **plus one additional rule** admitting the
    `himalaya template reply` -> `himalaya template send` command shape that
    the `direct-request` and `meeting-scheduling` categories use to send a
-   reply (`B-029`). That rule is built on `B-030`'s hardened heredoc pattern
+   reply (`B-029`). **It does not include a `message move` rule for
+   `Newsletters` or `Spam`** — the destinations `newsletter-bulk` and
+   `suspected-spam` need for a confident match — because those two
+   categories have not gone through the same live-validation pass as the
+   paths above. Add matching `move*Newsletters*` / `move*Spam*` rules
+   (mirroring the `INBOX.Notifications` rule's shape) before relying on
+   autonomous handling of those categories; without them, a message that
+   confidently classifies into either one will be blocked by the action gate
+   and left open in the worklog indefinitely. That rule is built on `B-030`'s hardened heredoc pattern
    (`references/command-reference.md`'s "Embedding message-derived text
    safely": `"$BODY"` loaded via a quoted heredoc, `--` before the body
    argument), and, per `B-034`, admits the pipe form of the composition
@@ -976,14 +984,13 @@ package-specific setup that T-139 and T-140 verified end to end.
    unquoted-heredoc bypass, a bare/unquoted `$BODY` regression, a
    missing-`--` variant, the pre-`B-030` naive literal-splice shape, and the
    now-removed `B-029`-era `$()` capture-and-splice shape that `B-034` found
-   himalaya cannot actually parse. The rule has **not** been re-run against a
-   live mailbox and scheduled `bob` instance the way T-139/T-140 validated
-   the paths above — that live pass (deploying per this guide, feeding the
-   job a message that classifies as `direct-request` or `meeting-scheduling`,
-   and confirming the reply is actually sent) remains outstanding, tracked
-   as `B-031`. Treat this rule as statically verified but not yet
-   live-validated; do not assume `direct-request` or `meeting-scheduling`
-   replies work end to end in a live deployment until that pass is done.
+   himalaya cannot actually parse. This rule has since been re-run against a
+   live mailbox and scheduled `bob` instance the same way T-139/T-140
+   validated the paths above: the job was fed a message that confidently
+   classified as `direct-request`, the reply was sent, the recipient
+   confirmed receipt, and the worklog recorded it correctly (`B-031`). Treat
+   this rule as both statically verified and live-validated for
+   `direct-request` and `meeting-scheduling` replies.
 
    **The escalation rule above matches a hardened command shape, not the
    originally live-validated one.** The subject/body are now loaded through
@@ -994,10 +1001,10 @@ package-specific setup that T-139 and T-140 verified end to end.
    `wildmatch` crate (the exact library `bob`'s S-004 matcher uses) for both
    the intended safe shape and several unsafe variants, but the *command
    itself* — a multi-line shell script containing heredocs, run via pi's
-   `bash` tool — has not been re-run against a live mailbox and `bob`
-   instance the way T-139/T-140 validated the original one-liner. Treat this
-   rule and command shape as hardened-but-unvalidated until that live pass
-   is done; tracked as a follow-up bug cross-linked with `B-029`.
+   `bash` tool — has since been re-run against a live mailbox and `bob`
+   instance the same way T-139/T-140 validated the original one-liner, and
+   the recipient confirmed receipt of the escalation email (`B-030`). Treat
+   this rule and command shape as both hardened and live-validated.
 
    **Two more rules admit the missing-configuration escalation fallback and
    the self-escalation filing move.** The bare `himalaya template write`
