@@ -318,12 +318,17 @@ reconciliation.
 
 - **Scheduled job working directory (per-entry `--cwd`, required).** The
   workspace a scheduled "check-email" job resolves to, set via S-009's
-  per-entry `--cwd`. **Why:** both skills, the manager-address configuration,
-  and the daily worklog are discovered from and written to this directory.
-  `pi_agent_cwd` is not an acceptable alternative here: it is shared by
-  every warm-pool worker (S-002), so routing discovery through it would leak
-  the `email-triage` policy skill into unrelated sessions, contradicting
-  this spec's isolation principle. **Where:** bob's existing schedule-entry
+  per-entry `--cwd`. **Why:** the manager-address configuration and the
+  daily worklog are read from and written to this directory. Per S-011 and
+  ADR-014, skill *discovery* no longer depends on this directory — bob
+  resolves a single shared install path for both skills and supplies it
+  through its extension regardless of where a session runs — but the
+  manager-address configuration and worklog diary remain per-job state and
+  stay `--cwd`-scoped. `pi_agent_cwd` is not an acceptable alternative for
+  that state: it is shared by every warm-pool worker (S-002), so routing it
+  through there would leak one job's manager address and diary into
+  unrelated sessions, contradicting this spec's isolation principle.
+  **Where:** bob's existing schedule-entry
   configuration (S-009); this spec adds no new bob-side setting.
   **Constraints:** must be an absolute path, kept under the same owner-only
   permissions as `schedules.json` itself — ADR-012 §7 records the working
@@ -342,17 +347,21 @@ reconciliation.
   `bob-companion`). **Why:** gives the package a stable, reviewable home
   shipped alongside `bob` itself, distinct from both the Claude Code
   dev-tooling plugin and the AI-team process tooling. **Where:** the
-  repository holds the versioned source; the runtime workspace a scheduled
-  job's per-entry `--cwd` points at is a **deployed copy** of that package,
-  not the product-repo checkout itself — the same directory also holds
-  mutable runtime state (the skill-local manager-address configuration and
-  the `worklog/` diary) that must be owner-only permissioned per the
-  requirement above, which a shared git working tree cannot guarantee.
-  **Constraints:** the deployed workspace copy is owner-only, matching the
-  cwd requirement above; the repository checkout is never used directly as a
-  scheduled job's `--cwd`. Per CR-005's resolved decision that "a pi working
-  directory is agent content, not a bob-managed XDG bucket," ADR-009's XDG
-  layout does not apply to this deployed workspace or to the diary it holds.
+  repository holds the versioned source; per S-011 and ADR-014, bob installs
+  that package once to a shared install path it resolves and supplies to pi
+  through its extension, independent of any job's `--cwd` — not as a
+  **deployed copy** placed inside each scheduled job's own working
+  directory. The scheduled job's per-entry `--cwd` still holds the mutable
+  runtime state scoped to that job (the skill-local manager-address
+  configuration and the `worklog/` diary), which must be owner-only
+  permissioned per the requirement above, but no longer needs to hold a copy
+  of the skill content itself. **Constraints:** the job's `--cwd` is
+  owner-only, matching the requirement above; the repository checkout is
+  never used directly as bob's skill install path or as a scheduled job's
+  `--cwd`. Per CR-005's resolved decision that "a pi working directory is
+  agent content, not a bob-managed XDG bucket," ADR-009's XDG layout does
+  not apply to the job's `--cwd` or to the diary it holds; the skill install
+  path's own layout is S-011/ADR-014's concern, not this spec's.
   **Default behavior:** not applicable — this is a repository/deployment
   layout requirement, not a runtime setting.
 
