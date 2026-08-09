@@ -3,7 +3,7 @@ id: B-035
 title: pi's non-interactive project-trust gate silently prevents scheduled-job 
   sessions from loading workspace-local .pi/skills
 severity: high
-status: open
+status: in-progress
 created: '2026-08-08'
 ---
 
