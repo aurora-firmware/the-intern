@@ -165,6 +165,143 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-08-09
+
+Reproduction status: confirmed (both live end-to-end, matching the bug's own
+evidence, and via a direct, isolated real-`pi` protocol reproduction below).
+
+Evidence captured:
+- Read `the-intern/service/crates/pi-agent-supervisor/src/pool.rs`,
+  `reaper.rs`, `lib.rs`, `process.rs`, and the periodic-dispatch call site in
+  `the-intern/service/crates/bob/src/serve.rs:919-969` (start_periodic_dispatcher).
+- Direct reproduction against the real `pi` binary (0.80.3, on PATH), driven
+  interactively over its own stdin/stdout via a bash coprocess (script
+  captured, no repo files touched):
+    coproc PI { timeout 30 pi --mode rpc --offline --no-approve; }
+    echo '{"id":"prompt-1","type":"prompt","message":"say hi"}' >&"${PI[1]}"
+  Observed the full RPC record stream through to completion
+  (`response` -> `agent_start` -> `turn_start` -> `message_start/update/end`
+  -> `turn_end` -> `agent_end`), then, after the run's own completion
+  markers (`turn_end`/`agent_end`) were emitted:
+    - `kill -0 $PI_PID` -> process still alive (`PI_STILL_ALIVE`).
+    - A further `read -t 3 -u "${PI[0]}"` on the child's stdout **timed out**
+      (rc=142, i.e. blocked waiting for data) rather than returning EOF —
+      i.e. the real `pi --mode rpc` worker does NOT close/EOF its stdout
+      when an individual prompt's run finishes; it stays resident, ready for
+      the next RPC command, and only closes stdout when the whole process
+      exits.
+  No stray `pi` processes were left running afterward (verified with
+  `pgrep -af "pi --mode rpc"`).
+- `cargo test -p pi-agent-supervisor` (64 tests) — all pass on current
+  `dev-agent` code. None of these tests exercise a worker process that
+  survives past the end of a fire-and-forget periodic run (every test child
+  is a synthetic `sh` script engineered to `exit 0` and thus close its own
+  stdout), so the existing suite structurally cannot catch this defect —
+  consistent with the bug being discovered only during B-030/B-031's
+  extended live-validation session rather than by unit tests.
+- `the-intern/service/crates/bob/tests/scheduler_execution_e2e.rs` (header
+  comment, line 3) explicitly documents it uses a "fake sh worker", not real
+  `pi`, for the same reason — the e2e suite doesn't cover this path either.
+
+Isolated fault:
+`the-intern/service/crates/pi-agent-supervisor/src/pool.rs`:
+- `ActiveSessionWorker::is_periodic_run_in_flight()` (lines 46-48) returns
+  `true` whenever `drain_handle: Option<JoinHandle<()>>` is `Some`.
+- `refresh_drain_state()` (lines 35-44) only clears `drain_handle` to `None`
+  once the background task spawned by `spawn_stdout_drain()` (lines 51-83)
+  finishes — i.e. once `stdout.read_line()` returns `Ok(0)` (EOF) or an
+  error. That task's doc comment (lines 51-58) and the design note in
+  `serve.rs` (lines 931-934) both assume "the run completes" and "EOF" are
+  the same event.
+- `reap_idle_and_surplus()` (lines 391-415) filters any worker with
+  `is_periodic_run_in_flight() == true` out of the idle-reap candidate set
+  entirely (line 402: `.filter(|(_, worker)| !worker.is_periodic_run_in_flight())`),
+  so such a worker can never appear in `stale_sessions` regardless of how
+  long `now - last_prompt_activity` grows.
+
+Root cause or fault hypothesis:
+`send_prompt_and_drain` (used exclusively by the periodic dispatcher for
+every `--cwd`-scoped scheduled fire, `serve.rs:939-941`) hands the worker's
+stdout to `spawn_stdout_drain`, whose only completion signal is physical EOF
+on that pipe. As directly confirmed against the real `pi` binary above, a
+`pi --mode rpc` worker does not exit or close stdout when one prompt's run
+finishes — it remains alive, listening for the next RPC command on stdin,
+exactly as required for warm/active workers to be reused across multiple
+sequential `send_prompt` calls elsewhere in this same pool. Consequently,
+once a cwd-scoped dedicated worker has ever run one periodic prompt via
+`send_prompt_and_drain`, its `drain_handle` is permanently `Some` (the
+drain task is permanently blocked in `read_line`), so
+`is_periodic_run_in_flight()` is permanently `true`, so the worker is
+permanently excluded from `reap_idle_and_surplus`'s candidate set — it can
+never be idle-reaped for as long as the process is alive, i.e. forever
+(nothing else in the codebase kills it). This exactly reproduces every
+symptom in the bug report:
+- One dedicated worker leaked per `--cwd` tick (intentional per T-122's
+  "always spawns a dedicated worker" design), none ever reclaimed —
+  unbounded accumulation until `max_processes` is exhausted, then every
+  subsequent fire is skipped with exactly the observed
+  `"cannot acquire cwd-scoped session ... max_processes"` warning
+  (`serve.rs:883-888`).
+- Sessions that "completed their work successfully" are still never reaped
+  — completion of the agent run (visible in the stream as `turn_end`/
+  `agent_end`) is not the same event as EOF, so success/failure of the run
+  is irrelevant to this defect.
+- `bob serve`'s own graceful shutdown *does* reap everything cleanly,
+  because `shutdown_all()` (pool.rs:431-481) unconditionally drains and
+  terminates every entry in `active_workers` — it never consults
+  `is_periodic_run_in_flight()` — matching the bug's explicit callout that
+  the defect is specific to the *live* idle-reap bookkeeping, not to
+  process reaping in general.
+- Externally `SIGKILL`ing a stuck worker still doesn't free its pool slot
+  promptly: killing the process does make the drain task observe EOF and
+  clear `drain_handle`, but that clearing only happens the next time
+  `reap_idle_and_surplus` runs (every `idle_reap_timeout`, i.e. up to 300s
+  later by default), and `refresh_drain_state()` resets
+  `last_prompt_activity` to that moment — so the slot isn't reclaimed until
+  a further full `idle_reap_timeout` elapses after that. This is consistent
+  with, and secondary to, the primary fault above.
+
+Planned fix (target for the tdd cycle; to be finalized during
+implementation):
+Stop using "stdout drain task has reached physical EOF" as the sole gate on
+idle-reap eligibility for periodic/drained workers, since that event does
+not occur until the whole `pi` process exits. Instead, track genuine
+in-flight-run activity independently of process-level EOF — e.g. have the
+background drain task update a shared last-activity timestamp on every
+drained record it reads (not only at EOF), and change
+`reap_idle_and_surplus` to compare `now - <last drained-record activity>`
+(falling back to `last_prompt_activity` when no records have streamed yet)
+against `idle_reap_timeout` for these workers too, rather than
+unconditionally excluding any worker whose drain task hasn't technically
+finished. The drain task itself keeps running (and is still aborted, as
+today, by `kill_session`/reap-removal/shutdown) so the child's stdout pipe
+never fills; only the *eligibility test* changes. This preserves the
+existing "don't reap a run that's still actively streaming" protection
+(AC in the existing `send_prompt_and_drain_keeps_an_in_flight_run_alive_...`
+test) while allowing genuinely idle dedicated workers to be reclaimed once
+no further stdout activity has been observed for `idle_reap_timeout`. Scope
+is limited to `pi-agent-supervisor/src/pool.rs` (`ActiveSessionWorker`,
+`spawn_stdout_drain`, `reap_idle_and_surplus`) — no change is needed to
+`acquire_session_with_cwd`'s "always spawn a fresh dedicated worker"
+behavior, which is intentional per T-122, nor to `serve.rs`.
+
+Planned verification:
+- New unit test in `pi-agent-supervisor` (pool.rs or lib.rs) using a
+  synthetic worker script that, after completing a fire-and-forget prompt
+  (emitting a `response` record), stays alive and keeps stdout open
+  (mirrors real `pi --mode rpc` behavior confirmed above) rather than
+  exiting — asserting that once `idle_reap_timeout` elapses past the run's
+  last observed activity, `reap_idle_and_surplus` (or the actor's reap
+  tick / `list_sessions()`) does reclaim the session. This test must fail
+  against the current code (red) before the fix, and pass after.
+- `cargo test -p pi-agent-supervisor` (full crate suite) green.
+- Manual live check per the bug's own Fix Verification block: run `bob
+  serve` with `max_processes` set low (e.g. 2) and a `* * * * *` `--cwd`
+  schedule for longer than `max_processes` minutes; confirm via
+  `ps --ppid <bob-pid>` that the live child-process count stays bounded
+  and no `"cannot acquire cwd-scoped session ... max_processes"` warning
+  appears.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
