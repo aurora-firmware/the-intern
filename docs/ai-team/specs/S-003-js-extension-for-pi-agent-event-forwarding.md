@@ -14,8 +14,11 @@ id: S-003
 S-001 Component 3 names the JS extension as a thin membrane inside every
 pi-agent process that forwards runtime events to Monitoring and hosts the
 blocking `tool_call` hook. This spec defines the **event-forwarding** half of
-that membrane. The blocking `tool_call` hook and agent skills are specified by
-S-004 and later work.
+that membrane, and — per ADR-014 — the extension's role in skill *delivery*:
+answering pi's resource-discovery event with a skill path bob resolved,
+without reading or interpreting the content at that path. The blocking
+`tool_call` hook is specified by S-004; skill *content* is specified by
+S-010 and S-011.
 
 Every supervised pi-agent session launched by `bob serve` is started with the
 bob extension loaded from bob's resolved extension path. Every documented pi
