@@ -220,7 +220,7 @@ Verified `template reply` options: `-f, --folder <NAME>` (default
 Compose-and-send in one step: generate the template and pipe its output
 straight into `template send` ([Composing and Sending](#composing-and-sending)
 covers why it must be a pipe, not a captured-and-spliced `$(...)`
-substitution — `B-034`). `BODY` here is composed/quoted reply text derived
+substitution). `BODY` here is composed/quoted reply text derived
 from the message being replied to — load it via the heredoc pattern in
 [Embedding message-derived text safely](#embedding-message-derived-text-safely)
 first, then:
@@ -247,7 +247,7 @@ Verified `template forward` options: `-f, --folder <NAME>` (default
 `INBOX`); `-H, --header <KEY:VAL>` (repeatable); `-a, --account <NAME>`.
 `BODY` is again message-derived text — load it via the same heredoc pattern,
 then pipe the template straight into `template send`, the same corrected
-shape [Composing and Sending](#composing-and-sending) explains (`B-034`):
+shape [Composing and Sending](#composing-and-sending) explains:
 
 ```bash
 himalaya template forward 42 -- "$BODY" | himalaya template send
@@ -280,7 +280,7 @@ Verified `template write` options: `-H, --header <KEY:VAL>` (repeatable,
 template (headers + MML body) into a MIME message, sends it, and saves a
 copy to the sent folder. Verified options: `-a, --account <NAME>`.
 
-**Positional-argument pitfall (Observed, `B-034`).** Despite `--help`
+**Positional-argument pitfall (Observed).** Despite `--help`
 advertising `[TEMPLATE]...` as a positional argument, `template send`
 cannot actually parse a template handed to it that way: capturing another
 command's output and splicing it in via `$(...)` —
@@ -317,7 +317,7 @@ template: `himalaya message send [OPTIONS] [MESSAGE]...` and
 `-f, --folder <NAME>`). Prefer the `template` commands above when
 composing from headers/body text — they build the MIME message for you.
 
-**Composition pattern corrected and live-exercised (`B-034`).** An earlier
+**Composition pattern corrected and live-exercised.** An earlier
 revision of this reference showed the composition above built with `$(...)`
 capture-and-splice rather than a pipe. That shape was tried against the
 installed binary and failed outright — `Error: 0: cannot parse template` —
