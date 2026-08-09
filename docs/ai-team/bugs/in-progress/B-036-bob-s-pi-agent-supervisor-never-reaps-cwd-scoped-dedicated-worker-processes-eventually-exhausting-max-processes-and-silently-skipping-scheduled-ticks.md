@@ -166,6 +166,27 @@ Planned verification:
 -->
 
 ### Diagnosis 1 — 2026-08-09
+Reproduction status:
+- Confirmed. The original live `bob serve` evidence demonstrates the leak, and a fresh local `pi --mode rpc --offline` reproduction confirmed that prompt handling can finish while the persistent child remains alive with stdout open.
+
+Evidence captured:
+- Before `bb92585`, `refresh_drain_state()` cleared the drain only on EOF/error, `is_periodic_run_in_flight()` was true while that drain existed, and idle reaping excluded in-flight workers.
+- The local RPC repro (`pi 0.65.2`) observed an accepted prompt followed by a still-alive child and a timed-out post-run stdout read; EOF is therefore not a per-run completion signal.
+- The existing branch commit adds terminal-record observation and a regression test where stdout never reaches EOF.
+
+Isolated fault:
+- `the-intern/service/crates/pi-agent-supervisor/src/pool.rs`: the drain-state refresh, periodic-run-in-flight predicate, stdout drain, and idle reaper modelled worker-process EOF as completion of one periodic run.
+
+Root cause or fault hypothesis:
+- `pi --mode rpc` workers persist between prompts. Since their stdout drain remains active until process exit, the old bookkeeping permanently classified completed cwd-scoped periodic runs as in-flight and excluded them from idle reaping, exhausting `max_processes` one tick at a time.
+
+Planned verification:
+- Test a persistent worker that emits `agent_end` then keeps stdout open; it must be reaped after `idle_reap_timeout`. Run `cargo test -p pi-agent-supervisor`, then manually verify a low-limit scheduled `--cwd` job stays bounded beyond `max_processes` ticks without acquisition warnings.
+
+Obstacles encountered:
+- The isolated local environment could not execute a full successful online pi run, so the fresh repro validates the no-EOF premise; the canonical live evidence covers the end-to-end scheduling symptom.
+
+### Diagnosis 1 — 2026-08-09
 
 Reproduction status: confirmed (both live end-to-end, matching the bug's own
 evidence, and via a direct, isolated real-`pi` protocol reproduction below).
