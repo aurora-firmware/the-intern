@@ -4,7 +4,7 @@ title: bob's pi-agent-supervisor never reaps cwd-scoped dedicated worker
   processes, eventually exhausting max_processes and silently skipping scheduled
   ticks
 severity: high
-status: open
+status: in-progress
 created: '2026-08-08'
 ---
 
