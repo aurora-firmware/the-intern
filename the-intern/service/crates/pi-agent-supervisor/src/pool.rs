@@ -9,11 +9,36 @@ use bob_core::{
 use std::collections::HashMap;
 use std::os::unix::io::OwnedFd;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::ChildStdout;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+
+/// The RPC record `type` that marks a fire-and-forget run as fully finished.
+///
+/// A real `pi --mode rpc` worker never closes stdout between prompts (see
+/// B-036's Diagnosis Log: a direct repro against the real binary showed the
+/// child staying alive and blocked on a further stdout read well after the
+/// run's own completion markers were emitted), so physical EOF cannot be
+/// used to detect "this periodic run has finished" for a worker kept alive
+/// between prompts. `agent_end` is the last record the documented RPC
+/// sequence emits for a completed run (after `agent_start`, `turn_start`,
+/// `message_*`, and `turn_end`), so its arrival on the detached stdout drain
+/// is treated as the real completion signal instead.
+const TERMINAL_RUN_RECORD_TYPE: &str = "agent_end";
+
+/// Returns `true` when `line` is a raw stdout record whose `type` is
+/// [`TERMINAL_RUN_RECORD_TYPE`]. Any line that fails to parse as JSON, or
+/// that lacks a matching `type` field, is treated as non-terminal.
+fn is_terminal_run_record(line: &str) -> bool {
+    let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+        return false;
+    };
+    record.get("type").and_then(serde_json::Value::as_str) == Some(TERMINAL_RUN_RECORD_TYPE)
+}
 
 #[derive(Debug)]
 struct ActiveSessionWorker {
@@ -21,17 +46,36 @@ struct ActiveSessionWorker {
     last_prompt_activity: Instant,
     /// Background task draining the worker's stdout after a fire-and-forget
     /// periodic prompt, if one is running. Aborted when the worker is removed
-    /// (killed, reaped, or shut down); otherwise it ends on its own at EOF.
+    /// (killed, reaped, or shut down); otherwise it keeps running for the
+    /// life of the child process, since a real `pi --mode rpc` worker never
+    /// reaches EOF between prompts (B-036).
     drain_handle: Option<JoinHandle<()>>,
+    /// Shared with the background drain task spawned alongside
+    /// `drain_handle`: set once that task observes the run's terminal RPC
+    /// record ([`TERMINAL_RUN_RECORD_TYPE`]). `None` when no drain is active.
+    drain_run_terminal_seen: Option<Arc<AtomicBool>>,
+    /// Sticky flag consumed once by [`Self::refresh_drain_state`]: becomes
+    /// `true` the first time `drain_run_terminal_seen` is observed set, at
+    /// which point `last_prompt_activity` is reset to that discovery moment
+    /// so the idle timer starts from genuine run completion instead of the
+    /// original prompt ack. Reset to `false` whenever a new drain is spawned.
+    drain_run_idle: bool,
 }
 
 impl ActiveSessionWorker {
     /// Refreshes fire-and-forget run state from the background stdout drain.
     ///
-    /// While the drain task is still running, the periodic job is considered
-    /// in flight and must not be idle-reaped. Once the drain reaches EOF, the
-    /// child has finished the detached run, so the worker becomes idle again
-    /// and the idle timer restarts from that completion moment.
+    /// Two independent completion signals are recognized:
+    /// - Physical EOF/read-error on the drain task (the child process itself
+    ///   exited): clears all drain state and restarts the idle timer.
+    /// - The drain task observing the run's terminal RPC record: a real `pi
+    ///   --mode rpc` worker stays alive and never reaches EOF between
+    ///   prompts, so this is the signal that actually fires for periodic
+    ///   dispatch (B-036). Consumed once so repeated reap ticks don't keep
+    ///   resetting the idle timer forever.
+    ///
+    /// While neither signal has fired, the periodic job is considered
+    /// genuinely in flight and must not be idle-reaped.
     fn refresh_drain_state(&mut self) {
         if self
             .drain_handle
@@ -39,24 +83,44 @@ impl ActiveSessionWorker {
             .is_some_and(tokio::task::JoinHandle::is_finished)
         {
             self.drain_handle = None;
+            self.drain_run_terminal_seen = None;
+            self.drain_run_idle = false;
+            self.last_prompt_activity = Instant::now();
+            return;
+        }
+
+        if !self.drain_run_idle
+            && self
+                .drain_run_terminal_seen
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Acquire))
+        {
+            self.drain_run_idle = true;
             self.last_prompt_activity = Instant::now();
         }
     }
 
     fn is_periodic_run_in_flight(&self) -> bool {
-        self.drain_handle.is_some()
+        self.drain_handle.is_some() && !self.drain_run_idle
     }
 }
 
-/// Reads and discards a detached worker's stdout until EOF.
+/// Reads and discards a detached worker's stdout until EOF, recording when
+/// the run's terminal record ([`TERMINAL_RUN_RECORD_TYPE`]) is observed.
 ///
 /// After a periodic prompt is accepted the agent run keeps streaming RPC
 /// records to stdout with no other reader. Continuously draining them keeps the
 /// OS pipe from filling: a full stdout pipe blocks the child mid-run, so
 /// without this the scheduled action would freeze before completing (e.g.
-/// before writing its output file). Ends when the child exits (EOF) or on a
-/// read error.
-fn spawn_stdout_drain(session_id: SessionId, mut stdout: BufReader<ChildStdout>) -> JoinHandle<()> {
+/// before writing its output file). The task itself only ends when the child
+/// exits (EOF) or on a read error -- a real `pi --mode rpc` worker keeps
+/// running between prompts, so `run_terminal_seen` is how callers learn the
+/// run itself has finished well before that.
+fn spawn_stdout_drain(
+    session_id: SessionId,
+    mut stdout: BufReader<ChildStdout>,
+    run_terminal_seen: Arc<AtomicBool>,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut line = String::new();
         loop {
@@ -68,6 +132,9 @@ fn spawn_stdout_drain(session_id: SessionId, mut stdout: BufReader<ChildStdout>)
                         session_id = %session_id,
                         "pi-agent-supervisor drained periodic worker stdout record"
                     );
+                    if is_terminal_run_record(&line) {
+                        run_terminal_seen.store(true, Ordering::Release);
+                    }
                 }
                 Err(error) => {
                     tracing::debug!(
@@ -196,6 +263,8 @@ impl SessionPool {
                 worker,
                 last_prompt_activity: Instant::now(),
                 drain_handle: None,
+                drain_run_terminal_seen: None,
+                drain_run_idle: false,
             },
         );
     }
@@ -288,10 +357,13 @@ impl SessionPool {
 
         if let Some(active_worker) = self.active_workers.get_mut(&session_id) {
             if let Some(stdout) = active_worker.worker.take_stdout() {
-                let handle = spawn_stdout_drain(session_id, stdout);
+                let run_terminal_seen = Arc::new(AtomicBool::new(false));
+                let handle = spawn_stdout_drain(session_id, stdout, Arc::clone(&run_terminal_seen));
                 if let Some(previous) = active_worker.drain_handle.replace(handle) {
                     previous.abort();
                 }
+                active_worker.drain_run_terminal_seen = Some(run_terminal_seen);
+                active_worker.drain_run_idle = false;
             }
         }
         Ok(())
