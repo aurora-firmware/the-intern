@@ -26,6 +26,34 @@ is missing (the directory, the file, or both) first, then append. Never skip
 an entry because the directory or file was missing; missing is the normal
 state for a brand-new day or a brand-new deployment, not an error condition.
 
+Use this exact append-command shape for the write step:
+
+```bash
+TODAY=$(date +%F)
+mkdir -p worklog
+cat >> worklog/$TODAY.md <<'EOF'
+## <HH:MM> — <subject> (from <sender>)
+
+- Done: <what was done for this message this run>
+- Left: <what is still outstanding, or "nothing" if fully resolved>
+- Next: <what happens next, and on what trigger>
+
+EOF
+```
+
+Keep the redirect target exactly `worklog/$TODAY.md`: cwd-relative and
+unquoted immediately after `>>`. The deployed action-authorization rule for
+this append step matches the literal substring `>> worklog/`, so rewriting the
+redirect as `>> "worklog/$TODAY.md"` or as an absolute workspace path changes
+the command text enough to miss the rule even though the append is otherwise
+legitimate. This unquoted form is still safe here because `TODAY` comes from
+`date +%F`, which yields only the calendar date characters used in the
+worklog filename. Keep the heredoc delimiter quoted (`<<'EOF'`): substitute
+the actual time, subject, sender, and outcome text into its body before
+running the command. The body contains arbitrary email-derived text, so
+quoting the delimiter keeps any `$()`, backticks, backslashes, or variable
+references in that text inert rather than allowing the shell to expand them.
+
 ## Per-message entry format
 
 Append one entry to today's file for every unseen message handled this run —

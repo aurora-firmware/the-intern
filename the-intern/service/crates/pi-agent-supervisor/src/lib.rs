@@ -942,6 +942,49 @@ mod tests {
         appeared.expect("long-running periodic run must remain alive long enough to finish");
     }
 
+    // Regression (B-036): a real `pi --mode rpc` worker never closes its
+    // stdout between prompts, so a completed periodic run must still become
+    // eligible for idle reaping once genuinely idle -- it must not be
+    // excluded forever just because its background stdout drain task hasn't
+    // technically finished (EOF never arrives). The script below ACKs the
+    // prompt, emits one more record whose `type` is `agent_end` (the real
+    // pi protocol's terminal record for a finished run, per the Diagnosis
+    // Log's direct repro against the real binary), and then blocks forever
+    // on a further read without exiting or closing stdout -- mirroring a
+    // real worker sitting idle between prompts.
+    #[tokio::test(flavor = "current_thread")]
+    async fn send_prompt_and_drain_reaps_worker_once_idle_after_terminal_record_even_though_stdout_never_reaches_eof(
+    ) {
+        let script = r#"while IFS= read -r line; do id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'); printf '{"id":"%s","type":"response","success":true}\n' "$id"; printf '{"type":"agent_end"}\n'; done"#;
+
+        let mut cfg = test_config("sh", &["-c", script], 1, 2);
+        cfg.idle_reap_timeout = Duration::from_millis(40);
+        let (handle, task) = start(cfg).expect("startup should succeed");
+        let session_id = handle
+            .acquire_session()
+            .await
+            .expect("session acquire should succeed");
+        handle
+            .send_prompt_and_drain(session_id, "go".to_string())
+            .await
+            .expect("send_prompt_and_drain should ack the prompt");
+
+        // Give the drain task time to observe the agent_end record, then
+        // wait past idle_reap_timeout for a reap tick to run.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let sessions = handle
+            .list_sessions()
+            .await
+            .expect("session listing should succeed");
+        assert!(
+            !sessions.contains(&session_id),
+            "a completed periodic run must be idle-reaped even though its worker \
+             process never closes stdout"
+        );
+        task.abort();
+    }
+
     // AC-1/AC-2: start_interactive_session spawns the child and exposes its id via list_sessions.
     #[tokio::test(flavor = "current_thread")]
     async fn start_interactive_session_returns_session_id_visible_in_list_sessions() {

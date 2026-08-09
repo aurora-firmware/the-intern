@@ -7,6 +7,9 @@
 .agents
 .ai-team.toml
 
+# PR review reports
+pr-*-review.md
+
 # Tooling
 mise.toml
 .tmp/

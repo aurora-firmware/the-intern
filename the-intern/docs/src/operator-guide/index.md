@@ -780,7 +780,38 @@ package-specific setup that T-139 and T-140 verified end to end.
    trusted runtime boundary for scheduled jobs, and it would mix mutable
    worklog/config state into source-controlled files.
 
-3. Set the skill-local `manager_address`.
+3. Establish pi's project trust for the deployed workspace.
+
+   `pi`'s own project trust gate is separate from the Unix trust boundary
+   described in [Scheduled jobs](#scheduled-jobs). `pi_agent_supervisor`
+   always spawns workers with `--mode rpc`, and pi's non-interactive modes
+   (`-p`, `--mode json`, `--mode rpc`) never show an interactive trust
+   prompt. Without an existing saved trust decision for the deployed
+   workspace, pi's default `defaultProjectTrust` setting (`"ask"`) silently
+   ignores project-local resources — including `.pi/skills/email-triage` and
+   `.pi/skills/himalaya` — on every tick. The scheduled job still fires and
+   still runs, but the agent never sees `SKILL.md` and instead explores the
+   workspace like a generic assistant, with every exploratory call denied by
+   the S-004 rules added in the next step and no error anywhere pointing at
+   project trust as the cause.
+
+   Add the deployed workspace's canonical absolute path to
+   `~/.pi/agent/trust.json` (the same file pi's interactive `/trust` command
+   writes) with a `true` value:
+
+   ```json
+   {
+     "/srv/workspaces/email-skills": true
+   }
+   ```
+
+   If `~/.pi/agent/trust.json` already has entries for other workspaces, add
+   this path as an additional key rather than overwriting the file.
+
+   Restart `bob serve` afterward — trust decisions are read when each `pi`
+   worker process starts, not picked up by workers already running.
+
+4. Set the skill-local `manager_address`.
 
    Edit only the deployed copy's `config/email-triage.toml`. This file is
    skill-local configuration, not part of bob's top-level `config.toml`:
@@ -793,7 +824,7 @@ package-specific setup that T-139 and T-140 verified end to end.
    The shipped `email-triage.example.toml` stays in the repository as a template
    only; the real address belongs only in the deployed workspace copy.
 
-4. Add scoped S-004 action rules for the deployed workspace, then reload policy.
+5. Add scoped S-004 action rules for the deployed workspace, then reload policy.
 
    The validated runtime matcher shape is:
 
@@ -1026,7 +1057,7 @@ package-specific setup that T-139 and T-140 verified end to end.
    bob policy reload
    ```
 
-5. Add the scheduled job with its deployed `--cwd`, then verify the observed outcomes.
+6. Add the scheduled job with its deployed `--cwd`, then verify the observed outcomes.
 
    Register the job against the deployed workspace, not the repository:
 
