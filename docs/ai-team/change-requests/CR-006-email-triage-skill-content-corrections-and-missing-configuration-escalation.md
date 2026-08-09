@@ -79,7 +79,7 @@ The escalation email must additionally state that the configuration file was
 missing and the directory where it was expected.
 
 No diary requirement is stated for this case in either skill: the worklog
-skill's general journaling discipline already records it.
+reference's general journaling discipline already records it.
 
 This replaces the current behaviour, which treats a missing or malformed
 address as a hard stop for every message needing escalation in that run.
