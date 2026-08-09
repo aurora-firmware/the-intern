@@ -243,6 +243,14 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-09
+
+Implemented the diagnosis-prescribed, guidance-layer fix in `references/worklog.md` (commit `1d7241b`). The document now supplies an exact `cat >> worklog/$TODAY.md <<EOF` append shape and explains why the cwd-relative redirect target must be unquoted: the existing narrowly scoped S-004 rule matches the literal `>> worklog/` substring. The documented `date +%F` value makes that unquoted filename safe.
+
+The policy rule was deliberately not widened, avoiding any expansion of the action-authorization surface. Existing `cargo test -p policy-control` verification passed (45 tests); the diagnosis’s pinned-wildmatch reproduction confirms the prescribed command is admitted while the quoted variant remains outside policy. A full live scheduled tick remains the operational follow-up.
+
+Obstacles Encountered: None during the documentation change. An unrelated untracked `pr-42-review.md` remains untouched.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
