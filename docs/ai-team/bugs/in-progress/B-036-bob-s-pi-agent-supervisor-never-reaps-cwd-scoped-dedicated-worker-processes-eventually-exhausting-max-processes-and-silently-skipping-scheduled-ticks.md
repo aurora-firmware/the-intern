@@ -364,3 +364,42 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-09
+PASS
+
+- Diagnosis chain passed: the logs identify the EOF-gated drain bookkeeping, the live and isolated evidence establish that a persistent pi RPC worker keeps stdout open between runs, and the root cause matches the affected idle-reap filter.
+- Bug criteria passed: `pool.rs` observes the terminal `agent_end` record once, retains protection for genuinely in-flight runs, and returns the completed persistent worker to normal idle-timeout reaping without unrelated scheduler changes.
+- Regression coverage and verification passed: the new no-EOF worker test fails on the old EOF-only behavior and passed after the fix; the focused test and `cargo test -p pi-agent-supervisor` passed (65 tests). The unrun multi-minute live check is a non-blocking operational confirmation because the automatic regression models the observed fault directly.
+- Code-quality review passed: the atomic completion flag is scoped to the detached drain task, reset per prompt, and the drain remains aborted on worker removal/shutdown. No secrets, unrelated refactors, or resource leaks were introduced.
+
+Next owner: Bug-Fix Loop.
+
+Obstacles Encountered: The prior development handoff contains an additional Session 1 entry; it is redundant lifecycle history only and does not change the implementation or verification evidence.
+
+### Review Verdict — 2026-08-09
+PASS
+
+Summary:
+- Reviewed canonical bug evidence, implementation commit `bb92585`, and focused plus live verification results; Stage 1 and Stage 2 both passed.
+
+Artifacts:
+- Updated canonical bug file: `docs/ai-team/bugs/in-progress/B-036-bob-s-pi-agent-supervisor-never-reaps-cwd-scoped-dedicated-worker-processes-eventually-exhausting-max-processes-and-silently-skipping-scheduled-ticks.md`
+- Reviewed diff `bb92585` affecting `the-intern/service/crates/pi-agent-supervisor/src/pool.rs` and `the-intern/service/crates/pi-agent-supervisor/src/lib.rs`
+
+Evidence:
+- Diagnosis chain verified complete in the canonical bug file: reproduction status, evidence, isolated fault, root-cause hypothesis, planned fix, and planned verification all matched the submitted implementation.
+- Stage 1 bug-fit review: `bb92585` changes only the periodic detached-run completion bookkeeping in `pi-agent-supervisor`, matching the documented isolated fault and adding one regression test for the no-EOF worker case.
+- Stage 2 code review: inspected the new terminal-record detection, idle-transition bookkeeping, reap-path interaction, and regression coverage in `pool.rs`/`lib.rs`; no correctness, security, readability, or performance defect identified.
+- Verification run on exported commit `bb92585`: `cargo test -p pi-agent-supervisor` passed (`65 passed; 0 failed`).
+- Live verification run on exported commit `bb92585` with real `pi 0.65.2`, `pi_agent_max_processes=2`, `pi_agent_idle_reap_timeout=5s`, and a `* * * * *` scheduled `--cwd` job: schedule added at `2026-08-09T07:35:16Z`; scheduled runs reached `agent_end` at `2026-08-09T07:36:02Z` and `2026-08-09T07:38:02Z`; reap ticks logged `idle_sessions_reaped=1` at `2026-08-09T07:36:15Z` and `2026-08-09T07:38:10Z`; `ps --ppid 2207796 -o pid,stat,etimes,cmd` at `2026-08-09T07:36:34Z` and `2026-08-09T07:38:12Z` showed only one live `pi` child; no `cannot acquire cwd-scoped session because active + warm workers reached max_processes` warning was observed.
+
+Obstacles Encountered:
+- In-sandbox socket binding and host PID inspection for the live `bob serve` check were blocked by sandbox isolation (`Operation not permitted` / namespace separation); completed the manual verification with escalated host-side commands instead.
+- The canonical Work Log contains duplicate `Session 1` entries from prior lifecycle commits; treated as historical duplication only, per instruction.
+
+Next Owner:
+- Bug-Fix Loop
+
+Next Action:
+- none
