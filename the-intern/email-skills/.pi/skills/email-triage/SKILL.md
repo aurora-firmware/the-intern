@@ -3,8 +3,8 @@ name: email-triage
 description: >
   Runs the scheduled email-triage workflow: on a "Check email" (or an
   equivalent scheduled triage) prompt fired from this package's own working
-  directory, detect unseen mail, reconcile the daily worklog on the day's
-  first executed run, and for each unseen message either act on it or
+  directory, reconcile the daily worklog on the day's first executed run,
+  detect unseen mail, and for each unseen message either act on it or
   escalate it to the configured manager address — recording a worklog entry
   for every message handled either way. This is the triage-policy skill: it
   carries the reconciliation, confidence-gated act-or-escalate, and diary
