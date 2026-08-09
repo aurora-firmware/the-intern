@@ -426,7 +426,7 @@ Add action rules under `[[policy.action_rules]]`:
 tool = "bash"
 
 [[policy.action_rules]]
-tool = "read_file"
+tool = "read"
 ```
 
 A rule with no argument matchers allows that tool for any arguments. The model is
@@ -733,6 +733,329 @@ bob audit tail --filter events
 history, no "last run" timestamp, and no run counter persisted by bob itself.
 Operators who need durable job-run records must collect and retain the audit log
 externally (for example, by shipping the JSONL file to a log aggregator).
+
+---
+
+## Deploying the `email-triage` scheduled job
+
+This section shows the validated operator procedure for turning the shipped
+`the-intern/email-skills/` package into a live scheduled `email-triage` job.
+It assumes the general policy model, `cwd`
+precedence, and schedule-store behavior already described in
+[Policy basics](#policy-basics),
+[Working directory for pi-agent sessions](#working-directory-for-pi-agent-sessions),
+and [Scheduled jobs](#scheduled-jobs); the steps below focus only on the
+package-specific setup that T-139 and T-140 verified end to end.
+
+1. Prepare the mailbox prerequisites outside bob.
+
+   `email-triage` depends on a working Himalaya IMAP/SMTP account owned outside
+   bob. Configure and test that account with Himalaya first, then choose the
+   single manager escalation address the skill will email when a message cannot
+   be classified confidently. Bob does not create or manage either of these
+   inputs for you.
+
+2. Deploy an owner-only workspace copy outside the repository checkout.
+
+   The scheduled job's `--cwd` must point at a deployed copy of the package,
+   not at this repository checkout. The deployed workspace holds mutable runtime
+   state that the skill reads without an ownership check: the local
+   `config/email-triage.toml`, the `worklog/` diary, and the `.pi/skills/`
+   tree pi auto-loads from the working directory. Keep that whole workspace
+   owner-only for the job user, matching the trust boundary described in
+   [Scheduled jobs](#scheduled-jobs).
+
+   ```bash
+   WORKSPACE=/srv/workspaces/email-skills
+
+   install -d -m 700 "$WORKSPACE"
+   cp -r the-intern/email-skills/. "$WORKSPACE/"
+   install -d -m 700 "$WORKSPACE/worklog"
+   chmod 700 "$WORKSPACE" "$WORKSPACE/.pi" "$WORKSPACE/config" "$WORKSPACE/worklog"
+   cp "$WORKSPACE/config/email-triage.example.toml" \
+      "$WORKSPACE/config/email-triage.toml"
+   ```
+
+   Do not use the repository checkout as `--cwd`: a shared checkout is not the
+   trusted runtime boundary for scheduled jobs, and it would mix mutable
+   worklog/config state into source-controlled files.
+
+3. Set the skill-local `manager_address`.
+
+   Edit only the deployed copy's `config/email-triage.toml`. This file is
+   skill-local configuration, not part of bob's top-level `config.toml`:
+
+   ```toml
+   manager_address = "manager@example.com"
+   ```
+
+   `manager_address` is required. It must be one well-formed email address.
+   The shipped `email-triage.example.toml` stays in the repository as a template
+   only; the real address belongs only in the deployed workspace copy.
+
+4. Add scoped S-004 action rules for the deployed workspace, then reload policy.
+
+   The validated runtime matcher shape is:
+
+   - `read` rules match `arguments.path`, so use `field_path = "path"`.
+   - `bash` rules match `arguments.command`, so use `field_path = "command"`.
+
+   Do not copy older `cmd` examples from parser-only tests. The live T-139/T-140
+   runs only succeeded when the bash rules matched the runtime `command` field.
+   Replace `/srv/workspaces/email-skills` with the exact absolute path to your
+   deployed copy and scope the mailbox move target to the real folder name from
+   `himalaya folder list` (the validated account used `INBOX.Notifications`,
+   not plain `Notifications`):
+
+   ```toml
+   [[policy.action_rules]]
+   tool = "read"
+   arg_matchers = [
+     { field_path = "path", pattern = "/srv/workspaces/email-skills/.pi/skills/email-triage/SKILL.md" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "read"
+   arg_matchers = [
+     { field_path = "path", pattern = "/srv/workspaces/email-skills/.pi/skills/himalaya/SKILL.md" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "read"
+   arg_matchers = [
+     { field_path = "path", pattern = "/srv/workspaces/email-skills/.pi/skills/email-triage/references/*.md" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "read"
+   arg_matchers = [
+     { field_path = "path", pattern = "/srv/workspaces/email-skills/.pi/skills/email-triage/references/categories/*.md" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "read"
+   arg_matchers = [
+     { field_path = "path", pattern = "/srv/workspaces/email-skills/.pi/skills/himalaya/references/*.md" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "read"
+   arg_matchers = [
+     { field_path = "path", pattern = "/srv/workspaces/email-skills/worklog/*.md" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "read"
+   arg_matchers = [
+     { field_path = "path", pattern = "worklog/*.md" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "himalaya --version*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "himalaya account list*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "himalaya folder list*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "himalaya*envelope list*not flag seen*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "himalaya*message read*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "himalaya*message move*INBOX.Notifications*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "himalaya*message move*Escalations*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "BODY=$(cat <<'*himalaya template reply *-- \"$BODY\" | himalaya template send*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "SUBJECT=$(cat <<'*SUBJECT=\"${SUBJECT//*BODY=$(cat <<'*himalaya template write -H *To:* -H \"Subject:Escalation: $SUBJECT\" -- \"$BODY\" | himalaya template send*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "himalaya template write" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "cat config/email-triage.toml*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "*find worklog*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "*ls worklog*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "test -f worklog/*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "cat worklog/*.md*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "mkdir -p worklog*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "*>> worklog/*.md*" },
+   ]
+   ```
+
+   **This rule set covers the live-validated paths** — `automated-notification`
+   (file, no reply), escalation, S-004 block handling, and skipped-tick
+   continuity (T-139, T-140) — **plus one additional rule** admitting the
+   `himalaya template reply` -> `himalaya template send` command shape that
+   the `direct-request` and `meeting-scheduling` categories use to send a
+   reply (`B-029`). **It does not include a `message move` rule for
+   `Newsletters` or `Spam`** — the destinations `newsletter-bulk` and
+   `suspected-spam` need for a confident match — because those two
+   categories have not gone through the same live-validation pass as the
+   paths above. Add matching `move*Newsletters*` / `move*Spam*` rules
+   (mirroring the `INBOX.Notifications` rule's shape) before relying on
+   autonomous handling of those categories; without them, a message that
+   confidently classifies into either one will be blocked by the action gate
+   and left open in the worklog indefinitely. That rule is built on `B-030`'s hardened heredoc pattern
+   (`references/command-reference.md`'s "Embedding message-derived text
+   safely": `"$BODY"` loaded via a quoted heredoc, `--` before the body
+   argument), and, per `B-034`, admits the pipe form of the composition
+   rather than the `$()` capture-and-splice form it originally shipped
+   with: `himalaya v1.2.0`'s `template send` cannot actually parse a
+   template passed as a positional CLI argument (`Error: 0: cannot parse
+   template`), though stdin-piped input of the identical content works, so
+   the correct shape is `himalaya template reply <ID> [-A] -- "$BODY" |
+   himalaya template send`, not the earlier `himalaya template send
+   "$(himalaya template reply <ID> [-A] -- "$BODY")"` shape. It was checked
+   against the real `wildmatch` crate (the exact library `bob`'s S-004
+   matcher uses): it matches the intended safe plain-reply and reply-all
+   (`-A`) pipe shapes — including when the message-derived body itself
+   contains adversarial shell metacharacters — and correctly rejects an
+   unquoted-heredoc bypass, a bare/unquoted `$BODY` regression, a
+   missing-`--` variant, the pre-`B-030` naive literal-splice shape, and the
+   now-removed `B-029`-era `$()` capture-and-splice shape that `B-034` found
+   himalaya cannot actually parse. This rule has since been re-run against a
+   live mailbox and scheduled `bob` instance the same way T-139/T-140
+   validated the paths above: the job was fed a message that confidently
+   classified as `direct-request`, the reply was sent, the recipient
+   confirmed receipt, and the worklog recorded it correctly (`B-031`). Treat
+   this rule as both statically verified and live-validated for
+   `direct-request` and `meeting-scheduling` replies.
+
+   **The escalation rule above matches a hardened command shape, not the
+   originally live-validated one.** The subject/body are now loaded through
+   the heredoc pattern in the `himalaya` skill's "Embedding message-derived
+   text safely" reference (`references/command-reference.md`) rather than
+   typed as literal quoted text, closing a command-injection path from
+   untrusted email content. The pattern was checked against the real
+   `wildmatch` crate (the exact library `bob`'s S-004 matcher uses) for both
+   the intended safe shape and several unsafe variants, but the *command
+   itself* — a multi-line shell script containing heredocs, run via pi's
+   `bash` tool — has since been re-run against a live mailbox and `bob`
+   instance the same way T-139/T-140 validated the original one-liner, and
+   the recipient confirmed receipt of the escalation email (`B-030`). Treat
+   this rule and command shape as both hardened and live-validated.
+
+   **Two more rules admit the missing-configuration escalation fallback and
+   the self-escalation filing move.** The bare `himalaya template write`
+   rule is an exact pattern with no trailing wildcard — it
+   admits only the no-argument invocation the missing-configuration
+   escalation fallback uses to read the account's own address from the
+   `From:` header, not any variant carrying arguments. Appending a trailing
+   `*` to that pattern would also admit further arguments such as `-H
+   "To:..." ... | himalaya template send`, i.e. arbitrary outbound email,
+   so none was added. The `Escalations` move rule mirrors the
+   `INBOX.Notifications` rule's shape for the `self-escalation` category's
+   filing step; `Escalations` is a starter default the skill's own
+   reference treats as renameable, so update the pattern above to the
+   folder name the deployment actually uses if it differs.
+
+   After editing the policy section, reload it without restarting bob:
+
+   ```bash
+   bob policy reload
+   ```
+
+5. Add the scheduled job with its deployed `--cwd`, then verify the observed outcomes.
+
+   Register the job against the deployed workspace, not the repository:
+
+   ```bash
+   bob schedule add \
+     --id check-email \
+     --cron "*/15 * * * *" \
+     --prompt "Check email" \
+     --cwd "$WORKSPACE"
+   ```
+
+   On the next tick, the expected operator-visible outcomes are:
+
+   - A new `worklog/YYYY-MM-DD.md` entry under the deployed workspace.
+   - `event` and `verdict` audit records visible with `bob audit tail`.
+   - An escalation email sent to `manager_address` when the skill leaves a
+     message open because it is not confidently classified.
+
+   Helpful checks:
+
+   ```bash
+   bob audit tail --filter events --filter verdicts
+   ls "$WORKSPACE/worklog"
+   ```
+
+   The cross-day continuity path verified in T-140 also reads prior worklog
+   entries through the relative `read.path = "worklog/*.md"` matcher above, so
+   keep that rule in place even if the first happy-path run appears to work
+   without it.
 
 ---
 

@@ -3,6 +3,31 @@
 Running log of bugs and friction observed while using the `ai-team` CLI and the
 slash-skills that wrap it. New entries at the top.
 
+## 2026-08-01 — `ai-team validate` false-positives `task-spec-missing` for specs that exist
+
+**Symptom.** `ai-team validate` reports `task-spec-missing` ("Task spec
+reference 'S-NNN' does not resolve to an existing spec file") for a large
+share of existing tasks, including references to S-002, S-005, S-007, and
+S-009 — all real, approved specs present in `docs/ai-team/specs/`. The same code
+fired immediately for four brand-new tasks referencing the freshly-approved
+S-010, even though `ai-team show S-010` resolves it without issue. 112 of 114
+total findings in a full-repo `ai-team validate` run were this one code.
+
+**Reproduction.** `ai-team validate` from the repo root; compare any
+`task-spec-missing` row's referenced spec id against `ai-team show <id>`,
+which resolves successfully.
+
+**Impact.** The check is currently too noisy to use as a real signal —
+`task-spec-missing` cannot currently be trusted to mean "this task references
+a spec that doesn't exist"; every occurrence needs manual cross-checking
+against `ai-team show`/`docs/ai-team/specs/` instead.
+
+**Suggested fix.** The false positive looks like a lookup-key mismatch (for
+example matching on full filename/slug rather than the frontmatter `id`
+field, or a stale index) rather than a real cross-reference gap; worth
+tracing `validate`'s spec-resolution path against a case that reproduces
+reliably (e.g. any completed task referencing S-002).
+
 ## 2026-06-30 — Developer subagent edited lifecycle task file on the task branch
 
 **Symptom.** During `dev-loop` processing of T-115, the Developer subagent

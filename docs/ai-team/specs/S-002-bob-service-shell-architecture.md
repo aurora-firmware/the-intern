@@ -418,8 +418,17 @@ Behavioural — concrete keys are defined when each subsystem lands.
   through the supervisor's existing child-process error path (and, for a
   scheduled firing, is skipped with a warning like any other spawn failure).
   Operators are advised to set an explicit workspace so pi's context-file
-  (`AGENTS.md`/`CLAUDE.md`), skills, and relative-path resolution are
-  predictable.
+  (`AGENTS.md`/`CLAUDE.md`) and relative-path resolution are predictable.
+  Skills are **not** affected by this key: bob supplies them independently of
+  the working directory (ADR-014, S-011).
+- **Skill install path.** The directory bob supplies to pi as the source of
+  agent skills. *Shape:* a service-wide flat `snake_case` key (ADR-002), like
+  `pi_agent_cwd` and `extension_path`. *Constraints:* absolute when set;
+  security-relevant, since its content reaches every session bob spawns
+  (ADR-014 §7). *Missing-value behaviour:* unset resolves to the ADR-009
+  `data` default alongside the extension; set-but-missing or empty is
+  **fail-open** — the session starts without skills and a warning is logged.
+  This differs deliberately from `extension_path`, which is fail-closed.
 - **Tracing.** Log level, formatter (development vs. JSON), and span sample
   rate. Audit log destinations are configured separately when Monitoring lands.
 - **Subsystem placeholders.** Each subsystem reserves its own configuration
@@ -474,3 +483,4 @@ present.
 | 2026-06-13 | Reconciled the connection-gate description with ADR-005: filesystem permissions are the sole admission gate, `SO_PEERCRED` is audit-only, and the in-service uid allow-list (`admin_allowed_uids`/`admin_allowed_gid`) is removed (additional uids via a Unix group instead). Updated the Responsibility table, Components 4–5 authentication, the system diagram and workflow labels, the Configuration and Open-Questions sections, and Implementation Order Phases 4/5/7. | ADR-005 (accepted 2026-05-22) removed the peer-credential gate and the uid allow-list, but S-002's gate wording was never updated; PR #22 reconciles the artifact set. | None (gate already implemented per ADR-005; documentation reconciliation only). |
 | 2026-06-23 | `bob chat` redefined: it requires the running service and launches a supervised, directly-launched interactive `pi` session (exempt from pre-flight admission, ADR-010) instead of feeding the admin-socket interactive-chat adapter. The obsolete chat-subscription workflow was removed from the active spec text. | CR-002. | T-103, T-104, T-105, T-106, T-107, T-108 |
 | 2026-07-05 | Added the service-wide `pi_agent_cwd` config key (absolute-only; default = inherit launch cwd; existence handled lazily at spawn time — no startup gate); the supervisor spawns workers with an explicit resolved cwd; documented that a per-entry-cwd scheduled job spawns a dedicated worker (no warm-pool reuse), consumes a `max_processes` slot, and — when the pool is exhausted — skips that fire with a warning rather than blocking or evicting; clarified that `bob chat` ignores `pi_agent_cwd` and uses the invocation cwd. | CR-005. | T-119, T-121, T-122, T-126, T-127, T-129 |
+| 2026-08-06 | Added the service-wide skill install path config key (absolute-only; default = the ADR-009 `data` location alongside the extension; set-but-missing is fail-open with a warning, unlike the fail-closed `extension_path`). Removed skills from the `pi_agent_cwd` guidance, since skills no longer resolve from the working directory. | ADR-014 accepted 2026-08-06 / S-011. | S-011 breakdown tasks (Gate 2 pending). |

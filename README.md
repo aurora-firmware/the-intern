@@ -78,6 +78,9 @@ deliberately do not pin pi-agent versions).
 - **Interactive `pi` binary** — the supervised interactive-chat behaviour
   (TTY requirement, raw mode) was last verified against **pi 0.79.10**
   (T-103).
+- **Scheduled/periodic `pi` binary** — non-interactive `pi -p -a` invocation
+  by scheduled jobs (used by the `the-intern/email-skills` package) was last
+  verified against **pi 0.65.2** in a live deployment (T-139).
 
 If a different version of `@earendil-works/pi-coding-agent` is installed,
 `npm test` in `the-intern/pi-extension` will fail with a clear incompatibility

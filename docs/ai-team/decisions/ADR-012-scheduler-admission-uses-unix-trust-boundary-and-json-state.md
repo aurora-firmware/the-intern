@@ -106,7 +106,17 @@ Concretely:
    pi-agent, every tool call still passes through the existing S-004
    `tool_call` action authorization gate.
 7. **Prompt-file contents and the working directory are trusted, un-checked
-   inputs.** A schedule entry's `file` contents and its `cwd` originate in the
+   inputs.**
+
+   > **Amended (ADR-014, 2026-08-06).** This clause's reasoning cited skills
+   > among the content pi auto-loads from the working directory. For sessions
+   > bob spawns, skills are now supplied by bob through its extension and no
+   > longer come from the working directory. The requirement below is
+   > **unchanged** and still stands on the context-file and prompt-file
+   > grounds: operators MUST keep both the prompt file and the cwd owner-only.
+   > ADR-014 §7 places the skill install path under the same obligation.
+
+   A schedule entry's `file` contents and its `cwd` originate in the
    owner-only schedule store, so their *values* are trusted; bob performs **no**
    ownership or permission check on either the prompt file or the working
    directory before use. This is a deliberate relaxation, previously recorded
