@@ -206,6 +206,124 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-08-09
+Reproduction status: Confirmed. The bug report's own Evidence section already
+contains a complete, session-ID-backed live reproduction (session
+`9c118c50-98b3-4b39-ba32-6caccdbb0cc5`, 2026-08-08T15:29:00Z, plus 4 repeat
+ticks) showing `<available_skills>` omitting the deployed workspace's
+`.pi/skills/*` entries until the workspace path was manually added to
+`~/.pi/agent/trust.json`. This session corroborates that reproduction with
+independent code-, docs-, and environment-level evidence (below) rather than
+re-running the full live email-triage stack, because this diagnosis sandbox
+has no configured model-provider API credentials (a fresh attempt to run
+`pi --mode json -p "say hi"` in an isolated, untrusted scratch workspace
+failed immediately with `No API key found for the selected model`, before
+reaching the resource-loading/system-prompt stage). The underlying mechanism
+is not credential-dependent, so this does not weaken the diagnosis.
+
+Evidence captured:
+- `pi --version` in this environment: `0.80.3`, matching the bug's recorded
+  environment. `pi --help` confirms `--approve, -a` / `--no-approve, -na`
+  exist as documented, and `--mode rpc` is a valid mode.
+- Installed pi docs at this exact version corroborate the bug's quotations
+  verbatim: `~/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/docs/security.md:29`
+  and `docs/settings.md:16` — "Non-interactive modes (`-p`, `--mode json`,
+  and `--mode rpc`) do not show a trust prompt. Without an applicable saved
+  trust decision, `defaultProjectTrust: "ask"` and `"never"` ignore such
+  resources ... Use `--approve`/`-a` ... to override project trust for one
+  run."
+- `git grep -in "trust|approve|-a\\b|defaultProjectTrust" the-intern/service/`
+  shows every "trust" reference in bob's own codebase is its unrelated
+  ADR-012 Unix schedule-store trust boundary
+  (`bob-core/src/types/schedule.rs`, `admin-rpc/src/dispatch.rs`,
+  `bob/src/config.rs`, `bob/src/serve.rs`); nothing anywhere references pi's
+  `~/.pi/agent/trust.json`, `defaultProjectTrust`, or `--approve`/`-a`.
+- `the-intern/service/crates/pi-agent-supervisor/src/lib.rs:43-58`
+  (`Config::default()`): `worker_args: vec!["--mode", "rpc"]` — no
+  `--approve`/`-a`, and no other `Config` field exists to add one.
+- `the-intern/service/crates/pi-agent-supervisor/src/pool.rs:488-511`: both
+  `worker_process_config_for_session` (warm-pool workers) and
+  `worker_process_config_for_cwd_session` (used by
+  `acquire_session_with_cwd`, the scheduled-job/`--cwd` dispatch path from
+  T-122/T-127) build `args` from the same `cfg.worker_args.clone()` —
+  scheduled-job workers get identical, unconditional `["--mode", "rpc"]`
+  args, no code path anywhere adds a trust override.
+- `the-intern/docs/src/operator-guide/index.md:739-1058` ("Deploying the
+  `email-triage` scheduled job", steps 1-5, read in full): prepare mailbox,
+  deploy owner-only workspace, set `manager_address`, add S-004 rules +
+  `bob policy reload`, `bob schedule add --cwd`. No step mentions
+  `~/.pi/agent/trust.json`, `--approve`, `defaultProjectTrust`, or any pi
+  project-trust concept.
+- This environment's own `~/.pi/agent/settings.json` has no
+  `defaultProjectTrust` key (falls back to documented default `"ask"`), and
+  `~/.pi/agent/trust.json` contains exactly one unrelated entry — a fresh
+  scratch workspace is, as expected, untrusted.
+- Direct experiment (isolated `$HOME`, scratch workspace with a probe
+  `.pi/skills/testskill/SKILL.md`, never-trusted): `HOME=<isolated> pi
+  --mode json -p "say hi" --verbose` from that workspace immediately emitted
+  a `session` event and exited 1 with `No API key found for the selected
+  model` before any skill-loading/system-prompt output, and left no
+  `trust.json` in the isolated `$HOME` (consistent with the documented
+  "ask"-default silently-ignore-no-prompt-no-save behavior). Full
+  reproduction of the actual `<available_skills>` payload was not repeatable
+  here for lack of model-provider credentials — an environment limitation,
+  not evidence against the diagnosis.
+- `git status`/`git diff` confirm no production code was modified during
+  this diagnosis.
+
+Isolated fault:
+- `the-intern/service/crates/pi-agent-supervisor/src/lib.rs:47`
+  (`Config::default().worker_args`), consumed unconditionally by
+  `pool.rs`'s `worker_process_config_for_session`/
+  `worker_process_config_for_cwd_session` for every worker `bob` spawns,
+  including scheduled-job (`--cwd`) workers — args never include
+  `--approve`/`-a`, no `Config`/CLI/schedule-entry option exists to add one.
+- `the-intern/docs/src/operator-guide/index.md`'s "Deploying the
+  `email-triage` scheduled job" section (lines 739-1058) — the documented
+  procedure never instructs the operator to establish pi project trust for
+  the deployed workspace before registering the scheduled job.
+
+Root cause or fault hypothesis: pi's own non-interactive project-trust gate
+(`defaultProjectTrust: "ask"` by default, silently ignoring project-local
+resources — including `.pi/skills/*` — for `--mode rpc`/`-p`/`--mode json`
+sessions with no saved trust decision) combines with two gaps in
+`the-intern`'s deployment surface: (1) `pi-agent-supervisor` spawns every
+worker, including scheduled-job workers bound to an operator-supplied
+`--cwd`, with fixed `["--mode", "rpc"]` args and no way to pass
+`--approve`/`-a`; and (2) the operator guide's deployment procedure never
+tells the operator to pre-seed trust for the deployed workspace. A freshly
+deployed workspace is, by definition, never in `~/.pi/agent/trust.json`, so
+every scheduled tick silently runs with project-local skills permanently
+excluded, no error surfaced anywhere — matching the bug's confirmed live
+evidence exactly.
+
+Planned fix: Close the gap at the documentation layer — the minimal change
+consistent with pi's own security model (an explicit, reviewable,
+per-workspace operator decision, matching the workaround already validated
+live in this bug's Evidence section) rather than a code change that would
+make `bob` auto-trust *every* scheduled job's `--cwd` on every tick with no
+operator opt-in. Add an explicit trust-establishment step to
+`the-intern/docs/src/operator-guide/index.md`'s "Deploying the
+`email-triage` scheduled job" section (after workspace deployment, before
+`bob schedule add`), instructing the operator to add the deployed
+workspace's canonical absolute path to `~/.pi/agent/trust.json`
+(`{"<abs-workspace-path>": true}`) and restart `bob serve`. Flag the
+alternative (`pi-agent-supervisor` passing `--approve`/`-a` for
+scheduled-job workers, or exposing it as a config option) as a broader,
+security-relevant change widening bob's trust surface, for the
+reviewer/Architect to weigh if a code-level fix is preferred instead of (or
+in addition to) the doc fix.
+
+Planned verification: Per the bug's own Fix Verification block — deploy a
+brand-new workspace with no prior `~/.pi/agent/trust.json` entry, follow
+only the (updated) documented procedure end to end, and confirm the first
+tick's `before_provider_request`/system-prompt payload already includes the
+workspace's own `.pi/skills/*` entries with no manual `trust.json` edit
+needed outside the documented step. If a code-level fix is chosen instead,
+add/extend a `pi-agent-supervisor` unit test asserting scheduled-job
+(`acquire_session_with_cwd`) worker args include the trust-override flag,
+alongside `cargo test -p pi-agent-supervisor`.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
