@@ -357,3 +357,63 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-09
+
+PASS
+
+**Diagnosis→fix evidence chain.** `Diagnosis 1 — 2026-08-09` is complete: reproduction status
+confirmed (corroborates the bug report's own live session evidence with independent
+code/docs/environment evidence, and honestly notes the direct-experiment limit — no
+model-provider credentials in this sandbox — without weakening the diagnosis), evidence
+captured (pi version/docs quotes, `pi-agent-supervisor` `lib.rs`/`pool.rs` code paths, operator
+guide read in full, settings/trust.json state, a real isolated-`$HOME` experiment), an isolated
+fault (`Config::default().worker_args` unconditionally omitting `--approve`/`-a`, and the
+operator guide's deployment procedure never establishing pi project trust), and a root-cause
+hypothesis matching the bug's confirmed live evidence exactly. The fix contract (planned fix:
+documentation-layer trust-establishment step, not a code change; planned verification: live
+E2E redeploy or, if code chosen instead, a `pi-agent-supervisor` unit test) is unambiguous.
+
+**Stage 1 — bug criteria.** The fix implements exactly the contracted planned fix: a new step 3
+("Establish pi's project trust for the deployed workspace") in
+`the-intern/docs/src/operator-guide/index.md`'s "Deploying the `email-triage` scheduled job"
+section, positioned after workspace deployment (step 2) and before the S-004/`bob schedule add`
+steps (renumbered 4-6), instructing the operator to add the deployed workspace's canonical path
+to `~/.pi/agent/trust.json` and restart `bob serve`. This directly closes the isolated fault at
+the documentation layer and satisfies the bug's own Expected Behavior wording ("without any
+extra manual step beyond what the operator guide's deployment procedure already documents") —
+documenting the step is an in-scope resolution, not a workaround. The code-level alternative
+(`pi-agent-supervisor` passing `--approve`) was correctly left unimplemented; the Diagnosis Log
+explicitly scoped it as a broader, security-relevant trust-surface change to flag for
+reviewer/Architect judgment rather than commit to unilaterally. Reviewer judgment: the doc-only
+fix is an appropriate, minimal resolution for this bug as scoped (explicit, reviewable, per-workspace
+opt-in matches pi's own security model) and does not require Architect escalation; a follow-up
+task/bug could independently propose the code-level enforcement if desired, but that is optional
+hardening outside this bug's stated scope, not a gap in this fix. No unrelated behavior was
+added; only the operator guide and the new test script were touched (confirmed via
+`git diff dev-agent...bug/B-035-...` — two files only).
+
+**Fix Verification.** The bug file's own Fix Verification block calls for a full live
+end-to-end redeploy, which requires model-provider credentials unavailable in this
+environment — consistent with the Diagnosis Log's own noted limitation and explained in the
+Work Log rather than silently skipped. In its place, a regression test
+(`the-intern/docs/test_operator_guide_email_triage_trust.sh`) was written and verified: reran it
+red (5/5 failing) against the pre-fix doc content and green (5/5 passing) against the current
+tree; also ran it 20 consecutive times clean to confirm the developer's claimed SIGPIPE-flakiness
+fix holds. Also confirmed `mdbook build` succeeds on the edited page. The regression test is a
+reasonable, practical proxy for a docs-only fix given the credential constraint, and the Work
+Log names the outstanding live check as unchanged in status from diagnosis, owned by whoever
+next has live credentials — not a gap in this review.
+
+**Stage 2 — code quality.** Fix is minimal (one new operator-guide step plus required
+renumbering, one new regression-test script; no source code touched). Verified no other live doc
+or code references the old step numbers (`B-029`'s "Step 4" reference is a resolved,
+closed-lifecycle snapshot correctly left untouched, exactly as the Work Log states). The new test
+script is self-contained (temp file + `trap` cleanup, no shared state) and follows the existing
+`test_wire_contract.sh` (T-091) precedent for a docs-only "developer verification script" not
+wired into CI — consistent with that established pattern, not a gap introduced here. No secrets,
+no dead code, readable step content that accurately reflects the Diagnosis Log's evidence
+(cross-checked prose against the pi docs quotes and code paths cited in Diagnosis 1). Diagnosis
+Log fix contract matches the implementation exactly.
+
+Both stages pass. No blocking issues found.
