@@ -3,7 +3,7 @@ id: B-037
 title: S-004 worklog-append action rule denies a legitimate quoted-path heredoc 
   append during live email-triage validation
 severity: low
-status: in-progress
+status: resolved
 created: '2026-08-08'
 task: T-139
 ---
