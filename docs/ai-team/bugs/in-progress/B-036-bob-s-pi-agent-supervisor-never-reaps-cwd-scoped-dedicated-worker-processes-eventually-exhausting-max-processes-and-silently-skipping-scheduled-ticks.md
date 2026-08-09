@@ -335,6 +335,16 @@ The final entry serves as the handoff to the reviewer. -->
 
 ### Session 1 — 2026-08-09
 
+Read the TDD workflow, Rust guidance, and Diagnosis 1 before validating the existing candidate commit `bb92585`. The fix changes periodic-run completion from the detached stdout drain reaching EOF to observing the terminal `agent_end` RPC record. It keeps the worker protected while work is active and restarts its idle timer only once the terminal record arrives, so an otherwise persistent RPC worker is subsequently eligible for idle reaping.
+
+The included regression test models the fault directly: it acknowledges a prompt, emits `agent_end`, then keeps stdout open forever, and asserts the session is reaped after the configured idle timeout. No further source edits were needed; process reuse and shutdown behavior were inspected but did not contribute to this stale in-flight-state defect.
+
+Verification passed: the focused regression test passed (`1 passed; 0 failed`), followed by `cargo test -p pi-agent-supervisor` (`65 passed; 0 failed`). Remaining implementation work: none.
+
+Obstacles Encountered: None. An unrelated untracked `pr-42-review.md` was left untouched.
+
+### Session 1 — 2026-08-09
+
 Implemented the fix for B-036 following the Diagnosis Log's fix contract (isolated fault: `ActiveSessionWorker::is_periodic_run_in_flight()` in `the-intern/service/crates/pi-agent-supervisor/src/pool.rs`, treating "drain task hasn't hit physical EOF" as "run still active").
 
 Before writing any test, I re-derived the exact implementation shape rather than applying the Diagnosis's literal wording ("update last-activity on every drained record") verbatim, because a literal reading would have broken the existing regression test `send_prompt_and_drain_keeps_an_in_flight_run_alive_past_idle_reap_timeout` — that test proves a periodic run must stay protected through a long *silent* period (no stdout activity at all) shorter than the run's own duration but longer than `idle_reap_timeout`. Pure "time since last activity" can't distinguish "silently still computing" from "genuinely finished and idle forever" — the exact ambiguity that caused the original bug. Instead I used the Diagnosis's own live-repro evidence (the real `pi --mode rpc` protocol's documented terminal record `agent_end`, emitted after `agent_start`/`turn_start`/`message_*`/`turn_end`) as an explicit semantic completion signal: the background stdout drain task now inspects each drained line for `"type":"agent_end"` and flips a shared `Arc<AtomicBool>` the first time it sees one. `ActiveSessionWorker::refresh_drain_state()` consumes that flag exactly once per run, at which point it resets `last_prompt_activity` to "now" and the worker leaves the "in-flight" state — `reap_idle_and_surplus()` then applies the normal `idle_reap_timeout` math to it like any other worker, using the existing filter/select machinery unchanged. Physical EOF (the child actually exiting) is still handled as a second, independent completion path for non-`pi` test doubles that do exit.
