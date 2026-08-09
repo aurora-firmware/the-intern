@@ -30,10 +30,9 @@ Use this exact append-command shape for the write step:
 
 ```bash
 TODAY=$(date +%F)
-TIME=$(date +%H:%M)
 mkdir -p worklog
-cat >> worklog/$TODAY.md <<EOF
-## $TIME — <subject> (from <sender>)
+cat >> worklog/$TODAY.md <<'EOF'
+## <HH:MM> — <subject> (from <sender>)
 
 - Done: <what was done for this message this run>
 - Left: <what is still outstanding, or "nothing" if fully resolved>
@@ -49,7 +48,11 @@ redirect as `>> "worklog/$TODAY.md"` or as an absolute workspace path changes
 the command text enough to miss the rule even though the append is otherwise
 legitimate. This unquoted form is still safe here because `TODAY` comes from
 `date +%F`, which yields only the calendar date characters used in the
-worklog filename.
+worklog filename. Keep the heredoc delimiter quoted (`<<'EOF'`): substitute
+the actual time, subject, sender, and outcome text into its body before
+running the command. The body contains arbitrary email-derived text, so
+quoting the delimiter keeps any `$()`, backticks, backslashes, or variable
+references in that text inert rather than allowing the shell to expand them.
 
 ## Per-message entry format
 
