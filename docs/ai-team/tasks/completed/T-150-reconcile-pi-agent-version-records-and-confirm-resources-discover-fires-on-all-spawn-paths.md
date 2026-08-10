@@ -2,7 +2,7 @@
 id: T-150
 title: Reconcile pi-agent version records and confirm resources_discover fires 
   on all spawn paths
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-09'
