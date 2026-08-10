@@ -81,6 +81,22 @@ Obstacles Encountered:
 - The task's own `## Verification` grep for `"claude/"` was already trivially true before any edit, because line 7's pre-existing text `` `.claude/skills` `` contains that substring — so it could not be used as a meaningful red/green signal for AC-1. Used more specific greps (`package-claude-skills.sh`, `claude/skills/`, `diary-discipline skill`) as the actual red/green checks for that cycle instead, and still ran the literal task verification block at the end for the record.
 - No `pi` binary or live credentials were used or needed — pure documentation task, same as T-161.
 
+### Session 2 — 2026-08-10
+
+Read the Work Log (Session 1) and the `### Review Verdict — 2026-08-10` FAIL entry. The verdict identified two issues in the AC-1/AC-2 rewrite: (1) a factual attribution defect repeated at four locations (`README.md:6, 64, 76, 398`) crediting `T-155/T-156` for the canonical `worklog` skill's origin, when git history (`9f10a27`, T-154's merge) shows T-154 actually extracted it, and T-156's sole commit (`55d819c`) only touches `.pi/skills/worklog/` packaging output, never canonical `skills/worklog/`; (2) a minor leftover "deployed copy" phrase at `README.md:192` inconsistent with the section's own rewritten "workspace" terminology.
+
+Fixed both issues in a single commit (`546d1ef`), as the review explicitly asked to bundle the minor phrasing fix with the citation fix:
+- Line 6 (intro paragraph): `S-011/T-155/T-156` → `S-011/T-154/T-155`.
+- Line 64 (package-layout tree, `skills/` line): `T-151/T-152/T-155/T-156` → `T-151/T-152/T-154/T-155`.
+- Line 76 (package-layout tree, `worklog/` line): `(S-011/T-155/T-156)` → `(S-011/T-154/T-155)`.
+- Line 398 (S-004 action-rules narrative): `` (`T-155`/`T-156`) `` → `` (`T-154`/`T-155`) ``.
+- Line 80 (`.pi/skills/` packaging-target citation, `T-153/T-156`) was deliberately left unchanged — the review confirmed this one is correct, since T-156 genuinely extended the pi packaging script to include `worklog`.
+- Line 192: `# then edit only the deployed copy's config/email-triage.toml and set` → `# then edit only the job workspace's config/email-triage.toml and set`, matching the operator guide's equivalent step-3 wording and the rest of the "Verified install-path deployment procedure" section's consistent use of "workspace." Left the one remaining "deployed copy" occurrence (line 478, T-139/T-140 historical narrative) untouched since it's accurate past-tense prose, not present-tense guidance.
+
+Re-ran the task's literal `## Verification` block after the fix — all three commands pass. Confirmed via `git diff --stat dev-agent...task/T-162-email-skills-readme-install-path` that only `the-intern/email-skills/README.md` was modified across the entire branch; the task lifecycle file was not touched on this branch. No new tests were needed beyond the existing grep-based verification precedent already established in Session 1, since this cycle only corrects factual citations and one phrase, with no new behavior or control flow to cover.
+
+Obstacles Encountered: none — the review verdict gave exact line numbers and replacement text for all five edits, so no diagnostic work was required.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
