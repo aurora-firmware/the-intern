@@ -24,7 +24,8 @@ run_test() {
 # Work in an isolated copy of the canonical source so tests never mutate the
 # repository's own tracked claude/ output.
 WORK_DIR="$(mktemp -d)"
-trap 'rm -rf "$WORK_DIR"' EXIT
+WORK_DIR2="$(mktemp -d)"
+trap 'rm -rf "$WORK_DIR" "$WORK_DIR2"' EXIT
 cp -r "$PACKAGE_DIR/skills" "$WORK_DIR/skills"
 cp "$SCRIPT" "$WORK_DIR/package-claude-skills.sh"
 chmod +x "$WORK_DIR/package-claude-skills.sh"
@@ -75,6 +76,36 @@ test_ac3_regeneration_removes_stale_generated_files() {
 }
 
 test_ac3_regeneration_removes_stale_generated_files
+
+# AC-2: the generated package lives at a new location within
+# the-intern/email-skills/ (claude/skills/, verified above) and the script
+# must never modify any file under the-intern/bob-companion/claude/ — a
+# different plugin with a different audience/release cadence. Mirrors the
+# real repository's sibling layout (the-intern/email-skills/ next to
+# the-intern/bob-companion/) in an isolated copy so this proves it without
+# touching the real repository tree.
+test_ac2_does_not_modify_bob_companion_claude() {
+  local ok=0
+  local repo_root
+  repo_root="$(cd "$PACKAGE_DIR/../.." && pwd)"
+  mkdir -p "$WORK_DIR2/the-intern/email-skills"
+  cp -r "$PACKAGE_DIR/skills" "$WORK_DIR2/the-intern/email-skills/skills"
+  cp "$SCRIPT" "$WORK_DIR2/the-intern/email-skills/package-claude-skills.sh"
+  chmod +x "$WORK_DIR2/the-intern/email-skills/package-claude-skills.sh"
+  cp -r "$repo_root/the-intern/bob-companion" "$WORK_DIR2/the-intern/bob-companion"
+
+  local before_snapshot="$WORK_DIR2/bob-companion-before.txt"
+  local after_snapshot="$WORK_DIR2/bob-companion-after.txt"
+  ( cd "$WORK_DIR2/the-intern/bob-companion" && find . -type f -exec sha256sum {} \; | sort ) > "$before_snapshot"
+
+  ( cd "$WORK_DIR2/the-intern/email-skills" && ./package-claude-skills.sh ) || ok=1
+
+  ( cd "$WORK_DIR2/the-intern/bob-companion" && find . -type f -exec sha256sum {} \; | sort ) > "$after_snapshot"
+  diff "$before_snapshot" "$after_snapshot" >/dev/null || ok=1
+  run_test "AC-2: script never modifies bob-companion/claude" "$ok"
+}
+
+test_ac2_does_not_modify_bob_companion_claude
 
 echo ""
 echo "Results: $pass_count passed, $fail_count failed"
