@@ -2,7 +2,7 @@
 id: T-163
 title: Add Claude packaging target generating a Claude-shaped skill package from
   the canonical source
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-09'
