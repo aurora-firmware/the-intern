@@ -74,6 +74,26 @@ test_ac4_regeneration_removes_stale_generated_files() {
 
 test_ac4_regeneration_removes_stale_generated_files
 
+# AC-3: the generated .pi/skills output stays committed to version control
+# with unchanged tracked status (this is a regression guard on repository
+# configuration, not on the script itself — the script has no say over what
+# git tracks). Runs against the real repository, not the isolated WORK_DIR.
+test_ac3_generated_output_stays_tracked_and_not_ignored() {
+  local ok=0
+  local repo_root
+  repo_root="$(cd "$PACKAGE_DIR/../.." && pwd)"
+  for generated in \
+    the-intern/email-skills/.pi/skills/himalaya/SKILL.md \
+    the-intern/email-skills/.pi/skills/email-triage/SKILL.md
+  do
+    git -C "$repo_root" check-ignore -q "$generated" && ok=1
+    git -C "$repo_root" ls-files --error-unmatch "$generated" >/dev/null 2>&1 || ok=1
+  done
+  run_test "AC-3: generated .pi/skills output stays git-tracked, not ignored" "$ok"
+}
+
+test_ac3_generated_output_stays_tracked_and_not_ignored
+
 echo ""
 echo "Results: $pass_count passed, $fail_count failed"
 [ "$fail_count" -eq 0 ] || exit 1

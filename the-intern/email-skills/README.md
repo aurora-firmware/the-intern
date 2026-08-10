@@ -56,20 +56,28 @@ required for discovery to work at all, and is now the recorded form.
 ```
 the-intern/email-skills/
 ├── README.md                       # this file
+├── package-pi-skills.sh             # T-153: generates .pi/skills/ below from skills/ below
+├── skills/                          # T-151/T-152: canonical, vendor-neutral skill source —
+│   │                                #   content exists here exactly once (S-011 Design Principles)
+│   ├── himalaya/                    # generic himalaya CLI-reference skill
+│   │   ├── SKILL.md                 #   no triage policy — reusable by any pi session
+│   │   └── references/              #   sharing this package's cwd (S-010 Design Principles)
+│   └── email-triage/                # triage policy skill (core loop + taxonomy)
+│       ├── SKILL.md
+│       └── references/
+│           ├── worklog.md           # diary format + skip-tolerant reconciliation rules
+│           ├── escalation.md        # manager-escalation rules and hard-stop behavior
+│           └── categories/          # taxonomy index + one workflow file per starter category
+│               └── README.md        #   (newsletter-bulk, automated-notification,
+│                                    #   suspected-spam, direct-request, meeting-scheduling)
 ├── .pi/
-│   └── skills/
-│       ├── himalaya/                # T-132: generic himalaya CLI-reference skill
-│       │   ├── SKILL.md             #   no triage policy — reusable by any pi session
-│       │   └── references/          #   sharing this package's cwd (S-010 Design Principles)
-│       └── email-triage/            # T-135/T-136: triage policy skill (core loop + taxonomy)
-│           ├── SKILL.md
+│   └── skills/                      # T-153: generated pi packaging target — produced solely
+│       ├── himalaya/                #   by running package-pi-skills.sh against skills/ above;
+│       │   ├── SKILL.md             #   never hand-edited. Committed tracked output (no CI or
+│       │   └── references/          #   install-time build step regenerates it), so it must stay
+│       └── email-triage/            #   in sync with skills/ by re-running the script and
+│           ├── SKILL.md             #   committing the result whenever skills/ changes.
 │           └── references/
-│               ├── worklog.md       # T-133: diary format + skip-tolerant reconciliation rules
-│               ├── escalation.md    # T-134: manager-escalation rules and hard-stop behavior
-│               └── categories/      # T-136/T-137/T-138: taxonomy index + one workflow file
-│                   └── README.md    #   per starter category (newsletter-bulk,
-│                                    #   automated-notification, suspected-spam,
-│                                    #   direct-request, meeting-scheduling)
 ├── config/
 │   └── email-triage.example.toml    # T-134: shipped template (manager_address documented,
 │                                     #   no real address). The real config/email-triage.toml
@@ -78,8 +86,25 @@ the-intern/email-skills/
                                       #   written only in the deployed copy — never committed.
 ```
 
-Later tasks (T-132–T-138) add files at the paths shown above without editing
-this section.
+Later tasks add files at the paths shown above without editing this section.
+
+**Regenerating the pi package.** `.pi/skills/` is generated, not hand-authored:
+it carries no independent copy of skill content, only the canonical `skills/`
+tree's files plus the one frontmatter field (`allowed-tools: Read Bash`) that
+pi's skill format needs and the canonical source deliberately omits (S-011
+Design Principles: canonical content stays vendor-neutral). After editing
+anything under `skills/`, regenerate and commit `.pi/skills/` from this
+directory:
+
+```bash
+cd the-intern/email-skills && ./package-pi-skills.sh
+```
+
+The script regenerates each packaged skill's `.pi/skills/<name>/` tree from
+scratch, so a file removed from `skills/<name>/` does not linger as stale
+output. `git diff --exit-code HEAD -- .pi/skills` after committing should be
+clean; a non-empty diff there means `.pi/skills/` has drifted from `skills/`
+and needs the script re-run.
 
 ## This package is the repository source of truth only
 
