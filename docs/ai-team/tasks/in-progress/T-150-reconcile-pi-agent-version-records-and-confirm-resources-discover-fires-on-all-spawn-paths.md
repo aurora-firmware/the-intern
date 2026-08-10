@@ -102,6 +102,46 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-10
+
+Read the task file and its dependency chain (S-011 §"pi-agent version" Configuration Requirement, ADR-014, B-035 resolved, T-131's precedent in `the-intern/email-skills/README.md`) before writing anything. This task had no prior Work Log entries.
+
+Confirmed the installed `pi` binary in this environment is `0.80.3` and that this environment has working model-provider credentials (unlike B-035's diagnosis sandbox), so live probing was possible rather than doc-inference-only.
+
+Reconstructed each of bob's three spawn paths' exact `pi` invocation shape directly from the Rust source (not guessed): pooled RPC worker and scheduled-periodic both build `pi --mode rpc --extension <path>` (`pi-agent-supervisor/src/process.rs` `RpcWorkerProcess::spawn`, `pool.rs` `worker_process_config_for_session`/`_for_cwd_session`), differing only in the `current_dir` passed to the child (scheduled uses the schedule entry's `--cwd`, never trust-seeded, matching B-035's exact scenario); interactive chat builds `pi --extension <path>` with no `--mode` flag at all (`process.rs` `InteractiveProcess::spawn`, `serve.rs` `build_interactive_session_config`, confirmed via its own unit test asserting `args.is_empty()`). None of the three pass `--approve`/`-a`.
+
+Built a throwaway probe extension (never committed, per the task's explicit instruction and the T-131 precedent) that registers `resources_discover` (logs firing + contributes a marker `skillPaths` entry) and `before_provider_request` (dumps the rebuilt system prompt so the marker skill's presence in `<available_skills>` can be checked). Iterated through two false leads before landing on a working test: (1) the extension factory must be a default export, not a named `activate` export — pi's loader error message named the exact requirement; (2) the first correctness check looked for the marker's SKILL.md *body* text in the system prompt and wrongly read as a negative — only a skill's frontmatter `name`/`description` appear in `<available_skills>` pre-first-turn, the body loads on demand via `read`, so the check was switched to the skill's registered name and confirmed with a `--skill` CLI-flag control run first (proving the marker skill itself was well-formed) before trusting the `resources_discover`-driven result.
+
+Ran the probe extension through all three reconstructed spawn shapes: pooled-RPC-worker shape from `/home/daneel/projects/the-intern` (`--mode rpc`), scheduled-periodic shape from a freshly-created directory confirmed absent from `~/.pi/agent/trust.json` (`--mode rpc`, per the task's mandatory untrusted-cwd condition), and interactive-chat shape (`--extension <path>`, no `--mode`) driven through a real pty via a small Python `pty.spawn`-based driver script (bash tool has no real TTY) since `bob chat`'s ink TUI needs raw-mode terminal semantics. All three fired `resources_discover` (confirmed via stderr) and all three surfaced the contributed marker skill before the first turn — for the two `--mode rpc` runs via the `before_provider_request` event's `payload.instructions` containing `<skill><name>t150-probe-marker</name>...`, and for interactive chat via the rendered `[Skills] gh-cli, git-conventions, pr-review, t150-probe-marker` startup banner. Critically, the scheduled-periodic-shape run from the untrusted cwd still worked — extension-contributed `resources_discover` paths are evidently not subject to the same non-interactive project-trust gate that `B-035` found blocks `.pi/skills/`-based auto-discovery, so there is no gap to flag for T-157–T-160.
+
+Updated the root `README.md`'s "pi-agent Version Compatibility" section: kept the extension-API pin at `0.75.3` unchanged (required verbatim by `pi-agent-compat.test.ts`'s literal/regex assertions) but explicitly reframed it as a compile-time API-surface pin, decoupled from the runtime CLI version; reconciled the two previously-disagreeing runtime records (interactive `0.79.10`/T-103, scheduled `0.65.2`/T-139) plus the previously-unrecorded pooled-RPC-worker path into one shared, revalidated record — `pi 0.80.3` — and recorded the `resources_discover`/system-prompt/untrusted-cwd verification result and its "no blocker" conclusion inline. Confirmed the AC-1 grep gate was red before the edit (`resources_discover` absent from README.md) and green after, then ran the full verification block (`npm test` in `the-intern/pi-extension`) green (38/38 tests). Single commit for the cycle, since all three ACs are satisfied by one cohesive edit backed by the probe evidence gathered beforehand: `a1ba007 docs(pi-agent): reconcile version records and verify resources_discover`.
+
+While reconciling the version numbers, found that `the-intern/bob-companion/claude/skills/bob-setup/SKILL.md` duplicates the old interactive-pi number (`0.79.10`) directly in its own prose rather than only deferring to the root README, and is now stale relative to this task's reconciled `0.80.3` record. That file is outside this task's Files to Touch (`README.md` only), so rather than editing it, filed `B-038` (severity low) via the `new-bug` skill with full evidence and a fix-verification grep. The loop has committed that bug file to `dev-agent` (`cf19328 chore(bugs): file B-038 — stale interactive pi version in bob-setup skill`).
+
+Nothing remains for this task's own scope: all three ACs are met and verified, the probe extension/skill artifacts are outside the repository tree and were never committed, and no other stale version references exist in tracked docs (checked `the-intern/email-skills/README.md`'s `0.65.2` mention separately — it's a historical validation note that already explicitly defers to the root README as canonical, so it was correctly left untouched).
+
+Result: PASS
+
+Summary:
+- All three acceptance criteria met: reconciled the three disagreeing pi-agent version records into the root README's "pi-agent Version Compatibility" section (extension-API pin kept at 0.75.3 as compile-time-only, runtime CLI unified at 0.80.3 across all three bob spawn paths), and live-verified (with a throwaway, never-committed probe extension, against the actual reconstructed invocation shape of each spawn path) that `resources_discover` fires and a contributed skill path reaches the system prompt's `<available_skills>` on all three, including the mandatory untrusted-cwd scheduled-periodic case. No blocker found for T-157–T-160.
+
+Artifacts:
+- `README.md` — reconciled "pi-agent Version Compatibility" section (commit `a1ba007` on `task/T-150-reconcile-pi-agent-version-records`)
+- `docs/ai-team/bugs/open/B-038-bob-setup-companion-skill-duplicates-a-now-stale-interactive-pi-version-number.md` — new bug report for an out-of-scope stale-doc defect discovered during this task; committed to `dev-agent`
+
+Evidence:
+- `grep -q "pi-agent Version Compatibility" README.md` → pass
+- `grep -q "resources_discover" README.md` → red before edit, green after
+- `cd the-intern/pi-extension && npm test` → 2 files, 38/38 tests passing (both before, unaffected, and after the edit)
+- Live probe runs (this session, pi 0.80.3, real model credentials): pooled-RPC-worker shape (`pi --mode rpc --extension <probe>` from repo root) — `resources_discover` fired, marker skill present in `before_provider_request` instructions; scheduled-periodic shape (`pi --mode rpc --extension <probe>` from a fresh directory confirmed absent from `~/.pi/agent/trust.json`) — same result; interactive-chat shape (`pi --extension <probe>`, no `--mode`, driven via a real pty) — `resources_discover` fired (stderr) and marker skill appeared in the rendered `[Skills]` startup banner before any turn
+
+Obstacles Encountered:
+- `pi`'s `--extension` factory function contract wasn't obvious from the extension-events doc alone — had to read the actual load-error message (`Extension does not export a valid factory function`) and `bob.ts`'s own `export default function` shape to get the probe extension loading at all.
+- The first correctness check for "did the contributed skill reach the prompt" was wrong: it checked for the SKILL.md body's marker text in `before_provider_request`, which is never present pre-first-turn (only `name`/`description` populate `<available_skills>`; body loads on demand). Caught via a `--skill` CLI-flag control run before trusting a false negative from `resources_discover`.
+- `bob chat`'s interactive-mode invocation shape has no real TTY available through the bash tool; built a small Python `pty.spawn`-based driver to give `pi` a pseudo-terminal for that one probe run rather than skipping the interactive path.
+- Discovered `the-intern/bob-companion/claude/skills/bob-setup/SKILL.md` now disagrees with the reconciled README record; out of this task's Files to Touch, so filed `B-038` instead of editing it.
+- Live probing used real API credits (small, on the order of $0.01 per short prompt across ~4 runs) since this environment has working model-provider credentials, unlike the B-035 diagnosis sandbox.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
