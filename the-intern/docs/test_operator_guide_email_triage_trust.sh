@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
-# Test: "Deploying the email-triage scheduled job" section must document an
-# explicit pi project-trust-establishment step for the deployed workspace,
-# positioned after the workspace is deployed and before the scheduled job is
-# registered with `bob schedule add`.
+# Test: "Deploying the email-triage scheduled job" section must document that
+# no pi project-trust step is required for the job's deployed working
+# directory under the skill install-path deployment model, and must explain
+# why (T-161 / S-011).
 #
-# B-035: pi's non-interactive `--mode rpc` workers (what
-# `pi_agent_supervisor` always spawns) never show a trust prompt. Without a
-# saved decision in `~/.pi/agent/trust.json`, a freshly deployed workspace's
-# `.pi/skills/` content (email-triage, himalaya) is silently ignored on every
-# scheduled tick, with no error surfaced anywhere. The deployment procedure
-# must document the trust-establishment step so operators are not left to
-# discover this undocumented manual workaround themselves.
+# B-035 (resolved) found that pi's non-interactive `--mode rpc` workers
+# silently ignore a deployed workspace's `.pi/skills/` tree without a saved
+# `~/.pi/agent/trust.json` decision, and the original fix added an explicit
+# trust-establishment step to this section. T-150 later confirmed that the
+# extension-contributed `resources_discover` skill path bob now supplies
+# instead (T-159/T-160) reaches the system prompt from an untrusted working
+# directory on every spawn path bob uses, including the scheduled-periodic
+# one this job runs on. Combined with T-161 removing the per-job
+# `.pi/skills/` copy entirely, the deployed workspace no longer carries any
+# project-local resource pi's project-trust gate covers, so the old trust
+# step is gone, replaced by an explanation of why it is no longer needed.
+# This test guards against that explanation silently disappearing, or the
+# old trust.json-editing step being silently reintroduced without updating
+# it.
 
 set -euo pipefail
 
@@ -52,36 +59,61 @@ check_present_in_section() {
     fi
 }
 
+check_absent_from_section() {
+    local desc="$1"
+    local pattern="$2"
+    if grep -qF "$pattern" "$SECTION_FILE"; then
+        echo "FAIL: $desc"
+        echo "      Pattern unexpectedly found in section: $pattern"
+        FAIL=$((FAIL + 1))
+    else
+        echo "PASS: $desc"
+        PASS=$((PASS + 1))
+    fi
+}
+
 first_matching_line() {
     grep -nF "$1" "$SECTION_FILE" | head -1 | cut -d: -f1
 }
 
-echo "=== Deploying the email-triage scheduled job — project-trust step ==="
+echo "=== Deploying the email-triage scheduled job — skill install-path model ==="
 echo ""
 
-check_present_in_section "pi project trust step documented" "project trust"
-check_present_in_section "trust.json path referenced" "trust.json"
-check_present_in_section "restart bob serve after editing trust.json documented" "Restart \`bob serve\`"
+check_present_in_section "explains no pi project-trust step is required" \
+    "No pi project-trust step is required for this workspace"
+check_present_in_section "cites B-035 for the historical trust-step context" \
+    "B-035"
+check_present_in_section "cites T-150's untrusted-cwd resources_discover confirmation" \
+    "T-150"
+check_present_in_section "explains skills reach the session via resources_discover" \
+    "resources_discover"
+check_absent_from_section "no longer instructs editing ~/.pi/agent/trust.json as an active step" \
+    "Add the deployed workspace's canonical absolute path to"
+check_absent_from_section "no longer instructs restarting bob serve for trust decisions" \
+    "Restart \`bob serve\` afterward"
+check_absent_from_section "no longer copies the whole package into the per-job workspace" \
+    "cp -r the-intern/email-skills/."
 
-# The trust step must be positioned after workspace deployment and before
-# the scheduled job is registered.
-DEPLOY_LINE="$(first_matching_line "Deploy an owner-only workspace copy")"
-TRUST_LINE="$(first_matching_line "trust.json")"
-SCHEDULE_ADD_LINE="$(first_matching_line "bob schedule add")"
+# The no-trust-step explanation must sit where the removed trust step used
+# to live: after the workspace is deployed and before the S-004 action rules
+# are added.
+DEPLOY_LINE="$(first_matching_line "Deploy an owner-only working directory")"
+NO_TRUST_LINE="$(first_matching_line "No pi project-trust step is required")"
+ACTION_RULES_LINE="$(first_matching_line "Add the S-004 action rules")"
 
-if [ -n "${DEPLOY_LINE:-}" ] && [ -n "${TRUST_LINE:-}" ] && [ "$TRUST_LINE" -gt "$DEPLOY_LINE" ]; then
-    echo "PASS: trust step appears after the workspace-deployment step"
+if [ -n "${DEPLOY_LINE:-}" ] && [ -n "${NO_TRUST_LINE:-}" ] && [ "$NO_TRUST_LINE" -gt "$DEPLOY_LINE" ]; then
+    echo "PASS: the no-trust-step explanation appears after the workspace-deployment step"
     PASS=$((PASS + 1))
 else
-    echo "FAIL: trust step must appear after the workspace-deployment step"
+    echo "FAIL: the no-trust-step explanation must appear after the workspace-deployment step"
     FAIL=$((FAIL + 1))
 fi
 
-if [ -n "${SCHEDULE_ADD_LINE:-}" ] && [ -n "${TRUST_LINE:-}" ] && [ "$TRUST_LINE" -lt "$SCHEDULE_ADD_LINE" ]; then
-    echo "PASS: trust step appears before bob schedule add"
+if [ -n "${ACTION_RULES_LINE:-}" ] && [ -n "${NO_TRUST_LINE:-}" ] && [ "$NO_TRUST_LINE" -lt "$ACTION_RULES_LINE" ]; then
+    echo "PASS: the no-trust-step explanation appears before the S-004 action-rules step"
     PASS=$((PASS + 1))
 else
-    echo "FAIL: trust step must appear before bob schedule add"
+    echo "FAIL: the no-trust-step explanation must appear before the S-004 action-rules step"
     FAIL=$((FAIL + 1))
 fi
 
