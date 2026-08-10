@@ -130,3 +130,106 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-10
+
+PASS
+
+**Stage 1 — Acceptance criteria.** All four criteria are met, independently
+re-verified beyond the diff and beyond re-running the literal grep/script
+checks — the actual ephemeral validation environment (`skill-install-path/`,
+`job-workspace/`, `chat-cwd/`, `chat-cwd-2/`, `bob-dev/`) and the real `pi`
+session transcripts and `bob` audit trail it produced were still present on
+disk and were inspected directly:
+
+- **AC-1** (single install-path copy, no per-workspace copy): confirmed by
+  direct filesystem inspection — `job-workspace/` holds only
+  `worklog/2026-08-10.md` and `config/email-triage.toml`; `chat-cwd/` and
+  `chat-cwd-2/` hold only their own `worklog/2026-08-10.md`; the shared
+  `skill-install-path/` holds exactly `himalaya/`, `email-triage/`,
+  `worklog/` (26 `[[policy.action_rules]]` blocks in the live
+  `bob-dev/config/bob/config.toml`, an exact match to the 26 blocks in the
+  task-branch README) — no skill file anywhere outside the install path.
+- **AC-2** (scheduled job, `--cwd` with no skill files, real triage +
+  worklog journal): confirmed via the real pi session transcript
+  (`.../t164/job-workspace`, `2026-08-10T20-24-00-685Z_...jsonl`) — the
+  session read skills only from the install path, classified the "Holded"
+  fixture, moved it to `INBOX.Notifications` via `himalaya`, and appended a
+  worklog entry into the job's own `--cwd`. Independently confirmed against
+  the live mailbox itself: `INBOX.Notifications` holds exactly the one
+  Holded message, and no new message exists in either Sent folder — no test
+  mail was sent.
+- **AC-3** (interactive `bob chat`, unrelated cwd, worklog journal via the
+  worklog skill): confirmed via two real pty-driven session transcripts
+  (`chat-cwd` at 22:13, `chat-cwd-2` at 22:18) — both loaded
+  `worklog/SKILL.md` + `references/*.md` from the install path and wrote a
+  correctly-timed entry (`## 22:13 —`, `## 22:18 —`) into their own cwd.
+- **AC-4** (single stable rule set admits every genuine call, no denied
+  call worked around): confirmed against `bob-dev/state/bob/audit.jsonl` —
+  exactly 7 recorded denials (4 at 20:13, matching the claimed compound
+  if/then, `ls -ld worklog`, standalone `date +%H:%M`, and `printf`
+  denials in the first `chat-cwd` run; 1 at 20:24 and 2 at 20:25, matching
+  the claimed `find`, `edit`, and ad hoc Python `bash` denials in the
+  `job-workspace` run). The final `config.toml` contains no `edit`-tool
+  rule and no rule admitting the denied `find`/Python-script shapes — the
+  three non-rule-set denials were genuinely left denied, not worked around.
+  The two rule-set gaps really were gaps, and really are closed: the
+  broadened `*ls *worklog*` pattern is exercised successfully later in the
+  `job-workspace` run (`ls -1 worklog ...`, which the old `*ls worklog*`
+  pattern would not have matched), and the new `date +%H:%M*` rule is
+  exercised successfully by the same run's standalone `date +%H:%M` call
+  (returns `22:25`, immediately after the entry was mis-written with a
+  `00:00` placeholder — this is the exact B-039 evidence).
+
+**Documentation accuracy checks (per the review request):**
+
+1. The two rule-set fixes in `email-skills/README.md` and
+   `docs/src/operator-guide/index.md` are identical in substance (same old
+   pattern → same new pattern, same new rule, same task/bug citations) and
+   both are real, verified gaps per the audit-trail/transcript evidence
+   above — not just asserted.
+2. B-039 read directly: title, summary, evidence (session JSONL path,
+   audit-trail denial reasons/timestamps, final worklog file content), and
+   suspected area (`entry-format.md` + `email-triage/references/worklog.md`)
+   are a faithful, accurate description of what the Work Log and the raw
+   transcripts show. Independently confirmed `entry-format.md`'s own
+   append-command template only computes `TODAY=$(date +%F)` for the
+   filename and never instructs a `date +%H:%M` lookup for the `<HH:MM>`
+   header — B-039's root-cause claim is correct, not inferred.
+3. No live mailbox side effects: `INBOX.Notifications` holds exactly the
+   one historical fixture message; neither Sent folder has any new message.
+   The claimed "12 IDs restored" is independently corroborated by the
+   validation session's own `real-unseen-ids.txt` snapshot (`123 124 125
+   ... 134`). A live re-check right now shows only 10 of those 12 IDs
+   still unseen (123 and 124 are now Seen) — but no `pi`/`bob` session
+   transcript exists after the T-164 validation run that touched the
+   mailbox, so this is external drift on what the Developer's own Work Log
+   already flags as "the account's real, actively-used inbox," not a T-164
+   side effect.
+4. AC-4 is genuinely addressed (see above), not just asserted — the
+   distinction the README/operator-guide draws between "real rule-set
+   gaps" (closed) and "correctly-denied calls that weren't rule-set gaps"
+   (left denied) matches the audit trail and the final live policy config
+   exactly.
+
+**Stage 2 — Code quality (documentation).** Correctness and consistency
+verified: the two touched files agree with each other and with the live
+evidence; `quickstart/index.md` and the trust-step script were correctly
+left untouched (`git diff --stat` confirms only the two intended files
+changed); the trust-step script re-run here still passes 9/9 on the
+task-branch version of the file it wasn't required to touch. `T-154`/`T-155`
+citations check out against the actual completed task files. No unrelated
+edits, no scope creep, Files-to-Touch respected (including the Gate-2
+sanctioned operator-guide/quickstart correction-only touches).
+
+**Minor, non-blocking observation:** the sentence "re-running the
+interactive session with the fixed rule set produced zero denials" (both
+files) is literally true but slightly overstates what that specific
+re-run exercised — neither new rule was actually hit in `chat-cwd-2`
+(the model used a `find worklog` compound check and a combined command
+that both happened to already match pre-existing, unrelated catch-all
+rules). The two new rules are still genuinely validated, just by the
+`job-workspace` run's standalone calls rather than by that cited re-run.
+Not worth a FAIL cycle; flagging for awareness only.
+
+Next owner: Development Loop.
