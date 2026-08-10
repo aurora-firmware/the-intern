@@ -89,3 +89,23 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-10
+
+PASS
+
+**Stage 1 — Acceptance Criteria:**
+- AC-1 (canonical `SKILL.md` and `references/` tree, including `categories/`, exist with the same content as the current `.pi/skills/email-triage/` copy): met. Diffed all 10 files in the branch (`task/T-152-canonical-email-triage-skill-source`, commits `b4964ab`, `e31b1a1`, `c7b05ec`) against the untouched `.pi/skills/email-triage/` copy — `SKILL.md` differs only by the removed `allowed-tools` line, and all 9 `references/` files (`worklog.md`, `escalation.md`, and the 7 `categories/*.md` files) are byte-identical.
+- AC-2 (canonical `SKILL.md` frontmatter has no `allowed-tools` field): met. `grep -c '^allowed-tools:'` on the canonical `SKILL.md` returns 0.
+- AC-3 (no diary/worklog-specific content modified during the move, including `.pi/skills/email-triage/` left untouched): met. `git diff dev-agent..task/T-152-canonical-email-triage-skill-source --stat -- the-intern/email-skills/.pi/skills/email-triage/` is empty; `references/worklog.md` content in the new canonical tree is byte-identical to the pi copy (no reduction toward the future `worklog` skill split, correctly deferred to T-154/T-155).
+- File list on the branch is exactly the 10 canonical files declared in "Files to Touch" (`SKILL.md` plus 9 `references/` files) — no unexpected files touched, no unspecified behavior added.
+
+**Stage 2 — Code Quality:**
+- Correctness: content relocation is exact (verified via diff against the pi copy for all 10 files, not by inspection alone); the one frontmatter field removed (`allowed-tools`) is precisely the pi-specific one named in the task description.
+- Tests: this task has no code/unit-test surface. The task's own `## Verification` diff command was run directly against the branch in a scratch worktree and passes with exit 0 and an empty diff.
+- Security: N/A (markdown content only, no secrets, no external input).
+- Readability: N/A (content moved verbatim; no restructuring).
+- Performance: N/A.
+- Commits (`b4964ab`, `e31b1a1`, `c7b05ec`) follow `git-conventions` (type `feat`, scope `email-skills`, imperative, no task ID repeated, ≤72 chars each).
+
+No blocking issues found.
