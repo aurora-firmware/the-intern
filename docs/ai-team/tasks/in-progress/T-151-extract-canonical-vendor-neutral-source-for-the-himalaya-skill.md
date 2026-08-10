@@ -66,6 +66,19 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-10
+
+Implemented T-151 by extracting the canonical vendor-neutral himalaya skill source. Read the (empty) Work Log first, then read the existing pi-shaped copy at `the-intern/email-skills/.pi/skills/himalaya/{SKILL.md,references/command-reference.md}` and S-011 (Purpose, Architecture, Responsibility Separation, and Implementation Order Phase 2) to confirm the target layout `the-intern/email-skills/skills/himalaya/`.
+
+Since this task is pure content relocation with no Rust/unit-test surface, the task's own `## Verification` diff command was treated as the TDD "test," extended with the same diff-based check for `references/command-reference.md` (AC-1 covers both files, but the task's Verification section only showed the SKILL.md diff explicitly). Two red→green cycles: (1) `SKILL.md` — confirmed the diff failed with "No such file" before the canonical file existed, then created it via `grep -v '^allowed-tools:'` over the pi copy so the pi-specific frontmatter field is dropped, then confirmed a clean (empty) diff; (2) `references/command-reference.md` — same red/green shape, but a straight `cp` since no frontmatter field needed removing there. Committed each cycle separately (`dac6b41`, `d7bc0df`).
+
+After both files existed, ran three closing checks rather than adding more code: AC-2 (`grep -c '^allowed-tools:'` on the canonical `SKILL.md` returns 0), AC-3 (`git diff --stat dev-agent -- the-intern/email-skills/.pi/skills/himalaya/` is empty, confirming the pi copy was never touched), and the task's exact `## Verification` command (exit 0, no diff). All three passed without further changes, so no additional commit was needed for them.
+
+Nothing was tried and rejected — the task's scope and target layout were unambiguous from S-011 and the task description, and no boundary or dependency issues surfaced. Nothing remains for T-151 itself; the `.pi/skills/himalaya/` copy is intentionally left in place per AC-3, to be replaced by T-153's generated packaging output later. Working tree is clean on `task/T-151-canonical-himalaya-skill-source` with two commits ahead of `dev-agent`.
+
+Obstacles Encountered:
+- This task has no Rust/unit-test surface (pure markdown content relocation), so the TDD red/green cycle used the task's own diff-based verification command (extended with an analogous diff for `references/command-reference.md`, since AC-1 covers both files but the task's Verification section only shows the SKILL.md diff explicitly) as the "test" instead of a code test file.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
