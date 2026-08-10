@@ -139,6 +139,12 @@ A reasonable starting point for local, single-operator use:
 # this key — see skill_install_path below.
 pi_agent_cwd = "/srv/workspaces/default"
 
+# Optional: install the himalaya/email-triage/worklog skills once at the
+# default path (~/.local/share/bob/skills) and every session gets them,
+# regardless of pi_agent_cwd or any per-job cwd. Uncomment only if you set
+# a non-default install location.
+# skill_install_path = "/opt/bob/skills"
+
 [monitoring]
 # Keep the default audit log path unless you need it elsewhere; narrow what
 # live `bob audit tail` shows by default.
@@ -163,6 +169,12 @@ Notes on the choices above:
 - **`pi_agent_cwd` must be absolute** and is unset by default (in which case
   sessions inherit whatever directory you launched `bob serve` from). Set it
   explicitly so behavior doesn't depend on your shell history.
+- **`skill_install_path` must be absolute when set** and defaults to the
+  ADR-009 `data` bucket alongside the extension
+  (`~/.local/share/bob/skills` on Linux) when unset. A missing or nonexistent
+  path is fail-open — the session starts without skills and a warning is
+  logged, unlike a missing `extension_path`, which is fail-closed. See
+  [Install the skill package](../operator-guide/index.md#install-the-skill-package).
 - **`[policy.action_rules]` is allow-only.** Start narrow (`read_file` is a
   safe first rule) and add tools as you confirm you need them, rather than
   starting broad and trying to lock down later.

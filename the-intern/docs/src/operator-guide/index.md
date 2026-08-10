@@ -119,6 +119,69 @@ that the resolved path is a regular file before it spawns pi. If the file is
 missing, the spawn fails closed and the error names the expected path; bob never
 starts a session without its monitoring and authorization extension.
 
+### Install the skill package
+
+Skill content — the `himalaya`, `email-triage`, and `worklog` skills packaged
+in `the-intern/email-skills/.pi/skills/` — is supplied to every session bob
+spawns from a single, service-wide **skill install path**, independent of
+that session's working directory (`S-011`, `ADR-014`). Install it once; every
+RPC-worker, interactive, and scheduled-job session bob spawns afterward
+carries it, regardless of `--cwd`.
+
+On Linux, the default is:
+
+```text
+~/.local/share/bob/skills
+```
+
+If `XDG_DATA_HOME` is set, the path is instead `$XDG_DATA_HOME/bob/skills` (a
+sibling of `bob/extensions/` under the same ADR-009 `data` bucket as the
+extension). On macOS, the default is `~/Library/Application Support/bob/skills`.
+
+Install the packaged pi skill content there:
+
+```bash
+mkdir -p ~/.local/share/bob/skills
+cp -r the-intern/email-skills/.pi/skills/. ~/.local/share/bob/skills/
+```
+
+To use another location, set the top-level `skill_install_path` key in
+`config.toml`:
+
+```toml
+skill_install_path = "/opt/bob/skills"
+```
+
+- **Must be absolute.** A relative value fails configuration loading
+  immediately with a clear error naming `skill_install_path`.
+- **Default: the ADR-009 `data` bucket, alongside the extension.** When
+  `skill_install_path` is not set, it resolves the same way `extension_path`
+  does — `$XDG_DATA_HOME/bob/skills`, falling back to
+  `$HOME/.local/share/bob/skills` (or the macOS equivalent) — rather than
+  being left unset.
+- **Fail-open, unlike `extension_path`.** `extension_path` fails closed: a
+  missing extension file blocks every session from starting. A missing,
+  empty, or nonexistent `skill_install_path` does not: bob's extension
+  answers pi's `resources_discover` event with no contributed skill paths
+  and logs one warning, and the session still starts and runs — only
+  without skills. See the
+  [Extension & Channel-Adapter Author Guide](../extension-author-guide/index.md#skill-supply-via-resources_discover)
+  for how the extension implements this.
+- **Existence is not checked at config load.** `bob serve` also logs one
+  startup warning if the resolved path does not exist as a directory, in
+  addition to the extension's own per-session warning — neither one fails
+  startup or blocks a session.
+- **Fixed at startup, like `pi_agent_cwd`.** The resolved `skill_install_path`
+  value is mapped into the supervisor's configuration once, at `bob serve`
+  startup. Changing the `skill_install_path` config value itself requires
+  restarting `bob serve`; updating the *contents* of an already-resolved
+  path does not — pi reads whatever is on disk fresh at each session's
+  `resources_discover` init, so a re-packaged skill update takes effect on
+  the next session without a restart.
+- Skills are supplied through this path regardless of `pi_agent_cwd` or any
+  per-entry scheduled-job `cwd` — see
+  [Working directory for pi-agent sessions](#working-directory-for-pi-agent-sessions).
+
 ### Remove stale extension copies from pi's own `packages` list
 
 pi loads extensions from two independent sources: the `--extension <path>`
