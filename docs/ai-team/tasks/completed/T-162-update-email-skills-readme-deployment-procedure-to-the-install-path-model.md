@@ -1,7 +1,7 @@
 ---
 id: T-162
 title: Update email-skills README deployment procedure to the install-path model
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-09'
