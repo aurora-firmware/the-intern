@@ -365,7 +365,13 @@ arg_matchers = [
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
-  { field_path = "command", pattern = "*ls worklog*" },
+  { field_path = "command", pattern = "*ls *worklog*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "date +%H:%M*" },
 ]
 
 [[policy.action_rules]]
@@ -393,15 +399,21 @@ arg_matchers = [
 ]
 ```
 
-**New in the install-path model — not yet independently live-validated:**
-the `worklog/SKILL.md` and `worklog/references/*.md` read rules above admit
-the `worklog` skill (`T-154`/`T-155`) that the reduced `email-triage`
-`SKILL.md` now delegates diary mechanics to. They follow the identical
-per-skill `SKILL.md` + `references/*.md` shape already live-validated below
-for `himalaya`/`email-triage`, but have not themselves been re-run against a
-live mailbox and scheduled `bob` instance under the install-path model —
-validate them the same way before depending on them in a production
-deployment.
+**The `worklog` skill's rules are now live-validated under the install-path
+model.** The `worklog/SKILL.md` and `worklog/references/*.md` read rules
+above admit the `worklog` skill (`T-154`/`T-155`) that the reduced
+`email-triage` `SKILL.md` now delegates diary mechanics to. `T-164` re-ran
+this exact rule set live, end to end, twice — once against a scheduled
+`email-triage` job and once against an interactive `bob chat` session asked
+to record a worklog entry directly — both from working directories holding
+no skill files of their own, both served entirely from a single shared
+skill install path with no per-workspace copy anywhere. See
+[Validation outcomes](#validation-outcomes) below for the full T-164
+record, including two real rule-set gaps that live run found and closed
+(the broadened `*ls *worklog*` pattern and the new `date +%H:%M*` rule
+above) and one skill-behavior defect it found and filed rather than papered
+over (`B-039`: a scheduled run can write a wrong placeholder worklog
+timestamp).
 
 The absolute-path `worklog` rule the per-workspace deployment model used
 (`{ field_path = "path", pattern = "<workspace>/worklog/*.md" }`) is dropped
@@ -414,7 +426,8 @@ workspace.
 
 **This rule set covers the live T-139/T-140 validation runs** —
 `automated-notification` (file, no reply), escalation, S-004 block handling,
-and skipped-tick continuity — **plus one additional rule** admitting the
+and skipped-tick continuity — re-confirmed live under the skill install-path
+model itself by `T-164` — **plus one additional rule** admitting the
 `himalaya template reply` -> `himalaya template send` shape that
 `direct-request` and `meeting-scheduling` need to send a reply (`B-029`).
 T-139's Session 2 explicitly deferred the direct-request route rather than
@@ -504,6 +517,77 @@ same mailbox and scheduled-job setup.
   escalation send once the command succeeds. The validated allow-rule set now
   includes the relative `read` matcher required for this cross-day
   carry-forward path.
+
+### T-164 — skill install-path model, end to end (2026-08-10)
+
+S-011 replaces the per-workspace deployed-copy model T-139/T-140 validated
+above with the install-path model described throughout this README. T-164
+re-ran the same kind of live validation those tasks ran, but against the
+new model itself: install the packaged skill content once at the resolved
+`skill_install_path`, then exercise both a scheduled job and an interactive
+`bob chat` session from working directories holding no skill files of their
+own, and confirm both actually use the installed skills.
+
+- **Setup.** An isolated `bob` runtime installed this package's `.pi/skills/`
+  content once at a dedicated `skill_install_path`. Two separate working
+  directories were used for the two validation runs below, and neither ever
+  held a `.pi/skills/` tree, a `skills/` tree, or any other copy of skill
+  content — confirmed by inspecting both trees before and after every run.
+  The single S-004 rule set below (scoped to the shared install path plus
+  the relative `worklog/*.md` rule) was the only policy in force for both
+  runs.
+- **Scheduled job (AC-2).** A `check-email` job was added with `--cwd`
+  pointed at a workspace holding only `config/email-triage.toml` and an
+  empty `worklog/` — no skill files. It was fed the same reusable
+  `automated-notification` fixture T-139 originally validated (the "You
+  have been invited to join Holded" message, restored from
+  `INBOX.Notifications` to `INBOX` and marked unseen for the run). Every
+  other message that was genuinely unseen in the live mailbox at the time
+  was temporarily marked seen for the run's duration and restored to
+  exactly its prior unseen state immediately afterward, so the run's
+  candidate set held only the one deliberate test fixture — no real
+  correspondence was read, classified, or acted on by this run. The job
+  correctly classified the fixture as `automated-notification`, moved it
+  back to `INBOX.Notifications`, and appended a worklog entry to
+  `worklog/2026-08-10.md` in the job's own `--cwd` — proving skill delivery
+  is independent of the job's working directory while diary state stayed
+  correctly `--cwd`-scoped, and proving skill content lived nowhere but the
+  shared install path.
+- **Interactive `bob chat` (AC-3).** A `bob chat` session was started (over
+  a real pty, since pi's interactive mode needs one) from a working
+  directory unrelated to any skill deployment and holding no skill files,
+  then asked directly to record a worklog entry. The session loaded the
+  `worklog` skill from the shared install path and correctly wrote the
+  entry to that same directory's own `worklog/<today>.md` — no skill files
+  were ever present there.
+- **Single stable rule set (AC-4).** The first pass of both runs, under the
+  rule set this README documented before T-164, hit real denials that
+  blocked genuinely-documented `worklog` skill behavior: `ls -ld worklog`
+  and a compound existence-check-then-`ls` command didn't match the
+  narrower `*ls worklog*` pattern, and no rule admitted a standalone
+  `date +%H:%M` lookup for the entry's `<HH:MM>` header. Both are closed
+  above (`*ls *worklog*`, `date +%H:%M*`); re-running the interactive
+  session with the fixed rule set produced zero denials. The scheduled-job
+  run additionally triggered three denials that were *not* rule-set gaps:
+  one `find` over the skill install path's `email-triage/references/categories/`
+  directory (exploratory — the taxonomy's category names are already fully
+  documented in `references/categories/README.md`, which this rule set
+  already admits reading, so nothing required this call), and two attempts
+  (an `edit` tool call and a `bash` call running an ad hoc Python script)
+  to correct a worklog entry that had been written with the wrong
+  placeholder timestamp `00:00` instead of the real time. Both correction
+  attempts were correctly denied: this skill's own "Tool usage" sections
+  are explicit that worklog mutations stay on `bash`'s documented
+  `mkdir`/`cat >>` shape, never `edit` or arbitrary scripts, precisely so a
+  narrow S-004 rule set can admit its whole runtime surface. No rule was
+  added to work around either denial — the `find` wasn't needed for the run
+  to succeed (and didn't stop it succeeding), and admitting `edit` or
+  arbitrary `bash` scripts would reopen exactly the broad surface this
+  package's rule set is designed to avoid. The wrong-timestamp behavior
+  itself is a real, separate skill-behavior defect, filed as `B-039`
+  (out of T-164's own scope to fix — the fix belongs in `worklog`'s or
+  `email-triage`'s own skill/reference files, not in this README's action
+  rules or deployment procedure).
 
 ## Account-specific folder names matter
 
