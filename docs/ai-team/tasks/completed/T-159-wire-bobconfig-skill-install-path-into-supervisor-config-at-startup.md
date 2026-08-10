@@ -1,7 +1,7 @@
 ---
 id: T-159
 title: Wire BobConfig skill_install_path into supervisor config at startup
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-09'
