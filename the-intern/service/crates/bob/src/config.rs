@@ -1898,6 +1898,43 @@ prompt = "from toml"
         fs::remove_file(config_file).expect("temp config file should be removable");
     }
 
+    // ── AC-4 (T-157): skill_install_path existence is not checked at load
+    //    time ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn loads_successfully_when_skill_install_path_names_a_nonexistent_directory() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let nonexistent = temp.path().join("does-not-exist-yet");
+
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let config_file = write_temp_config(&format!(
+            r#"skill_install_path = "{}""#,
+            nonexistent.display()
+        ));
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("skill_install_path naming a nonexistent directory should still load");
+
+        assert_eq!(config.skill_install_path, nonexistent.clone());
+        assert!(
+            !nonexistent.exists(),
+            "the named directory must remain unchecked and uncreated at load time"
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
     #[derive(Clone, Default)]
     struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
 
