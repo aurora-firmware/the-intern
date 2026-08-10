@@ -60,6 +60,22 @@ test_ac3_output_byte_identical_to_canonical_source() {
 
 test_ac3_output_byte_identical_to_canonical_source
 
+# AC-3 (regeneration): re-running the script regenerates each packaged
+# skill's tree from scratch, so a file that no longer exists in the
+# canonical source does not survive as stale generated output and break the
+# byte-for-byte identity AC-3 requires.
+test_ac3_regeneration_removes_stale_generated_files() {
+  local ok=0
+  local stale_file="$WORK_DIR/claude/skills/himalaya/references/stale-leftover.md"
+  mkdir -p "$(dirname "$stale_file")"
+  echo "stale content that no longer exists in the canonical source" > "$stale_file"
+  ( cd "$WORK_DIR" && ./package-claude-skills.sh ) || ok=1
+  [ ! -e "$stale_file" ] || ok=1
+  run_test "AC-3: regeneration removes stale generated files not in canonical source" "$ok"
+}
+
+test_ac3_regeneration_removes_stale_generated_files
+
 echo ""
 echo "Results: $pass_count passed, $fail_count failed"
 [ "$fail_count" -eq 0 ] || exit 1
