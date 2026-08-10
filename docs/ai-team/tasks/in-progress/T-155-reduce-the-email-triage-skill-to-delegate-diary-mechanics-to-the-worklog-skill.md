@@ -135,3 +135,95 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-10
+
+PASS
+
+**Stage 1 — Acceptance criteria**
+
+- AC-1 (remove diary mechanics, add explicit pointer): Met. Diff confined
+  to `SKILL.md` and `references/worklog.md` (canonical + regenerated `.pi`
+  copies) — exactly the Files to Touch. Both files now name the `worklog`
+  skill explicitly (frontmatter `description`, intro, tool-usage, Step 1,
+  Step 4 in `SKILL.md`; the opening paragraph of `references/worklog.md`).
+  No stray diary-mechanics command detail (`mkdir -p`, `test -f`,
+  `cat >>`, `TODAY=`) remains in either email-triage file — grepped and
+  confirmed clean.
+- AC-2 (retain detection/classification/act-or-escalate/retry unchanged):
+  Met. `git diff` confirms Steps 2 and 3 of `SKILL.md` are byte-for-byte
+  unchanged. Step 1 necessarily changes prose (AC-1 requires delegating
+  first-run detection/reconciliation), but the retry-of-carried-forward-
+  blocked-action rule is explicitly retained and, if anything, more
+  explicit than before ("Reconciliation is also the point at which a
+  carried-forward blocked action is retried — no other point in this loop
+  revisits a blocked action..."). This matches S-011's Responsibility
+  Separation row verbatim ("retains retry of a carried-forward blocked
+  action").
+- AC-3 (combined reading loses no instruction): Met, verified by a
+  section-by-section mapping of the pre-reduction combined content (old
+  `SKILL.md` diary passages + old 158-line `references/worklog.md`,
+  via `git show dev-agent:...`) against the new combined set (reduced
+  `SKILL.md` + reduced `references/worklog.md` + `worklog` skill's
+  `SKILL.md`/`references/entry-format.md`/`references/reconciliation.md`).
+  Every generic mechanic — location, file creation, the exact
+  append-command shape and its `>> worklog/` allow-rule safety rationale,
+  the Done/Left/Next field definitions, first-run detection, the
+  first-run-reconciliation walk-back algorithm and day-skip causes, the
+  generic "open items live in the tracked system only" rationale, and the
+  no-automatic-expiry carry-forward mechanics — has a verbatim-or-
+  generalized home in the `worklog` skill's three files. Every
+  domain-specific instruction — the `<subject> (from <sender>)` item
+  identifier, the `\Seen`-flag side-effect rationale, and the two concrete
+  closing conditions (manager reply / gate allow rule) — is retained in
+  the reduced `references/worklog.md` or `SKILL.md` Step 1/Step 4. The one
+  piece not carried forward verbatim is a rhetorical aside in the old
+  Step 1 cross-referencing "the same way this loop avoids a skill-owned
+  last-seen file for detecting new mail (step 2 below)" — this is
+  connective tissue, not an operative instruction, and the mechanic it
+  refers to (reuse file presence instead of a second marker file) is
+  itself stated in the `worklog` skill's own `SKILL.md`. No instruction
+  was actually dropped.
+- AC-4 (regenerate `.pi/skills` in the same change): Met. Ran both
+  verification commands from a clean worktree checkout of the task
+  branch: `grep -q "worklog" .../SKILL.md` passes, and
+  `./package-pi-skills.sh && git diff --exit-code HEAD -- .pi/skills`
+  is clean (post-commit, per the task's own note). Also re-ran T-153's
+  `test_package_pi_skills.sh` regression suite — all 4 tests pass,
+  confirming `himalaya` and `worklog` packaging is undisturbed.
+
+No unspecified behavior was added, no unexpected files were modified —
+`git diff --stat dev-agent...task/T-155-email-triage-delegate-worklog`
+shows exactly the four Files to Touch.
+
+**Reduce-vs-remove reasoning for `references/worklog.md` (specifically
+requested check):** Holds up, and is the objectively correct call rather
+than an avoidance of AC-1's "or removed" option. The Files to Touch entry
+conditions removal on the file being "fully superseded by the `worklog`
+skill" — it is not: genuine email-triage-specific content survives
+(item-identifier mapping, `\Seen`-flag rationale, domain closing
+conditions) with no domain-neutral home in the `worklog` skill by design
+(the `worklog` skill explicitly disclaims owning closing conditions).
+Independently, six files outside this task's Files to Touch
+(`references/categories/*.md`, `references/escalation.md`) reference
+`references/worklog.md` by name; deleting it would leave those
+out-of-scope files with dangling references this task has no mandate to
+fix. Both reasons point the same way, and reducing is the choice that
+avoids a scope violation rather than causing one.
+
+**Stage 2 — Code quality**
+
+Correctness, readability, and scope are all sound for a pure
+content-authoring change with no control-flow surface — the task's own
+verification commands plus the pre-existing packaging test suite serve as
+the appropriate regression guard, consistent with the T-153/T-154
+precedent this task's Work Log cites.
+
+Minor, non-blocking observation: commit `d02a93f`'s subject line
+("docs(email-skills): delegate email-triage worklog reference to worklog
+skill") is 76 characters, over the `git-conventions` skill's documented
+≤72-char limit. Recent `dev-agent` history has occasional similar
+overages, so this is not grounds for a FAIL, but worth keeping in mind for
+future commits.
+
+Next owner: Development Loop.
