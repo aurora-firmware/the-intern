@@ -119,6 +119,70 @@ that the resolved path is a regular file before it spawns pi. If the file is
 missing, the spawn fails closed and the error names the expected path; bob never
 starts a session without its monitoring and authorization extension.
 
+### Install the skill package
+
+Skill content — the `himalaya`, `email-triage`, and `worklog` skills packaged
+in `the-intern/email-skills/.pi/skills/` — is supplied to every session bob
+spawns from a single, service-wide **skill install path**, independent of
+that session's working directory (`S-011`, `ADR-014`). Install it once; every
+RPC-worker, interactive, and scheduled-job session bob spawns afterward
+carries it, regardless of `--cwd`.
+
+On Linux, the default is:
+
+```text
+~/.local/share/bob/skills
+```
+
+If `XDG_DATA_HOME` is set, the path is instead `$XDG_DATA_HOME/bob/skills` (a
+sibling of `bob/extensions/` under the same ADR-009 `data` bucket as the
+extension). On macOS, the default is `~/Library/Application Support/bob/skills`.
+
+Install the packaged pi skill content there:
+
+```bash
+mkdir -p ~/.local/share/bob/skills
+SKILL_PACKAGE_SRC=the-intern/email-skills/.pi/skills
+cp -r "$SKILL_PACKAGE_SRC/." ~/.local/share/bob/skills/
+```
+
+To use another location, set the top-level `skill_install_path` key in
+`config.toml`:
+
+```toml
+skill_install_path = "/opt/bob/skills"
+```
+
+- **Must be absolute.** A relative value fails configuration loading
+  immediately with a clear error naming `skill_install_path`.
+- **Default: the ADR-009 `data` bucket, alongside the extension.** When
+  `skill_install_path` is not set, it resolves the same way `extension_path`
+  does — `$XDG_DATA_HOME/bob/skills`, falling back to
+  `$HOME/.local/share/bob/skills` (or the macOS equivalent) — rather than
+  being left unset.
+- **Fail-open, unlike `extension_path`.** `extension_path` fails closed: a
+  missing extension file blocks every session from starting. A missing,
+  empty, or nonexistent `skill_install_path` does not: bob's extension
+  answers pi's `resources_discover` event with no contributed skill paths
+  and logs one warning, and the session still starts and runs — only
+  without skills. See the
+  [Extension & Channel-Adapter Author Guide](../extension-author-guide/index.md#skill-supply-via-resources_discover)
+  for how the extension implements this.
+- **Existence is not checked at config load.** `bob serve` also logs one
+  startup warning if the resolved path does not exist as a directory, in
+  addition to the extension's own per-session warning — neither one fails
+  startup or blocks a session.
+- **Fixed at startup, like `pi_agent_cwd`.** The resolved `skill_install_path`
+  value is mapped into the supervisor's configuration once, at `bob serve`
+  startup. Changing the `skill_install_path` config value itself requires
+  restarting `bob serve`; updating the *contents* of an already-resolved
+  path does not — pi reads whatever is on disk fresh at each session's
+  `resources_discover` init, so a re-packaged skill update takes effect on
+  the next session without a restart.
+- Skills are supplied through this path regardless of `pi_agent_cwd` or any
+  per-entry scheduled-job `cwd` — see
+  [Working directory for pi-agent sessions](#working-directory-for-pi-agent-sessions).
+
 ### Remove stale extension copies from pi's own `packages` list
 
 pi loads extensions from two independent sources: the `--extension <path>`
@@ -246,9 +310,11 @@ Bob's TOML configuration file is located at:
 `bob` controls the working directory (cwd) each supervised `pi` process runs
 in via the service-wide `pi_agent_cwd` config key and, for scheduled jobs, an
 optional per-entry `cwd` (see [Scheduled jobs](#scheduled-jobs)). This lets pi
-discover project context (`AGENTS.md`/`CLAUDE.md`), skills, and relative
-prompt-file paths from a predictable directory instead of whichever directory
-`bob serve` happened to be launched from.
+discover project context (`AGENTS.md`/`CLAUDE.md`) and relative prompt-file
+paths from a predictable directory instead of whichever directory `bob serve`
+happened to be launched from. **Skills are not affected by this key or any
+per-entry `cwd`** — bob supplies them to every session independently of its
+working directory; see [Install the skill package](#install-the-skill-package).
 
 ### `pi_agent_cwd` (service-wide)
 
@@ -266,8 +332,9 @@ pi_agent_cwd = "/srv/workspaces/default"
   immediately with a clear error naming `pi_agent_cwd`.
 - **Default: unset.** When `pi_agent_cwd` is not set, RPC workers inherit the
   launch cwd of the `bob serve` process itself — the behavior bob has always
-  had. Set it explicitly so pi's context-file discovery, skills, and any
-  relative paths in prompts resolve predictably.
+  had. Set it explicitly so pi's context-file discovery and any relative
+  paths in prompts resolve predictably. (Skill discovery is unaffected
+  either way — see [Install the skill package](#install-the-skill-package).)
 - **Existence is not checked at config load.** A `pi_agent_cwd` naming a
   directory that does not exist still loads successfully. A missing directory
   only surfaces later, at worker-spawn time, as a logged (warned) spawn
@@ -553,12 +620,14 @@ tick.
 > relaxation of the trust boundary used for schedule-store admission. Because scheduled jobs bypass
 > `[policy].admitted_users`, a prompt file or working directory that another
 > user can write is an injection path into a trusted job. A writable `cwd` is
-> especially significant: pi automatically loads `AGENTS.md`/`CLAUDE.md` and
-> skills from a session's working directory, so a maliciously-writable `cwd`
-> can inject context and instructions the operator never intended the job to
-> run with. Keep both prompt files and every scheduled `cwd` under the same
-> owner-only protection as `schedules.json` itself — filesystem permissions,
-> not a bob-side ownership check, are the gate.
+> especially significant: pi automatically loads `AGENTS.md`/`CLAUDE.md` from
+> a session's working directory (skills are supplied independently of `cwd`
+> — see [Install the skill package](#install-the-skill-package)), so a
+> maliciously-writable `cwd` can inject context and instructions the
+> operator never intended the job to run with. Keep both prompt files and
+> every scheduled `cwd` under the same owner-only protection as
+> `schedules.json` itself — filesystem permissions, not a bob-side ownership
+> check, are the gate.
 
 #### Cron expression format
 
@@ -740,12 +809,19 @@ externally (for example, by shipping the JSONL file to a log aggregator).
 
 This section shows the validated operator procedure for turning the shipped
 `the-intern/email-skills/` package into a live scheduled `email-triage` job.
-It assumes the general policy model, `cwd`
-precedence, and schedule-store behavior already described in
+It assumes the general policy model, `cwd` precedence, schedule-store
+behavior, and the skill install path already described in
 [Policy basics](#policy-basics),
 [Working directory for pi-agent sessions](#working-directory-for-pi-agent-sessions),
-and [Scheduled jobs](#scheduled-jobs); the steps below focus only on the
-package-specific setup that T-139 and T-140 verified end to end.
+[Install the skill package](#install-the-skill-package), and
+[Scheduled jobs](#scheduled-jobs); the steps below focus only on the
+package-specific setup that T-139 and T-140 verified end to end, updated for
+the skill install-path deployment model (`S-011`).
+
+Skills are installed **once**, service-wide — the steps below no longer
+deploy a per-job copy of `.pi/skills/`. If you have not already installed
+the package as described in
+[Install the skill package](#install-the-skill-package), do that first.
 
 1. Prepare the mailbox prerequisites outside bob.
 
@@ -755,124 +831,128 @@ package-specific setup that T-139 and T-140 verified end to end.
    be classified confidently. Bob does not create or manage either of these
    inputs for you.
 
-2. Deploy an owner-only workspace copy outside the repository checkout.
+2. Deploy an owner-only working directory for the job's mutable state.
 
-   The scheduled job's `--cwd` must point at a deployed copy of the package,
-   not at this repository checkout. The deployed workspace holds mutable runtime
-   state that the skill reads without an ownership check: the local
-   `config/email-triage.toml`, the `worklog/` diary, and the `.pi/skills/`
-   tree pi auto-loads from the working directory. Keep that whole workspace
-   owner-only for the job user, matching the trust boundary described in
-   [Scheduled jobs](#scheduled-jobs).
+   The scheduled job's `--cwd` still needs its own owner-only directory, but
+   under the skill install-path model it holds only the job's mutable
+   runtime state — the local `config/email-triage.toml` and the `worklog/`
+   diary — not a copy of the skill content itself. Skills reach the session
+   from the skill install path (installed once, above) independently of
+   this directory, so it no longer needs a `.pi/skills/` tree at all. Keep
+   the directory owner-only for the job user, matching the trust boundary
+   described in [Scheduled jobs](#scheduled-jobs).
 
    ```bash
    WORKSPACE=/srv/workspaces/email-skills
 
    install -d -m 700 "$WORKSPACE"
-   cp -r the-intern/email-skills/. "$WORKSPACE/"
+   install -d -m 700 "$WORKSPACE/config"
    install -d -m 700 "$WORKSPACE/worklog"
-   chmod 700 "$WORKSPACE" "$WORKSPACE/.pi" "$WORKSPACE/config" "$WORKSPACE/worklog"
-   cp "$WORKSPACE/config/email-triage.example.toml" \
+   cp the-intern/email-skills/config/email-triage.example.toml \
       "$WORKSPACE/config/email-triage.toml"
+   chmod 700 "$WORKSPACE" "$WORKSPACE/config" "$WORKSPACE/worklog"
    ```
 
    Do not use the repository checkout as `--cwd`: a shared checkout is not the
    trusted runtime boundary for scheduled jobs, and it would mix mutable
    worklog/config state into source-controlled files.
 
-3. Establish pi's project trust for the deployed workspace.
+   > **No pi project-trust step is required for this workspace.** Earlier
+   > revisions of this section (`B-035`) added a step establishing pi
+   > project trust for the deployed workspace in `~/.pi/agent/trust.json`,
+   > because that workspace's own `.pi/skills/` tree was silently ignored by
+   > pi's non-interactive `--mode rpc` workers under the pre-install-path
+   > deployment model. Under the skill install-path model this working
+   > directory no longer contains a `.pi/skills/` tree, or any of the other
+   > project-local resources pi's project-trust gate covers
+   > (`.pi/settings.json`, `.pi/extensions`, `.pi/prompts`, `.pi/themes`,
+   > `.pi/SYSTEM.md`/`APPEND_SYSTEM.md`, or `.agents/skills`) — skills reach
+   > the session through the bob extension's `resources_discover` answer
+   > instead, which `T-150` confirmed fires and reaches the system prompt
+   > from an untrusted working directory on every spawn path bob uses,
+   > including the scheduled-periodic one this job runs on. If you deployed
+   > this job under the old model and previously added its workspace path to
+   > `~/.pi/agent/trust.json`, that entry is now unnecessary but harmless —
+   > leave it or remove it, either is fine.
 
-   `pi`'s own project trust gate is separate from the Unix trust boundary
-   described in [Scheduled jobs](#scheduled-jobs). `pi_agent_supervisor`
-   always spawns workers with `--mode rpc`, and pi's non-interactive modes
-   (`-p`, `--mode json`, `--mode rpc`) never show an interactive trust
-   prompt. Without an existing saved trust decision for the deployed
-   workspace, pi's default `defaultProjectTrust` setting (`"ask"`) silently
-   ignores project-local resources — including `.pi/skills/email-triage` and
-   `.pi/skills/himalaya` — on every tick. The scheduled job still fires and
-   still runs, but the agent never sees `SKILL.md` and instead explores the
-   workspace like a generic assistant, with every exploratory call denied by
-   the S-004 rules added in the next step and no error anywhere pointing at
-   project trust as the cause.
+3. Set the skill-local `manager_address`.
 
-   Add the deployed workspace's canonical absolute path to
-   `~/.pi/agent/trust.json` (the same file pi's interactive `/trust` command
-   writes) with a `true` value:
-
-   ```json
-   {
-     "/srv/workspaces/email-skills": true
-   }
-   ```
-
-   If `~/.pi/agent/trust.json` already has entries for other workspaces, add
-   this path as an additional key rather than overwriting the file.
-
-   Restart `bob serve` afterward — trust decisions are read when each `pi`
-   worker process starts, not picked up by workers already running.
-
-4. Set the skill-local `manager_address`.
-
-   Edit only the deployed copy's `config/email-triage.toml`. This file is
-   skill-local configuration, not part of bob's top-level `config.toml`:
+   Edit only the job workspace's `config/email-triage.toml` (created in step
+   2). This file is skill-local configuration, not part of bob's top-level
+   `config.toml`:
 
    ```toml
    manager_address = "manager@example.com"
    ```
 
    `manager_address` is required. It must be one well-formed email address.
-   The shipped `email-triage.example.toml` stays in the repository as a template
-   only; the real address belongs only in the deployed workspace copy.
+   The shipped `email-triage.example.toml` stays in the repository as a
+   template only; the real address belongs only in the job workspace's copy.
 
-5. Add scoped S-004 action rules for the deployed workspace, then reload policy.
+4. Add the S-004 action rules scoped to the skill install path, then reload policy.
 
-   The validated runtime matcher shape is:
+   The validated runtime matcher shape is unchanged from the per-workspace
+   deployment model:
 
    - `read` rules match `arguments.path`, so use `field_path = "path"`.
    - `bash` rules match `arguments.command`, so use `field_path = "command"`.
 
    Do not copy older `cmd` examples from parser-only tests. The live T-139/T-140
    runs only succeeded when the bash rules matched the runtime `command` field.
-   Replace `/srv/workspaces/email-skills` with the exact absolute path to your
-   deployed copy and scope the mailbox move target to the real folder name from
-   `himalaya folder list` (the validated account used `INBOX.Notifications`,
-   not plain `Notifications`):
+   That runtime payload shape does not depend on where the skill content
+   lives, so moving the `read` rules from a per-workspace `.pi/skills/` path
+   to the shared skill install path changes only the `pattern` values below,
+   not the matcher shape itself.
+
+   Replace `/opt/bob/skills` below with your actual `skill_install_path` (the
+   default shown in [Install the skill package](#install-the-skill-package),
+   or your configured override). This set is now scoped to that single,
+   stable location — unlike the old per-workspace rules, it does **not**
+   need to be re-derived for every deployment. Scope the mailbox move target
+   to the real folder name from `himalaya folder list` (the validated
+   account used `INBOX.Notifications`, not plain `Notifications`):
 
    ```toml
    [[policy.action_rules]]
    tool = "read"
    arg_matchers = [
-     { field_path = "path", pattern = "/srv/workspaces/email-skills/.pi/skills/email-triage/SKILL.md" },
+     { field_path = "path", pattern = "/opt/bob/skills/email-triage/SKILL.md" },
    ]
 
    [[policy.action_rules]]
    tool = "read"
    arg_matchers = [
-     { field_path = "path", pattern = "/srv/workspaces/email-skills/.pi/skills/himalaya/SKILL.md" },
+     { field_path = "path", pattern = "/opt/bob/skills/himalaya/SKILL.md" },
    ]
 
    [[policy.action_rules]]
    tool = "read"
    arg_matchers = [
-     { field_path = "path", pattern = "/srv/workspaces/email-skills/.pi/skills/email-triage/references/*.md" },
+     { field_path = "path", pattern = "/opt/bob/skills/worklog/SKILL.md" },
    ]
 
    [[policy.action_rules]]
    tool = "read"
    arg_matchers = [
-     { field_path = "path", pattern = "/srv/workspaces/email-skills/.pi/skills/email-triage/references/categories/*.md" },
+     { field_path = "path", pattern = "/opt/bob/skills/email-triage/references/*.md" },
    ]
 
    [[policy.action_rules]]
    tool = "read"
    arg_matchers = [
-     { field_path = "path", pattern = "/srv/workspaces/email-skills/.pi/skills/himalaya/references/*.md" },
+     { field_path = "path", pattern = "/opt/bob/skills/email-triage/references/categories/*.md" },
    ]
 
    [[policy.action_rules]]
    tool = "read"
    arg_matchers = [
-     { field_path = "path", pattern = "/srv/workspaces/email-skills/worklog/*.md" },
+     { field_path = "path", pattern = "/opt/bob/skills/himalaya/references/*.md" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "read"
+   arg_matchers = [
+     { field_path = "path", pattern = "/opt/bob/skills/worklog/references/*.md" },
    ]
 
    [[policy.action_rules]]
@@ -984,6 +1064,26 @@ package-specific setup that T-139 and T-140 verified end to end.
    ]
    ```
 
+   **New in this deployment model — not yet independently live-validated:**
+   the `worklog/SKILL.md` and `worklog/references/*.md` read rules above
+   admit the `worklog` skill `T-155`/`T-156` extracted from `email-triage`'s
+   own reference content; the reduced `email-triage` `SKILL.md` now
+   delegates diary mechanics to it (S-011 Responsibility Separation). They
+   follow the identical per-skill `SKILL.md` + `references/*.md` shape
+   already live-validated below for `himalaya`/`email-triage`, but have not
+   themselves been re-run against a live mailbox and scheduled `bob`
+   instance under this task — validate them the same way before depending
+   on them in a production deployment.
+
+   The absolute-path `worklog` rule the per-workspace deployment model used
+   (`{ field_path = "path", pattern = "<workspace>/worklog/*.md" }`) is
+   dropped entirely: the relative `worklog/*.md` rule above already matches
+   worklog reads issued from any working directory, which is what S-011's
+   Configuration Requirements call for ("the rule admitting worklog writes
+   must be broad enough to cover arbitrary working directories") — one
+   relative rule now covers every deployment's worklog reads instead of one
+   absolute rule per workspace.
+
    **This rule set covers the live-validated paths** — `automated-notification`
    (file, no reply), escalation, S-004 block handling, and skipped-tick
    continuity (T-139, T-140) — **plus one additional rule** admitting the
@@ -1057,7 +1157,7 @@ package-specific setup that T-139 and T-140 verified end to end.
    bob policy reload
    ```
 
-6. Add the scheduled job with its deployed `--cwd`, then verify the observed outcomes.
+5. Add the scheduled job with its deployed `--cwd`, then verify the observed outcomes.
 
    Register the job against the deployed workspace, not the repository:
 
