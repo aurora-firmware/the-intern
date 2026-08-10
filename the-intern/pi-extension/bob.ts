@@ -5,10 +5,12 @@
  * Unix domain socket, tagged with the session id allocated by the bob
  * service supervisor.  Also registers a blocking `tool_call` hook that
  * sends an Authz frame and awaits a matching AuthzVerdict before letting
- * the tool call proceed.
+ * the tool call proceed, and a `resources_discover` hook that answers with
+ * the skill install path read from BOB_SKILL_INSTALL_PATH (ADR-014).
  *
  * Wire contract (outbound frames):
- *   InboundFrame::Event — for all non-tool_call events:
+ *   InboundFrame::Event — for every forwarded event (excludes tool_call and
+ *   resources_discover, which have their own dedicated handlers):
  *     {"kind":"event","session":"<BOB_SESSION_ID>","payload":{"event":"<name>","data":<object>}}\n
  *   InboundFrame::Authz — for tool_call events:
  *     {"kind":"authz","session":"<BOB_SESSION_ID>","tool":"<name>","arguments":<object>}\n
