@@ -133,3 +133,71 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-10
+
+FAIL
+
+**Stage 1 — Acceptance criteria: all met.**
+- AC-1: `resources_discover` removed from `PI_EVENTS` (`bob.ts` — the array
+  no longer includes it); covered by
+  `bob.test.ts` "T-160 AC-1" and `pi-agent-compat.test.ts`'s updated
+  completeness check.
+- AC-2: `handleResourcesDiscover` returns `{ skillPaths: [path] }` when
+  `BOB_SKILL_INSTALL_PATH` is set, non-empty, and exists; covered by
+  `bob.test.ts` "T-160 AC-2".
+- AC-3: unset/empty var → no skill paths, exactly one `warn()` call, no
+  throw; covered by `bob.test.ts` "T-160 AC-3" (both the unset and empty
+  cases).
+- AC-4: nonexistent path → no skill paths, exactly one `warn()` call, no
+  throw; covered by `bob.test.ts` "T-160 AC-4".
+- AC-5: `pi-agent-compat.test.ts`'s exclusion set is now
+  `{tool_call, resources_discover}`; the `extra` assertion fails the check
+  if either dedicated-handler event reappears in `PI_EVENTS`, satisfying the
+  "shall fail if any dedicated-handler event is also present" clause.
+- Files touched exactly match the Files-to-Touch list (6 files, verified via
+  `git diff --stat dev-agent...task/T-160-answer-resources-discover-skill-path`);
+  no unexpected files modified. `npm test` reproduces 43/43 passing
+  (up from the 38 baseline); `npx tsc --noEmit` is clean; `mdbook build` in
+  `the-intern/docs` succeeds with no warnings and the new
+  `#skill-supply-via-resources_discover` anchor link resolves correctly
+  against the generated heading id. No unspecified behavior was added; the
+  self-noted module-doc-comment touch-up (lines 1-14) is in-scope same-file
+  accuracy, not scope creep.
+
+**Stage 2 — Code quality: one blocking issue.**
+
+- **File and location:** `the-intern/pi-extension/bob.ts`, line 451, inside
+  `handleResourcesDiscover` (registered as the `resources_discover` handler
+  at the bottom of the file).
+- **What is wrong:** `fs.existsSync(skillInstallPath)` is a synchronous,
+  blocking filesystem call made directly on the extension's event loop, once
+  per session at `resources_discover` time. This violates
+  `docs/ai-team/docs/coding-guidelines-node.md` §6 ("Hook code must be short
+  and bounded. Do not do CPU-heavy inspection, large synchronous parsing,
+  blocking filesystem work, or long retry loops on the event loop.") and the
+  Stage 2 performance checklist ("No unnecessary loops, blocking calls, or
+  resource leaks"). It is also the only production-code (non-test) use of a
+  `*Sync` fs call anywhere in `the-intern/pi-extension/` — there is no
+  existing precedent for it in `bob.ts`.
+- **What should change:** Use an async existence check (e.g.
+  `await fs.promises.access(skillInstallPath)` inside a try/catch, or
+  `fs.promises.stat`) and make `handleResourcesDiscover` an `async` function
+  returning a `Promise`. This is a mechanical change with no effect on
+  behavior or the acceptance criteria: the installed package's
+  `ExtensionHandler<E, R>` type is
+  `(event: E, ctx: ExtensionContext) => Promise<R | void> | R | void`, so an
+  async handler is already a supported registration shape — the same shape
+  already used for `handleToolCall` — and the existing tests already
+  `await handlers[0]!(...)`, so no test rewrite is needed beyond confirming
+  they still pass.
+
+Everything else reviewed clean: no hardcoded secrets, `warn()` reused
+correctly (existing helper, ctx.ui/stderr branches both already covered by
+existing tests), tests are independent (`beforeEach`/`afterEach` reset
+`tmpDir`/`sockPath`/all three `BOB_*` env vars, no shared mutable state
+across the new describe blocks), naming and comments are clear, and
+`env.d.ts`/`README.md`/`extension-author-guide/index.md` accurately reflect
+the fail-open contract from S-003's 2026-08-09 amendment and ADR-014.
+
+Next: Developer fixes the single blocking-call issue above and resubmits.
