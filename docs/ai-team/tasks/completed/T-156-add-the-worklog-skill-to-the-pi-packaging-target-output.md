@@ -1,7 +1,7 @@
 ---
 id: T-156
 title: Add the worklog skill to the pi packaging target output
-status: pending
+status: completed
 priority: low
 assigned-role: developer
 created: '2026-08-09'
