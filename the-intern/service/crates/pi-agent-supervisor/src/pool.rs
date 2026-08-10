@@ -572,6 +572,7 @@ impl SessionPool {
             extension_sock_path: cfg.extension_sock_path.clone(),
             extension_path: cfg.extension_path.clone(),
             worker_cwd: cfg.worker_cwd.clone(),
+            skill_install_path: cfg.skill_install_path.clone(),
         }
     }
 
@@ -615,6 +616,7 @@ mod tests {
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             worker_cwd: None,
+            skill_install_path: None,
         }
     }
 
@@ -640,6 +642,20 @@ mod tests {
         let process_cfg = SessionPool::worker_process_config_for_session(&cfg, SessionId::new());
 
         assert_eq!(process_cfg.worker_cwd, Some(worker_cwd));
+    }
+
+    // AC-1 (T-158): the pool threads the configured service-wide skill
+    // install path into the per-worker spawn config used for warm-worker
+    // spawning, mirroring the existing worker_cwd mapping.
+    #[test]
+    fn worker_process_config_carries_configured_skill_install_path() {
+        let skill_install_path = std::path::PathBuf::from("/opt/bob/skills");
+        let mut cfg = test_config("sh", &["-c", "exit 0"], 0, 1);
+        cfg.skill_install_path = Some(skill_install_path.clone());
+
+        let process_cfg = SessionPool::worker_process_config_for_session(&cfg, SessionId::new());
+
+        assert_eq!(process_cfg.skill_install_path, Some(skill_install_path));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -924,6 +940,7 @@ mod tests {
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             cwd: None,
+            skill_install_path: None,
         };
 
         let session_id = pool
@@ -972,6 +989,7 @@ mod tests {
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             cwd: None,
+            skill_install_path: None,
         };
 
         pool.start_interactive_session(interactive_cfg, stdin_fd, stdout_fd, stderr_fd)

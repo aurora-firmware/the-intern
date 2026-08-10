@@ -38,6 +38,11 @@ pub struct Config {
     /// a pool worker. `None` means workers inherit the launch cwd of `bob
     /// serve` unchanged.
     pub worker_cwd: Option<PathBuf>,
+    /// Absolute path to the installed skills package, passed to spawned
+    /// children as `BOB_SKILL_INSTALL_PATH`. `None` or an empty path means
+    /// the variable is not set (ADR-014 §4 fail-open: missing path means no
+    /// skills, not a spawn failure).
+    pub skill_install_path: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -53,6 +58,7 @@ impl Default for Config {
             extension_sock_path: PathBuf::new(),
             extension_path: PathBuf::new(),
             worker_cwd: None,
+            skill_install_path: None,
         }
     }
 }
@@ -446,6 +452,14 @@ impl Actor {
                                 extension_sock_path,
                                 extension_path,
                                 cwd,
+                                // AC-4: the actor's own Config is the only
+                                // way an interactive session sees
+                                // skill_install_path — start_interactive_session
+                                // takes no such parameter (CR-005 precedent:
+                                // this path never consults the actor's Config
+                                // for other fields either, so it must be
+                                // populated here explicitly).
+                                skill_install_path: self.cfg.skill_install_path.clone(),
                             };
                             let result =
                                 self.pool.start_interactive_session(cfg, stdin, stdout, stderr);
@@ -524,6 +538,7 @@ mod tests {
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             worker_cwd: None,
+            skill_install_path: None,
         }
     }
 
@@ -565,6 +580,32 @@ mod tests {
         assert_eq!(
             cfg.worker_cwd,
             Some(std::path::PathBuf::from("/opt/bob/workspace"))
+        );
+    }
+
+    // AC-1 (T-158): Config carries an optional skill install path, unset by
+    // default so no `BOB_SKILL_INSTALL_PATH` is set on spawned children.
+    #[test]
+    fn default_config_leaves_skill_install_path_unset() {
+        let cfg = Config::default();
+
+        assert_eq!(
+            cfg.skill_install_path, None,
+            "skill_install_path should be unset by default"
+        );
+    }
+
+    // AC-1 (T-158): Config can carry a configured skill install path.
+    #[test]
+    fn config_carries_configured_skill_install_path() {
+        let cfg = Config {
+            skill_install_path: Some(std::path::PathBuf::from("/opt/bob/skills")),
+            ..test_config("sh", &["-c", "exit 0"], 1, 2)
+        };
+
+        assert_eq!(
+            cfg.skill_install_path,
+            Some(std::path::PathBuf::from("/opt/bob/skills"))
         );
     }
 
@@ -1030,6 +1071,68 @@ mod tests {
         task.abort();
     }
 
+    // AC-4 (T-158): Command::StartInteractiveSession does not accept a
+    // skill_install_path parameter (no new RPC parameter per the task
+    // description), so the actor must populate
+    // InteractiveProcessConfig.skill_install_path directly from its own
+    // Config.skill_install_path. The interactive child writes the env var to
+    // a file so this test observes the actor's wiring end to end.
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_interactive_session_populates_skill_install_path_from_actor_config() {
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let skill_install_path = std::path::PathBuf::from("/opt/bob/skills");
+        let mut cfg = test_config("sh", &["-c", "exit 0"], 0, 4);
+        cfg.skill_install_path = Some(skill_install_path.clone());
+        let (handle, task) = start(cfg).expect("startup should succeed");
+
+        let out_file = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-actor-interactive-skill-path-{}.txt",
+            SessionId::new()
+        ));
+        let _ = std::fs::remove_file(&out_file);
+
+        let stdin_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stdout_fd: OwnedFd = File::create(&out_file)
+            .expect("create output file for stdout")
+            .into();
+        let stderr_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+
+        handle
+            .start_interactive_session(
+                "sh".to_string(),
+                vec![
+                    "-c".to_string(),
+                    "printf '%s' \"$BOB_SKILL_INSTALL_PATH\"".to_string(),
+                ],
+                Duration::from_millis(2000),
+                SessionId::new(),
+                std::path::PathBuf::new(),
+                std::env::current_exe().expect("current executable should exist"),
+                None,
+                stdin_fd,
+                stdout_fd,
+                stderr_fd,
+            )
+            .await
+            .expect("interactive session should start");
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let written = std::fs::read_to_string(&out_file)
+            .expect("output file should have been written by child");
+
+        assert_eq!(
+            written.trim(),
+            skill_install_path.to_string_lossy(),
+            "interactive child should see BOB_SKILL_INSTALL_PATH from the actor's own Config"
+        );
+
+        let _ = std::fs::remove_file(&out_file);
+        task.abort();
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn interactive_exit_watcher_is_not_delayed_by_idle_reap_timeout() {
         use std::fs::File;
@@ -1171,6 +1274,7 @@ mod tests {
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             worker_cwd: None,
+            skill_install_path: None,
         };
 
         let (handle, task) = start(cfg).expect("startup should succeed");

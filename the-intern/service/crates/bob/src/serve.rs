@@ -115,6 +115,11 @@ fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Con
         // Unset when pi_agent_cwd is None so warm-pool workers inherit the
         // launch cwd of `bob serve` (AC-1/AC-2).
         worker_cwd: cfg.pi_agent_cwd.clone(),
+        // T-158: field added to the supervisor's own Config surface here;
+        // left unset (T-159 maps BobConfig.skill_install_path into this
+        // field at `bob serve` startup, mirroring how T-126 mapped
+        // pi_agent_cwd above).
+        skill_install_path: None,
     }
 }
 
