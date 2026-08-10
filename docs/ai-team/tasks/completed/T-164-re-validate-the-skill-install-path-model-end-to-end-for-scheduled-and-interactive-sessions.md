@@ -2,7 +2,7 @@
 id: T-164
 title: Re-validate the skill install-path model end to end for scheduled and 
   interactive sessions
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-09'
