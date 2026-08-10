@@ -66,6 +66,22 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-10
+
+Implemented T-156 in a single TDD cycle. Read the (empty) Work Log first. Confirmed both dependencies were already merged into `dev-agent`: `package-pi-skills.sh` from T-153 with a `skill_names=(himalaya email-triage)` array driving a generic copy-and-frontmatter-patch loop, and the canonical `skills/worklog/SKILL.md` + `references/` from T-154 already present in the repo but not yet packaged.
+
+Extended the existing T-153 test suite (`test_package_pi_skills.sh`) to cover `worklog` alongside the two existing skills: added tree-existence checks to `test_ac1_generates_expected_tree`, added `worklog` to the byte-identical/frontmatter loop in `test_ac2_frontmatter_gains_allowed_tools_body_unchanged`, and added `worklog` to the git-tracked/not-ignored regression guard in `test_ac3_generated_output_stays_tracked_and_not_ignored`. Ran the suite and confirmed it failed on AC-1, AC-2, and AC-3 (red) before any implementation change — AC-4 (stale-file cleanup on regeneration) was unaffected and stayed green throughout, since it isn't skill-specific.
+
+Implemented the minimal fix: added `worklog` to the `skill_names` array in `package-pi-skills.sh`. Ran `./package-pi-skills.sh` to generate `.pi/skills/worklog/{SKILL.md,references/}` in the real repo tree (since this generated output is itself the task's second listed deliverable file, matching how `himalaya` and `email-triage` outputs are already committed), then `git add`ed the new tree. Re-ran the test suite: all 4 tests (AC-1 through AC-4) passed. Also ran the task's own literal `Verification` bash block end-to-end and confirmed both `diff`s were silent (exit 0).
+
+Considered and rejected splitting AC-1 and AC-2 into two separately-red TDD cycles: because the packaging script's transform is fully generic over skill name, the single array-addition change that satisfies AC-1 (tree generation) also fully satisfies AC-2 (byte-identical body, matching frontmatter convention) with no additional code — a second "red" step for AC-2 alone would have been artificial, since nothing would actually be failing to write code against. Instead treated AC-1, AC-2, and the pre-existing AC-3 git-tracking guard as one atomic red→green cycle, matching the task's own combined `Verification` command which checks both criteria together in one sequence.
+
+One commit made on `task/T-156-worklog-in-pi-packaging`: `55d819c feat(email-skills): add worklog to pi packaging target`, covering `package-pi-skills.sh`, `test_package_pi_skills.sh`, and the new generated `.pi/skills/worklog/` tree (3 files). Nothing remains outstanding for this task.
+
+Obstacles Encountered:
+- AC-1 and AC-2 (tree generation and byte-identical content) are satisfied by the exact same one-line implementation change (`skill_names` array addition), since the packaging script's transform is generic over skill name. Rather than force an artificial second red step for AC-2 after AC-1's fix already made it pass, AC-1, AC-2, and the pre-existing AC-3 git-tracking regression guard were treated as one atomic red→green cycle, extending all three test functions together before the single implementation change — mirroring the task's own combined Verification block, which explicitly checks both criteria in one command sequence.
+- The newly generated `.pi/skills/worklog/` tree initially showed as untracked (`??`) after running the script locally; AC-3's regression-guard test caught this correctly (it failed until the new files were `git add`ed), confirming the test's value — no code defect, just the expected local-generation-then-track step.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
