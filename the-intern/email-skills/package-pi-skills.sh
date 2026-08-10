@@ -18,6 +18,10 @@ for skill_name in "${skill_names[@]}"; do
     exit 1
   fi
 
+  # Regenerate from scratch: a stray or stale file left over in a previous
+  # generated tree must never survive a re-run once its canonical source is
+  # gone.
+  rm -rf "$dest_dir"
   mkdir -p "$pi_skills_dir"
   cp -r "$source_dir" "$dest_dir"
 

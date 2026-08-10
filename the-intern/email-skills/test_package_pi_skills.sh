@@ -59,6 +59,21 @@ test_ac2_frontmatter_gains_allowed_tools_body_unchanged() {
 
 test_ac2_frontmatter_gains_allowed_tools_body_unchanged
 
+# AC-4: re-running the script regenerates each packaged skill's tree from
+# scratch, so a file that no longer exists in the canonical source does not
+# survive as stale generated output.
+test_ac4_regeneration_removes_stale_generated_files() {
+  local ok=0
+  local stale_file="$WORK_DIR/.pi/skills/himalaya/references/stale-leftover.md"
+  mkdir -p "$(dirname "$stale_file")"
+  echo "stale content that no longer exists in the canonical source" > "$stale_file"
+  ( cd "$WORK_DIR" && ./package-pi-skills.sh ) || ok=1
+  [ ! -e "$stale_file" ] || ok=1
+  run_test "AC-4: regeneration removes stale generated files not in canonical source" "$ok"
+}
+
+test_ac4_regeneration_removes_stale_generated_files
+
 echo ""
 echo "Results: $pass_count passed, $fail_count failed"
 [ "$fail_count" -eq 0 ] || exit 1
