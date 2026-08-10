@@ -2,7 +2,7 @@
 id: T-160
 title: Answer pi resources_discover event in the bob extension with the skill 
   install path
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-09'
