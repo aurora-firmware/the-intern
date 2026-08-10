@@ -2,7 +2,7 @@
 id: T-153
 title: Add pi packaging target generating .pi/skills output from the canonical 
   skill source
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-09'
