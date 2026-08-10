@@ -90,3 +90,23 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-10
+
+PASS
+
+**Stage 1 — Acceptance Criteria:**
+- AC-1 (canonical `SKILL.md` and `references/command-reference.md` exist with the same operational content as the `.pi/skills/himalaya/` copy): met. Diffed both files' content in the branch (`task/T-151-canonical-himalaya-skill-source`, commits `dac6b41`, `d7bc0df`) against the untouched `.pi/skills/himalaya/` copy in a scratch worktree — `SKILL.md` differs only by the removed `allowed-tools` line, and `references/command-reference.md` is byte-identical.
+- AC-2 (canonical `SKILL.md` frontmatter has no `allowed-tools` field): met. `grep -c '^allowed-tools:' the-intern/email-skills/skills/himalaya/SKILL.md` returns 0.
+- AC-3 (`.pi/skills/himalaya/` left unchanged): met. `git diff dev-agent..task/T-151-canonical-himalaya-skill-source --stat -- the-intern/email-skills/.pi/skills/himalaya/` is empty; the branch's full file list touches only the two new canonical files plus the task file's own Work Log.
+- No unspecified behavior or files outside the task's declared scope were touched.
+
+**Stage 2 — Code Quality:**
+- Correctness: content relocation is exact (verified via diff, not by inspection alone); the one frontmatter field removed is precisely the pi-specific one named in the task description.
+- Tests: this task has no code/unit-test surface. The task's own `## Verification` diff command was run directly against the branch and passes with exit 0 and an empty diff; the analogous check for `references/command-reference.md` also passes. Treating the verification command as the test here is appropriate for a pure-content-relocation task.
+- Security: N/A (markdown content only, no secrets, no external input).
+- Readability: N/A (content moved verbatim; no restructuring).
+- Performance: N/A.
+- Commits (`dac6b41`, `d7bc0df`) follow `git-conventions` (type `feat`, scope `email-skills`, imperative, no task ID repeated, ≤72 chars).
+
+No blocking issues found.
