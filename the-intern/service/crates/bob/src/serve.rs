@@ -115,11 +115,15 @@ fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Con
         // Unset when pi_agent_cwd is None so warm-pool workers inherit the
         // launch cwd of `bob serve` (AC-1/AC-2).
         worker_cwd: cfg.pi_agent_cwd.clone(),
-        // T-158: field added to the supervisor's own Config surface here;
-        // left unset (T-159 maps BobConfig.skill_install_path into this
-        // field at `bob serve` startup, mirroring how T-126 mapped
-        // pi_agent_cwd above).
-        skill_install_path: None,
+        // T-159: BobConfig.skill_install_path (T-157) is always a resolved
+        // absolute path by this point — unlike pi_agent_cwd above, there is
+        // no "leave unset" case here, so it is always wrapped in `Some`.
+        // The pi-agent-supervisor actor keeps this Config for its own
+        // lifetime and both the pool path (spawned via this Config) and the
+        // interactive path (T-158 AC-4, which reads
+        // `self.cfg.skill_install_path` directly) read the same field, so
+        // there is no per-path divergence.
+        skill_install_path: Some(cfg.skill_install_path.clone()),
     }
 }
 
@@ -1100,6 +1104,31 @@ pub mod tests {
         assert_eq!(
             supervisor_cfg.worker_cwd, None,
             "unset pi_agent_cwd must leave worker_cwd unset so workers inherit the launch cwd"
+        );
+    }
+
+    // AC-1/AC-2 (T-159): BobConfig.skill_install_path is always a resolved
+    // absolute path by the time it reaches serve.rs (T-157's default
+    // resolution plus `validate()` rejecting non-absolute values), so it
+    // must be mapped unconditionally (unlike the Option<PathBuf>
+    // `pi_agent_cwd` above) into the supervisor Config's skill_install_path
+    // field — the single field both this pool-path mapping and the
+    // interactive path (T-158 AC-4, which reads the same actor Config
+    // field directly) read from, satisfying AC-2's "no per-path divergence".
+    #[test]
+    fn pi_agent_supervisor_config_maps_skill_install_path_from_bob_config() {
+        let skill_install_path = std::path::PathBuf::from("/opt/bob/skills");
+        let cfg = BobConfig {
+            skill_install_path: skill_install_path.clone(),
+            ..BobConfig::test_base()
+        };
+
+        let supervisor_cfg = build_pi_agent_supervisor_config(&cfg);
+
+        assert_eq!(
+            supervisor_cfg.skill_install_path,
+            Some(skill_install_path),
+            "skill_install_path must be mapped into the supervisor Config's skill_install_path field"
         );
     }
 
