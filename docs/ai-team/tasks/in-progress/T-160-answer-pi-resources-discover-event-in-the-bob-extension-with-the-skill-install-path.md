@@ -211,3 +211,86 @@ across the new describe blocks), naming and comments are clear, and
 the fail-open contract from S-003's 2026-08-09 amendment and ADR-014.
 
 Next: Developer fixes the single blocking-call issue above and resubmits.
+
+### Review Verdict — 2026-08-10
+
+PASS
+
+**Re-review scope:** Session 2's Work Log documents a fix for the sole Stage
+2 blocking issue from the prior FAIL verdict (`fs.existsSync()` blocking the
+event loop in `handleResourcesDiscover`). Verified that fix specifically,
+then re-ran the full two-stage review on the current branch tip
+(`task/T-160-answer-resources-discover-skill-path`, commit `9997b9b`).
+
+**Targeted fix verification.**
+- `the-intern/pi-extension/bob.ts`: `handleResourcesDiscover` is now
+  `async` and returns `Promise<{ skillPaths?: string[] } | void>`; the body
+  replaces `fs.existsSync(skillInstallPath)` with
+  `try { await fs.promises.access(skillInstallPath); } catch { ... }`,
+  matching the async `ExtensionHandler<E, R>` shape already used by
+  `handleToolCall`. The `pi.on("resources_discover", ...)` registration
+  cast's return type was updated to match. `grep -n "Sync(" bob.ts` returns
+  no matches — no synchronous fs (or other blocking) call remains in the
+  file.
+- Confirmed the new regression test
+  (`"T-160 review-fix: handleResourcesDiscover does not block the event
+  loop"` in `bob.test.ts`) is a genuine red/green test, independently: ran
+  it against a temporary copy of `bob.ts` restored to the pre-fix commit
+  (`9997b9b^`) with the current test file — it failed with `expected {
+  Object (skillPaths) } to be an instance of Promise`, then restored the
+  fixed `bob.ts` and confirmed the suite is green again (working tree left
+  clean, matching the committed state throughout).
+- The fix is minimal: commit `9997b9b` touches only `bob.ts` (13 lines) and
+  `bob.test.ts` (+34 lines, new test only) — no unrelated refactoring.
+
+**Stage 1 — Acceptance criteria: all still met** (re-checked against the
+current tip; the async change is behavior-preserving for AC-1 through AC-5):
+- AC-1: `resources_discover` is absent from `PI_EVENTS` (`bob.ts:73` array;
+  confirmed via `grep -n "resources_discover" bob.ts` — only doc comments
+  and the dedicated-handler registration reference it); covered by
+  `bob.test.ts` "T-160 AC-1" and `pi-agent-compat.test.ts`.
+- AC-2: valid existing `BOB_SKILL_INSTALL_PATH` → `{ skillPaths: [path] }`;
+  covered by `bob.test.ts` "T-160 AC-2" (still passes unchanged with the
+  handler now async, since the test already awaits the handler's result).
+- AC-3: unset/empty → no skill paths, one `warn()`, no throw; covered by
+  "T-160 AC-3" (both cases).
+- AC-4: nonexistent path → no skill paths, one `warn()`, no throw; covered
+  by "T-160 AC-4".
+- AC-5: `pi-agent-compat.test.ts`'s `DEDICATED_HANDLER_EVENTS` exclusion set
+  is `{tool_call, resources_discover}` and the completeness check fails if
+  either reappears in `PI_EVENTS`; confirmed via direct read of the test
+  file.
+- Files touched across the whole task branch remain exactly the six
+  Files-to-Touch entries (`git diff --stat
+  dev-agent...task/T-160-answer-resources-discover-skill-path`); no
+  unexpected files modified. No unspecified behavior was added.
+
+**Stage 2 — Code quality: clean, no blocking issues.**
+- **Correctness:** the `try { await fs.promises.access(...) } catch { ... }`
+  branch is the correct async equivalent of the removed
+  `!fs.existsSync(...)` check — `access()` rejects on a missing or
+  inaccessible path, and the catch branch takes the same warn-and-return-void
+  path the old boolean-negative branch took. Behavior is unchanged for all
+  four ACs.
+- **Tests:** `npm test` in `the-intern/pi-extension` reproduces `Test Files
+  2 passed (2)`, `Tests 44 passed (44)` (up from 43, the delta being the one
+  new regression test); `npx vitest run bob.test.ts -t "T-160 review-fix"`
+  passes in isolation; `npx tsc --noEmit` is clean. The new test is
+  independent — reuses the existing `beforeEach`/`afterEach` fixture that
+  creates a fresh `tmpDir` and clears all three `BOB_*` env vars per test, no
+  shared mutable state.
+- **Security:** no change to input validation or secret handling from the
+  prior review.
+- **Readability:** the new `describe` block is clearly named and comment-
+  labelled "T-160 review-fix"; the async conversion is a small, self-
+  contained diff with no dead code left behind.
+- **Performance:** the blocking-call issue is resolved — no synchronous fs
+  call remains in `bob.ts` production code (verified via grep, see above).
+
+No new issues found. Everything previously reviewed clean in the 2026-08-10
+first-entry verdict (secrets, `warn()` reuse, test independence, naming,
+`env.d.ts`/`README.md`/`extension-author-guide/index.md` accuracy) is
+unaffected by this session's change and remains clean, since session 2 only
+touched `bob.ts` and `bob.test.ts`.
+
+Next: task is ready for integration.
