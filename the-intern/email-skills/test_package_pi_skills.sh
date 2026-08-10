@@ -29,7 +29,8 @@ cp -r "$PACKAGE_DIR/skills" "$WORK_DIR/skills"
 cp "$SCRIPT" "$WORK_DIR/package-pi-skills.sh"
 chmod +x "$WORK_DIR/package-pi-skills.sh"
 
-# AC-1: running the script produces SKILL.md and references/ for both skills
+# AC-1: running the script produces SKILL.md and references/ for all three
+# skills, including the worklog skill added in T-156.
 test_ac1_generates_expected_tree() {
   local ok=0
   ( cd "$WORK_DIR" && ./package-pi-skills.sh ) || ok=1
@@ -37,7 +38,9 @@ test_ac1_generates_expected_tree() {
   [ -d "$WORK_DIR/.pi/skills/himalaya/references" ] || ok=1
   [ -f "$WORK_DIR/.pi/skills/email-triage/SKILL.md" ] || ok=1
   [ -d "$WORK_DIR/.pi/skills/email-triage/references" ] || ok=1
-  run_test "AC-1: script generates SKILL.md and references/ for both skills" "$ok"
+  [ -f "$WORK_DIR/.pi/skills/worklog/SKILL.md" ] || ok=1
+  [ -d "$WORK_DIR/.pi/skills/worklog/references" ] || ok=1
+  run_test "AC-1: script generates SKILL.md and references/ for all three skills" "$ok"
 }
 
 test_ac1_generates_expected_tree
@@ -45,10 +48,11 @@ test_ac1_generates_expected_tree
 # AC-2: generated SKILL.md body is byte-for-byte identical to the canonical
 # source, and its frontmatter additionally contains allowed-tools: Read Bash.
 # Stripping that one added line from the generated frontmatter must
-# reproduce the canonical file exactly (frontmatter and body alike).
+# reproduce the canonical file exactly (frontmatter and body alike). Covers
+# the worklog skill added in T-156 alongside the two pre-existing skills.
 test_ac2_frontmatter_gains_allowed_tools_body_unchanged() {
   local ok=0
-  for name in himalaya email-triage; do
+  for name in himalaya email-triage worklog; do
     local canonical="$WORK_DIR/skills/$name/SKILL.md"
     local generated="$WORK_DIR/.pi/skills/$name/SKILL.md"
     grep -q '^allowed-tools: Read Bash$' "$generated" || ok=1
@@ -78,13 +82,15 @@ test_ac4_regeneration_removes_stale_generated_files
 # with unchanged tracked status (this is a regression guard on repository
 # configuration, not on the script itself — the script has no say over what
 # git tracks). Runs against the real repository, not the isolated WORK_DIR.
+# Covers the worklog skill's generated output added in T-156.
 test_ac3_generated_output_stays_tracked_and_not_ignored() {
   local ok=0
   local repo_root
   repo_root="$(cd "$PACKAGE_DIR/../.." && pwd)"
   for generated in \
     the-intern/email-skills/.pi/skills/himalaya/SKILL.md \
-    the-intern/email-skills/.pi/skills/email-triage/SKILL.md
+    the-intern/email-skills/.pi/skills/email-triage/SKILL.md \
+    the-intern/email-skills/.pi/skills/worklog/SKILL.md
   do
     git -C "$repo_root" check-ignore -q "$generated" && ok=1
     git -C "$repo_root" ls-files --error-unmatch "$generated" >/dev/null 2>&1 || ok=1
