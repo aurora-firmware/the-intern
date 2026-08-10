@@ -2,7 +2,7 @@
 id: T-161
 title: Update operator guide and quickstart to the skill install-path deployment
   model
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-09'
