@@ -107,6 +107,39 @@ test_ac2_does_not_modify_bob_companion_claude() {
 
 test_ac2_does_not_modify_bob_companion_claude
 
+# AC-4: the script provides a plugin manifest at
+# claude/.claude-plugin/plugin.json mirroring the shape (same top-level key
+# set) of bob-companion/claude's manifest, with this package's own name and
+# description, and carrying no skill body content.
+test_ac4_plugin_manifest_present_and_shaped() {
+  local ok=0
+  local manifest="$WORK_DIR/claude/.claude-plugin/plugin.json"
+  local bob_manifest="$PACKAGE_DIR/../bob-companion/claude/.claude-plugin/plugin.json"
+
+  [ -f "$manifest" ] || ok=1
+  python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$manifest" >/dev/null 2>&1 || ok=1
+
+  local bob_keys our_keys
+  bob_keys=$(python3 -c "import json,sys; print(' '.join(sorted(json.load(open(sys.argv[1])).keys())))" "$bob_manifest")
+  our_keys=$(python3 -c "import json,sys; print(' '.join(sorted(json.load(open(sys.argv[1])).keys())))" "$manifest" 2>/dev/null || echo "")
+  [ "$bob_keys" = "$our_keys" ] || ok=1
+
+  local our_name
+  our_name=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['name'])" "$manifest" 2>/dev/null || echo "")
+  [ -n "$our_name" ] || ok=1
+  [ "$our_name" != "bob-companion" ] || ok=1
+
+  # No skill body content: none of the canonical skills' own description
+  # openers should appear in the manifest.
+  grep -qF "CLI reference for himalaya" "$manifest" 2>/dev/null && ok=1
+  grep -qF "Domain-free diary discipline" "$manifest" 2>/dev/null && ok=1
+  grep -qF "Runs the scheduled email-triage workflow" "$manifest" 2>/dev/null && ok=1
+
+  run_test "AC-4: plugin manifest exists, mirrors bob-companion's shape, has own name/description, carries no skill body content" "$ok"
+}
+
+test_ac4_plugin_manifest_present_and_shaped
+
 echo ""
 echo "Results: $pass_count passed, $fail_count failed"
 [ "$fail_count" -eq 0 ] || exit 1
