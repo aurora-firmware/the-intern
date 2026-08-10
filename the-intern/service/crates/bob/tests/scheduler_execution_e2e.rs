@@ -359,6 +359,7 @@ async fn schedule_entry_from_json_store_is_delivered_when_admitted_users_is_empt
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: current_exe_path(),
             worker_cwd: None,
+            skill_install_path: None,
         })
         .expect("pi-agent supervisor must start with fake worker");
 
@@ -591,6 +592,7 @@ async fn scheduled_entry_with_per_entry_cwd_runs_pi_session_in_that_directory_ho
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: current_exe_path(),
             worker_cwd: Some(configured_default_cwd.clone()),
+            skill_install_path: None,
         })
         .expect("pi-agent supervisor must start with fake worker");
 
@@ -762,6 +764,7 @@ async fn scheduled_entry_with_missing_per_entry_cwd_at_fire_time_skips_the_fire_
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: current_exe_path(),
             worker_cwd: None,
+            skill_install_path: None,
         })
         .expect("pi-agent supervisor must start");
 
@@ -961,6 +964,7 @@ async fn scheduled_entry_firing_records_the_resolved_cwd_on_the_audit_record() {
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: current_exe_path(),
             worker_cwd: None,
+            skill_install_path: None,
         })
         .expect("pi-agent supervisor must start with fake worker");
 

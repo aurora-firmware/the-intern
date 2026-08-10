@@ -38,6 +38,11 @@ pub struct Config {
     /// a pool worker. `None` means workers inherit the launch cwd of `bob
     /// serve` unchanged.
     pub worker_cwd: Option<PathBuf>,
+    /// Absolute path to the installed skills package, passed to spawned
+    /// children as `BOB_SKILL_INSTALL_PATH`. `None` or an empty path means
+    /// the variable is not set (ADR-014 §4 fail-open: missing path means no
+    /// skills, not a spawn failure).
+    pub skill_install_path: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -53,6 +58,7 @@ impl Default for Config {
             extension_sock_path: PathBuf::new(),
             extension_path: PathBuf::new(),
             worker_cwd: None,
+            skill_install_path: None,
         }
     }
 }
@@ -524,6 +530,7 @@ mod tests {
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             worker_cwd: None,
+            skill_install_path: None,
         }
     }
 
@@ -565,6 +572,32 @@ mod tests {
         assert_eq!(
             cfg.worker_cwd,
             Some(std::path::PathBuf::from("/opt/bob/workspace"))
+        );
+    }
+
+    // AC-1 (T-158): Config carries an optional skill install path, unset by
+    // default so no `BOB_SKILL_INSTALL_PATH` is set on spawned children.
+    #[test]
+    fn default_config_leaves_skill_install_path_unset() {
+        let cfg = Config::default();
+
+        assert_eq!(
+            cfg.skill_install_path, None,
+            "skill_install_path should be unset by default"
+        );
+    }
+
+    // AC-1 (T-158): Config can carry a configured skill install path.
+    #[test]
+    fn config_carries_configured_skill_install_path() {
+        let cfg = Config {
+            skill_install_path: Some(std::path::PathBuf::from("/opt/bob/skills")),
+            ..test_config("sh", &["-c", "exit 0"], 1, 2)
+        };
+
+        assert_eq!(
+            cfg.skill_install_path,
+            Some(std::path::PathBuf::from("/opt/bob/skills"))
         );
     }
 
@@ -1171,6 +1204,7 @@ mod tests {
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             worker_cwd: None,
+            skill_install_path: None,
         };
 
         let (handle, task) = start(cfg).expect("startup should succeed");
