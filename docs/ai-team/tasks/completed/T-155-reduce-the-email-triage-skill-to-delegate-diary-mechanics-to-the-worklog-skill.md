@@ -2,7 +2,7 @@
 id: T-155
 title: Reduce the email-triage skill to delegate diary mechanics to the worklog 
   skill
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-09'
