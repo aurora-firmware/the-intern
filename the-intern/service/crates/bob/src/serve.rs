@@ -100,6 +100,26 @@ fn start_subsystems(cfg: &BobConfig) -> ServiceResult<Runtime> {
     }
 }
 
+/// S-011 Workflow startup step: "bob starts and resolves the skill install
+/// path → path missing or empty: log a warning and continue without skills"
+/// (fail-open, `ADR-014` §4).
+///
+/// `BobConfig.skill_install_path` is never checked for existence at config
+/// load (T-157) or by the supervisor's spawn-time env var wiring (T-158,
+/// which only sees whatever it's given), so this is the one place a missing
+/// or non-directory resolved path surfaces to the operator. It is
+/// deliberately non-fatal: this function only logs and returns, it cannot
+/// fail `bob serve` startup.
+fn warn_if_skill_install_path_missing(cfg: &BobConfig) {
+    if !cfg.skill_install_path.is_dir() {
+        tracing::warn!(
+            skill_install_path = %cfg.skill_install_path.display(),
+            "resolved skill install path does not exist as a directory; \
+             sessions will start without skills"
+        );
+    }
+}
+
 fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Config {
     pi_agent_supervisor::Config {
         worker_command: cfg.pi_agent_command.clone(),
@@ -203,6 +223,10 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     info!("policy-control actor started");
 
     info!("starting pi-agent-supervisor actor");
+    // AC-3 (T-159): fail-open startup warning, not a startup failure — see
+    // warn_if_skill_install_path_missing's doc comment for the S-011
+    // Workflow step this implements.
+    warn_if_skill_install_path_missing(cfg);
     let pi_agent_supervisor_cfg = build_pi_agent_supervisor_config(cfg);
     let (pi_agent_supervisor_handle, pi_agent_supervisor_join) =
         pi_agent_supervisor::start(pi_agent_supervisor_cfg)?;
@@ -1243,6 +1267,111 @@ pub mod tests {
         assert!(
             supervisor_cfg.extension_sock_path.as_os_str().is_empty(),
             "empty extension_sock_path in BobConfig must result in empty path in supervisor Config"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // AC-3 (T-159) helpers: a thread-safe in-memory tracing writer, mirroring
+    // the pattern established in config.rs / telemetry.rs, used to assert on
+    // warning log content without touching global tracing state.
+    // ---------------------------------------------------------------------------
+
+    #[derive(Clone, Default)]
+    struct CaptureWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl CaptureWriter {
+        fn contents(&self) -> String {
+            String::from_utf8(self.0.lock().expect("lock").clone())
+                .expect("captured output is valid UTF-8")
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
+        type Writer = CaptureWriterHandle;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            CaptureWriterHandle(self.0.clone())
+        }
+    }
+
+    struct CaptureWriterHandle(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CaptureWriterHandle {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    // AC-3 (T-159): a resolved skill_install_path that does not exist as a
+    // directory must log a warning naming the path, and startup must not be
+    // treated as failed (fail-open, S-011 Workflow / ADR-014 §4).
+    #[test]
+    fn warns_when_resolved_skill_install_path_directory_is_missing() {
+        let missing = std::env::temp_dir().join(format!(
+            "bob-test-missing-skill-install-path-{}",
+            std::process::id()
+        ));
+        assert!(
+            !missing.exists(),
+            "test precondition: path must not already exist"
+        );
+        let cfg = BobConfig {
+            skill_install_path: missing.clone(),
+            ..BobConfig::test_base()
+        };
+
+        let writer = CaptureWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .without_time()
+            .with_writer(writer.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            warn_if_skill_install_path_missing(&cfg);
+        });
+
+        let logs = writer.contents();
+        assert!(
+            logs.contains(&missing.display().to_string()),
+            "warning must name the missing skill install path; got: {logs}"
+        );
+        assert!(
+            logs.to_lowercase().contains("warn"),
+            "log line must be a warning, not another level; got: {logs}"
+        );
+    }
+
+    // AC-3 (T-159) counter-case: an existing skill_install_path directory
+    // must not produce a warning, so the log stays quiet on the common path.
+    #[test]
+    fn does_not_warn_when_resolved_skill_install_path_directory_exists() {
+        let tmp = tempfile::tempdir().expect("tempdir must be creatable");
+        let cfg = BobConfig {
+            skill_install_path: tmp.path().to_path_buf(),
+            ..BobConfig::test_base()
+        };
+
+        let writer = CaptureWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .without_time()
+            .with_writer(writer.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            warn_if_skill_install_path_missing(&cfg);
+        });
+
+        let logs = writer.contents();
+        assert!(
+            logs.is_empty(),
+            "an existing skill install path directory must not log a warning; got: {logs}"
         );
     }
 
