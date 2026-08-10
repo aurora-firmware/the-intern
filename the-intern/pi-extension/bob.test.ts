@@ -1647,3 +1647,58 @@ describe("T-160 AC-1: resources_discover removed from generic PI_EVENTS list", (
     expect(PI_EVENTS).not.toContain("resources_discover");
   });
 });
+
+// ---------------------------------------------------------------------------
+// T-160 AC-3: absent or empty BOB_SKILL_INSTALL_PATH contributes no skill
+// paths, logs one warning, and does not throw or block session init.
+// ---------------------------------------------------------------------------
+
+describe("T-160 AC-3: absent or empty BOB_SKILL_INSTALL_PATH contributes no skill paths", () => {
+  it("contributes no skill paths and logs one warning when BOB_SKILL_INSTALL_PATH is unset", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    delete process.env.BOB_SKILL_INSTALL_PATH;
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("resources_discover") ?? [];
+    expect(handlers.length).toBe(1);
+
+    const result = await handlers[0]!(
+      { type: "resources_discover", cwd: tmpDir, reason: "startup" },
+      {} as ExtensionContext
+    );
+
+    expect((result as any)?.skillPaths).toBeUndefined();
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+  });
+
+  it("contributes no skill paths and logs one warning when BOB_SKILL_INSTALL_PATH is empty", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_SKILL_INSTALL_PATH = "";
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("resources_discover") ?? [];
+    const result = await handlers[0]!(
+      { type: "resources_discover", cwd: tmpDir, reason: "startup" },
+      {} as ExtensionContext
+    );
+
+    expect((result as any)?.skillPaths).toBeUndefined();
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+  });
+});

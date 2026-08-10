@@ -429,10 +429,23 @@ export default function bobFactory(pi: ExtensionAPI): void {
   // ---------------------------------------------------------------------------
   // Dedicated resources_discover handler (ADR-014).
   //
-  // Stub for now — always contributes no skill paths. Filled in by later
-  // commits on this cycle.
+  // Answers pi's resources_discover event with the skill install path read
+  // from BOB_SKILL_INSTALL_PATH. Fail-open: an absent, empty, or nonexistent
+  // path contributes no skill paths and logs one warning, but never throws or
+  // blocks session initialisation.
   // ---------------------------------------------------------------------------
-  function handleResourcesDiscover(_event: unknown, _ctx: ExtensionContext): void {
+  function handleResourcesDiscover(
+    _event: unknown,
+    ctx: ExtensionContext
+  ): { skillPaths?: string[] } | void {
+    const skillInstallPath = process.env.BOB_SKILL_INSTALL_PATH;
+    if (!skillInstallPath) {
+      warn(
+        "BOB_SKILL_INSTALL_PATH is not set — contributing no skill paths for this session.",
+        ctx
+      );
+      return;
+    }
     return;
   }
 
