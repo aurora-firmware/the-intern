@@ -1,7 +1,7 @@
 ---
 id: T-157
 title: Add skill_install_path config key to BobConfig
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-09'
