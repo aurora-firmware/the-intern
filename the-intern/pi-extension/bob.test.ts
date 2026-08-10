@@ -1702,3 +1702,34 @@ describe("T-160 AC-3: absent or empty BOB_SKILL_INSTALL_PATH contributes no skil
     stderrSpy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// T-160 AC-4: a BOB_SKILL_INSTALL_PATH naming a path that does not exist on
+// disk contributes no skill paths, logs one warning, and does not throw or
+// block session init.
+// ---------------------------------------------------------------------------
+
+describe("T-160 AC-4: nonexistent BOB_SKILL_INSTALL_PATH contributes no skill paths", () => {
+  it("contributes no skill paths and logs one warning when the path does not exist on disk", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_SKILL_INSTALL_PATH = path.join(tmpDir, "does-not-exist");
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("resources_discover") ?? [];
+    const result = await handlers[0]!(
+      { type: "resources_discover", cwd: tmpDir, reason: "startup" },
+      {} as ExtensionContext
+    );
+
+    expect((result as any)?.skillPaths).toBeUndefined();
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+  });
+});

@@ -446,6 +446,13 @@ export default function bobFactory(pi: ExtensionAPI): void {
       );
       return;
     }
+    if (!fs.existsSync(skillInstallPath)) {
+      warn(
+        `BOB_SKILL_INSTALL_PATH "${skillInstallPath}" does not exist — contributing no skill paths for this session.`,
+        ctx
+      );
+      return;
+    }
     return;
   }
 
