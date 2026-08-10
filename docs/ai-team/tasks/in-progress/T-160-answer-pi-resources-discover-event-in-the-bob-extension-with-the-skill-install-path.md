@@ -101,6 +101,27 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-10
+
+Implemented T-160 end to end via TDD, five commits on task/T-160-answer-resources-discover-skill-path. Read the ADR-014 decision record and S-003's 2026-08-09 amendment (env var contract for BOB_SKILL_INSTALL_PATH) before writing any code, since the task description referenced both but the task file's Work Log was empty (first session). Confirmed via node_modules/@earendil-works/pi-coding-agent's installed types.d.ts that ResourcesDiscoverResult ({skillPaths?, promptPaths?, themePaths?}) is not part of the package's public export surface (only reachable through the internal dist path, unlike ToolCallEventResult which is exported) — used a local minimal `{ skillPaths?: string[] }` type in the registration cast instead of importing it, following the same cast pattern already used for the tool_call registration.
+
+Four TDD cycles, each red before green: (1) removed resources_discover from PI_EVENTS and added a dedicated (stub) handler + registration, which forced pi-agent-compat.test.ts's PI_EVENTS-completeness test red until the exclusion set was updated to {tool_call, resources_discover} — bundled that fix into the same commit since it was mechanically forced by the PI_EVENTS change and is explicitly required by AC-5; (2) unset/empty BOB_SKILL_INSTALL_PATH -> one warning, no skillPaths; (3) nonexistent path -> one warning, no skillPaths; (4) valid existing path -> {skillPaths: [path]}. Each cycle's test was verified red via `npx vitest run bob.test.ts -t "..."` before implementing, then green via `npm test`. Tests invoke `pi.handlers.get("resources_discover")[0]` directly to capture the handler's return value, mirroring the existing tool_call test pattern — no UDS server needed since this handler never touches the socket.
+
+After the code cycles, updated env.d.ts, README.md, and docs/src/extension-author-guide/index.md per the Files-to-Touch list, including the two specific corrections the task called out (the "Event frame — sent for every pi event except tool_call" claim, and the two-variable supervisor enumeration). Also lightly corrected bob.ts's own top-of-file module doc comment (lines 1-14, not separately listed in Files to Touch but the same file already in scope) since it still said "for all non-tool_call events" after resources_discover also became a dedicated handler — judged this a minimal, same-file accuracy fix rather than scope creep. Verified the mdBook docs still build cleanly after the extension-author-guide edit (`mdbook build` in the-intern/docs, no warnings).
+
+Final state: 6 files touched, exactly matching the task's Files to Touch list (verified via `git diff --stat dev-agent...task/...`). `npm test` in the-intern/pi-extension passes 43/43 (up from the 38 baseline), `npx tsc --noEmit` is clean. Nothing remains for this task; all five acceptance criteria (AC-1 through AC-5) have dedicated test coverage.
+
+Evidence:
+- `cd the-intern/pi-extension && npm test` — final run: `Test Files 2 passed (2)`, `Tests 43 passed (43)`.
+- `cd the-intern/pi-extension && npx tsc --noEmit` — no output (clean).
+- `git diff --stat dev-agent...task/T-160-answer-resources-discover-skill-path` — confirms only the six Files-to-Touch files changed.
+- `cd the-intern/docs && mdbook build` — succeeded with no warnings after the extension-author-guide edit.
+- Per-cycle red confirmations captured in the transcript (`npx vitest run bob.test.ts -t "T-160 AC-N"` failing before each implementation, passing after).
+
+Obstacles Encountered:
+- `ResourcesDiscoverResult` is not part of `@earendil-works/pi-coding-agent`'s public export surface (`dist/index.d.ts`), unlike `ToolCallEventResult`. Worked around by defining a local minimal inline type (`{ skillPaths?: string[] }`) in the registration cast, matching the project's existing pattern of casting `pi` for overloads that are awkward to type generically — no package or config change needed.
+- None otherwise; `pi` binary was not needed since `npm test` runs a pure vitest suite with no `pi` process involved.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
