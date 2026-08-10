@@ -1036,7 +1036,13 @@ the package as described in
    [[policy.action_rules]]
    tool = "bash"
    arg_matchers = [
-     { field_path = "command", pattern = "*ls worklog*" },
+     { field_path = "command", pattern = "*ls *worklog*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "date +%H:%M*" },
    ]
 
    [[policy.action_rules]]
@@ -1064,16 +1070,30 @@ the package as described in
    ]
    ```
 
-   **New in this deployment model — not yet independently live-validated:**
-   the `worklog/SKILL.md` and `worklog/references/*.md` read rules above
-   admit the `worklog` skill `T-155`/`T-156` extracted from `email-triage`'s
-   own reference content; the reduced `email-triage` `SKILL.md` now
-   delegates diary mechanics to it (S-011 Responsibility Separation). They
-   follow the identical per-skill `SKILL.md` + `references/*.md` shape
-   already live-validated below for `himalaya`/`email-triage`, but have not
-   themselves been re-run against a live mailbox and scheduled `bob`
-   instance under this task — validate them the same way before depending
-   on them in a production deployment.
+   **The `worklog` skill's rules are now live-validated under the
+   install-path model.** The `worklog/SKILL.md` and `worklog/references/*.md`
+   read rules above admit the `worklog` skill `T-154`/`T-155` extracted from
+   `email-triage`'s own reference content; the reduced `email-triage`
+   `SKILL.md` now delegates diary mechanics to it (S-011 Responsibility
+   Separation). `T-164` re-ran this exact rule set — including these
+   `worklog` rules — live, end to end, twice: once against a scheduled
+   `email-triage` job (`automated-notification` happy path, worklog entry
+   written into the job's own `--cwd`) and once against an interactive
+   `bob chat` session asked to record a worklog entry directly, both from
+   working directories holding no skill files of their own and both served
+   entirely from a single shared skill install path. Live validation
+   surfaced two real gaps this exact rule set had before `T-164`: the `ls
+   worklog` bash pattern above is now `*ls *worklog*` (broadened to match
+   flag variants such as `ls -ld worklog`, which the earlier narrower
+   pattern missed), and the `date +%H:%M*` rule above is new — the
+   `worklog` skill needs it to look up the current time for an entry's
+   `<HH:MM>` header. Without that rule, a run may write a wrong placeholder
+   timestamp instead of the real time and then be unable to correct it,
+   since correcting it would need `edit` or an arbitrary script — tools
+   this skill's own documented surface deliberately excludes; see `B-039`
+   for the open follow-up on that specific defect (the `date` rule closes
+   the *policy* gap, but does not by itself guarantee the model always
+   calls it).
 
    The absolute-path `worklog` rule the per-workspace deployment model used
    (`{ field_path = "path", pattern = "<workspace>/worklog/*.md" }`) is
@@ -1086,7 +1106,8 @@ the package as described in
 
    **This rule set covers the live-validated paths** — `automated-notification`
    (file, no reply), escalation, S-004 block handling, and skipped-tick
-   continuity (T-139, T-140) — **plus one additional rule** admitting the
+   continuity (T-139, T-140), re-confirmed live under the skill install-path
+   model itself by `T-164` — **plus one additional rule** admitting the
    `himalaya template reply` -> `himalaya template send` command shape that
    the `direct-request` and `meeting-scheduling` categories use to send a
    reply (`B-029`). **It does not include a `message move` rule for
