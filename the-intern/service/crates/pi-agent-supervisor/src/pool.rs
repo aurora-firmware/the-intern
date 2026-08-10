@@ -940,6 +940,7 @@ mod tests {
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             cwd: None,
+            skill_install_path: None,
         };
 
         let session_id = pool
@@ -988,6 +989,7 @@ mod tests {
             extension_sock_path: std::path::PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             cwd: None,
+            skill_install_path: None,
         };
 
         pool.start_interactive_session(interactive_cfg, stdin_fd, stdout_fd, stderr_fd)
