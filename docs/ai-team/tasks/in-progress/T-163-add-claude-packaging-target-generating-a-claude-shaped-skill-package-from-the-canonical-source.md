@@ -141,3 +141,122 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-10
+
+PASS
+
+**Claim verification 1 — Claude Code frontmatter needs no vendor-specific transformation:**
+independently confirmed against Claude Code's own documentation, not just the
+Developer's summary. Fetched `https://code.claude.com/docs/en/skills.md` and
+`https://code.claude.com/docs/en/plugins-reference.md` directly.
+
+- `skills.md`'s frontmatter reference table lists `name`, `description`, and
+  `compatibility` as recognized SKILL.md fields, none required ("All fields
+  are optional. Only `description` is recommended so Claude knows when to use
+  the skill."). `compatibility` is documented as "Environment requirements
+  for the skill... Claude Code accepts the field but doesn't act on it" —
+  exactly the pass-through behavior the canonical `himalaya/SKILL.md`'s
+  `compatibility` field needs. This is a real difference from the pi target:
+  pi requires `allowed-tools` to be added (T-153), Claude Code does not
+  require any field to be added.
+- `plugins-reference.md` confirms the generated layout matches the documented
+  plugin shape exactly: a `skills/<name>/SKILL.md` directory layout (`Skills`
+  row, File locations reference table) and a `.claude-plugin/plugin.json`
+  manifest where `name` is stated as "the only required field" (Required
+  fields section). The generated `claude/.claude-plugin/plugin.json` supplies
+  `name` plus the same optional metadata keys (`description`, `version`,
+  `author`, `homepage`, `repository`, `license`, `keywords`) already used by
+  `bob-companion/claude/.claude-plugin/plugin.json`, all of which are
+  documented, recognized fields.
+- Conclusion: the Developer's claim holds. A byte-for-byte `cp -r` with no
+  frontmatter transformation is correct for this vendor, and no
+  Claude-specific required field is missing.
+
+**Claim verification 2 — `test_package_claude_skills.sh` not in Files to Touch:**
+reasonable, not scope creep, for the same reason T-153's analogous addition
+was accepted in that task's own review: the `tdd` skill's Output Format
+requires "test files ... covering all acceptance criteria," the added file
+tests only `package-claude-skills.sh` (a listed Files-to-Touch item), and it
+adds no production behavior of its own. `package-claude-skills.sh` has real
+control flow (regenerate-from-scratch, a plugin-manifest heredoc, a
+missing-source error branch) that only a dedicated test file can exercise —
+a diff-only verification check would not cover it.
+
+**Stage 1 — Acceptance Criteria:**
+- AC-1 (packaging script generates one `SKILL.md` per skill from
+  `the-intern/email-skills/skills/`, Claude Code layout/conventions): met.
+  Ran `./package-claude-skills.sh` against the real repo tree (via an
+  isolated `git worktree`) — `claude/skills/{himalaya,email-triage,worklog}/SKILL.md`
+  all present. `test_ac1_generates_expected_tree` covers this in an isolated
+  `mktemp -d` copy; passed.
+- AC-2 (output lives under a new `the-intern/email-skills/` location; no file
+  under `the-intern/bob-companion/claude/` modified): met.
+  `git diff --stat dev-agent...task/T-163-claude-packaging-target -- the-intern/bob-companion`
+  is empty. Confirmed `the-intern/email-skills/claude/` is tracked and not
+  matched by the root `.gitignore`'s unanchored `.claude` rule (the tracked
+  directory is named `claude`, and its plugin metadata directory is named
+  `.claude-plugin`, neither of which is a path component literally named
+  `.claude`) via `git check-ignore -v` (exit 1, no match) and `git ls-files`.
+  `test_ac2_does_not_modify_bob_companion_claude` independently proves this
+  with a before/after `sha256sum` snapshot of an isolated copy of
+  `bob-companion`; passed.
+- AC-3 (output for all three skills, including full `references/` trees,
+  byte-for-byte identical to canonical source): met. Ran the task's own
+  Verification block (`./package-claude-skills.sh && test -f ... && diff -r
+  skills/<name>/references claude/skills/<name>/references` for all three
+  skills) against the real repo tree — clean, exit 0. Re-running the script
+  against the already-committed output produced zero `git status` diff (no
+  drift between committed output and what the script produces today).
+  `test_ac3_output_byte_identical_to_canonical_source` and
+  `test_ac3_regeneration_removes_stale_generated_files` (regen-from-scratch,
+  proven via a planted stale file that is gone after re-run) both passed.
+- AC-4 (Claude Code plugin manifest at
+  `claude/.claude-plugin/plugin.json`, mirroring `bob-companion`'s manifest
+  shape with this package's own name/description, no skill body content):
+  met. Verified the committed manifest's top-level keys match
+  `bob-companion/claude/.claude-plugin/plugin.json`'s exactly (`name`,
+  `description`, `version`, `author`, `homepage`, `repository`, `license`,
+  `keywords`), with `name: "email-skills"` and its own description.
+  Manually confirmed no skill body content leaked — the manifest's
+  description is generic package-level prose, not any skill's own
+  description text. `test_ac4_plugin_manifest_present_and_shaped` also
+  greps for each skill's description-opener text to guard this; passed.
+- Files touched match "Files to Touch" plus the justified
+  `test_package_claude_skills.sh` addition (see claim verification 2 above):
+  `package-claude-skills.sh` (new), `claude/skills/{himalaya,email-triage,worklog}/SKILL.md`
+  + `references/**` (new, generated), `claude/.claude-plugin/plugin.json`
+  (new). No files outside `the-intern/email-skills/` touched
+  (`git diff --stat dev-agent...task/T-163-claude-packaging-target -- . ':(exclude)the-intern/email-skills'`
+  empty). `README.md` correctly left untouched — it is not in this task's
+  Files to Touch and no AC needs it (unlike T-153, which had it listed).
+  Dependencies `T-151`, `T-152`, `T-154`, `T-155` all confirmed completed
+  before this task started.
+
+**Stage 2 — Code Quality:**
+- Correctness: `package-claude-skills.sh`'s logic is sound — `rm -rf` +
+  `cp -r` per skill for regenerate-from-scratch (matching the AC-3
+  regeneration requirement and T-153's precedent), a heredoc-owned plugin
+  manifest carrying no skill content, `set -euo pipefail` throughout, and a
+  clear missing-canonical-source guard that exits 1 with a stderr message.
+- Tests: `test_package_claude_skills.sh`'s 5 tests all pass independently
+  (`mktemp -d` `WORK_DIR`/`WORK_DIR2` with an `EXIT` trap cleanup) and
+  deterministically; re-ran the suite directly (not just trusting the Work
+  Log) — `Results: 5 passed, 0 failed`.
+- Security: N/A — no secrets, no untrusted external input; the script only
+  reads a fixed, repo-local canonical directory and writes to a fixed
+  repo-local destination.
+- Readability: names are descriptive (`canonical_dir`, `claude_skills_dir`,
+  `plugin_manifest_dir`), comments explain non-obvious choices (regen-from-
+  scratch rationale, manifest being script-owned static content), no dead
+  code.
+- Performance: N/A — small, bounded directory copies over three skill
+  directories.
+- Minor, non-blocking observation: the commit
+  `feat(email-skills): generate Claude plugin manifest from packaging script`
+  is 73 characters, one over the git-conventions skill's documented
+  "≤ 72 chars total" for `<type>(<component>): <description>`. Trivial and
+  not worth a review cycle on its own; worth keeping in mind for the next
+  commit on this task or a future one.
+
+Next owner: active Development Loop.
