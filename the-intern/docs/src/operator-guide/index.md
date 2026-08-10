@@ -246,9 +246,11 @@ Bob's TOML configuration file is located at:
 `bob` controls the working directory (cwd) each supervised `pi` process runs
 in via the service-wide `pi_agent_cwd` config key and, for scheduled jobs, an
 optional per-entry `cwd` (see [Scheduled jobs](#scheduled-jobs)). This lets pi
-discover project context (`AGENTS.md`/`CLAUDE.md`), skills, and relative
-prompt-file paths from a predictable directory instead of whichever directory
-`bob serve` happened to be launched from.
+discover project context (`AGENTS.md`/`CLAUDE.md`) and relative prompt-file
+paths from a predictable directory instead of whichever directory `bob serve`
+happened to be launched from. **Skills are not affected by this key or any
+per-entry `cwd`** — bob supplies them to every session independently of its
+working directory; see [Install the skill package](#install-the-skill-package).
 
 ### `pi_agent_cwd` (service-wide)
 
@@ -266,8 +268,9 @@ pi_agent_cwd = "/srv/workspaces/default"
   immediately with a clear error naming `pi_agent_cwd`.
 - **Default: unset.** When `pi_agent_cwd` is not set, RPC workers inherit the
   launch cwd of the `bob serve` process itself — the behavior bob has always
-  had. Set it explicitly so pi's context-file discovery, skills, and any
-  relative paths in prompts resolve predictably.
+  had. Set it explicitly so pi's context-file discovery and any relative
+  paths in prompts resolve predictably. (Skill discovery is unaffected
+  either way — see [Install the skill package](#install-the-skill-package).)
 - **Existence is not checked at config load.** A `pi_agent_cwd` naming a
   directory that does not exist still loads successfully. A missing directory
   only surfaces later, at worker-spawn time, as a logged (warned) spawn
@@ -553,12 +556,14 @@ tick.
 > relaxation of the trust boundary used for schedule-store admission. Because scheduled jobs bypass
 > `[policy].admitted_users`, a prompt file or working directory that another
 > user can write is an injection path into a trusted job. A writable `cwd` is
-> especially significant: pi automatically loads `AGENTS.md`/`CLAUDE.md` and
-> skills from a session's working directory, so a maliciously-writable `cwd`
-> can inject context and instructions the operator never intended the job to
-> run with. Keep both prompt files and every scheduled `cwd` under the same
-> owner-only protection as `schedules.json` itself — filesystem permissions,
-> not a bob-side ownership check, are the gate.
+> especially significant: pi automatically loads `AGENTS.md`/`CLAUDE.md` from
+> a session's working directory (skills are supplied independently of `cwd`
+> — see [Install the skill package](#install-the-skill-package)), so a
+> maliciously-writable `cwd` can inject context and instructions the
+> operator never intended the job to run with. Keep both prompt files and
+> every scheduled `cwd` under the same owner-only protection as
+> `schedules.json` itself — filesystem permissions, not a bob-side ownership
+> check, are the gate.
 
 #### Cron expression format
 

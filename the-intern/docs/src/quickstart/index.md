@@ -135,7 +135,8 @@ A reasonable starting point for local, single-operator use:
 
 ```toml
 # Run pi-agent sessions from a predictable project directory so it can find
-# AGENTS.md/CLAUDE.md, skills, and relative prompt paths.
+# AGENTS.md/CLAUDE.md and relative prompt paths. Skills are unaffected by
+# this key — see skill_install_path below.
 pi_agent_cwd = "/srv/workspaces/default"
 
 [monitoring]
