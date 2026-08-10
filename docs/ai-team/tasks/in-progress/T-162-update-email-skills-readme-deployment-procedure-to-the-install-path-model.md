@@ -92,3 +92,142 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-10
+
+FAIL
+
+**Verification-block scrutiny note first:** independently confirmed the
+Developer's flagged observation — the task's own literal `## Verification`
+grep for `"claude/"` is vacuously true pre-edit (`dev-agent`'s prior
+`README.md:7` already contains the substring `.claude/skills`), so it could
+not serve as a red/green signal for AC-1. This matches the established
+T-150/T-153/T-155/T-156 precedent of documenting a no-red AC rather than
+skipping coverage, and the Developer correctly used more specific greps
+(`package-claude-skills.sh`, `claude/skills/`) as the real red/green checks.
+Not a review issue on its own. All three literal verification commands were
+re-run directly against the branch and pass.
+
+**Stage 1 — Acceptance Criteria:**
+- AC-1 (package-layout description reflects one canonical `skills/` source
+  with two generated packaging targets, `.pi/skills/` T-151–T-153/T-156 and
+  `claude/` T-163): mostly met, but see the Stage 2 correctness defect below
+  — one of the two packaging-target citations required by this AC is
+  correct (`claude/` → T-163, `.pi/skills/` → T-153/T-156), but the
+  Developer's own added citation for the canonical `skills/` source itself
+  is factually wrong in a way that undermines this AC's purpose (an
+  accurate package-layout description).
+- AC-2 (replace "Verified deployed-workspace procedure"/"Verified S-004
+  action rules" sections' per-workspace deployed-copy guidance with the
+  install-path model): met. Independently re-ran the task's own grep checks
+  and confirmed both retired headings are gone
+  (`## Verified install-path deployment procedure`, `## Verified S-004
+  action rules for the install-path model` now exist instead), the
+  `cp -r the-intern/email-skills/. "$WORKSPACE/"` full-package copy is
+  removed, the deployed job workspace now holds only `config/`+`worklog/`,
+  and the S-004 rule set is rewritten to `/abs/skill-install-path/...`
+  patterns.
+- Files touched: only `the-intern/email-skills/README.md` (the sole Files
+  to Touch entry) — confirmed via `git diff --stat
+  dev-agent...task/T-162-email-skills-readme-install-path`. No other file
+  modified.
+
+**Stage 2 — Code Quality / cross-check against what T-153/T-156/T-161/T-163
+actually shipped (the specific scrutiny requested):**
+
+- Ran both packaging scripts (`package-pi-skills.sh`,
+  `package-claude-skills.sh`) against the real repo tree on this branch —
+  both produce a zero `git diff`, confirming the README's "committed
+  tracked output, regenerate and commit" claims are accurate and the
+  `.pi/skills/{himalaya,email-triage,worklog}/` and
+  `claude/skills/{himalaya,email-triage,worklog}/` trees the layout diagram
+  describes actually exist as described.
+- Cross-checked the rewritten S-004 action-rule TOML block (8 `read` rules
+  + `bash` rules) line-for-line against `the-intern/docs/src/operator-
+  guide/index.md`'s T-161-rewritten "Deploying the `email-triage` scheduled
+  job" § step 4 — identical rule order, identical pattern shapes (only
+  `/abs/skill-install-path/...` vs. the guide's worked `/opt/bob/skills/...`
+  example differ, as expected for a generic vs. worked example). The new
+  `worklog/SKILL.md` and `worklog/references/*.md` rules and the "not yet
+  independently live-validated" callout match the operator guide's
+  equivalent callout. `skill_install_path`'s Linux/macOS defaults
+  (`~/.local/share/bob/skills`, `~/Library/Application Support/bob/skills`)
+  match `operator-guide/index.md`'s "Install the skill package" § exactly.
+  Cross-checked S-011's Design Principles ("content must exist exactly
+  once", "manifests and layout only") and ADR-014's framing — both matched
+  by the README's prose.
+- **Defect — factual attribution error, repeated at four locations:** the
+  canonical `worklog` skill under `the-intern/email-skills/skills/worklog/`
+  was created by **T-154** ("Extract the domain-free worklog skill from
+  email-triage" — confirmed via `git log`, commit `9f10a27 feat(email-
+  skills): add domain-free worklog skill overview`, part of T-154's merge).
+  **T-156 never touches `skills/worklog/`** — confirmed via `git show
+  55d819c --stat` (T-156's sole commit): it only modifies
+  `package-pi-skills.sh`, `test_package_pi_skills.sh`, and
+  `.pi/skills/worklog/**` (the generated *pi packaging* output), never
+  anything under canonical `skills/`. This diff introduces or extends four
+  citations that cite `T-155`/`T-156` for the worklog skill's *canonical
+  source/extraction*, omitting `T-154` (the task that actually did the
+  extraction) entirely:
+  - `README.md:6` — "plus `worklog` (the domain-free diary-discipline skill
+    S-011/T-155/T-156 extracted out of `email-triage`)" — should cite
+    T-154 (extraction) and T-155 (email-triage delegation reduction), not
+    T-156.
+  - `README.md:64` — "`skills/` # T-151/T-152/T-155/T-156: canonical,
+    vendor-neutral skill source" — should read T-151/T-152/**T-154**/T-155
+    (T-151 himalaya, T-152 email-triage, T-154 worklog, T-155 email-triage
+    reduction); T-156 has no role in the canonical `skills/` tree at all.
+  - `README.md:76` — "`worklog/` # domain-free diary-discipline skill
+    (S-011/T-155/T-156)" — same error; should cite T-154 (and optionally
+    T-155 for the companion delegation-reduction side of the extraction),
+    not T-156.
+  - `README.md:398` — "the `worklog` skill (`T-155`/`T-156`) that the
+    reduced `email-triage` `SKILL.md` now delegates diary mechanics to" —
+    same error; should cite `T-154`/`T-155`.
+  Note `README.md:80` ("`.pi/` skills/ # T-153/T-156: generated pi
+  packaging target") is **correct** — T-153 created the pi packaging
+  script and T-156 genuinely did extend it to include `worklog`, so that
+  citation is right; only the *canonical-source* citations (attributing
+  where `skills/worklog/` itself came from) are wrong. This looks like a
+  T-154→T-156 substitution made consistently across the diff, not an
+  isolated typo, so it should be swept for correctness everywhere `T-156`
+  is cited in the context of the canonical `worklog` skill's origin, not
+  just patched at one line.
+  This is a real, actionable correctness defect in documentation that this
+  task's own description says must "stay the authoritative, accurate
+  record for anyone reading it directly" — a future reader tracing
+  `skills/worklog/`'s origin via this file would be pointed at T-156 (pi
+  packaging only) instead of T-154 (the actual extraction task).
+- **Minor, non-blocking, bundle with the fix above:** `README.md:192`'s
+  bash-block comment — `# then edit only the deployed copy's
+  config/email-triage.toml and set / # manager_address there` — is
+  unchanged leftover text from before this diff, sitting inside the
+  rewritten "Verified install-path deployment procedure" section. Every
+  other reference to the job's `--cwd` directory in this rewritten section
+  now consistently says "workspace" (never "deployed copy" as present-tense
+  guidance — "deployed copy" only appears elsewhere as accurate *historical*
+  narrative about the old model). Since step 1 of this same procedure
+  installs a separate "deployed" skill package to the skill install path,
+  "the deployed copy's config/email-triage.toml" is ambiguous about which
+  deployed thing it means. Reword to match the surrounding prose, e.g.
+  "then edit only the job workspace's config/email-triage.toml" (matching
+  `operator-guide/index.md`'s step 3 wording, "Edit only the job
+  workspace's `config/email-triage.toml`").
+- Correctness/Readability otherwise: the rewritten prose, package-layout
+  ASCII tree structure, "Regenerating the Claude package" subsection, and
+  the "This package is installed once, service-wide" / "Verified
+  install-path deployment procedure" sections are accurate, well
+  cross-referenced, and consistent with T-153/T-156/T-161/T-163 as actually
+  shipped, aside from the citation defect above. Internal anchor links
+  (`#package-layout`, `#verified-install-path-deployment-procedure`,
+  `#validation-outcomes`) all resolve to real headings.
+- Security/Performance: N/A — documentation-only change.
+
+**What should change:** fix the T-154/T-155/T-156 citation error at the four
+locations listed above (`README.md:6,64,76,398`), and while in the area,
+reword the leftover "deployed copy" phrasing at `README.md:192`. No other
+changes needed — the substantive install-path-model rewrite (AC-2) and the
+packaging-target layout (AC-1, apart from the citation defect) are correct
+and verified against the real repo state and the referenced tasks.
+
+Next owner: active Development Loop.
