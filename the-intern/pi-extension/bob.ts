@@ -436,10 +436,10 @@ export default function bobFactory(pi: ExtensionAPI): void {
   // path contributes no skill paths and logs one warning, but never throws or
   // blocks session initialisation.
   // ---------------------------------------------------------------------------
-  function handleResourcesDiscover(
+  async function handleResourcesDiscover(
     _event: unknown,
     ctx: ExtensionContext
-  ): { skillPaths?: string[] } | void {
+  ): Promise<{ skillPaths?: string[] } | void> {
     const skillInstallPath = process.env.BOB_SKILL_INSTALL_PATH;
     if (!skillInstallPath) {
       warn(
@@ -448,7 +448,9 @@ export default function bobFactory(pi: ExtensionAPI): void {
       );
       return;
     }
-    if (!fs.existsSync(skillInstallPath)) {
+    try {
+      await fs.promises.access(skillInstallPath);
+    } catch {
       warn(
         `BOB_SKILL_INSTALL_PATH "${skillInstallPath}" does not exist — contributing no skill paths for this session.`,
         ctx
@@ -584,7 +586,10 @@ export default function bobFactory(pi: ExtensionAPI): void {
   (pi as unknown as {
     on(
       event: "resources_discover",
-      handler: (event: unknown, ctx: ExtensionContext) => { skillPaths?: string[] } | void
+      handler: (
+        event: unknown,
+        ctx: ExtensionContext
+      ) => Promise<{ skillPaths?: string[] } | void>
     ): void;
   }).on("resources_discover", handleResourcesDiscover);
 }
