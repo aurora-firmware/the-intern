@@ -153,3 +153,66 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-10
+
+PASS
+
+Stage 1 (acceptance criteria) — all three met, checked against `README.md`
+(commit `a1ba007` on `task/T-150-reconcile-pi-agent-version-records`):
+- AC-1: The "pi-agent Version Compatibility" section now records a single
+  reconciled runtime `pi` version (`0.80.3`) shared across all three bob
+  spawn paths, plus a stated, explicit reason the extension-API pin
+  (`0.75.3`) is kept separate (compile-time TypeScript surface pin vs.
+  runtime executable version) — satisfies the "or documented per-path
+  versions with a stated reason" clause.
+- AC-2: Work Log documents a probe extension registered for
+  `resources_discover` run through all three spawn paths, with the
+  scheduled-periodic probe run from a directory confirmed absent from
+  `~/.pi/agent/trust.json`. The event fired and a contributed skill path
+  reached `<available_skills>` pre-first-turn on all three; the result is
+  recorded in the README.
+- AC-3: No gap was found, and the README explicitly states "No gap is
+  recorded and no blocker is raised for T-157–T-160," satisfying the
+  conditional criterion's documentation requirement.
+- No unspecified behavior added; only `README.md` was modified
+  (`git diff dev-agent...task/T-150-... --stat` shows one file, 23
+  insertions / 7 deletions), matching Files to Touch. The probe extension
+  was never committed (confirmed clean worktree, no stray probe files in
+  history). The out-of-scope stale-version duplicate found in
+  `bob-companion/claude/skills/bob-setup/SKILL.md` was correctly filed as
+  `B-038` rather than edited inline, keeping this task's diff scoped to its
+  stated Files to Touch.
+
+Stage 2 (code quality):
+- Correctness: independently spot-checked the Work Log's spawn-path
+  reconstruction against the actual Rust source rather than taking it on
+  faith — `pi-agent-supervisor/src/lib.rs:47` confirms the default
+  `worker_args: vec!["--mode", "rpc"]` used by both the pooled worker
+  (`pool.rs::worker_process_config_for_session`) and the cwd-scoped
+  scheduled worker (`worker_process_config_for_cwd_session`, which only
+  overrides `worker_cwd`), and `bob/src/serve.rs:153-161` /
+  `build_interactive_session_config` confirms interactive chat always
+  passes `args: Vec::new()` (no `--mode`), independent of configured
+  `pi_agent_args` — matching the Work Log's claims exactly.
+- Tests: re-ran the task's full verification block in a clean worktree
+  checked out at the task branch tip — `grep -q "pi-agent Version
+  Compatibility" README.md` (pass), `grep -q "resources_discover"
+  README.md` (pass), `cd the-intern/pi-extension && npm test` (2 files,
+  38/38 tests passing, matching the Work Log's claim). Confirmed
+  `pi-agent-compat.test.ts` still asserts the literal `0.75.3` and the
+  `/unsupported/i` wording the task said must not regress — both are
+  retained unchanged in the reconciled README section.
+- Security: not applicable — documentation-only change.
+- Readability: the reconciled section is clear, explicitly separates the
+  compile-time API pin from the runtime CLI record, and states the
+  verification result and its "no blocker" conclusion inline.
+- Performance: not applicable.
+- B-038 (filed during this session for the out-of-scope stale-version
+  duplicate) is well-formed: evidence independently spot-checked and
+  confirmed accurate (`SKILL.md:31` still reads `0.79.10`), non-blocking
+  for this task.
+
+No blocking issues found. Both review stages pass.
+
+Next owner: Development Loop.
