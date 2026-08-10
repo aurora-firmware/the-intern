@@ -1,7 +1,7 @@
 ---
 id: T-154
 title: Extract the domain-free worklog skill from email-triage
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-09'
