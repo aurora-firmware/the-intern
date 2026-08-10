@@ -275,6 +275,13 @@ impl BobConfig {
             }
         }
 
+        if !self.skill_install_path.is_absolute() {
+            return Err(configuration_error(format!(
+                "skill_install_path must be an absolute path, got {}",
+                self.skill_install_path.display()
+            )));
+        }
+
         Ok(self)
     }
 }
@@ -1858,6 +1865,34 @@ prompt = "from toml"
         assert!(
             matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("pi_agent_cwd")),
             "expected Configuration error naming pi_agent_cwd, got {result:?}"
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    // ── AC-2 (T-157): a relative skill_install_path fails config load ─────────
+
+    #[test]
+    fn returns_configuration_error_when_skill_install_path_is_relative() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let config_file = write_temp_config(r#"skill_install_path = "relative/skills""#);
+
+        let result = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        });
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("skill_install_path")),
+            "expected Configuration error naming skill_install_path, got {result:?}"
         );
 
         fs::remove_file(config_file).expect("temp config file should be removable");
