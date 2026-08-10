@@ -247,3 +247,82 @@ packaging-target layout (AC-1, apart from the citation defect) are correct
 and verified against the real repo state and the referenced tasks.
 
 Next owner: active Development Loop.
+
+### Review Verdict — 2026-08-10
+
+PASS
+
+**Verified fix commit (`546d1ef`, "fix(email-skills): cite T-154 for canonical
+worklog skill origin"), branch `task/T-162-email-skills-readme-install-path`.**
+Checked `git show 546d1ef` directly: it changes exactly the five lines the
+prior FAIL verdict specified, nothing else.
+
+- `README.md:6` — `S-011/T-155/T-156` → `S-011/T-154/T-155`. Confirmed.
+- `README.md:64` — `T-151/T-152/T-155/T-156` → `T-151/T-152/T-154/T-155`.
+  Confirmed.
+- `README.md:76` — `(S-011/T-155/T-156)` → `(S-011/T-154/T-155)`. Confirmed.
+- `README.md:398` — `` (`T-155`/`T-156`) `` → `` (`T-154`/`T-155`) ``.
+  Confirmed.
+- `README.md:80` (`.pi/skills/` packaging-target citation, `T-153/T-156`) —
+  correctly left unchanged, as the prior verdict noted this one is accurate.
+- `README.md:192` — `# then edit only the deployed copy's
+  config/email-triage.toml` → `# then edit only the job workspace's
+  config/email-triage.toml`. Confirmed, and now matches the operator guide's
+  equivalent step-3 wording as well as the rest of the "Verified install-path
+  deployment procedure" section's consistent "workspace" terminology.
+
+Independently re-verified the underlying facts the fix corrects: `git show
+9f10a27 --stat` confirms T-154 ("feat(email-skills): add domain-free worklog
+skill overview") added `the-intern/email-skills/skills/worklog/SKILL.md` —
+the canonical source. `git show 55d819c --stat` (T-156's sole commit)
+confirms it touches only `.pi/skills/worklog/**` (generated pi-packaging
+output), `package-pi-skills.sh`, and `test_package_pi_skills.sh` — never
+canonical `skills/worklog/`. The fix's citations are factually correct.
+
+Grepped the full post-fix `README.md` for every `T-154`/`T-155`/`T-156`
+occurrence (5 hits, all listed above and all correct) and every remaining
+"deployed copy" occurrence (1 hit, line 478 — `"T-139 established the happy
+path on the live deployed copy"`, accurate past-tense historical narrative
+about the pre-install-path model, correctly left untouched, consistent with
+the prior verdict's guidance to leave it alone).
+
+**Stage 1 — Acceptance Criteria (re-checked in full, not just the delta):**
+- AC-1 (package-layout description reflects one canonical `skills/` source
+  with two generated packaging targets, `.pi/skills/` T-151–T-153/T-156 and
+  `claude/` T-163): met. With the citation fix, all package-layout citations
+  are now accurate — `skills/` → T-151/T-152/T-154/T-155,
+  `.pi/skills/` → T-153/T-156, `claude/` → T-163.
+- AC-2 (replace "Verified deployed-workspace procedure"/"Verified S-004
+  action rules" sections' per-workspace deployed-copy guidance with the
+  install-path model): met, unaffected by this session's fix. Re-ran the
+  task's own grep checks: both retired headings are gone, `## Verified
+  install-path deployment procedure` and `## Verified S-004 action rules for
+  the install-path model` exist instead.
+- Task `## Verification` block re-run against the branch — all three
+  commands pass:
+  `! grep -q "Verified deployed-workspace procedure"`,
+  `! grep -q "Verified S-004 action rules for the happy path"`,
+  `grep -q "claude/"`.
+- Files touched across the whole branch: `git diff --stat
+  dev-agent...task/T-162-email-skills-readme-install-path` shows only
+  `the-intern/email-skills/README.md` (176 insertions, 81 deletions,
+  1 file) — the sole Files-to-Touch entry. No unrelated file modified this
+  session or any prior session on this branch.
+
+**Stage 2 — Code Quality:**
+- Ran both packaging scripts (`package-pi-skills.sh`,
+  `package-claude-skills.sh`) against the real repo tree on this branch from
+  a scratch worktree — both still produce a zero `git diff` against
+  `.pi/skills/` and `claude/` respectively, confirming the README's
+  "committed tracked output, regenerate and commit" claims remain accurate
+  after the fix.
+- The fix is minimal and surgical — exactly the citation/phrasing corrections
+  the prior verdict specified, no unrelated rewording, no scope creep.
+- Readability: the corrected citations read naturally in context; no
+  dangling or inconsistent terminology remains.
+- Security/Performance: N/A — documentation-only change.
+
+Both prior defects are resolved and no new issues were introduced. Minor
+observation (non-blocking): none.
+
+Next owner: active Development Loop.
