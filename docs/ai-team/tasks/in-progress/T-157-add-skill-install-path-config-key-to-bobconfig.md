@@ -138,3 +138,69 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-10
+
+PASS
+
+**Stage 1 — Acceptance criteria** (`the-intern/service/crates/bob/src/config.rs`,
+verified against branch `task/T-157-skill-install-path-bobconfig`, commits
+`4599bac`..`a540e69`):
+
+- AC-1 (optional top-level `skill_install_path` key parsed into `BobConfig`) —
+  met. `BobConfig.skill_install_path: PathBuf` is added, wired through
+  `RawBobConfig`/`from_raw`, and covered by
+  `loads_skill_install_path_override_from_config_file`.
+- AC-2 (relative path fails config load with a clear error naming the key) —
+  met. `validate()` rejects a non-absolute `skill_install_path` with a
+  `Configuration` error naming the key, mirroring `pi_agent_cwd`'s check.
+  Covered by `returns_configuration_error_when_skill_install_path_is_relative`.
+- AC-3 (unset resolves to the ADR-009 `data` bucket default alongside the
+  extension) — met. `default_skill_install_path_for_env` mirrors
+  `default_extension_path_for_env`'s `XDG_DATA_HOME`/`HOME`-fallback
+  resolution, joining `bob/skills` (sibling of `bob/extensions/bob.ts` under
+  the shared `data_root/bob/` root, per ADR-009 and S-002's "alongside the
+  extension" wording). Covered by two tests: `XDG_DATA_HOME` set, and `HOME`
+  fallback when it is absent.
+- AC-4 (non-existent directory still loads successfully, no existence check)
+  — met. No existence check was added anywhere in the diff; confirmed by
+  `loads_successfully_when_skill_install_path_names_a_nonexistent_directory`,
+  which asserts both a successful load and that the named directory remains
+  uncreated.
+- No unspecified behavior was added. The task's explicit scope note (config
+  surface only; supervisor wiring is T-159, `resources_discover` answering is
+  T-160) is honored — no fail-open warning/logging behavior was added at load
+  time, which is correct since S-002's "set-but-missing is fail-open with a
+  warning" behavior belongs to session-spawn time (T-159/T-160), not config
+  load.
+- Files touched: `config.rs` (in `Files to Touch`) plus one incidental line
+  in `the-intern/service/crates/bob/tests/shell_e2e.rs` (`client_cfg()`'s
+  exhaustive struct literal needed a stand-in value for the new required
+  field). This is documented in the Work Log, mechanical (no behavior
+  change), and necessary to keep `cargo test --workspace` compiling — not
+  scope creep.
+
+**Stage 2 — Code quality:**
+
+- Correctness: `default_skill_install_path_for_env` correctly mirrors
+  `default_extension_path_for_env`'s structure (XDG_DATA_HOME → HOME fallback
+  → temp-dir last resort), changing only the joined leaf path. The
+  `validate()` absolute-path check correctly mirrors `pi_agent_cwd`'s
+  existing check.
+- Tests: 4 new tests, independent (unique temp files/dirs per test, no
+  shared mutable state), covering both the success path (override parses,
+  default resolves two ways, missing directory still loads) and the failure
+  path (relative path rejected). Verified by re-running the full suite on
+  the task branch in an isolated worktree:
+  `cargo test -p bob config` → 52 passed, 0 failed (matches the Work Log's
+  claim). `cargo test --workspace` → all crates pass, 0 failures.
+  `cargo fmt --all -- --check` → clean (exit 0).
+- Security: `skill_install_path` is documented as a trusted, un-checked
+  input per ADR-014 §7 — consistent with the spec; no existence/permission
+  check was added at this layer, which is correct for this task's scope.
+- Readability: doc comments are accurate and cross-reference S-002/ADR-009/
+  ADR-014 and the deferred T-159/T-160 work; naming is consistent with
+  `extension_path`/`pi_agent_cwd` conventions already in the file.
+- Performance: no loops, blocking calls, or resource leaks introduced.
+
+Both stages pass. No blocking issues found.
