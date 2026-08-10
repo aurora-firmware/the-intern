@@ -3,54 +3,59 @@ name: email-triage
 description: >
   Runs the scheduled email-triage workflow: on a "Check email" (or an
   equivalent scheduled triage) prompt fired from this package's own working
-  directory, reconcile the daily worklog on the day's first executed run,
-  detect unseen mail, and for each unseen message either act on it or
-  escalate it to the configured manager address — recording a worklog entry
-  for every message handled either way. This is the triage-policy skill: it
-  carries the reconciliation, confidence-gated act-or-escalate, and diary
-  rules. It is not the himalaya CLI reference — load the `himalaya` skill
-  for the actual commands and flags, and see `references/worklog.md` and
-  `references/escalation.md` for the diary and escalation rules this loop
-  follows rather than restating them here.
+  directory, detect unseen mail and, for each unseen message, either act on
+  it or escalate it to the configured manager address — recording a worklog
+  entry for every message handled either way. This is the triage-policy
+  skill: it carries the confidence-gated act-or-escalate decision and the
+  retry of a carried-forward blocked action. It delegates the diary
+  mechanics — where the worklog lives, how to create it, its entry format,
+  first-run detection, and reconciliation — to the `worklog` skill, and the
+  CLI mechanics to the `himalaya` skill: load `worklog` and `himalaya` for
+  those, and see `references/worklog.md` (this skill's own email-specific
+  diary notes) and `references/escalation.md` for the triage-specific rules
+  this loop follows rather than restating them here.
 allowed-tools: Read Bash
 ---
 
 # Email Triage
 
-This is the triage-policy skill: it decides what to do with a mailbox, not
-how to drive `himalaya`. Every run of this loop follows the same four
-steps — reconcile (first executed run of the day only), detect
-unseen mail, act on or escalate each unseen message, and record a worklog
-entry for it — and delegates the CLI mechanics and reference detail to the
-`himalaya` skill and this skill's own `references/` files rather than
-restating them here.
+This is the triage-policy skill: it decides what to do with a mailbox — not
+how to drive `himalaya`, and not how to keep a diary. Every run of this loop
+follows the same four steps — reconcile (first executed run of the day
+only), detect unseen mail, act on or escalate each unseen message, and
+record a worklog entry for it — and delegates the CLI mechanics to the
+`himalaya` skill, the diary mechanics to the `worklog` skill, and its own
+domain-specific reference detail to this skill's own `references/` files
+rather than restating any of it here.
 
 ---
 
 ## Tool usage
 
-Every tool call this skill or the `himalaya` skill makes is subject to
-bob's action-authorization gate — not only the himalaya invocations. The
-action-authorization gate governs every pi-agent tool call, so the config
-read, the worklog reads and appends, and any on-demand `references/*.md`
-load are all gated the same way. This skill keeps that surface uniform and
-explicit, so one narrow allow-rule set can admit the whole package:
+Every tool call this skill, the `himalaya` skill, or the `worklog` skill
+calls for is subject to bob's action-authorization gate — not only the
+himalaya invocations. The action-authorization gate governs every pi-agent
+tool call, so the config read, the worklog reads and appends the `worklog`
+skill defines, and any on-demand `references/*.md` load are all gated the
+same way. This skill keeps that surface uniform and explicit, so one narrow
+allow-rule set can admit the whole package:
 
 - **`read`** — reference material and prior worklog contents only: any
-  `worklog/*.md` file's contents (used during reconciliation, via the job's
-  own `cwd`-relative path), and any `references/*.md` file — this skill's
-  own references, and the `himalaya` skill's own reference file when that
-  skill is in play.
+  `worklog/*.md` file's contents (read during reconciliation, per the
+  `worklog` skill's own `references/reconciliation.md`, via the job's own
+  `cwd`-relative path), and any `references/*.md` file — this skill's own
+  references, the `worklog` skill's own references, and the `himalaya`
+  skill's own reference file when that skill is in play.
 - **`bash`** — every himalaya CLI invocation (per the `himalaya` skill), and
-  the skill-local config read plus every worklog filesystem mutation:
-  loading `config/email-triage.toml` from the job's own `cwd` (for example
-  with `cat`), checking whether `worklog/` or today's file exists, creating
-  either if missing, and appending each per-message entry (for example
-  `mkdir -p`, `test -f`, and a redirection such as `printf ... >>` to
-  append). Keeping the config read and every mutation — worklog writes and
-  himalaya calls alike — on the same `bash` tool, rather than also reaching
-  for the `write`/`edit` tools, keeps this package's whole runtime surface
-  behind one tool family for a later allow rule to admit by argument shape.
+  the skill-local config read plus every worklog filesystem mutation (per
+  the `worklog` skill's own `references/entry-format.md`): loading
+  `config/email-triage.toml` from the job's own `cwd` (for example with
+  `cat`), checking whether `worklog/` or today's file exists, creating
+  either if missing, and appending each per-item entry. Keeping the config
+  read and every mutation — worklog writes and himalaya calls alike — on
+  the same `bash` tool, rather than also reaching for the `write`/`edit`
+  tools, keeps this package's whole runtime surface behind one tool family
+  for a later allow rule to admit by argument shape.
 
 If the `bash` call that reads `config/email-triage.toml`, a `read` for a
 worklog file, or a `bash` call to create or append to the worklog is itself
@@ -66,31 +71,20 @@ run-ending problem.
 
 ### 1. Determine whether this is the day's first executed run, and reconcile
 
-Check whether today's worklog file, `worklog/<YYYY-MM-DD>.md` (today's local
-calendar date), already exists (`bash`, e.g. `test -f`). Its absence is the
-signal that no run has written to today's file yet — reuse that existing
-file's presence as "is this the day's first executed run" rather than
-adding a second, skill-owned last-run marker file, the same way this loop
-avoids a skill-owned last-seen file for detecting new mail (step 2 below).
+Follow the `worklog` skill's own logic for determining whether this is the
+day's first executed run and, if so, its `references/reconciliation.md`
+"First-run reconciliation" section to find the most recent worklog file
+with open items and carry every still-open entry forward into today's
+file — which file to walk back to, the entry format, and the generic
+carry-forward mechanics all live there; do not re-derive or restate them
+here.
 
-- **File does not exist yet:** treat this as the day's first executed run.
-  Before doing anything else — before listing unseen mail — follow
-  `references/worklog.md`'s "First-run reconciliation" section to find the
-  most recent worklog file with open items and carry every still-open entry
-  forward into today's file, including any pending manager escalation (an
-  open item left by a previous low-confidence classification) and any open
-  block from the action-authorization gate, which this is also the point
-  at which to retry.
-  `references/worklog.md` defines the full mechanics — which file to walk
-  back to, the entry format, how each kind of open item closes; do not
-  re-derive or restate them here.
-- **File already exists:** some run has already written to today's file
-  (whether or not that run needed reconciliation) — skip reconciliation and
-  go straight to listing unseen mail. (If an earlier run today reconciled
-  nothing and saw no unseen mail, today's file may still be absent; the
-  next run repeats this same first-run check, which is harmless —
-  reconciliation itself is idempotent when there is nothing open to carry
-  forward.)
+For this skill, the items carried forward are: any pending manager
+escalation (an open item left by a previous low-confidence classification)
+and any open block from the action-authorization gate. Reconciliation is
+also the point at which a carried-forward blocked action is retried — no
+other point in this loop revisits a blocked action, so carrying it forward
+without retrying it here would leave it stuck open indefinitely.
 
 ### 2. List unseen mail
 
@@ -179,12 +173,16 @@ on a given run — never do both.
 ### 4. Record a worklog entry for the message
 
 Whatever the outcome above — acted, escalated, or blocked at either
-step — append one entry to today's worklog file for this message, in the
-format `references/worklog.md` defines (`Done`/`Left`/`Next`; creating
-`worklog/` and today's file first if either is still missing — do not skip
-the entry because either was missing). Do this before moving on to the
-next unseen message, so a run interrupted partway still leaves a complete
-record for every message it did handle before stopping.
+step — append one entry to today's worklog file for this message. Follow
+the `worklog` skill's own `references/entry-format.md` for how to create
+`worklog/` and today's file if either is still missing, the exact
+append-command shape, and the `Done`/`Left`/`Next` fields every entry
+carries — do not restate any of that here. This skill's own
+`references/worklog.md` defines the one thing specific to email triage: the
+entry's item identifier is the message's `<subject> (from <sender>)`. Do
+this before moving on to the next unseen message, so a run interrupted
+partway still leaves a complete record for every message it did handle
+before stopping.
 
 The entry must describe the actual outcome from step 3, not the intended one.
 If an escalation send was denied by the action-authorization gate, do
