@@ -134,3 +134,153 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-10
+
+PASS
+
+Stage 1 (acceptance criteria) — all five met, checked against
+`the-intern/docs/src/operator-guide/index.md`,
+`the-intern/docs/src/quickstart/index.md`, and
+`the-intern/docs/test_operator_guide_email_triage_trust.sh` on
+`task/T-161-operator-guide-skill-install-path` (commits `f8a3601`, `997597f`,
+`72cbb0a`, `8a3ed77`):
+
+- AC-1/AC-2: "Deploying the `email-triage` scheduled job" no longer copies
+  the whole package (`cp -r the-intern/email-skills/. "$WORKSPACE/"` is
+  gone; independently confirmed absent via
+  `! grep -q 'cp -r the-intern/email-skills/\.'`). The deployed workspace now
+  holds only `config/` and `worklog/`. The six workspace-scoped
+  `arg_matchers` are replaced by a single set of `read` rules scoped to
+  `skill_install_path` (default `/opt/bob/skills` example), with two new
+  rules for the `worklog` skill's own `SKILL.md`/`references/*.md` — a
+  genuine spec requirement (S-011 Configuration Requirements, "Action rules
+  admitting skill tool calls": "reads of skill reference content at the
+  install path"), not scope creep.
+- AC-3: independently re-checked all four flagged locations against the
+  pre-T-161 `dev-agent` content at the exact cited lines
+  (`quickstart/index.md:138`, `operator-guide/index.md:249/269/557`) — each
+  originally read "...discover project context, skills, and relative
+  prompt-file paths..." or "...pi automatically loads AGENTS.md/CLAUDE.md and
+  skills from a session's working directory..."; all four now correctly
+  state skills are unaffected by `pi_agent_cwd`/per-entry `cwd`, matching
+  S-002's 2026-08-06 amendment. No other stale `pi_agent_cwd`-governs-skills
+  claim remains in either file.
+- AC-4: `skill_install_path` is documented (new "Install the skill package"
+  subsection) with all four required properties — absolute-only, ADR-009
+  `data`-bucket default alongside the extension, fail-open on a
+  missing/nonexistent path, existence not checked at config load —
+  cross-checked against S-011's "Skill install path" Configuration
+  Requirement and matches it exactly, including the fail-open/fail-closed
+  contrast with `extension_path`.
+- AC-5: `test_operator_guide_email_triage_trust.sh` rewritten to assert the
+  section explains why no trust step is required (cites B-035, T-150,
+  `resources_discover`) and asserts the old trust.json-editing/restart
+  instructions and the old whole-package `cp -r` are gone, positioned
+  correctly (after workspace deployment, before the S-004 action rules).
+- No unspecified behavior added; `git diff dev-agent...task/T-161-... --stat`
+  shows exactly the three Files to Touch modified, nothing else. No stray
+  references to the old per-workspace deployment procedure remain elsewhere
+  in `the-intern/docs/src` or `the-intern/bob-companion`.
+
+Stage 2 (code quality) — plus the three specific scrutiny points requested:
+
+**1. Trust-step removal, checked against T-150's actual findings and pi's
+own security model (not taken on faith):** Read
+`docs/ai-team/tasks/completed/T-150-...md` in full — its live-probe evidence
+(pooled RPC worker, interactive chat, and scheduled-periodic, the last from a
+working directory confirmed absent from `~/.pi/agent/trust.json`) confirms
+`resources_discover` fires and a contributed skill path reaches
+`<available_skills>` pre-first-turn on all three spawn paths, unconditional
+on project trust. Independently located and read pi's actual installed
+`docs/security.md` (`@earendil-works/pi-coding-agent@0.80.3`, this
+environment's installed CLI) rather than trusting the Work Log's paraphrase:
+it confirms project trust gates exactly `.pi/settings.json`,
+`.pi/extensions`/`.pi/skills`/`.pi/prompts`/`.pi/themes`,
+`.pi/SYSTEM.md`/`.pi/APPEND_SYSTEM.md`, and project `.agents/skills` — no
+more, no less — and that `AGENTS.md`/`CLAUDE.md` load regardless of trust.
+Also read `docs/extensions.md`'s lifecycle diagram and `resources_discover`
+section: project-local `.pi/extensions` load only after trust, but bob's
+extension is loaded via the CLI `--extension` flag (a user/global/CLI-level
+extension per pi's own model), which is unaffected by project trust and
+fires `resources_discover` regardless. Independently confirmed
+`the-intern/email-skills/.pi/` contains nothing but `.pi/skills/` (no
+`.pi/settings.json`, `.pi/extensions`, `.pi/prompts`, `.pi/themes`, or
+`.pi/SYSTEM.md`), so the old `cp -r` never populated any other
+trust-gated resource, and the new deployed workspace (`config/` + `worklog/`
+only) contains none of the trust-gated categories either. The removal is
+correctly reasoned and the new explanatory note accurately cites its
+grounding (B-035 history, T-150 confirmation, `resources_discover`
+mechanism). No trust that was actually needed was silently dropped.
+
+**2. New, not-yet-independently-live-validated `worklog` action rules:**
+acceptable for this docs task. S-011's Configuration Requirements
+(Configuration Requirements § "Action rules admitting skill tool calls")
+explicitly requires documenting reads of skill reference content at the
+install path for every shipped skill, so adding the `worklog` rules was
+required, not optional. The task's own Description frames "re-validate ...
+under the new path" specifically around the `arguments.path`/`arguments.command`
+matcher-shape invariant (already established structurally by T-139/T-140,
+independent of which skill or path value is matched), not a full live
+functional re-test of a third skill — this task has neither a `pi` binary
+requirement nor live credentials in its Dependencies/Files to Touch, unlike
+T-150. Confirmed neither T-155 nor T-156 (which packaged the `worklog`
+skill) performed any live action-rule validation either, so the Developer's
+"not yet independently live-validated" framing is accurate, not
+overstated-then-hedged. The callout is prominent, specific (names exactly
+which two rules), and gives the operator an actionable next step
+("validate them the same way before depending on them in a production
+deployment") rather than silently presenting new rules as equally
+validated as the T-139/T-140 rule set below them.
+
+**3. `test_operator_guide_email_triage_trust.sh` — independently re-ran, not
+just trusted:** checked out the branch tip in an isolated worktree and ran
+the rewritten script against the rewritten doc: 9/9 pass, matching the
+Work Log. Then reset only `operator-guide/index.md` to the pre-T-161
+`dev-agent` content and re-ran the same script: it is genuinely red — 7
+explicit `FAIL:` lines print (all 7 direct-pattern assertions fail against
+the old content) before the script aborts with a nonzero exit on the first
+positional lookup (`DEPLOY_LINE="$(first_matching_line "Deploy an
+owner-only working directory")"`, which matches nothing in the old
+wording "Deploy an owner-only workspace copy..." and, under
+`set -euo pipefail`, kills the script via `grep`'s no-match exit status
+propagating through the pipeline before the script reaches its own
+`[ -n "${DEPLOY_LINE:-}" ]` guard). So the Work Log's "7/9 checks fail"
+figure is not quite literally accurate — it is actually "7 fail, then the
+script errors out before the remaining 2 ever run" — but the substantive
+claim it supports (a genuine, non-vacuous regression guard: red against old
+content, 9/9 green against new content) is independently confirmed true.
+This `set -e`/`pipefail`-vs-`first_matching_line` fragility is pre-existing
+in the original (pre-T-161) script — verified byte-for-byte identical
+`first_matching_line` helper and the same bare-assignment call pattern in
+`dev-agent`'s prior version — so it is inherited script debt, not something
+this diff introduced, and it does not affect the script's correctness as a
+CI gate (nonzero exit either way). Non-blocking observation for the
+Developer/a future task: consider hardening `first_matching_line` (e.g.
+`grep ... || true`) so a genuinely broken doc produces a clean N/9 tally
+instead of a mid-run abort; not required for this task's own AC-5, which is
+satisfied.
+
+Other Stage 2 checks:
+- Correctness: independently re-ran the full task `## Verification` block
+  in the isolated worktree — all four commands pass. Independently rebuilt
+  the mdBook (`BOB_BIN=<debug binary> mdbook build`) — succeeds with only an
+  unrelated pre-existing `mdbook-mermaid` version-mismatch warning, no
+  structural errors. Spot-checked every new `#install-the-skill-package` and
+  `#skill-supply-via-resources_discover` anchor reference against the actual
+  heading text — all resolve correctly.
+- Tests: the task's own `## Verification` block and the rewritten trust-step
+  script both function as intended (see point 3 above).
+- Security: documentation-only change; the new explanatory note correctly
+  preserves the Unix-trust-boundary security note (owner-only `cwd`
+  protection) untouched — only the pi-project-trust-gate claim was
+  corrected, not the unrelated filesystem-permission guidance.
+- Readability: clear, well-organized; the new "not yet independently
+  live-validated" callout and "no trust step required" explanation are both
+  easy to find and act on.
+- Performance: not applicable.
+
+No blocking issues found. Both review stages pass. One non-blocking
+observation recorded above (point 3) for future script hardening.
+
+Next owner: Development Loop.
