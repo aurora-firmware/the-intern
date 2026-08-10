@@ -45,6 +45,21 @@ test_ac1_generates_expected_tree() {
 
 test_ac1_generates_expected_tree
 
+# AC-3: generated output (SKILL.md and the full references/ tree) is
+# byte-for-byte identical to the canonical source for all three skills.
+# Unlike the pi target (T-153), Claude Code's own frontmatter fields (name,
+# description, compatibility) are already what the canonical source carries,
+# so no vendor-specific field needs to be added here.
+test_ac3_output_byte_identical_to_canonical_source() {
+  local ok=0
+  for name in himalaya email-triage worklog; do
+    diff -r "$WORK_DIR/skills/$name" "$WORK_DIR/claude/skills/$name" >/dev/null || ok=1
+  done
+  run_test "AC-3: generated SKILL.md and references/ trees are byte-for-byte identical to canonical source" "$ok"
+}
+
+test_ac3_output_byte_identical_to_canonical_source
+
 echo ""
 echo "Results: $pass_count passed, $fail_count failed"
 [ "$fail_count" -eq 0 ] || exit 1
