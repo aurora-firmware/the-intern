@@ -2,7 +2,7 @@
 id: T-158
 title: Add skill_install_path to pi-agent-supervisor process configs and thread 
   to child environment
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-09'
