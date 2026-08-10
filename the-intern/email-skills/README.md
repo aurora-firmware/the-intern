@@ -1,12 +1,15 @@
 # Email Skills Package
 
-This package ships the two pi-agent skills S-010 defines — `himalaya` (a
-generic CLI-reference skill) and `email-triage` (the triage policy skill) — as
-a versioned, reviewable product artifact, separate from
-`the-intern/bob-companion/claude` (Claude Code dev-tooling for operating
-`bob`) and from this repository's own `.claude/skills` (this repository's
-AI-team process tooling). Neither of those is where pi-agent discovers its
-runtime skills; this package is.
+This package ships three pi-agent skills as a versioned, reviewable product
+artifact: `himalaya` (a generic CLI-reference skill) and `email-triage` (the
+triage policy skill), both defined by S-010, plus `worklog` (the domain-free
+diary-discipline skill S-011/T-155/T-156 extracted out of `email-triage`).
+The package is separate from `the-intern/bob-companion/claude` (Claude Code
+dev-tooling for operating `bob`) and from this repository's own
+`.claude/skills` (this repository's AI-team process tooling). Neither of
+those is where an agent discovers this package's runtime skills; the two
+generated packaging targets under this directory — `.pi/skills/` and
+`claude/` — are (see [Package layout](#package-layout)).
 
 ## Verified skill discovery path and invocation form
 
@@ -57,33 +60,47 @@ required for discovery to work at all, and is now the recorded form.
 the-intern/email-skills/
 ├── README.md                       # this file
 ├── package-pi-skills.sh             # T-153: generates .pi/skills/ below from skills/ below
-├── skills/                          # T-151/T-152: canonical, vendor-neutral skill source —
-│   │                                #   content exists here exactly once (S-011 Design Principles)
+├── package-claude-skills.sh         # T-163: generates claude/ below from skills/ below
+├── skills/                          # T-151/T-152/T-155/T-156: canonical, vendor-neutral
+│   │                                #   skill source — content exists here exactly once
+│   │                                #   (S-011 Design Principles)
 │   ├── himalaya/                    # generic himalaya CLI-reference skill
 │   │   ├── SKILL.md                 #   no triage policy — reusable by any pi session
 │   │   └── references/              #   sharing this package's cwd (S-010 Design Principles)
-│   └── email-triage/                # triage policy skill (core loop + taxonomy)
-│       ├── SKILL.md
-│       └── references/
-│           ├── worklog.md           # diary format + skip-tolerant reconciliation rules
-│           ├── escalation.md        # manager-escalation rules and hard-stop behavior
-│           └── categories/          # taxonomy index + one workflow file per starter category
-│               └── README.md        #   (newsletter-bulk, automated-notification,
-│                                    #   suspected-spam, direct-request, meeting-scheduling)
+│   ├── email-triage/                # triage policy skill (detection, classification,
+│   │   ├── SKILL.md                 #   act-or-escalate decision); delegates all diary
+│   │   └── references/              #   mechanics to the worklog skill below (S-011)
+│   │       └── categories/          #   taxonomy index + one workflow file per starter
+│   │           └── README.md        #   category (newsletter-bulk, automated-notification,
+│   │                                #   suspected-spam, direct-request, meeting-scheduling)
+│   └── worklog/                     # domain-free diary-discipline skill (S-011/T-155/T-156):
+│       ├── SKILL.md                 #   location, entry format, first-run detection,
+│       └── references/              #   reconciliation, and how an open item closes
 ├── .pi/
-│   └── skills/                      # T-153: generated pi packaging target — produced solely
-│       ├── himalaya/                #   by running package-pi-skills.sh against skills/ above;
-│       │   ├── SKILL.md             #   never hand-edited. Committed tracked output (no CI or
-│       │   └── references/          #   install-time build step regenerates it), so it must stay
-│       └── email-triage/            #   in sync with skills/ by re-running the script and
-│           ├── SKILL.md             #   committing the result whenever skills/ changes.
-│           └── references/
+│   └── skills/                      # T-153/T-156: generated pi packaging target — produced
+│       ├── himalaya/                #   solely by running package-pi-skills.sh against skills/
+│       ├── email-triage/            #   above; never hand-edited. Committed tracked output (no
+│       └── worklog/                 #   CI or install-time build step regenerates it), so it
+│                                     #   must stay in sync with skills/ by re-running the
+│                                     #   script and committing the result whenever skills/
+│                                     #   changes.
+├── claude/                          # T-163: generated Claude Code packaging target —
+│   ├── .claude-plugin/              #   produced solely by running package-claude-skills.sh
+│   │   └── plugin.json              #   against skills/ above; never hand-edited. Same
+│   └── skills/                      #   committed-tracked-output contract as .pi/skills/
+│       ├── himalaya/                #   above — content exists only under skills/ (S-011
+│       ├── email-triage/            #   Design Principles). Unlike .pi/skills/, this target
+│       └── worklog/                 #   needs no vendor-specific frontmatter field added, so
+│                                     #   its output is byte-for-byte identical to skills/.
 ├── config/
 │   └── email-triage.example.toml    # T-134: shipped template (manager_address documented,
 │                                     #   no real address). The real config/email-triage.toml
-│                                     #   exists only in the deployed copy — never committed.
-└── worklog/                         # runtime diary directory. <YYYY-MM-DD>.md entries are
-                                      #   written only in the deployed copy — never committed.
+│                                     #   exists only in the deployed job workspace — never
+│                                     #   committed, and no longer holds any skill content
+│                                     #   (S-011 skill install-path model — see below).
+└── worklog/                         # runtime diary directory, written by the worklog skill.
+                                      #   <YYYY-MM-DD>.md entries are written only in the
+                                      #   deployed job workspace — never committed.
 ```
 
 Later tasks add files at the paths shown above without editing this section.
@@ -105,6 +122,25 @@ scratch, so a file removed from `skills/<name>/` does not linger as stale
 output. `git diff --exit-code HEAD -- .pi/skills` after committing should be
 clean; a non-empty diff there means `.pi/skills/` has drifted from `skills/`
 and needs the script re-run.
+
+**Regenerating the Claude package.** `claude/skills/` is generated the same
+way, by a separate script: it also carries no independent copy of skill
+content, and — unlike `.pi/skills/` — needs no vendor-specific frontmatter
+field added, since Claude Code's own skill format already matches what the
+canonical source carries. After editing anything under `skills/`, regenerate
+and commit `claude/` from this directory:
+
+```bash
+cd the-intern/email-skills && ./package-claude-skills.sh
+```
+
+The script regenerates each packaged skill's `claude/skills/<name>/` tree
+from scratch the same way `package-pi-skills.sh` does, and also (re)writes
+the static `claude/.claude-plugin/plugin.json` plugin manifest — layout
+metadata only, carrying no skill body content of its own. `git diff
+--exit-code HEAD -- claude` after committing should be clean; a non-empty
+diff there means `claude/` has drifted from `skills/` and needs the script
+re-run.
 
 ## This package is the repository source of truth only
 
