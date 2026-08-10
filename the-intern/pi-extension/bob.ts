@@ -51,6 +51,7 @@
  *     BOB_AUTHZ_TIMEOUT_MS verdict timeout, not by killing the transport.
  */
 
+import * as fs from "node:fs";
 import * as net from "node:net";
 import type { ExtensionAPI, ExtensionContext, ToolCallEventResult } from "@earendil-works/pi-coding-agent";
 
@@ -62,11 +63,12 @@ import type { ExtensionAPI, ExtensionContext, ToolCallEventResult } from "@earen
 // but return a client-rendered SPA; the type definitions from the installed
 // package are the authoritative machine-readable source.
 //
-// `tool_call` is intentionally excluded: it is handled by the blocking
-// authz hook (see below) rather than the fire-and-forget event loop.
+// `tool_call` and `resources_discover` are intentionally excluded: each is
+// handled by its own dedicated registration (the blocking authz hook and the
+// skill-path answer, respectively — see below) rather than the
+// fire-and-forget event loop.
 // ---------------------------------------------------------------------------
 export const PI_EVENTS = [
-  "resources_discover",
   "session_start",
   "session_before_switch",
   "session_before_fork",
@@ -425,6 +427,16 @@ export default function bobFactory(pi: ExtensionAPI): void {
   }
 
   // ---------------------------------------------------------------------------
+  // Dedicated resources_discover handler (ADR-014).
+  //
+  // Stub for now — always contributes no skill paths. Filled in by later
+  // commits on this cycle.
+  // ---------------------------------------------------------------------------
+  function handleResourcesDiscover(_event: unknown, _ctx: ExtensionContext): void {
+    return;
+  }
+
+  // ---------------------------------------------------------------------------
   // Blocking tool_call authz hook.
   //
   // Sends an Authz frame to the bob service and awaits a matching
@@ -519,8 +531,9 @@ export default function bobFactory(pi: ExtensionAPI): void {
     return { block: false };
   }
 
-  // Register a handler for every documented pi event (excluding tool_call,
-  // which uses the blocking authz hook registered separately below).
+  // Register a handler for every documented pi event (excluding tool_call
+  // and resources_discover, each of which is registered separately below
+  // with its own dedicated handler).
   // Cast is required because ExtensionAPI.on() uses individual overloads per
   // event name rather than a general string → handler signature.
   const piGeneric = pi as unknown as {
@@ -540,4 +553,16 @@ export default function bobFactory(pi: ExtensionAPI): void {
       handler: (event: unknown, ctx: ExtensionContext) => Promise<ToolCallEventResult>
     ): void;
   }).on("tool_call", handleToolCall);
+
+  // Register the dedicated resources_discover handler.
+  // Cast is required: ResourcesDiscoverResult is not part of the installed
+  // package's public export surface (only reachable via the internal dist
+  // path types.d.ts), so this local minimal return type stands in for it —
+  // see handleResourcesDiscover above.
+  (pi as unknown as {
+    on(
+      event: "resources_discover",
+      handler: (event: unknown, ctx: ExtensionContext) => { skillPaths?: string[] } | void
+    ): void;
+  }).on("resources_discover", handleResourcesDiscover);
 }

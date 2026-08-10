@@ -19,7 +19,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 // ---------------------------------------------------------------------------
 // Import the extension factory under test.
 // ---------------------------------------------------------------------------
-import bobFactory from "./bob.js";
+import bobFactory, { PI_EVENTS } from "./bob.js";
 
 // ---------------------------------------------------------------------------
 // Stub ExtensionAPI
@@ -160,6 +160,7 @@ afterEach(() => {
   // Restore env vars.
   delete process.env.BOB_SESSION_ID;
   delete process.env.BOB_EXTENSION_SOCK_PATH;
+  delete process.env.BOB_SKILL_INSTALL_PATH;
 });
 
 // ---------------------------------------------------------------------------
@@ -1632,5 +1633,17 @@ describe("T-057 AC-4: BOB_AUTHZ_TIMEOUT_MS controls verdict timeout", () => {
     expect((result as any)?.block).toBeFalsy();
 
     await server.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-160 AC-1: resources_discover is no longer forwarded through the generic
+// fire-and-forget PI_EVENTS event-loop registration — it gets its own
+// dedicated handler instead (see the describe blocks below).
+// ---------------------------------------------------------------------------
+
+describe("T-160 AC-1: resources_discover removed from generic PI_EVENTS list", () => {
+  it("does not include resources_discover in the exported PI_EVENTS array", () => {
+    expect(PI_EVENTS).not.toContain("resources_discover");
   });
 });
