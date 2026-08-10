@@ -126,3 +126,36 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-10
+
+PASS
+
+**Scope note on `test_package_pi_skills.sh` (not in "Files to Touch"):** reasonable,
+not scope creep. It tests only `package-pi-skills.sh`, which *is* a listed
+Files-to-Touch item, and adds no production behavior beyond the task's scope.
+T-151/T-152 (pure content relocation) correctly used their own diff-based
+Verification command as the TDD "test" and added no test file, but T-153's
+script has real control flow (regenerate-from-scratch, frontmatter insertion
+via a `---` delimiter counter, an error branch) that a diff-only check would
+not exercise — the tdd skill's Output Format explicitly requires "test files
+... covering all acceptance criteria," so a dedicated test file is the
+correct artifact here, and it follows the repo's existing colocated
+`test_*.sh` convention (e.g. `the-intern/docs/test_operator_guide_email_triage_trust.sh`,
+`the-intern/docs/test_wire_contract.sh`).
+
+**Stage 1 — Acceptance Criteria:**
+- AC-1 (script generates `.pi/skills/{himalaya,email-triage}/SKILL.md` + `references/` from canonical `skills/`): met. Ran `./package-pi-skills.sh` against the real tree and confirmed both destinations exist with `references/` populated; `test_package_pi_skills.sh`'s `test_ac1_generates_expected_tree` covers this in an isolated `mktemp -d` copy.
+- AC-2 (generated body byte-for-byte identical to canonical, frontmatter gains `allowed-tools: Read Bash`): met. Independently diffed `skills/<name>/SKILL.md` against `.pi/skills/<name>/SKILL.md` with the `allowed-tools` line stripped back out for both skills — empty diff in both cases; `references/` trees are identical (`diff -rq`, no output). Confirmed the awk delimiter-counter correctly inserts only once even though both `SKILL.md` files contain additional `^---$` lines in the body (markdown horizontal rules) — the `inserted` flag guards against re-insertion, and the empirical diff confirms no corruption.
+- AC-3 (regenerated `.pi/skills/` stays committed/tracked, unchanged tracked status): met. `git diff dev-agent...task/T-153-pi-packaging-target --stat -- the-intern/email-skills/.pi` is empty — the hand-maintained content already matched what the script produces, so no drift-fix commit was needed. Verified the root `.gitignore`'s `/.pi` rule is anchored to repo root (line 6, comment on line 4), so it does not match `the-intern/email-skills/.pi/`, confirming the task description's tracked-vs-generated claim. `test_ac3_generated_output_stays_tracked_and_not_ignored` regression-guards this against the real repo.
+- AC-4 (regenerate from scratch, no stale output survives): met. Read the script — `rm -rf "$dest_dir"` precedes `cp -r`. `test_ac4_regeneration_removes_stale_generated_files` plants a stray reference file and confirms it's gone after a re-run; passed.
+- Files touched match "Files to Touch" plus the justified `test_package_pi_skills.sh` addition (see scope note above): `package-pi-skills.sh` (new), `.pi/skills/{himalaya,email-triage}/SKILL.md` (regenerated, zero-diff), `README.md` (package layout section updated, verified accurate against S-011 Design Principles — "Skill content must exist exactly once," "manifests and layout only" — lines 80-81 of the spec). No files outside `the-intern/email-skills/` touched (`git diff --stat -- . ':!the-intern/email-skills'` empty). Task's own Verification command (`./package-pi-skills.sh && git diff --exit-code HEAD -- .pi/skills`) ran clean (exit 0).
+
+**Stage 2 — Code Quality:**
+- Correctness: script logic is sound — `rm -rf` + `cp -r` for regenerate-from-scratch, awk delimiter counter for frontmatter insertion (verified above against real content including the body's extra `---` lines), `set -euo pipefail` throughout, missing-canonical-source guard exits 1 with a clear stderr message.
+- Tests: `test_package_pi_skills.sh`'s 4 tests all pass (`PASS: AC-1`, `AC-2`, `AC-4`, `AC-3` — 4 passed, 0 failed), are independent (each uses `local ok=0` and a fresh `mktemp -d` `WORK_DIR` with an `EXIT` trap cleanup), and are deterministic. Minor, non-blocking observation: the script's missing-canonical-source error branch (`package-pi-skills.sh` lines 15-18) has no test exercising it — this isn't tied to any acceptance criterion and the guard is a trivial, manually-verified-correct one-liner, so it doesn't block this verdict, but it would be a good addition in a future pass over this script.
+- Security: N/A — no secrets, no untrusted external input; the script only reads a fixed, repo-local canonical directory.
+- Readability: names are descriptive (`canonical_dir`, `pi_skills_dir`, `dest_dir`), each script is focused (packaging vs. test), comments explain non-obvious choices (regenerate-from-scratch rationale, awk insertion point), no dead code.
+- Performance: N/A — small, bounded file copies over two skill directories; no loops or resource leaks of concern.
+
+Next owner: active Development Loop.
