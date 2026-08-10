@@ -20,4 +20,18 @@ for skill_name in "${skill_names[@]}"; do
 
   mkdir -p "$pi_skills_dir"
   cp -r "$source_dir" "$dest_dir"
+
+  # Re-add the one pi-specific frontmatter field, as the last field before
+  # the closing frontmatter delimiter, without touching anything else.
+  awk '
+    /^---$/ {
+      delim++
+      if (delim == 2 && !inserted) {
+        print "allowed-tools: Read Bash"
+        inserted = 1
+      }
+    }
+    { print }
+  ' "$dest_dir/SKILL.md" > "$dest_dir/SKILL.md.packaging-tmp"
+  mv "$dest_dir/SKILL.md.packaging-tmp" "$dest_dir/SKILL.md"
 done

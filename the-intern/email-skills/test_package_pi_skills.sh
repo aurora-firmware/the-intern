@@ -42,6 +42,23 @@ test_ac1_generates_expected_tree() {
 
 test_ac1_generates_expected_tree
 
+# AC-2: generated SKILL.md body is byte-for-byte identical to the canonical
+# source, and its frontmatter additionally contains allowed-tools: Read Bash.
+# Stripping that one added line from the generated frontmatter must
+# reproduce the canonical file exactly (frontmatter and body alike).
+test_ac2_frontmatter_gains_allowed_tools_body_unchanged() {
+  local ok=0
+  for name in himalaya email-triage; do
+    local canonical="$WORK_DIR/skills/$name/SKILL.md"
+    local generated="$WORK_DIR/.pi/skills/$name/SKILL.md"
+    grep -q '^allowed-tools: Read Bash$' "$generated" || ok=1
+    diff <(cat "$canonical") <(grep -v '^allowed-tools: Read Bash$' "$generated") >/dev/null || ok=1
+  done
+  run_test "AC-2: generated SKILL.md adds allowed-tools and leaves everything else byte-identical" "$ok"
+}
+
+test_ac2_frontmatter_gains_allowed_tools_body_unchanged
+
 echo ""
 echo "Results: $pass_count passed, $fail_count failed"
 [ "$fail_count" -eq 0 ] || exit 1
