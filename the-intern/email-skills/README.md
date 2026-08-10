@@ -3,7 +3,7 @@
 This package ships three pi-agent skills as a versioned, reviewable product
 artifact: `himalaya` (a generic CLI-reference skill) and `email-triage` (the
 triage policy skill), both defined by S-010, plus `worklog` (the domain-free
-diary-discipline skill S-011/T-155/T-156 extracted out of `email-triage`).
+diary-discipline skill S-011/T-154/T-155 extracted out of `email-triage`).
 The package is separate from `the-intern/bob-companion/claude` (Claude Code
 dev-tooling for operating `bob`) and from this repository's own
 `.claude/skills` (this repository's AI-team process tooling). Neither of
@@ -61,7 +61,7 @@ the-intern/email-skills/
 ├── README.md                       # this file
 ├── package-pi-skills.sh             # T-153: generates .pi/skills/ below from skills/ below
 ├── package-claude-skills.sh         # T-163: generates claude/ below from skills/ below
-├── skills/                          # T-151/T-152/T-155/T-156: canonical, vendor-neutral
+├── skills/                          # T-151/T-152/T-154/T-155: canonical, vendor-neutral
 │   │                                #   skill source — content exists here exactly once
 │   │                                #   (S-011 Design Principles)
 │   ├── himalaya/                    # generic himalaya CLI-reference skill
@@ -73,7 +73,7 @@ the-intern/email-skills/
 │   │       └── categories/          #   taxonomy index + one workflow file per starter
 │   │           └── README.md        #   category (newsletter-bulk, automated-notification,
 │   │                                #   suspected-spam, direct-request, meeting-scheduling)
-│   └── worklog/                     # domain-free diary-discipline skill (S-011/T-155/T-156):
+│   └── worklog/                     # domain-free diary-discipline skill (S-011/T-154/T-155):
 │       ├── SKILL.md                 #   location, entry format, first-run detection,
 │       └── references/              #   reconciliation, and how an open item closes
 ├── .pi/
@@ -189,7 +189,7 @@ install -d -m 700 "$WORKSPACE/config"
 install -d -m 700 "$WORKSPACE/worklog"
 cp the-intern/email-skills/config/email-triage.example.toml \
    "$WORKSPACE/config/email-triage.toml"
-# then edit only the deployed copy's config/email-triage.toml and set
+# then edit only the job workspace's config/email-triage.toml and set
 # manager_address there
 ```
 
@@ -395,7 +395,7 @@ arg_matchers = [
 
 **New in the install-path model — not yet independently live-validated:**
 the `worklog/SKILL.md` and `worklog/references/*.md` read rules above admit
-the `worklog` skill (`T-155`/`T-156`) that the reduced `email-triage`
+the `worklog` skill (`T-154`/`T-155`) that the reduced `email-triage`
 `SKILL.md` now delegates diary mechanics to. They follow the identical
 per-skill `SKILL.md` + `references/*.md` shape already live-validated below
 for `himalaya`/`email-triage`, but have not themselves been re-run against a
