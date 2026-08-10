@@ -1,0 +1,12 @@
+{
+  "name": "email-skills",
+  "description": "Packages the himalaya, email-triage, and worklog skills as a Claude Code plugin, generated from this repository's canonical email-skills source.",
+  "version": "0.1.0",
+  "author": {
+    "name": "aurora-firmware"
+  },
+  "homepage": "https://github.com/aurora-firmware/the-intern",
+  "repository": "https://github.com/aurora-firmware/the-intern",
+  "license": "UNLICENSED",
+  "keywords": ["email", "himalaya", "email-triage", "worklog", "the-intern", "pi-agent"]
+}
