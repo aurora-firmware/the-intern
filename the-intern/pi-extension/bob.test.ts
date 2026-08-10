@@ -1649,6 +1649,35 @@ describe("T-160 AC-1: resources_discover removed from generic PI_EVENTS list", (
 });
 
 // ---------------------------------------------------------------------------
+// T-160 AC-2: a set, non-empty, existing BOB_SKILL_INSTALL_PATH is answered
+// as a contributed skill path.
+// ---------------------------------------------------------------------------
+
+describe("T-160 AC-2: answers resources_discover with the resolved skill path", () => {
+  it("returns skillPaths containing BOB_SKILL_INSTALL_PATH when it is set and exists", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    const skillPath = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillPath);
+    process.env.BOB_SKILL_INSTALL_PATH = skillPath;
+
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("resources_discover") ?? [];
+    expect(handlers.length).toBe(1);
+
+    const result = await handlers[0]!(
+      { type: "resources_discover", cwd: tmpDir, reason: "startup" },
+      {} as ExtensionContext
+    );
+
+    expect((result as any)?.skillPaths).toEqual([skillPath]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // T-160 AC-3: absent or empty BOB_SKILL_INSTALL_PATH contributes no skill
 // paths, logs one warning, and does not throw or block session init.
 // ---------------------------------------------------------------------------

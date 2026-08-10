@@ -453,7 +453,7 @@ export default function bobFactory(pi: ExtensionAPI): void {
       );
       return;
     }
-    return;
+    return { skillPaths: [skillInstallPath] };
   }
 
   // ---------------------------------------------------------------------------
