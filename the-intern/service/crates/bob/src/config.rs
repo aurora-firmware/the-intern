@@ -1789,6 +1789,52 @@ prompt = "from toml"
         fs::remove_file(config_file).expect("temp config file should be removable");
     }
 
+    // ── AC-3 (T-157): unset skill_install_path resolves to the ADR-009 data
+    //    bucket default alongside the extension ──────────────────────────────
+
+    #[test]
+    fn resolves_default_skill_install_path_from_xdg_data_home_when_not_configured() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let data_home = temp.path().join("xdg-data-home");
+
+        let config = load_with_env_overrides([(
+            "XDG_DATA_HOME",
+            data_home
+                .to_str()
+                .expect("temporary data-home path should be valid UTF-8"),
+        )])
+        .expect("config should load");
+
+        assert_eq!(
+            config.skill_install_path,
+            data_home.join("bob").join("skills")
+        );
+    }
+
+    #[test]
+    fn resolves_default_skill_install_path_from_home_when_xdg_data_home_is_unset() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let home = temp.path().join("home");
+
+        let config = load_with_env_overrides([(
+            "HOME",
+            home.to_str()
+                .expect("temporary home path should be valid UTF-8"),
+        )])
+        .expect("config should load");
+
+        let expected = if cfg!(target_os = "macos") {
+            home.join("Library")
+                .join("Application Support")
+                .join("bob")
+                .join("skills")
+        } else {
+            home.join(".local").join("share").join("bob").join("skills")
+        };
+
+        assert_eq!(config.skill_install_path, expected);
+    }
+
     // ── AC-2 (T-119): a relative pi_agent_cwd fails config load ───────────────
 
     #[test]
