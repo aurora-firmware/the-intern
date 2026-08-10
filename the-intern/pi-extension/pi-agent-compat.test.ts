@@ -5,7 +5,8 @@
  * - The declared dependency version is pinned exactly (no semver range prefix).
  * - The installed package version matches the supported version exactly.
  * - The fire-and-forget PI_EVENTS in bob.ts matches the installed package's
- *   typed event surface (ExtensionAPI.on() overloads), excluding tool_call.
+ *   typed event surface (ExtensionAPI.on() overloads), excluding the events
+ *   with their own dedicated handlers (tool_call, resources_discover).
  *
  * Tests here fail with a descriptive error when the installed pi-agent package
  * drifts from the tested API surface, giving operators a clear incompatibility
@@ -145,12 +146,20 @@ describe("AC-4: README files document supported pi-agent version and incompatibi
 });
 
 // ---------------------------------------------------------------------------
-// AC-3: PI_EVENTS in bob.ts matches the installed package's typed event surface,
-//        excluding tool_call.
+// AC-3 (T-160 AC-5): PI_EVENTS in bob.ts matches the installed package's typed
+//        event surface, excluding the events with dedicated handlers
+//        (tool_call, resources_discover).
 // ---------------------------------------------------------------------------
 
-describe("AC-3: bob PI_EVENTS matches installed pi-agent typed event surface (excluding tool_call)", () => {
-  it("exports PI_EVENTS from bob.ts that covers every event in the installed package's on() overloads except tool_call", async () => {
+// Events registered with their own dedicated handler instead of the generic
+// fire-and-forget PI_EVENTS loop: tool_call (blocking authz hook) and
+// resources_discover (skill-path answer, ADR-014). PI_EVENTS must cover every
+// other event the installed package exposes, and must fail this check if
+// either dedicated-handler event is also present in PI_EVENTS.
+const DEDICATED_HANDLER_EVENTS = new Set(["tool_call", "resources_discover"]);
+
+describe("AC-3: bob PI_EVENTS matches installed pi-agent typed event surface (excluding dedicated-handler events)", () => {
+  it("exports PI_EVENTS from bob.ts that covers every event in the installed package's on() overloads except tool_call and resources_discover", async () => {
     // Import the exported PI_EVENTS list from the bob extension.
     const bobModule = await import("./bob.js");
     const piEvents: readonly string[] = bobModule.PI_EVENTS;
@@ -163,8 +172,9 @@ describe("AC-3: bob PI_EVENTS matches installed pi-agent typed event surface (ex
     // Read the full event surface from the installed package types.
     const installedEvents = readInstalledEventSurface();
 
-    // The package surface minus tool_call is what PI_EVENTS must cover.
-    const expectedEvents = installedEvents.filter((e) => e !== "tool_call");
+    // The package surface minus the dedicated-handler events is what
+    // PI_EVENTS must cover.
+    const expectedEvents = installedEvents.filter((e) => !DEDICATED_HANDLER_EVENTS.has(e));
 
     // Sort both for a stable comparison.
     const piEventsSorted = [...piEvents].sort();
@@ -176,7 +186,7 @@ describe("AC-3: bob PI_EVENTS matches installed pi-agent typed event surface (ex
     expect(
       missing,
       `PI_EVENTS in bob.ts is missing events that the installed package exposes: [${missing.join(", ")}]. ` +
-        "Update PI_EVENTS to include all events from the installed package except tool_call."
+        "Update PI_EVENTS to include all events from the installed package except tool_call and resources_discover."
     ).toEqual([]);
 
     expect(

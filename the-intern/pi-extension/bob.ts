@@ -5,10 +5,12 @@
  * Unix domain socket, tagged with the session id allocated by the bob
  * service supervisor.  Also registers a blocking `tool_call` hook that
  * sends an Authz frame and awaits a matching AuthzVerdict before letting
- * the tool call proceed.
+ * the tool call proceed, and a `resources_discover` hook that answers with
+ * the skill install path read from BOB_SKILL_INSTALL_PATH (ADR-014).
  *
  * Wire contract (outbound frames):
- *   InboundFrame::Event — for all non-tool_call events:
+ *   InboundFrame::Event — for every forwarded event (excludes tool_call and
+ *   resources_discover, which have their own dedicated handlers):
  *     {"kind":"event","session":"<BOB_SESSION_ID>","payload":{"event":"<name>","data":<object>}}\n
  *   InboundFrame::Authz — for tool_call events:
  *     {"kind":"authz","session":"<BOB_SESSION_ID>","tool":"<name>","arguments":<object>}\n
@@ -51,6 +53,7 @@
  *     BOB_AUTHZ_TIMEOUT_MS verdict timeout, not by killing the transport.
  */
 
+import * as fs from "node:fs";
 import * as net from "node:net";
 import type { ExtensionAPI, ExtensionContext, ToolCallEventResult } from "@earendil-works/pi-coding-agent";
 
@@ -62,11 +65,12 @@ import type { ExtensionAPI, ExtensionContext, ToolCallEventResult } from "@earen
 // but return a client-rendered SPA; the type definitions from the installed
 // package are the authoritative machine-readable source.
 //
-// `tool_call` is intentionally excluded: it is handled by the blocking
-// authz hook (see below) rather than the fire-and-forget event loop.
+// `tool_call` and `resources_discover` are intentionally excluded: each is
+// handled by its own dedicated registration (the blocking authz hook and the
+// skill-path answer, respectively — see below) rather than the
+// fire-and-forget event loop.
 // ---------------------------------------------------------------------------
 export const PI_EVENTS = [
-  "resources_discover",
   "session_start",
   "session_before_switch",
   "session_before_fork",
@@ -425,6 +429,38 @@ export default function bobFactory(pi: ExtensionAPI): void {
   }
 
   // ---------------------------------------------------------------------------
+  // Dedicated resources_discover handler (ADR-014).
+  //
+  // Answers pi's resources_discover event with the skill install path read
+  // from BOB_SKILL_INSTALL_PATH. Fail-open: an absent, empty, or nonexistent
+  // path contributes no skill paths and logs one warning, but never throws or
+  // blocks session initialisation.
+  // ---------------------------------------------------------------------------
+  async function handleResourcesDiscover(
+    _event: unknown,
+    ctx: ExtensionContext
+  ): Promise<{ skillPaths?: string[] } | void> {
+    const skillInstallPath = process.env.BOB_SKILL_INSTALL_PATH;
+    if (!skillInstallPath) {
+      warn(
+        "BOB_SKILL_INSTALL_PATH is not set — contributing no skill paths for this session.",
+        ctx
+      );
+      return;
+    }
+    try {
+      await fs.promises.access(skillInstallPath);
+    } catch {
+      warn(
+        `BOB_SKILL_INSTALL_PATH "${skillInstallPath}" does not exist — contributing no skill paths for this session.`,
+        ctx
+      );
+      return;
+    }
+    return { skillPaths: [skillInstallPath] };
+  }
+
+  // ---------------------------------------------------------------------------
   // Blocking tool_call authz hook.
   //
   // Sends an Authz frame to the bob service and awaits a matching
@@ -519,8 +555,9 @@ export default function bobFactory(pi: ExtensionAPI): void {
     return { block: false };
   }
 
-  // Register a handler for every documented pi event (excluding tool_call,
-  // which uses the blocking authz hook registered separately below).
+  // Register a handler for every documented pi event (excluding tool_call
+  // and resources_discover, each of which is registered separately below
+  // with its own dedicated handler).
   // Cast is required because ExtensionAPI.on() uses individual overloads per
   // event name rather than a general string → handler signature.
   const piGeneric = pi as unknown as {
@@ -540,4 +577,19 @@ export default function bobFactory(pi: ExtensionAPI): void {
       handler: (event: unknown, ctx: ExtensionContext) => Promise<ToolCallEventResult>
     ): void;
   }).on("tool_call", handleToolCall);
+
+  // Register the dedicated resources_discover handler.
+  // Cast is required: ResourcesDiscoverResult is not part of the installed
+  // package's public export surface (only reachable via the internal dist
+  // path types.d.ts), so this local minimal return type stands in for it —
+  // see handleResourcesDiscover above.
+  (pi as unknown as {
+    on(
+      event: "resources_discover",
+      handler: (
+        event: unknown,
+        ctx: ExtensionContext
+      ) => Promise<{ skillPaths?: string[] } | void>
+    ): void;
+  }).on("resources_discover", handleResourcesDiscover);
 }
