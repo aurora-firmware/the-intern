@@ -1,7 +1,7 @@
 ---
 id: T-151
 title: Extract canonical vendor-neutral source for the himalaya skill
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-09'
