@@ -95,3 +95,97 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-10
+
+PASS
+
+Read `the-intern/email-skills/skills/worklog/SKILL.md`,
+`references/entry-format.md`, and `references/reconciliation.md` in full on
+`task/T-154-extract-worklog-skill`, and compared each section closely
+against the original `the-intern/email-skills/skills/email-triage/references/worklog.md`
+(and, for first-run detection specifically, `email-triage/SKILL.md`'s loop
+step 1, since that mechanic lives there rather than in `references/worklog.md`).
+
+**Stage 1 — Acceptance Criteria:**
+- AC-1 (domain-free `SKILL.md` describing location, entry format, first-run
+  detection, reconciliation, closing an open item, without referencing
+  email/himalaya/any domain): met. Ran the task's own verification command
+  (`test -f ... && ! grep -qi "email\|himalaya" SKILL.md`) — exit 0. Went
+  beyond the literal grep and read the full text: no mailbox/sender/
+  manager/`\Seen`/himalaya/category/triage language anywhere in the three
+  new files. `bob` and `max_processes` (bob-specific implementation names)
+  were also generalized to "the host service" / "a process-count limit,"
+  which is stronger than the AC requires but consistent with S-011's
+  design principle that skill content stay intelligible to a second vendor
+  with no access to this project's internals. First-run detection is
+  correctly present in `SKILL.md` ("Determining whether this is the day's
+  first executed run") even though that logic's original home is
+  `email-triage/SKILL.md`'s loop step 1, not `references/worklog.md` — a
+  reasonable and necessary read of AC-1 plus S-011 Component 4's purpose
+  text, which explicitly lists "detecting a day's first executed run" as
+  part of what this skill must own.
+- AC-2 (carry the diary-format and reconciliation reference content from
+  `references/worklog.md` into the new skill's own references): met. Went
+  section by section: "Creating the worklog file" (including the exact
+  append-command shape and the heredoc-quoting/unquoted-redirect safety
+  rationale) and "Per-message entry format" carried into
+  `entry-format.md`, generalized only in the placeholder
+  (`<subject> (from <sender>)` → `<item-identifier>`) and prose examples,
+  with the load-bearing mechanics (exact `mkdir -p worklog` /
+  `cat >> worklog/$TODAY.md <<'EOF'` shape, the three Done/Left/Next
+  fields, the `>> worklog/` action-authorization-rule matching rationale)
+  preserved verbatim in substance. "First-run reconciliation" (walk-back
+  search, `Left`-not-"nothing" test, day-skip causes) and "Open items live
+  in the worklog only" (side-effect-ambiguity rationale, sole-source-of-
+  truth rule) carried into `reconciliation.md`, generalized faithfully
+  (e.g. `\Seen` flag → "side effect in that upstream system"). "How an
+  open item closes" carries the carry-forward mechanics (Left unchanged,
+  Next restated, today's file becomes the new most-recent-with-open-items
+  file, no automatic expiry) but omits the original's two concrete closing
+  causes (manager's reply arriving; an admitting allow rule being added).
+  Checked this deliberately against S-011's Responsibility Separation
+  table, which assigns email-triage "retains retry of a carried-forward
+  blocked action" — the exact mechanic tied to the second omitted cause —
+  confirming that owning the domain-specific closing conditions is
+  correctly out of `worklog`'s scope, not a gap in AC-2 coverage.
+- AC-3 (leave `email-triage`'s own worklog content unchanged): met.
+  `git diff --stat dev-agent...task/T-154-extract-worklog-skill --
+  the-intern/email-skills/skills/email-triage/ the-intern/email-skills/.pi/`
+  is empty; `git diff --name-status` shows only the three new
+  `skills/worklog/*` files. No files outside "Files to Touch" were
+  modified.
+
+**Stage 2 — Code Quality (content-authoring equivalent):**
+- Correctness: internal cross-references (`references/entry-format.md`,
+  `references/reconciliation.md`, and named subsections like "First-run
+  reconciliation" / "How an open item closes") all resolve to sections
+  that actually exist in the target files. Frontmatter shape (`name`,
+  `description`) matches the sibling `email-triage`/`himalaya` canonical
+  skills; no `allowed-tools` field, consistent with those being a
+  packaging-target concern (T-153/T-156), not canonical-source content.
+- Tests: no dedicated test file, consistent with the T-153-endorsed
+  precedent that pure content-authoring tasks with no control-flow surface
+  use the task's own `## Verification` command as the red→green check
+  rather than a `test_*.sh` file. Re-ran `./package-pi-skills.sh` and
+  `bash test_package_pi_skills.sh` from `the-intern/email-skills/` on the
+  task branch — all 4 existing packaging tests still pass, confirming
+  `worklog` was correctly left out of the `.pi/` output (that's T-156) and
+  nothing else in the package was disturbed.
+- Security: N/A — no code; the load-bearing shell-safety rationale (why
+  the redirect stays unquoted, why the heredoc delimiter stays quoted) was
+  itself checked for accurate preservation, not just presence.
+- Readability: prose quality is high and consistent with the sibling
+  skills' voice; the skill states its own scope boundary explicitly
+  ("This skill defines no closing conditions of its own") rather than
+  leaving it implicit, which reads clearly on its own.
+- Performance: N/A.
+
+**Minor, non-blocking observation:** the task Description's phrase
+"extracted from the diary-mechanics content currently embedded in ...
+`references/worklog.md`" undersells the actual source set — first-run
+detection genuinely came from `email-triage/SKILL.md`'s loop step 1, not
+`references/worklog.md`. Worth a note for whoever writes T-155/T-156's task
+descriptions, not a defect in this work.
+
+Next owner: active Development Loop.
