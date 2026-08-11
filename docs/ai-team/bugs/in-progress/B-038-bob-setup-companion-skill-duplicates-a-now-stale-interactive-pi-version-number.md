@@ -3,7 +3,7 @@ id: B-038
 title: bob-setup companion skill duplicates a now-stale interactive pi version 
   number
 severity: low
-status: open
+status: in-progress
 created: '2026-08-10'
 ---
 
