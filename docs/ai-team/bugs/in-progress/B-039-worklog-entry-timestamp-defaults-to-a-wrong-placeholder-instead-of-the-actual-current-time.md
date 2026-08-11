@@ -197,6 +197,24 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-11
+
+Read the full Diagnosis Log (Diagnosis 1) from `dev-agent` before starting; the Work Log section was empty, so this is the first implementation session. Followed the tdd skill's red→green→refactor cycle for the fix contract.
+
+Wrote a new regression test, `the-intern/email-skills/test_worklog_entry_format_timestamp.sh`, following the house style of the existing `test_package_pi_skills.sh` (`set -euo pipefail`, `run_test` helper, PASS/FAIL output, non-zero exit on any failure). It extracts the shown `bash` command block from the "Creating the worklog file" section of `skills/worklog/references/entry-format.md` and asserts (1) the block contains a `date +%H:%M`-shaped variable assignment, and (2) the heredoc's entry header uses that computed variable rather than a bare `<HH:MM>` placeholder. Confirmed it failed against the pre-fix file (`FAIL: shown append-command block computes the current time via a date +%H:%M lookup`).
+
+Implemented the fix in the canonical source exactly per the fix contract: added `NOW=$(date +%H:%M)` alongside the existing `TODAY=$(date +%F)` in the shown command block, and replaced the bare `## <HH:MM> — <item-identifier>` header with `## $NOW — <item-identifier>`.
+
+While writing the prose update, I noticed and tested (via a throwaway shell run) that because the heredoc delimiter is intentionally quoted (`<<'EOF'`, to keep untrusted item content inert), `$NOW` does not shell-expand inside the heredoc body — running the block as literally shown would write the literal string `$NOW` into the worklog file, a different but equally wrong defect that would fail the bug's own Fix Verification criterion (the header must match real wall-clock time). I considered restructuring the append into a `printf`-plus-heredoc combination that would let `$NOW` expand safely outside the quoted section, but rejected this as exceeding the fix contract's minimal-change scope and introducing new risk (item-identifier text would then sit in an unquoted `printf` argument, which is not obviously safer). Instead I tightened the prose to explicitly instruct: because the delimiter is quoted, `$NOW` will not auto-expand — before running the command, replace the literal `$NOW` text with the actual `HH:MM` value the `NOW=$(date +%H:%M)` lookup returned, the same way `<item-identifier>` and the `Done`/`Left`/`Next` text are already substituted before running. This stays within "tighten the surrounding prose to explicitly require this date lookup for the time value" from the fix contract, but is worth reviewer attention since it goes slightly beyond the contract's literal wording ("use `$NOW` in the header") to ensure the fix is actually behaviorally correct rather than just textually matching the instruction.
+
+Re-ran the new test — both assertions pass. Regenerated the two packaging targets via `./package-pi-skills.sh` and `./package-claude-skills.sh` from `the-intern/email-skills/`, confirmed all three copies (canonical, `.pi/skills/`, `claude/skills/`) are byte-identical for this file via `diff`. Re-ran the two pre-existing packaging test suites (`test_package_pi_skills.sh`, `test_package_claude_skills.sh`) — both pass (5/5 each), confirming no drift.
+
+Committed the full cycle in one commit on `bug/B-039-worklog-timestamp-placeholder` (`cadd135`, `fix(email-skills): compute worklog entry time via date, not placeholder`) covering the canonical source edit, both regenerated packaging targets, and the new test script — did not split into separate red/green commits since the implementation was a single small, cohesive prose-and-template change with no intermediate stable state worth a separate commit.
+
+Nothing else was touched: `skills/email-triage/references/worklog.md` was re-confirmed (per the Diagnosis Log) to contain no timestamp content, so it was correctly left out of scope. No production Rust/TS code was touched. The bug lifecycle file's stale in-tree copy on this branch was read for context only, never edited or committed, per the loop's instructions.
+
+What remains: the bug's own manual/live Fix Verification step — re-running a real scheduled `email-triage` job against a live mailbox and confirming the resulting worklog entry's `<HH:MM>` header matches real wall-clock time within one minute, with no denied correction attempt in the transcript or audit trail — is out of scope for this session (requires external resources) and remains for a human or a later live-validation task, matching T-164's own pattern for this kind of live-only verification step.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
