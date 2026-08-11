@@ -3,7 +3,7 @@ id: B-039
 title: worklog entry timestamp defaults to a wrong placeholder instead of the 
   actual current time
 severity: medium
-status: open
+status: in-progress
 created: '2026-08-10'
 task: T-164
 ---
