@@ -18,10 +18,11 @@ state for a brand-new day or a brand-new deployment, not an error condition.
 Use this exact append-command shape for the write step:
 
 ```bash
+NOW=$(date +%H:%M)
 TODAY=$(date +%F)
 mkdir -p worklog
 cat >> worklog/$TODAY.md <<'EOF'
-## <HH:MM> — <item-identifier>
+## $NOW — <item-identifier>
 
 - Done: <what was done for this item this run>
 - Left: <what is still outstanding, or "nothing" if fully resolved>
@@ -37,13 +38,25 @@ rewriting the redirect as `>> "worklog/$TODAY.md"` or as an absolute
 workspace path changes the command text enough to miss such a rule even
 though the append is otherwise legitimate. This unquoted form is still safe
 here because `TODAY` comes from `date +%F`, which yields only the calendar
-date characters used in the worklog filename. Keep the heredoc delimiter
-quoted (`<<'EOF'`): substitute the actual time, item identifier, and outcome
-text into its body before running the command. The body typically contains
+date characters used in the worklog filename. `NOW` must come from this
+same kind of `date` lookup (`date +%H:%M`) — never a guessed, estimated, or
+placeholder value — for the same reason `TODAY` does: it is the only source
+of the actual current time available to the run.
+
+Keep the heredoc delimiter quoted (`<<'EOF'`): the body typically contains
 text derived from whatever the item itself is — content the consuming
 skill does not fully control — so quoting the delimiter keeps any `$()`,
 backticks, backslashes, or variable references in that text inert rather
-than allowing the shell to expand them.
+than allowing the shell to expand them. Because the delimiter is quoted,
+the shell will **not** expand `$NOW` inside the heredoc body — it stays
+literal `$NOW` text if left as shown. `$NOW` in the header line above marks
+where the just-computed time value belongs: before running the command,
+replace `$NOW` with the literal `HH:MM` result of the `NOW=$(date +%H:%M)`
+lookup shown above it, the same way `<item-identifier>` and the `Done`/
+`Left`/`Next` text get replaced with their real values before the command
+runs. Never run the command with the literal text `$NOW` still in place,
+and never substitute a guessed or estimated time in its place — the
+substituted value must be the result of that `date` lookup.
 
 ## Per-item entry format
 
