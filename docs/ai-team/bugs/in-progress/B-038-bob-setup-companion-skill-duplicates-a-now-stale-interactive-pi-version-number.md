@@ -146,6 +146,16 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-11
+
+Read the canonical bug file from `dev-agent` (not the stale in-tree copy, which predates the Diagnosis Log) and used the recorded Diagnosis Log as the fix contract. The isolated fault was the sentence "Interactive `pi` binary (used by `bob chat`): last verified against **0.79.10**." at `the-intern/bob-companion/claude/skills/bob-setup/SKILL.md:30-31`, which disagreed with the root README's T-150-reconciled value of pi 0.80.3.
+
+Of the two options the Diagnosis Log offered — (a) drop the duplicated number and defer entirely to the root README, or (b) update the number to 0.80.3 — I chose (a). The extension-API line just above it (`0.75.3`) is kept accurate by an automated test (`npm test` in `the-intern/pi-extension` fails loudly on mismatch), so hardcoding a number there carries low staleness risk. The interactive-`pi` line has no such enforcement mechanism — it's exactly the kind of unenforced duplicate that caused this bug in the first place (T-150's scope only covered README.md, so this file drifted). Restating the current number (0.80.3) would just recreate the same staleness trap for the next version bump. Dropping the number and pointing readers to the root README's "pi-agent Version Compatibility" section removes the duplicate-of-truth entirely, which is also consistent with the paragraph's own lead sentence ("Version compatibility is pinned, not aspirational — check the root README.md ... section for the exact supported versions").
+
+I did not touch the two `0.75.3` extension-API-pin references (`bob-setup/SKILL.md:28`, `bob-troubleshooting/references/symptom-table.md:12`), confirmed via `grep -rn "0.79.10\|0.65.2\|0.75.3" the-intern/bob-companion/` before and after the edit that only the intended line changed and the unrelated pins were preserved verbatim.
+
+Ran the bug's own Fix Verification command (`grep -n "0.79.10\|0.65.2" the-intern/bob-companion/claude/skills/bob-setup/SKILL.md`) and confirmed it now returns no matches. No automated regression test was written, since this is a one-line prose fix and the bug's Fix Verification is itself a single grep command. Committed the change as `cc3d52b` (`docs(bob-companion): drop stale duplicated interactive pi version`) on `bug/B-038-stale-pi-version-companion-skill`. Nothing remains outstanding for this bug; ready for review.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
