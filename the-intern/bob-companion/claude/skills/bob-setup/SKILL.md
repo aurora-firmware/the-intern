@@ -27,8 +27,9 @@ supported versions before assuming a mismatch is your bug:
 - Extension API (`@earendil-works/pi-coding-agent`): tested against
   **0.75.3** only — `npm test` in `the-intern/pi-extension` fails loudly with
   the exact fix command if the installed version differs.
-- Interactive `pi` binary (used by `bob chat`): last verified against
-  **0.79.10**.
+- Interactive `pi` binary (used by `bob chat`): no version number is
+  duplicated here — see the root README's "pi-agent Version Compatibility"
+  section for the currently verified version.
 
 ## 2. Rust toolchain
 
