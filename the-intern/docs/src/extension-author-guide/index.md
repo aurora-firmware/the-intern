@@ -12,7 +12,11 @@ The bob extension (`the-intern/pi-extension/bob.ts`) is a pi-agent extension.
 pi loads it once per session. When loaded, `bob.ts` connects to a Unix domain
 socket whose path is given in the `BOB_EXTENSION_SOCK_PATH` environment
 variable, using the session id carried in `BOB_SESSION_ID`. Both variables
-are set by the bob service's pi-agent supervisor before it spawns pi.
+are set by the bob service's pi-agent supervisor before it spawns pi. A third
+variable, `BOB_SKILL_INSTALL_PATH`, is also set by the supervisor (optional,
+governing skill supply rather than event forwarding or authorization — see
+[Skill supply via `resources_discover`](#skill-supply-via-resources_discover)
+below).
 
 ### How bob loads the extension
 
@@ -43,7 +47,8 @@ Inner JSON must not contain literal newlines.
 
 `bob.ts` sends two kinds of frames:
 
-**Event frame** — sent for every pi event except `tool_call`:
+**Event frame** — sent for every pi event except `tool_call` and
+`resources_discover`:
 
 ```json
 {"kind":"event","session":"<BOB_SESSION_ID>","payload":{"event":"<name>","data":<object>}}
@@ -51,8 +56,9 @@ Inner JSON must not contain literal newlines.
 
 The full list of forwarded events is the `PI_EVENTS` constant exported from
 `bob.ts`. At the time of writing it covers all events reachable via the
-`ExtensionAPI.on()` overloads of the installed package, excluding `tool_call`,
-which is handled by the authz hook instead.
+`ExtensionAPI.on()` overloads of the installed package, excluding `tool_call`
+and `resources_discover`, each of which has its own dedicated handler instead
+(the authz hook and the skill-supply handler described below).
 
 **Authz frame** — sent for `tool_call` events, blocking the tool call until
 a verdict arrives:
@@ -78,6 +84,26 @@ FIFO order. If a verdict does not arrive within the configured timeout
 not match this shape (for example a legacy `"verdict":"allow"|"block"` string,
 as sent by extension releases before this wire format was introduced),
 `bob.ts` fails closed and blocks the tool call.
+
+### Skill supply via resources_discover
+
+`bob.ts` registers a dedicated handler for pi's `resources_discover` event,
+modeled on the `tool_call` authz hook's special-case registration but with no
+socket traffic involved. On `resources_discover`, the handler reads
+`BOB_SKILL_INSTALL_PATH` from the environment:
+
+- If the variable is set, non-empty, and names a path that exists on disk, it
+  answers with that path as a contributed `skillPaths` entry, so pi loads
+  skills from it independent of the session's working directory
+  (`S-011` / `ADR-014`).
+- If the variable is absent, empty, or names a path that does not exist, the
+  handler contributes no skill paths and logs one warning via the same
+  `warn()` helper used elsewhere in `bob.ts`.
+
+This is fail-open, not fail-closed: unlike a missing `BOB_SESSION_ID` or
+`BOB_EXTENSION_SOCK_PATH`, a missing or invalid `BOB_SKILL_INSTALL_PATH` does
+not disable event forwarding or the `tool_call` authorization hook — the
+session still starts and runs, only without skills.
 
 ### One connection per session, and why it matters
 

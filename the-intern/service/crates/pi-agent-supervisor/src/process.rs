@@ -26,6 +26,11 @@ pub struct WorkerProcessConfig {
     /// Working directory set on the child process via `current_dir`. `None`
     /// means the child inherits the launch cwd unchanged.
     pub worker_cwd: Option<PathBuf>,
+    /// Absolute path to the installed skills package, set as
+    /// `BOB_SKILL_INSTALL_PATH`. `None` or an empty path means the variable
+    /// is not set on the child environment (ADR-014 §4 fail-open: missing
+    /// path means no skills, not a spawn failure).
+    pub skill_install_path: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -68,6 +73,12 @@ impl RpcWorkerProcess {
 
         if !cfg.extension_sock_path.as_os_str().is_empty() {
             cmd.env("BOB_EXTENSION_SOCK_PATH", &cfg.extension_sock_path);
+        }
+
+        if let Some(skill_install_path) = &cfg.skill_install_path {
+            if !skill_install_path.as_os_str().is_empty() {
+                cmd.env("BOB_SKILL_INSTALL_PATH", skill_install_path);
+            }
         }
 
         if let Some(worker_cwd) = &cfg.worker_cwd {
@@ -275,6 +286,11 @@ pub struct InteractiveProcessConfig {
     /// child inherits the launch cwd unchanged — mirrors
     /// `WorkerProcessConfig::worker_cwd`.
     pub cwd: Option<PathBuf>,
+    /// Absolute path to the installed skills package, set as
+    /// `BOB_SKILL_INSTALL_PATH`. `None` or an empty path means the variable
+    /// is not set on the child environment — mirrors
+    /// `WorkerProcessConfig::skill_install_path`.
+    pub skill_install_path: Option<PathBuf>,
 }
 
 /// A supervised interactive pi child process.
@@ -329,6 +345,12 @@ impl InteractiveProcess {
 
         if !cfg.extension_sock_path.as_os_str().is_empty() {
             cmd.env("BOB_EXTENSION_SOCK_PATH", &cfg.extension_sock_path);
+        }
+
+        if let Some(skill_install_path) = &cfg.skill_install_path {
+            if !skill_install_path.as_os_str().is_empty() {
+                cmd.env("BOB_SKILL_INSTALL_PATH", skill_install_path);
+            }
         }
 
         if let Some(cwd) = &cfg.cwd {
@@ -463,6 +485,7 @@ mod tests {
             extension_sock_path: PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             worker_cwd: None,
+            skill_install_path: None,
         }
     }
 
@@ -521,6 +544,7 @@ mod tests {
             extension_sock_path: PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             worker_cwd: None,
+            skill_install_path: None,
         };
 
         let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
@@ -555,6 +579,7 @@ mod tests {
             extension_sock_path: sock_path.clone(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             worker_cwd: None,
+            skill_install_path: None,
         };
 
         let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
@@ -588,6 +613,7 @@ mod tests {
             extension_sock_path: PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             worker_cwd: None,
+            skill_install_path: None,
         };
 
         let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
@@ -602,6 +628,111 @@ mod tests {
             value,
             Value::String("unset".to_string()),
             "BOB_EXTENSION_SOCK_PATH should not be set on child env when path is empty"
+        );
+    }
+
+    // AC-2 (T-158): BOB_SKILL_INSTALL_PATH is set when configured to a
+    // non-empty path.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_sets_bob_skill_install_path_when_path_is_non_empty() {
+        let session_id = SessionId::new();
+        let skill_install_path = PathBuf::from("/opt/bob/skills");
+        let cfg = WorkerProcessConfig {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                // Output the env var as a JSON string for read_next_stdout_json.
+                "printf '\"%s\"\\n' \"$BOB_SKILL_INSTALL_PATH\"".to_string(),
+            ],
+            child_termination_deadline: Duration::from_millis(50),
+            session_id,
+            extension_sock_path: PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
+            worker_cwd: None,
+            skill_install_path: Some(skill_install_path.clone()),
+        };
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+
+        let value = worker
+            .read_next_stdout_json()
+            .await
+            .expect("stdout read should succeed")
+            .expect("value should be present");
+
+        assert_eq!(
+            value,
+            Value::String(skill_install_path.to_string_lossy().into_owned()),
+            "BOB_SKILL_INSTALL_PATH on child env should match the configured path"
+        );
+    }
+
+    // AC-3 (T-158): when skill_install_path is unset (None), spawn proceeds
+    // without that var.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_omits_bob_skill_install_path_when_unset() {
+        let session_id = SessionId::new();
+        let cfg = WorkerProcessConfig {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                // Print "unset" when the variable is absent, "set:<value>" when present.
+                "if [ -z \"${BOB_SKILL_INSTALL_PATH+x}\" ]; then printf '\"unset\"\\n'; else printf '\"set:%s\"\\n' \"$BOB_SKILL_INSTALL_PATH\"; fi".to_string(),
+            ],
+            child_termination_deadline: Duration::from_millis(50),
+            session_id,
+            extension_sock_path: PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
+            worker_cwd: None,
+            skill_install_path: None,
+        };
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+
+        let value = worker
+            .read_next_stdout_json()
+            .await
+            .expect("stdout read should succeed")
+            .expect("value should be present");
+
+        assert_eq!(
+            value,
+            Value::String("unset".to_string()),
+            "BOB_SKILL_INSTALL_PATH should not be set on child env when skill_install_path is unset"
+        );
+    }
+
+    // AC-3 (T-158): when skill_install_path is Some(empty path), spawn
+    // proceeds without that var (empty must be treated like unset).
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_omits_bob_skill_install_path_when_path_is_empty() {
+        let session_id = SessionId::new();
+        let cfg = WorkerProcessConfig {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "if [ -z \"${BOB_SKILL_INSTALL_PATH+x}\" ]; then printf '\"unset\"\\n'; else printf '\"set:%s\"\\n' \"$BOB_SKILL_INSTALL_PATH\"; fi".to_string(),
+            ],
+            child_termination_deadline: Duration::from_millis(50),
+            session_id,
+            extension_sock_path: PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
+            worker_cwd: None,
+            skill_install_path: Some(PathBuf::new()),
+        };
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+
+        let value = worker
+            .read_next_stdout_json()
+            .await
+            .expect("stdout read should succeed")
+            .expect("value should be present");
+
+        assert_eq!(
+            value,
+            Value::String("unset".to_string()),
+            "BOB_SKILL_INSTALL_PATH should not be set on child env when skill_install_path is an empty path"
         );
     }
 
@@ -800,6 +931,7 @@ mod tests {
             extension_sock_path: PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             worker_cwd: None,
+            skill_install_path: None,
         })
         .expect("spawn should succeed");
 
@@ -861,6 +993,7 @@ mod tests {
             extension_sock_path: sock_path.clone(),
             extension_path: extension_path.clone(),
             cwd: None,
+            skill_install_path: None,
         };
 
         let process = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
@@ -883,6 +1016,111 @@ mod tests {
         assert!(
             written.contains(&format!("arg:{}", extension_path.display())),
             "--extension path should appear in child positional args; got: {written:?}"
+        );
+
+        let _ = std::fs::remove_file(&out_file);
+    }
+
+    // AC-2 (T-158): BOB_SKILL_INSTALL_PATH is set on the interactive child
+    // environment when skill_install_path is configured to a non-empty path.
+    #[tokio::test(flavor = "current_thread")]
+    async fn interactive_spawn_sets_bob_skill_install_path_when_path_is_non_empty() {
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let out_file = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-interactive-skill-path-{}.txt",
+            SessionId::new()
+        ));
+        let _ = std::fs::remove_file(&out_file);
+
+        let skill_install_path = PathBuf::from("/opt/bob/skills");
+        let script = "printf 'skill:%s\\n' \"$BOB_SKILL_INSTALL_PATH\"";
+
+        let stdin_fd: OwnedFd = File::open("/dev/null")
+            .expect("open /dev/null for stdin")
+            .into();
+        let stdout_fd: OwnedFd = File::create(&out_file)
+            .expect("create output file for stdout")
+            .into();
+        let stderr_fd: OwnedFd = File::open("/dev/null")
+            .expect("open /dev/null for stderr")
+            .into();
+
+        let cfg = InteractiveProcessConfig {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            child_termination_deadline: Duration::from_millis(2000),
+            session_id: SessionId::new(),
+            extension_sock_path: PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
+            cwd: None,
+            skill_install_path: Some(skill_install_path.clone()),
+        };
+
+        let process = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
+            .expect("interactive spawn should succeed");
+        process.wait_for_exit().await;
+
+        let written = std::fs::read_to_string(&out_file)
+            .expect("output file should have been written by child");
+
+        assert_eq!(
+            written.trim(),
+            format!("skill:{}", skill_install_path.display()),
+            "BOB_SKILL_INSTALL_PATH should be set on interactive child; got: {written:?}"
+        );
+
+        let _ = std::fs::remove_file(&out_file);
+    }
+
+    // AC-3 (T-158): when skill_install_path is unset, BOB_SKILL_INSTALL_PATH
+    // is not set on the interactive child, and spawning still succeeds.
+    #[tokio::test(flavor = "current_thread")]
+    async fn interactive_spawn_omits_bob_skill_install_path_when_unset() {
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let out_file = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-interactive-skill-path-unset-{}.txt",
+            SessionId::new()
+        ));
+        let _ = std::fs::remove_file(&out_file);
+
+        let script = "if [ -z \"${BOB_SKILL_INSTALL_PATH+x}\" ]; then printf 'unset\\n'; else printf 'set:%s\\n' \"$BOB_SKILL_INSTALL_PATH\"; fi";
+
+        let stdin_fd: OwnedFd = File::open("/dev/null")
+            .expect("open /dev/null for stdin")
+            .into();
+        let stdout_fd: OwnedFd = File::create(&out_file)
+            .expect("create output file for stdout")
+            .into();
+        let stderr_fd: OwnedFd = File::open("/dev/null")
+            .expect("open /dev/null for stderr")
+            .into();
+
+        let cfg = InteractiveProcessConfig {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            child_termination_deadline: Duration::from_millis(2000),
+            session_id: SessionId::new(),
+            extension_sock_path: PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
+            cwd: None,
+            skill_install_path: None,
+        };
+
+        let process = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
+            .expect("interactive spawn should succeed");
+        process.wait_for_exit().await;
+
+        let written = std::fs::read_to_string(&out_file)
+            .expect("output file should have been written by child");
+
+        assert_eq!(
+            written.trim(),
+            "unset",
+            "BOB_SKILL_INSTALL_PATH should not be set on interactive child when unset; got: {written:?}"
         );
 
         let _ = std::fs::remove_file(&out_file);
@@ -911,6 +1149,7 @@ mod tests {
             extension_sock_path: PathBuf::new(),
             extension_path: missing.clone(),
             cwd: None,
+            skill_install_path: None,
         };
 
         let error = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
@@ -947,6 +1186,7 @@ mod tests {
             extension_sock_path: PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             cwd: None,
+            skill_install_path: None,
         };
 
         let process = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
@@ -998,6 +1238,7 @@ mod tests {
             extension_sock_path: PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             cwd: Some(interactive_cwd.clone()),
+            skill_install_path: None,
         };
 
         let process = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
@@ -1054,6 +1295,7 @@ mod tests {
             extension_sock_path: PathBuf::new(),
             extension_path: std::env::current_exe().expect("current executable should exist"),
             cwd: None,
+            skill_install_path: None,
         };
         assert_eq!(cfg.cwd, None, "test setup expects cwd to default to None");
 

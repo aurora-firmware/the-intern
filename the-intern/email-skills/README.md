@@ -1,12 +1,15 @@
 # Email Skills Package
 
-This package ships the two pi-agent skills S-010 defines — `himalaya` (a
-generic CLI-reference skill) and `email-triage` (the triage policy skill) — as
-a versioned, reviewable product artifact, separate from
-`the-intern/bob-companion/claude` (Claude Code dev-tooling for operating
-`bob`) and from this repository's own `.claude/skills` (this repository's
-AI-team process tooling). Neither of those is where pi-agent discovers its
-runtime skills; this package is.
+This package ships three pi-agent skills as a versioned, reviewable product
+artifact: `himalaya` (a generic CLI-reference skill) and `email-triage` (the
+triage policy skill), both defined by S-010, plus `worklog` (the domain-free
+diary-discipline skill S-011/T-154/T-155 extracted out of `email-triage`).
+The package is separate from `the-intern/bob-companion/claude` (Claude Code
+dev-tooling for operating `bob`) and from this repository's own
+`.claude/skills` (this repository's AI-team process tooling). Neither of
+those is where an agent discovers this package's runtime skills; the two
+generated packaging targets under this directory — `.pi/skills/` and
+`claude/` — are (see [Package layout](#package-layout)).
 
 ## Verified skill discovery path and invocation form
 
@@ -56,78 +59,168 @@ required for discovery to work at all, and is now the recorded form.
 ```
 the-intern/email-skills/
 ├── README.md                       # this file
+├── package-pi-skills.sh             # T-153: generates .pi/skills/ below from skills/ below
+├── package-claude-skills.sh         # T-163: generates claude/ below from skills/ below
+├── skills/                          # T-151/T-152/T-154/T-155: canonical, vendor-neutral
+│   │                                #   skill source — content exists here exactly once
+│   │                                #   (S-011 Design Principles)
+│   ├── himalaya/                    # generic himalaya CLI-reference skill
+│   │   ├── SKILL.md                 #   no triage policy — reusable by any pi session
+│   │   └── references/              #   sharing this package's cwd (S-010 Design Principles)
+│   ├── email-triage/                # triage policy skill (detection, classification,
+│   │   ├── SKILL.md                 #   act-or-escalate decision); delegates all diary
+│   │   └── references/              #   mechanics to the worklog skill below (S-011)
+│   │       └── categories/          #   taxonomy index + one workflow file per starter
+│   │           └── README.md        #   category (newsletter-bulk, automated-notification,
+│   │                                #   suspected-spam, direct-request, meeting-scheduling)
+│   └── worklog/                     # domain-free diary-discipline skill (S-011/T-154/T-155):
+│       ├── SKILL.md                 #   location, entry format, first-run detection,
+│       └── references/              #   reconciliation, and how an open item closes
 ├── .pi/
-│   └── skills/
-│       ├── himalaya/                # T-132: generic himalaya CLI-reference skill
-│       │   ├── SKILL.md             #   no triage policy — reusable by any pi session
-│       │   └── references/          #   sharing this package's cwd (S-010 Design Principles)
-│       └── email-triage/            # T-135/T-136: triage policy skill (core loop + taxonomy)
-│           ├── SKILL.md
-│           └── references/
-│               ├── worklog.md       # T-133: diary format + skip-tolerant reconciliation rules
-│               ├── escalation.md    # T-134: manager-escalation rules and hard-stop behavior
-│               └── categories/      # T-136/T-137/T-138: taxonomy index + one workflow file
-│                   └── README.md    #   per starter category (newsletter-bulk,
-│                                    #   automated-notification, suspected-spam,
-│                                    #   direct-request, meeting-scheduling)
+│   └── skills/                      # T-153/T-156: generated pi packaging target — produced
+│       ├── himalaya/                #   solely by running package-pi-skills.sh against skills/
+│       ├── email-triage/            #   above; never hand-edited. Committed tracked output (no
+│       └── worklog/                 #   CI or install-time build step regenerates it), so it
+│                                     #   must stay in sync with skills/ by re-running the
+│                                     #   script and committing the result whenever skills/
+│                                     #   changes.
+├── claude/                          # T-163: generated Claude Code packaging target —
+│   ├── .claude-plugin/              #   produced solely by running package-claude-skills.sh
+│   │   └── plugin.json              #   against skills/ above; never hand-edited. Same
+│   └── skills/                      #   committed-tracked-output contract as .pi/skills/
+│       ├── himalaya/                #   above — content exists only under skills/ (S-011
+│       ├── email-triage/            #   Design Principles). Unlike .pi/skills/, this target
+│       └── worklog/                 #   needs no vendor-specific frontmatter field added, so
+│                                     #   its output is byte-for-byte identical to skills/.
 ├── config/
 │   └── email-triage.example.toml    # T-134: shipped template (manager_address documented,
 │                                     #   no real address). The real config/email-triage.toml
-│                                     #   exists only in the deployed copy — never committed.
-└── worklog/                         # runtime diary directory. <YYYY-MM-DD>.md entries are
-                                      #   written only in the deployed copy — never committed.
+│                                     #   exists only in the deployed job workspace — never
+│                                     #   committed, and no longer holds any skill content
+│                                     #   (S-011 skill install-path model — see below).
+└── worklog/                         # runtime diary directory, written by the worklog skill.
+                                      #   <YYYY-MM-DD>.md entries are written only in the
+                                      #   deployed job workspace — never committed.
 ```
 
-Later tasks (T-132–T-138) add files at the paths shown above without editing
-this section.
+Later tasks add files at the paths shown above without editing this section.
 
-## This package is the repository source of truth only
+**Regenerating the pi package.** `.pi/skills/` is generated, not hand-authored:
+it carries no independent copy of skill content, only the canonical `skills/`
+tree's files plus the one frontmatter field (`allowed-tools: Read Bash`) that
+pi's skill format needs and the canonical source deliberately omits (S-011
+Design Principles: canonical content stays vendor-neutral). After editing
+anything under `skills/`, regenerate and commit `.pi/skills/` from this
+directory:
 
-A scheduled job's per-entry `--cwd` (S-009 / ADR-012 §7) must point at an
-owner-only **deployed copy** of this package, never at this repository
-checkout. The deployed copy also holds mutable runtime state — the
-skill-local `config/email-triage.toml` and the `worklog/` diary — that must
-be owner-only permissioned (S-010 Configuration Requirements), which a shared
-git working tree cannot guarantee.
+```bash
+cd the-intern/email-skills && ./package-pi-skills.sh
+```
 
-## Verified deployed-workspace procedure
+The script regenerates each packaged skill's `.pi/skills/<name>/` tree from
+scratch, so a file removed from `skills/<name>/` does not linger as stale
+output. `git diff --exit-code HEAD -- .pi/skills` after committing should be
+clean; a non-empty diff there means `.pi/skills/` has drifted from `skills/`
+and needs the script re-run.
 
-The live T-139 happy-path validation used a deployed workspace at
-`/tmp/t139-email-workspace-s4`, while the bob runtime and audit state lived
-separately at `/tmp/t139-bob-dev-s4`. The package checkout itself was **not**
-used as the scheduled job's `--cwd`.
+**Regenerating the Claude package.** `claude/skills/` is generated the same
+way, by a separate script: it also carries no independent copy of skill
+content, and — unlike `.pi/skills/` — needs no vendor-specific frontmatter
+field added, since Claude Code's own skill format already matches what the
+canonical source carries. After editing anything under `skills/`, regenerate
+and commit `claude/` from this directory:
 
-Create the deployed workspace outside this repository and make the workspace
-directories owner-only before adding the job:
+```bash
+cd the-intern/email-skills && ./package-claude-skills.sh
+```
+
+The script regenerates each packaged skill's `claude/skills/<name>/` tree
+from scratch the same way `package-pi-skills.sh` does, and also (re)writes
+the static `claude/.claude-plugin/plugin.json` plugin manifest — layout
+metadata only, carrying no skill body content of its own. `git diff
+--exit-code HEAD -- claude` after committing should be clean; a non-empty
+diff there means `claude/` has drifted from `skills/` and needs the script
+re-run.
+
+## This package is installed once, service-wide — not copied per job
+
+Under the S-011/ADR-014 skill install-path model, `bob` supplies this
+package's `.pi/skills/` content to every session it spawns — RPC worker,
+interactive `bob chat`, and scheduled job alike — from a single,
+service-wide **skill install path**, independent of that session's working
+directory. Install `.pi/skills/` there once; every session bob spawns
+afterward carries it, regardless of `--cwd`. This replaces the earlier
+per-workspace deployed-copy model (T-139/T-140), where every job needed its
+own full copy of this package under its `--cwd`.
+
+A scheduled job's per-entry `--cwd` (S-009 / ADR-012 §7) is still required,
+but now holds only the job's **mutable runtime state** — the skill-local
+`config/email-triage.toml` and the `worklog/` diary — not a copy of this
+package's skill content. That state must still be owner-only permissioned
+(S-010 Configuration Requirements), which a shared git working tree cannot
+guarantee, so the job workspace must still be created outside this
+repository checkout. See
+[Verified install-path deployment procedure](#verified-install-path-deployment-procedure)
+below for the exact steps.
+
+## Verified install-path deployment procedure
+
+Install the packaged pi skill content to bob's configured (or default)
+skill install path once:
+
+```bash
+SKILL_INSTALL_PATH=~/.local/share/bob/skills   # bob's Linux default — see
+                                                # the operator guide for the
+                                                # macOS default and the
+                                                # skill_install_path override
+mkdir -p "$SKILL_INSTALL_PATH"
+SKILL_PACKAGE_SRC=the-intern/email-skills/.pi/skills
+cp -r "$SKILL_PACKAGE_SRC/." "$SKILL_INSTALL_PATH/"
+```
+
+Then deploy an owner-only working directory holding only the job's mutable
+runtime state — `config/` and `worklog/`, not skill content:
 
 ```bash
 WORKSPACE=/absolute/path/outside/the-repo/email-skills
 
 install -d -m 700 "$WORKSPACE"
-cp -r the-intern/email-skills/. "$WORKSPACE/"
+install -d -m 700 "$WORKSPACE/config"
 install -d -m 700 "$WORKSPACE/worklog"
-chmod 700 "$WORKSPACE" "$WORKSPACE/.pi" "$WORKSPACE/config" "$WORKSPACE/worklog"
-cp "$WORKSPACE/config/email-triage.example.toml" \
+cp the-intern/email-skills/config/email-triage.example.toml \
    "$WORKSPACE/config/email-triage.toml"
-# then edit only the deployed copy's config/email-triage.toml and set
+# then edit only the job workspace's config/email-triage.toml and set
 # manager_address there
 ```
 
-The required ownership boundary is that the deployed workspace and its mutable
-subdirectories are owned by the job user and mode `700`, so other local users
-cannot read or modify the package, the local config, or the worklog. Keep the
-job's `--cwd` pointed at that deployed copy only:
+The required ownership boundary is unchanged from the earlier model: the
+deployed workspace and its subdirectories are owned by the job user and mode
+`700`, so other local users cannot read or modify the local config or the
+worklog. Keep the job's `--cwd` pointed at that workspace:
 
 ```bash
 ./scripts/bob-dev.sh schedule add --id check-email --cron "* * * * *" \
   --prompt "Check email" --cwd "$WORKSPACE"
 ```
 
-Do not point `--cwd` at this repository checkout. The deployed copy is where
-the mutable `config/email-triage.toml` and `worklog/*.md` live, and it is the
-path the S-004 policy rules must match.
+Do not point `--cwd` at this repository checkout, and do not copy this
+package's skill content into `$WORKSPACE` — that content now reaches the
+session from the skill install path above, independent of `--cwd`. The
+workspace exists only for `config/email-triage.toml` and `worklog/*.md`, and
+it is the path the S-004 worklog rules below must match.
 
-## Verified S-004 action rules for the happy path
+The live T-139/T-140 happy-path and continuity validation (see
+[Validation outcomes](#validation-outcomes) below) ran under the earlier
+per-workspace `.pi/skills/` copy, before the install-path model existed. The
+runtime tool-call payload shapes the S-004 rules below match —
+`arguments.path` for `read`, `arguments.command` for `bash` — do not depend
+on which path the skill content lives at, so moving skill-reference rules
+from a per-workspace path to the shared install path changes only the
+`pattern` values, not the matcher shape T-139/T-140 established. This is the
+same reasoning the operator guide's deployment section applies to the
+identical move (`T-161`).
+
+## Verified S-004 action rules for the install-path model
 
 T-139 first observed the same scheduled-job run denied by default policy, then
 allowed after adding scoped action rules. The validated matcher surface was:
@@ -135,52 +228,60 @@ allowed after adding scoped action rules. The validated matcher surface was:
 - `tool = "read"` with `field_path = "path"`
 - `tool = "bash"` with `field_path = "command"`
 
-The live T-139 runtime under `/tmp/t139-bob-dev-s4` only succeeded with
-`field_path = "command"` in both `config.toml` and `config.full.toml`. This
-matches the policy-control runtime matcher semantics: the bash action gate
-matches against the JSON `arguments.command` string. Older local parser examples
-and tests still use `cmd` only because `field_path` is treated as an opaque
-string at config-parse time; those examples do not prove the runtime bash
-payload shape and should not be copied into live S-004 policy rules.
+The live T-139 runtime only succeeded with `field_path = "command"` in both
+`config.toml` and `config.full.toml`. This matches the policy-control runtime
+matcher semantics: the bash action gate matches against the JSON
+`arguments.command` string. Older local parser examples and tests still use
+`cmd` only because `field_path` is treated as an opaque string at
+config-parse time; those examples do not prove the runtime bash payload
+shape and should not be copied into live S-004 policy rules.
 
-The live happy-path rules that admitted every tool call used by the deployed
-package were:
+Under the install-path model this rule set is scoped to the single, stable
+skill install path instead of being re-derived per deployment. Replace
+`/abs/skill-install-path` below with your resolved `skill_install_path`
+(default `~/.local/share/bob/skills` on Linux, shown above):
 
 ```toml
 [[policy.action_rules]]
 tool = "read"
 arg_matchers = [
-  { field_path = "path", pattern = "/abs/workspace/.pi/skills/email-triage/SKILL.md" },
+  { field_path = "path", pattern = "/abs/skill-install-path/email-triage/SKILL.md" },
 ]
 
 [[policy.action_rules]]
 tool = "read"
 arg_matchers = [
-  { field_path = "path", pattern = "/abs/workspace/.pi/skills/himalaya/SKILL.md" },
+  { field_path = "path", pattern = "/abs/skill-install-path/himalaya/SKILL.md" },
 ]
 
 [[policy.action_rules]]
 tool = "read"
 arg_matchers = [
-  { field_path = "path", pattern = "/abs/workspace/.pi/skills/email-triage/references/*.md" },
+  { field_path = "path", pattern = "/abs/skill-install-path/worklog/SKILL.md" },
 ]
 
 [[policy.action_rules]]
 tool = "read"
 arg_matchers = [
-  { field_path = "path", pattern = "/abs/workspace/.pi/skills/email-triage/references/categories/*.md" },
+  { field_path = "path", pattern = "/abs/skill-install-path/email-triage/references/*.md" },
 ]
 
 [[policy.action_rules]]
 tool = "read"
 arg_matchers = [
-  { field_path = "path", pattern = "/abs/workspace/.pi/skills/himalaya/references/*.md" },
+  { field_path = "path", pattern = "/abs/skill-install-path/email-triage/references/categories/*.md" },
 ]
 
 [[policy.action_rules]]
 tool = "read"
 arg_matchers = [
-  { field_path = "path", pattern = "/abs/workspace/worklog/*.md" },
+  { field_path = "path", pattern = "/abs/skill-install-path/himalaya/references/*.md" },
+]
+
+[[policy.action_rules]]
+tool = "read"
+arg_matchers = [
+  { field_path = "path", pattern = "/abs/skill-install-path/worklog/references/*.md" },
 ]
 
 [[policy.action_rules]]
@@ -264,7 +365,13 @@ arg_matchers = [
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
-  { field_path = "command", pattern = "*ls worklog*" },
+  { field_path = "command", pattern = "*ls *worklog*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "date +%H:%M*" },
 ]
 
 [[policy.action_rules]]
@@ -292,9 +399,35 @@ arg_matchers = [
 ]
 ```
 
+**The `worklog` skill's rules are now live-validated under the install-path
+model.** The `worklog/SKILL.md` and `worklog/references/*.md` read rules
+above admit the `worklog` skill (`T-154`/`T-155`) that the reduced
+`email-triage` `SKILL.md` now delegates diary mechanics to. `T-164` re-ran
+this exact rule set live, end to end, twice — once against a scheduled
+`email-triage` job and once against an interactive `bob chat` session asked
+to record a worklog entry directly — both from working directories holding
+no skill files of their own, both served entirely from a single shared
+skill install path with no per-workspace copy anywhere. See
+[Validation outcomes](#validation-outcomes) below for the full T-164
+record, including two real rule-set gaps that live run found and closed
+(the broadened `*ls *worklog*` pattern and the new `date +%H:%M*` rule
+above) and one skill-behavior defect it found and filed rather than papered
+over (`B-039`: a scheduled run can write a wrong placeholder worklog
+timestamp).
+
+The absolute-path `worklog` rule the per-workspace deployment model used
+(`{ field_path = "path", pattern = "<workspace>/worklog/*.md" }`) is dropped
+entirely: the relative `worklog/*.md` rule above already matches worklog
+reads issued from any working directory, which is what S-011's Configuration
+Requirements call for ("the rule admitting worklog writes must be broad
+enough to cover arbitrary working directories") — one relative rule now
+covers every deployment's worklog reads instead of one absolute rule per
+workspace.
+
 **This rule set covers the live T-139/T-140 validation runs** —
 `automated-notification` (file, no reply), escalation, S-004 block handling,
-and skipped-tick continuity — **plus one additional rule** admitting the
+and skipped-tick continuity — re-confirmed live under the skill install-path
+model itself by `T-164` — **plus one additional rule** admitting the
 `himalaya template reply` -> `himalaya template send` shape that
 `direct-request` and `meeting-scheduling` need to send a reply (`B-029`).
 T-139's Session 2 explicitly deferred the direct-request route rather than
@@ -340,18 +473,18 @@ real mailbox and `bob` instance the same way T-139/T-140 validated the
 original one-liner, and the recipient confirmed receipt of the escalation
 email (`B-030`). Treat it as both hardened and live-validated.
 
-Replace `/abs/workspace` with the absolute path to your deployed copy. Do not
-collapse these into a blanket `tool = "bash"` rule: the T-139 denial evidence
-showed the job blocked until the shell commands were admitted one scoped shape
-at a time, and the successful retry used the narrowed patterns above. In
-particular, the deployed package's runtime surface is broader than "himalaya
-commands plus append": the skill reads `config/email-triage.toml` through
-`bash`, checks and lists today's `worklog/` files through `bash`, opens prior
-worklog contents through `read`, and uses one pipe-shaped escalation send.
-The first-run reconciliation read was later observed in T-140 as a
-`cwd`-relative `read.path` such as `worklog/2026-07-29.md`, so the deployed
-allow rules must admit that relative shape as well as any absolute
-workspace-qualified paths used elsewhere.
+Replace `/abs/skill-install-path` with your resolved `skill_install_path`. Do
+not collapse these into a blanket `tool = "bash"` rule: the T-139 denial
+evidence showed the job blocked until the shell commands were admitted one
+scoped shape at a time, and the successful retry used the narrowed patterns
+above. In particular, the deployed package's runtime surface is broader than
+"himalaya commands plus append": the skill reads `config/email-triage.toml`
+through `bash`, checks and lists today's `worklog/` files through `bash`,
+opens prior worklog contents through `read`, and uses one pipe-shaped
+escalation send. The first-run reconciliation read was later observed in
+T-140 as a `cwd`-relative `read.path` such as `worklog/2026-07-29.md`, so the
+deployed allow rules must admit that relative shape as well as any
+install-path-qualified paths used elsewhere.
 
 ## Validation outcomes
 
@@ -384,6 +517,77 @@ same mailbox and scheduled-job setup.
   escalation send once the command succeeds. The validated allow-rule set now
   includes the relative `read` matcher required for this cross-day
   carry-forward path.
+
+### T-164 — skill install-path model, end to end (2026-08-10)
+
+S-011 replaces the per-workspace deployed-copy model T-139/T-140 validated
+above with the install-path model described throughout this README. T-164
+re-ran the same kind of live validation those tasks ran, but against the
+new model itself: install the packaged skill content once at the resolved
+`skill_install_path`, then exercise both a scheduled job and an interactive
+`bob chat` session from working directories holding no skill files of their
+own, and confirm both actually use the installed skills.
+
+- **Setup.** An isolated `bob` runtime installed this package's `.pi/skills/`
+  content once at a dedicated `skill_install_path`. Two separate working
+  directories were used for the two validation runs below, and neither ever
+  held a `.pi/skills/` tree, a `skills/` tree, or any other copy of skill
+  content — confirmed by inspecting both trees before and after every run.
+  The single S-004 rule set below (scoped to the shared install path plus
+  the relative `worklog/*.md` rule) was the only policy in force for both
+  runs.
+- **Scheduled job (AC-2).** A `check-email` job was added with `--cwd`
+  pointed at a workspace holding only `config/email-triage.toml` and an
+  empty `worklog/` — no skill files. It was fed the same reusable
+  `automated-notification` fixture T-139 originally validated (the "You
+  have been invited to join Holded" message, restored from
+  `INBOX.Notifications` to `INBOX` and marked unseen for the run). Every
+  other message that was genuinely unseen in the live mailbox at the time
+  was temporarily marked seen for the run's duration and restored to
+  exactly its prior unseen state immediately afterward, so the run's
+  candidate set held only the one deliberate test fixture — no real
+  correspondence was read, classified, or acted on by this run. The job
+  correctly classified the fixture as `automated-notification`, moved it
+  back to `INBOX.Notifications`, and appended a worklog entry to
+  `worklog/2026-08-10.md` in the job's own `--cwd` — proving skill delivery
+  is independent of the job's working directory while diary state stayed
+  correctly `--cwd`-scoped, and proving skill content lived nowhere but the
+  shared install path.
+- **Interactive `bob chat` (AC-3).** A `bob chat` session was started (over
+  a real pty, since pi's interactive mode needs one) from a working
+  directory unrelated to any skill deployment and holding no skill files,
+  then asked directly to record a worklog entry. The session loaded the
+  `worklog` skill from the shared install path and correctly wrote the
+  entry to that same directory's own `worklog/<today>.md` — no skill files
+  were ever present there.
+- **Single stable rule set (AC-4).** The first pass of both runs, under the
+  rule set this README documented before T-164, hit real denials that
+  blocked genuinely-documented `worklog` skill behavior: `ls -ld worklog`
+  and a compound existence-check-then-`ls` command didn't match the
+  narrower `*ls worklog*` pattern, and no rule admitted a standalone
+  `date +%H:%M` lookup for the entry's `<HH:MM>` header. Both are closed
+  above (`*ls *worklog*`, `date +%H:%M*`); re-running the interactive
+  session with the fixed rule set produced zero denials. The scheduled-job
+  run additionally triggered three denials that were *not* rule-set gaps:
+  one `find` over the skill install path's `email-triage/references/categories/`
+  directory (exploratory — the taxonomy's category names are already fully
+  documented in `references/categories/README.md`, which this rule set
+  already admits reading, so nothing required this call), and two attempts
+  (an `edit` tool call and a `bash` call running an ad hoc Python script)
+  to correct a worklog entry that had been written with the wrong
+  placeholder timestamp `00:00` instead of the real time. Both correction
+  attempts were correctly denied: this skill's own "Tool usage" sections
+  are explicit that worklog mutations stay on `bash`'s documented
+  `mkdir`/`cat >>` shape, never `edit` or arbitrary scripts, precisely so a
+  narrow S-004 rule set can admit its whole runtime surface. No rule was
+  added to work around either denial — the `find` wasn't needed for the run
+  to succeed (and didn't stop it succeeding), and admitting `edit` or
+  arbitrary `bash` scripts would reopen exactly the broad surface this
+  package's rule set is designed to avoid. The wrong-timestamp behavior
+  itself is a real, separate skill-behavior defect, filed as `B-039`
+  (out of T-164's own scope to fix — the fix belongs in `worklog`'s or
+  `email-triage`'s own skill/reference files, not in this README's action
+  rules or deployment procedure).
 
 ## Account-specific folder names matter
 

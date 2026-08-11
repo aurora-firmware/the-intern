@@ -27,9 +27,13 @@ set by the bob service to connect back to it.
 
 ## Environment-Variable Contract
 
-The bob service supervisor sets these two variables on every `pi` child process
-it spawns. The bob extension reads them at load time; they are the sole
-communication channel between the two components at startup.
+The bob service supervisor sets `BOB_SESSION_ID` and `BOB_EXTENSION_SOCK_PATH`
+on every `pi` child process it spawns; the bob extension reads them at load
+time and they are the sole communication channel for event forwarding and
+tool-call authorization. `BOB_SKILL_INSTALL_PATH` shares the same per-session
+environment delivery mechanism but is optional and governs a separate concern
+— resource-discovery skill supply, not event forwarding or authorization (see
+below).
 
 ### `BOB_SESSION_ID`
 
@@ -63,6 +67,21 @@ communication channel between the two components at startup.
 - **Fail-closed behaviour:** If no verdict arrives within the timeout, the tool
   call is blocked (not allowed to proceed) and one warning is logged.  The
   session continues; subsequent tool calls each get their own fresh timeout.
+
+### `BOB_SKILL_INSTALL_PATH`
+
+- **Type:** string (filesystem path), OPTIONAL
+- **Format:** Absolute path to the service's resolved skill install location.
+- **Purpose:** The bob extension answers pi's `resources_discover` event with
+  this path as a contributed skill path, so every session bob spawns gets the
+  same skills independent of its working directory (`S-011` / `ADR-014`).
+- **Absence behaviour (fail-open, not fail-closed):** If this variable is
+  absent, empty, or names a path that does not exist on disk, the extension
+  contributes no skill paths and logs one warning. Unlike `BOB_SESSION_ID` and
+  `BOB_EXTENSION_SOCK_PATH`, this does not disable event forwarding or the
+  `tool_call` authorization hook — skill supply is instructional content, not
+  the monitoring/authorization membrane, so a session without skills still
+  runs.
 
 An operator can verify the contract by inspecting the environment of any running
 `pi` process that was spawned by `bob serve`:

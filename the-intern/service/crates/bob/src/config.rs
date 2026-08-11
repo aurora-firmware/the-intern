@@ -38,6 +38,16 @@ pub struct BobConfig {
     /// Directory existence is not checked here; a missing directory surfaces
     /// as a spawn-time error from the supervisor.
     pub pi_agent_cwd: Option<PathBuf>,
+    /// Directory bob supplies to pi as the source of agent skills (S-002
+    /// "Skill install path", ADR-014).
+    ///
+    /// Always an absolute path (`validate()` rejects a relative value at
+    /// load time). When unset in `config.toml` it resolves to the ADR-009
+    /// `data` bucket default alongside `extension_path`
+    /// (`$XDG_DATA_HOME/bob/skills`). Directory existence is not checked
+    /// here; resolving and consuming this path happens in later phases
+    /// (T-159, T-160).
+    pub skill_install_path: PathBuf,
     pub tracing_level: String,
     pub tracing_format: String,
     /// Policy rules sourced from the `[policy]` TOML section.
@@ -112,6 +122,7 @@ impl BobConfig {
             pi_agent_max_processes: 8,
             pi_agent_idle_reap_timeout: Duration::from_secs(300),
             pi_agent_cwd: None,
+            skill_install_path: PathBuf::new(),
             tracing_level: "info".to_string(),
             tracing_format: "pretty".to_string(),
             policy: PolicyConfig::default(),
@@ -192,6 +203,7 @@ impl BobConfig {
             pi_agent_max_processes: raw.pi_agent_max_processes,
             pi_agent_idle_reap_timeout: raw.pi_agent_idle_reap_timeout,
             pi_agent_cwd: raw.pi_agent_cwd,
+            skill_install_path: raw.skill_install_path,
             tracing_level: raw.tracing_level,
             tracing_format: raw.tracing_format,
             policy: raw.policy,
@@ -263,6 +275,13 @@ impl BobConfig {
             }
         }
 
+        if !self.skill_install_path.is_absolute() {
+            return Err(configuration_error(format!(
+                "skill_install_path must be an absolute path, got {}",
+                self.skill_install_path.display()
+            )));
+        }
+
         Ok(self)
     }
 }
@@ -315,6 +334,7 @@ struct RawBobConfig {
     pi_agent_idle_reap_timeout: Duration,
     #[serde(default)]
     pi_agent_cwd: Option<PathBuf>,
+    skill_install_path: PathBuf,
     tracing_level: String,
     tracing_format: String,
     /// Policy rules from the `[policy]` TOML section; absent means deny-all.
@@ -573,6 +593,7 @@ fn defaults_with_runtime_root(
 ) -> RawBobConfig {
     let monitoring_audit_log_path = default_monitoring_audit_log_path_for_env(env, uid);
     let extension_path = default_extension_path_for_env(env, uid);
+    let skill_install_path = default_skill_install_path_for_env(env, uid);
     let schedule_store_path = default_schedule_store_path_for_env(env, uid);
 
     RawBobConfig {
@@ -589,6 +610,7 @@ fn defaults_with_runtime_root(
         pi_agent_max_processes: 8,
         pi_agent_idle_reap_timeout: Duration::from_secs(300),
         pi_agent_cwd: None,
+        skill_install_path,
         tracing_level: default_tracing_level().to_string(),
         tracing_format: "pretty".to_string(),
         policy: PolicyConfig::default(),
@@ -665,6 +687,31 @@ fn default_extension_path_for_env(env: &BTreeMap<String, String>, uid: u32) -> P
         });
 
     data_root.join("bob").join("extensions").join("bob.ts")
+}
+
+/// Resolves the default skill install path from the environment.
+///
+/// Mirrors `default_extension_path_for_env`'s resolution pattern (S-002
+/// "Skill install path", ADR-009 `data` bucket): `$XDG_DATA_HOME/bob/skills`,
+/// falling back to `$HOME/.local/share/bob/skills` on Linux (or the platform
+/// equivalent on macOS) when `XDG_DATA_HOME` is unset.
+fn default_skill_install_path_for_env(env: &BTreeMap<String, String>, uid: u32) -> PathBuf {
+    let data_root = env
+        .get("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            if cfg!(target_os = "macos") {
+                env.get("HOME")
+                    .map(|home| Path::new(home).join("Library").join("Application Support"))
+                    .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-data-{uid}")))
+            } else {
+                env.get("HOME")
+                    .map(|home| Path::new(home).join(".local").join("share"))
+                    .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-data-{uid}")))
+            }
+        });
+
+    data_root.join("bob").join("skills")
 }
 
 /// Resolves the default JSON schedule-store path from the environment.
@@ -1727,6 +1774,74 @@ prompt = "from toml"
         fs::remove_file(config_file).expect("temp config file should be removable");
     }
 
+    // ── AC-1 (T-157): skill_install_path parses from config.toml ─────────────
+
+    #[test]
+    fn loads_skill_install_path_override_from_config_file() {
+        let config_file = write_temp_config(r#"skill_install_path = "/opt/bob/custom-skills""#);
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env: BTreeMap::new(),
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("skill_install_path override should load");
+
+        assert_eq!(
+            config.skill_install_path,
+            PathBuf::from("/opt/bob/custom-skills")
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    // ── AC-3 (T-157): unset skill_install_path resolves to the ADR-009 data
+    //    bucket default alongside the extension ──────────────────────────────
+
+    #[test]
+    fn resolves_default_skill_install_path_from_xdg_data_home_when_not_configured() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let data_home = temp.path().join("xdg-data-home");
+
+        let config = load_with_env_overrides([(
+            "XDG_DATA_HOME",
+            data_home
+                .to_str()
+                .expect("temporary data-home path should be valid UTF-8"),
+        )])
+        .expect("config should load");
+
+        assert_eq!(
+            config.skill_install_path,
+            data_home.join("bob").join("skills")
+        );
+    }
+
+    #[test]
+    fn resolves_default_skill_install_path_from_home_when_xdg_data_home_is_unset() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let home = temp.path().join("home");
+
+        let config = load_with_env_overrides([(
+            "HOME",
+            home.to_str()
+                .expect("temporary home path should be valid UTF-8"),
+        )])
+        .expect("config should load");
+
+        let expected = if cfg!(target_os = "macos") {
+            home.join("Library")
+                .join("Application Support")
+                .join("bob")
+                .join("skills")
+        } else {
+            home.join(".local").join("share").join("bob").join("skills")
+        };
+
+        assert_eq!(config.skill_install_path, expected);
+    }
+
     // ── AC-2 (T-119): a relative pi_agent_cwd fails config load ───────────────
 
     #[test]
@@ -1750,6 +1865,71 @@ prompt = "from toml"
         assert!(
             matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("pi_agent_cwd")),
             "expected Configuration error naming pi_agent_cwd, got {result:?}"
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    // ── AC-2 (T-157): a relative skill_install_path fails config load ─────────
+
+    #[test]
+    fn returns_configuration_error_when_skill_install_path_is_relative() {
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let config_file = write_temp_config(r#"skill_install_path = "relative/skills""#);
+
+        let result = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        });
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("skill_install_path")),
+            "expected Configuration error naming skill_install_path, got {result:?}"
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    // ── AC-4 (T-157): skill_install_path existence is not checked at load
+    //    time ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn loads_successfully_when_skill_install_path_names_a_nonexistent_directory() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let nonexistent = temp.path().join("does-not-exist-yet");
+
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+
+        let config_file = write_temp_config(&format!(
+            r#"skill_install_path = "{}""#,
+            nonexistent.display()
+        ));
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("skill_install_path naming a nonexistent directory should still load");
+
+        assert_eq!(config.skill_install_path, nonexistent.clone());
+        assert!(
+            !nonexistent.exists(),
+            "the named directory must remain unchecked and uncreated at load time"
         );
 
         fs::remove_file(config_file).expect("temp config file should be removable");

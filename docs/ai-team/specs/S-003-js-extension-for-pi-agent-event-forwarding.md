@@ -157,7 +157,7 @@ id for that pi-agent process.
 **Estimated size:** Small. One TypeScript file plus a focused test suite.
 The factory body is dominated by the static list of event names.
 **Interfaces:**
-- *Consumes:* `process.env.BOB_SESSION_ID` (string, required); `process.env.BOB_EXTENSION_SOCK_PATH` (filesystem path, required).
+- *Consumes:* `process.env.BOB_SESSION_ID` (string, required); `process.env.BOB_EXTENSION_SOCK_PATH` (filesystem path, required); `process.env.BOB_SKILL_INSTALL_PATH` (filesystem path, optional — see Environment-variable contract).
 - *Consumes (pi API):* `ExtensionAPI.on(name, handler)` for every event name in the documented set; `ctx.ui` (or stderr fallback) for the single warning line.
 - *Produces:* one NDJSON line per event on the opened UDS, conforming to `InboundFrame::Event` (see Configuration Requirements → Wire contract).
 - *Lifecycle:* the default factory runs synchronously at extension load; the socket is opened lazily on first event so a missing socket does not crash extension load.
@@ -171,7 +171,7 @@ tests covering the env vars, `--extension`, and fail-closed missing-file
 behaviour.
 **Interfaces:**
 - *Consumes:* the session id the supervisor already allocates per spawn; the configured `extension.sock` path already resolved by the service shell (S-002); the resolved `extension_path` from `BobConfig`.
-- *Produces:* `BOB_SESSION_ID` and `BOB_EXTENSION_SOCK_PATH` environment variables plus `--extension <resolved path>` on the spawned pi process. No change to stdio framing or the `runRpcMode()` channel.
+- *Produces:* `BOB_SESSION_ID` and `BOB_EXTENSION_SOCK_PATH` environment variables (both REQUIRED), plus `BOB_SKILL_INSTALL_PATH` (OPTIONAL, set only when the service's resolved skill install path is non-empty — `S-011`/`ADR-014`), plus `--extension <resolved path>` on the spawned pi process. No change to stdio framing or the `runRpcMode()` channel.
 
 ### Component 3: `TracingMonitoringHandle`
 
@@ -234,9 +234,14 @@ The Phase 3 deliverable rests on three configuration contracts.
 
 ### Environment-variable contract (Contract, not Example)
 
-The supervisor MUST set these on every `pi` child process it spawns. They
-are the sole communication channel between the bob service and the bob
-extension at load time.
+The supervisor MUST set `BOB_SESSION_ID` and `BOB_EXTENSION_SOCK_PATH` on
+every `pi` child process it spawns; they are the sole communication channel
+between the bob service and the bob extension at load time for event
+forwarding and tool-call authorization. `BOB_SKILL_INSTALL_PATH` (added by
+the 2026-08-09 amendment below) shares this same per-session environment
+delivery mechanism but is OPTIONAL and governs a separate concern —
+resource-discovery skill supply, not event forwarding or authorization —
+per `S-011`/`ADR-014`.
 
 - **`BOB_SESSION_ID`** — string, REQUIRED. The exact session id the
   supervisor uses internally for this pi-agent process. Format: the
@@ -247,12 +252,27 @@ extension at load time.
 - **`BOB_EXTENSION_SOCK_PATH`** — string, REQUIRED. Absolute path to the
   service's `extension.sock`. Same value the `extension-ipc` actor binds
   to. The extension opens a UDS to this path.
+- **`BOB_SKILL_INSTALL_PATH`** — string, OPTIONAL (unlike the two variables
+  above). Absolute path to the service's resolved skill install location
+  (`ADR-009` `data` bucket default, or the configured `skill_install_path`
+  override — `S-002`). Set only when the resolved path is non-empty; the
+  supervisor MUST omit the variable entirely, not set it empty, when there
+  is nothing to supply. The extension answers pi's `resources_discover`
+  event with this path when present. This variable carries no bearing on
+  event forwarding or the `tool_call` authorization hook.
 
-When either variable is missing the bob extension MUST log one warning
-line and remain loaded as a no-op for the rest of the session. The bob
-service MUST NOT fail to spawn pi when it cannot resolve a value for
-either variable; instead it falls back to not setting that variable,
-which produces the same operator-visible "no events" outcome.
+When `BOB_SESSION_ID` or `BOB_EXTENSION_SOCK_PATH` is missing the bob
+extension MUST log one warning line and remain loaded as a no-op for the
+rest of the session. The bob service MUST NOT fail to spawn pi when it
+cannot resolve a value for either variable; instead it falls back to not
+setting that variable, which produces the same operator-visible "no events"
+outcome. When `BOB_SKILL_INSTALL_PATH` is absent, empty, or names a path
+that does not exist, the extension MUST contribute no skill paths and log
+one warning, without affecting event forwarding or authorization — this is
+a materially different (fail-open, non-fatal-to-the-session's-core-purpose)
+failure mode from the two REQUIRED variables, reflecting that skill supply
+is instructional content rather than the monitoring/authorization membrane
+(`ADR-014` §4).
 
 ### Wire contract (Contract, not Example)
 
@@ -319,3 +339,4 @@ across the supervisor and `bob::serve`.
 | 2026-06-23 | Bob now owns and supplies the extension by path (`pi --extension`), default `$XDG_DATA_HOME/bob/extensions/bob.ts` (override `extension_path`), required and fail-closed. The obsolete pi-discovery-path model was removed from the active spec text. | CR-003 (depends on ADR-009 layout; the extension is the S-004 authz membrane so it must load). | T-100, T-101, T-102, T-108 |
 | 2026-08-01 | Exclusions' "Agent skills" bullet corrected: skills were never bundled with Phase 4/the extension; they reach pi-agent via cwd-relative auto-discovery (ADR-012 §7), delivered concretely by S-010. | Architecture Consistency Review of S-010 found this bullet stale against ADR-012 §7 and against S-001's corrected Component 3 (2026-08-01 amendment). | None (documentation reconciliation). |
 | 2026-08-06 | Exclusions' "Agent skills" bullet replaced by "Agent skill *content*": the extension now supplies skill paths to pi by answering pi's resource-discovery event, so skill *delivery* is no longer independent of this spec. Skill *content* remains out of scope (S-010, S-011). | ADR-014 accepted 2026-08-06. The 2026-08-01 amendment's "independent of the extension" claim held only while skills reached pi through cwd-relative auto-discovery. This is a scope amendment, not a wording correction: the extension gains a delivery responsibility this spec previously disclaimed. | S-011 breakdown tasks (Gate 2 pending). |
+| 2026-08-09 | Environment-variable contract extended with a third variable, `BOB_SKILL_INSTALL_PATH` (OPTIONAL, fail-open, distinct from the two REQUIRED variables), and Components 1/2's Interfaces updated to match. The contract's "sole communication channel" framing is now scoped to event forwarding and authorization specifically, since the new variable governs a separate concern (resource-discovery skill supply) delivered over the same per-session environment mechanism. | Gate 2 preflight on the S-011 task breakdown (T-158/T-160) found this spec's closed two-variable enumeration would contradict the shipped contract once those tasks land, mirroring the reconciliation S-002 already made on 2026-08-06 for the same ADR-014/S-011 decision. | T-158, T-160 (pending). |

@@ -74,13 +74,29 @@ deliberately do not pin pi-agent versions).
 - **Extension API** — the bob extension (`the-intern/pi-extension/bob.ts`) has
   been tested against `@earendil-works/pi-coding-agent` **version 0.75.3**
   only. This is the only supported pi-agent API version for the bob extension
-  until a future task updates the compatibility record.
-- **Interactive `pi` binary** — the supervised interactive-chat behaviour
-  (TTY requirement, raw mode) was last verified against **pi 0.79.10**
-  (T-103).
-- **Scheduled/periodic `pi` binary** — non-interactive `pi -p -a` invocation
-  by scheduled jobs (used by the `the-intern/email-skills` package) was last
-  verified against **pi 0.65.2** in a live deployment (T-139).
+  until a future task updates the compatibility record. This pin covers the
+  TypeScript type surface the extension is checked against
+  (`pi-agent-compat.test.ts`) and is deliberately independent of the
+  installed `pi` CLI binary version below: the two are reconciled, not
+  merged, because one is a compile-time API contract and the other is a
+  runtime executable version (T-150).
+- **Runtime `pi` binary, all three bob spawn paths** — pooled RPC worker,
+  interactive chat (`bob chat`), and scheduled/periodic invocation now share
+  a single reconciled, revalidated version: **pi 0.80.3** (T-150). This
+  replaces the two previously-disagreeing per-path records (interactive:
+  0.79.10, T-103; scheduled: 0.65.2, T-139) — both paths, plus the
+  previously-unrecorded pooled RPC worker path, were revalidated together
+  against the currently installed version rather than upgraded independently.
+  `resources_discover` — the extension event `ADR-014`'s skill-supply design
+  depends on — was confirmed to fire during session initialisation on all
+  three spawn paths at this version, and a contributed skill path was
+  confirmed to reach the rebuilt system prompt's `<available_skills>` before
+  the first turn on all three, including when the scheduled-periodic path's
+  working directory was absent from `~/.pi/agent/trust.json` — i.e.,
+  extension-contributed `resources_discover` paths are not subject to the
+  same non-interactive project-trust gate that `B-035` found blocks
+  `.pi/skills/`-based auto-discovery. No gap is recorded and no blocker is
+  raised for T-157–T-160.
 
 If a different version of `@earendil-works/pi-coding-agent` is installed,
 `npm test` in `the-intern/pi-extension` will fail with a clear incompatibility

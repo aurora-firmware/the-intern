@@ -19,7 +19,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 // ---------------------------------------------------------------------------
 // Import the extension factory under test.
 // ---------------------------------------------------------------------------
-import bobFactory from "./bob.js";
+import bobFactory, { PI_EVENTS } from "./bob.js";
 
 // ---------------------------------------------------------------------------
 // Stub ExtensionAPI
@@ -160,6 +160,7 @@ afterEach(() => {
   // Restore env vars.
   delete process.env.BOB_SESSION_ID;
   delete process.env.BOB_EXTENSION_SOCK_PATH;
+  delete process.env.BOB_SKILL_INSTALL_PATH;
 });
 
 // ---------------------------------------------------------------------------
@@ -1632,5 +1633,166 @@ describe("T-057 AC-4: BOB_AUTHZ_TIMEOUT_MS controls verdict timeout", () => {
     expect((result as any)?.block).toBeFalsy();
 
     await server.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-160 AC-1: resources_discover is no longer forwarded through the generic
+// fire-and-forget PI_EVENTS event-loop registration — it gets its own
+// dedicated handler instead (see the describe blocks below).
+// ---------------------------------------------------------------------------
+
+describe("T-160 AC-1: resources_discover removed from generic PI_EVENTS list", () => {
+  it("does not include resources_discover in the exported PI_EVENTS array", () => {
+    expect(PI_EVENTS).not.toContain("resources_discover");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-160 AC-2: a set, non-empty, existing BOB_SKILL_INSTALL_PATH is answered
+// as a contributed skill path.
+// ---------------------------------------------------------------------------
+
+describe("T-160 AC-2: answers resources_discover with the resolved skill path", () => {
+  it("returns skillPaths containing BOB_SKILL_INSTALL_PATH when it is set and exists", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    const skillPath = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillPath);
+    process.env.BOB_SKILL_INSTALL_PATH = skillPath;
+
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("resources_discover") ?? [];
+    expect(handlers.length).toBe(1);
+
+    const result = await handlers[0]!(
+      { type: "resources_discover", cwd: tmpDir, reason: "startup" },
+      {} as ExtensionContext
+    );
+
+    expect((result as any)?.skillPaths).toEqual([skillPath]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-160 AC-3: absent or empty BOB_SKILL_INSTALL_PATH contributes no skill
+// paths, logs one warning, and does not throw or block session init.
+// ---------------------------------------------------------------------------
+
+describe("T-160 AC-3: absent or empty BOB_SKILL_INSTALL_PATH contributes no skill paths", () => {
+  it("contributes no skill paths and logs one warning when BOB_SKILL_INSTALL_PATH is unset", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    delete process.env.BOB_SKILL_INSTALL_PATH;
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("resources_discover") ?? [];
+    expect(handlers.length).toBe(1);
+
+    const result = await handlers[0]!(
+      { type: "resources_discover", cwd: tmpDir, reason: "startup" },
+      {} as ExtensionContext
+    );
+
+    expect((result as any)?.skillPaths).toBeUndefined();
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+  });
+
+  it("contributes no skill paths and logs one warning when BOB_SKILL_INSTALL_PATH is empty", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_SKILL_INSTALL_PATH = "";
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("resources_discover") ?? [];
+    const result = await handlers[0]!(
+      { type: "resources_discover", cwd: tmpDir, reason: "startup" },
+      {} as ExtensionContext
+    );
+
+    expect((result as any)?.skillPaths).toBeUndefined();
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-160 AC-4: a BOB_SKILL_INSTALL_PATH naming a path that does not exist on
+// disk contributes no skill paths, logs one warning, and does not throw or
+// block session init.
+// ---------------------------------------------------------------------------
+
+describe("T-160 AC-4: nonexistent BOB_SKILL_INSTALL_PATH contributes no skill paths", () => {
+  it("contributes no skill paths and logs one warning when the path does not exist on disk", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    process.env.BOB_SKILL_INSTALL_PATH = path.join(tmpDir, "does-not-exist");
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("resources_discover") ?? [];
+    const result = await handlers[0]!(
+      { type: "resources_discover", cwd: tmpDir, reason: "startup" },
+      {} as ExtensionContext
+    );
+
+    expect((result as any)?.skillPaths).toBeUndefined();
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+
+    stderrSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-160 review-fix (2026-08-10): handleResourcesDiscover must not perform a
+// blocking synchronous filesystem call on the extension's event loop. The
+// registered handler is async, matching the ExtensionHandler<E, R> contract's
+// Promise<R | void> shape already used by the tool_call handler.
+// ---------------------------------------------------------------------------
+
+describe("T-160 review-fix: handleResourcesDiscover does not block the event loop", () => {
+  it("returns a Promise from the registered resources_discover handler, matching the async tool_call handler pattern", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+    const skillPath = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillPath);
+    process.env.BOB_SKILL_INSTALL_PATH = skillPath;
+
+    const pi = makeStubPi();
+
+    bobFactory(pi as any);
+
+    const handlers = pi.handlers.get("resources_discover") ?? [];
+    expect(handlers.length).toBe(1);
+
+    const returned = handlers[0]!(
+      { type: "resources_discover", cwd: tmpDir, reason: "startup" },
+      {} as ExtensionContext
+    );
+
+    expect(returned).toBeInstanceOf(Promise);
+
+    const result = await returned;
+    expect((result as any)?.skillPaths).toEqual([skillPath]);
   });
 });
