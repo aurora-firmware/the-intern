@@ -38,4 +38,12 @@ for skill_name in "${skill_names[@]}"; do
     { print }
   ' "$dest_dir/SKILL.md" > "$dest_dir/SKILL.md.packaging-tmp"
   mv "$dest_dir/SKILL.md.packaging-tmp" "$dest_dir/SKILL.md"
+
+  # The awk step above only inserts allowed-tools when it finds a second
+  # frontmatter delimiter; a malformed canonical SKILL.md (missing/broken
+  # `---` fencing) would otherwise pass through unchanged with no error.
+  grep -q '^allowed-tools: Read Bash$' "$dest_dir/SKILL.md" || {
+    echo "error: failed to insert allowed-tools into $dest_dir/SKILL.md (missing/malformed frontmatter delimiters?)" >&2
+    exit 1
+  }
 done

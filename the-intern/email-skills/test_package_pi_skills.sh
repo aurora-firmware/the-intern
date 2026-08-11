@@ -100,6 +100,31 @@ test_ac3_generated_output_stays_tracked_and_not_ignored() {
 
 test_ac3_generated_output_stays_tracked_and_not_ignored
 
+# Regression test: a canonical SKILL.md with a missing/malformed closing
+# frontmatter delimiter must make the script fail loudly instead of silently
+# packaging a SKILL.md with no allowed-tools field.
+test_malformed_frontmatter_fails_loudly() {
+  local ok=0
+  local malformed_dir="$WORK_DIR/skills/himalaya"
+  local backup
+  backup="$(mktemp)"
+  cp "$malformed_dir/SKILL.md" "$backup"
+  # Replace with a synthetic SKILL.md that opens frontmatter but never
+  # closes it (only one '---' line total) — the actual bug scenario.
+  printf -- '---\nname: himalaya\ndescription: broken frontmatter, no closing delimiter\n' \
+    > "$malformed_dir/SKILL.md"
+
+  local rc=0
+  ( cd "$WORK_DIR" && ./package-pi-skills.sh ) >/dev/null 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || ok=1
+
+  cp "$backup" "$malformed_dir/SKILL.md"
+  rm -f "$backup"
+  run_test "Regression: missing closing frontmatter delimiter fails the build instead of silently omitting allowed-tools" "$ok"
+}
+
+test_malformed_frontmatter_fails_loudly
+
 echo ""
 echo "Results: $pass_count passed, $fail_count failed"
 [ "$fail_count" -eq 0 ] || exit 1
