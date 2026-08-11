@@ -110,6 +110,32 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-08-11
+
+Reproduction status: Confirmed. Direct text comparison between `the-intern/bob-companion/claude/skills/bob-setup/SKILL.md` and the root `README.md`'s "pi-agent Version Compatibility" section, on this branch (cut from `dev-agent` @ 3335532, which already includes T-150's merged README reconciliation, commit `11d3d93` / `a1ba007`).
+
+Evidence captured:
+- `the-intern/bob-companion/claude/skills/bob-setup/SKILL.md:30-31` states: "Interactive `pi` binary (used by `bob chat`): last verified against **0.79.10**."
+- Root `README.md:83-89` ("pi-agent Version Compatibility" section, post-T-150) states the runtime `pi` binary is now reconciled to a single version across all three bob spawn paths (pooled RPC worker, interactive chat, scheduled/periodic): **pi 0.80.3**, explicitly replacing the old "interactive: 0.79.10, T-103" record.
+- `git log --oneline -- README.md` confirms `a1ba007 docs(pi-agent): reconcile version records and verify resources_discover` (2026-08-10) is the T-150 commit that changed README.md; `git log --all --oneline | grep T-150` confirms T-150 is `completed` and merged into `dev-agent` (`11d3d93 chore(tasks): merge T-150 ...`, `6af367d chore(tasks): move T-150 to completed`).
+- `grep -rn "0.79.10\|0.65.2\|0.75.3" the-intern/bob-companion/` output:
+  - `bob-troubleshooting/references/symptom-table.md:12` — `0.75.3` (extension-API pin, unaffected by T-150, still accurate — out of scope).
+  - `bob-setup/SKILL.md:28` — `0.75.3` (extension-API pin, still accurate — out of scope).
+  - `bob-setup/SKILL.md:31` — `0.79.10` (interactive runtime `pi` binary version — stale, disagrees with README's reconciled 0.80.3).
+- Suggested Fix Verification command from the bug file, run against the current tree, still matches (i.e. the defect is still present): `grep -n "0.79.10\|0.65.2" the-intern/bob-companion/claude/skills/bob-setup/SKILL.md` → returns `31:  **0.79.10**.` (exit 0 / one match).
+
+Isolated fault: `the-intern/bob-companion/claude/skills/bob-setup/SKILL.md`, lines 30-31 (the "Interactive `pi` binary (used by `bob chat`): last verified against **0.79.10**" sentence). This is the only stale duplicate in the companion-plugin tree; the two other `0.75.3` matches are the extension-API pin, which T-150 deliberately did not change (per README.md's own text: "the two are reconciled, not merged ... one is a compile-time API contract and the other is a runtime executable version") and remain correct.
+
+Root cause: T-150's Files to Touch scope was limited to `README.md` only. `bob-setup/SKILL.md` independently duplicates the interactive-`pi` runtime version number in its own prose instead of only deferring to the root README section it explicitly names as authoritative, so the reconciliation task's edit never reached this file. This is a scope-boundary gap (an out-of-scope duplicate location), not a logic or state error — root cause, not just a hypothesis, since the evidence chain (task history, file contents, and the bug's own reproduction steps) fully accounts for the discrepancy.
+
+Planned fix: In `the-intern/bob-companion/claude/skills/bob-setup/SKILL.md`, either (a) drop the duplicated "last verified against 0.79.10" number entirely and state only that the root README's "pi-agent Version Compatibility" section is authoritative for the interactive `pi` binary, or (b) update the duplicated number to match the root README's current reconciled value (pi 0.80.3). No other files in the companion tree need changes — the `0.75.3` extension-API references in `bob-setup/SKILL.md:28` and `bob-troubleshooting/references/symptom-table.md:12` are unaffected by T-150 and must be left as-is.
+
+Planned verification:
+```
+grep -n "0.79.10\|0.65.2" the-intern/bob-companion/claude/skills/bob-setup/SKILL.md
+```
+should return no matches after the fix (currently returns one match at line 31, confirming the pre-fix baseline).
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
