@@ -167,3 +167,70 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-11
+
+PASS
+
+Reviewed on `dev-agent` against branch `bug/B-038-stale-pi-version-companion-skill`
+(single commit `cc3d52b`, "docs(bob-companion): drop stale duplicated interactive
+pi version", based on `dev-agent` @ `3335532` — confirmed via
+`git merge-base cc3d52b 3335532`).
+
+**Evidence-chain pre-check:** Diagnosis Log ("Diagnosis 1 — 2026-08-11") is
+complete — reproduction status (confirmed, direct text comparison), evidence
+captured (SKILL.md:30-31 text, README.md's T-150-reconciled record, git log
+provenance for the T-150 commit, and a full `grep -rn` of the companion tree),
+isolated fault (SKILL.md:30-31's "last verified against 0.79.10" sentence),
+and root cause (T-150's Files to Touch scope was limited to `README.md`, so
+this independent duplicate never got updated) are all present. Chain is
+sufficient to proceed.
+
+**Stage 1 — Bug criteria:**
+- Fix addresses the isolated fault: confirmed via `git show cc3d52b` — the
+  stale "last verified against **0.79.10**" sentence at
+  `the-intern/bob-companion/claude/skills/bob-setup/SKILL.md:30-31` is
+  replaced with a sentence that drops the version number and defers to the
+  root README's "pi-agent Version Compatibility" section. Matches the isolated
+  fault recorded in the Diagnosis Log exactly.
+- Fix Verification steps followed: ran the bug's own command against the
+  fixed commit — `git show cc3d52b:the-intern/bob-companion/claude/skills/bob-setup/SKILL.md`
+  piped through `grep -n "0.79.10\|0.65.2"` returns no matches (exit 1), as
+  required.
+- No unrelated behavior added: `git show --stat cc3d52b` shows exactly one
+  file changed (3 insertions, 2 deletions) — only
+  `the-intern/bob-companion/claude/skills/bob-setup/SKILL.md`. The bug
+  lifecycle file was not touched on the branch (the Diagnosis Log and Work
+  Log entries live in commits `d482cb9`/`09fb849` on `dev-agent`, not on the
+  bug branch).
+- Ran `git grep -n "0.79.10\|0.65.2\|0.75.3" cc3d52b -- the-intern/bob-companion/`
+  directly against the fixed commit: only the two expected, out-of-scope
+  `0.75.3` extension-API-pin references remain
+  (`bob-setup/SKILL.md:28`, `bob-troubleshooting/references/symptom-table.md:12`),
+  both left untouched exactly as the Diagnosis Log's planned fix specified.
+
+**Stage 2 — Code quality:**
+- Correctness/readability: the replacement sentence is grammatically clear,
+  matches the surrounding bullet's style, and is consistent with the
+  paragraph's own lead-in ("check the root README.md ... section for the
+  exact supported versions").
+- Fix is minimal: 3-line diff, single file, no unrelated refactoring or
+  cleanup bundled in.
+- Diagnosis Log fix contract vs. implementation: the Diagnosis Log's Planned
+  Fix offered two options — (a) drop the duplicated number and defer to the
+  root README, or (b) update it to 0.80.3. The Developer chose (a), matching
+  the bug's own Expected Behavior section, which explicitly allows either.
+  The Work Log's stated rationale — the extension-API line just above is
+  protected by an automated test (`npm test` in `the-intern/pi-extension`
+  fails loudly on mismatch) while the interactive-`pi` line has no such
+  enforcement, so restating a hardcoded number would simply recreate the same
+  unenforced-duplicate trap that caused this bug — is sound engineering
+  judgment, not merely a different-but-equally-valid choice. Endorsed.
+- Regression test: none added. Acceptable and documented — this is a
+  one-line prose/documentation fix in a Markdown skill file with no
+  executable behavior to unit-test, and the bug's own Fix Verification is
+  itself a single grep command, which was run and independently
+  re-verified above. Proportionate for a low-severity documentation bug of
+  this size; does not block PASS.
+
+Both stages pass. No issues found.
