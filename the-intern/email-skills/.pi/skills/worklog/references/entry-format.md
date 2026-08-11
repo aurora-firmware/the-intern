@@ -22,7 +22,7 @@ NOW=$(date +%H:%M)
 TODAY=$(date +%F)
 mkdir -p worklog
 cat >> worklog/$TODAY.md <<'EOF'
-## $NOW — <item-identifier>
+## <NOW> — <item-identifier>
 
 - Done: <what was done for this item this run>
 - Left: <what is still outstanding, or "nothing" if fully resolved>
@@ -48,15 +48,19 @@ text derived from whatever the item itself is — content the consuming
 skill does not fully control — so quoting the delimiter keeps any `$()`,
 backticks, backslashes, or variable references in that text inert rather
 than allowing the shell to expand them. Because the delimiter is quoted,
-the shell will **not** expand `$NOW` inside the heredoc body — it stays
-literal `$NOW` text if left as shown. `$NOW` in the header line above marks
-where the just-computed time value belongs: before running the command,
-replace `$NOW` with the literal `HH:MM` result of the `NOW=$(date +%H:%M)`
-lookup shown above it, the same way `<item-identifier>` and the `Done`/
-`Left`/`Next` text get replaced with their real values before the command
-runs. Never run the command with the literal text `$NOW` still in place,
-and never substitute a guessed or estimated time in its place — the
-substituted value must be the result of that `date` lookup.
+the shell will **not** expand shell-variable syntax inside the heredoc
+body — a literal `$NOW` written there would stay literal `$NOW` text
+rather than becoming a real time. That is exactly why the header uses the
+bracketed placeholder `<NOW>` instead of `$NOW`: `<NOW>` cannot be mistaken
+for something the shell fills in automatically, the same way
+`<item-identifier>` already cannot. Before running the command, replace
+`<NOW>` in the header line with the literal `HH:MM` result of the
+`NOW=$(date +%H:%M)` lookup shown above it, the same way `<item-identifier>`
+and the `Done`/`Left`/`Next` text get replaced with their real values
+before the command runs. Never run the command with the literal text
+`<NOW>` still in place, and never substitute a guessed or estimated time in
+its place — the substituted value must be the result of that `date`
+lookup.
 
 ## Per-item entry format
 
@@ -71,6 +75,10 @@ the outcome. Each entry records exactly three things about that item:
 - Next: <what happens next, and on what trigger>
 ```
 
+- **`<HH:MM>`** — the actual local time this entry is written, from a
+  `date +%H:%M` lookup, exactly as described in "Creating the worklog
+  file" above — never a guessed, estimated, or left-as-shown placeholder
+  value.
 - **`<item-identifier>`** — a short, human-readable label for the item this
   entry is about. The consuming skill chooses this label; it should be
   enough on its own to identify which item the entry describes when
