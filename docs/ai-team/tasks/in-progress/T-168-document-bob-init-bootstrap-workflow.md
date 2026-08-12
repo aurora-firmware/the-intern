@@ -96,3 +96,10 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-12
+PASS
+
+- Stage 1 passed. Verified `bob init` is documented before serve/schedule in the quickstart, the shared skill-install-path model and absence of workspace `.pi/skills` copies are documented, and the bootstrap policy guidance correctly states the permissive `bash`/`read`/`write`/`edit` rules plus the required review-and-narrow follow-up.
+- Stage 1 passed for the CLI reference/build path. Reviewed `the-intern/docs/book.toml` and `the-intern/docs/preprocessors/cli-reference/src/main.rs`; the generator includes `init` and `schedule`, and a reproduced root-level `mdbook build the-intern/docs` emitted `cli-reference/init.html` and `cli-reference/schedule.html`.
+- Stage 2 passed. Changes are scoped to the task, the preprocessor fix aligns with the documented verification flow, and the only observed build output beyond success was the pre-existing `mdbook-mermaid` version warning.
