@@ -183,6 +183,39 @@ skill_install_path = "/opt/bob/skills"
   per-entry scheduled-job `cwd` — see
   [Working directory for pi-agent sessions](#working-directory-for-pi-agent-sessions).
 
+### Initialize a workspace with `bob init`
+
+For a first-time bootstrap, prefer `bob init` over creating a workspace and
+live config by hand:
+
+```bash
+bob init /srv/workspaces/email-skills
+```
+
+`bob init` creates an owner-only workspace containing:
+
+- `AGENTS.md`
+- `CLAUDE.md`
+- `config/email-triage.toml`
+- `worklog/`
+
+It also writes the live bob config file at the platform default config path and
+installs the shared skill package at `skill_install_path`. It does **not**
+create a workspace-local `.pi/skills/` tree.
+
+The generated live config is a permissive bootstrap: it allows any arguments
+for `bash`, `read`, `write`, and `edit`, keeps every other tool default-denied,
+and is meant only to get an operator to a reviewable starting point. Review and
+narrow that config before relying on it as a security control.
+
+After `bob init`, set the skill-local manager escalation address in the
+workspace copy of `config/email-triage.toml` before you schedule that
+workspace:
+
+```toml
+manager_address = "manager@example.com"
+```
+
 ### Remove stale extension copies from pi's own `packages` list
 
 pi loads extensions from two independent sources: the `--extension <path>`
@@ -831,31 +864,26 @@ the package as described in
    be classified confidently. Bob does not create or manage either of these
    inputs for you.
 
-2. Deploy an owner-only working directory for the job's mutable state.
+2. Bootstrap the owner-only workspace with `bob init`.
 
    The scheduled job's `--cwd` still needs its own owner-only directory, but
-   under the skill install-path model it holds only the job's mutable
-   runtime state — the local `config/email-triage.toml` and the `worklog/`
-   diary — not a copy of the skill content itself. Skills reach the session
-   from the skill install path (installed once, above) independently of
-   this directory, so it no longer needs a `.pi/skills/` tree at all. Keep
-   the directory owner-only for the job user, matching the trust boundary
-   described in [Scheduled jobs](#scheduled-jobs).
+   under the skill install-path model it holds only the job's mutable runtime
+   state — the local `config/email-triage.toml` and the `worklog/` diary — not
+   a copy of the skill content itself. Skills reach the session from the shared
+   skill install path independently of this directory, so it no longer needs a
+   `.pi/skills/` tree at all.
 
    ```bash
    WORKSPACE=/srv/workspaces/email-skills
-
-   install -d -m 700 "$WORKSPACE"
-   install -d -m 700 "$WORKSPACE/config"
-   install -d -m 700 "$WORKSPACE/worklog"
-   cp the-intern/email-skills/config/email-triage.example.toml \
-      "$WORKSPACE/config/email-triage.toml"
-   chmod 700 "$WORKSPACE" "$WORKSPACE/config" "$WORKSPACE/worklog"
+   bob init "$WORKSPACE"
    ```
 
-   Do not use the repository checkout as `--cwd`: a shared checkout is not the
-   trusted runtime boundary for scheduled jobs, and it would mix mutable
-   worklog/config state into source-controlled files.
+   `bob init` creates `AGENTS.md`, `CLAUDE.md`, `config/email-triage.toml`,
+   and `worklog/`, installs the shared skills once at bob's service-wide
+   install path, and writes a broad bootstrap policy into bob's live
+   `config.toml`. Do not use the repository checkout as `--cwd`: a shared
+   checkout is not the trusted runtime boundary for scheduled jobs, and it
+   would mix mutable worklog/config state into source-controlled files.
 
    > **No pi project-trust step is required for this workspace.** Earlier
    > revisions of this section (`B-035`) added a step establishing pi
@@ -889,7 +917,11 @@ the package as described in
    The shipped `email-triage.example.toml` stays in the repository as a
    template only; the real address belongs only in the job workspace's copy.
 
-4. Add the S-004 action rules scoped to the skill install path, then reload policy.
+4. Replace the bootstrap-wide action rules with the S-004 rules scoped to the skill install path, then reload policy.
+
+   `bob init` seeds a permissive four-tool bootstrap policy so the workspace is
+   immediately runnable. Before relying on the deployment, replace those broad
+   rules with the narrower rules below.
 
    The validated runtime matcher shape is unchanged from the per-workspace
    deployment model:
