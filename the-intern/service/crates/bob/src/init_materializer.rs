@@ -46,6 +46,7 @@ pub(crate) fn materialize_workspace_with_paths(
     force: bool,
 ) -> ServiceResult<MaterializationReport> {
     let workspace_path = resolve_workspace_path(workspace_path, current_dir);
+    reject_git_metadata_target(&workspace_path)?;
     ensure_directory(&workspace_path)?;
 
     let mut report = MaterializationReport {
@@ -265,6 +266,22 @@ fn normalize_path(path: PathBuf) -> PathBuf {
         }
     }
     normalized
+}
+
+fn reject_git_metadata_target(path: &Path) -> ServiceResult<()> {
+    if path
+        .components()
+        .any(|component| component.as_os_str() == ".git")
+    {
+        return Err(ServiceError::InvalidRequest {
+            detail: format!(
+                "workspace path {} targets git metadata; choose a directory outside .git",
+                path.display()
+            ),
+        });
+    }
+
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -632,5 +649,81 @@ mod tests {
             report.replaced_paths.contains(&resolved_paths.config_path),
             "report should record the replaced live config"
         );
+    }
+
+    #[test]
+    fn rejects_git_metadata_targets_before_any_filesystem_mutation() {
+        for target in [Path::new(".git"), Path::new(".git/hooks")] {
+            let temp = tempfile::tempdir().expect("tempdir should be created");
+            let env = init_env(&temp);
+            let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+            let git_dir = temp.path().join(".git");
+            let hooks_dir = git_dir.join("hooks");
+            let head_path = git_dir.join("HEAD");
+            let hook_path = hooks_dir.join("pre-commit");
+
+            fs::create_dir_all(&hooks_dir).expect(".git/hooks should be created");
+            fs::write(&head_path, "ref: refs/heads/main\n").expect("HEAD should be seeded");
+            fs::write(&hook_path, "#!/bin/sh\necho keep\n").expect("hook should be seeded");
+            fs::set_permissions(&git_dir, fs::Permissions::from_mode(0o755))
+                .expect(".git permissions should be set");
+            fs::set_permissions(&hooks_dir, fs::Permissions::from_mode(0o755))
+                .expect("hooks permissions should be set");
+
+            let git_mode_before = fs::metadata(&git_dir)
+                .expect("stat .git before materialization")
+                .permissions()
+                .mode()
+                & 0o777;
+            let hooks_mode_before = fs::metadata(&hooks_dir)
+                .expect("stat hooks before materialization")
+                .permissions()
+                .mode()
+                & 0o777;
+
+            let err = materialize_workspace_with_paths(target, temp.path(), &resolved_paths, true)
+                .expect_err("workspace targets at or inside .git must be rejected");
+
+            assert!(
+                matches!(err, ServiceError::InvalidRequest { ref detail } if detail.contains(".git")),
+                "expected .git safeguard error, got {err:?}"
+            );
+            assert_eq!(
+                fs::read_to_string(&head_path).expect("HEAD should remain readable"),
+                "ref: refs/heads/main\n",
+                ".git contents must remain unchanged after rejection"
+            );
+            assert_eq!(
+                fs::read_to_string(&hook_path).expect("hook should remain readable"),
+                "#!/bin/sh\necho keep\n",
+                "nested git metadata must remain unchanged after rejection"
+            );
+            assert_eq!(
+                fs::metadata(&git_dir)
+                    .expect("stat .git after materialization")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                git_mode_before,
+                ".git directory permissions must remain unchanged after rejection"
+            );
+            assert_eq!(
+                fs::metadata(&hooks_dir)
+                    .expect("stat hooks after materialization")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                hooks_mode_before,
+                "nested .git directory permissions must remain unchanged after rejection"
+            );
+            assert!(
+                !resolved_paths.skill_install_path.exists(),
+                "shared skill install path must not be created when the workspace target is invalid"
+            );
+            assert!(
+                !resolved_paths.config_path.exists(),
+                "live config must not be created when the workspace target is invalid"
+            );
+        }
     }
 }
