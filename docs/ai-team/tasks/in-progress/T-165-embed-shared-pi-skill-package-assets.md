@@ -79,6 +79,13 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-12
+Implemented `bob`’s embedded shared pi-skill asset support by generating a build-time Rust table from the canonical `the-intern/email-skills/.pi/skills` tree and exposing it through a new `init_assets` module. The public surface is intentionally small: callers can enumerate a deterministic, sorted list of embedded assets, inspect each stable relative path, and look up byte content for a requested asset. Unit tests cover the canonical source-path suffix, the full expected embedded file list and byte-for-byte parity with the tracked package files, and the required `email-triage`, `himalaya`, and `worklog` roots.
+
+I considered adding a crate dependency such as `include_dir` or maintaining a second checked-in copy of the packaged assets, but rejected both. Adding a new dependency was unnecessary for this scope and would have expanded the touch set beyond the task’s declared files. A second maintained copy would have violated the task and spec intent by creating drift risk against the canonical generated package. Instead, `build.rs` discovers the tracked package directly, registers rerun tracking on the source tree, and writes the generated asset table into `OUT_DIR`.
+
+No implementation work remains for this task branch. The next step is reviewer validation against the task acceptance criteria and verification command.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
