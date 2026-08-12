@@ -98,3 +98,10 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-12
+PASS
+
+Stage 1 passed. `the-intern/service/crates/bob/tests/init_e2e.rs` adds an isolated-XDG `bob init` E2E that asserts the shared skill install path is created, the workspace has no `.pi/skills` tree, the generated policy admits exactly `bash`, `read`, `write`, and `edit` while denying an unsupported tool, and the initialized workspace's live chat banner advertises the shared `email-triage`, `himalaya`, and `worklog` skills. The tests call the real `pi --version` prerequisite first and fail with a prerequisite message instead of substituting a mock runner.
+
+Stage 2 passed. The change is scoped to the allowed test file, the assertions are aligned with the delivered `bob init` and skill-discovery behavior, and the task verification command `cargo test -p bob --test init_e2e -- --nocapture` passed on the submitted task branch outside the sandbox as required for the socket-based live test.
