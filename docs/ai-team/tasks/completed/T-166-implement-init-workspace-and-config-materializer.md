@@ -1,7 +1,7 @@
 ---
 id: T-166
 title: Implement init workspace and config materializer
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-08-12'
