@@ -21,7 +21,7 @@ command = "mdbook-mermaid"
 # arguments mdbook appends are forwarded to the binary rather than
 # interpreted by cargo.
 [preprocessor.cli-reference]
-command = "cargo run --manifest-path preprocessors/cli-reference/Cargo.toml -q --"
+command = "bash -lc 'if [ -f preprocessors/cli-reference/Cargo.toml ]; then exec cargo run --manifest-path preprocessors/cli-reference/Cargo.toml -q -- \"$@\"; else exec cargo run --manifest-path the-intern/docs/preprocessors/cli-reference/Cargo.toml -q -- \"$@\"; fi' _"
 
 [output]
 

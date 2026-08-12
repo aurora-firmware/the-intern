@@ -4,7 +4,16 @@ use std::process::{Command, Stdio};
 use mdbook::book::{Book, BookItem, Chapter};
 
 /// Subcommands to document, in display order.
-const SUBCOMMANDS: &[&str] = &["serve", "status", "sessions", "audit", "policy", "chat"];
+const SUBCOMMANDS: &[&str] = &[
+    "init",
+    "serve",
+    "status",
+    "sessions",
+    "audit",
+    "policy",
+    "schedule",
+    "chat",
+];
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
