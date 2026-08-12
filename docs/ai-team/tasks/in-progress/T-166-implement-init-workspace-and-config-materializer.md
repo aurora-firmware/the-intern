@@ -92,6 +92,9 @@ Implemented a filesystem-only init materializer and exposed it from `bob`. It re
 
 Focused tests cover fresh materialization, modes, loader-valid config, the exact bootstrap rule set and default-deny for an unsupported tool, no-force workspace skips and live-config refusal, plus force replacement that preserves unrelated files and `.git`. Path resolution is shared with the existing config loader rather than duplicated. CLI wiring and end-to-end coverage remain for later tasks.
 
+### Session 2 — 2026-08-12
+Addressed the reviewer finding by rejecting a resolved workspace target that is `.git` or lies inside `.git` before any chmod, create, or write operation. A regression test covers both `.git` and `.git/hooks`, asserting Git metadata contents and modes are unchanged and no shared skill or live config paths are created. The focused regression and full `cargo test -p bob init_materializer` pass.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
