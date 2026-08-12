@@ -1,7 +1,7 @@
 ---
 id: T-168
 title: Document bob init bootstrap workflow
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-08-12'
