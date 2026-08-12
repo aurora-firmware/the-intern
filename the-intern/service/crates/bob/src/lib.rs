@@ -10,6 +10,7 @@ use bob_core::types::AuditFilterKind;
 pub mod cli;
 pub mod client;
 pub mod config;
+pub mod init_assets;
 pub mod serve;
 pub mod telemetry;
 
