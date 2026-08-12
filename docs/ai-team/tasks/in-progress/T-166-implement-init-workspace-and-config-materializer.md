@@ -113,3 +113,9 @@ FAIL
 - **File and location** — `the-intern/service/crates/bob/src/init_materializer.rs:48-61`, `:72-100`, `:195-215`.
   **What is wrong** — AC-4 says the materializer must never modify a target `.git` directory, but the implementation never checks whether the requested workspace path is `.git` (or inside one) before calling `ensure_directory()` and writing `AGENTS.md`, `CLAUDE.md`, `config/email-triage.toml`, and `worklog/`. If the caller points `workspace_path` at `.git`, this code will chmod that directory and create generated files inside it.
   **What should change** — Reject `.git` targets before any filesystem mutation, and add a focused test that proves pointing the materializer at a `.git` directory fails without changing its contents or permissions.
+
+### Review Verdict — 2026-08-12
+PASS
+
+- Stage 1 passed: all acceptance criteria are met. `materialize_workspace_with_paths()` now rejects resolved `.git` and nested Git-metadata targets before any filesystem mutation, and the regression test verifies contents, modes, shared skill install, and live config remain untouched on rejection.
+- Stage 2 passed: the fix is minimal, the new test covers the previously missing failure path, and the focused verification command still passes.
