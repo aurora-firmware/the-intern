@@ -272,8 +272,14 @@ reconciliation.
   action list denies all tool calls — so neither skill can act at all
   without one. **Where:** bob's existing S-004 action-ruleset configuration;
   this spec adds no new bob-side mechanism, only a required entry in it.
-  **Constraints:** the rule must be scoped narrowly enough to admit this
-  package's himalaya invocations without being a blanket `bash` allow.
+  **Constraints:** outside the documented `bob init` bootstrap profile, the
+  rule must be scoped narrowly enough to admit this package's himalaya
+  invocations without being a blanket `bash` allow. CR-007 permits `bob init`
+  to generate a temporary first-run exception: a no-matcher `bash` rule,
+  alongside the same broad rules for `read`, `write`, and `edit`, so a fresh
+  installation works without iterative rule authoring. The generated config
+  warns that this grants broad authority and directs the operator to narrow it
+  after confirming the installation works.
   **Default behavior:** an unadmitted `bash` call is blocked by S-004; per
   the Workflow, the block is recorded in the day's worklog as an open item,
   never silently dropped.
@@ -372,7 +378,7 @@ reconciliation.
 | 1 | Author and ship the `himalaya` skill (adapted CLI-reference package) as a standalone product artifact, at the package location defined above. | Nothing |
 | 2 | Author the `email-triage` skill's core loop: unseen-mail detection via the `\Seen` flag, diary read/write with skip-tolerant reconciliation, and the escalation-to-manager path (including S-004-block handling), without the full category taxonomy (a single generic act-or-escalate behavior). | Phase 1 |
 | 3 | Draft the starter category taxonomy and one reference workflow file per category; wire classification into the `email-triage` skill so it selects and follows the matched category's workflow. | Phase 2 |
-| 4 | End-to-end validation against a real scheduled job (`bob schedule add` with a per-entry `--cwd` pointing at the shipped package, plus the required S-004 allow rule): confirm ticks produce worklog entries, escalations reach the manager address, blocks are recorded rather than dropped, and the next executed run picks up prior open items. | Phase 3 |
+| 4 | End-to-end validation against a real scheduled job (`bob schedule add` with a per-entry `--cwd` pointing at the initialized workspace containing local configuration and `worklog/`; the package is supplied from the shared S-011 install path; plus the required S-004 allow rule): confirm ticks produce worklog entries, escalations reach the manager address, blocks are recorded rather than dropped, and the next executed run picks up prior open items. | Phase 3 |
 | 5 | Document operator setup — himalaya account, manager address, the S-004 allow rule (with a concrete worked example of the allow rule's argument-matcher shape, since S-004's own glob/argument-path syntax is still an open question there), and `bob schedule add --cwd` usage — in the S-007 operator guide. | Phase 4 |
 
 ## Alternatives Considered
@@ -432,3 +438,5 @@ reconciliation.
 |------|-------------|-----|----------------|
 | 2026-08-06 | The "No bob-core or bob-service changes" design principle replaced by "All triage logic stays on the pi-agent side": this spec still adds no channel adapter, admin-RPC method, or core type, but no longer claims skills require no bob-service change, since skill delivery moves into bob. | ADR-014 accepted 2026-08-06 / S-011. Skills are supplied by bob through its extension and no longer resolve from the working directory. | S-011 breakdown tasks (Gate 2 pending). |
 | 2026-08-07 | Three escalation- and taxonomy-related changes: (a) the category taxonomy is no longer a user extension point — it is fixed per release (Component 3 and the Responsibility Separation row); (b) a missing or malformed escalation configuration no longer hard-stops the message — the run escalates to the mail account's own address, stating that the configuration was missing and where it was expected, and records the message in the worklog without further action only when that address is undeterminable, while an escalation send blocked by S-004 remains a hard stop (Workflow, Configuration Requirements); (c) the taxonomy gains a terminal category for the skill's own escalation mail, which is filed and never escalated again (Component 3). | CR-006 items 3, 5, and 6, driven by the PR #42 review. Skill content ships with releases, so invited local category edits would be overwritten on upgrade; an escalation must still reach a human when its address configuration is absent, rather than stopping every message that needs one; and the self-addressed escalation that creates would otherwise re-escalate itself indefinitely. | T-143, T-144, T-145, T-146 |
+| 2026-08-12 | Permitted the documented `bob init` first-run policy exception: no-matcher rules for `bash`, `read`, `write`, and `edit`, with an explicit broad-authority warning and review obligation. | CR-007 prioritizes a working first installation; narrow `bash` matching remains the normal operator configuration after bootstrap. | S-012 tasks TBD |
+| 2026-08-12 | Corrected the Phase 4 scheduled-validation cwd to the initialized workspace; skills are supplied from S-011's shared install path. | Architecture consistency review found the older package-cwd wording stale against ADR-014 and the shared skill-delivery model. | S-012 tasks TBD |
