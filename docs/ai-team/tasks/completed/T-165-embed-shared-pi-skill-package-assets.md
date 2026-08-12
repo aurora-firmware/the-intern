@@ -1,7 +1,7 @@
 ---
 id: T-165
 title: Embed shared pi skill package assets
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-08-12'
