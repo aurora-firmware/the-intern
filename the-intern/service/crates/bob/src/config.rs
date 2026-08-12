@@ -817,6 +817,20 @@ pub fn load() -> ServiceResult<BobConfig> {
 }
 
 #[cfg(test)]
+pub(crate) fn load_with_test_sources(
+    env: BTreeMap<String, String>,
+    config_path: Option<PathBuf>,
+    uid: u32,
+) -> ServiceResult<BobConfig> {
+    BobConfig::load_with_sources(ConfigSources {
+        env,
+        config_path,
+        cli_overrides: BTreeMap::new(),
+        uid,
+    })
+}
+
+#[cfg(test)]
 mod tests {
     use std::{
         fs,

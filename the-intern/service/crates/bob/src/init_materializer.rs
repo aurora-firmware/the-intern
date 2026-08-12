@@ -297,6 +297,9 @@ fn current_uid() -> u32 {
 mod tests {
     use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt, path::Path};
 
+    use policy_control::{PolicyEngine, RulesetSnapshot};
+    use serde_json::json;
+
     use super::*;
 
     fn init_env(temp: &tempfile::TempDir) -> BTreeMap<String, String> {
@@ -396,5 +399,238 @@ mod tests {
         assert_mode(&workspace_config, 0o600);
         assert_mode(&shared_skill, 0o600);
         assert_mode(&live_config, 0o600);
+    }
+
+    #[test]
+    fn generates_loader_valid_config_with_four_bootstrap_rules_and_no_admin_socket() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = BTreeMap::from([
+            (
+                "XDG_CONFIG_HOME".to_string(),
+                temp.path().join("xdg-config").display().to_string(),
+            ),
+            (
+                "XDG_DATA_HOME".to_string(),
+                temp.path().join("xdg-data").display().to_string(),
+            ),
+            (
+                "XDG_STATE_HOME".to_string(),
+                temp.path().join("xdg-state").display().to_string(),
+            ),
+            (
+                "XDG_RUNTIME_DIR".to_string(),
+                temp.path().join("xdg-runtime").display().to_string(),
+            ),
+        ]);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+
+        materialize_workspace_with_paths(
+            Path::new("workspace"),
+            temp.path(),
+            &resolved_paths,
+            false,
+        )
+        .expect("fresh materialization should succeed");
+
+        let live_config = fs::read_to_string(&resolved_paths.config_path)
+            .expect("live config should exist after materialization");
+        assert!(
+            live_config.contains(&format!(
+                "skill_install_path = \"{}\"",
+                resolved_paths.skill_install_path.display()
+            )),
+            "live config should name the resolved shared skill install path"
+        );
+        assert_eq!(
+            live_config.matches("[[policy.action_rules]]").count(),
+            4,
+            "live config should contain exactly four bootstrap rules"
+        );
+
+        let loaded = crate::config::load_with_test_sources(
+            env,
+            Some(resolved_paths.config_path.clone()),
+            4242,
+        )
+        .expect("generated config should load through BobConfig");
+
+        let snapshot = RulesetSnapshot::from_config(loaded.policy.clone())
+            .expect("generated policy should validate");
+        let configured_tools = snapshot
+            .action_rules()
+            .iter()
+            .map(|rule| rule.tool.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(configured_tools, ["bash", "read", "write", "edit"]);
+        assert!(
+            snapshot
+                .action_rules()
+                .iter()
+                .all(|rule| rule.arg_matchers.is_empty()),
+            "bootstrap rules should allow the named tools without argument matchers"
+        );
+
+        let unsupported = PolicyEngine::evaluate_action(&snapshot, "fetch", &json!({}));
+        assert!(
+            !unsupported.allow,
+            "tools outside the bootstrap set must remain denied"
+        );
+        assert!(
+            !loaded.admin_sock_path.exists(),
+            "filesystem-only materialization must not create the admin socket path"
+        );
+    }
+
+    #[test]
+    fn skips_existing_workspace_files_without_force_and_reports_them() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+        let workspace = temp.path().join("workspace");
+        fs::create_dir_all(&workspace).expect("workspace directory should be created");
+
+        let existing_agents = workspace.join("AGENTS.md");
+        fs::write(&existing_agents, "keep me\n").expect("existing AGENTS.md should be seeded");
+
+        let report = materialize_workspace_with_paths(
+            Path::new("workspace"),
+            temp.path(),
+            &resolved_paths,
+            false,
+        )
+        .expect("workspace conflicts without live config should still succeed");
+
+        assert_eq!(
+            fs::read_to_string(&existing_agents).expect("AGENTS.md should remain readable"),
+            "keep me\n",
+            "existing generated workspace files must remain unchanged without force"
+        );
+        assert!(
+            report.skipped_paths.contains(&existing_agents),
+            "report should name skipped workspace files"
+        );
+    }
+
+    #[test]
+    fn leaves_existing_live_config_unchanged_and_returns_an_error_without_force() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+
+        let config_parent = resolved_paths
+            .config_path
+            .parent()
+            .expect("config path should have a parent");
+        fs::create_dir_all(config_parent).expect("config parent should be created");
+        fs::write(
+            &resolved_paths.config_path,
+            "skill_install_path = \"/keep/me\"\n",
+        )
+        .expect("existing live config should be seeded");
+
+        let err = materialize_workspace_with_paths(
+            Path::new("workspace"),
+            temp.path(),
+            &resolved_paths,
+            false,
+        )
+        .expect_err("existing live config must block no-force materialization");
+
+        assert!(
+            matches!(err, ServiceError::InvalidRequest { ref detail } if detail.contains("live config already exists")),
+            "expected live-config conflict error, got {err:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(&resolved_paths.config_path)
+                .expect("live config should remain readable"),
+            "skill_install_path = \"/keep/me\"\n",
+            "live config must remain unchanged when force is absent"
+        );
+    }
+
+    #[test]
+    fn force_replaces_only_generated_files_and_preserves_git_directory_contents() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+        let workspace = temp.path().join("workspace");
+        let workspace_config_dir = workspace.join("config");
+        let git_dir = workspace.join(".git");
+        let untouched_note = workspace.join("notes.txt");
+
+        fs::create_dir_all(&workspace_config_dir).expect("config dir should be created");
+        fs::create_dir_all(&git_dir).expect(".git dir should be created");
+        fs::write(workspace.join("AGENTS.md"), "old agents\n").expect("AGENTS should be seeded");
+        fs::write(workspace.join("CLAUDE.md"), "old claude\n").expect("CLAUDE should be seeded");
+        fs::write(
+            workspace_config_dir.join("email-triage.toml"),
+            "manager_address = \"old@example.invalid\"\n",
+        )
+        .expect("workspace config should be seeded");
+        fs::write(&untouched_note, "do not touch\n").expect("note should be seeded");
+        fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD should be seeded");
+
+        let shared_skill = resolved_paths
+            .skill_install_path
+            .join("email-triage")
+            .join("SKILL.md");
+        fs::create_dir_all(
+            shared_skill
+                .parent()
+                .expect("shared skill path should have a parent"),
+        )
+        .expect("shared skill parent should be created");
+        fs::write(&shared_skill, "old skill\n").expect("shared skill should be seeded");
+
+        let config_parent = resolved_paths
+            .config_path
+            .parent()
+            .expect("config path should have a parent");
+        fs::create_dir_all(config_parent).expect("config parent should be created");
+        fs::write(
+            &resolved_paths.config_path,
+            "skill_install_path = \"/old/skills\"\n",
+        )
+        .expect("live config should be seeded");
+
+        let report = materialize_workspace_with_paths(
+            Path::new("workspace"),
+            temp.path(),
+            &resolved_paths,
+            true,
+        )
+        .expect("force should replace generated files");
+
+        assert_eq!(
+            fs::read_to_string(workspace.join("AGENTS.md")).expect("AGENTS should exist"),
+            CONTEXT_PLACEHOLDER
+        );
+        assert_eq!(
+            fs::read_to_string(workspace.join("CLAUDE.md")).expect("CLAUDE should exist"),
+            CONTEXT_PLACEHOLDER
+        );
+        assert_eq!(
+            fs::read_to_string(workspace_config_dir.join("email-triage.toml"))
+                .expect("workspace config should exist"),
+            EMAIL_TRIAGE_TEMPLATE
+        );
+        assert_eq!(
+            fs::read_to_string(&untouched_note).expect("note should remain readable"),
+            "do not touch\n",
+            "force must not modify non-generated workspace files"
+        );
+        assert_eq!(
+            fs::read_to_string(git_dir.join("HEAD")).expect("HEAD should remain readable"),
+            "ref: refs/heads/main\n",
+            "force must never modify the target .git directory"
+        );
+        assert!(
+            report.replaced_paths.contains(&workspace.join("AGENTS.md")),
+            "report should record replaced generated workspace files"
+        );
+        assert!(
+            report.replaced_paths.contains(&resolved_paths.config_path),
+            "report should record the replaced live config"
+        );
     }
 }
