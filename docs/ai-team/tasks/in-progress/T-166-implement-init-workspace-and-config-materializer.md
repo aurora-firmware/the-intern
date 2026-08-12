@@ -103,3 +103,10 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-12
+FAIL
+
+- **File and location** — `the-intern/service/crates/bob/src/init_materializer.rs:48-61`, `:72-100`, `:195-215`.
+  **What is wrong** — AC-4 says the materializer must never modify a target `.git` directory, but the implementation never checks whether the requested workspace path is `.git` (or inside one) before calling `ensure_directory()` and writing `AGENTS.md`, `CLAUDE.md`, `config/email-triage.toml`, and `worklog/`. If the caller points `workspace_path` at `.git`, this code will chmod that directory and create generated files inside it.
+  **What should change** — Reject `.git` targets before any filesystem mutation, and add a focused test that proves pointing the materializer at a `.git` directory fails without changing its contents or permissions.
