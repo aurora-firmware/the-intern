@@ -1,7 +1,7 @@
 ---
 id: T-169
 title: Verify initialized workspace skill discovery end to end
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-08-12'
