@@ -11,6 +11,7 @@ pub mod cli;
 pub mod client;
 pub mod config;
 pub mod init_assets;
+pub mod init_materializer;
 pub mod serve;
 pub mod telemetry;
 

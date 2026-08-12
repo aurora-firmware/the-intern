@@ -89,6 +89,12 @@ pub struct MonitoringConfig {
     pub default_tail_filters: Vec<AuditFilterKind>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedInitPaths {
+    pub config_path: PathBuf,
+    pub skill_install_path: PathBuf,
+}
+
 // `Default` is intentionally not implemented for `BobConfig`.
 //
 // Both `admin_sock_path` and `extension_sock_path` must be non-empty for the
@@ -714,6 +720,16 @@ fn default_skill_install_path_for_env(env: &BTreeMap<String, String>, uid: u32) 
     data_root.join("bob").join("skills")
 }
 
+pub(crate) fn resolve_init_paths_for_env(
+    env: &BTreeMap<String, String>,
+    uid: u32,
+) -> ResolvedInitPaths {
+    ResolvedInitPaths {
+        config_path: default_config_path_for_env(env),
+        skill_install_path: default_skill_install_path_for_env(env, uid),
+    }
+}
+
 /// Resolves the default JSON schedule-store path from the environment.
 ///
 /// On Linux, the path is `$XDG_STATE_HOME/bob/schedules.json`.  When
@@ -745,12 +761,12 @@ fn default_schedule_store_path_for_env(env: &BTreeMap<String, String>, uid: u32)
 }
 
 fn default_config_path(sources: &ConfigSources) -> PathBuf {
+    default_config_path_for_env(&sources.env)
+}
+
+fn default_config_path_for_env(env: &BTreeMap<String, String>) -> PathBuf {
     if cfg!(target_os = "macos") {
-        let home = sources
-            .env
-            .get("HOME")
-            .cloned()
-            .unwrap_or_else(|| "~".into());
+        let home = env.get("HOME").cloned().unwrap_or_else(|| "~".into());
         return Path::new(&home)
             .join("Library")
             .join("Application Support")
@@ -758,16 +774,10 @@ fn default_config_path(sources: &ConfigSources) -> PathBuf {
             .join("config.toml");
     }
 
-    let root = sources
-        .env
+    let root = env
         .get("XDG_CONFIG_HOME")
         .cloned()
-        .or_else(|| {
-            sources
-                .env
-                .get("HOME")
-                .map(|home| format!("{home}/.config"))
-        })
+        .or_else(|| env.get("HOME").map(|home| format!("{home}/.config")))
         .unwrap_or_else(|| ".config".to_string());
 
     Path::new(&root).join("bob").join("config.toml")
