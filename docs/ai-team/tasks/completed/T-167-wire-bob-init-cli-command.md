@@ -1,7 +1,7 @@
 ---
 id: T-167
 title: Wire bob init CLI command
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-08-12'
