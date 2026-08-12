@@ -82,6 +82,11 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-12
+Added `crates/bob/tests/init_e2e.rs`. The tests use isolated XDG/runtime paths, run real `bob init`, verify shared skills under `$XDG_DATA_HOME/bob/skills` and no workspace `.pi/skills`, parse the generated policy to verify exactly the four bootstrap tools and default-deny for an unsupported tool, then require real `pi`, start `bob serve` with the real extension fixture, and capture PTY-driven `bob chat` until its `[Skills]` banner proves all three shared skills are discovered.
+
+Managed-sandbox socket binding is denied as documented, so the live test runs outside the sandbox. The final `cargo test -p bob --test init_e2e -- --nocapture` passed with two tests after correcting the PTY `script` invocation to capture and flush the transcript before timeout. No mock runner or workspace-local skill fixture was introduced.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
