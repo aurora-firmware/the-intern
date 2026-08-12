@@ -9,10 +9,15 @@ use crate::{client::AdminClient, config::BobConfig};
 
 mod audit;
 mod chat;
+mod init;
 mod policy;
 mod schedule;
 mod sessions;
 mod status;
+
+pub fn init(path: &str, force: bool) -> ServiceResult<()> {
+    init::run(path, force)
+}
 
 pub fn status(json: bool) -> ServiceResult<()> {
     status::run(json)

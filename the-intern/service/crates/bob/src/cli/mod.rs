@@ -15,6 +15,11 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    Init {
+        path: String,
+        #[arg(long)]
+        force: bool,
+    },
     Serve,
     Status,
     Sessions {
@@ -109,10 +114,33 @@ mod tests {
 
         assert!(help.contains("--json"), "help text was: {help}");
         for name in [
-            "serve", "status", "sessions", "audit", "policy", "schedule", "chat",
+            "init", "serve", "status", "sessions", "audit", "policy", "schedule", "chat",
         ] {
             assert!(help.contains(name), "missing {name} in help text: {help}");
         }
+    }
+
+    #[test]
+    fn parses_init_with_required_path_and_optional_force_flag() {
+        let cli = Cli::parse_from(["bob", "init", "./workspace", "--force"]);
+
+        assert!(matches!(
+            cli.command,
+            Command::Init {
+                ref path,
+                force: true
+            } if path == "./workspace"
+        ));
+    }
+
+    #[test]
+    fn init_requires_a_path_argument() {
+        let result = Cli::try_parse_from(["bob", "init"]);
+
+        assert!(
+            result.is_err(),
+            "clap should reject bob init without a path"
+        );
     }
 
     #[test]
