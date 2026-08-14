@@ -151,7 +151,7 @@ This asks the running service to start a supervised, interactive `pi`
 session and attaches it to your terminal. Type normally; when you exit pi,
 `bob chat` exits too. If it instead prints `bob service is not running —
 cannot reach admin socket at <path>`, the service isn't up or
-`BOB_ADMIN_SOCK_PATH` doesn't match between the two shells — recheck step 4.
+`BOB_ADMIN_SOCK_PATH` doesn't match between the two shells — recheck step 5.
 
 Stop the service itself with `Ctrl-C` (`SIGTERM`) in the terminal running
 `bob serve`.

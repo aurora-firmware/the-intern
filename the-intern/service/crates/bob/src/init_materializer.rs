@@ -45,6 +45,15 @@ pub(crate) fn materialize_workspace_with_paths(
     resolved_paths: &ResolvedInitPaths,
     force: bool,
 ) -> ServiceResult<MaterializationReport> {
+    if resolved_paths.config_path.exists() && !force {
+        return Err(ServiceError::InvalidRequest {
+            detail: format!(
+                "live config already exists at {}; rerun with --force to replace it",
+                resolved_paths.config_path.display()
+            ),
+        });
+    }
+
     let workspace_path = resolve_workspace_path(workspace_path, current_dir);
     reject_git_metadata_target(&workspace_path)?;
     ensure_directory(&workspace_path)?;
@@ -161,6 +170,8 @@ fn write_generated_file(
     force: bool,
     report: &mut MaterializationReport,
 ) -> ServiceResult<()> {
+    reject_symlink_target(path)?;
+
     if path.exists() {
         let metadata = fs::metadata(path).map_err(|err| ServiceError::Persistence {
             detail: format!("failed to inspect existing path {}: {err}", path.display()),
@@ -194,6 +205,8 @@ fn write_generated_file(
 }
 
 fn ensure_directory(path: &Path) -> ServiceResult<()> {
+    reject_symlink_target(path)?;
+
     if path.exists() {
         let metadata = fs::metadata(path).map_err(|err| ServiceError::Persistence {
             detail: format!("failed to inspect directory {}: {err}", path.display()),
@@ -266,6 +279,26 @@ fn normalize_path(path: PathBuf) -> PathBuf {
         }
     }
     normalized
+}
+
+/// Refuses a symlink at `path` rather than following it. `fs::metadata`,
+/// `fs::write`, and `fs::set_permissions` all follow symlinks, so without
+/// this check a pre-planted symlink (e.g. in an untrusted cloned directory)
+/// could redirect writes or permission changes to an arbitrary target file
+/// or directory outside anything this command is meant to touch.
+fn reject_symlink_target(path: &Path) -> ServiceResult<()> {
+    if let Ok(link_metadata) = fs::symlink_metadata(path) {
+        if link_metadata.file_type().is_symlink() {
+            return Err(ServiceError::InvalidRequest {
+                detail: format!(
+                    "refusing to follow symlink at {}; remove it manually first",
+                    path.display()
+                ),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn reject_git_metadata_target(path: &Path) -> ServiceResult<()> {
@@ -725,5 +758,125 @@ mod tests {
                 "live config must not be created when the workspace target is invalid"
             );
         }
+    }
+
+    #[test]
+    fn refuses_to_write_through_a_symlinked_workspace_file_even_with_force() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+        let workspace = temp.path().join("workspace");
+        fs::create_dir_all(&workspace).expect("workspace directory should be created");
+
+        let secret = temp.path().join("secret.txt");
+        fs::write(&secret, "do not touch\n").expect("secret file should be seeded");
+        std::os::unix::fs::symlink(&secret, workspace.join("AGENTS.md"))
+            .expect("symlink should be created");
+
+        let err = materialize_workspace_with_paths(
+            Path::new("workspace"),
+            temp.path(),
+            &resolved_paths,
+            true,
+        )
+        .expect_err("a symlinked generated-file target must be refused");
+
+        assert!(
+            matches!(err, ServiceError::InvalidRequest { ref detail } if detail.contains("symlink")),
+            "expected a symlink-refusal error, got {err:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(&secret).expect("secret file should remain readable"),
+            "do not touch\n",
+            "force must never write through a symlink to an arbitrary file"
+        );
+    }
+
+    #[test]
+    fn refuses_a_symlinked_workspace_path_pointing_at_git_metadata() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+
+        let git_dir = temp.path().join("repo").join(".git");
+        fs::create_dir_all(&git_dir).expect(".git dir should be created");
+        fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD should be seeded");
+        fs::set_permissions(&git_dir, fs::Permissions::from_mode(0o755))
+            .expect(".git permissions should be set");
+
+        std::os::unix::fs::symlink(&git_dir, temp.path().join("evil-link"))
+            .expect("symlink should be created");
+
+        let git_mode_before = fs::metadata(&git_dir)
+            .expect("stat .git before materialization")
+            .permissions()
+            .mode()
+            & 0o777;
+
+        let err = materialize_workspace_with_paths(
+            Path::new("evil-link"),
+            temp.path(),
+            &resolved_paths,
+            true,
+        )
+        .expect_err("a workspace path symlinked to git metadata must be refused");
+
+        assert!(
+            matches!(err, ServiceError::InvalidRequest { ref detail } if detail.contains("symlink")),
+            "expected a symlink-refusal error, got {err:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(git_dir.join("HEAD")).expect("HEAD should remain readable"),
+            "ref: refs/heads/main\n",
+            ".git contents must remain unchanged when the workspace path is a symlink to it"
+        );
+        assert_eq!(
+            fs::metadata(&git_dir)
+                .expect("stat .git after materialization")
+                .permissions()
+                .mode()
+                & 0o777,
+            git_mode_before,
+            ".git directory permissions must remain unchanged when the workspace path is a symlink to it"
+        );
+    }
+
+    #[test]
+    fn refuses_live_config_conflict_before_any_shared_or_workspace_mutation() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+
+        let config_parent = resolved_paths
+            .config_path
+            .parent()
+            .expect("config path should have a parent");
+        fs::create_dir_all(config_parent).expect("config parent should be created");
+        fs::write(
+            &resolved_paths.config_path,
+            "skill_install_path = \"/keep/me\"\n",
+        )
+        .expect("existing live config should be seeded");
+
+        let err = materialize_workspace_with_paths(
+            Path::new("workspace"),
+            temp.path(),
+            &resolved_paths,
+            false,
+        )
+        .expect_err("existing live config must block no-force materialization");
+
+        assert!(
+            matches!(err, ServiceError::InvalidRequest { ref detail } if detail.contains("live config already exists")),
+            "expected live-config conflict error, got {err:?}"
+        );
+        assert!(
+            !temp.path().join("workspace").exists(),
+            "workspace directory must not be created when the live-config conflict is caught up front"
+        );
+        assert!(
+            !resolved_paths.skill_install_path.exists(),
+            "shared skill install path must not be created when the live-config conflict is caught up front"
+        );
     }
 }
