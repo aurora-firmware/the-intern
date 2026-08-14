@@ -277,6 +277,12 @@ A later session reconciles carried-forward open items from that same directory
   departure from the narrowly-matched rule shape the action model otherwise
   favours; the operator accepted it in preference to confining journaling to
   configured directories or reverting to scheduled-only journaling.
+- **Bootstrap profile exception:** CR-007 permits `bob init` to generate
+  no-matcher rules for exactly `bash`, `read`, `write`, and `edit` as a
+  deliberately broad first-run profile. This is an operator-usability
+  exception, not a replacement for the normal install-path-scoped reference
+  reads and worklog guidance above; the generated config must disclose the
+  authority and direct later narrowing.
 - **Missing-value behaviour:** absent rules deny, as the action model already
   requires. A denied call is recorded by the skill and never worked around.
 
@@ -322,3 +328,7 @@ A later session reconciles carried-forward open items from that same directory
 | 5 | Update the operator-facing deployment procedure and the action-rule guidance to the install-path model, and re-validate the previously live-validated paths against the new deployment shape. | Phases 3, 4 |
 
 ## Amendment Log
+
+| Date | What changed | Why | Affected tasks |
+|------|-------------|-----|----------------|
+| 2026-08-12 | Added the CR-007 `bob init` bootstrap exception allowing no-matcher rules for four named standard pi tools. | A fresh operator installation must work without manually discovering tool-call argument shapes; normal install-path-scoped and worklog guidance remains the recommended steady state. | S-012 tasks TBD |

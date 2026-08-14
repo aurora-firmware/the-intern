@@ -298,6 +298,14 @@ The deliverable rests on a policy section in bob's existing TOML configuration
   A tool absent from the list is denied. A rule referencing a field path that
   the call's arguments do not contain fails that matcher, and therefore the
   rule does not allow the call.
+- **Bootstrap profile exception:** `bob init` may generate a documented
+  first-run profile with no-matcher rules for exactly `bash`, `read`, `write`,
+  and `edit`. This deliberately grants every invocation of each named tool so
+  a fresh operator installation works without iterative rule authoring; it
+  does not authorize unnamed tools, disable the action gate, or alter this
+  section's default-deny semantics. The generated config must warn that this
+  is broad authority, not a sandbox or least-privilege policy, and direct the
+  operator to review and narrow it after confirming the installation works.
 
 ### Verdict timeout
 
@@ -367,3 +375,4 @@ The deliverable rests on a policy section in bob's existing TOML configuration
 | 2026-06-30 | Scheduler jobs exempted from scheduler-derived UUID admission; `[policy].admitted_users` applies only to admission-gated requests. | ADR-012 / CR-004 make local scheduler admission depend on trusted schedule-store membership under the Unix trust boundary, while preserving the global `tool_call` action gate. | Scheduler amendment tasks TBD |
 | 2026-08-01 | Exclusions' "Agent skills" bullet corrected: skills were never bundled with Phase 4/the authorization hook; they reach pi-agent via cwd-relative auto-discovery (ADR-012 §7), delivered concretely by S-010, whose `bash` calls remain subject to this spec's action gate. | Architecture Consistency Review of S-010 found this bullet stale against ADR-012 §7 and against S-001's corrected Component 3 (2026-08-01 amendment). | None (documentation reconciliation). |
 | 2026-08-06 | Exclusions' "Agent skills" bullet rewritten: skill delivery is bob's (ADR-014 / S-011), skill content is S-010's, and neither grants authority. Noted that rules admitting reads of skill reference content are now scoped to the install path rather than to each job's working directory. | ADR-014 accepted 2026-08-06. The accepted risk that always-active journaling requires a rule broad enough to cover arbitrary working directories, departing from this spec's narrowly-matched rule shape, is recorded in S-011's Configuration Requirements, not here. | S-011 breakdown tasks (Gate 2 pending). |
+| 2026-08-12 | Added the fixed four-tool no-matcher bootstrap-profile exception for `bob init`, including its warning and operator-review obligation. | CR-007 accepts broad first-run usability while retaining explicit named-tool allow rules and default-deny for every other tool. | S-012 tasks TBD |

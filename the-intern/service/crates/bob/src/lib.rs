@@ -10,6 +10,8 @@ use bob_core::types::AuditFilterKind;
 pub mod cli;
 pub mod client;
 pub mod config;
+pub mod init_assets;
+pub mod init_materializer;
 pub mod serve;
 pub mod telemetry;
 
@@ -18,6 +20,7 @@ use config::BobConfig;
 
 #[async_trait]
 pub trait DispatchRuntime {
+    fn init(&self, path: &str, force: bool) -> ServiceResult<()>;
     fn load_config(&self) -> ServiceResult<BobConfig>;
     fn init_telemetry(&self, cfg: &BobConfig) -> ServiceResult<()>;
     async fn run_serve(&self, cfg: BobConfig) -> ServiceResult<()>;
@@ -45,6 +48,10 @@ pub struct ProductionRuntime;
 
 #[async_trait]
 impl DispatchRuntime for ProductionRuntime {
+    fn init(&self, path: &str, force: bool) -> ServiceResult<()> {
+        cli::commands::init(path, force)
+    }
+
     fn load_config(&self) -> ServiceResult<BobConfig> {
         config::load()
     }
@@ -111,21 +118,26 @@ pub async fn run_cli(cli: Cli) -> ServiceResult<()> {
 }
 
 pub async fn run_cli_with_runtime(runtime: &impl DispatchRuntime, cli: Cli) -> ServiceResult<()> {
+    let Cli { json, command } = cli;
+    if let Command::Init { path, force } = command {
+        return runtime.init(&path, force);
+    }
+
     let cfg = runtime.load_config()?;
     runtime.init_telemetry(&cfg)?;
 
-    match cli.command {
+    match command {
         Command::Serve => runtime.run_serve(cfg).await,
-        Command::Status => runtime.status(cli.json),
+        Command::Status => runtime.status(json),
         Command::Sessions { command } => match command {
-            SessionsCommand::List => runtime.sessions_list(cli.json),
-            SessionsCommand::Kill { id } => runtime.sessions_kill(cli.json, &id),
+            SessionsCommand::List => runtime.sessions_list(json),
+            SessionsCommand::Kill { id } => runtime.sessions_kill(json, &id),
         },
         Command::Audit { command } => match command {
-            AuditCommand::Tail { filters } => runtime.audit_tail(cli.json, filters),
+            AuditCommand::Tail { filters } => runtime.audit_tail(json, filters),
         },
         Command::Policy { command } => match command {
-            PolicyCommand::Reload => runtime.policy_reload(cli.json),
+            PolicyCommand::Reload => runtime.policy_reload(json),
         },
         Command::Schedule { command } => match command {
             ScheduleCommand::Add {
@@ -135,18 +147,19 @@ pub async fn run_cli_with_runtime(runtime: &impl DispatchRuntime, cli: Cli) -> S
                 file,
                 cwd,
             } => runtime.schedule_add(
-                cli.json,
+                json,
                 &id,
                 &cron,
                 prompt.as_deref(),
                 file.as_deref(),
                 cwd.as_deref(),
             ),
-            ScheduleCommand::Remove { id } => runtime.schedule_remove(cli.json, &id),
+            ScheduleCommand::Remove { id } => runtime.schedule_remove(json, &id),
             ScheduleCommand::List { json } => runtime.schedule_list(json),
-            ScheduleCommand::Reload => runtime.schedule_reload(cli.json),
+            ScheduleCommand::Reload => runtime.schedule_reload(json),
         },
-        Command::Chat { session } => runtime.chat(cli.json, session.as_deref()),
+        Command::Chat { session } => runtime.chat(json, session.as_deref()),
+        Command::Init { .. } => unreachable!("init returns before config loading"),
     }
 }
 
@@ -167,18 +180,29 @@ mod tests {
     #[derive(Clone)]
     struct FakeRuntime {
         calls: Arc<Mutex<Vec<&'static str>>>,
+        init_calls: Arc<Mutex<Vec<(String, bool)>>>,
     }
 
     impl FakeRuntime {
         fn new() -> Self {
             Self {
                 calls: Arc::new(Mutex::new(Vec::new())),
+                init_calls: Arc::new(Mutex::new(Vec::new())),
             }
         }
     }
 
     #[async_trait]
     impl DispatchRuntime for FakeRuntime {
+        fn init(&self, path: &str, force: bool) -> ServiceResult<()> {
+            self.calls.lock().expect("lock").push("init");
+            self.init_calls
+                .lock()
+                .expect("lock")
+                .push((path.to_string(), force));
+            Ok(())
+        }
+
         fn load_config(&self) -> ServiceResult<BobConfig> {
             self.calls.lock().expect("lock").push("load");
             Ok(BobConfig::test_base())
@@ -258,6 +282,28 @@ mod tests {
         assert_eq!(
             runtime.calls.lock().expect("lock").as_slice(),
             ["load", "telemetry", "serve"]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn init_dispatch_bypasses_config_and_telemetry_loading() {
+        let runtime = FakeRuntime::new();
+        let cli = Cli {
+            json: false,
+            command: Command::Init {
+                path: "./workspace".to_string(),
+                force: true,
+            },
+        };
+
+        run_cli_with_runtime(&runtime, cli)
+            .await
+            .expect("init dispatch succeeds");
+
+        assert_eq!(runtime.calls.lock().expect("lock").as_slice(), ["init"]);
+        assert_eq!(
+            runtime.init_calls.lock().expect("lock").as_slice(),
+            [("./workspace".to_string(), true)]
         );
     }
 }

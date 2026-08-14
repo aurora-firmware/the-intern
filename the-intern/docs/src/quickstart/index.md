@@ -75,7 +75,45 @@ somewhere else.) Full details:
 
 ---
 
-## 4. Start the service
+## 4. Initialize a workspace
+
+Pick the owner-only workspace directory you want bob sessions or scheduled jobs
+to run in, then initialize it:
+
+```bash
+WORKSPACE="$HOME/workspaces/email-skills"
+bob init "$WORKSPACE"
+```
+
+`bob init` creates the workspace files bob expects locally:
+
+- `AGENTS.md`
+- `CLAUDE.md`
+- `config/email-triage.toml`
+- `worklog/`
+
+It also writes bob's live config file at the platform default location
+(`$XDG_CONFIG_HOME/bob/config.toml` on Linux, `~/Library/Application Support/bob/config.toml`
+on macOS) and installs the shared `himalaya`, `email-triage`, and `worklog`
+skills once at bob's shared data path. It does **not** create a workspace
+`.pi/skills` copy.
+
+Before you serve or schedule that workspace, set the required manager escalation
+address in the generated skill-local config:
+
+```toml
+# $WORKSPACE/config/email-triage.toml
+manager_address = "manager@example.com"
+```
+
+`bob init` also generates a permissive bootstrap policy. It allows any
+arguments for `bash`, `read`, `write`, and `edit`, keeps every other tool
+default-denied, and is intended only as a starting point. Review and narrow the
+generated `config.toml` before relying on it as a security control.
+
+---
+
+## 5. Start the service
 
 ```bash
 export BOB_TEST_RUNTIME_DIR="$(mktemp -d)"
@@ -103,7 +141,7 @@ uptime_seconds: 2
 
 ---
 
-## 5. Have your first chat
+## 6. Have your first chat
 
 ```bash
 bob chat
@@ -113,81 +151,37 @@ This asks the running service to start a supervised, interactive `pi`
 session and attaches it to your terminal. Type normally; when you exit pi,
 `bob chat` exits too. If it instead prints `bob service is not running —
 cannot reach admin socket at <path>`, the service isn't up or
-`BOB_ADMIN_SOCK_PATH` doesn't match between the two shells — recheck step 4.
+`BOB_ADMIN_SOCK_PATH` doesn't match between the two shells — recheck step 5.
 
 Stop the service itself with `Ctrl-C` (`SIGTERM`) in the terminal running
 `bob serve`.
 
 ---
 
-## Recommended starting configuration
+## Review the generated config
 
-Bob runs with sane defaults and an empty config is valid, but a fresh
-install with **no policy configured denies every tool call** — `bob chat`
-will connect but every action the agent tries will be blocked. For anything
-beyond a bare connectivity check, create a config file at:
+`bob init` writes a live `config.toml` for you, so the first-run task is to
+edit what it generated rather than start from a blank file.
 
-- Linux: `$XDG_CONFIG_HOME/bob/config.toml` (falls back to
-  `~/.config/bob/config.toml`)
-- macOS: `~/Library/Application Support/bob/config.toml`
+- Keep `skill_install_path` unless you intentionally want the shared skills
+  somewhere else.
+- Set `pi_agent_cwd` if you want every non-interactive session to start in a
+  predictable directory.
+- Replace the bootstrap-wide `bash`/`read`/`write`/`edit` rules with the
+  narrower rules your deployment actually needs.
 
-A reasonable starting point for local, single-operator use:
+After editing the file, apply it without restarting the service:
 
-```toml
-# Run pi-agent sessions from a predictable project directory so it can find
-# AGENTS.md/CLAUDE.md and relative prompt paths. Skills are unaffected by
-# this key — see skill_install_path below.
-pi_agent_cwd = "/srv/workspaces/default"
-
-# Optional: install the himalaya/email-triage/worklog skills once at the
-# default path (~/.local/share/bob/skills) and every session gets them,
-# regardless of pi_agent_cwd or any per-job cwd. Uncomment only if you set
-# a non-default install location.
-# skill_install_path = "/opt/bob/skills"
-
-[monitoring]
-# Keep the default audit log path unless you need it elsewhere; narrow what
-# live `bob audit tail` shows by default.
-default_tail_filters = ["events", "verdicts"]
-
-[policy]
-# Interactive `bob chat` and scheduled jobs are not admission-gated, so this
-# list only matters if/when other channel adapters are added.
-admitted_users = []
-
-# Allow-list the tools you actually want the agent to use. Anything not
-# listed here is denied — there is no default-allow.
-[[policy.action_rules]]
-tool = "read_file"
-
-[[policy.action_rules]]
-tool = "bash"
+```bash
+bob policy reload
 ```
 
-Notes on the choices above:
-
-- **`pi_agent_cwd` must be absolute** and is unset by default (in which case
-  sessions inherit whatever directory you launched `bob serve` from). Set it
-  explicitly so behavior doesn't depend on your shell history.
-- **`skill_install_path` must be absolute when set** and defaults to the
-  ADR-009 `data` bucket alongside the extension
-  (`~/.local/share/bob/skills` on Linux) when unset. A missing or nonexistent
-  path is fail-open — the session starts without skills and a warning is
-  logged, unlike a missing `extension_path`, which is fail-closed. See
-  [Install the skill package](../operator-guide/index.md#install-the-skill-package).
-- **`[policy.action_rules]` is allow-only.** Start narrow (`read_file` is a
-  safe first rule) and add tools as you confirm you need them, rather than
-  starting broad and trying to lock down later.
-- After editing the file, apply it without restarting the service:
-
-  ```bash
-  bob policy reload
-  ```
-
-See [Policy basics](../operator-guide/index.md#policy-basics) and [Working
+See [Policy basics](../operator-guide/index.md#policy-basics), [Working
 directory for pi-agent
-sessions](../operator-guide/index.md#working-directory-for-pi-agent-sessions)
-for the full model.
+sessions](../operator-guide/index.md#working-directory-for-pi-agent-sessions),
+and [Deploying the `email-triage` scheduled
+job](../operator-guide/index.md#deploying-the-email-triage-scheduled-job) for
+the full model.
 
 ---
 
