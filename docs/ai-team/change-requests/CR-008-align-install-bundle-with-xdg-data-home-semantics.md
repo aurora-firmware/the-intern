@@ -24,6 +24,10 @@ Remove the current requirement that an empty-but-present variable is treated dif
 from an unset variable or that the installer reproduce bob's current literal resolver
 behavior for relative values. The installer must not normalize relative values under HOME.
 
+Apply the same policy to bob's runtime extension-path resolver: unset or empty resolves to
+the platform default; a non-empty absolute value is honored; and a non-empty relative value
+is rejected as invalid configuration. This keeps installation and runtime lookup consistent.
+
 ## Context
 
 The current S-013/T-170 wording requires a literal reproduction of bob's resolver, including
@@ -48,12 +52,15 @@ Affected artifacts:
 The current task-branch implementation must be revised after the task is resumed: remove
 its HOME anchoring behavior, default the empty case, and reject non-empty relative values.
 This changes installer behavior but aligns it with the XDG specification. Bob's existing
-runtime resolver still treats empty and relative values literally; a separate follow-up may
-be needed if runtime behavior must be made fully consistent with this installer rule.
+runtime resolver still treats empty and relative values literally and must be changed as part
+of this amendment. That change affects configuration validation and its tests, and should be
+planned as a separate implementation task from the install script.
 
 ## Possible Spec Amendments
 
 S-013 Component 3 and its Configuration Requirements must replace the current
 empty-is-set/literal-resolver rule with the three explicit XDG cases above. T-170 must then
 be amended with matching acceptance criteria and verification for unset, empty, absolute,
-and non-empty relative values.
+and non-empty relative values. The amended spec must also require bob's runtime resolver to
+enforce the same cases; the Planner must create a distinct runtime-resolver implementation
+task with configuration and resolver test coverage.
