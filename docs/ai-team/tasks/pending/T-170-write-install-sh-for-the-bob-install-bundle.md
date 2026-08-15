@@ -39,8 +39,16 @@ per-platform install-bundle zip. At runtime it sits next to a `bob` binary and `
 4. If a `bob` binary already exists at `~/.local/bin/bob`, prompt for interactive `y/n`
    confirmation before overwriting; abort with no changes if declined.
 5. If `pi` is not on `PATH`, print a warning pointing at the pi install guide, but never
-   fail or block on it.
-6. Print a short summary of what was installed and where.
+   fail or block on it. If `~/.local/bin` is not itself on the operator's `PATH`, print a
+   separate warning saying so, but never fail or block on it either.
+6. Print a summary naming the installed binary path and extension path.
+
+"`XDG_DATA_HOME` is set" means the variable exists in the environment, even if its value is
+the empty string — this matches bob's own resolver
+(`the-intern/service/crates/bob/src/config.rs:680-695`, referenced here alongside ADR-009 as
+the reference implementation `install.sh` must reproduce exactly). A smoke test that wants to
+simulate "unset" must unset the variable (`env -u XDG_DATA_HOME`), not set it to an empty
+string.
 
 Do not read `config.toml` or make network calls — honoring a later `extension_path`/
 `BOB_EXTENSION_PATH` override is explicitly out of scope (S-013 Design Principles).
@@ -58,8 +66,10 @@ AC-3: THE SYSTEM SHALL install the sibling `bob.ts` to `$XDG_DATA_HOME/bob/exten
 AC-4: IF a `bob` binary already exists at `~/.local/bin/bob` THEN THE SYSTEM SHALL prompt for
       interactive confirmation before overwriting it, and make no changes if the operator
       declines.
-AC-5: IF `pi` is not found on `PATH` THEN THE SYSTEM SHALL print a warning naming the pi
-      install guide and continue without failing.
+AC-5: THE SYSTEM SHALL print a summary naming the installed binary path and extension path,
+      including a warning when `pi` is not found on `PATH` (naming the pi install guide) and
+      a warning when `~/.local/bin` is not on the operator's `PATH`, continuing without
+      failing in either case.
 
 ## Dependencies
 
@@ -72,18 +82,31 @@ AC-5: IF `pi` is not found on `PATH` THEN THE SYSTEM SHALL print a warning namin
 ## Verification
 
 ```bash
-shellcheck the-intern/install-bundle/install.sh
+# shellcheck if available; otherwise fall back to a bash syntax-only check
+shellcheck the-intern/install-bundle/install.sh || bash -n the-intern/install-bundle/install.sh
 
-# Manual dry-run against an isolated HOME, using the real dev binary as a stand-in:
-export TEST_HOME="$(mktemp -d)"
-mkdir -p "$TEST_HOME/bundle" && cd "$TEST_HOME/bundle"
-cp the-intern/service/target/debug/bob bob
-cp the-intern/pi-extension/bob.ts bob.ts
-HOME="$TEST_HOME" XDG_DATA_HOME= ./install.sh
+# Manual dry-run against an isolated HOME, using the real dev binary as a stand-in.
+# Use absolute paths throughout — the script itself runs from inside the bundle dir.
+REPO="$PWD"
+TEST_HOME="$(mktemp -d)"
+BUNDLE="$TEST_HOME/bundle"
+mkdir -p "$BUNDLE"
+cp "$REPO/the-intern/service/target/debug/bob" "$BUNDLE/bob"
+cp "$REPO/the-intern/pi-extension/bob.ts" "$BUNDLE/bob.ts"
+cp "$REPO/the-intern/install-bundle/install.sh" "$BUNDLE/install.sh"
+chmod +x "$BUNDLE/install.sh"
+
+# XDG_DATA_HOME truly unset -> platform default path
+(cd "$BUNDLE" && env -u XDG_DATA_HOME HOME="$TEST_HOME" ./install.sh)
 test -x "$TEST_HOME/.local/bin/bob"
 test -f "$TEST_HOME/.local/share/bob/extensions/bob.ts"
-# Re-run and confirm the overwrite prompt appears (answer n, confirm no changes;
-# answer y, confirm it re-copies).
+
+# XDG_DATA_HOME set -> honored, even overriding the platform default
+rm -rf "$TEST_HOME/.local/bin" "$TEST_HOME/.local/share"
+(cd "$BUNDLE" && HOME="$TEST_HOME" XDG_DATA_HOME="$TEST_HOME/xdg" ./install.sh)
+test -f "$TEST_HOME/xdg/bob/extensions/bob.ts"
+
+# Re-run and confirm the overwrite prompt: answer n (no changes made), then y (re-copies).
 ```
 
 ## Work Log

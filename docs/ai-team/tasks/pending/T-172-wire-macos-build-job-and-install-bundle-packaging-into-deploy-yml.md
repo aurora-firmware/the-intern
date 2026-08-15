@@ -41,6 +41,22 @@ artifact (`actions/download-artifact`); and add both new zip filenames to the ex
 entries untouched. If the macOS job fails, the Linux job's `needs:` dependency means the
 release step never runs — no partial release ships.
 
+Pin `actions/upload-artifact`/`actions/download-artifact` to the same major version already
+used elsewhere in this repo's workflows (check `build.yml`) — a version mismatch silently
+fails to find the artifact. Zip before uploading as a CI artifact, not after downloading:
+GitHub's artifact upload does not preserve Unix file-mode bits, so uploading the loose macOS
+binary and `install.sh` and zipping them on the Linux runner would ship a bundle whose
+executables have lost their execute bit.
+
+`.github/workflows/test_deploy_workflow.py` is a static acceptance-test harness for
+`deploy.yml` (from T-083) that locates "the archive step" by matching step names containing
+`archive`, `tar`, or `package`, and asserts things about the *first* such match. A new step
+placed before "Archive docs" will make it match the wrong step and silently fail an
+assertion about docs coverage (this harness is not wired into `build.yml`, so a break here
+would otherwise go unnoticed). Extend `test_deploy_workflow.py` alongside the `deploy.yml`
+changes so it correctly accounts for the new macOS job and the two new install-bundle
+release assets, while keeping its existing docs/archive assertions passing.
+
 ## Acceptance Criteria
 
 AC-1: WHEN a tag is pushed THE SYSTEM SHALL build a macOS arm64 `bob` binary in a job
@@ -66,21 +82,26 @@ AC-5: THE SYSTEM SHALL continue to build the docs archive, CLI reference, extens
 
 - `.github/workflows/deploy.yml` — add the macOS build job; extend the Linux release job
   with staging, artifact download, and the two new release asset entries
+- `.github/workflows/test_deploy_workflow.py` — extend to account for the new macOS job and
+  the two new install-bundle release assets, keeping its existing docs/archive assertions
+  passing
 
 ## Verification
 
 ```bash
 python3 -c "import yaml; yaml.safe_load(open('.github/workflows/deploy.yml')); print('YAML OK')"
 grep -n "macos-14\|build-macos\|bob-install" .github/workflows/deploy.yml
+python3 .github/workflows/test_deploy_workflow.py
 
 # Local smoke test of the staging/zip shape for one platform (mirrors the CI step):
-mkdir -p /tmp/bob-install-smoke && cd /tmp/bob-install-smoke
-cp the-intern/service/target/debug/bob bob
-cp the-intern/pi-extension/bob.ts bob.ts
-cp the-intern/install-bundle/install.sh install.sh
-cp the-intern/install-bundle/README.txt README.txt
-zip -r the-intern-bob-install-smoke-linux-x86_64.zip bob bob.ts install.sh README.txt
-unzip -l the-intern-bob-install-smoke-linux-x86_64.zip
+REPO="$PWD"
+STAGE="$(mktemp -d)"
+cp "$REPO/the-intern/service/target/debug/bob" "$STAGE/bob"
+cp "$REPO/the-intern/pi-extension/bob.ts" "$STAGE/bob.ts"
+cp "$REPO/the-intern/install-bundle/install.sh" "$STAGE/install.sh"
+cp "$REPO/the-intern/install-bundle/README.txt" "$STAGE/README.txt"
+(cd "$STAGE" && zip -r the-intern-bob-install-smoke-linux-x86_64.zip bob bob.ts install.sh README.txt)
+unzip -l "$STAGE/the-intern-bob-install-smoke-linux-x86_64.zip"
 ```
 
 ## Work Log

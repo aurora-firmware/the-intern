@@ -38,11 +38,21 @@ release zip exists. Add a short pointer in the extension-author guide noting the
 bundle is now the typical way `bob.ts` reaches its default path, without duplicating the
 resolution-order detail that guide already documents correctly.
 
+The quickstart's introduction (currently: "gets you to a working `bob chat` session using
+the released binary… If you'd rather build from source (for example, to run on a platform
+other than Linux x86_64)…") and its step-2 note ("The released binary is built for Linux
+x86_64") both still frame macOS as a source-build-only platform. Update both to name
+`linux-x86_64` and `macos-arm64` as the two released platforms, since S-013's whole point is
+that macOS no longer requires a source build.
+
 ## Acceptance Criteria
 
 AC-1: THE SYSTEM SHALL present downloading the platform-matching install-bundle zip and
       running `./install.sh` as the primary "get bob running" path in the quickstart,
-      replacing the prior `sudo mv` and manual `tar -xzf` steps.
+      replacing the prior `sudo mv` and manual `tar -xzf` steps, and SHALL update the
+      quickstart's introduction and platform notes to name both `linux-x86_64` and
+      `macos-arm64` as released platforms rather than directing macOS readers to a source
+      build.
 AC-2: THE SYSTEM SHALL update the operator guide's manual binary/extension placement section
       to present the install bundle as the recommended path, retaining the old manual steps
       only as an explicitly labeled alternative for source builds.
@@ -65,7 +75,9 @@ AC-3: THE SYSTEM SHALL add a pointer in the extension-author guide noting the in
 ```bash
 grep -n "bob-install-.*\.zip" the-intern/docs/src/quickstart/index.md
 grep -n "install.sh" the-intern/docs/src/quickstart/index.md the-intern/docs/src/operator-guide/index.md
-grep -qv "sudo mv bob" the-intern/docs/src/quickstart/index.md && echo "sudo mv removed from primary path"
+! grep -q "sudo mv bob" the-intern/docs/src/quickstart/index.md
+! grep -qi "platform other than Linux x86_64" the-intern/docs/src/quickstart/index.md
+grep -qi "macos-arm64\|macOS.*arm64" the-intern/docs/src/quickstart/index.md
 ```
 
 ## Work Log
