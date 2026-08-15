@@ -94,6 +94,10 @@ The final entry serves as the handoff to the reviewer. -->
 
 Implemented the runtime XDG resolver update in `the-intern/service/crates/bob/src/config.rs`. Default extension-path resolution now happens after configuration overrides merge: an unset or empty `XDG_DATA_HOME` uses the platform default, a non-empty absolute value is honored, and a non-empty relative value returns a Configuration error naming `XDG_DATA_HOME`; an explicit `extension_path` override remains authoritative. Added empty and relative-value tests and retained coverage of existing unset, absolute, and override behavior. Focused configuration tests passed (39 passed), as did `cargo fmt --all -- --check`. Implementation commit: `8dda7d2`.
 
+### Session 2 — 2026-08-15
+
+Fixed the review regression where a valid explicit `extension_path` override could not load with a relative `XDG_DATA_HOME` because the independent default `skill_install_path` was also derived literally from that value. Added a complete config-load regression test and changed the default skill-path resolver to ignore unset, empty, or relative XDG data-home values and use the platform data default, while retaining non-empty absolute values. The extension resolver remains fail-closed for a relative value when it is needed. Focused configuration tests now pass (40 passed), formatting passes, and the reviewed CLI invocation proceeds beyond configuration loading. Implementation commit: `5edd40e`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
