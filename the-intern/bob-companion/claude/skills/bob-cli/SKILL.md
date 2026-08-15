@@ -5,8 +5,8 @@ description: Drive the bob CLI — status, sessions, audit, policy, schedule, an
 
 # bob-cli
 
-`bob` is a single binary with subcommands `serve`, `status`, `sessions`,
-`audit`, `policy`, `schedule`, `chat`. Every subcommand accepts a global
+`bob` is a single binary with subcommands `init`, `serve`, `status`,
+`sessions`, `audit`, `policy`, `schedule`, `chat`. Every subcommand accepts a global
 `--json` flag for single-line JSON output instead of human-readable text —
 prefer `--json` when you (Claude) are the consumer, since it's stable to
 parse and the human text form is not guaranteed to match it field-for-field.
@@ -21,6 +21,7 @@ socket path doesn't match" problem, not a bug in the subcommand; see
 
 | Task | Command |
 |---|---|
+| Bootstrap a new workspace | `bob init <path>` |
 | Is bob up, and what version/uptime? | `bob status --json` |
 | List active sessions | `bob sessions list --json` |
 | Kill a session | `bob sessions kill <id>` |
