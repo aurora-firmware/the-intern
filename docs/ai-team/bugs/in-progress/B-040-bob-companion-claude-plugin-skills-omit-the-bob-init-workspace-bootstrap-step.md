@@ -185,3 +185,55 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-15
+PASS
+
+Stage 1 (bug criteria): Diagnosis Log entry (Diagnosis 1 — 2026-08-15) contains a complete
+evidence chain — reproduction status (confirmed, with both Fix Verification greps re-run and
+exit codes noted), evidence captured (file inventory, full reads of all four plugin skills,
+confirmation `bob init` is a real tested subcommand, and a read of the quickstart doc), an
+isolated fault (documentation-only gap in `bob-setup/SKILL.md` and `bob-cli/SKILL.md`), and a
+root cause (process gap — T-168 updated the mdBook docs for S-012 but never touched the
+`bob-companion/claude` plugin). The fix addresses exactly that isolated fault: `bob-setup`
+gained a new numbered "5. Initialize a workspace" section (with the two following sections
+renumbered 6→7, 7→8 to stay sequential) and `bob-cli` gained `init` in both the intro
+subcommand list and the "Quick command map" table. Only the two named files were touched
+(`git diff origin/dev-agent...bug/B-040-...` confirms this); no unrelated files or behavior
+were changed.
+
+Fix Verification: both commands from the bug file were re-run against the branch tip
+(commit `2041159`) and pass —
+`grep -n "bob init" the-intern/bob-companion/claude/skills/bob-setup/SKILL.md` matches lines
+77 and 80; `grep -n "init" the-intern/bob-companion/claude/skills/bob-cli/SKILL.md` matches
+lines 8 and 24.
+
+Content accuracy spot-check: compared the new `bob-setup` §5 prose and the `bob-cli` additions
+against `the-intern/docs/src/quickstart/index.md` §"4. Initialize a workspace" (lines 78-113)
+and `the-intern/docs/src/operator-guide/index.md` §"Initialize a workspace with `bob init`"
+(lines 186-213). The plugin text mirrors both sources on every substantive point: the created
+file/directory list (`AGENTS.md`, `CLAUDE.md`, `config/email-triage.toml`, `worklog/`), the
+live `config.toml` being written at the platform default path rather than workspace-local, the
+shared `himalaya`/`email-triage`/`worklog` skill package install (explicitly not a
+workspace-local `.pi/skills/` copy), the permissive bootstrap policy description (`bash`,
+`read`, `write`, `edit` allowed with everything else default-denied, needing review before
+relying on it), and the reminder to set `manager_address` in the generated
+`config/email-triage.toml` before scheduling. This confirms the Work Log's claim that the
+content was mirrored from the already-reviewed doc sources rather than re-derived.
+
+Regression test: none added. The Work Log's rationale — this repository has no test harness for
+Claude Code skill markdown content (verified: no test/lint files under
+`the-intern/bob-companion/`, and `.github/workflows/build.yml` has no step that touches
+`bob-companion` or runs markdown linting) — holds up. Grep-based Fix Verification (confirmed
+failing before the fix, passing after) plus the content spot-check above is the practical
+equivalent here.
+
+Stage 2 (code quality): the diff is minimal and scoped to the fix contract — no unrelated
+refactoring, no changes to `bob-health-check`, `bob-troubleshooting`, `references/`, or
+`plugin.json`, consistent with the Work Log's stated (and correct) decision to leave those
+alone. Section renumbering in `bob-setup/SKILL.md` is internally consistent and the new §5's
+cross-reference to "the config file section below" still resolves correctly to the renamed §6.
+Prose is clear, uses the plugin's existing voice/format (numbered walkthrough steps,
+command-map table rows), and introduces no dead links or broken markdown.
+
+Both stages pass. No blocking issues found.
