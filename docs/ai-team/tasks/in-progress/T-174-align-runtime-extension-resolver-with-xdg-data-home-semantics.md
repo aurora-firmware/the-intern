@@ -90,6 +90,10 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-15
+
+Implemented the runtime XDG resolver update in `the-intern/service/crates/bob/src/config.rs`. Default extension-path resolution now happens after configuration overrides merge: an unset or empty `XDG_DATA_HOME` uses the platform default, a non-empty absolute value is honored, and a non-empty relative value returns a Configuration error naming `XDG_DATA_HOME`; an explicit `extension_path` override remains authoritative. Added empty and relative-value tests and retained coverage of existing unset, absolute, and override behavior. Focused configuration tests passed (39 passed), as did `cargo fmt --all -- --check`. Implementation commit: `8dda7d2`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
