@@ -119,6 +119,10 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-15
+
+Implemented `the-intern/install-bundle/install.sh` with command-level TDD. The script rejects unsupported platforms before filesystem changes; installs the sibling binary and extension; follows bob's XDG-data-home presence semantics; prompts before overwriting the binary; and emits the required non-blocking warnings and summary. Three red→green→refactor commits were made (`e4908c3`, `9ba4b13`, and `4d40d34`). Verification used syntax/lint checks and isolated temporary-home smoke tests for supported and unsupported platforms, XDG set/unset handling, overwrite decline and confirmation, and warning behavior. No persistent test file was added because the task's Files to Touch boundary permits only the new script. Nothing remains for implementation.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
