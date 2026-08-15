@@ -195,10 +195,15 @@ impl BobConfig {
             entries: schedule_entries,
         };
 
+        let extension_path = match raw.extension_path {
+            Some(path) => path,
+            None => default_extension_path_for_env(&sources.env, sources.uid)?,
+        };
+
         let cfg = BobConfig {
             admin_sock_path: raw.admin_sock_path,
             extension_sock_path: raw.extension_sock_path,
-            extension_path: raw.extension_path,
+            extension_path,
             request_queue_capacity: raw.request_queue_capacity,
             request_submit_timeout: raw.request_submit_timeout,
             shutdown_drain_deadline: raw.shutdown_drain_deadline,
@@ -320,7 +325,8 @@ impl ConfigSources {
 struct RawBobConfig {
     admin_sock_path: PathBuf,
     extension_sock_path: PathBuf,
-    extension_path: PathBuf,
+    #[serde(default)]
+    extension_path: Option<PathBuf>,
     #[serde(deserialize_with = "deserialize_usize")]
     request_queue_capacity: usize,
     #[serde(deserialize_with = "deserialize_duration")]
@@ -598,14 +604,13 @@ fn defaults_with_runtime_root(
     uid: u32,
 ) -> RawBobConfig {
     let monitoring_audit_log_path = default_monitoring_audit_log_path_for_env(env, uid);
-    let extension_path = default_extension_path_for_env(env, uid);
     let skill_install_path = default_skill_install_path_for_env(env, uid);
     let schedule_store_path = default_schedule_store_path_for_env(env, uid);
 
     RawBobConfig {
         admin_sock_path: runtime_root.join("admin.sock"),
         extension_sock_path: runtime_root.join("extension.sock"),
-        extension_path,
+        extension_path: None,
         request_queue_capacity: 1024,
         request_submit_timeout: Duration::from_secs(5),
         shutdown_drain_deadline: Duration::from_secs(30),
@@ -676,23 +681,45 @@ fn default_monitoring_audit_log_path_for_env(env: &BTreeMap<String, String>, uid
     state_root.join("bob").join("audit.jsonl")
 }
 
-fn default_extension_path_for_env(env: &BTreeMap<String, String>, uid: u32) -> PathBuf {
-    let data_root = env
-        .get("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            if cfg!(target_os = "macos") {
-                env.get("HOME")
-                    .map(|home| Path::new(home).join("Library").join("Application Support"))
-                    .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-data-{uid}")))
-            } else {
-                env.get("HOME")
-                    .map(|home| Path::new(home).join(".local").join("share"))
-                    .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-data-{uid}")))
-            }
-        });
+fn default_extension_path_for_env(
+    env: &BTreeMap<String, String>,
+    uid: u32,
+) -> ServiceResult<PathBuf> {
+    let data_root = default_extension_data_root_for_env(env, uid)?;
+    Ok(data_root.join("bob").join("extensions").join("bob.ts"))
+}
 
-    data_root.join("bob").join("extensions").join("bob.ts")
+fn default_extension_data_root_for_env(
+    env: &BTreeMap<String, String>,
+    uid: u32,
+) -> ServiceResult<PathBuf> {
+    match env.get("XDG_DATA_HOME") {
+        Some(value) if value.is_empty() => Ok(platform_default_data_root_for_env(env, uid)),
+        Some(value) => {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                Ok(path)
+            } else {
+                Err(configuration_error(format!(
+                    "XDG_DATA_HOME must be an absolute path when non-empty, got {}",
+                    path.display()
+                )))
+            }
+        }
+        None => Ok(platform_default_data_root_for_env(env, uid)),
+    }
+}
+
+fn platform_default_data_root_for_env(env: &BTreeMap<String, String>, uid: u32) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        env.get("HOME")
+            .map(|home| Path::new(home).join("Library").join("Application Support"))
+            .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-data-{uid}")))
+    } else {
+        env.get("HOME")
+            .map(|home| Path::new(home).join(".local").join("share"))
+            .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-data-{uid}")))
+    }
 }
 
 /// Resolves the default skill install path from the environment.
@@ -701,21 +728,22 @@ fn default_extension_path_for_env(env: &BTreeMap<String, String>, uid: u32) -> P
 /// "Skill install path", ADR-009 `data` bucket): `$XDG_DATA_HOME/bob/skills`,
 /// falling back to `$HOME/.local/share/bob/skills` on Linux (or the platform
 /// equivalent on macOS) when `XDG_DATA_HOME` is unset.
+///
+/// Unlike `extension_path`, skills are fail-open (ADR-014 / S-002), so a
+/// relative `XDG_DATA_HOME` degrades to the platform default instead of making
+/// the entire config load unusable when skills are otherwise unconfigured.
 fn default_skill_install_path_for_env(env: &BTreeMap<String, String>, uid: u32) -> PathBuf {
-    let data_root = env
-        .get("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            if cfg!(target_os = "macos") {
-                env.get("HOME")
-                    .map(|home| Path::new(home).join("Library").join("Application Support"))
-                    .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-data-{uid}")))
+    let data_root = match env.get("XDG_DATA_HOME") {
+        Some(value) if !value.is_empty() => {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                path
             } else {
-                env.get("HOME")
-                    .map(|home| Path::new(home).join(".local").join("share"))
-                    .unwrap_or_else(|| std::env::temp_dir().join(format!("bob-data-{uid}")))
+                platform_default_data_root_for_env(env, uid)
             }
-        });
+        }
+        _ => platform_default_data_root_for_env(env, uid),
+    };
 
     data_root.join("bob").join("skills")
 }
@@ -992,6 +1020,66 @@ mod tests {
     }
 
     #[test]
+    fn resolves_default_extension_path_from_home_when_xdg_data_home_is_empty() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let home = temp.path().join("home");
+        let skill_install_path = temp.path().join("skills");
+
+        let config = load_with_env_overrides([
+            (
+                "HOME",
+                home.to_str()
+                    .expect("temporary home path should be valid UTF-8"),
+            ),
+            ("XDG_DATA_HOME", ""),
+            (
+                "BOB_SKILL_INSTALL_PATH",
+                skill_install_path
+                    .to_str()
+                    .expect("temporary skill path should be valid UTF-8"),
+            ),
+        ])
+        .expect("config should load");
+
+        let expected = if cfg!(target_os = "macos") {
+            home.join("Library")
+                .join("Application Support")
+                .join("bob")
+                .join("extensions")
+                .join("bob.ts")
+        } else {
+            home.join(".local")
+                .join("share")
+                .join("bob")
+                .join("extensions")
+                .join("bob.ts")
+        };
+
+        assert_eq!(config.extension_path, expected);
+    }
+
+    #[test]
+    fn returns_configuration_error_when_xdg_data_home_is_relative() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let skill_install_path = temp.path().join("skills");
+
+        let result = load_with_env_overrides([
+            ("XDG_DATA_HOME", "relative/data-home"),
+            (
+                "BOB_SKILL_INSTALL_PATH",
+                skill_install_path
+                    .to_str()
+                    .expect("temporary skill path should be valid UTF-8"),
+            ),
+        ]);
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("XDG_DATA_HOME")),
+            "expected Configuration error mentioning XDG_DATA_HOME, got {result:?}"
+        );
+    }
+
+    #[test]
     fn loads_extension_path_override_from_config_file() {
         let config_file = write_temp_config(r#"extension_path = "/opt/bob/custom-extension.ts""#);
 
@@ -1009,6 +1097,58 @@ mod tests {
         );
 
         fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    #[test]
+    fn loads_extension_path_cli_override_when_xdg_data_home_is_relative() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let home = temp.path().join("home");
+
+        let mut env = BTreeMap::new();
+        if cfg!(target_os = "macos") {
+            env.insert("TMPDIR".to_string(), "/tmp/bob-tests".to_string());
+        } else {
+            env.insert("XDG_RUNTIME_DIR".to_string(), "/run/user/4242".to_string());
+        }
+        env.insert(
+            "HOME".to_string(),
+            home.to_str()
+                .expect("temporary home path should be valid UTF-8")
+                .to_string(),
+        );
+        env.insert(
+            "XDG_DATA_HOME".to_string(),
+            "relative/data-home".to_string(),
+        );
+
+        let mut cli_overrides = BTreeMap::new();
+        cli_overrides.insert(
+            "extension_path".to_string(),
+            "/opt/bob/custom-extension.ts".to_string(),
+        );
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+            cli_overrides,
+            uid: 4242,
+        })
+        .expect("explicit extension_path override should load");
+
+        let expected_skill_path = if cfg!(target_os = "macos") {
+            home.join("Library")
+                .join("Application Support")
+                .join("bob")
+                .join("skills")
+        } else {
+            home.join(".local").join("share").join("bob").join("skills")
+        };
+
+        assert_eq!(
+            config.extension_path,
+            PathBuf::from("/opt/bob/custom-extension.ts")
+        );
+        assert_eq!(config.skill_install_path, expected_skill_path);
     }
 
     #[test]
