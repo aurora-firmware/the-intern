@@ -3,7 +3,7 @@ id: B-040
 title: bob-companion Claude plugin skills omit the bob init workspace-bootstrap 
   step
 severity: medium
-status: in-progress
+status: resolved
 created: '2026-08-15'
 ---
 
