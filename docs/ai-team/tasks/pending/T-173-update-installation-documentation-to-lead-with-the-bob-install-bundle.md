@@ -63,6 +63,8 @@ AC-3: THE SYSTEM SHALL add a pointer in the extension-author guide noting the in
 
 - `T-170` — `install.sh`'s actual behavior must be final before documenting it
 - `T-172` — the release zip naming convention must be final before documenting it
+- `T-174` — bob's runtime default extension lookup must match `install.sh` before
+  documenting the install path as immediately usable without overrides
 
 ## Files to Touch
 

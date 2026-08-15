@@ -30,12 +30,14 @@ per-platform install-bundle zip. At runtime it sits next to a `bob` binary and `
    detected and exit non-zero without touching the filesystem.
 2. Install the sibling `bob` binary to `~/.local/bin/bob` (create the directory if missing)
    and mark it executable.
-3. Resolve the extension install path the same way bob's own runtime resolver does: if
-   `XDG_DATA_HOME` is set, use `$XDG_DATA_HOME/bob/extensions/bob.ts` (both platforms);
-   otherwise fall back to the platform default — `~/.local/share/bob/extensions/bob.ts` on
-   Linux (ADR-009), `~/Library/Application Support/bob/extensions/bob.ts` on macOS
-   (ADR-009's macOS clause). Create parent directories as needed and copy the sibling
-   `bob.ts` there.
+3. Resolve the extension install path with XDG Base Directory semantics matching amended
+   S-013: if `XDG_DATA_HOME` is unset or empty, use the platform default —
+   `~/.local/share/bob/extensions/bob.ts` on Linux (ADR-009),
+   `~/Library/Application Support/bob/extensions/bob.ts` on macOS (ADR-009's macOS
+   clause); if `XDG_DATA_HOME` is non-empty and absolute, use
+   `$XDG_DATA_HOME/bob/extensions/bob.ts`; if `XDG_DATA_HOME` is non-empty and relative,
+   print a clear error and exit non-zero before modifying the filesystem. Create parent
+   directories as needed and copy the sibling `bob.ts` there.
 4. If a `bob` binary already exists at `~/.local/bin/bob`, prompt for interactive `y/n`
    confirmation before overwriting; abort with no changes if declined.
 5. If `pi` is not on `PATH`, print a warning pointing at the pi install guide, but never
@@ -43,12 +45,11 @@ per-platform install-bundle zip. At runtime it sits next to a `bob` binary and `
    separate warning saying so, but never fail or block on it either.
 6. Print a summary naming the installed binary path and extension path.
 
-"`XDG_DATA_HOME` is set" means the variable exists in the environment, even if its value is
-the empty string — this matches bob's own resolver
-(`the-intern/service/crates/bob/src/config.rs:680-695`, referenced here alongside ADR-009 as
-the reference implementation `install.sh` must reproduce exactly). A smoke test that wants to
-simulate "unset" must unset the variable (`env -u XDG_DATA_HOME`), not set it to an empty
-string.
+Planner amendment from CR-008 supersedes the prior "empty string means set" requirement and
+the attempted HOME anchoring described in the existing Work Log. `install.sh` must not
+normalize a non-empty relative `XDG_DATA_HOME` under `HOME`; it must reject that value before
+any write. The matching bob runtime resolver change is owned by T-174, which is independent
+of this install-script task except for the shared S-013 contract.
 
 Do not read `config.toml` or make network calls — honoring a later `extension_path`/
 `BOB_EXTENSION_PATH` override is explicitly out of scope (S-013 Design Principles).
@@ -60,16 +61,16 @@ AC-1: WHEN `install.sh` is run on a platform/architecture other than linux-x86_6
       creating or modifying any file.
 AC-2: THE SYSTEM SHALL install the sibling `bob` binary to `~/.local/bin/bob`, creating
       `~/.local/bin` if it does not exist, and mark the installed file executable.
-AC-3: THE SYSTEM SHALL install the sibling `bob.ts` to `$XDG_DATA_HOME/bob/extensions/bob.ts`
-      when `XDG_DATA_HOME` is set, otherwise to the platform default path, creating parent
-      directories as needed.
-AC-4: IF a `bob` binary already exists at `~/.local/bin/bob` THEN THE SYSTEM SHALL prompt for
-      interactive confirmation before overwriting it, and make no changes if the operator
-      declines.
-AC-5: THE SYSTEM SHALL print a summary naming the installed binary path and extension path,
-      including a warning when `pi` is not found on `PATH` (naming the pi install guide) and
-      a warning when `~/.local/bin` is not on the operator's `PATH`, continuing without
-      failing in either case.
+AC-3: THE SYSTEM SHALL install the sibling `bob.ts` to the platform default extension path
+      when `XDG_DATA_HOME` is unset or empty, and to
+      `$XDG_DATA_HOME/bob/extensions/bob.ts` when `XDG_DATA_HOME` is non-empty and absolute,
+      creating parent directories as needed.
+AC-4: IF `XDG_DATA_HOME` is non-empty and relative THEN THE SYSTEM SHALL print a clear error
+      and exit non-zero before creating or modifying any file.
+AC-5: WHEN installation reaches overwrite and reporting checks THE SYSTEM SHALL prompt before
+      overwriting an existing `~/.local/bin/bob`, make no changes if the operator declines,
+      print a summary naming the installed binary path and extension path, and print
+      non-blocking warnings when `pi` is not on `PATH` or `~/.local/bin` is not on `PATH`.
 
 ## Dependencies
 
@@ -96,15 +97,29 @@ cp "$REPO/the-intern/pi-extension/bob.ts" "$BUNDLE/bob.ts"
 cp "$REPO/the-intern/install-bundle/install.sh" "$BUNDLE/install.sh"
 chmod +x "$BUNDLE/install.sh"
 
-# XDG_DATA_HOME truly unset -> platform default path
+# XDG_DATA_HOME unset -> platform default path
 (cd "$BUNDLE" && env -u XDG_DATA_HOME HOME="$TEST_HOME" ./install.sh)
 test -x "$TEST_HOME/.local/bin/bob"
 test -f "$TEST_HOME/.local/share/bob/extensions/bob.ts"
 
-# XDG_DATA_HOME set -> honored, even overriding the platform default
+# XDG_DATA_HOME empty -> platform default path
+rm -rf "$TEST_HOME/.local/bin" "$TEST_HOME/.local/share"
+(cd "$BUNDLE" && HOME="$TEST_HOME" XDG_DATA_HOME= ./install.sh)
+test -f "$TEST_HOME/.local/share/bob/extensions/bob.ts"
+
+# XDG_DATA_HOME non-empty absolute -> honored, overriding the platform default
 rm -rf "$TEST_HOME/.local/bin" "$TEST_HOME/.local/share"
 (cd "$BUNDLE" && HOME="$TEST_HOME" XDG_DATA_HOME="$TEST_HOME/xdg" ./install.sh)
 test -f "$TEST_HOME/xdg/bob/extensions/bob.ts"
+
+# XDG_DATA_HOME non-empty relative -> clear error and no filesystem changes
+rm -rf "$TEST_HOME/.local/bin" "$TEST_HOME/.local/share" "$TEST_HOME/xdg"
+if (cd "$BUNDLE" && HOME="$TEST_HOME" XDG_DATA_HOME="relative/data" ./install.sh); then
+  echo "expected relative XDG_DATA_HOME to fail" >&2
+  exit 1
+fi
+test ! -e "$TEST_HOME/.local/bin/bob"
+test ! -e "$TEST_HOME/.local/share/bob/extensions/bob.ts"
 
 # Re-run and confirm the overwrite prompt: answer n (no changes made), then y (re-copies).
 ```

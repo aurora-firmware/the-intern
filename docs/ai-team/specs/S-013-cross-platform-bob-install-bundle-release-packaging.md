@@ -1,6 +1,6 @@
 ---
 title: Cross-platform bob install bundle release packaging
-version: '0.1'
+version: '0.2'
 status: approved  # draft | review | approved | superseded
 created: '2026-08-15'
 author: planner
@@ -83,13 +83,14 @@ What this specification explicitly does NOT cover:
   user's home directory — a decision this spec makes, consistent with (but
   not itself mandated by) ADR-008's single-user local deployment scope.
 - The extension must land at exactly the path bob's own runtime resolver
-  would choose with no `BOB_EXTENSION_PATH`/`extension_path` override set:
-  `$XDG_DATA_HOME`-first if that variable is set (on both platforms, this is
-  honored, not an override), otherwise the platform default
-  (`~/.local/share/bob/extensions/bob.ts` on Linux per ADR-009,
-  `~/Library/Application Support/bob/extensions/bob.ts` on macOS per
-  ADR-009's macOS clause). `install.sh` must reproduce this precedence
-  exactly, not assume an unconditional per-OS path.
+  chooses with no `BOB_EXTENSION_PATH`/`extension_path` override set, using
+  XDG Base Directory semantics for `XDG_DATA_HOME`: unset or empty uses the
+  platform default (`~/.local/share/bob/extensions/bob.ts` on Linux per
+  ADR-009, `~/Library/Application Support/bob/extensions/bob.ts` on macOS per
+  ADR-009's macOS clause); a non-empty absolute value is honored as
+  `$XDG_DATA_HOME/bob/extensions/bob.ts`; and a non-empty relative value is
+  invalid configuration. `install.sh` and bob's runtime resolver must enforce
+  the same three cases.
 - `install.sh` writes only to that resolved default location and does not
   read `config.toml`. Honoring a later `extension_path`/`BOB_EXTENSION_PATH`
   override, if the operator sets one, is a post-install, operator-driven
@@ -148,8 +149,8 @@ What this specification explicitly does NOT cover:
                             unzips, runs ./install.sh
                                               ↓
                      binary → ~/.local/bin/bob
-                     extension → $XDG_DATA_HOME/bob/extensions/bob.ts
-                        if set, else platform default (ADR-009)
+                     extension → platform default if XDG_DATA_HOME is unset
+                        or empty; otherwise absolute XDG_DATA_HOME/bob/...
                                               ↓
                             ready for `bob init` (S-012)
 ```
@@ -164,6 +165,7 @@ What this specification explicitly does NOT cover:
 | `install.sh` | Place the binary and extension at their platform-default locations without sudo, prompting before overwriting an existing install | Ships inside the zip; has no network dependency once downloaded; reads no configuration |
 | `README.txt` | Tell a first-time operator what is in the zip and how to run `install.sh` | Plain text, zip-local; not a replacement for the mdBook docs |
 | mdBook documentation (quickstart, operator guide, extension-author guide) | Present the zip+`install.sh` path as the primary "get bob running" route | Existing manual download/placement steps (including the current `sudo mv` instruction) get rewritten; the `bob init` step (S-012) is unchanged |
+| bob runtime extension resolver | Resolve the default extension path with the same XDG data-home policy as `install.sh` | Keeps a fresh install usable without `extension_path` overrides; rejects non-empty relative `XDG_DATA_HOME` values as invalid configuration instead of resolving them relative to the process cwd |
 
 ## Components
 
@@ -181,9 +183,9 @@ What this specification explicitly does NOT cover:
 
 ### Component 3: install.sh
 
-**Purpose:** Install the bob binary and pi-agent extension to their default locations without sudo, reproducing bob's own `$XDG_DATA_HOME`-first extension-path resolution exactly, and safely handling an existing install and an unsupported platform.
+**Purpose:** Install the bob binary and pi-agent extension to their default locations without sudo, using the same XDG data-home cases as bob's runtime extension resolver, and safely handling an existing install and an unsupported platform.
 **Estimated size:** Medium — per-platform path resolution, existing-install detection, interactive confirmation, clear unsupported-platform messaging.
-**Interfaces:** Reads its own zip-local sibling files (the bob binary, `bob.ts`) and the `XDG_DATA_HOME` environment variable if set; writes to `~/.local/bin` and the resolved extension data path; probes `PATH` for `pi` and prompts on the terminal. Reads no configuration file (`config.toml`) and makes no network calls.
+**Interfaces:** Reads its own zip-local sibling files (the bob binary, `bob.ts`) and the `XDG_DATA_HOME` environment variable; writes to `~/.local/bin` and the resolved extension data path; rejects non-empty relative `XDG_DATA_HOME` before writing anything; probes `PATH` for `pi` and prompts on the terminal. Reads no configuration file (`config.toml`) and makes no network calls.
 
 ### Component 4: README.txt
 
@@ -196,6 +198,12 @@ What this specification explicitly does NOT cover:
 **Purpose:** Make the zip+`install.sh` path the primary "get bob running" route, replacing the manual download/`sudo mv`/manual-`cp` instructions everywhere they currently appear.
 **Estimated size:** Small.
 **Interfaces:** Edits `the-intern/docs/src/quickstart/index.md` and `the-intern/docs/src/operator-guide/index.md` (both currently describe the manual binary/extension placement this spec replaces), plus a pointer update in `the-intern/docs/src/extension-author-guide/index.md`; still hands off to the existing `bob init` step (S-012) unchanged.
+
+### Component 6: bob runtime extension resolver
+
+**Purpose:** Keep bob's default extension lookup aligned with `install.sh` so a bundle install is immediately usable without `extension_path` or `BOB_EXTENSION_PATH` overrides.
+**Estimated size:** Small — one resolver policy change plus configuration/resolver test coverage.
+**Interfaces:** Reads `XDG_DATA_HOME` during bob configuration load. If `XDG_DATA_HOME` is unset or empty, resolves the extension default to the platform data directory. If it is non-empty and absolute, resolves the extension default under that directory. If it is non-empty and relative, fails configuration load with a clear error naming `XDG_DATA_HOME`. Explicit `extension_path` configuration remains the existing operator override path and is not changed by this component.
 
 ## Workflow
 
@@ -234,8 +242,9 @@ install.sh checks ~/.local/bin/bob for an existing install
   ↓
 Binary copied to ~/.local/bin (created if missing) and marked executable
   ↓
-Extension copied to $XDG_DATA_HOME/bob/extensions/bob.ts if XDG_DATA_HOME is set,
-else the platform default path (created if missing)
+Extension copied to the platform default when XDG_DATA_HOME is unset or empty,
+or to $XDG_DATA_HOME/bob/extensions/bob.ts when XDG_DATA_HOME is non-empty absolute.
+If XDG_DATA_HOME is non-empty relative, install.sh exits non-zero before writing.
   ↓
 install.sh reports what it did and warns if pi is not found on PATH
   ↓
@@ -254,19 +263,34 @@ Operator proceeds to `bob init <workspace>` (S-012, unchanged)
   `install.sh` creates the directory if it does not already exist.
 
 - **What:** the pi-agent extension's install path. **Why:** must match the
-  exact path bob's own runtime resolver would choose with no
+  exact path bob's own runtime resolver chooses with no
   `BOB_EXTENSION_PATH`/`extension_path` override set, or bob fails to find
   the extension without extra configuration.
-  **Where it lives:** `$XDG_DATA_HOME/bob/extensions/bob.ts` if
-  `XDG_DATA_HOME` is set (checked first, on both platforms), otherwise the
-  platform default — `~/.local/share/bob/extensions/bob.ts` on Linux
-  (ADR-009), `~/Library/Application Support/bob/extensions/bob.ts` on macOS
-  (ADR-009's macOS clause, also documented in the quickstart and operator
-  guide). **Constraints:** `install.sh` must reproduce this precedence
-  exactly and must not read `config.toml` or otherwise attempt to honor an
-  `extension_path` override itself — that remains a post-install, operator-
-  driven concern under S-003. **Default behavior when missing:**
-  `install.sh` creates the parent directory if it does not already exist.
+  **Where it lives:** the platform default when `XDG_DATA_HOME` is unset or
+  empty — `~/.local/share/bob/extensions/bob.ts` on Linux (ADR-009),
+  `~/Library/Application Support/bob/extensions/bob.ts` on macOS (ADR-009's
+  macOS clause, also documented in the quickstart and operator guide) — or
+  `$XDG_DATA_HOME/bob/extensions/bob.ts` when `XDG_DATA_HOME` is non-empty
+  and absolute. **Constraints:** a non-empty relative `XDG_DATA_HOME` is an
+  invalid configuration and `install.sh` must exit non-zero before modifying
+  the filesystem; `install.sh` must not normalize relative values under
+  `HOME`. `install.sh` must not read `config.toml` or otherwise attempt to
+  honor an `extension_path` override itself — that remains a post-install,
+  operator-driven concern under S-003. **Default behavior when missing:**
+  unset or empty `XDG_DATA_HOME` uses the platform default, and `install.sh`
+  creates the parent directory if it does not already exist.
+
+- **What:** bob's runtime default extension resolver. **Why:** a bundle
+  install only works without extra configuration when bob resolves the same
+  default extension path that `install.sh` writes. **Where it lives:** bob's
+  configuration load path, not the install script. **Constraints:** the
+  resolver follows the same three `XDG_DATA_HOME` cases as the installer:
+  unset or empty uses the platform default; non-empty absolute is honored; and
+  non-empty relative fails configuration load with a clear error naming
+  `XDG_DATA_HOME`. Explicit `extension_path` configuration remains the
+  existing override mechanism and is not changed by this spec. **Default
+  behavior when missing:** unset or empty `XDG_DATA_HOME` resolves to the
+  platform default.
 
 - **What:** the release asset naming convention. **Why:** an operator must
   be able to identify the correct download for their machine without
@@ -298,9 +322,10 @@ Operator proceeds to `bob init <workspace>` (S-012, unchanged)
 | Phase | What | Depends On |
 |---|---|---|
 | 1 | Add the new macOS build job (separate from the existing Linux release job) producing a macOS arm64 `bob` binary on every tag push, on a GitHub-hosted `macos-14` runner | Nothing |
-| 2 | Write `install.sh` and `README.txt`: `$XDG_DATA_HOME`-first extension-path resolution, existing-install detection and confirmation prompt, unsupported-platform handling, `pi` presence check | Nothing (can proceed in parallel with Phase 1) |
-| 3 | Add the per-platform packaging step to both jobs (staging, zip, tag+OS+arch naming); have the macOS job upload its zip as a build artifact; have the Linux job download it and attach both new zips, unchanged alongside the existing four assets, in its single GitHub Release step | Phases 1 and 2 |
-| 4 | Update the mdBook quickstart and operator guide (and the extension-author guide pointer) to lead with the zip+`install.sh` path | Phase 3 |
+| 2 | Write `install.sh` and `README.txt`: XDG data-home extension-path resolution, existing-install detection and confirmation prompt, unsupported-platform handling, `pi` presence check | Nothing (can proceed in parallel with Phase 1) |
+| 3 | Align bob's runtime default extension resolver with the installer's XDG data-home policy and add configuration/resolver test coverage | Nothing (can proceed in parallel with Phases 1 and 2) |
+| 4 | Add the per-platform packaging step to both jobs (staging, zip, tag+OS+arch naming); have the macOS job upload its zip as a build artifact; have the Linux job download it and attach both new zips, unchanged alongside the existing four assets, in its single GitHub Release step | Phases 1 and 2 |
+| 5 | Update the mdBook quickstart and operator guide (and the extension-author guide pointer) to lead with the zip+`install.sh` path | Phases 3 and 4 |
 
 ## Amendment Log
 
@@ -309,3 +334,4 @@ Operator proceeds to `bob init <workspace>` (S-012, unchanged)
 |------|-------------|-----|----------------|
 | YYYY-MM-DD | Description of change | Reason for amendment | T-XXX, T-YYY |
 -->
+| 2026-08-15 | Replaced the prior literal "`XDG_DATA_HOME` is set" extension-path rule with XDG Base Directory semantics for both `install.sh` and bob's runtime resolver: unset or empty uses the platform default, non-empty absolute is honored, and non-empty relative is invalid. Added Component 6 for runtime resolver alignment and made the documentation phase wait for that behavior. | CR-008 / Architect consistency review PASS. The old rule made empty `XDG_DATA_HOME` resolve to `bob/extensions/bob.ts`, colliding with the bundle's sibling `./bob` executable; HOME-normalizing relative values made install/runtime lookup diverge. | T-170, T-173, T-174 |

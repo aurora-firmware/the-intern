@@ -1,11 +1,17 @@
 ---
 id: CR-008
 title: Align install bundle with XDG data-home semantics
-status: pending
+status: applied
 created: '2026-08-15'
 ---
 
 # Align install bundle with XDG data-home semantics
+
+> **Applied (2026-08-15):** Architect consistency review passed with direction to amend
+> S-013, amend blocked T-170, and create a distinct runtime resolver task. S-013 was
+> amended to version 0.2; T-170 was revised to use the three explicit XDG data-home cases;
+> and T-174 was created for bob's runtime default extension resolver and configuration test
+> coverage. T-173 now depends on T-174 before user-facing installation docs are finalized.
 
 ## Desired Changes
 
