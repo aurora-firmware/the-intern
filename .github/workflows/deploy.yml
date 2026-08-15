@@ -12,6 +12,7 @@ env:
   SERVICE_DIR: the-intern/service
   DOCS_DIR: the-intern/docs
   EXTENSIONS_DIR: the-intern/pi-extension
+  BOB_COMPANION_DIR: the-intern/bob-companion
   MDBOOK_VERSION: 0.4.52
   MDBOOK_MERMAID_VERSION: 0.14.0
 
@@ -66,6 +67,12 @@ jobs:
             -C ${{ env.EXTENSIONS_DIR }} \
             bob.ts README.md package.json package-lock.json
 
+      - name: Archive bob-companion plugin
+        run: |
+          tar -czf the-intern-bob-companion-claude-${{ github.ref_name }}.tar.gz \
+            -C ${{ env.BOB_COMPANION_DIR }} \
+            claude
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -75,3 +82,4 @@ jobs:
             ${{ env.SERVICE_DIR }}/target/release/bob
             the-intern-docs-${{ github.ref_name }}.tar.gz
             the-intern-bob-extension-${{ github.ref_name }}.tar.gz
+            the-intern-bob-companion-claude-${{ github.ref_name }}.tar.gz
