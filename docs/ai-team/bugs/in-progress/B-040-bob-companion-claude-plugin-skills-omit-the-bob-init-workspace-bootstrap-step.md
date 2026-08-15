@@ -95,6 +95,57 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-08-15
+Reproduction status: Confirmed. `grep -rn "init" the-intern/bob-companion/claude/` returns zero
+matches across all 8 tracked plugin files (plugin.json, README.md, and the SKILL.md +
+references files for bob-setup, bob-cli, bob-health-check, bob-troubleshooting). Both Fix
+Verification commands from the bug report also return no matches:
+`grep -n "bob init" the-intern/bob-companion/claude/skills/bob-setup/SKILL.md` (exit 1) and
+`grep -n "init" the-intern/bob-companion/claude/skills/bob-cli/SKILL.md` (exit 1).
+
+Evidence captured:
+- `git ls-files the-intern/bob-companion/claude/` — full file inventory.
+- Read `bob-setup/SKILL.md` in full: numbered bootstrap walkthrough (1. pi prerequisite,
+  2. Rust toolchain, 3. build, 4. install extension, 5. config file, 6. local dev loop,
+  7. sandbox caveat) never covers workspace initialization or `bob init`.
+- Read `bob-cli/SKILL.md` in full: intro subcommand list and "Quick command map" table both
+  enumerate `serve, status, sessions, audit, policy, schedule, chat` but omit `init`.
+- Read `bob-health-check/SKILL.md` and `bob-troubleshooting/SKILL.md` in full: neither
+  mentions `init`.
+- `grep -n "Init {" the-intern/service/crates/bob/src/cli/mod.rs` confirms `bob init <path>
+  [--force]` is a real, tested subcommand (`Command::Init { path: String, force: bool }`,
+  exercised by unit tests at lines 125 and 138 of that file).
+- Read `the-intern/docs/src/quickstart/index.md` (lines 85-113): documents what `bob init`
+  creates (`AGENTS.md`, `CLAUDE.md`, `config/email-triage.toml`, `worklog/`), that it writes
+  the live `config.toml` at the platform default XDG/Application Support location, installs
+  shared himalaya/email-triage/worklog skills once, and generates a permissive bootstrap
+  policy that should be reviewed/narrowed before relying on it.
+- `git status --short` on the bug branch is clean — no production files were changed to
+  produce this evidence.
+
+Isolated fault: Documentation-only gap in `the-intern/bob-companion/claude/skills/bob-setup/SKILL.md`
+(missing an `init` step before "6. Local dev loop") and
+`the-intern/bob-companion/claude/skills/bob-cli/SKILL.md` (missing `init` from the intro
+subcommand list and the "Quick command map" table). No source/runtime code is at fault —
+`bob init` itself works correctly and is already covered in the mdBook docs (T-168); only the
+Claude-facing plugin skills were never updated when S-012 shipped.
+
+Root cause: Process gap, not a logic error. T-168 updated the mdBook user-facing docs for
+`bob init` (S-012) but the `bob-companion/claude` plugin — a separate, purpose-built knowledge
+package for Claude sessions driving bob without a human pointing them at the mdBook docs — was
+out of that task's scope and was never updated in a follow-up. No later task closed that gap
+until this bug was filed.
+
+Planned verification (fix contract, to run after the tdd cycle):
+```bash
+grep -n "bob init" the-intern/bob-companion/claude/skills/bob-setup/SKILL.md
+grep -n "init" the-intern/bob-companion/claude/skills/bob-cli/SKILL.md
+```
+Both commands must return at least one match, and manual review must confirm `bob-setup`
+explains that a workspace must be initialized with `bob init <path>` before `bob
+serve`/`bob chat` are meaningful (summarizing what it creates, per the quickstart doc), and
+that `bob-cli`'s command map/subcommand list includes `init` alongside the other subcommands.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
