@@ -156,6 +156,24 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-15
+
+Implemented the fix contract from the Diagnosis Log: the `bob-companion/claude` plugin skills had zero mentions of `bob init` anywhere, even though `bob init` is the required first step to bootstrap a workspace (creating `AGENTS.md`, `CLAUDE.md`, `config/email-triage.toml`, `worklog/`, writing the live `config.toml`, and installing the shared skill package) before `bob serve`/`bob chat` mean anything against that workspace. This was a documentation-only gap left over from S-012/T-168, which updated the mdBook user-facing docs but never touched this plugin.
+
+Confirmed the failing state first: `grep -rn "init" the-intern/bob-companion/claude/` returned no matches across all 8 tracked plugin files, and both Fix Verification commands from the bug report (`grep -n "bob init" .../bob-setup/SKILL.md` and `grep -n "init" .../bob-cli/SKILL.md`) exited 1.
+
+Read the two authoritative sources named in the fix scope guidance — `the-intern/docs/src/quickstart/index.md` section "4. Initialize a workspace" and `the-intern/docs/src/operator-guide/index.md` section "Initialize a workspace with `bob init`" (around line 186) — and mirrored their content rather than re-deriving it from CLI source, so the plugin doesn't drift from the already-reviewed docs.
+
+In `bob-setup/SKILL.md`, inserted a new numbered step "5. Initialize a workspace" right after the extension-install step (4) and before the config-file step, since a workspace needs to exist before the config file discussion is actionable; renumbered the two following sections (old 6 "Local dev loop" → 7, old 7 "Sandbox caveat" → 8) to keep the walkthrough sequential. The new section explains what `bob init <path>` creates, that it writes bob's live config.toml at the platform default path and installs the shared skill package (not a workspace-local `.pi/skills/` copy), that the generated config is a permissive bootstrap policy that should be reviewed/narrowed, and to set `manager_address` in the generated email-triage config before scheduling.
+
+In `bob-cli/SKILL.md`, added `init` to the intro subcommand list (`bob` is a single binary with subcommands `init`, `serve`, `status`, ...) and added a "Bootstrap a new workspace" → `bob init <path>` row at the top of the "Quick command map" table, ahead of `bob status`, since bootstrapping logically precedes checking status.
+
+Considered and rejected: touching `bob-health-check/SKILL.md`, `bob-troubleshooting/SKILL.md`, `references/command-reference.md`, or `plugin.json` — none needed a change to satisfy the fix contract, and the scope guidance explicitly said not to touch them without concrete necessity; found none.
+
+No automated regression test was added. This repository has no test harness for Claude Code skill markdown content — these files are plain-text agent instructions consumed by Claude Code at skill-invocation time, not executable code exercised by `cargo test` or any other test runner in this repo. Verification is grep-based (confirmed failing before the fix, confirmed passing after) plus manual review of the added prose against the quickstart/operator-guide source of truth.
+
+Verified after the edit: both `grep -n "bob init" the-intern/bob-companion/claude/skills/bob-setup/SKILL.md` and `grep -n "init" the-intern/bob-companion/claude/skills/bob-cli/SKILL.md` now return matches (lines 77/80 and 8/24 respectively). Committed as `2041159` (`docs(bob-companion): document bob init in setup and cli skills`) on `bug/B-040-bob-companion-claude-plugin-skills-omit-the-bob-init-workspace-bootstrap-step`. Nothing remains outstanding for this bug's scope.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
