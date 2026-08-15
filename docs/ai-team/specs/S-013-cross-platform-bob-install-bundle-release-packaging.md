@@ -1,7 +1,7 @@
 ---
 title: Cross-platform bob install bundle release packaging
 version: '0.1'
-status: review  # draft | review | approved | superseded
+status: approved  # draft | review | approved | superseded
 created: '2026-08-15'
 author: planner
 id: S-013
@@ -170,7 +170,7 @@ What this specification explicitly does NOT cover:
 ### Component 1: macOS build job
 
 **Purpose:** Produce a release `bob` binary for macOS arm64 on every tag push, as a separate CI job from the existing Linux release job — not a matrix applied to it.
-**Estimated size:** Medium — first macOS build in this project's CI; needs a new, currently unprovisioned macOS-capable runner (a Gate 1 infrastructure decision, not an architecture conflict — see Exclusions).
+**Estimated size:** Medium — first macOS build in this project's CI. Runs on a GitHub-hosted `macos-14` runner (decided at Gate 1), alongside the existing self-hosted Linux runner — no accepted ADR requires self-hosted-only CI, so this introduces no architecture conflict.
 **Interfaces:** Consumes the same `cargo build --release -p bob` contract already used for Linux; exposes a zipped macOS install bundle to the Linux release job as a CI build artifact. Does not build docs and does not call the GitHub Release creation step.
 
 ### Component 2: Per-platform packaging step
@@ -297,7 +297,7 @@ Operator proceeds to `bob init <workspace>` (S-012, unchanged)
 
 | Phase | What | Depends On |
 |---|---|---|
-| 1 | Add the new macOS build job (separate from the existing Linux release job) producing a macOS arm64 `bob` binary on every tag push, on a provisioned macOS-capable runner | Nothing (blocked on the Gate 1 runner-provisioning decision) |
+| 1 | Add the new macOS build job (separate from the existing Linux release job) producing a macOS arm64 `bob` binary on every tag push, on a GitHub-hosted `macos-14` runner | Nothing |
 | 2 | Write `install.sh` and `README.txt`: `$XDG_DATA_HOME`-first extension-path resolution, existing-install detection and confirmation prompt, unsupported-platform handling, `pi` presence check | Nothing (can proceed in parallel with Phase 1) |
 | 3 | Add the per-platform packaging step to both jobs (staging, zip, tag+OS+arch naming); have the macOS job upload its zip as a build artifact; have the Linux job download it and attach both new zips, unchanged alongside the existing four assets, in its single GitHub Release step | Phases 1 and 2 |
 | 4 | Update the mdBook quickstart and operator guide (and the extension-author guide pointer) to lead with the zip+`install.sh` path | Phase 3 |
