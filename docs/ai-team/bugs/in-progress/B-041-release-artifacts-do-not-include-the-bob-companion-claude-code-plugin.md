@@ -209,6 +209,18 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-15
+
+Implemented the fix recorded in the Diagnosis Log's fix contract for B-041 (release artifacts do not include the bob-companion Claude Code plugin). Before changing anything, confirmed the failing state via `grep -n "bob-companion" .github/workflows/deploy.yml`, which returned no matches — the isolated fault (missing archive step and missing release asset entry) was reproduced exactly as diagnosed. Read the full `deploy.yml` to match existing indentation and step ordering, then made three additive edits mirroring the existing "Archive docs" pattern (whole-subdirectory tar via `-C <parent> <subdir>`, since `bob-companion/claude` is a subdirectory rather than a flat file list like the pi-extension archive): added a `BOB_COMPANION_DIR: the-intern/bob-companion` env var alongside the existing `DOCS_DIR`/`EXTENSIONS_DIR`; added a new "Archive bob-companion plugin" step immediately after "Archive bob extension" and before "Create GitHub Release", running `tar -czf the-intern-bob-companion-claude-${{ github.ref_name }}.tar.gz -C ${{ env.BOB_COMPANION_DIR }} claude`; and appended `the-intern-bob-companion-claude-${{ github.ref_name }}.tar.gz` as a fourth line in the release job's `files:` block, following the existing `the-intern-<thing>-<tag>.tar.gz` naming convention. No existing steps were reordered or modified — the diff is purely additive (8 lines).
+
+Verification: re-ran the grep (now 3 matches at the env var, step name, and files-block lines) and ran the local tar smoke test specified in the bug's Fix Verification section, using the exact `-C the-intern/bob-companion claude` invocation the new CI step uses. The resulting archive was inspected with `tar -tzf` and contained all expected paths, and all three required assertions (`claude/.claude-plugin/plugin.json`, `claude/README.md`, `claude/skills/bob-setup/SKILL.md`) passed.
+
+No automated regression test or CI dry-run was run, and none was attempted: this workflow (`deploy.yml`) only triggers `on: push: tags: '*'`, there is no local GitHub Actions runner in this repo, and the task instructions explicitly prohibited pushing a tag to validate the change live. The tar smoke test substitutes for this by exercising the identical `tar -czf ... -C <dir> <subdir>` logic against the real `the-intern/bob-companion` directory, which is the only meaningfully testable unit of this change outside the Actions runtime; the remaining risk (YAML syntax validity, `softprops/action-gh-release` correctly consuming the new `files:` line) is inherent to this class of infra-as-YAML change and is consistent with how the three existing archive/release steps in this same file are exercised (only at tag-push time).
+
+No deviations from the Diagnosis Log's planned fix were needed — the target directory structure matched the diagnosis's assumptions exactly. Nothing remains outstanding for this bug from the Developer's side.
+
+Committed as `149045a` (`fix(ci): add bob-companion claude plugin to release archive`) on `bug/B-041-release-artifacts-do-not-include-the-bob-companion-claude-code-plugin`. Only `.github/workflows/deploy.yml` was touched; the bug lifecycle file was left untouched on this branch per instructions.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
