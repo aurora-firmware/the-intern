@@ -142,6 +142,10 @@ Implemented `the-intern/install-bundle/install.sh` with command-level TDD. The s
 
 Addressed the review finding for an explicitly empty `XDG_DATA_HOME`. The script now retains the required “set” branch but anchors the otherwise relative resolved extension path below `HOME`, preventing a collision with the sibling bundle binary. The defect was reproduced before the fix; the isolated regression then passed with the extension at `$HOME/bob/extensions/bob.ts`. The existing unset, absolute-XDG, and overwrite smoke checks also passed. Implementation commit: `056ce96` (`fix(install-bundle): anchor empty xdg path in home`). Nothing remains for implementation.
 
+### Session 3 — 2026-08-15
+
+After the abandoned earlier branch was deleted, rebuilt `the-intern/install-bundle/install.sh` on a fresh branch against the amended CR-008/S-013 contract. The new script defaults unset or empty `XDG_DATA_HOME`, honors only non-empty absolute values, and rejects relative values before filesystem changes; it also retains platform checks, binary overwrite confirmation, warnings, and installed-path summary. Syntax/lint and isolated temporary-home smoke tests passed for Linux/macOS defaults, empty/absolute/relative XDG cases, overwrite flows, and warning behavior. Implementation commits: `dda15ce`, `25b580d`, and `93b3691`. Historical Sessions 1–2 and their review verdicts are superseded by this implementation.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
