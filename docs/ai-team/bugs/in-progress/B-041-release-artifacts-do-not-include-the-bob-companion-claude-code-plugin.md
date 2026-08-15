@@ -232,3 +232,68 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-15
+
+PASS
+
+Reviewed `bug/B-041-release-artifacts-do-not-include-the-bob-companion-claude-code-plugin`
+at commit `149045a` (`fix(ci): add bob-companion claude plugin to release archive`,
+touching only `.github/workflows/deploy.yml`, 8 insertions / 0 deletions) against
+this bug file's Diagnosis Log and Fix Verification.
+
+**Diagnosis→fix evidence chain:** Diagnosis 1 contains a complete fix contract —
+reproduction status (confirmed, `grep`/`find` evidence), evidence captured (full
+file read, spec cross-checks against S-007 Component 5 and S-010's explicit
+`bob-companion` exclusion, local tar smoke test), an isolated fault (missing
+archive step + missing `files:` entry in `deploy.yml`), a root cause (packaging
+step was never written — genuine gap, not a regression), and a concrete planned
+fix (new `BOB_COMPANION_DIR` env var, new "Archive bob-companion plugin" step
+after "Archive bob extension", new `files:` line). Independently verified the
+S-007/S-010 claims by reading both specs — S-007 Component 5 is confirmed as the
+precedent for the docs-archive-into-`deploy.yml` pattern, and S-010 explicitly
+disclaims scope over `bob-companion/claude` ("This package ships separately").
+
+**Stage 1 — Bug criteria:** All met.
+- Fix matches the isolated fault and fix contract exactly: `BOB_COMPANION_DIR:
+  the-intern/bob-companion` env var added alongside `DOCS_DIR`/`EXTENSIONS_DIR`;
+  new "Archive bob-companion plugin" step added between "Archive bob extension"
+  and "Create GitHub Release"; `the-intern-bob-companion-claude-${{
+  github.ref_name }}.tar.gz` appended as the fourth `files:` entry.
+- Fix Verification steps from the bug file re-run against the fix commit
+  (via a detached worktree at `149045a`), all passing:
+  - `grep -n "bob-companion" .github/workflows/deploy.yml` → 3 matches (env var,
+    step name, `files:` line), matching the Work Log's claim.
+  - Local tar smoke test (`tar -czf ... -C the-intern/bob-companion claude`)
+    produced an archive containing `claude/.claude-plugin/plugin.json`,
+    `claude/README.md`, and `claude/skills/bob-setup/SKILL.md` — all three
+    `grep -q` assertions passed.
+- No unrelated behavior added; diff touches only the three planned elements.
+
+**Stage 2 — Code quality / YAML correctness:**
+- `python3 -c "import yaml, sys; yaml.safe_load(...)"` against the fixed file
+  reports valid YAML.
+- New env var, step, and `files:` entry follow the exact indentation of the
+  sibling `DOCS_DIR`/`EXTENSIONS_DIR` entries and "Archive docs"/"Archive bob
+  extension" steps (2-space env indent, 6-space step-name indent, 8-space
+  `run:` indent, 10/12-space shell-continuation indent — confirmed with
+  `cat -A`, no trailing whitespace or tabs). `git show 149045a` confirms 0
+  deletions — the diff is purely additive; no existing step was reordered.
+- New "Archive bob-companion plugin" step is placed after "Archive bob
+  extension" and before "Create GitHub Release", so the archive exists before
+  the release step's `files:` block references it.
+- Fix is minimal (8 lines), no unrelated refactoring bundled.
+
+**Regression test / verification rationale:** No automated regression test is
+practical — `deploy.yml` only triggers on `push: tags: '*'`, there is no local
+GitHub Actions runner in this repo, and a live tag push was explicitly out of
+scope for this bug. This rationale holds. The Work Log's substitute (local
+`tar -czf`/`tar -tzf` smoke test against the real `the-intern/bob-companion`
+directory, exercising the identical archive-invocation shape used by the new
+CI step) is consistent with how the pre-existing "Archive docs" step
+(S-007 Component 5) was itself verified, and was independently re-run here
+with the same result.
+
+No issues found. Both stages pass.
+
+Next owner: Bug-Fix Loop.
