@@ -2,7 +2,7 @@
 id: B-041
 title: Release artifacts do not include the bob-companion Claude Code plugin
 severity: medium
-status: open
+status: in-progress
 created: '2026-08-15'
 ---
 
