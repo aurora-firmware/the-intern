@@ -1,7 +1,7 @@
 ---
 id: T-170
 title: Write install.sh for the bob install bundle
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-08-15'
