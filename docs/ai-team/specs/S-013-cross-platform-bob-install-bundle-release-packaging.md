@@ -1,7 +1,7 @@
 ---
 title: Cross-platform bob install bundle release packaging
 version: '0.1'
-status: draft  # draft | review | approved | superseded
+status: review  # draft | review | approved | superseded
 created: '2026-08-15'
 author: planner
 id: S-013
