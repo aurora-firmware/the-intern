@@ -83,8 +83,9 @@ What this specification explicitly does NOT cover:
   user's home directory — a decision this spec makes, consistent with (but
   not itself mandated by) ADR-008's single-user local deployment scope.
 - The extension must land at exactly the path bob's own runtime resolver
-  would choose with no environment overrides set: `$XDG_DATA_HOME`-first if
-  that variable is set (on both platforms), otherwise the platform default
+  would choose with no `BOB_EXTENSION_PATH`/`extension_path` override set:
+  `$XDG_DATA_HOME`-first if that variable is set (on both platforms, this is
+  honored, not an override), otherwise the platform default
   (`~/.local/share/bob/extensions/bob.ts` on Linux per ADR-009,
   `~/Library/Application Support/bob/extensions/bob.ts` on macOS per
   ADR-009's macOS clause). `install.sh` must reproduce this precedence
@@ -106,6 +107,11 @@ What this specification explicitly does NOT cover:
 - Adding a further platform later must require only a new build job and a
   new platform branch in `install.sh` — not a restructuring of the existing
   release job or the script's control flow.
+- If the macOS build job fails, or its runner is unavailable, the release
+  must fail fast as a whole rather than publish Linux-only assets — the
+  Linux job's dependency on the macOS job's artifact makes this the natural
+  behavior, and it matches S-007's existing no-partial-release precedent (a
+  failed release job can be fixed and the tag re-run).
 
 ### System Diagram
 
@@ -177,7 +183,7 @@ What this specification explicitly does NOT cover:
 
 **Purpose:** Install the bob binary and pi-agent extension to their default locations without sudo, reproducing bob's own `$XDG_DATA_HOME`-first extension-path resolution exactly, and safely handling an existing install and an unsupported platform.
 **Estimated size:** Medium — per-platform path resolution, existing-install detection, interactive confirmation, clear unsupported-platform messaging.
-**Interfaces:** Reads its own zip-local sibling files (the bob binary, `bob.ts`) and the `XDG_DATA_HOME` environment variable if set; writes to `~/.local/bin` and the resolved extension data path; does not read `config.toml` and has no other interfaces.
+**Interfaces:** Reads its own zip-local sibling files (the bob binary, `bob.ts`) and the `XDG_DATA_HOME` environment variable if set; writes to `~/.local/bin` and the resolved extension data path; probes `PATH` for `pi` and prompts on the terminal. Reads no configuration file (`config.toml`) and makes no network calls.
 
 ### Component 4: README.txt
 
@@ -248,8 +254,9 @@ Operator proceeds to `bob init <workspace>` (S-012, unchanged)
   `install.sh` creates the directory if it does not already exist.
 
 - **What:** the pi-agent extension's install path. **Why:** must match the
-  exact path bob's own runtime resolver would choose with no overrides set,
-  or bob fails to find the extension without extra configuration.
+  exact path bob's own runtime resolver would choose with no
+  `BOB_EXTENSION_PATH`/`extension_path` override set, or bob fails to find
+  the extension without extra configuration.
   **Where it lives:** `$XDG_DATA_HOME/bob/extensions/bob.ts` if
   `XDG_DATA_HOME` is set (checked first, on both platforms), otherwise the
   platform default — `~/.local/share/bob/extensions/bob.ts` on Linux
