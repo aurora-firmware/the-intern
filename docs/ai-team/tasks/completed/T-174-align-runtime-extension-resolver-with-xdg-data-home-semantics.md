@@ -1,7 +1,7 @@
 ---
 id: T-174
 title: Align runtime extension resolver with XDG data-home semantics
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-08-15'
