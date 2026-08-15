@@ -134,3 +134,8 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-15
+FAIL
+
+- `the-intern/install-bundle/install.sh:46-54,91-96` — AC-3 is not fully met for the task's required `"XDG_DATA_HOME is set, even if empty"` semantics. With `XDG_DATA_HOME=''`, the script resolves the extension target to `bob/extensions/bob.ts`, then fails from inside the bundle with `mkdir: cannot create directory 'bob': Not a directory` because the sibling bundle binary already occupies `./bob`. Reproduction used the reviewed script from `task/T-170-write-install-sh-for-the-bob-install-bundle` with `(cd "$BUNDLE" && HOME="$TEST_HOME" XDG_DATA_HOME='' PATH="/usr/bin:/bin" ./install.sh)`, which exited 1 before copying the extension. Update the installer so the empty-string `XDG_DATA_HOME` case still completes successfully while preserving the resolver semantics required by the task note.
