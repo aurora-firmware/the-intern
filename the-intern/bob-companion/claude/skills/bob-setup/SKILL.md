@@ -71,7 +71,29 @@ Copy `the-intern/pi-extension/bob.ts` there, or override the path with
 and the duplicate-connection failure mode looks like a policy/authz bug,
 not an install bug (see `bob-troubleshooting`).
 
-## 5. Config file (optional)
+## 5. Initialize a workspace
+
+`bob serve`/`bob chat` aren't meaningful against a workspace until it's been
+bootstrapped with `bob init`:
+
+```bash
+bob init /path/to/workspace
+```
+
+This creates an owner-only workspace directory containing `AGENTS.md`,
+`CLAUDE.md`, `config/email-triage.toml`, and `worklog/`. It also writes
+bob's live `config.toml` at the platform default config path (see the
+config file section below) and installs the shared `himalaya`/
+`email-triage`/`worklog` skill package at `skill_install_path` — it does
+**not** create a workspace-local `.pi/skills/` copy.
+
+The generated `config.toml` is a permissive bootstrap policy — it allows any
+arguments for `bash`, `read`, `write`, and `edit`, and keeps every other
+tool default-denied. Review and narrow it before relying on it as a
+security control. Also set `manager_address` in the generated
+`config/email-triage.toml` before scheduling that workspace.
+
+## 6. Config file (optional)
 
 Location: `$XDG_CONFIG_HOME/bob/config.toml` (fallback
 `~/.config/bob/config.toml`) on Linux, `~/Library/Application
@@ -97,7 +119,7 @@ Env var overrides follow the pattern `BOB_<UPPER_SNAKE_FIELD_NAME>` (any
 | `BOB_PI_AGENT_MAX_PROCESSES` / `BOB_PI_AGENT_WARM_POOL_SIZE` | Supervisor pool sizing |
 | `BOB_TRACING_LEVEL` (or `RUST_LOG`) | Log verbosity |
 
-## 6. Local dev loop (preferred over hand-rolling env vars)
+## 7. Local dev loop (preferred over hand-rolling env vars)
 
 Two terminals, using the repo's own helper scripts — they derive matching
 socket paths for you so client and server never disagree:
@@ -134,7 +156,7 @@ setting `BOB_ADMIN_SOCK_PATH` for client commands — a path mismatch here is
 the single most common "bob isn't running" false alarm (see
 `bob-troubleshooting`).
 
-## 7. Sandbox caveat
+## 8. Sandbox caveat
 
 Some tests (and `bob chat`/admin-rpc itself) rely on Unix domain sockets
 and `SO_PEERCRED`/peer-credential reads. Under a restrictive sandbox these
