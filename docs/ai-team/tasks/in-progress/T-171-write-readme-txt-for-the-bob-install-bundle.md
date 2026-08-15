@@ -65,6 +65,10 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-15
+
+Created the short plain-text install-bundle landing readme. It lists `bob`, `bob.ts`, `install.sh`, and `README.txt`; identifies `./install.sh` as the only required installation step; and points the operator to `bob init <workspace>` and the online quickstart. The task verification and stricter content checks passed. Implementation commit: `167ec8f`. No remaining work.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
