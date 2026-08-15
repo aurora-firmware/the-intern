@@ -123,6 +123,10 @@ The final entry serves as the handoff to the reviewer. -->
 
 Implemented `the-intern/install-bundle/install.sh` with command-level TDD. The script rejects unsupported platforms before filesystem changes; installs the sibling binary and extension; follows bob's XDG-data-home presence semantics; prompts before overwriting the binary; and emits the required non-blocking warnings and summary. Three red→green→refactor commits were made (`e4908c3`, `9ba4b13`, and `4d40d34`). Verification used syntax/lint checks and isolated temporary-home smoke tests for supported and unsupported platforms, XDG set/unset handling, overwrite decline and confirmation, and warning behavior. No persistent test file was added because the task's Files to Touch boundary permits only the new script. Nothing remains for implementation.
 
+### Session 2 — 2026-08-15
+
+Addressed the review finding for an explicitly empty `XDG_DATA_HOME`. The script now retains the required “set” branch but anchors the otherwise relative resolved extension path below `HOME`, preventing a collision with the sibling bundle binary. The defect was reproduced before the fix; the isolated regression then passed with the extension at `$HOME/bob/extensions/bob.ts`. The existing unset, absolute-XDG, and overwrite smoke checks also passed. Implementation commit: `056ce96` (`fix(install-bundle): anchor empty xdg path in home`). Nothing remains for implementation.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
