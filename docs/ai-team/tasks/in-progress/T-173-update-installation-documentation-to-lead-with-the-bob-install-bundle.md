@@ -107,3 +107,9 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-16
+PASS
+
+- Stage 1 passed: AC-1 through AC-3 are satisfied in the quickstart, operator guide, and extension-author guide, and the diff only touches the three task-scoped docs files.
+- Stage 2 passed: the documented bundle names and `./install.sh` flow match the release-packaging spec and installer behavior, the task verification greps passed, and an mdBook build succeeded for the branch docs when pointed at the local `bob` binary.
