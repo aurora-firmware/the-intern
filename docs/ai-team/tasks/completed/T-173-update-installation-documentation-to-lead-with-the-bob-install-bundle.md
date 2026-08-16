@@ -1,7 +1,7 @@
 ---
 id: T-173
 title: Update installation documentation to lead with the bob install bundle
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-08-15'
