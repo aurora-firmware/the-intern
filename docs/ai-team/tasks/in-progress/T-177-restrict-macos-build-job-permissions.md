@@ -74,6 +74,18 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-16
+
+Added a regression test requiring `build-macos` to declare `permissions: {contents: read}` and
+also guarding the workflow-level `contents: write` required for release creation. The new test
+first failed because `build-macos` had no permissions block. The minimal workflow update adds the
+job-scoped read-only permission while preserving all macOS packaging/upload behavior. The workflow
+regression suite then passed: 37 tests OK. Implementation commit: `740c91a`
+(`fix(ci): restrict macos build job permissions`).
+
+The task's `python` command was unavailable in this shell, so the equivalent `python3` command
+was used. An unrelated untracked `.github/workflows/__pycache__/` remains untouched.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
