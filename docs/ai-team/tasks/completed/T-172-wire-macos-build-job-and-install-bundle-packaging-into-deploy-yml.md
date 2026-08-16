@@ -1,7 +1,7 @@
 ---
 id: T-172
 title: Wire macOS build job and install-bundle packaging into deploy.yml
-status: pending
+status: completed
 priority: high
 assigned-role: unassigned
 created: '2026-08-15'
