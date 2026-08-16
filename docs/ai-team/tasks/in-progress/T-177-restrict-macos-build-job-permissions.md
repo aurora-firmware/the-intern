@@ -97,3 +97,17 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-16
+PASS
+
+Stage 1 passed.
+- AC-1 met: `build-macos` declares job-scoped `permissions: { contents: read }` in `.github/workflows/deploy.yml`.
+- AC-2 met: workflow-level `permissions: { contents: write }` remains in place and the macOS packaging/upload steps are unchanged.
+- Scope check passed: implementation commit `740c91a` changes only `.github/workflows/deploy.yml` and `.github/workflows/test_deploy_workflow.py`.
+
+Stage 2 passed.
+- Correctness: the permission reduction is minimal and does not broaden any other workflow capability.
+- Tests: regression coverage now checks both the narrowed `build-macos` permission and the retained workflow-level release permission; `python3 .github/workflows/test_deploy_workflow.py` passed with 37 tests.
+
+Next owner: Development Loop.
