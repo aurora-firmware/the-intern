@@ -1,7 +1,7 @@
 ---
 id: T-171
 title: Write README.txt for the bob install bundle
-status: pending
+status: completed
 priority: medium
 assigned-role: unassigned
 created: '2026-08-15'
