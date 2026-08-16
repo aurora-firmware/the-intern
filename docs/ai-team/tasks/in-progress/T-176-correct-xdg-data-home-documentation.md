@@ -85,6 +85,20 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-16
+
+Confirmed the canonical resolver behavior in `the-intern/service/crates/bob/src/config.rs` and
+`the-intern/install-bundle/install.sh`, then corrected only the two task-owned guides. The
+extension documentation now states that unset or empty `XDG_DATA_HOME` uses the platform default,
+a non-empty absolute value overrides it, and a non-empty relative value is rejected. The operator
+guide's `skill_install_path` wording now documents its distinct fallback for unset, empty, or
+relative values and no longer claims it resolves identically to `extension_path`.
+
+A docs-only text assertion failed before the edits because the required wording was absent; after
+the edits, text assertions, `mdbook build`, and the task grep verification passed. Implementation
+commit: `8b61e87` (`docs(docs): correct xdg data-home resolution guidance`). `mdbook build` emitted
+a non-blocking `mdbook-mermaid` version-mismatch warning. No implementation work remains.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
