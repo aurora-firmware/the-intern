@@ -110,15 +110,17 @@ For released builds on `linux-x86_64` and `macos-arm64`, the recommended path
 is the install bundle described above: it installs `bob.ts` to bob's default
 extension location automatically when you run `./install.sh`.
 
-On Linux, install `bob.ts` under the XDG data directory. The default is:
+Install `bob.ts` under bob's resolved data directory. When `XDG_DATA_HOME` is
+unset or empty, the default is:
 
 ```text
 ~/.local/share/bob/extensions/bob.ts
 ```
 
-If `XDG_DATA_HOME` is set, the path is instead
-`$XDG_DATA_HOME/bob/extensions/bob.ts`. On macOS, the default is
-`~/Library/Application Support/bob/extensions/bob.ts`.
+On macOS, that default is `~/Library/Application Support/bob/extensions/bob.ts`
+instead. A non-empty absolute `XDG_DATA_HOME` override changes the install
+location to `$XDG_DATA_HOME/bob/extensions/bob.ts`. A non-empty relative
+`XDG_DATA_HOME` value is rejected with an error instead of being guessed at.
 
 For a source checkout on Linux:
 
@@ -158,9 +160,14 @@ On Linux, the default is:
 ~/.local/share/bob/skills
 ```
 
-If `XDG_DATA_HOME` is set, the path is instead `$XDG_DATA_HOME/bob/skills` (a
+When `XDG_DATA_HOME` is unset or empty, bob uses the platform default skill
+directory: `~/.local/share/bob/skills` on Linux or
+`~/Library/Application Support/bob/skills` on macOS. A non-empty absolute
+`XDG_DATA_HOME` override changes the path to `$XDG_DATA_HOME/bob/skills` (a
 sibling of `bob/extensions/` under the same ADR-009 `data` bucket as the
-extension). On macOS, the default is `~/Library/Application Support/bob/skills`.
+extension). A non-empty relative `XDG_DATA_HOME` value does not fail config
+loading here; `skill_install_path` deliberately falls back to the same platform
+default used for unset or empty values.
 
 Install the packaged pi skill content there:
 
@@ -180,10 +187,11 @@ skill_install_path = "/opt/bob/skills"
 - **Must be absolute.** A relative value fails configuration loading
   immediately with a clear error naming `skill_install_path`.
 - **Default: the ADR-009 `data` bucket, alongside the extension.** When
-  `skill_install_path` is not set, it resolves the same way `extension_path`
-  does — `$XDG_DATA_HOME/bob/skills`, falling back to
-  `$HOME/.local/share/bob/skills` (or the macOS equivalent) — rather than
-  being left unset.
+  `skill_install_path` is not set, bob resolves it to
+  `$XDG_DATA_HOME/bob/skills` only when `XDG_DATA_HOME` is a non-empty
+  absolute path. When `XDG_DATA_HOME` is unset, empty, or relative, bob
+  instead falls back to the platform default path rather than leaving the
+  setting unset.
 - **Fail-open, unlike `extension_path`.** `extension_path` fails closed: a
   missing extension file blocks every session from starting. A missing,
   empty, or nonexistent `skill_install_path` does not: bob's extension
