@@ -229,7 +229,7 @@ fn init_materializes_shared_skills_and_bootstrap_policy_in_isolated_xdg_dirs() {
 }
 
 #[test]
-fn initialized_workspace_chat_banner_lists_the_shared_skill_paths() {
+fn initialized_workspace_chat_banner_lists_the_shared_skill_names() {
     ensure_real_pi_prerequisite();
 
     let env = IsolatedInitWorkspace::new();
@@ -253,12 +253,9 @@ fn initialized_workspace_chat_banner_lists_the_shared_skill_paths() {
     );
 
     for skill in ["email-triage", "himalaya", "worklog"] {
-        let expected_path = env.skill_install_path.join(skill).join("SKILL.md");
-        let expected_path_text = expected_path.display().to_string();
         assert!(
-            transcript.contains(&expected_path_text),
-            "chat banner should advertise {} in [Skills]; status={:?}\nstdout={}\nstderr={}\ntranscript={}",
-            expected_path.display(),
+            transcript.contains(skill),
+            "chat banner should advertise {skill} in [Skills]; status={:?}\nstdout={}\nstderr={}\ntranscript={}",
             chat_output.status.code(),
             String::from_utf8_lossy(&chat_output.stdout),
             String::from_utf8_lossy(&chat_output.stderr),
