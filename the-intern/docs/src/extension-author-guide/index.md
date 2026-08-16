@@ -22,9 +22,12 @@ below).
 
 Bob owns extension delivery. It resolves `bob.ts` from the XDG data directory
 and passes the result to each pi process with `pi --extension <resolved-path>`.
-The Linux default is `~/.local/share/bob/extensions/bob.ts`, or
-`$XDG_DATA_HOME/bob/extensions/bob.ts` when `XDG_DATA_HOME` is set. The macOS
-default is `~/Library/Application Support/bob/extensions/bob.ts`.
+When `XDG_DATA_HOME` is unset or empty, the default path is
+`~/.local/share/bob/extensions/bob.ts` on Linux or
+`~/Library/Application Support/bob/extensions/bob.ts` on macOS. A non-empty
+absolute `XDG_DATA_HOME` override changes the path to
+`$XDG_DATA_HOME/bob/extensions/bob.ts`. A non-empty relative `XDG_DATA_HOME`
+value is rejected during resolution instead of being guessed at.
 
 For most operators, `bob.ts` reaches that default location through the release
 install bundle: they download the platform-matching
