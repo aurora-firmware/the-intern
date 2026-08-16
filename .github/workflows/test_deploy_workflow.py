@@ -300,6 +300,14 @@ class TestMacosBuildJob(unittest.TestCase):
             "build-macos job must run on macos-14",
         )
 
+    def test_build_macos_job_restricts_contents_permission_to_read(self):
+        self.assertIsNotNone(self.job, "expected a separate build-macos job")
+        self.assertEqual(
+            self.job.get("permissions"),
+            {"contents": "read"},
+            "build-macos job must explicitly limit contents permission to read",
+        )
+
     def test_build_macos_job_builds_release_bob_binary(self):
         self.assertIsNotNone(self.job, "expected a separate build-macos job")
         run_blocks = [
@@ -354,6 +362,13 @@ class TestReleaseJobInstallBundles(unittest.TestCase):
         self.workflow = load_workflow()
         self.job = self.workflow["jobs"]["release"]
         self.steps = self.job["steps"]
+
+    def test_workflow_keeps_workflow_level_contents_write_permission(self):
+        self.assertEqual(
+            self.workflow.get("permissions"),
+            {"contents": "write"},
+            "workflow must keep contents: write for release creation",
+        )
 
     def test_release_job_needs_build_macos(self):
         self.assertEqual(
