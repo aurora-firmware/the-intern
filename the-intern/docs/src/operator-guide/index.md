@@ -116,8 +116,10 @@ On Linux, install `bob.ts` under the XDG data directory. The default is:
 ~/.local/share/bob/extensions/bob.ts
 ```
 
-If `XDG_DATA_HOME` is set, the path is instead
-`$XDG_DATA_HOME/bob/extensions/bob.ts`. On macOS, the default is
+If `XDG_DATA_HOME` is unset or empty, bob uses the platform default above. If
+`XDG_DATA_HOME` is set to a non-empty absolute path, the path is instead
+`$XDG_DATA_HOME/bob/extensions/bob.ts`. A non-empty relative `XDG_DATA_HOME`
+is invalid and bob refuses to start pi. On macOS, the default is
 `~/Library/Application Support/bob/extensions/bob.ts`.
 
 For a source checkout on Linux:
@@ -158,9 +160,11 @@ On Linux, the default is:
 ~/.local/share/bob/skills
 ```
 
-If `XDG_DATA_HOME` is set, the path is instead `$XDG_DATA_HOME/bob/skills` (a
-sibling of `bob/extensions/` under the same ADR-009 `data` bucket as the
-extension). On macOS, the default is `~/Library/Application Support/bob/skills`.
+If `XDG_DATA_HOME` is set to a non-empty absolute path, the path is instead
+`$XDG_DATA_HOME/bob/skills` (a sibling of `bob/extensions/` under the same
+ADR-009 `data` bucket as the extension). If `XDG_DATA_HOME` is unset, empty,
+or relative, bob falls back to the platform default above. On macOS, the
+default is `~/Library/Application Support/bob/skills`.
 
 Install the packaged pi skill content there:
 
