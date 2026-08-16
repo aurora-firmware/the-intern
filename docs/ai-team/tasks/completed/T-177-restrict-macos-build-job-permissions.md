@@ -1,7 +1,7 @@
 ---
 id: T-177
 title: Restrict macOS build job permissions
-status: pending
+status: completed
 priority: low
 assigned-role: developer
 created: '2026-08-16'
