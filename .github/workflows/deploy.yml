@@ -92,9 +92,9 @@ jobs:
 
       - name: Build docs
         working-directory: ${{ env.DOCS_DIR }}
-        env:
-          BOB_BIN: ${{ github.workspace }}/${{ env.SERVICE_DIR }}/target/release/bob
-        run: mdbook build
+        run: |
+          export BOB_BIN="$GITHUB_WORKSPACE/${{ env.SERVICE_DIR }}/target/release/bob"
+          mdbook build
 
       - name: Archive docs
         run: |
@@ -123,7 +123,7 @@ jobs:
           cp "${{ env.INSTALL_BUNDLE_DIR }}/README.txt" "$stage_dir/README.txt"
           (
             cd "$stage_dir"
-            zip -r "${{ github.workspace }}/the-intern-bob-install-${{ github.ref_name }}-linux-x86_64.zip" \
+            zip -r "$GITHUB_WORKSPACE/the-intern-bob-install-${{ github.ref_name }}-linux-x86_64.zip" \
               bob bob.ts install.sh README.txt
           )
 
