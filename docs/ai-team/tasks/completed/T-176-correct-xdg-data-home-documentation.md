@@ -1,7 +1,7 @@
 ---
 id: T-176
 title: Correct XDG data-home documentation
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-16'
