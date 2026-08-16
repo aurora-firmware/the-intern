@@ -8,7 +8,7 @@ created: 2026-08-16
 
 ## Summary
 
-Active specs: 12. Pending tasks: 0. In progress tasks: 0. Completed tasks: 174. Blocked tasks: 0. Open bugs: 0. Bugs in progress: 0. Resolved bugs: 41. ADRs: 14. Latest integration result: chore(tasks): merge T-173 install docs bundle.
+Active specs: 12. Pending tasks: 0. In progress tasks: 0. Completed tasks: 177. Blocked tasks: 0. Open bugs: 0. Bugs in progress: 0. Resolved bugs: 41. ADRs: 14. Latest integration result: chore(tasks): merge T-177 macos permissions.
 
 ## Specifications
 
@@ -29,7 +29,7 @@ Active specs: 12. Pending tasks: 0. In progress tasks: 0. Completed tasks: 174. 
 
 ## Integration Evidence
 
-- Latest integration-test result: chore(tasks): merge T-173 install docs bundle
+- Latest integration-test result: chore(tasks): merge T-177 macos permissions
 - Source: git log --all --grep=merge|integration|verification|test -n 1
 - Date: 2026-08-16
 
@@ -211,6 +211,9 @@ Active specs: 12. Pending tasks: 0. In progress tasks: 0. Completed tasks: 174. 
 | T-172 | Wire macOS build job and install-bundle packaging into deploy.yml | unassigned |
 | T-173 | Update installation documentation to lead with the bob install bundle | unassigned |
 | T-174 | Align runtime extension resolver with XDG data-home semantics | unassigned |
+| T-175 | Harden install-bundle overwrite and PATH checks | developer |
+| T-176 | Correct XDG data-home documentation | developer |
+| T-177 | Restrict macOS build job permissions | developer |
 
 ## In Progress
 
