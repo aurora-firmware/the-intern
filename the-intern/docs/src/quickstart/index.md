@@ -4,8 +4,8 @@ This page gets you to a working `bob chat` session using the **released
 binary** — no Rust toolchain and no source build required. It links out to
 the [Operator & Deployer Guide](../operator-guide/index.md) and the
 [End-User Guide](../end-user-guide/index.md) for anything more detailed than
-"make it run." If you'd rather build from source (for example, to run on a
-platform other than Linux x86_64), see
+"make it run." Released install bundles are available for `linux-x86_64` and
+`macos-arm64`. If you'd rather build from source, see
 [Build and install](../operator-guide/index.md#build-and-install) in the
 Operator & Deployer Guide instead.
 
@@ -31,46 +31,44 @@ Repository: [aurora-firmware/the-intern](https://github.com/aurora-firmware/the-
 
 ---
 
-## 2. Download `bob`
+## 2. Download the install bundle
 
-Grab the `bob` binary from the
-[latest release](https://github.com/aurora-firmware/the-intern/releases/latest)
-and put it on your `PATH`:
+From the [latest release](https://github.com/aurora-firmware/the-intern/releases/latest),
+download the install bundle that matches your platform:
+
+- `the-intern-bob-install-<tag>-linux-x86_64.zip`
+- `the-intern-bob-install-<tag>-macos-arm64.zip`
+
+Replace `<tag>` with the release tag shown on the releases page (for example
+`0.5.0`), then unzip the archive:
 
 ```bash
-curl -fL -o bob \
-  https://github.com/aurora-firmware/the-intern/releases/latest/download/bob
-chmod +x bob
-sudo mv bob /usr/local/bin/bob   # or any directory already on PATH
+unzip the-intern-bob-install-<tag>-<platform>.zip
 ```
 
-The released binary is built for Linux x86_64. Confirm it runs:
+Released install bundles are published for `linux-x86_64` and `macos-arm64`.
+
+---
+
+## 3. Run the installer
+
+Change into the unzipped directory and run the bundled installer:
+
+```bash
+cd the-intern-bob-install-<tag>-<platform>
+./install.sh
+```
+
+`install.sh` installs `bob` and `bob.ts` into their default user-local
+locations without `sudo`. Confirm the binary runs:
 
 ```bash
 bob status --help
 ```
 
----
-
-## 3. Install the bob extension
-
-`bob` hands every `pi` process its extension via `pi --extension
-<path>` — it never relies on pi's own extension search path. Download the
-extension archive from the same [release page](https://github.com/aurora-firmware/the-intern/releases/latest)
-(named `the-intern-bob-extension-<version>.tar.gz`) and install `bob.ts`:
-
-```bash
-mkdir -p ~/.local/share/bob/extensions
-curl -fL -o bob-extension.tar.gz \
-  https://github.com/aurora-firmware/the-intern/releases/download/<version>/the-intern-bob-extension-<version>.tar.gz
-tar -xzf bob-extension.tar.gz -C ~/.local/share/bob/extensions bob.ts
-```
-
-Replace `<version>` with the tag shown on the releases page (for example
-`0.5.0`). (macOS default install path is
-`~/Library/Application Support/bob/extensions/bob.ts` instead. Use
-`extension_path` in `config.toml` or `BOB_EXTENSION_PATH` to put it
-somewhere else.) Full details:
+`bob` hands every `pi` process its extension via `pi --extension <path>`, and
+the install bundle puts `bob.ts` at the default path that runtime lookup
+expects. If you are building from source instead of using a release bundle, see
 [Install the bob extension](../operator-guide/index.md#install-the-bob-extension).
 
 ---
