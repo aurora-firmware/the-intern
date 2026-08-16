@@ -88,6 +88,28 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-16
+
+Implemented T-175 in `the-intern/install-bundle/install.sh` with a red→green shell
+regression test in `the-intern/install-bundle/test-install.sh`. The first failing check
+reproduced the silent abort when overwrite confirmation hit EOF with stdin redirected from
+`/dev/null`. The implementation guards the prompt read with an explicit non-zero abort message
+before any writes, and reworks `path_contains_dir` to preserve empty PATH entries, treat them as
+the current directory via `$PWD`, and trim trailing slashes only from non-empty entries before
+comparison. The prior `IFS=':' read -a` splitter was rejected because it drops a fully empty
+`PATH` and trailing empty entries, which would not preserve current-directory semantics.
+
+Verification passed with `bash -n the-intern/install-bundle/install.sh` and
+`bash the-intern/install-bundle/test-install.sh`, covering EOF/no-write behavior,
+trailing-slash PATH entries, and empty-entry current-directory semantics. Implementation commit:
+`f6a5377` (`fix(install-bundle): harden overwrite and path checks`). No implementation work
+remains.
+
+Obstacles Encountered: `docs/ai-team/docs/coding-guidelines.md`, referenced by the role
+instructions, does not exist; the implementation used `CLAUDE.md`, the task file, and
+repo-specific constraints instead. An unrelated untracked `.github/workflows/__pycache__/`
+remains untouched.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
