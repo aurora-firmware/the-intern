@@ -18,10 +18,37 @@ require_bundle_file() {
 path_contains_dir() {
   local target="$1"
   local entry=""
+  local normalized_entry=""
+  local normalized_target="$target"
+  local remaining_path="${PATH-}"
+  local path_entries=()
 
-  IFS=':' read -r -a path_entries <<<"${PATH-}"
+  while [ "$normalized_target" != "/" ] && [ "${normalized_target%/}" != "$normalized_target" ]; do
+    normalized_target="${normalized_target%/}"
+  done
+
+  while :; do
+    if [[ "$remaining_path" == *:* ]]; then
+      path_entries+=("${remaining_path%%:*}")
+      remaining_path="${remaining_path#*:}"
+      continue
+    fi
+
+    path_entries+=("$remaining_path")
+    break
+  done
+
   for entry in "${path_entries[@]}"; do
-    if [ "$entry" = "$target" ]; then
+    normalized_entry="$entry"
+    if [ -z "$normalized_entry" ]; then
+      normalized_entry="$PWD"
+    else
+      while [ "$normalized_entry" != "/" ] && [ "${normalized_entry%/}" != "$normalized_entry" ]; do
+        normalized_entry="${normalized_entry%/}"
+      done
+    fi
+
+    if [ "$normalized_entry" = "$normalized_target" ]; then
       return 0
     fi
   done
@@ -72,7 +99,10 @@ pi_install_guide="https://github.com/earendil-works/pi/blob/main/packages/coding
 
 if [ -e "$install_binary_path" ]; then
   printf 'A bob binary already exists at %s. Overwrite? [y/N] ' "$install_binary_path"
-  read -r overwrite_response
+  if ! read -r overwrite_response; then
+    printf 'Install aborted: no input available for overwrite confirmation.\n' >&2
+    exit 1
+  fi
   case "$overwrite_response" in
     y | Y)
       ;;
