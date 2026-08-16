@@ -149,9 +149,8 @@ class TestArchiveStep(unittest.TestCase):
     def _find_archive_step(self):
         for step in self.steps:
             name = step.get("name", "")
-            if "archive" in name.lower() or "tar" in name.lower() or "package" in name.lower():
+            if "archive docs" in name.lower():
                 return step
-        # Also look in run commands
         for step in self.steps:
             run = step.get("run", "")
             if "tar" in run and "docs" in run:
@@ -236,6 +235,184 @@ class TestReleaseStep(unittest.TestCase):
             files_value,
             "release files must include the bob extension archive",
         )
+
+    def test_release_files_includes_bob_companion_archive(self):
+        """Release must keep the bob-companion archive unchanged."""
+        step = self._find_release_step()
+        self.assertIsNotNone(step, "softprops/action-gh-release step must exist")
+        files_value = step.get("with", {}).get("files", "")
+        self.assertIn(
+            "the-intern-bob-companion-claude",
+            files_value,
+            "release files must include the bob-companion archive",
+        )
+
+    def test_release_files_includes_linux_install_bundle_zip(self):
+        """Release must attach the Linux install-bundle zip."""
+        step = self._find_release_step()
+        self.assertIsNotNone(step, "softprops/action-gh-release step must exist")
+        files_value = step.get("with", {}).get("files", "")
+        self.assertIn(
+            "the-intern-bob-install-${{ github.ref_name }}-linux-x86_64.zip",
+            files_value,
+            "release files must include the Linux install-bundle zip",
+        )
+
+    def test_release_files_includes_macos_install_bundle_zip(self):
+        """Release must attach the macOS install-bundle zip."""
+        step = self._find_release_step()
+        self.assertIsNotNone(step, "softprops/action-gh-release step must exist")
+        files_value = step.get("with", {}).get("files", "")
+        self.assertIn(
+            "the-intern-bob-install-${{ github.ref_name }}-macos-arm64.zip",
+            files_value,
+            "release files must include the macOS install-bundle zip",
+        )
+
+    def test_release_files_list_keeps_four_existing_assets_and_adds_two_zips(self):
+        """Release must publish exactly six assets in the existing release step."""
+        step = self._find_release_step()
+        self.assertIsNotNone(step, "softprops/action-gh-release step must exist")
+        files_value = step.get("with", {}).get("files", "")
+        files = [line.strip() for line in files_value.splitlines() if line.strip()]
+        self.assertEqual(
+            len(files),
+            6,
+            "release files list must keep the four existing assets and add two install-bundle zips",
+        )
+
+
+class TestMacosBuildJob(unittest.TestCase):
+    """AC-1, AC-2, AC-4: macOS build job must create and upload a zipped install bundle."""
+
+    def setUp(self):
+        self.workflow = load_workflow()
+        self.job = self.workflow["jobs"].get("build-macos")
+
+    def test_build_macos_job_exists(self):
+        self.assertIsNotNone(self.job, "expected a separate build-macos job")
+
+    def test_build_macos_job_runs_on_macos_14(self):
+        self.assertIsNotNone(self.job, "expected a separate build-macos job")
+        self.assertEqual(
+            self.job.get("runs-on"),
+            "macos-14",
+            "build-macos job must run on macos-14",
+        )
+
+    def test_build_macos_job_restricts_contents_permission_to_read(self):
+        self.assertIsNotNone(self.job, "expected a separate build-macos job")
+        self.assertEqual(
+            self.job.get("permissions"),
+            {"contents": "read"},
+            "build-macos job must explicitly limit contents permission to read",
+        )
+
+    def test_build_macos_job_builds_release_bob_binary(self):
+        self.assertIsNotNone(self.job, "expected a separate build-macos job")
+        run_blocks = [
+            step.get("run", "") for step in self.job.get("steps", []) if step.get("run")
+        ]
+        self.assertTrue(
+            any("cargo build --release -p bob" in run for run in run_blocks),
+            "build-macos job must build bob in release mode",
+        )
+
+    def test_build_macos_job_packages_expected_files_into_zip(self):
+        self.assertIsNotNone(self.job, "expected a separate build-macos job")
+        run_blocks = [
+            step.get("run", "") for step in self.job.get("steps", []) if step.get("run")
+        ]
+        package_run = next(
+            (
+                run for run in run_blocks
+                if "the-intern-bob-install-${{ github.ref_name }}-macos-arm64.zip" in run
+            ),
+            "",
+        )
+        self.assertIn("target/release/bob", package_run)
+        self.assertIn("bob.ts", package_run)
+        self.assertIn("install.sh", package_run)
+        self.assertIn("README.txt", package_run)
+        self.assertIn("zip", package_run, "macOS install bundle must be zipped before upload")
+
+    def test_build_macos_job_uploads_zip_artifact_with_repo_pinned_action_major(self):
+        self.assertIsNotNone(self.job, "expected a separate build-macos job")
+        upload_steps = [
+            step for step in self.job.get("steps", []) if "upload-artifact" in step.get("uses", "")
+        ]
+        self.assertEqual(len(upload_steps), 1, "expected one upload-artifact step in build-macos")
+        upload_step = upload_steps[0]
+        self.assertIn(
+            "@v6",
+            upload_step.get("uses", ""),
+            "upload-artifact must use the same pinned major version as build.yml",
+        )
+        self.assertIn(
+            ".zip",
+            upload_step.get("with", {}).get("path", ""),
+            "upload-artifact must upload the pre-zipped macOS bundle",
+        )
+
+
+class TestReleaseJobInstallBundles(unittest.TestCase):
+    """AC-2, AC-4, AC-5: Linux release job must package Linux bundle and gate on macOS."""
+
+    def setUp(self):
+        self.workflow = load_workflow()
+        self.job = self.workflow["jobs"]["release"]
+        self.steps = self.job["steps"]
+
+    def test_workflow_keeps_workflow_level_contents_write_permission(self):
+        self.assertEqual(
+            self.workflow.get("permissions"),
+            {"contents": "write"},
+            "workflow must keep contents: write for release creation",
+        )
+
+    def test_release_job_needs_build_macos(self):
+        self.assertEqual(
+            self.job.get("needs"),
+            "build-macos",
+            "release job must depend on build-macos so a macOS failure blocks the release",
+        )
+
+    def test_release_job_downloads_macos_artifact_with_repo_pinned_action_major(self):
+        download_steps = [
+            step for step in self.steps if "download-artifact" in step.get("uses", "")
+        ]
+        self.assertEqual(len(download_steps), 1, "expected one download-artifact step in release job")
+        download_step = download_steps[0]
+        self.assertIn(
+            "@v6",
+            download_step.get("uses", ""),
+            "download-artifact must use the same pinned major version as build.yml",
+        )
+
+    def test_release_job_packages_linux_install_bundle_zip(self):
+        package_steps = [
+            step for step in self.steps
+            if "the-intern-bob-install-${{ github.ref_name }}-linux-x86_64.zip" in step.get("run", "")
+        ]
+        self.assertEqual(len(package_steps), 1, "expected one Linux install-bundle packaging step")
+        run_cmd = package_steps[0].get("run", "")
+        self.assertIn("target/release/bob", run_cmd)
+        self.assertIn("bob.ts", run_cmd)
+        self.assertIn("install.sh", run_cmd)
+        self.assertIn("README.txt", run_cmd)
+
+    def test_release_job_keeps_existing_archive_steps_exactly_once(self):
+        archive_step_names = [step.get("name", "") for step in self.steps]
+        self.assertEqual(archive_step_names.count("Archive docs"), 1)
+        self.assertEqual(archive_step_names.count("Archive bob extension"), 1)
+        self.assertEqual(archive_step_names.count("Archive bob-companion plugin"), 1)
+
+    def test_release_job_builds_docs_exactly_once(self):
+        docs_build_steps = [
+            step for step in self.steps
+            if "docs" in step.get("name", "").lower() and "build" in step.get("name", "").lower()
+        ]
+        self.assertEqual(len(docs_build_steps), 1, "release job must build docs exactly once")
 
 
 class TestBobExtensionArchiveStep(unittest.TestCase):
