@@ -56,6 +56,22 @@ on `PATH` before you continue.
 
 ## Build and install
 
+For released builds on supported platforms, prefer the install bundle from the
+[GitHub Releases page](https://github.com/aurora-firmware/the-intern/releases).
+Download the zip that matches your platform
+(`the-intern-bob-install-<tag>-linux-x86_64.zip` or
+`the-intern-bob-install-<tag>-macos-arm64.zip`), unzip it, and run:
+
+```bash
+./install.sh
+```
+
+That installs the `bob` binary and `bob.ts` into their default user-local
+locations without `sudo`.
+
+If no release zip exists for your target platform, or you are working from a
+source checkout on purpose, use the manual source-build path below.
+
 Build the `bob` binary from the Rust workspace:
 
 ```bash
@@ -90,6 +106,10 @@ The bob extension is a required source asset. Bob supplies it directly to every
 pi process as `pi --extension <resolved-path>`; do not copy it into pi's own
 extension search path and do not run `pi install` for it.
 
+For released builds on `linux-x86_64` and `macos-arm64`, the recommended path
+is the install bundle described above: it installs `bob.ts` to bob's default
+extension location automatically when you run `./install.sh`.
+
 On Linux, install `bob.ts` under the XDG data directory. The default is:
 
 ```text
@@ -106,6 +126,10 @@ For a source checkout on Linux:
 mkdir -p ~/.local/share/bob/extensions
 cp the-intern/pi-extension/bob.ts ~/.local/share/bob/extensions/bob.ts
 ```
+
+This manual copy path is the source-build alternative when no release bundle
+exists for your platform or when you intentionally want to install from a local
+checkout.
 
 To use another location, set the top-level `extension_path` key in
 `config.toml`:
