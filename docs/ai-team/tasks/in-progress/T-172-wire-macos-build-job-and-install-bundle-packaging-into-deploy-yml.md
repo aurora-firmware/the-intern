@@ -129,3 +129,10 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-16
+PASS
+
+- Stage 1 passed: AC-1 through AC-5 are satisfied in commit `8a04602`. `.github/workflows/deploy.yml` adds a separate `build-macos` job on `macos-14`, packages both install-bundle zips with the required four files, keeps the existing Linux docs/CLI/archive work in the `release` job exactly once, gates release publication on `needs: build-macos`, and attaches the two new zip assets through the existing `softprops/action-gh-release@v2` step alongside the four unchanged assets.
+- Stage 1 scope check passed: only the two task-listed files changed.
+- Stage 2 passed: `deploy.yml` parses as valid YAML, `.github/workflows/test_deploy_workflow.py` passes with 35 tests, `actions/upload-artifact` and `actions/download-artifact` match the `@v6` major already used in `.github/workflows/build.yml`, and the workflow zips each install bundle before artifact upload so executable mode bits for `bob` and `install.sh` are preserved in the shipped bundles.
