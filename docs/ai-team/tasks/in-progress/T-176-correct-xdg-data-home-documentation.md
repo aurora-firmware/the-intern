@@ -110,3 +110,23 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-16
+PASS
+
+Stage 1 passed. AC-1 is satisfied in both guides: the submitted text now documents
+that `extension_path` falls back on unset or empty `XDG_DATA_HOME`, honors a
+non-empty absolute override, and rejects a non-empty relative value, matching
+`default_extension_data_root_for_env()` in `the-intern/service/crates/bob/src/config.rs`.
+AC-2 and AC-3 are satisfied in the operator guide: `skill_install_path` is
+documented as honoring only a non-empty absolute `XDG_DATA_HOME`, while unset,
+empty, or relative values deliberately fall back to the platform default,
+matching `default_skill_install_path_for_env()`, and the guide no longer claims
+it resolves identically to `extension_path`.
+
+Stage 2 passed. The implementation stayed within the task-owned documentation
+files, introduced no unrelated behavior, and the submitted wording is precise
+and internally consistent. Verification re-ran successfully against the
+submitted guide content with `rg` and `mdbook build`; the mdBook run required
+pointing `BOB_BIN` at the already-built local debug binary because the isolated
+review copy did not include `the-intern/service/target/`.
