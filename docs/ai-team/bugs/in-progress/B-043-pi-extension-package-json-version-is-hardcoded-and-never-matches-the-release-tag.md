@@ -3,7 +3,7 @@ id: B-043
 title: pi-extension package.json version is hardcoded and never matches the 
   release tag
 severity: low
-status: open
+status: in-progress
 created: '2026-08-17'
 ---
 
