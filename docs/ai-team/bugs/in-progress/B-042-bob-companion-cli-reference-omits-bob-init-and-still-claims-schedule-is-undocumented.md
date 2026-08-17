@@ -144,6 +144,89 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-08-17
+
+Reproduction status: Confirmed. Direct text inspection of the plugin tree
+against current `dev-agent` source (`cfe427b`), plus `git log -S` against
+the mdbook preprocessor and a `grep` of `command-reference.md` for an
+`## bob init` section.
+
+Evidence captured:
+- `grep -n "missing from the" the-intern/bob-companion/claude/README.md the-intern/bob-companion/claude/skills/bob-cli/SKILL.md`
+  → `README.md:34` and `bob-cli/SKILL.md:35` both match, asserting `schedule`
+  is "missing from the generated CLI reference" / "missing from the
+  auto-generated mdBook CLI reference."
+- `grep -n '"schedule"' the-intern/docs/preprocessors/cli-reference/src/main.rs`
+  → line 14, inside the `SUBCOMMANDS` array (`init, serve, status, sessions,
+  audit, policy, schedule, chat`) — `schedule` is present and generates
+  `the-intern/docs/book/cli-reference/schedule.html` on `mdbook build`.
+- `git log --oneline -S'"schedule"' -- the-intern/docs/preprocessors/cli-reference/src/main.rs`
+  → single commit `54419cd docs(bob): document init bootstrap workflow`
+  (2026-08-13) added the entry. `git log -1 --format=%ai 0.5.1` → `2026-07-29`
+  — the release tag GitHub issue #41 was reproduced against predates this
+  fix, confirming the fix is real, on `dev-agent`, and postdates the
+  originally-reported gap.
+- `grep -n "^## bob" the-intern/bob-companion/claude/skills/bob-cli/references/command-reference.md`
+  → `serve`, `status`, `sessions list`, `sessions kill`, `audit tail`,
+  `policy reload`, four `schedule ...` headings, `chat` — no `init` heading,
+  and `grep -c init` on the file returns `0`.
+- `the-intern/service/crates/bob/src/cli/mod.rs:18-22` — `Init { path:
+  String, #[arg(long)] force: bool }` confirms `bob init <path> [--force]`
+  is a real, flag-bearing subcommand.
+- `the-intern/service/crates/bob/src/init_materializer.rs:48-51` — without
+  `--force`, `materialize_workspace` errors with `"live config already
+  exists at <path>; rerun with --force to replace it"` when the resolved
+  live `config.toml` path already exists; `--force` allows overwrite.
+
+Isolated fault:
+- `the-intern/bob-companion/claude/README.md:34` — the parenthetical
+  `(e.g. `schedule` missing from the generated CLI reference)`.
+- `the-intern/bob-companion/claude/skills/bob-cli/SKILL.md:34-36` — the
+  `— it is **missing from the auto-generated mdBook CLI reference**, so
+  don't assume absence there means it doesn't exist` clause.
+- `the-intern/bob-companion/claude/skills/bob-cli/references/command-reference.md`
+  — missing `## bob init <path> [--force]` section (the file has no `init`
+  coverage at all).
+
+Root cause: Both faults are the same class of defect as `B-038`/`B-040` —
+this plugin's prose independently duplicates or references facts about
+other parts of the tree (the generated mdBook docs, the CLI's subcommand
+set) without a single source of truth or enforcement, so it silently drifts
+when those other parts change. The `schedule` claim drifted when `54419cd`
+fixed the underlying mdBook gap without updating the plugin text that
+referenced it. The `bob init` gap is a coverage gap left over from `B-040`,
+whose fix (adding `init` to `bob-setup/SKILL.md` and the `bob-cli/SKILL.md`
+quick command map) was scoped to making Claude *aware* `init` exists, but
+never extended to giving it a flag-by-flag entry in
+`command-reference.md`, the file `bob-cli/SKILL.md` itself names as the
+authoritative full reference.
+
+Planned fix:
+1. In `README.md:34`, drop the `schedule`-specific parenthetical and either
+   remove the example entirely or replace it with a currently-true one (or
+   generalize the sentence to not name a specific gap that can go stale
+   again without a re-check mechanism).
+2. In `bob-cli/SKILL.md:34-36`, remove the "missing from the auto-generated
+   mdBook CLI reference" clause about `schedule` — state plainly that the
+   full flag-by-flag reference is in `references/command-reference.md`,
+   without the now-false caveat.
+3. In `command-reference.md`, add a `## bob init <path> [--force]` section
+   between the file's introduction and `## bob serve`, documenting: the
+   required `path` positional, the optional `--force` flag, and its
+   overwrite semantics (errors with "live config already exists... rerun
+   with --force to replace it" when the resolved live `config.toml` exists
+   and `--force` is absent).
+
+Planned verification:
+```bash
+grep -n "missing from the" the-intern/bob-companion/claude/README.md \
+  the-intern/bob-companion/claude/skills/bob-cli/SKILL.md
+# expect: no matches
+
+grep -c "^## bob init" the-intern/bob-companion/claude/skills/bob-cli/references/command-reference.md
+# expect: 1
+```
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
