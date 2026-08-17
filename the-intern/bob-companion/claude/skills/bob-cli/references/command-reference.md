@@ -4,6 +4,21 @@ Source of truth: `the-intern/service/crates/bob/src/cli/mod.rs` (clap
 grammar) and `the-intern/service/crates/bob/src/cli/commands/*.rs`
 (handlers). Global flag `--json` applies to every subcommand below.
 
+## `bob init <path> [--force]`
+
+Bootstraps a workspace at `<path>` and writes bob's live `config.toml` at
+the platform default config path, without needing `bob serve` running
+first. `<path>` is a required positional argument — the workspace
+directory to create/populate (`AGENTS.md`, `CLAUDE.md`,
+`config/email-triage.toml`, `worklog/`). Also installs the shared
+`himalaya`/`email-triage`/`worklog` skill package at `skill_install_path`.
+
+`--force` is optional. Without it, if the resolved live `config.toml` path
+already exists, the command fails locally with `"live config already
+exists at <path>; rerun with --force to replace it"` and writes nothing.
+With `--force`, existing generated files (workspace files, the live config,
+the shared skill package) are overwritten.
+
 ## `bob serve`
 
 No flags. Foreground, long-running. Builds `BobConfig`, starts every

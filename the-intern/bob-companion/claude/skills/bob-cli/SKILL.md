@@ -31,10 +31,8 @@ socket path doesn't match" problem, not a bug in the subcommand; see
 | Open an interactive chat session | `bob chat` |
 | Start the service (foreground) | `bob serve` |
 
-Full flag-by-flag reference (including the `schedule` subcommand — it is
-**missing from the auto-generated mdBook CLI reference**, so don't assume
-absence there means it doesn't exist) is in
-`references/command-reference.md`.
+Full flag-by-flag reference for every subcommand, including `init` and
+`schedule`, is in `references/command-reference.md`.
 
 ## Things that are easy to get wrong
 
