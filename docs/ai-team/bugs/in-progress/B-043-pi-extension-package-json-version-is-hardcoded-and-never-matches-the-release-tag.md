@@ -280,3 +280,81 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-17
+
+PASS
+
+Reviewed on `dev-agent` against branch `bug/B-043-pi-extension-version-tag`
+(single commit `fcd227f`, "fix(ci): stamp pi-extension package.json version
+from the release tag", based on `dev-agent` @ `be66f04`). Used
+`git diff dev-agent...bug/B-043-pi-extension-version-tag` (merge-base
+form) to avoid a direction artifact from the branch predating this bug
+file's Work Log commit on `dev-agent` — confirmed the branch touches only
+`.github/workflows/deploy.yml` (+2 lines) and does not modify the bug
+lifecycle file.
+
+**Evidence-chain pre-check:** Diagnosis Log ("Diagnosis 1 — 2026-08-17") is
+complete — reproduction status (confirmed), evidence captured (grep of the
+single `version` occurrence, the "Archive bob extension" step's lack of any
+stamping, the `build.rs`/`Cargo.toml` precedent for the `bob` binary, a
+local dry run of the exact planned `sed` command, and the
+`package-lock.json` `xml-naming@0.1.0` collision that ruled lockfile
+patching out of scope), isolated fault (`deploy.yml` lines 104-108), root
+cause (no equivalent of `build.rs`'s `GITHUB_REF_NAME` mechanism exists for
+the extension), and a concrete planned fix + planned verification are all
+present. Chain is sufficient to proceed.
+
+**Stage 1 — Bug criteria:**
+- Fix addresses the isolated fault exactly as planned: the `sed` command
+  added to the "Archive bob extension" step is character-for-character the
+  command recorded in the Diagnosis Log's Planned Fix.
+- Fix Verification steps followed and independently re-run here: copied
+  `the-intern/pi-extension/package.json`, applied the same `sed` pattern
+  with a stand-in tag, diffed against the original (exactly one line
+  changed), `grep -c '"version"'` → `1`, and `python3 -c "import json;
+  json.load(...)"` → valid JSON. All three match the Work Log's reported
+  results.
+- No unrelated behavior added: diff is two lines in one file, nothing else
+  touched; `package-lock.json` correctly left alone per the Diagnosis Log's
+  explicit scope decision.
+
+**Stage 2 — Code quality:**
+- Correctness: the `sed` pattern targets `"version": "<anything>"` — spot
+  checked against the real `package.json` and confirmed there is exactly
+  one such key in the file (no nested `version` fields in `devDependencies`,
+  which are bare semver-range strings), so there's no risk of an
+  unintended second match.
+- Tests: no CI harness exercises `deploy.yml` outside of an actual tag
+  push; the bug's own local-simulation verification (re-run above) is the
+  practical equivalent and it passed.
+- Security: `${{ github.ref_name }}` is interpolated directly into a `run:`
+  block, which is a known GitHub Actions injection pattern in general — but
+  this file already does the same interpolation in six other places (e.g.
+  the `tar`/`zip` filenames, the release `name:` field), and tag creation
+  on this repo already requires push access, i.e. the same trust boundary
+  every other `github.ref_name` reference in this file relies on. Not a new
+  risk introduced by this fix; consistent with existing file convention.
+  Noting as non-blocking.
+- Readability: single, clearly-labeled command; comment-free but
+  self-explanatory in context of the step name.
+- Performance: n/a (one `sed` invocation on a small file).
+
+**Bug Fix Addendum:**
+- Fix is minimal: two lines, one file, matches Suspected Area exactly.
+- No automated regression test — acceptable given no test harness exists
+  for this workflow file outside of an actual release run; the recorded
+  local-simulation verification fills the equivalent role and was
+  independently re-run above.
+- No unrelated refactoring or cleanup bundled.
+- Diagnosis Log fix contract matches the implementation exactly.
+
+**Minor observation (non-blocking):** a release tag containing a literal
+`/` (Git tags permit this) would break this `sed` command, since `/` is
+its delimiter — but every other `github.ref_name` interpolation in this
+file (filenames, the release `name:` field) has the same latent
+assumption, all existing release tags are plain semver, and defending
+against it is out of scope for this bug.
+
+Next owner: Integrator, merge `bug/B-043-pi-extension-version-tag` into
+`dev-agent`.
