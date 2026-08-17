@@ -3,7 +3,7 @@ id: B-042
 title: bob-companion CLI reference omits bob init and still claims schedule is 
   undocumented
 severity: low
-status: open
+status: in-progress
 created: '2026-08-17'
 ---
 
