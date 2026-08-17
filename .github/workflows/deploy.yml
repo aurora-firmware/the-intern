@@ -103,6 +103,8 @@ jobs:
 
       - name: Archive bob extension
         run: |
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${{ github.ref_name }}\"/" \
+            "${{ env.EXTENSIONS_DIR }}/package.json"
           tar -czf the-intern-bob-extension-${{ github.ref_name }}.tar.gz \
             -C ${{ env.EXTENSIONS_DIR }} \
             bob.ts README.md package.json package-lock.json
