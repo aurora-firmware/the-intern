@@ -123,6 +123,91 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-08-17
+
+Reproduction status: Confirmed. Direct inspection of
+`the-intern/pi-extension/package.json` and `.github/workflows/deploy.yml`
+on `dev-agent` @ `893e820`.
+
+Evidence captured:
+- `grep -n '"version"' the-intern/pi-extension/package.json` → single hit,
+  line 2, `"version": "0.1.0",` — the only `"version"` key in the file (no
+  dependency entries carry a nested `version` object key; devDependencies
+  are bare semver-range strings).
+- `sed -n '104,108p' .github/workflows/deploy.yml` (the "Archive bob
+  extension" step) → tars `bob.ts README.md package.json
+  package-lock.json` straight from the checkout with no version-stamping.
+- `the-intern/service/crates/bob/build.rs:5-13` — the existing, working
+  precedent: reads `GITHUB_REF_NAME` (a var GitHub Actions sets
+  automatically on every run, equal to the tag name on a tag-triggered
+  workflow like this one — confirmed via `github.ref_name` already being
+  used throughout `deploy.yml`, e.g. line 106
+  `the-intern-bob-extension-${{ github.ref_name }}.tar.gz`) and bakes it in
+  as `APP_VERSION` at build time, leaving `Cargo.toml`'s own `version =
+  "0.1.0"` (`the-intern/service/crates/bob/Cargo.toml:3`) untouched and
+  never manually bumped.
+- Local test of the planned `sed` patch against a scratch copy of the real
+  `package.json`: `sed -i "s/\"version\": \"[^\"]*\"/\"version\":
+  \"9.9.9\"/" /tmp/pkg-test.json` → diff shows exactly one line changed
+  (`"version": "0.1.0",` → `"version": "9.9.9",`), rest of the file
+  byte-identical; `grep -c '"version"'` on the result still reports `1`
+  (no accidental double-match or corruption).
+- `the-intern/pi-extension/package-lock.json` has three `"version": "0.1.0"`
+  occurrences: the root package (lines 3, 9 — both before the first
+  `node_modules/...` entry) and, coincidentally, an unrelated transitive
+  dependency `xml-naming@0.1.0` at line 3524
+  (`grep -n '"version": "0.1.0"' the-intern/pi-extension/package-lock.json`).
+  A naive global replace of that literal string would corrupt
+  `xml-naming`'s pinned version.
+
+Isolated fault: `.github/workflows/deploy.yml`'s "Archive bob extension"
+step (lines 104-108) — it packages `the-intern/pi-extension/package.json`
+verbatim from the checkout with no step anywhere in the workflow that
+updates its `version` field to the release tag before archiving.
+
+Root cause: Unlike the `bob` binary (`build.rs` reads `GITHUB_REF_NAME` and
+bakes it into `APP_VERSION` at build time), no equivalent mechanism exists
+for the TypeScript extension's `package.json`. The field was set once at
+file creation and nothing in the release pipeline was ever built to keep it
+in sync with the tag it ships under.
+
+Planned fix: In `.github/workflows/deploy.yml`'s "Archive bob extension"
+step, before the `tar` command, patch
+`${{ env.EXTENSIONS_DIR }}/package.json`'s `version` field to `${{
+github.ref_name }}` with `sed` (no reliance on `node`/`npm`/`jq`, none of
+which are confirmed present in the `rust-dev` container this job runs in):
+
+```bash
+sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${{ github.ref_name }}\"/" \
+  "${{ env.EXTENSIONS_DIR }}/package.json"
+```
+
+This mutates the ephemeral CI checkout only — the tracked repo file stays
+at `0.1.0`, exactly mirroring how `Cargo.toml`'s `version` field is never
+bumped either. `package-lock.json` is explicitly out of scope: the
+extension's own README states it is "shipped as source only. No npm
+publish, no build artifact, and no `pi install` command is involved" — no
+consumer of the release tarball runs `npm ci`/`npm install` against it, so
+the lockfile's version fields have no practical effect, and safely patching
+them (skipping the unrelated `xml-naming@0.1.0` entry) would add complexity
+disproportionate to any real benefit.
+
+Planned verification: Since this only runs inside the tag-triggered release
+workflow, verify locally by simulating the same `sed` command against a
+scratch copy of the real file with a stand-in tag value, confirming exactly
+one line changes and the JSON stays valid:
+
+```bash
+cp the-intern/pi-extension/package.json /tmp/b043-verify.json
+sed -i 's/"version": "[^"]*"/"version": "9.9.9"/' /tmp/b043-verify.json
+diff the-intern/pi-extension/package.json /tmp/b043-verify.json
+# expect exactly one line changed: "version": "0.1.0", -> "version": "9.9.9",
+grep -c '"version"' /tmp/b043-verify.json
+# expect: 1
+python3 -c "import json; json.load(open('/tmp/b043-verify.json'))"
+# expect: no error (file is still valid JSON)
+```
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
