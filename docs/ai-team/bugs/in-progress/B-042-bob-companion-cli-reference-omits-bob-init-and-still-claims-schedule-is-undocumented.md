@@ -294,3 +294,77 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-17
+
+PASS
+
+Reviewed on `dev-agent` against branch `bug/B-042-companion-cli-reference-stale`
+(single commit `1b4b319`, "docs(bob-companion): fix stale schedule gap claim,
+document bob init", based on `dev-agent` @ `a61c8ea` — confirmed via
+`git diff dev-agent bug/B-042-companion-cli-reference-stale -- the-intern/bob-companion`
+touching exactly the three files named in Suspected Area).
+
+**Evidence-chain pre-check:** Diagnosis Log ("Diagnosis 1 — 2026-08-17") is
+complete — reproduction status (confirmed, direct text inspection), evidence
+captured (grep output, `git log -S` provenance for the commit that fixed the
+underlying mdBook gap, clap grammar, and `init_materializer.rs` `--force`
+semantics), isolated fault (three specific locations), root cause (same
+unenforced-duplicate class as B-038/B-040), and a three-part planned fix with
+planned verification are all present. Chain is sufficient to proceed.
+
+**Stage 1 — Bug criteria:**
+- Fix addresses all three isolated faults exactly as planned: `README.md:34`'s
+  stale parenthetical is gone; `bob-cli/SKILL.md:34-36`'s "missing from the
+  auto-generated mdBook CLI reference" clause is gone; `command-reference.md`
+  now has a `## \`bob init <path> [--force]\`` section, placed first as
+  planned.
+- Fix Verification steps followed and re-run independently: `grep -n
+  "missing from the" README.md bob-cli/SKILL.md` on the branch → no matches.
+  `grep -c '^## \`bob init' command-reference.md` → `1`. Both match the
+  corrected commands the Work Log recorded (the bug file's original Fix
+  Verification command used `"^## bob init"` without the backtick the file's
+  own heading style uses for every subcommand — the Work Log caught this,
+  corrected it in the bug file, and re-ran it; verified independently here
+  and it holds).
+- No unrelated behavior added: `git diff dev-agent bug/B-042-... --
+  the-intern/bob-companion` touches only `README.md`, `bob-cli/SKILL.md`, and
+  `command-reference.md` — exactly the Suspected Area. The `bob-cli/SKILL.md`
+  sentence was rewritten (not just trimmed) to name `init` and `schedule` as
+  covered in `command-reference.md`; this directly supports planned-fix item 3
+  (making the new `init` section discoverable from the pointer sentence) and
+  is not scope creep.
+
+**Stage 2 — Code quality:**
+- Correctness: spot-checked the new `bob init` content against
+  `the-intern/service/crates/bob/src/cli/mod.rs:18-22` (clap grammar: `path`
+  positional + `--force` flag) and `init_materializer.rs:48-51,70-71` (the
+  exact "live config already exists... rerun with --force" error text, and
+  that `--force` governs the live config, workspace files, and shared skill
+  package) — all accurate.
+- Tests: no automated test exists for this plugin tree, consistent with
+  `B-038`/`B-040` precedent (documentation-only, no test harness for
+  companion-plugin prose); the bug's own grep-based Fix Verification is the
+  full and sufficient verification for this class of fix.
+- Security: n/a, prose only.
+- Readability: new section matches the file's existing heading style exactly
+  (`## \`bob <subcommand> ...\``) and existing section length/format.
+- Performance: n/a.
+
+**Bug Fix Addendum:**
+- Fix is minimal: three files, all named in Suspected Area, no unrelated
+  refactor.
+- No automated regression test — acceptable per the established
+  documentation-only precedent (`B-038`); the grep-based Fix Verification
+  fills the same role and was independently re-run above.
+- No unrelated refactoring or cleanup bundled.
+- Diagnosis Log fix contract matches the implementation exactly, including
+  the placement of the new `init` section (first, before `bob serve`).
+
+**Minor observation (non-blocking):** `README.md`'s skill-trigger table for
+`bob-cli` still doesn't list `init` among its triggers — noted in this bug's
+own Related section as out of scope (a `B-040` leftover, not part of this
+bug's isolated fault), so correctly not touched here.
+
+Next owner: Integrator, merge `bug/B-042-companion-cli-reference-stale` into
+`dev-agent`.
