@@ -31,5 +31,5 @@ This plugin intentionally does **not** duplicate the mdBook user manual at
 `the-intern/docs/` (End-User Guide, Operator Guide, Architecture Overview,
 Extension Author Guide, CLI Reference). It exists so Claude can act
 correctly *without* a human first pointing it at those docs, and it calls
-out gaps in them (e.g. `schedule` missing from the generated CLI reference)
-rather than re-explaining what they already cover well.
+out any gaps found in them rather than re-explaining what they already
+cover well.
