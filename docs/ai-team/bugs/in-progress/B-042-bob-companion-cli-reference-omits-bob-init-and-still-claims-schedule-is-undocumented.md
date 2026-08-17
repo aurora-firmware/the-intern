@@ -128,9 +128,10 @@ grep -n "missing from the" the-intern/bob-companion/claude/README.md \
   the-intern/bob-companion/claude/skills/bob-cli/SKILL.md
 # should return no matches after the fix.
 
-# command-reference.md must document bob init:
-grep -n "^## bob init" the-intern/bob-companion/claude/skills/bob-cli/references/command-reference.md
-# should return exactly one match after the fix.
+# command-reference.md must document bob init (heading style matches every
+# other entry in the file, e.g. "## `bob serve`" — backtick-wrapped):
+grep -c '^## `bob init' the-intern/bob-companion/claude/skills/bob-cli/references/command-reference.md
+# should print 1 after the fix.
 ```
 
 ## Diagnosis Log
@@ -236,6 +237,51 @@ rejected, decisions made, what remains for next session.
 
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
+
+### Session 1 — 2026-08-17
+
+Implemented all three parts of the Diagnosis Log's planned fix on
+`bug/B-042-companion-cli-reference-stale`, cut from `dev-agent` @ `a61c8ea`.
+
+1. `the-intern/bob-companion/claude/README.md:34-35` — replaced the
+   `schedule`-specific example (now false) with a sentence that doesn't
+   name a specific gap, so it can't go stale the same way again when the
+   next mdBook gap is found and fixed elsewhere.
+2. `the-intern/bob-companion/claude/skills/bob-cli/SKILL.md:34-36` —
+   removed the "missing from the auto-generated mdBook CLI reference"
+   clause; the sentence now just points at `command-reference.md` as the
+   full flag-by-flag reference and explicitly names `init` and `schedule`
+   as covered there (partly to make the `init` addition below discoverable
+   from this pointer sentence, not just from the Quick command map).
+3. `the-intern/bob-companion/claude/skills/bob-cli/references/command-reference.md` —
+   added a `## \`bob init <path> [--force]\`` section, placed first (before
+   `## \`bob serve\``) to match the subcommand ordering used elsewhere in
+   the plugin (`bob-cli/SKILL.md`'s own subcommand list and Quick command
+   map both list `init` first). Content: the required `path` positional,
+   the optional `--force` flag, and its overwrite semantics, sourced from
+   `the-intern/service/crates/bob/src/cli/mod.rs:18-22` (clap grammar) and
+   `the-intern/service/crates/bob/src/init_materializer.rs:48-51` (the
+   exact "live config already exists... rerun with --force" error text and
+   what `--force` overwrites).
+
+One correction to the bug's own Fix Verification command: `command-reference.md`
+headings are backtick-wrapped (e.g. `## \`bob serve\``, not `## bob serve`),
+so `grep -n "^## bob init"` never matches any heading in this file
+regardless of the fix. Updated the Fix Verification section in this file to
+`grep -c '^## \`bob init'`, matching the file's actual heading style, and
+reran it — prints `1`.
+
+Ran both Fix Verification commands from this file after the edits:
+- `grep -n "missing from the" README.md bob-cli/SKILL.md` → no matches (was
+  2 matches before the fix, one per file).
+- `grep -c '^## \`bob init' command-reference.md` → `1`.
+
+No automated test exists for this plugin tree (documentation-only, same as
+`B-038`/`B-040`); the bug's own grep-based Fix Verification commands are the
+full verification. Did not touch the `README.md` bob-cli trigger-table row
+(which also doesn't mention `init`) or any other file — out of scope for
+this bug's isolated fault, and not covered by planned fix or fix
+verification. Nothing remains outstanding for this bug; ready for review.
 
 ## Review
 
