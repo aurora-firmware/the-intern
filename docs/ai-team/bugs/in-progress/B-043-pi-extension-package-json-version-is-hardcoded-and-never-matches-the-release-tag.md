@@ -218,6 +218,57 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-17
+
+Implemented the Diagnosis Log's planned fix on
+`bug/B-043-pi-extension-version-tag`, cut from `dev-agent` @ `be66f04`.
+
+Added a `sed` command to `.github/workflows/deploy.yml`'s "Archive bob
+extension" step, immediately before the `tar` invocation, that patches
+`${{ env.EXTENSIONS_DIR }}/package.json`'s `version` field to `${{
+github.ref_name }}`:
+
+```yaml
+sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${{ github.ref_name }}\"/" \
+  "${{ env.EXTENSIONS_DIR }}/package.json"
+```
+
+Placed it in the same step rather than a separate one, matching this
+workflow's existing style (each `- name:` step already does several
+related shell operations, e.g. "Package macOS install bundle").
+
+Considered and rejected also patching `package-lock.json`: its root-package
+`version` fields have no practical consumer (the extension is shipped
+source-only, no `npm ci`/`install` against the release tarball per its own
+README), and a naive fix risks corrupting the unrelated transitive
+dependency `xml-naming@0.1.0` pinned at the exact same literal version
+string — added complexity for zero real benefit, so left untouched, as
+scoped in the Diagnosis Log.
+
+Ran the Diagnosis Log's Planned Verification locally (this only runs for
+real inside the tag-triggered release workflow, so local verification
+simulates the `sed` command against a scratch copy of the real file):
+
+```
+cp the-intern/pi-extension/package.json /tmp/b043-verify.json
+sed -i 's/"version": "[^"]*"/"version": "9.9.9"/' /tmp/b043-verify.json
+diff the-intern/pi-extension/package.json /tmp/b043-verify.json
+# -> exactly one line changed: "version": "0.1.0", -> "version": "9.9.9",
+grep -c '"version"' /tmp/b043-verify.json
+# -> 1
+python3 -c "import json; json.load(open('/tmp/b043-verify.json'))"
+# -> no error, still valid JSON
+```
+
+All three checks passed as predicted. Also confirmed the edited
+`deploy.yml` is still valid YAML: `python3 -c "import yaml;
+yaml.safe_load(open('.github/workflows/deploy.yml'))"` → no error.
+
+No automated test exists for this workflow file (no CI harness runs
+`deploy.yml` outside of an actual tag push); the bug's own local-simulation
+Fix Verification is the full verification available short of cutting a
+real tag. Nothing remains outstanding for this bug; ready for review.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
