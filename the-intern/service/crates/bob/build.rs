@@ -16,11 +16,11 @@ fn main() {
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set for bob"),
     );
     let package_root = manifest_dir
-        .join("../../../email-skills/.pi/skills")
+        .join("../../../bob-skills/.pi/skills")
         .canonicalize()
         .unwrap_or_else(|err| {
             panic!(
-                "failed to resolve canonical email-skills package path from {}: {err}",
+                "failed to resolve canonical bob-skills package path from {}: {err}",
                 manifest_dir.display()
             )
         });

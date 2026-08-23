@@ -13,7 +13,7 @@ use crate::{
 const CONTEXT_PLACEHOLDER: &str = "# Workspace Instructions\n\nWorkspace-specific instructions belong in this file. Bob treats this file as trusted pi context for this workspace.\n";
 const EMAIL_TRIAGE_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../email-skills/config/email-triage.example.toml"
+    "/../../../bob-skills/config/email-triage.example.toml"
 ));
 
 #[derive(Debug, Clone, PartialEq, Eq)]
