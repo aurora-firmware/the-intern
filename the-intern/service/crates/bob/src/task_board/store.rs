@@ -412,13 +412,43 @@ fn append_log_entry_content(
     entry: &str,
     path: &Path,
 ) -> ServiceResult<String> {
-    if !content.contains("\n## Log\n") && !content.starts_with("## Log\n") {
+    let mut offset = 0usize;
+    let mut insert_offset = None;
+    let mut in_log_section = false;
+
+    for segment in content.split_inclusive('\n') {
+        let line = segment.strip_suffix('\n').unwrap_or(segment);
+
+        if in_log_section && line.starts_with("## ") {
+            insert_offset = Some(offset);
+            break;
+        }
+
+        if line == "## Log" {
+            in_log_section = true;
+            insert_offset = Some(offset + segment.len());
+        }
+
+        offset += segment.len();
+    }
+
+    let insert_offset = match insert_offset {
+        Some(insert_offset) => insert_offset,
+        None => {
+            return Err(ServiceError::InvalidRequest {
+                detail: format!("task file {} is missing a log section", path.display()),
+            });
+        }
+    };
+
+    if !in_log_section {
         return Err(ServiceError::InvalidRequest {
             detail: format!("task file {} is missing a log section", path.display()),
         });
     }
 
-    let mut updated = content.to_owned();
+    let mut updated = String::with_capacity(content.len() + entry.len() + 32);
+    updated.push_str(&content[..insert_offset]);
     if !updated.ends_with('\n') {
         updated.push('\n');
     }
@@ -432,6 +462,11 @@ fn append_log_entry_content(
     if !entry.ends_with('\n') {
         updated.push('\n');
     }
+    let trailing = &content[insert_offset..];
+    if !trailing.is_empty() && !updated.ends_with("\n\n") {
+        updated.push('\n');
+    }
+    updated.push_str(trailing);
 
     Ok(updated)
 }
@@ -648,6 +683,64 @@ mod tests {
         assert!(
             content.ends_with("## Log\n\n### 2026-08-23\nRecorded a follow-up note.\n"),
             "log entry should be appended at the end: {content}"
+        );
+    }
+
+    #[test]
+    fn append_log_entry_inserts_before_later_sections_in_hand_authored_files() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        fs::create_dir_all(&board).expect("create board");
+        let path = board.join("2026-08-23-hand-authored-log.md");
+        fs::write(
+            &path,
+            concat!(
+                "---\n",
+                "title: Hand-authored task\n",
+                "status: doing\n",
+                "---\n\n",
+                "## Description\n",
+                "Keep later sections untouched.\n\n",
+                "## Definition of Done\n",
+                "- [ ] append inside the log section\n\n",
+                "## Log\n",
+                "### 2026-08-22\n",
+                "Initial note.\n\n",
+                "## Notes\n",
+                "Trailing content stays where it is.\n",
+            ),
+        )
+        .expect("write hand-authored task");
+        let store = TaskStore::new(&board);
+
+        store
+            .append_log_entry(
+                &path,
+                NaiveDate::from_ymd_opt(2026, 8, 23).expect("valid date"),
+                "Recorded a follow-up note.",
+            )
+            .expect("append should succeed");
+
+        let content = fs::read_to_string(&path).expect("task file");
+        assert_eq!(
+            content,
+            concat!(
+                "---\n",
+                "title: Hand-authored task\n",
+                "status: doing\n",
+                "---\n\n",
+                "## Description\n",
+                "Keep later sections untouched.\n\n",
+                "## Definition of Done\n",
+                "- [ ] append inside the log section\n\n",
+                "## Log\n",
+                "### 2026-08-22\n",
+                "Initial note.\n\n",
+                "### 2026-08-23\n",
+                "Recorded a follow-up note.\n\n",
+                "## Notes\n",
+                "Trailing content stays where it is.\n",
+            )
         );
     }
 
