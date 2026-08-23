@@ -135,3 +135,10 @@ FAIL
 
 - `the-intern/service/crates/bob/src/task_board/store.rs:409` — `append_log_entry_content` only checks that `## Log` exists somewhere, then appends the new dated entry to the end of the file. For any hand-authored task that keeps additional content after the log heading, the entry lands outside the log section, which misses the task contract and the S-014 workflow requirement to append to the task's log section. Change this helper to locate the `## Log` section boundary and insert the new `### YYYY-MM-DD` block inside that section, preserving any later content unchanged.
 - `the-intern/service/crates/bob/src/task_board/store.rs:628` — the tests only cover the generated template where `## Log` is the last section, so they do not catch the acceptance gap above for hand-authored files. Add a regression test with a valid hand-authored task file that has content after `## Log`, then verify the new entry is inserted under `## Log` without moving or rewriting the trailing content.
+
+### Review Verdict — 2026-08-23
+PASS
+
+- Stage 1 passed: AC-1 through AC-5 are satisfied on `task/T-183-add-task-file-store`. The store creates `0600` markdown files with only `title` and `status` frontmatter, rejects invalid statuses before writing, rewrites only the targeted frontmatter line, reports exact/none/ambiguous partial identifier resolution, and reads hand-authored quoted titles.
+- Stage 2 passed: `a95e1d3` fixes the prior log-section defect by inserting new `### YYYY-MM-DD` entries before the next `##` heading, and the new regression test covers a hand-authored task with trailing sections to keep later content in place.
+- Verification rerun passed: `(cd the-intern/service && cargo test -p bob task_board)` completed successfully with 16 passing task-board tests.
