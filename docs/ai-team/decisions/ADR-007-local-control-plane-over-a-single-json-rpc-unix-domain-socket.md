@@ -85,6 +85,17 @@ of `config.toml` unless an owning ADR explicitly says otherwise.
 > `$XDG_STATE_HOME/bob/schedules.json` and keeps the same admin-socket method
 > family as the authorized mutation path.
 
+> **Amended (S-012, 2026-08-23).** "Its non-`serve` subcommands are thin
+> JSON-RPC clients" overstates the rule. This decision governs the *control
+> plane*: everything that reaches the running service does so over `admin.sock`,
+> and no second transport is introduced. It does not require every subcommand to
+> reach the service. `bob init` (S-012) is filesystem-only and never contacts a
+> running service, and further filesystem-only subcommands are consistent with
+> this ADR. The invariant is that a subcommand needing the service uses this
+> plane and only this plane; a subcommand needing nothing from the service uses
+> nothing. Recorded when the S-014 draft review found the original wording had
+> been false since `bob init` shipped.
+
 ## Consequences
 
 ### Positive
