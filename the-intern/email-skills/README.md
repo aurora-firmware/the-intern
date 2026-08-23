@@ -7,9 +7,9 @@ diary-discipline skill S-011/T-154/T-155 extracted out of `email-triage`).
 The package is separate from `the-intern/bob-companion/claude` (Claude Code
 dev-tooling for operating `bob`) and from this repository's own
 `.claude/skills` (this repository's AI-team process tooling). Neither of
-those is where an agent discovers this package's runtime skills; the two
-generated packaging targets under this directory — `.pi/skills/` and
-`claude/` — are (see [Package layout](#package-layout)).
+those is where an agent discovers this package's runtime skills; the
+generated `.pi/skills/` target under this directory is (see
+[Package layout](#package-layout)).
 
 ## Verified skill discovery path and invocation form
 
@@ -60,7 +60,6 @@ required for discovery to work at all, and is now the recorded form.
 the-intern/email-skills/
 ├── README.md                       # this file
 ├── package-pi-skills.sh             # T-153: generates .pi/skills/ below from skills/ below
-├── package-claude-skills.sh         # T-163: generates claude/ below from skills/ below
 ├── skills/                          # T-151/T-152/T-154/T-155: canonical, vendor-neutral
 │   │                                #   skill source — content exists here exactly once
 │   │                                #   (S-011 Design Principles)
@@ -84,14 +83,6 @@ the-intern/email-skills/
 │                                     #   must stay in sync with skills/ by re-running the
 │                                     #   script and committing the result whenever skills/
 │                                     #   changes.
-├── claude/                          # T-163: generated Claude Code packaging target —
-│   ├── .claude-plugin/              #   produced solely by running package-claude-skills.sh
-│   │   └── plugin.json              #   against skills/ above; never hand-edited. Same
-│   └── skills/                      #   committed-tracked-output contract as .pi/skills/
-│       ├── himalaya/                #   above — content exists only under skills/ (S-011
-│       ├── email-triage/            #   Design Principles). Unlike .pi/skills/, this target
-│       └── worklog/                 #   needs no vendor-specific frontmatter field added, so
-│                                     #   its output is byte-for-byte identical to skills/.
 ├── config/
 │   └── email-triage.example.toml    # T-134: shipped template (manager_address documented,
 │                                     #   no real address). The real config/email-triage.toml
@@ -122,25 +113,6 @@ scratch, so a file removed from `skills/<name>/` does not linger as stale
 output. `git diff --exit-code HEAD -- .pi/skills` after committing should be
 clean; a non-empty diff there means `.pi/skills/` has drifted from `skills/`
 and needs the script re-run.
-
-**Regenerating the Claude package.** `claude/skills/` is generated the same
-way, by a separate script: it also carries no independent copy of skill
-content, and — unlike `.pi/skills/` — needs no vendor-specific frontmatter
-field added, since Claude Code's own skill format already matches what the
-canonical source carries. After editing anything under `skills/`, regenerate
-and commit `claude/` from this directory:
-
-```bash
-cd the-intern/email-skills && ./package-claude-skills.sh
-```
-
-The script regenerates each packaged skill's `claude/skills/<name>/` tree
-from scratch the same way `package-pi-skills.sh` does, and also (re)writes
-the static `claude/.claude-plugin/plugin.json` plugin manifest — layout
-metadata only, carrying no skill body content of its own. `git diff
---exit-code HEAD -- claude` after committing should be clean; a non-empty
-diff there means `claude/` has drifted from `skills/` and needs the script
-re-run.
 
 ## This package is installed once, service-wide — not copied per job
 
