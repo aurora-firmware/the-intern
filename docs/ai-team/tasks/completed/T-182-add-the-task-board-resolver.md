@@ -1,7 +1,7 @@
 ---
 id: T-182
 title: Add the task board resolver
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-23'
