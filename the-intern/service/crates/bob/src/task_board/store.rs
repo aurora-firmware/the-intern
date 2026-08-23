@@ -15,6 +15,12 @@ pub enum TaskStatus {
     Done,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrontmatterField {
+    Title,
+    Status,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateTask {
     pub title: String,
@@ -74,6 +80,22 @@ impl TaskStore {
             status,
             content,
         })
+    }
+
+    pub fn rewrite_frontmatter_field(
+        &self,
+        path: &Path,
+        field: FrontmatterField,
+        value: &str,
+    ) -> ServiceResult<TaskFile> {
+        let content = fs::read_to_string(path).map_err(|err| ServiceError::Persistence {
+            detail: format!("failed to read task file {}: {err}", path.display()),
+        })?;
+        let updated = rewrite_frontmatter_content(&content, field, value, path)?;
+        fs::write(path, updated.as_bytes()).map_err(|err| ServiceError::Persistence {
+            detail: format!("failed to rewrite task file {}: {err}", path.display()),
+        })?;
+        self.read_task(path)
     }
 }
 
@@ -241,6 +263,78 @@ fn task_identity_from_path(path: &Path) -> ServiceResult<String> {
         })
 }
 
+fn rewrite_frontmatter_content(
+    content: &str,
+    field: FrontmatterField,
+    value: &str,
+    path: &Path,
+) -> ServiceResult<String> {
+    let key = match field {
+        FrontmatterField::Title => "title",
+        FrontmatterField::Status => "status",
+    };
+    let replacement_value = match field {
+        FrontmatterField::Title => {
+            if value.trim().is_empty() {
+                return Err(ServiceError::InvalidRequest {
+                    detail: "task title must not be empty".to_owned(),
+                });
+            }
+            if value.contains('\n') {
+                return Err(ServiceError::InvalidRequest {
+                    detail: "task title must be a single line".to_owned(),
+                });
+            }
+            format_frontmatter_title(value)
+        }
+        FrontmatterField::Status => TaskStatus::parse(value)?.to_string(),
+    };
+
+    if !content.starts_with("---\n") {
+        return Err(ServiceError::InvalidRequest {
+            detail: format!("task file {} is missing frontmatter", path.display()),
+        });
+    }
+
+    let mut offset = 0usize;
+    let mut in_frontmatter = false;
+
+    for segment in content.split_inclusive('\n') {
+        let line = segment.strip_suffix('\n').unwrap_or(segment);
+
+        if offset == 0 {
+            in_frontmatter = line == "---";
+            offset += segment.len();
+            continue;
+        }
+
+        if in_frontmatter && line == "---" {
+            break;
+        }
+
+        if in_frontmatter && line.strip_prefix(key).is_some() && line[key.len()..].starts_with(':') {
+            let newline = if segment.ends_with('\n') { "\n" } else { "" };
+            let mut updated = String::with_capacity(content.len() + replacement_value.len());
+            updated.push_str(&content[..offset]);
+            updated.push_str(key);
+            updated.push_str(": ");
+            updated.push_str(&replacement_value);
+            updated.push_str(newline);
+            updated.push_str(&content[offset + segment.len()..]);
+            return Ok(updated);
+        }
+
+        offset += segment.len();
+    }
+
+    Err(ServiceError::InvalidRequest {
+        detail: format!(
+            "task file {} is missing frontmatter field {key}",
+            path.display()
+        ),
+    })
+}
+
 fn write_owner_only_file(path: &Path, content: &str) -> ServiceResult<()> {
     #[cfg(unix)]
     {
@@ -274,7 +368,7 @@ fn write_owner_only_file(path: &Path, content: &str) -> ServiceResult<()> {
 mod tests {
     use std::fs;
 
-    use super::{CreateTask, TaskStatus, TaskStore};
+    use super::{CreateTask, FrontmatterField, TaskStatus, TaskStore};
     use chrono::NaiveDate;
 
     #[cfg(unix)]
@@ -361,5 +455,63 @@ mod tests {
             fs::read_dir(&board).expect("board entries").next().is_none(),
             "board should stay empty on validation failure"
         );
+    }
+
+    #[test]
+    fn rewrite_frontmatter_field_preserves_all_non_target_content() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("2026-08-23-manual-task.md");
+        let before = concat!(
+            "---\n",
+            "title: Manual task\n",
+            "status: todo\n",
+            "---\n\n",
+            "## Description\n",
+            "Keep this text exactly.\n\n",
+            "## Definition of Done\n",
+            "- [ ] unchanged item\n\n",
+            "## Log\n",
+            "### 2026-08-22\n",
+            "Existing note.\n",
+        );
+        fs::write(&path, before).expect("write task file");
+        let store = TaskStore::new(temp.path());
+
+        let updated = store
+            .rewrite_frontmatter_field(&path, FrontmatterField::Status, "blocked")
+            .expect("rewrite should succeed");
+
+        assert_eq!(updated.status, TaskStatus::Blocked);
+        let after = fs::read_to_string(&path).expect("updated task file");
+        let expected = before.replacen("status: todo", "status: blocked", 1);
+        assert_eq!(after, expected, "rewrite should only change the target line");
+    }
+
+    #[test]
+    fn read_task_accepts_hand_authored_quoted_title_frontmatter() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("2026-08-23-fix-colons.md");
+        fs::write(
+            &path,
+            concat!(
+                "---\n",
+                "title: \"Fix parser: handle colon-bearing title\"\n",
+                "status: doing\n",
+                "---\n\n",
+                "## Description\n",
+                "Handle manually authored files.\n\n",
+                "## Definition of Done\n",
+                "- [ ] parser accepts the title\n\n",
+                "## Log\n",
+            ),
+        )
+        .expect("write hand-authored task");
+        let store = TaskStore::new(temp.path());
+
+        let task = store.read_task(&path).expect("task should parse");
+
+        assert_eq!(task.identity, "2026-08-23-fix-colons");
+        assert_eq!(task.title, "Fix parser: handle colon-bearing title");
+        assert_eq!(task.status, TaskStatus::Doing);
     }
 }
