@@ -109,6 +109,15 @@ input is testable; a parser dependency was rejected in favor of the focused
 two-field tolerant parser. An incidental index-lock contention cleared after
 serial retry. Unrelated `.github/workflows/__pycache__/` was preserved.
 
+### Session 2 — 2026-08-23
+
+Fixed the review finding in `a95e1d3`: log entries now insert before the next
+`##` heading, staying inside `## Log` for hand-authored files with later
+sections. Added the regression test and verified it, the generated-template
+case, all 16 task-board tests, and rustfmt. An initial `--exact` test invocation
+filtered the test out and was corrected; a brief Cargo lock wait cleared.
+Unrelated `.github/workflows/__pycache__/` remains preserved.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
