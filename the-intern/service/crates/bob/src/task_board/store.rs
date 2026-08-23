@@ -1,6 +1,5 @@
 use std::{
-    fmt,
-    fs,
+    fmt, fs,
     path::{Path, PathBuf},
 };
 
@@ -96,6 +95,77 @@ impl TaskStore {
             detail: format!("failed to rewrite task file {}: {err}", path.display()),
         })?;
         self.read_task(path)
+    }
+
+    pub fn append_log_entry(
+        &self,
+        path: &Path,
+        date: NaiveDate,
+        entry: &str,
+    ) -> ServiceResult<TaskFile> {
+        let content = fs::read_to_string(path).map_err(|err| ServiceError::Persistence {
+            detail: format!("failed to read task file {}: {err}", path.display()),
+        })?;
+        let updated = append_log_entry_content(&content, date, entry, path)?;
+        fs::write(path, updated.as_bytes()).map_err(|err| ServiceError::Persistence {
+            detail: format!("failed to append log entry to {}: {err}", path.display()),
+        })?;
+        self.read_task(path)
+    }
+
+    pub fn list_tasks(&self) -> ServiceResult<Vec<TaskFile>> {
+        let mut tasks = Vec::new();
+        let entries = fs::read_dir(&self.board_path).map_err(|err| ServiceError::Persistence {
+            detail: format!(
+                "failed to read task board directory {}: {err}",
+                self.board_path.display()
+            ),
+        })?;
+
+        for entry in entries {
+            let entry = entry.map_err(|err| ServiceError::Persistence {
+                detail: format!(
+                    "failed to read an entry from task board directory {}: {err}",
+                    self.board_path.display()
+                ),
+            })?;
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("md") {
+                continue;
+            }
+            tasks.push(self.read_task(&path)?);
+        }
+
+        tasks.sort_by(|left, right| left.identity.cmp(&right.identity));
+        Ok(tasks)
+    }
+
+    pub fn resolve_partial_identifier(&self, partial: &str) -> ServiceResult<String> {
+        let tasks = self.list_tasks()?;
+        if let Some(exact) = tasks.iter().find(|task| task.identity == partial) {
+            return Ok(exact.identity.clone());
+        }
+
+        let candidates = tasks
+            .into_iter()
+            .filter(|task| task.identity.starts_with(partial))
+            .map(|task| task.identity)
+            .collect::<Vec<_>>();
+
+        match candidates.as_slice() {
+            [single] => Ok(single.clone()),
+            [] => Err(ServiceError::InvalidRequest {
+                detail: format!(
+                    "no task matches partial identifier {partial:?}; candidates found: none"
+                ),
+            }),
+            _ => Err(ServiceError::InvalidRequest {
+                detail: format!(
+                    "partial identifier {partial:?} is ambiguous; candidates found: {}",
+                    candidates.join(", ")
+                ),
+            }),
+        }
     }
 }
 
@@ -312,7 +382,8 @@ fn rewrite_frontmatter_content(
             break;
         }
 
-        if in_frontmatter && line.strip_prefix(key).is_some() && line[key.len()..].starts_with(':') {
+        if in_frontmatter && line.strip_prefix(key).is_some() && line[key.len()..].starts_with(':')
+        {
             let newline = if segment.ends_with('\n') { "\n" } else { "" };
             let mut updated = String::with_capacity(content.len() + replacement_value.len());
             updated.push_str(&content[..offset]);
@@ -333,6 +404,36 @@ fn rewrite_frontmatter_content(
             path.display()
         ),
     })
+}
+
+fn append_log_entry_content(
+    content: &str,
+    date: NaiveDate,
+    entry: &str,
+    path: &Path,
+) -> ServiceResult<String> {
+    if !content.contains("\n## Log\n") && !content.starts_with("## Log\n") {
+        return Err(ServiceError::InvalidRequest {
+            detail: format!("task file {} is missing a log section", path.display()),
+        });
+    }
+
+    let mut updated = content.to_owned();
+    if !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    if !updated.ends_with("\n\n") {
+        updated.push('\n');
+    }
+    updated.push_str("### ");
+    updated.push_str(&date.format("%Y-%m-%d").to_string());
+    updated.push('\n');
+    updated.push_str(entry);
+    if !entry.ends_with('\n') {
+        updated.push('\n');
+    }
+
+    Ok(updated)
 }
 
 fn write_owner_only_file(path: &Path, content: &str) -> ServiceResult<()> {
@@ -419,7 +520,10 @@ mod tests {
             content.contains("\n## Definition of Done\n- [ ] observable outcome one\n- [ ] observable outcome two\n"),
             "definition of done checklist missing: {content}"
         );
-        assert!(content.contains("\n## Log\n"), "log section missing: {content}");
+        assert!(
+            content.contains("\n## Log\n"),
+            "log section missing: {content}"
+        );
 
         #[cfg(unix)]
         {
@@ -452,7 +556,10 @@ mod tests {
             "error should describe allowed statuses: {detail}"
         );
         assert!(
-            fs::read_dir(&board).expect("board entries").next().is_none(),
+            fs::read_dir(&board)
+                .expect("board entries")
+                .next()
+                .is_none(),
             "board should stay empty on validation failure"
         );
     }
@@ -484,7 +591,10 @@ mod tests {
         assert_eq!(updated.status, TaskStatus::Blocked);
         let after = fs::read_to_string(&path).expect("updated task file");
         let expected = before.replacen("status: todo", "status: blocked", 1);
-        assert_eq!(after, expected, "rewrite should only change the target line");
+        assert_eq!(
+            after, expected,
+            "rewrite should only change the target line"
+        );
     }
 
     #[test]
@@ -513,5 +623,114 @@ mod tests {
         assert_eq!(task.identity, "2026-08-23-fix-colons");
         assert_eq!(task.title, "Fix parser: handle colon-bearing title");
         assert_eq!(task.status, TaskStatus::Doing);
+    }
+
+    #[test]
+    fn append_log_entry_adds_a_dated_entry_to_the_log_section() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        fs::create_dir_all(&board).expect("create board");
+        let store = TaskStore::new(&board);
+        let created = store
+            .create_task(&task_request("Add breadcrumbs", "todo"))
+            .expect("task should be created");
+
+        let updated = store
+            .append_log_entry(
+                &created.path,
+                NaiveDate::from_ymd_opt(2026, 8, 23).expect("valid date"),
+                "Recorded a follow-up note.",
+            )
+            .expect("append should succeed");
+
+        assert_eq!(updated.identity, created.identity);
+        let content = fs::read_to_string(&created.path).expect("task file");
+        assert!(
+            content.ends_with("## Log\n\n### 2026-08-23\nRecorded a follow-up note.\n"),
+            "log entry should be appended at the end: {content}"
+        );
+    }
+
+    #[test]
+    fn list_tasks_reads_hand_authored_and_created_markdown_files() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        fs::create_dir_all(&board).expect("create board");
+        let store = TaskStore::new(&board);
+
+        store
+            .create_task(&task_request("Prepare release notes", "todo"))
+            .expect("created task");
+        fs::write(
+            board.join("2026-08-22-review-logs.md"),
+            concat!(
+                "---\n",
+                "title: \"Review logs: capture edge cases\"\n",
+                "status: blocked\n",
+                "---\n\n",
+                "## Description\n",
+                "Hand-authored.\n\n",
+                "## Definition of Done\n",
+                "- [ ] listed successfully\n\n",
+                "## Log\n",
+            ),
+        )
+        .expect("write hand-authored task");
+
+        let tasks = store.list_tasks().expect("list should succeed");
+
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|task| task.identity.as_str())
+                .collect::<Vec<_>>(),
+            vec!["2026-08-22-review-logs", "2026-08-23-prepare-release-notes",]
+        );
+        assert_eq!(tasks[0].title, "Review logs: capture edge cases");
+        assert_eq!(tasks[0].status, TaskStatus::Blocked);
+        assert_eq!(tasks[1].status, TaskStatus::Todo);
+    }
+
+    #[test]
+    fn resolve_partial_identifier_fails_for_none_and_ambiguous_matches() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        fs::create_dir_all(&board).expect("create board");
+        let store = TaskStore::new(&board);
+
+        store
+            .create_task(&task_request("Prepare release notes", "todo"))
+            .expect("created task");
+        store
+            .create_task(&task_request("Prepare release checklist", "doing"))
+            .expect("created task");
+
+        let ambiguous = store
+            .resolve_partial_identifier("2026-08-23-prepare-release")
+            .expect_err("ambiguous partial should fail");
+        let ambiguous_detail = match ambiguous {
+            bob_core::error::ServiceError::InvalidRequest { detail } => detail,
+            other => panic!("expected invalid request, got {other:?}"),
+        };
+        assert!(
+            ambiguous_detail.contains("2026-08-23-prepare-release-notes"),
+            "ambiguity error should name candidates: {ambiguous_detail}"
+        );
+        assert!(
+            ambiguous_detail.contains("2026-08-23-prepare-release-checklist"),
+            "ambiguity error should name candidates: {ambiguous_detail}"
+        );
+
+        let none = store
+            .resolve_partial_identifier("does-not-exist")
+            .expect_err("missing partial should fail");
+        let none_detail = match none {
+            bob_core::error::ServiceError::InvalidRequest { detail } => detail,
+            other => panic!("expected invalid request, got {other:?}"),
+        };
+        assert!(
+            none_detail.contains("candidates found: none"),
+            "missing-partial error should say no candidates were found: {none_detail}"
+        );
     }
 }
