@@ -375,8 +375,12 @@ enforces them.
 |---|---|---|
 | 1 | Board resolution and the task file store: a task file can be created from the template at a resolved board and read back, with correct permissions | Nothing |
 | 2 | The full `bob task` surface — `new`, `list`, `status`, `note`, `show` — with text and JSON output and local validation of invalid input | Phase 1 |
-| 3 | The canonical `tasks` skill, delivered to the pi and Claude packages by the existing packaging scripts, so a session spawned by bob carries it | Phase 2 |
+| 3 | The canonical `tasks` skill, delivered to the pi and Claude packages by the existing packaging scripts, so a session spawned by bob carries it. The binary embeds the generated pi package wholesale, so this phase also carries every expectation that pins the embedded or installed skill set to three skills | Phase 2 |
 | 4 | Every hand-written account of the CLI updated for the new subcommand, and every hand-written account of the `bob init` workspace layout updated for the board directory and the fourth installed skill tree — in the companion plugin and in the shipped manual alike | Phase 2; the layout half also depends on Phase 5 |
-| 5 | `bob init` scaffolds the board directory in a fresh workspace | Phase 1, and human approval of CR-009 |
+| 5 | `bob init` creates the empty board directory in a fresh workspace, installs the fourth skill tree at the shared install path, and guarantees that `--force` never removes or replaces board content | Phase 1 and Phase 3, and CR-009 |
 
 ## Amendment Log
+
+| Date | What changed | Why | Affected tasks |
+|------|-------------|-----|----------------|
+| 2026-08-23 | Phase 3 extended to cover every expectation pinning the embedded or installed skill set to three skills; Phase 5 extended to name the fourth skill tree's installation and the `--force` guarantee, and to depend on Phase 3. | The binary embeds the generated pi package wholesale, so adding a fourth skill breaks the exhaustive embedded-asset and install assertions in the same change rather than later; and CR-009's `--force` guarantee was recorded in the change-request but not in any phase. Found while checking what work CR-009 generates, before breakdown. | None yet (Gate 2 pending). |
