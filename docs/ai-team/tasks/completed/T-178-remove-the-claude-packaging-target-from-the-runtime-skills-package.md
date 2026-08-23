@@ -1,7 +1,7 @@
 ---
 id: T-178
 title: Remove the claude packaging target from the runtime skills package
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-23'
