@@ -97,6 +97,22 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-23
+
+Moved `the-intern/email-skills/` to `the-intern/bob-skills/` with `git mv` and
+updated the build-time asset resolution, embedded-path assertion, example config
+include, and pi packaging regression test. Documentation and historical
+artifacts were intentionally left to follow-on tasks. The implementation is
+committed as `95e5194` on `task/T-179-rename-runtime-skills-package`.
+
+Focused `init_assets` and pi packaging tests passed. `cargo test -p bob` passed
+outside the restricted sandbox (185 lib tests plus integration/doc tests); its
+in-sandbox Unix-socket failures were the documented `Operation not permitted`
+limitation. No work remains.
+
+Obstacles encountered: preserved unrelated untracked
+`.github/workflows/__pycache__/`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
