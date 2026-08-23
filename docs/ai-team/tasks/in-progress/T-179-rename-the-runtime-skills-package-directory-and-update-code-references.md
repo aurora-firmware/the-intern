@@ -124,3 +124,27 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-23
+PASS
+
+Stage 1 passed. AC-1 is satisfied on the implementation branch by moving the
+runtime package to `the-intern/bob-skills/` and removing the tracked
+`the-intern/email-skills/` tree, while historical artifacts and follow-on
+documentation references remained untouched as required. AC-2 is satisfied by
+the updated bob build-time package path, embedded source-directory suffix
+assertion, and example config include in
+`the-intern/service/crates/bob/build.rs`,
+`the-intern/service/crates/bob/src/init_assets.rs`, and
+`the-intern/service/crates/bob/src/init_materializer.rs`. AC-3 is satisfied by
+the updated repository-relative assertions in
+`the-intern/bob-skills/test_package_pi_skills.sh`, which passed in review. AC-4
+is satisfied because the implementation diff is limited to the runtime package
+move and executable references; no completed task, resolved bug, or progress
+report artifacts were modified.
+
+Stage 2 passed. The rename is mechanically correct, the runtime path assertions
+stay aligned across build and test code, and the change includes the expected
+regression coverage for the packaged skill paths. Non-blocking observation:
+repository-level and shipped-manual text references still using the old package
+name are intentionally deferred to T-180 and T-181.
