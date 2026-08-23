@@ -120,3 +120,9 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-23
+FAIL
+
+- `the-intern/service/crates/bob/src/task_board/store.rs:409` — `append_log_entry_content` only checks that `## Log` exists somewhere, then appends the new dated entry to the end of the file. For any hand-authored task that keeps additional content after the log heading, the entry lands outside the log section, which misses the task contract and the S-014 workflow requirement to append to the task's log section. Change this helper to locate the `## Log` section boundary and insert the new `### YYYY-MM-DD` block inside that section, preserving any later content unchanged.
+- `the-intern/service/crates/bob/src/task_board/store.rs:628` — the tests only cover the generated template where `## Log` is the last section, so they do not catch the acceptance gap above for hand-authored files. Add a regression test with a valid hand-authored task file that has content after `## Log`, then verify the new entry is inserted under `## Log` without moving or rewriting the trailing content.
