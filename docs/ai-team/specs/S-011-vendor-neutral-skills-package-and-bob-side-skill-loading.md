@@ -26,9 +26,10 @@ of the email-triage skill; and the skill content is packaged so a second agent
 vendor can consume it without a second copy of the content existing.
 
 Success is confirmed when a session started from a directory containing no
-skill files can still perform a skilled task, when the same skill content is
-loadable by both supported vendors from one source tree, and when a scheduled
-run and an interactive session both journal through the same worklog skill.
+skill files can still perform a skilled task, when the canonical source carries
+no vendor-specific layout so a second vendor target can be added whenever a
+consumer for one exists, and when a scheduled run and an interactive session
+both journal through the same worklog skill.
 
 ## Exclusions
 
@@ -107,7 +108,7 @@ What this specification explicitly does NOT cover:
                         │
          ┌──────────────┴──────────────┐
          │ packaging (manifests only)  │
-         │  pi target      claude target│
+         │          pi target          │
          └──────────────┬──────────────┘
                         │ install
                         v
@@ -142,7 +143,7 @@ What this specification explicitly does NOT cover:
 | Component | Responsibility | Notes |
 |---|---|---|
 | Canonical skill source | Holds every skill's content exactly once, vendor-neutral | Consumed by all packaging targets; carries no vendor-specific layout |
-| Packaging targets | Present the canonical content in each vendor's expected layout | Manifests and layout only; must contain no content of their own |
+| Packaging target | Present the canonical content in the supported vendor's expected layout | Manifests and layout only; must contain no content of its own. One target exists today; the requirement applies to any target added later |
 | Skill install path | The deployed, read-only location bob resolves and makes available to its extension | A trusted, un-checked input; operator-protected by filesystem permissions |
 | bob service | Resolve the install path and make it available to the extension on every session spawned | Uses the existing per-session environment contract; bob never reads skill content |
 | bob extension | Answer pi's resource-discovery event with the resolved skill path | Already supplied on all three spawn paths and already subscribed to the event; governed by `ADR-014` |
@@ -164,15 +165,16 @@ removal of the one frontmatter field whose format differs between vendors.
 references; consumed by every packaging target and, once installed, by the
 sessions bob spawns.
 
-### Component 2: Packaging targets
+### Component 2: Packaging target
 
 **Purpose:** Present the canonical content in the layout and with the manifest
-each supported vendor expects.
-**Estimated size:** Small — one manifest per vendor plus the linkage to the
-canonical source.
+the supported vendor expects.
+**Estimated size:** Small — one manifest plus the linkage to the canonical
+source, per target.
 **Interfaces:** Exposes a vendor-installable package; consumes the canonical
 skill source. Must be verifiable as containing no independent copy of the
-content.
+content. One target exists; the canonical source stays free of vendor-specific
+layout so a second can be added when a consumer for one exists.
 
 ### Component 3: bob-side skill supply
 
@@ -335,3 +337,4 @@ A later session reconciles carried-forward open items from that same directory
 |------|-------------|-----|----------------|
 | 2026-08-12 | Added the CR-007 `bob init` bootstrap exception allowing no-matcher rules for four named standard pi tools. | A fresh operator installation must work without manually discovering tool-call argument shapes; normal install-path-scoped and worklog guidance remains the recommended steady state. | S-012 tasks TBD |
 | 2026-08-23 | The canonical skill set gains a fourth skill, `tasks`, in the System Diagram and the Responsibility Separation table. No principle, packaging target, install path, or delivery mechanism changes. | CR-009 / S-014. The command's operating instructions ship with the skills bob supplies through its extension rather than with operator tooling, so the set this specification defines grows by one. | Tasks TBD |
+| 2026-08-23 | The Claude packaging target is removed, leaving the pi target as the only one. The Purpose's success criterion no longer requires the content to be loadable by two vendors, and now requires the canonical source to stay free of vendor-specific layout so a second target can be added when a consumer exists. Diagram, Component 2, and the packaging responsibility row follow. | CR-011. The Claude target demonstrated the two-vendor principle rather than serving a consumer, and carrying it through CR-010's rename and S-014's fourth skill would cost work on output nobody installs. The canonical-source layer is deliberately kept so re-adding a vendor stays cheap. | Tasks TBD |

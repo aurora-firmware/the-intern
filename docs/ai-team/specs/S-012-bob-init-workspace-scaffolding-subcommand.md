@@ -43,7 +43,7 @@ run `bob serve` and `bob chat` or schedule a job with `--cwd <workspace>`.
 
 ### Principles
 
-- The canonical skills source remains `the-intern/email-skills/skills`; the
+- The canonical skills source remains `the-intern/bob-skills/skills`; the
   released binary embeds the generated pi package only as a delivery asset and
   materializes it once into the shared install path.
 - The shared install path is the same XDG-data default `BobConfig` resolves
@@ -62,7 +62,7 @@ run `bob serve` and `bob chat` or schedule a job with `--cwd <workspace>`.
 
 | Component | Responsibility |
 |---|---|
-| Embedded pi-package assets | Compile the generated `email-skills/.pi/skills` output into the binary and expose its fixed files to installation code. |
+| Embedded pi-package assets | Compile the generated `bob-skills/.pi/skills` output into the binary and expose its fixed files to installation code. |
 | Shared-skill installer | Materialize the assets at the resolved shared install path, with owner-only permissions and non-destructive/force semantics. |
 | Workspace materializer | Create `AGENTS.md`, `CLAUDE.md`, `config/email-triage.toml`, `worklog/`, and `tasks/`; all are owner-only. |
 | Config generator | Write the complete live config at the same path used by bob's loader, including its shared install path and CR-007 policy profile. |
@@ -157,3 +157,4 @@ the shared skills from the initialized workspace without a workspace
 |------|-------------|-----|----------------|
 | 2026-08-12 | Redrafted against S-011/ADR-014: skills install once at a shared path, while init creates workspace-local state and the CR-007 permissive bootstrap policy. | The earlier draft's per-workspace skill deployment contradicted the approved shared install-path architecture. | Tasks TBD |
 | 2026-08-23 | `bob init` also creates an empty `<workspace>/tasks/` board directory and installs a fourth `tasks` pi-package tree at the shared install path. `--force` never removes or replaces board content. | CR-009, driven by S-014: the task board resolves from the working directory, so scaffolding it fixes the resolution point at the workspace root, and the skill that teaches the command reaches sessions only through the shared install path this command populates. | Tasks TBD |
+| 2026-08-23 | The canonical skills source and the embedded pi-package output are named under `the-intern/bob-skills/` instead of `the-intern/email-skills/`. | CR-010. The package holds domain-free skills — `worklog` by S-011's design and `tasks` by S-014 — so its email-oriented directory name no longer describes it. Rename only; no behaviour, layout, or install-path change. | Tasks TBD |

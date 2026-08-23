@@ -76,9 +76,6 @@ What this specification explicitly does NOT cover:
 - **Multi-user, shared, or remote boards.** Board access is local filesystem
   access by one operator and the sessions that operator's service spawns, per
   ADR-008. No locking, merge, or synchronisation mechanism is in scope.
-- **Renaming the `email-skills` package directory.** The directory name is
-  already inaccurate for the domain-free `worklog` skill and this specification
-  makes it more so, but renaming a released packaging target is separate work.
 
 ## Architecture
 
@@ -156,8 +153,7 @@ What this specification explicitly does NOT cover:
 
    Skill delivery (existing mechanisms, unchanged):
 
-     canonical skills/tasks ──packaging──┬──► .pi/skills/tasks ─┐
-                                         └──► claude/skills/tasks│
+     canonical skills/tasks ──packaging──►  .pi/skills/tasks ─┐
                                                                  │ installed by
                                                                  │ bob init at the
                                                                  │ shared path
@@ -182,7 +178,7 @@ What this specification explicitly does NOT cover:
 | Board resolver | Locate the board by walking upward from the working directory, honour an explicit override, create the board on a write operation, apply owner-only permissions | Exposes a resolved absolute board path; consumes the working directory, the override flag, and the environment variable |
 | Task file store | Read and rewrite task frontmatter, apply the file template, append dated log entries, derive an identifier from title and date, resolve a partial identifier to exactly one task | Owns the file format; consumes a resolved board path |
 | Canonical `tasks` skill | State when work belongs on the board, how to describe a task so a cold reader can pick it up, and what each status means | Content lives once in the vendor-neutral skill source (S-011); defers to the command for the format |
-| Existing packaging targets | Deliver the canonical skill unchanged to the pi and Claude packages | No new packaging mechanism; the skill list the scripts generate gains one entry. This makes the S-011 package a set of four skills; every S-011 principle, packaging target, and delivery path is unchanged, and its enumeration of the set needs amending on approval of this specification |
+| Existing packaging target | Deliver the canonical skill unchanged to the pi package | No new packaging mechanism; the skill list the scripts generate gains one entry. This makes the S-011 package a set of four skills; every S-011 principle, packaging target, and delivery path is unchanged, and its enumeration of the set needs amending on approval of this specification |
 | Operator-facing documentation updates | Record that the subcommand exists, what its flags are, and what `bob init` now produces | Edits to the companion plugin's existing `bob-cli` and `bob-setup` skills and to the hand-written manual pages that enumerate the workspace layout; no new skill, and no second account of how to use the board. The manual's CLI reference is derived from `--help` at build time (S-007) and needs no hand-written prose |
 | `bob init` scaffolding | Create the board directory in a fresh workspace | Change to approved S-012 behaviour; specified by CR-009 and gated on its approval |
 
@@ -223,7 +219,7 @@ another run can pick up cold, what each status commits it to, and which
 subcommand performs each of those moves.
 **Estimated size:** Small.
 **Interfaces:** Exposes skill content in the vendor-neutral source tree;
-consumed unchanged by both existing packaging targets and reaching sessions
+consumed unchanged by the existing packaging target and reaching sessions
 through the shared install path the extension answers with.
 
 ### Component 5: Operator-facing documentation updates
@@ -262,7 +258,7 @@ Reaching a session, and keeping operator tooling accurate:
 ```
 Canonical tasks skill written once in the vendor-neutral source
   ↓
-Existing packaging scripts regenerate the pi and Claude targets
+The existing packaging script regenerates the pi target
   ↓
 ★ Human approves CR-009, so bob init installs the fourth skill tree
   ↓
@@ -375,7 +371,7 @@ enforces them.
 |---|---|---|
 | 1 | Board resolution and the task file store: a task file can be created from the template at a resolved board and read back, with correct permissions | Nothing |
 | 2 | The full `bob task` surface — `new`, `list`, `status`, `note`, `show` — with text and JSON output and local validation of invalid input | Phase 1 |
-| 3 | The canonical `tasks` skill, delivered to the pi and Claude packages by the existing packaging scripts, so a session spawned by bob carries it. The binary embeds the generated pi package wholesale, so this phase also carries every expectation that pins the embedded or installed skill set to three skills | Phase 2 |
+| 3 | The canonical `tasks` skill, delivered to the pi package by the existing packaging script, so a session spawned by bob carries it. The binary embeds the generated pi package wholesale, so this phase also carries every expectation that pins the embedded or installed skill set to three skills | Phase 2 |
 | 4 | Every hand-written account of the CLI updated for the new subcommand, and every hand-written account of the `bob init` workspace layout updated for the board directory and the fourth installed skill tree — in the companion plugin and in the shipped manual alike | Phase 2; the layout half also depends on Phase 5 |
 | 5 | `bob init` creates the empty board directory in a fresh workspace, installs the fourth skill tree at the shared install path, and guarantees that `--force` never removes or replaces board content | Phase 1 and Phase 3, and CR-009 |
 
@@ -384,3 +380,4 @@ enforces them.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-08-23 | Phase 3 extended to cover every expectation pinning the embedded or installed skill set to three skills; Phase 5 extended to name the fourth skill tree's installation and the `--force` guarantee, and to depend on Phase 3. | The binary embeds the generated pi package wholesale, so adding a fourth skill breaks the exhaustive embedded-asset and install assertions in the same change rather than later; and CR-009's `--force` guarantee was recorded in the change-request but not in any phase. Found while checking what work CR-009 generates, before breakdown. | None yet (Gate 2 pending). |
+| 2026-08-23 | The four places assuming two packaging targets now describe one; the exclusion ruling the package-directory rename out of scope is removed. | CR-011 removes the Claude packaging target, and CR-010 performs the rename the exclusion deferred, so both statements were about to become false. No change to how the `tasks` skill reaches a session. | Tasks TBD |
