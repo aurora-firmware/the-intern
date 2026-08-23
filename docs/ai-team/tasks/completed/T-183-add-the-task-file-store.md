@@ -1,7 +1,7 @@
 ---
 id: T-183
 title: Add the task file store
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-23'
