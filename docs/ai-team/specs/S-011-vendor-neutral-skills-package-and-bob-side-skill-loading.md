@@ -102,7 +102,8 @@ What this specification explicitly does NOT cover:
        repository (single source of truth)
        skills/  ──┬── himalaya      (CLI reference)
                   ├── email-triage  (triage policy)
-                  └── worklog       (diary discipline, domain-free)
+                  ├── worklog       (diary discipline, domain-free)
+                  └── tasks         (task board discipline, domain-free)
                         │
          ┌──────────────┴──────────────┐
          │ packaging (manifests only)  │
@@ -148,6 +149,7 @@ What this specification explicitly does NOT cover:
 | `worklog` skill | Owns the entire diary discipline: location, entry format, creation, first-run detection, reconciliation, and how an open item closes | Domain-free; consumed by any work that needs continuity |
 | `email-triage` skill | Owns detection, classification, and the act-or-escalate decision | Delegates all diary mechanics to `worklog`; retains retry of a carried-forward blocked action |
 | `himalaya` skill | Owns CLI reference knowledge | Carries no triage policy; unchanged in role |
+| `tasks` skill | Owns the task-board discipline: when work belongs on a board, how to describe it so a later run can pick it up cold, and what each status commits to | Domain-free; defers to the `bob task` command for the file format rather than restating it (S-014) |
 | Action-authorization gate (existing) | Gates every tool call a skill makes | Unmodified; admitting rules are an operator deployment concern |
 
 ## Components
@@ -332,3 +334,4 @@ A later session reconciles carried-forward open items from that same directory
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-08-12 | Added the CR-007 `bob init` bootstrap exception allowing no-matcher rules for four named standard pi tools. | A fresh operator installation must work without manually discovering tool-call argument shapes; normal install-path-scoped and worklog guidance remains the recommended steady state. | S-012 tasks TBD |
+| 2026-08-23 | The canonical skill set gains a fourth skill, `tasks`, in the System Diagram and the Responsibility Separation table. No principle, packaging target, install path, or delivery mechanism changes. | CR-009 / S-014. The command's operating instructions ship with the skills bob supplies through its extension rather than with operator tooling, so the set this specification defines grows by one. | Tasks TBD |

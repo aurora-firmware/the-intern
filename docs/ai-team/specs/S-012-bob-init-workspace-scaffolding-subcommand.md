@@ -15,7 +15,8 @@ id: S-012
 configuration needed for a useful first session. It creates only the mutable,
 workspace-local state that S-010 requires: trusted context placeholders, a
 real `config/email-triage.toml` seeded from the shipped example, and a
-`worklog/` directory. It installs the shipped pi skill package once at bob's
+`worklog/` directory, and an empty `tasks/` board directory for the S-014 task
+board. It installs the shipped pi skill package once at bob's
 shared S-011/ADR-014 install path, rather than copying skills into the
 workspace. It then writes a deliberately permissive first-run policy profile
 so the shipped skills work without manual TOML rule authoring.
@@ -63,7 +64,7 @@ run `bob serve` and `bob chat` or schedule a job with `--cwd <workspace>`.
 |---|---|
 | Embedded pi-package assets | Compile the generated `email-skills/.pi/skills` output into the binary and expose its fixed files to installation code. |
 | Shared-skill installer | Materialize the assets at the resolved shared install path, with owner-only permissions and non-destructive/force semantics. |
-| Workspace materializer | Create `AGENTS.md`, `CLAUDE.md`, `config/email-triage.toml`, and `worklog/`; all are owner-only. |
+| Workspace materializer | Create `AGENTS.md`, `CLAUDE.md`, `config/email-triage.toml`, `worklog/`, and `tasks/`; all are owner-only. |
 | Config generator | Write the complete live config at the same path used by bob's loader, including its shared install path and CR-007 policy profile. |
 | `bob init` command | Parse path and `--force`, resolve paths, run the filesystem steps, report conflicts, warnings, and next steps. |
 
@@ -104,8 +105,13 @@ the command exits non-zero after leaving it unchanged.
   rather than only writing an example file. It remains a local operator file;
   `manager_address` is intentionally left for the operator.
 - `<workspace>/worklog/` is created for the worklog skill.
+- `<workspace>/tasks/` is created, empty, as the S-014 task board. No task file,
+  placeholder, or index is written into it. Because its contents are operator
+  and agent work product rather than files this command owns, `--force` never
+  removes or replaces anything inside it; an existing directory at that path is
+  skipped and named in the warnings.
 - The shared install path receives the embedded `himalaya`, `email-triage`,
-  and `worklog` pi-package trees, never a workspace copy.
+  `worklog`, and `tasks` pi-package trees, never a workspace copy.
 - Directories are mode `0700`; generated files, including live `config.toml`,
   are mode `0600` on Unix platforms.
 
@@ -150,3 +156,4 @@ the shared skills from the initialized workspace without a workspace
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-08-12 | Redrafted against S-011/ADR-014: skills install once at a shared path, while init creates workspace-local state and the CR-007 permissive bootstrap policy. | The earlier draft's per-workspace skill deployment contradicted the approved shared install-path architecture. | Tasks TBD |
+| 2026-08-23 | `bob init` also creates an empty `<workspace>/tasks/` board directory and installs a fourth `tasks` pi-package tree at the shared install path. `--force` never removes or replaces board content. | CR-009, driven by S-014: the task board resolves from the working directory, so scaffolding it fixes the resolution point at the workspace root, and the skill that teaches the command reaches sessions only through the shared install path this command populates. | Tasks TBD |
