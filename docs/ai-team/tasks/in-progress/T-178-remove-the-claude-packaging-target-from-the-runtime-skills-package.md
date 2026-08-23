@@ -125,3 +125,27 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-23
+PASS
+
+Stage 1 acceptance review passed:
+- AC-1 satisfied: the branch removes `the-intern/email-skills/claude/`,
+  `the-intern/email-skills/package-claude-skills.sh`, and
+  `the-intern/email-skills/test_package_claude_skills.sh`.
+- AC-2 satisfied: [the-intern/email-skills/README.md](/home/daneel/projects/the-intern/the-intern/email-skills/README.md)
+  now documents only the `.pi/skills/` packaging target in both the package
+  layout and regeneration instructions.
+- AC-3 satisfied: `./the-intern/email-skills/test_package_pi_skills.sh`
+  passed unchanged on the task branch.
+- AC-4 satisfied: `git diff --name-only dev-agent...task/T-178-remove-the-claude-packaging-target -- the-intern/bob-companion`
+  returned no changes.
+
+Stage 2 code-quality review passed:
+- Correctness: the diff is limited to the requested deletions plus the README
+  updates that remove the obsolete Claude target references.
+- Tests: the existing pi packaging regression test still passes, and
+  `git diff --check dev-agent...task/T-178-remove-the-claude-packaging-target`
+  reported no whitespace or conflict-marker issues.
+- Security, readability, and performance: no new runtime behavior or input
+  handling was introduced; the change reduces dead generated content only.
