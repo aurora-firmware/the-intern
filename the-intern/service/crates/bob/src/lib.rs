@@ -13,6 +13,7 @@ pub mod config;
 pub mod init_assets;
 pub mod init_materializer;
 pub mod serve;
+pub mod task_board;
 pub mod telemetry;
 
 use cli::{AuditCommand, Cli, Command, PolicyCommand, ScheduleCommand, SessionsCommand};
