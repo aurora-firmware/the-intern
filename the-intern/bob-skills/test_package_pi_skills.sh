@@ -88,9 +88,9 @@ test_ac3_generated_output_stays_tracked_and_not_ignored() {
   local repo_root
   repo_root="$(cd "$PACKAGE_DIR/../.." && pwd)"
   for generated in \
-    the-intern/email-skills/.pi/skills/himalaya/SKILL.md \
-    the-intern/email-skills/.pi/skills/email-triage/SKILL.md \
-    the-intern/email-skills/.pi/skills/worklog/SKILL.md
+    the-intern/bob-skills/.pi/skills/himalaya/SKILL.md \
+    the-intern/bob-skills/.pi/skills/email-triage/SKILL.md \
+    the-intern/bob-skills/.pi/skills/worklog/SKILL.md
   do
     git -C "$repo_root" check-ignore -q "$generated" && ok=1
     git -C "$repo_root" ls-files --error-unmatch "$generated" >/dev/null 2>&1 || ok=1

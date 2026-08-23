@@ -21,7 +21,7 @@ impl EmbeddedAsset {
     }
 }
 
-// Generated at build time from the canonical tracked the-intern/email-skills/.pi/skills tree.
+// Generated at build time from the canonical tracked the-intern/bob-skills/.pi/skills tree.
 include!(concat!(env!("OUT_DIR"), "/embedded_pi_skill_assets.rs"));
 
 pub fn embedded_pi_skill_package_source_dir() -> &'static str {
@@ -52,7 +52,7 @@ mod tests {
         let source_dir = embedded_pi_skill_package_source_dir();
 
         assert!(
-            source_dir.ends_with("/the-intern/email-skills/.pi/skills"),
+            source_dir.ends_with("/the-intern/bob-skills/.pi/skills"),
             "expected canonical package path suffix, got {source_dir}"
         );
     }
