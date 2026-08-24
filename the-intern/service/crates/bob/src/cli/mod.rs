@@ -121,6 +121,24 @@ pub enum TaskCommand {
         #[arg(long)]
         path: bool,
     },
+    List {
+        /// Filter listed tasks by status. Accepted values: todo, doing,
+        /// blocked, done. May be repeated to include multiple statuses.
+        /// Omit to see every status except done.
+        #[arg(long = "status", value_name = "STATUS")]
+        statuses: Vec<String>,
+    },
+    Status {
+        id: String,
+        status: String,
+        /// Reason recorded in the task's log entry for this transition.
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    Note {
+        id: String,
+        text: String,
+    },
 }
 
 #[cfg(test)]
@@ -255,6 +273,96 @@ mod tests {
                 },
             } if id == "2026-08-24-fix-release"
         ));
+    }
+
+    #[test]
+    fn task_list_parses_repeatable_status_filters() {
+        let cli = Cli::parse_from([
+            "bob", "task", "list", "--status", "blocked", "--status", "done",
+        ]);
+
+        match cli.command {
+            Command::Task {
+                board: None,
+                command: TaskCommand::List { statuses },
+            } => {
+                assert_eq!(statuses, vec!["blocked", "done"]);
+            }
+            other => panic!("expected task list, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn task_list_without_status_flag_parses_with_empty_filters() {
+        let cli = Cli::parse_from(["bob", "task", "list"]);
+
+        assert!(matches!(
+            cli.command,
+            Command::Task {
+                board: None,
+                command: TaskCommand::List { ref statuses },
+            } if statuses.is_empty()
+        ));
+    }
+
+    #[test]
+    fn task_status_parses_id_status_and_optional_reason() {
+        let cli = Cli::parse_from([
+            "bob",
+            "task",
+            "status",
+            "2026-08-24-fix-release-notes",
+            "blocked",
+            "--reason",
+            "waiting on release manager",
+        ]);
+
+        match cli.command {
+            Command::Task {
+                board: None,
+                command: TaskCommand::Status { id, status, reason },
+            } => {
+                assert_eq!(id, "2026-08-24-fix-release-notes");
+                assert_eq!(status, "blocked");
+                assert_eq!(reason.as_deref(), Some("waiting on release manager"));
+            }
+            other => panic!("expected task status, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn task_status_without_reason_flag_parses_with_none() {
+        let cli = Cli::parse_from(["bob", "task", "status", "2026-08-24-fix", "done"]);
+
+        assert!(matches!(
+            cli.command,
+            Command::Task {
+                board: None,
+                command: TaskCommand::Status { reason: None, .. },
+            }
+        ));
+    }
+
+    #[test]
+    fn task_note_parses_id_and_text() {
+        let cli = Cli::parse_from([
+            "bob",
+            "task",
+            "note",
+            "2026-08-24-fix-release-notes",
+            "Blocked on QA sign-off.",
+        ]);
+
+        match cli.command {
+            Command::Task {
+                board: None,
+                command: TaskCommand::Note { id, text },
+            } => {
+                assert_eq!(id, "2026-08-24-fix-release-notes");
+                assert_eq!(text, "Blocked on QA sign-off.");
+            }
+            other => panic!("expected task note, got {other:?}"),
+        }
     }
 
     #[test]

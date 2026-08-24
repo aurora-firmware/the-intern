@@ -62,6 +62,17 @@ pub trait DispatchRuntime {
         id: &str,
         path_only: bool,
     ) -> ServiceResult<()>;
+    fn task_list(&self, json: bool, board: Option<&str>, statuses: &[String]) -> ServiceResult<()>;
+    fn task_status(
+        &self,
+        json: bool,
+        board: Option<&str>,
+        id: &str,
+        status: &str,
+        reason: Option<&str>,
+    ) -> ServiceResult<()>;
+    fn task_note(&self, json: bool, board: Option<&str>, id: &str, text: &str)
+        -> ServiceResult<()>;
 }
 
 pub struct ProductionRuntime;
@@ -162,6 +173,31 @@ impl DispatchRuntime for ProductionRuntime {
     ) -> ServiceResult<()> {
         cli::commands::task_show(json, board, id, path_only)
     }
+
+    fn task_list(&self, json: bool, board: Option<&str>, statuses: &[String]) -> ServiceResult<()> {
+        cli::commands::task_list(json, board, statuses)
+    }
+
+    fn task_status(
+        &self,
+        json: bool,
+        board: Option<&str>,
+        id: &str,
+        status: &str,
+        reason: Option<&str>,
+    ) -> ServiceResult<()> {
+        cli::commands::task_status(json, board, id, status, reason)
+    }
+
+    fn task_note(
+        &self,
+        json: bool,
+        board: Option<&str>,
+        id: &str,
+        text: &str,
+    ) -> ServiceResult<()> {
+        cli::commands::task_note(json, board, id, text)
+    }
 }
 
 pub async fn run_cli(cli: Cli) -> ServiceResult<()> {
@@ -191,6 +227,11 @@ pub async fn run_cli_with_runtime(runtime: &impl DispatchRuntime, cli: Cli) -> S
                 &definition_of_done,
             ),
             TaskCommand::Show { id, path } => runtime.task_show(json, board.as_deref(), &id, path),
+            TaskCommand::List { statuses } => runtime.task_list(json, board.as_deref(), &statuses),
+            TaskCommand::Status { id, status, reason } => {
+                runtime.task_status(json, board.as_deref(), &id, &status, reason.as_deref())
+            }
+            TaskCommand::Note { id, text } => runtime.task_note(json, board.as_deref(), &id, &text),
         };
     }
 
@@ -361,6 +402,39 @@ mod tests {
             _path_only: bool,
         ) -> ServiceResult<()> {
             self.calls.lock().expect("lock").push("task_show");
+            Ok(())
+        }
+
+        fn task_list(
+            &self,
+            _json: bool,
+            _board: Option<&str>,
+            _statuses: &[String],
+        ) -> ServiceResult<()> {
+            self.calls.lock().expect("lock").push("task_list");
+            Ok(())
+        }
+
+        fn task_status(
+            &self,
+            _json: bool,
+            _board: Option<&str>,
+            _id: &str,
+            _status: &str,
+            _reason: Option<&str>,
+        ) -> ServiceResult<()> {
+            self.calls.lock().expect("lock").push("task_status");
+            Ok(())
+        }
+
+        fn task_note(
+            &self,
+            _json: bool,
+            _board: Option<&str>,
+            _id: &str,
+            _text: &str,
+        ) -> ServiceResult<()> {
+            self.calls.lock().expect("lock").push("task_note");
             Ok(())
         }
     }
