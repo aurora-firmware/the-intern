@@ -265,3 +265,110 @@ in the next cycle's commits, not a reason for this verdict by itself.
   bug is resolved and re-verified.
 - No changes needed to AC-1, AC-2, or AC-4 content; they are correct as
   written and evidenced.
+
+### Review Verdict — 2026-08-24
+
+PASS
+
+Re-review of Session 2's commit `380f00a` on
+`task/T-189-update-the-shipped-manual-for-bob-task-and-the-new-workspace-layout`,
+which closes the AC-3 gap this file's prior verdict (cycle 1) failed on. AC-1,
+AC-2, and AC-4 were already assessed MET in cycle 1 and are unchanged by
+Session 2 (no further edits to `quickstart/index.md` or `operator-guide/index.md`);
+re-verified only that the diff still touches nothing beyond the three files
+now in `Files to Touch`.
+
+Stage 1 — Acceptance Criteria:
+
+- **AC-1, AC-2, AC-4 — MET** (carried over from cycle 1, unchanged).
+- **AC-3 — now MET.** Verified independently, the same way cycle 1's failure
+  was found: `git checkout` onto the task branch, `rm -rf the-intern/docs/book`,
+  `cargo build -p bob` (exit 0), `(cd the-intern/docs && mdbook build)` (exit
+  0), then inspected the output directly rather than trusting the exit code.
+  `ls the-intern/docs/book/cli-reference/` now includes `task.html` alongside
+  the other nine pages. Extracted `task.html`'s `<main>` content and confirmed
+  it is real generated `bob task --help` output (`Usage: bob task [OPTIONS]
+  <COMMAND>`, listing `new`, `show`, `list`, `status`, `note`, `help`, plus
+  `--board`/`--json`/`-h`/`--version` flags) — not a stale or placeholder
+  page. Also confirmed no hand-written reference page was added: `find
+  the-intern/docs/src -iname "*task*"` returns nothing, satisfying AC-3's
+  "with no hand-written reference page added" clause directly, not just by
+  its absence from the diff.
+
+Stage 2 — Code Quality, on
+`the-intern/docs/preprocessors/cli-reference/src/main.rs` (the only file
+Session 2 touched):
+
+- **Correctness.** Read `parse_subcommand_names` in full. It walks lines
+  after an exact `"Commands:"` header match, stops at the first blank line,
+  and takes the first whitespace token per line, skipping `help`. Ran `./target/debug/bob
+  --help` directly and confirmed the real `Commands:` section shape
+  (`init  task  serve  status  sessions  audit  policy  schedule  chat  help`,
+  each on its own line with no wrapped description text, since none of these
+  subcommands currently carry a clap doc comment) — matches every assumption
+  the parser makes. `help` is correctly excluded per its own explicit check,
+  matching the old hardcoded list's behavior (which also never listed
+  `help`). One theoretical fragility worth naming for the future, not
+  blocking now: if a future subcommand's clap help text is long enough to
+  wrap onto a continuation line before the section's terminating blank line,
+  `split_whitespace().next()` on that continuation line would be
+  misidentified as another subcommand name. None of the current 9
+  subcommands trigger this (all render on one line each, confirmed above),
+  and guarding against it wasn't part of AC-3 or `B-044`'s fix contract, so
+  this is a note for a future bug if it ever manifests, not a defect today.
+- **Tests.** Followed a genuine red→green cycle as claimed: the new test
+  `parse_subcommand_names_extracts_top_level_commands_excluding_help` exists,
+  asserts `parse_subcommand_names` on a representative `--help` fixture
+  (including a `help` line) returns `["init", "task", "serve", "status"]` —
+  i.e. it directly asserts the `help`-exclusion behavior, not just that the
+  function runs. Ran `cargo test` inside
+  `the-intern/docs/preprocessors/cli-reference/`: 10/10 pass, including this
+  new test and the pre-existing `build_index_content_lists_all_commands_with_relative_links`.
+  `grep -n "SUBCOMMANDS"` on the task-branch file returns nothing — the old
+  constant was fully removed, not left as dead code alongside the new
+  function.
+- **Readability.** Doc comments on `parse_subcommand_names` and the call site
+  in `run()` accurately describe the new behavior and its motivation (closing
+  the bug class for future subcommands). No dead code, no commented-out
+  blocks.
+- **Security/Performance.** No new external input surface — same
+  already-captured `bob --help` subprocess output as before, just parsed
+  instead of ignored. No unnecessary loops or allocations beyond the
+  single-pass line walk.
+- `cargo fmt --check` clean in the preprocessor crate.
+
+Reordering check (raised explicitly for this cycle): the Work Log's claim
+that `cli-reference/index.html` now links pages in the binary's declared
+subcommand order is correct — extracted the built `index.html`'s `<main>`
+content and got exactly `bob, init, task, serve, status, sessions, audit,
+policy, schedule, chat`, matching `bob --help`'s `Commands:` order verbatim
+(confirmed by running `bob --help` directly). This is not a regression: the
+only two things the old hardcoded order was ever depended on for were (a) the
+generated page *set* (which AC-3 requires to be complete and now is) and (b)
+human readability of the index list (alphabetical-ish grouping isn't claimed
+or promised anywhere in the docs or spec). Grepped the whole repo for any
+test or golden file pinning CLI-reference page order:
+`build_index_content_lists_all_commands_with_relative_links` only asserts
+`content.contains(...)` for two of the chapters, order-independent; the only
+other match, `bob/src/cli/mod.rs`'s `help_lists_global_json_flag_and_all_subcommands`,
+also uses unordered `help.contains(name)` checks and isn't about the docs
+preprocessor at all. No test pins order. Confirmed as a genuinely
+non-breaking cosmetic side effect, not something to flag as a regression.
+
+`B-044` remains `open` with no Diagnosis Log — expected, since the loop
+routed the fix through T-189's expanded `Files to Touch` rather than through
+B-044's own bug workflow (T-189's Description explicitly authorized either
+the minimal `"task"`-string fix or the derive-from-binary approach as
+"Developer's call," so this isn't scope creep against a bug-fix minimality
+bar that was never in force here). Resolving B-044's lifecycle state is the
+loop's job, as the Work Log notes; not doing that here.
+
+Minor, non-blocking observation (repeating cycle 1's note, now with a third
+instance): the new commit `fix(docs-preprocessor): derive cli-reference
+subcommands from binary help` is 73 characters, one over `git-conventions`'
+72-character limit, joining the two commits already flagged in cycle 1. Not
+a reason for this verdict; worth tightening across the branch's commits in a
+future cycle if the loop ever amends history for this task.
+
+All four ACs are now MET with independently-verified evidence, and Stage 2
+found no blocking issues. Both stages pass.
