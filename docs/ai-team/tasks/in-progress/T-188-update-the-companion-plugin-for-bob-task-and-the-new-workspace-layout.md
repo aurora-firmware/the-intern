@@ -124,3 +124,57 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-24
+
+PASS
+
+**Stage 1 — Acceptance criteria** (checked independently against source, not
+just the Work Log):
+
+- AC-1: PASS. `bob-cli/SKILL.md`'s frontmatter `description` lists `task`
+  first among the subcommands, and the opening body paragraph lists it too
+  (`init`, `task`, `serve`, `status`, `sessions`, `audit`, `policy`,
+  `schedule`, `chat`).
+- AC-2: PASS. Read `TaskCommand` in
+  `the-intern/service/crates/bob/src/cli/mod.rs` directly: five variants
+  (`New`, `Show`, `List`, `Status`, `Note`) plus the parent `Task` command's
+  `--board` flag. Cross-checked every field against the new `## `bob task
+  [--board <PATH>] <subcommand>`` section of `command-reference.md`:
+  `new` (`title`, `--status`, `--created`, `--description`, `--done`),
+  `show` (`id`, `--path`), `list` (`--status`), `status` (`id`, `status`,
+  `--reason`), `note` (`id`, `text`) are all present with matching flag
+  names, defaults, and repeatability. Also spot-checked the described
+  behavior (partial-id resolution, `BoardOperation::Write` auto-create only
+  on `new`, `--board` > `TASKS_DIR` > ancestor search > `<cwd>/tasks`
+  resolution order) against `cli/commands/task.rs` and
+  `task_board/board.rs::resolve_board_path` — matches.
+- AC-3: PASS. Both `command-reference.md`'s `bob init` section and
+  `bob-setup/SKILL.md` section 5 now list the `tasks/` board directory and
+  all four installed skills (`himalaya`/`email-triage`/`tasks`/`worklog`).
+  Verified against `init_materializer.rs` (`ensure_board_directory`,
+  `worklog` dir) and `init_assets.rs`
+  (`BTreeSet::from(["email-triage", "himalaya", "tasks", "worklog"])`) —
+  matches.
+- AC-4: PASS. Checked out the task branch into a scratch worktree and ran
+  `ls the-intern/bob-companion/claude/skills`: exactly `bob-cli`,
+  `bob-health-check`, `bob-setup`, `bob-troubleshooting` — the same 4
+  directories as on `dev-agent`, no new skill directory added.
+- No unspecified behavior added; only the three files listed under Files to
+  Touch were modified (plus the task file itself). Ran the task's literal
+  Verification block (4 `grep`/`ls` commands) against the worktree — all
+  green.
+
+Description constraint ("does not become a second account of how to use the
+board"): confirmed. The new `bob-cli/SKILL.md` paragraph explicitly defers
+board-usage discipline to the `tasks` pi-agent skill from T-186, and the new
+`bob task` section in `command-reference.md` stays at the flag/behavior
+level throughout (id resolution mechanics, error strings, defaults) with no
+judgment calls about when to file, move, or word a task.
+
+**Stage 2 — Code quality**: documentation-only change; content is accurate
+against the source of truth, well organized, consistent with the existing
+reference doc's style, and free of dead/commented-out content. Commit
+messages follow `git-conventions` format.
+
+No blocking issues found.
