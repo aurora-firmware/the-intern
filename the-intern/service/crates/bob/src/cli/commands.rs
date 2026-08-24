@@ -91,6 +91,24 @@ pub fn task_show(json: bool, board: Option<&str>, id: &str, path_only: bool) -> 
     task::run_show(json, board, id, path_only)
 }
 
+pub fn task_list(json: bool, board: Option<&str>, statuses: &[String]) -> ServiceResult<()> {
+    task::run_list(json, board, statuses)
+}
+
+pub fn task_status(
+    json: bool,
+    board: Option<&str>,
+    id: &str,
+    status: &str,
+    reason: Option<&str>,
+) -> ServiceResult<()> {
+    task::run_status(json, board, id, status, reason)
+}
+
+pub fn task_note(json: bool, board: Option<&str>, id: &str, text: &str) -> ServiceResult<()> {
+    task::run_note(json, board, id, text)
+}
+
 pub(crate) fn run_async<T>(future: impl Future<Output = ServiceResult<T>>) -> ServiceResult<T> {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         return tokio::task::block_in_place(|| handle.block_on(future));

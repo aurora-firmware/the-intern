@@ -11,7 +11,7 @@ use serde_json::json;
 
 use crate::task_board::{
     board::{resolve_board_path, BoardOperation},
-    store::{CreateTask, TaskFile, TaskStatus, TaskStore},
+    store::{CreateTask, FrontmatterField, TaskFile, TaskStatus, TaskStore},
 };
 
 use super::{invalid_request_error, write_json_line};
@@ -37,6 +37,33 @@ struct ShownTaskOutput {
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 struct TaskPathOutput {
+    id: String,
+    path: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct TaskSummary {
+    id: String,
+    title: String,
+    status: String,
+    path: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct ListedTasksOutput {
+    tasks: Vec<TaskSummary>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct StatusChangedOutput {
+    id: String,
+    previous_status: String,
+    status: String,
+    path: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct NoteAddedOutput {
     id: String,
     path: String,
 }
@@ -151,6 +178,212 @@ fn run_show_with_context(
     write_shown_task(out, json_output, path_only, &task)
 }
 
+pub(super) fn run_list(
+    json_output: bool,
+    board_override: Option<&str>,
+    statuses: &[String],
+) -> ServiceResult<()> {
+    let current_dir = env::current_dir()
+        .map_err(|err| invalid_request_error(format!("current directory unavailable: {err}")))?;
+    let env_override = env::var_os(TASKS_DIR_ENV_VAR).map(PathBuf::from);
+    let mut out = io::stdout();
+    run_list_with_context(
+        json_output,
+        board_override.map(Path::new),
+        statuses,
+        &current_dir,
+        env_override.as_deref(),
+        &mut out,
+    )
+}
+
+pub(super) fn run_status(
+    json_output: bool,
+    board_override: Option<&str>,
+    id: &str,
+    status: &str,
+    reason: Option<&str>,
+) -> ServiceResult<()> {
+    let current_dir = env::current_dir()
+        .map_err(|err| invalid_request_error(format!("current directory unavailable: {err}")))?;
+    let env_override = env::var_os(TASKS_DIR_ENV_VAR).map(PathBuf::from);
+    let mut out = io::stdout();
+    run_status_with_context(
+        json_output,
+        board_override.map(Path::new),
+        id,
+        status,
+        reason,
+        Local::now().date_naive(),
+        &current_dir,
+        env_override.as_deref(),
+        &mut out,
+    )
+}
+
+pub(super) fn run_note(
+    json_output: bool,
+    board_override: Option<&str>,
+    id: &str,
+    text: &str,
+) -> ServiceResult<()> {
+    let current_dir = env::current_dir()
+        .map_err(|err| invalid_request_error(format!("current directory unavailable: {err}")))?;
+    let env_override = env::var_os(TASKS_DIR_ENV_VAR).map(PathBuf::from);
+    let mut out = io::stdout();
+    run_note_with_context(
+        json_output,
+        board_override.map(Path::new),
+        id,
+        text,
+        Local::now().date_naive(),
+        &current_dir,
+        env_override.as_deref(),
+        &mut out,
+    )
+}
+
+fn run_list_with_context(
+    json_output: bool,
+    board_override: Option<&Path>,
+    statuses: &[String],
+    current_dir: &Path,
+    env_override: Option<&Path>,
+    out: &mut impl Write,
+) -> ServiceResult<()> {
+    let filter = parse_status_filter(statuses)?;
+
+    let board_path = resolve_board_path_for_operation(
+        current_dir,
+        board_override,
+        env_override,
+        BoardOperation::Read,
+    )?;
+    let store = TaskStore::new(&board_path);
+    let tasks = store.list_tasks()?;
+
+    let groups = group_tasks_by_status(&tasks, &filter);
+    write_listed_tasks(out, json_output, &groups)
+}
+
+fn run_status_with_context(
+    json_output: bool,
+    board_override: Option<&Path>,
+    id: &str,
+    status: &str,
+    reason: Option<&str>,
+    today: NaiveDate,
+    current_dir: &Path,
+    env_override: Option<&Path>,
+    out: &mut impl Write,
+) -> ServiceResult<()> {
+    if id.trim().is_empty() {
+        return Err(invalid_request_error("task identifier must not be empty"));
+    }
+    let new_status = TaskStatus::parse(status)?;
+
+    let board_path = resolve_board_path_for_operation(
+        current_dir,
+        board_override,
+        env_override,
+        BoardOperation::Move,
+    )?;
+    let store = TaskStore::new(&board_path);
+    let resolved_id = store.resolve_partial_identifier(id)?;
+    let path = board_path.join(format!("{resolved_id}.md"));
+
+    let previous_status = store.read_task(&path)?.status;
+    store.rewrite_frontmatter_field(&path, FrontmatterField::Status, &new_status.to_string())?;
+
+    let entry = format_status_log_entry(previous_status, new_status, reason);
+    let updated = store.append_log_entry(&path, today, &entry)?;
+
+    write_status_changed(out, json_output, previous_status, &updated)
+}
+
+fn run_note_with_context(
+    json_output: bool,
+    board_override: Option<&Path>,
+    id: &str,
+    text: &str,
+    today: NaiveDate,
+    current_dir: &Path,
+    env_override: Option<&Path>,
+    out: &mut impl Write,
+) -> ServiceResult<()> {
+    if id.trim().is_empty() {
+        return Err(invalid_request_error("task identifier must not be empty"));
+    }
+    if text.trim().is_empty() {
+        return Err(invalid_request_error("note text must not be empty"));
+    }
+
+    let board_path = resolve_board_path_for_operation(
+        current_dir,
+        board_override,
+        env_override,
+        BoardOperation::Read,
+    )?;
+    let store = TaskStore::new(&board_path);
+    let resolved_id = store.resolve_partial_identifier(id)?;
+    let path = board_path.join(format!("{resolved_id}.md"));
+
+    let updated = store.append_log_entry(&path, today, text)?;
+
+    write_note_added(out, json_output, &updated)
+}
+
+fn parse_status_filter(statuses: &[String]) -> ServiceResult<Vec<TaskStatus>> {
+    if statuses.is_empty() {
+        return Ok(default_list_statuses());
+    }
+
+    statuses
+        .iter()
+        .map(|value| TaskStatus::parse(value))
+        .collect()
+}
+
+fn default_list_statuses() -> Vec<TaskStatus> {
+    vec![TaskStatus::Todo, TaskStatus::Doing, TaskStatus::Blocked]
+}
+
+fn canonical_status_order() -> Vec<TaskStatus> {
+    vec![
+        TaskStatus::Todo,
+        TaskStatus::Doing,
+        TaskStatus::Blocked,
+        TaskStatus::Done,
+    ]
+}
+
+fn group_tasks_by_status<'task>(
+    tasks: &'task [TaskFile],
+    filter: &[TaskStatus],
+) -> Vec<(TaskStatus, Vec<&'task TaskFile>)> {
+    canonical_status_order()
+        .into_iter()
+        .filter(|status| filter.contains(status))
+        .map(|status| {
+            let matching = tasks
+                .iter()
+                .filter(|task| task.status == status)
+                .collect::<Vec<_>>();
+            (status, matching)
+        })
+        .filter(|(_, matching)| !matching.is_empty())
+        .collect()
+}
+
+fn format_status_log_entry(previous: TaskStatus, next: TaskStatus, reason: Option<&str>) -> String {
+    match reason {
+        Some(reason) if !reason.trim().is_empty() => {
+            format!("Status changed from {previous} to {next}: {reason}")
+        }
+        _ => format!("Status changed from {previous} to {next}."),
+    }
+}
+
 fn resolve_board_path_for_operation(
     current_dir: &Path,
     board_override: Option<&Path>,
@@ -229,6 +462,87 @@ fn write_shown_task(
     }
 
     out.write_all(task.content.as_bytes())
+        .map_err(|err| invalid_request_error(format!("failed to write task output: {err}")))
+}
+
+fn write_listed_tasks(
+    out: &mut impl Write,
+    json_output: bool,
+    groups: &[(TaskStatus, Vec<&TaskFile>)],
+) -> ServiceResult<()> {
+    if json_output {
+        let tasks = groups
+            .iter()
+            .flat_map(|(status, tasks)| {
+                tasks.iter().map(move |task| TaskSummary {
+                    id: task.identity.clone(),
+                    title: task.title.clone(),
+                    status: status.to_string(),
+                    path: task.path.display().to_string(),
+                })
+            })
+            .collect();
+        return write_json_line(out, &json!(ListedTasksOutput { tasks }));
+    }
+
+    if groups.is_empty() {
+        return write_output_line(out, "no tasks found");
+    }
+
+    for (status, tasks) in groups {
+        write_output_line(out, format!("{status}:"))?;
+        for task in tasks {
+            write_output_line(out, format!("  {}  {}", task.identity, task.title))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn write_status_changed(
+    out: &mut impl Write,
+    json_output: bool,
+    previous_status: TaskStatus,
+    task: &TaskFile,
+) -> ServiceResult<()> {
+    let response = StatusChangedOutput {
+        id: task.identity.clone(),
+        previous_status: previous_status.to_string(),
+        status: task.status.to_string(),
+        path: task.path.display().to_string(),
+    };
+
+    if json_output {
+        return write_json_line(out, &json!(response));
+    }
+
+    write_output_line(out, format!("task: {}", response.id))?;
+    write_output_line(
+        out,
+        format!(
+            "status: {} -> {}",
+            response.previous_status, response.status
+        ),
+    )?;
+    write_output_line(out, format!("path: {}", response.path))
+}
+
+fn write_note_added(out: &mut impl Write, json_output: bool, task: &TaskFile) -> ServiceResult<()> {
+    let response = NoteAddedOutput {
+        id: task.identity.clone(),
+        path: task.path.display().to_string(),
+    };
+
+    if json_output {
+        return write_json_line(out, &json!(response));
+    }
+
+    write_output_line(out, format!("note added to task: {}", response.id))?;
+    write_output_line(out, format!("path: {}", response.path))
+}
+
+fn write_output_line(out: &mut impl Write, line: impl AsRef<str>) -> ServiceResult<()> {
+    writeln!(out, "{}", line.as_ref())
         .map_err(|err| invalid_request_error(format!("failed to write task output: {err}")))
 }
 
