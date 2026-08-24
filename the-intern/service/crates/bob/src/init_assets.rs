@@ -72,6 +72,7 @@ mod tests {
             "email-triage/references/worklog.md",
             "himalaya/SKILL.md",
             "himalaya/references/command-reference.md",
+            "tasks/SKILL.md",
             "worklog/SKILL.md",
             "worklog/references/entry-format.md",
             "worklog/references/reconciliation.md",
@@ -99,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn contains_the_three_shipped_skill_roots() {
+    fn contains_the_four_shipped_skill_roots() {
         let roots = embedded_pi_skill_assets()
             .iter()
             .map(|asset| {
@@ -113,7 +114,7 @@ mod tests {
 
         assert_eq!(
             roots,
-            BTreeSet::from(["email-triage", "himalaya", "worklog"])
+            BTreeSet::from(["email-triage", "himalaya", "tasks", "worklog"])
         );
     }
 }

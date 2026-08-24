@@ -7,7 +7,7 @@ package_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 canonical_dir="$package_dir/skills"
 pi_skills_dir="$package_dir/.pi/skills"
 
-skill_names=(himalaya email-triage worklog)
+skill_names=(himalaya email-triage worklog tasks)
 
 for skill_name in "${skill_names[@]}"; do
   source_dir="$canonical_dir/$skill_name"
