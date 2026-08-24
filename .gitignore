@@ -16,3 +16,6 @@ mise.toml
 
 # mdBook rendered output
 the-intern/docs/book/
+
+# python cache
+__pycache__
