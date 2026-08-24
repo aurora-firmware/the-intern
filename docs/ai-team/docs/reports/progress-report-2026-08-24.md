@@ -8,7 +8,7 @@ created: 2026-08-24
 
 ## Summary
 
-Active specs: 13. Pending tasks: 6. In progress tasks: 1. Completed tasks: 182. Blocked tasks: 0. Open bugs: 0. Bugs in progress: 0. Resolved bugs: 43. ADRs: 14. Latest integration result: chore(tasks): merge T-184 add bob task new show subcommands.
+Active specs: 13. Pending tasks: 0. In progress tasks: 0. Completed tasks: 189. Blocked tasks: 0. Open bugs: 0. Bugs in progress: 0. Resolved bugs: 44. ADRs: 14. Latest integration result: chore(bugs): resolve B-044 cli-reference preprocessor omits bob task.
 
 ## Specifications
 
@@ -30,7 +30,7 @@ Active specs: 13. Pending tasks: 6. In progress tasks: 1. Completed tasks: 182. 
 
 ## Integration Evidence
 
-- Latest integration-test result: chore(tasks): merge T-184 add bob task new show subcommands
+- Latest integration-test result: chore(bugs): resolve B-044 cli-reference preprocessor omits bob task
 - Source: git log --all --grep=merge|integration|verification|test -n 1
 - Date: 2026-08-24
 
@@ -217,15 +217,22 @@ Active specs: 13. Pending tasks: 6. In progress tasks: 1. Completed tasks: 182. 
 | T-177 | Restrict macOS build job permissions | developer |
 | T-178 | Remove the claude packaging target from the runtime skills package | developer |
 | T-179 | Rename the runtime skills package directory and update code references | developer |
+| T-180 | Update the shipped manual for the renamed skills package | developer |
+| T-181 | Update repository-level references for the renamed skills package | developer |
 | T-182 | Add the task board resolver | developer |
 | T-183 | Add the task file store | developer |
 | T-184 | Add bob task new and bob task show subcommands | developer |
+| T-185 | Add bob task list, status, and note subcommands | developer |
+| T-186 | Add the canonical tasks skill and deliver it to the pi package | developer |
+| T-187 | Scaffold the board directory and install the tasks skill in bob init | developer |
+| T-188 | Update the companion plugin for bob task and the new workspace layout | developer |
+| T-189 | Update the shipped manual for bob task and the new workspace layout | developer |
 
 ## In Progress
 
 | Task ID | Title | Agent Role | Notes |
 |---|---|---|---|
-| T-181 | Update repository-level references for the renamed skills package | developer | actively progressing |
+| none | n/a | n/a | no in-progress tasks |
 
 ## Blocked
 
@@ -280,6 +287,7 @@ Active specs: 13. Pending tasks: 6. In progress tasks: 1. Completed tasks: 182. 
 | B-041 | Release artifacts do not include the bob-companion Claude Code plugin | medium | resolved | complete |
 | B-042 | bob-companion CLI reference omits bob init and still claims schedule is undocumented | low | resolved | complete |
 | B-043 | pi-extension package.json version is hardcoded and never matches the release tag | low | resolved | complete |
+| B-044 | CLI reference preprocessor's hardcoded subcommand list omits bob task | medium | resolved | complete |
 
 ## Decisions
 
@@ -302,7 +310,7 @@ Active specs: 13. Pending tasks: 6. In progress tasks: 1. Completed tasks: 182. 
 
 ## Next Actions
 
-1. Advance T-181: Update repository-level references for the renamed skills package
+1. No immediate actions.
 
 ## Risks and Concerns
 
