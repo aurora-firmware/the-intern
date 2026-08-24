@@ -1,7 +1,7 @@
 ---
 id: T-186
 title: Add the canonical tasks skill and deliver it to the pi package
-status: in-progress
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-23'
