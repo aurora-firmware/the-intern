@@ -89,12 +89,13 @@ bob init "$WORKSPACE"
 - `CLAUDE.md`
 - `config/email-triage.toml`
 - `worklog/`
+- `tasks/` (empty task board directory)
 
 It also writes bob's live config file at the platform default location
 (`$XDG_CONFIG_HOME/bob/config.toml` on Linux, `~/Library/Application Support/bob/config.toml`
-on macOS) and installs the shared `himalaya`, `email-triage`, and `worklog`
-skills once at bob's shared data path. It does **not** create a workspace
-`.pi/skills` copy.
+on macOS) and installs the shared `himalaya`, `email-triage`, `worklog`, and
+`tasks` skills once at bob's shared data path. It does **not** create a
+workspace `.pi/skills` copy.
 
 Before you serve or schedule that workspace, set the required manager escalation
 address in the generated skill-local config:
