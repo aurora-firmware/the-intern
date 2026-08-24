@@ -254,7 +254,7 @@ manager_address = "manager@example.com"
 `bob init` creates the empty `tasks/` board directory listed above, and the
 shipped `tasks` skill drives it by running `bob task` subcommands — see the
 [CLI Reference](../cli-reference/index.md) for the exact `new`/`list`/`show`/
-`move`/`note` syntax; this guide covers only the deployment-relevant
+`status`/`note` syntax; this guide covers only the deployment-relevant
 properties.
 
 `bob task` reads and writes board files directly and never opens
