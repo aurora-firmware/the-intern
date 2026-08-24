@@ -1,7 +1,7 @@
 ---
 id: T-188
 title: Update the companion plugin for bob task and the new workspace layout
-status: pending
+status: in-progress
 priority: medium
 assigned-role: developer
 created: '2026-08-23'
