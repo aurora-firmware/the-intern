@@ -20,6 +20,12 @@ pub enum Command {
         #[arg(long)]
         force: bool,
     },
+    Task {
+        #[arg(long)]
+        board: Option<String>,
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
     Serve,
     Status,
     Sessions {
@@ -97,11 +103,31 @@ pub enum ScheduleCommand {
     Reload,
 }
 
+#[derive(Debug, Subcommand)]
+pub enum TaskCommand {
+    New {
+        title: String,
+        #[arg(long, default_value = "todo")]
+        status: String,
+        #[arg(long = "created")]
+        created_date: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long = "done", value_name = "ITEM")]
+        definition_of_done: Vec<String>,
+    },
+    Show {
+        id: String,
+        #[arg(long)]
+        path: bool,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use clap::{CommandFactory, Parser};
 
-    use super::{AuditCommand, Cli, Command, ScheduleCommand, SessionsCommand};
+    use super::{AuditCommand, Cli, Command, ScheduleCommand, SessionsCommand, TaskCommand};
     use bob_core::types::AuditFilterKind;
 
     #[test]
@@ -114,7 +140,7 @@ mod tests {
 
         assert!(help.contains("--json"), "help text was: {help}");
         for name in [
-            "init", "serve", "status", "sessions", "audit", "policy", "schedule", "chat",
+            "init", "task", "serve", "status", "sessions", "audit", "policy", "schedule", "chat",
         ] {
             assert!(help.contains(name), "missing {name} in help text: {help}");
         }
@@ -165,6 +191,69 @@ mod tests {
             Command::Chat {
                 session: Some(ref session)
             } if session == "abc"
+        ));
+    }
+
+    #[test]
+    fn task_new_parses_board_override_and_optional_fields() {
+        let cli = Cli::parse_from([
+            "bob",
+            "task",
+            "--board",
+            "./workspace/tasks",
+            "new",
+            "Fix release notes",
+            "--status",
+            "doing",
+            "--created",
+            "2026-08-24",
+            "--description",
+            "Update the shipping section.",
+            "--done",
+            "Docs updated",
+            "--done",
+            "Release notes reviewed",
+        ]);
+
+        match cli.command {
+            Command::Task {
+                board,
+                command:
+                    TaskCommand::New {
+                        title,
+                        status,
+                        created_date,
+                        description,
+                        definition_of_done,
+                    },
+            } => {
+                assert_eq!(board.as_deref(), Some("./workspace/tasks"));
+                assert_eq!(title, "Fix release notes");
+                assert_eq!(status, "doing");
+                assert_eq!(created_date.as_deref(), Some("2026-08-24"));
+                assert_eq!(description.as_deref(), Some("Update the shipping section."));
+                assert_eq!(
+                    definition_of_done,
+                    vec!["Docs updated", "Release notes reviewed"]
+                );
+            }
+            other => panic!("expected task new, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn task_show_parses_path_flag() {
+        let cli = Cli::parse_from(["bob", "task", "show", "2026-08-24-fix-release", "--path"]);
+
+        assert!(matches!(
+            cli.command,
+            Command::Task {
+                board: None,
+                command: TaskCommand::Show {
+                    ref id,
+                    path: true,
+                },
+            } if id == "2026-08-24-fix-release"
         ));
     }
 

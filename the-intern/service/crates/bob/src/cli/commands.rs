@@ -14,6 +14,7 @@ mod policy;
 mod schedule;
 mod sessions;
 mod status;
+mod task;
 
 pub fn init(path: &str, force: bool) -> ServiceResult<()> {
     init::run(path, force)
@@ -64,6 +65,30 @@ pub fn schedule_reload(json: bool) -> ServiceResult<()> {
 
 pub fn chat(json: bool, session: Option<&str>) -> ServiceResult<()> {
     chat::run(json, session)
+}
+
+pub fn task_new(
+    json: bool,
+    board: Option<&str>,
+    title: &str,
+    status: &str,
+    created_date: Option<&str>,
+    description: Option<&str>,
+    definition_of_done: &[String],
+) -> ServiceResult<()> {
+    task::run_new(
+        json,
+        board,
+        title,
+        status,
+        created_date,
+        description,
+        definition_of_done,
+    )
+}
+
+pub fn task_show(json: bool, board: Option<&str>, id: &str, path_only: bool) -> ServiceResult<()> {
+    task::run_show(json, board, id, path_only)
 }
 
 pub(crate) fn run_async<T>(future: impl Future<Output = ServiceResult<T>>) -> ServiceResult<T> {

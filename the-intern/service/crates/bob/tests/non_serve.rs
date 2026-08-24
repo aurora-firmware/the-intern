@@ -84,6 +84,81 @@ fn audit_tail_with_multiple_filters_exits_non_zero_when_socket_absent() {
     );
 }
 
+#[test]
+fn task_new_creates_board_and_task_without_an_admin_socket() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let state_home = temp.path().join("state");
+    let home_dir = temp.path().join("home");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+
+    let output = bob_command_with_temp_state(&state_home, &home_dir)
+        .current_dir(&workspace)
+        .args(["task", "new", "Inspect logs", "--created", "2026-08-24"])
+        .output()
+        .expect("bob binary to run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "bob task new must succeed without an admin socket"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(
+        stdout.contains("created task: 2026-08-24-inspect-logs"),
+        "stdout must report the created task; got: {stdout}"
+    );
+    assert!(
+        workspace
+            .join("tasks")
+            .join("2026-08-24-inspect-logs.md")
+            .exists(),
+        "task new must create the markdown file on disk"
+    );
+}
+
+#[test]
+fn task_show_path_succeeds_without_an_admin_socket_and_finds_the_ancestor_board() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let state_home = temp.path().join("state");
+    let home_dir = temp.path().join("home");
+    let workspace = temp.path().join("workspace");
+    let nested_dir = workspace.join("project").join("src");
+    std::fs::create_dir_all(&nested_dir).expect("nested dir");
+
+    let create_output = bob_command_with_temp_state(&state_home, &home_dir)
+        .current_dir(&workspace)
+        .args(["task", "new", "Inspect logs", "--created", "2026-08-24"])
+        .output()
+        .expect("bob binary to run");
+    assert_eq!(create_output.status.code(), Some(0));
+
+    let output = bob_command_with_temp_state(&state_home, &home_dir)
+        .current_dir(&nested_dir)
+        .args(["task", "show", "2026-08-24-inspect", "--path"])
+        .output()
+        .expect("bob binary to run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "bob task show --path must succeed without an admin socket"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert_eq!(
+        stdout,
+        format!(
+            "{}\n",
+            workspace
+                .join("tasks")
+                .join("2026-08-24-inspect-logs.md")
+                .display()
+        )
+    );
+}
+
 fn bob_command_with_temp_state(state_home: &Path, home_dir: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bob"));
     command
