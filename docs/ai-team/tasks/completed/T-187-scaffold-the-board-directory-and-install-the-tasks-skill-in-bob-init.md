@@ -1,7 +1,7 @@
 ---
 id: T-187
 title: Scaffold the board directory and install the tasks skill in bob init
-status: in-progress
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-23'
