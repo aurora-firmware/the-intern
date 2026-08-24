@@ -181,3 +181,83 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-24
+
+PASS
+
+Stage 1 (acceptance criteria) — all four independently verified, not taken on
+the Work Log's word:
+
+- AC-1: read `the-intern/bob-skills/skills/tasks/SKILL.md` in full. It covers
+  when work belongs on the board vs. an in-session checklist, how to write a
+  cold-readable description/Definition of Done, what each of todo/doing/
+  blocked/done commits to, and which subcommand performs each move — with no
+  mention of frontmatter, YAML, file naming, or `.md` conventions anywhere
+  (`grep -inE 'frontmatter|yaml|filename|file name|T-NNN|naming'` on the file:
+  no matches). Cross-checked every factual claim against the actual `bob
+  task` implementation rather than trusting the prose: the named statuses
+  (`todo`/`doing`/`blocked`/`done`) match `TaskStatus::parse` in
+  `the-intern/service/crates/bob/src/task_board/store.rs`; the five
+  subcommands described by purpose (file new work / see what's open / move
+  between statuses / record progress without changing status / read a task
+  back) match `TaskCommand::{New,List,Status,Note,Show}` in
+  `the-intern/service/crates/bob/src/cli/mod.rs`; "finished work is hidden by
+  default" matches the `List.statuses` doc comment ("Omit to see every status
+  except done"); and the board-discovery paragraph matches
+  `find_nearest_board`/`resolve_board_path` in
+  `the-intern/service/crates/bob/src/task_board/board.rs` (walks upward via
+  `dir.parent()`, creates a new board at the search-start directory only on a
+  write operation). This is S-014's "command is the normative definition"
+  principle honored in practice, not just claimed — met.
+- AC-2: ran `./the-intern/bob-skills/package-pi-skills.sh` on the task branch
+  myself; it generates `.pi/skills/tasks/SKILL.md` alongside the three
+  existing skill trees, and `./the-intern/bob-skills/test_package_pi_skills.sh`
+  passes (5/5) — met.
+- AC-3: `cargo test -p bob --lib init_assets` passes, including
+  `contains_the_four_shipped_skill_roots` and the extended
+  `exposes_a_stable_relative_path_list_and_matching_bytes` (embedded asset
+  list includes `tasks/SKILL.md`). `cargo test -p bob --test init_e2e`
+  passes, including the new `tasks` assertions in
+  `init_materializes_shared_skills_and_bootstrap_policy_in_isolated_xdg_dirs`
+  and `initialized_workspace_chat_banner_lists_the_shared_skill_names` — met.
+- AC-4: independently grepped both
+  `the-intern/bob-skills/skills/tasks/SKILL.md` and
+  `the-intern/bob-skills/.pi/skills/tasks/SKILL.md` for spec/ADR/task/bug
+  tokens and repo-name references (`\b(spec|specs|specification|
+  specifications|adr|adrs|decision record|decision records)\b`,
+  `\bT-[0-9]+\b|\bB-[0-9]+\b|\bS-[0-9]+\b`, and `the-intern|bob-skills|
+  aurorafw|dev-agent|pi-agent|ai-team`) — zero matches in either file
+  (the one hit from a looser "spec" substring match was "specific," a false
+  positive). The packaged copy's only diff from canonical is the expected,
+  pre-existing `allowed-tools: Read Bash` insertion the packaging script adds
+  to every skill (confirmed identical mechanism on `worklog/SKILL.md`) — met.
+
+No unspecified behavior added; diff is exactly the four Files to Touch plus
+the mechanically generated `.pi/skills/tasks/SKILL.md` (`git diff
+dev-agent...task/T-186-... --stat`).
+
+Independently verified the Work Log's claim about `init_e2e.rs`: temporarily
+moved `the-intern/bob-skills/.pi/skills/tasks` out of the tree (leaving the
+task branch's updated test assertions in place) and reran
+`cargo test -p bob --test init_e2e` — both tests failed as expected, with the
+chat-banner transcript showing `email-triage, himalaya, worklog` and no
+`tasks`. Restored the directory and reran — both pass again, and the full
+`cargo test --workspace` and `cargo fmt --all -- --check` are green with a
+clean `git status`. This confirms the new `tasks` assertions are real and
+would catch a regression, not decorative additions layered onto tests that
+were already guaranteed to pass — and confirms the Work Log's characterization
+(only `init_assets.rs`'s two assertions were exhaustive and went red
+automatically; `init_e2e.rs`'s were non-exhaustive and needed the new
+assertions added deliberately for AC-3, not because they were already
+broken) is accurate, not a cover for skipped verification.
+
+Stage 2 (code quality): the three commits are cleanly scoped (feat: skill +
+packaging; test: init_assets.rs; test: init_e2e.rs), commit messages follow
+the `type(scope): description` convention, no dead code or unrelated
+refactors, and no unexpected files touched. `test_package_pi_skills.sh` was
+correctly left unmodified — it isn't in Files to Touch, its assertions are
+per-skill (not exhaustive), and nothing in this task's ACs requires it to
+enumerate `tasks`.
+
+Both stages pass. No blocking or non-blocking observations.
