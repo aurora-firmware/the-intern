@@ -173,3 +173,79 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-24
+PASS
+
+Stage 1 (acceptance criteria) — all four met, each checked against code, not
+assumed:
+
+- AC-1: `ensure_board_directory` creates `workspace_path.join("tasks")` with
+  `set_owner_only_mode(path, 0o700)` and writes nothing into it. Confirmed by
+  reading `init_materializer.rs` and by both the unit test
+  `creates_an_empty_board_directory_with_owner_only_permissions` and the e2e
+  test `init_creates_an_empty_board_directory_with_owner_only_permissions`,
+  which I ran directly (both pass).
+- AC-2 (this task's core value) — traced `ensure_board_directory` line by
+  line. It takes no `force` parameter at all (its signature is
+  `(path, report)`, and its caller in `materialize_workspace_files` never
+  threads `force` into it), so the guarantee is structural, not conditional:
+  there is no code path through which `--force` can reach this function.
+  When `path.exists()` and is a directory, the function only ever pushes to
+  `report.skipped_paths` and returns — it never calls `fs::write`,
+  `fs::remove_*`, `set_owner_only_mode`, or any other mutation on a
+  pre-existing board, and (unlike `ensure_directory`) it does not even
+  normalize the mode of a pre-existing board, which is stricter than the AC
+  requires. Symlinks are rejected via the same `reject_symlink_target`
+  helper used by `ensure_directory`/`write_generated_file` (checked with
+  `fs::symlink_metadata`, unconditionally, before the existence check), and a
+  non-directory conflict is rejected with the same
+  `fs::metadata` + `!metadata.is_dir()` → `ServiceError::InvalidRequest`
+  pattern those helpers use. Ran the unit test
+  `force_never_removes_or_replaces_existing_board_directory_contents`
+  (loops `force ∈ {false, true}` against a pre-seeded board with a task
+  file) and the e2e test
+  `init_force_never_removes_or_replaces_existing_board_directory_contents`
+  — both pass. Also confirmed the pre-existing board lands under the
+  existing generic `"skipped existing:"` report section in
+  `cli/commands/init.rs` (`write_path_section(out, "skipped existing",
+  &report.skipped_paths)`), satisfying the "named in the warnings"
+  requirement with no renderer change needed.
+- AC-3 — verified by reading the installer, not the Work Log's claim.
+  `install_shared_skills` iterates `embedded_pi_skill_assets()` generically
+  (no hardcoded skill-name list) and calls `write_generated_file` per asset.
+  `embedded_pi_skill_assets()` is generated at build time by
+  `bob/build.rs`, which recursively walks the entire tracked
+  `the-intern/bob-skills/.pi/skills` directory and emits one `EmbeddedAsset`
+  per file found — `tasks/SKILL.md` already exists in that tracked tree
+  (from T-186), so it is picked up automatically. No hardcoded skill list
+  exists elsewhere in the `bob` crate that would need updating. This
+  confirms AC-3 required zero code changes, as claimed.
+- AC-4 — `bob task`'s board creation goes through
+  `task_board::board::resolve_board_path` with `BoardOperation::Write`,
+  which is entirely independent of `materialize_workspace_with_paths`
+  (only `bob init` calls the latter); the pre-existing test
+  `non_serve.rs::task_new_creates_board_and_task_without_an_admin_socket`
+  exercises this without `bob init` ever running.
+
+No unspecified behavior was added and no unexpected files were touched:
+`git diff --stat` against `dev-agent` shows exactly the two files listed
+under Files to Touch (109 and 68 insertions, 0 deletions).
+
+Stage 2 (code quality) — correctness confirmed by tracing the logic above;
+tests are independent (fresh `tempfile::tempdir()`/isolated XDG env per
+test, no shared mutable state) and cover both the fresh-creation and
+pre-existing/force-guarantee paths; the new helper's doc comment accurately
+describes its behavior; no dead code; no security concerns (local
+filesystem operations only, following the same validated-path patterns as
+the adjacent helpers); no performance concerns. Ran the task's exact
+Verification command, `cargo test -p bob --test init_e2e` (4/4 pass), the
+two new unit tests directly (2/2 pass), and `cargo fmt --all -- --check`
+(clean).
+
+Flaky-test note for the loop, not a review blocker: the Work Log's reported
+one-off failure of `pi-agent-supervisor`'s
+`actor_shutdown_terminates_active_and_warm_worker_processes` under
+`cargo test --workspace` is pre-existing flakiness unrelated to this
+change — this diff touches zero files in `pi-agent-supervisor`, confirmed
+via `git diff --stat`. It does not affect this verdict.
