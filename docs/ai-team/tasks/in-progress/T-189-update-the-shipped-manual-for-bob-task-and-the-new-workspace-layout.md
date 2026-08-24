@@ -121,3 +121,131 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-24
+
+FAIL
+
+Stage 1 — Acceptance Criteria, checked against the diff and independently
+against `init_materializer.rs`, `init_assets.rs`, `task.rs`, and `non_serve.rs`
+(not just the Work Log's prose):
+
+- **AC-1 — MET.** `quickstart/index.md` and `operator-guide/index.md` both add
+  `tasks/` and the `tasks` skill to every enumeration of what `bob init`
+  produces, including a third near-duplicate enumeration in the
+  "Deploying the `email-triage` scheduled job" section that the Work Log
+  correctly caught for internal consistency. Verified against source:
+  `init_materializer.rs::materialize_workspace` creates `tasks/` alongside
+  `worklog/` via `ensure_board_directory`, and
+  `init_assets.rs::EMBEDDED_PI_SKILL_ASSETS`/`installed_skill_names` list
+  `tasks/SKILL.md` as the fourth skill alongside `email-triage`, `himalaya`,
+  `worklog`. Ran `cargo test -p bob --lib init_materializer` on the task
+  branch (11 passed), including
+  `creates_an_empty_board_directory_with_owner_only_permissions`, which
+  corroborates the "empty task board directory" wording.
+- **AC-2 — MET.** The new "The task board (`bob task`)" section in
+  `operator-guide/index.md` states plainly that `bob task` never opens
+  `admin.sock` and, with `init`, is the only subcommand that works while
+  `bob serve` is stopped. Verified against source: `task.rs` has no
+  `admin_sock`/`AdminClient` reference at all. Ran
+  `cargo test -p bob --test non_serve` on the task branch (5 passed),
+  including `task_new_creates_board_and_task_without_an_admin_socket` and
+  `task_show_path_succeeds_without_an_admin_socket_and_finds_the_ancestor_board`,
+  alongside `status_exits_non_zero_when_admin_socket_is_missing` and the
+  `audit_tail_*` tests, which corroborate that every other subcommand tested
+  there does require the socket.
+- **AC-4 — MET.** The new section gives concrete `[[policy.action_rules]]`
+  guidance (a `bash` rule for `bob task*`, a `read` rule for
+  `<skill_install_path>/tasks/SKILL.md`), correctly frames it as the same
+  default-deny/absent-rule-denies model documented in "Policy basics" ("allow-
+  only: if a tool is absent from the list, it is denied"), and cross-links
+  "Policy basics", "Install the skill package", and "Deploying the
+  `email-triage` scheduled job" — all three anchors resolve in the built
+  HTML (`book/operator-guide/index.html`, confirmed by grep after `mdbook
+  build`). The TOML block parses as valid TOML. This matches the guidance
+  pattern already established for `worklog` in the same file.
+- **AC-3 — NOT MET.** I independently built the docs on the task branch
+  (`cargo build -p bob` then `(cd the-intern/docs && mdbook build)`, both
+  exit 0) and confirmed `the-intern/docs/book/cli-reference/` contains
+  `audit.html bob.html chat.html index.html init.html policy.html
+  schedule.html serve.html sessions.html status.html` — **no `task.html`**,
+  even though `./target/debug/bob --help` lists `task` as a real top-level
+  command. `the-intern/docs/preprocessors/cli-reference/src/main.rs`'s
+  `SUBCOMMANDS` constant (`init, serve, status, sessions, audit, policy,
+  schedule, chat`) still omits `task`. This is exactly the gap the Developer
+  found and filed as `B-044` (`0c3a26f`, well-diagnosed, with matching
+  Fix Verification steps) — the diagnostic work here is good and correctly
+  scoped as a bug rather than folded silently into this task's diff.
+
+  The judgment call: AC-3 reads "WHEN the manual is built THE SYSTEM SHALL
+  generate the `bob task` reference pages from the binary with no
+  hand-written reference page added." Read as a whole, the "with no
+  hand-written reference page added" clause qualifies *how* the pages must
+  appear (automatically, not authored by hand) — it is not a second,
+  independently-satisfiable escape hatch. The core clause, "THE SYSTEM SHALL
+  generate the `bob task` reference pages from the binary," is empirically
+  false as of this diff, verified directly against the built book output,
+  not inferred from the Work Log. The task's own Verification block does not
+  catch this: `mdbook build` exits 0 regardless (the preprocessor fails
+  silently, by design of the bug), and `grep -q "bob task" .../operator-
+  guide/index.md` is satisfied entirely by the new prose section's own text,
+  never by anything in `cli-reference/`. Treating that script's exit code as
+  sufficient here would be exactly the "tests can have gaps" rubber-stamp
+  pitfall the code-review skill warns against — Stage 1 calls for checking
+  whether the criterion is met against the code (and, for a doc-generation
+  claim, against the generated output), not just whether the literal script
+  passes.
+
+  I considered PASS on the theory that the preprocessor file is outside
+  `Files to Touch` and the gap is correctly filed as `B-044` for someone
+  else to fix. I am not taking that reading: `Files to Touch` scopes what
+  this task's Description anticipated touching, but AC-3 is a claim about
+  "the manual" as a shipped artifact, not about the two files this task
+  happened to edit, and S-014's own Exclusion for the CLI reference
+  ("needs no edit here") is only true because the reference is *supposed*
+  to regenerate itself automatically — which, for this exact command, it
+  currently does not. Closing T-189 with AC-3 false would ship a manual
+  whose own "Install the skill package"/"The task board" sections point
+  operators at `../cli-reference/index.md` for the `bob task` syntax
+  ("see the [CLI Reference](../cli-reference/index.md) for the exact
+  `new`/`list`/`show`/`move`/`note` syntax") while no such reference page
+  exists in the built book — a real, user-facing gap, not a paperwork one.
+
+  I am not escalating this. Nothing here is a spec contradiction or a
+  design question needing Architect judgment: `B-044`'s own Suspected Area
+  already names the fix precisely (add `"task"` to `SUBCOMMANDS`, or better,
+  derive the list from the binary's own top-level subcommand names so this
+  class of gap can't recur), and its Fix Verification block
+  (`test -f book/cli-reference/task.html`) is exactly the missing check.
+  This is an ordinary, fully-diagnosed, mechanical fix a Developer can land
+  in one more cycle — either by folding the preprocessor fix into this
+  task's `Files to Touch` (updating this task's Verification block to assert
+  `test -f the-intern/docs/book/cli-reference/task.html` so the regression
+  can't reappear silently again), or by making T-189 explicitly depend on
+  `B-044` landing first and not closing until it has. Either path stays
+  within the approved specification; neither needs Architect input.
+
+Since AC-3 is not met, Stage 1 fails and Stage 2 is skipped per the
+code-review skill's procedure (I still spot-checked code quality — prose
+accuracy, anchor resolution, TOML validity, no unrelated files touched — and
+found nothing else blocking, beyond one non-blocking note below).
+
+Minor, non-blocking observation: two of the four commit messages on
+`task/T-189-...` exceed the 72-character limit in `git-conventions`
+("docs(operator-guide): add task board section on service-stopped access and
+action rules" — 87 chars; "docs(operator-guide): keep scheduled-job
+workspace layout consistent with tasks board" — 85 chars). Worth tightening
+in the next cycle's commits, not a reason for this verdict by itself.
+
+**What should change:**
+- File: `the-intern/docs/preprocessors/cli-reference/src/main.rs` — add
+  `"task"` to `SUBCOMMANDS` (or derive it from the binary's own subcommand
+  list, per `B-044`'s Suspected Area), and confirm
+  `the-intern/docs/book/cli-reference/task.html` exists after `mdbook build`.
+- File: this task file's `Files to Touch` and `Verification` — either add
+  the preprocessor file to `Files to Touch` and extend `Verification` with
+  `test -f the-intern/docs/book/cli-reference/task.html`, or add an explicit
+  blocking `Dependencies` entry on `B-044` and hold T-189 open until that
+  bug is resolved and re-verified.
+- No changes needed to AC-1, AC-2, or AC-4 content; they are correct as
+  written and evidenced.
