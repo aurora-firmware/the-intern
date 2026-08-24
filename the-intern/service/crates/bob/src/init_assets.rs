@@ -21,7 +21,7 @@ impl EmbeddedAsset {
     }
 }
 
-// Generated at build time from the canonical tracked the-intern/email-skills/.pi/skills tree.
+// Generated at build time from the canonical tracked the-intern/bob-skills/.pi/skills tree.
 include!(concat!(env!("OUT_DIR"), "/embedded_pi_skill_assets.rs"));
 
 pub fn embedded_pi_skill_package_source_dir() -> &'static str {
@@ -52,7 +52,7 @@ mod tests {
         let source_dir = embedded_pi_skill_package_source_dir();
 
         assert!(
-            source_dir.ends_with("/the-intern/email-skills/.pi/skills"),
+            source_dir.ends_with("/the-intern/bob-skills/.pi/skills"),
             "expected canonical package path suffix, got {source_dir}"
         );
     }
@@ -72,6 +72,7 @@ mod tests {
             "email-triage/references/worklog.md",
             "himalaya/SKILL.md",
             "himalaya/references/command-reference.md",
+            "tasks/SKILL.md",
             "worklog/SKILL.md",
             "worklog/references/entry-format.md",
             "worklog/references/reconciliation.md",
@@ -99,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn contains_the_three_shipped_skill_roots() {
+    fn contains_the_four_shipped_skill_roots() {
         let roots = embedded_pi_skill_assets()
             .iter()
             .map(|asset| {
@@ -113,7 +114,7 @@ mod tests {
 
         assert_eq!(
             roots,
-            BTreeSet::from(["email-triage", "himalaya", "worklog"])
+            BTreeSet::from(["email-triage", "himalaya", "tasks", "worklog"])
         );
     }
 }

@@ -195,6 +195,14 @@ fn init_materializes_shared_skills_and_bootstrap_policy_in_isolated_xdg_dirs() {
         env.skill_install_path.display()
     );
     assert!(
+        env.skill_install_path
+            .join("tasks")
+            .join("SKILL.md")
+            .is_file(),
+        "tasks skill should be installed under {}",
+        env.skill_install_path.display()
+    );
+    assert!(
         !env.workspace_path.join(".pi").join("skills").exists(),
         "initialized workspace must not contain a workspace-local .pi/skills tree"
     );
@@ -229,6 +237,67 @@ fn init_materializes_shared_skills_and_bootstrap_policy_in_isolated_xdg_dirs() {
 }
 
 #[test]
+fn init_creates_an_empty_board_directory_with_owner_only_permissions() {
+    ensure_real_pi_prerequisite();
+
+    let env = IsolatedInitWorkspace::new();
+    let init_output = run_bob_init(&env);
+    assert_command_succeeded(&init_output, "bob init");
+
+    let board = env.workspace_path.join("tasks");
+    assert!(
+        board.is_dir(),
+        "board directory should be created at {}",
+        board.display()
+    );
+    assert_eq!(
+        fs::read_dir(&board)
+            .expect("board directory should be readable")
+            .count(),
+        0,
+        "board directory should be created empty, with no task files written into it"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&board)
+            .expect("board directory should be stat-able")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "board directory should be owner-only");
+    }
+}
+
+#[test]
+fn init_force_never_removes_or_replaces_existing_board_directory_contents() {
+    ensure_real_pi_prerequisite();
+
+    let env = IsolatedInitWorkspace::new();
+    let first_init = run_bob_init(&env);
+    assert_command_succeeded(&first_init, "bob init");
+
+    let board = env.workspace_path.join("tasks");
+    let existing_task = board.join("2026-08-24-example-task.md");
+    fs::write(&existing_task, "keep me\n").expect("existing task file should be seeded");
+
+    let forced_init = run_bob_init_forced(&env);
+    assert_command_succeeded(&forced_init, "bob init --force");
+
+    assert_eq!(
+        fs::read_to_string(&existing_task).expect("existing task file should remain readable"),
+        "keep me\n",
+        "bob init --force must never remove or replace board content"
+    );
+
+    let stdout = String::from_utf8_lossy(&forced_init.stdout);
+    assert!(
+        stdout.contains(&board.display().to_string()),
+        "bob init --force output should name the skipped board directory in its warnings; got: {stdout}"
+    );
+}
+
+#[test]
 fn initialized_workspace_chat_banner_lists_the_shared_skill_names() {
     ensure_real_pi_prerequisite();
 
@@ -252,7 +321,7 @@ fn initialized_workspace_chat_banner_lists_the_shared_skill_names() {
         transcript
     );
 
-    for skill in ["email-triage", "himalaya", "worklog"] {
+    for skill in ["email-triage", "himalaya", "worklog", "tasks"] {
         assert!(
             transcript.contains(skill),
             "chat banner should advertise {skill} in [Skills]; status={:?}\nstdout={}\nstderr={}\ntranscript={}",
@@ -300,6 +369,13 @@ fn run_bob_init(env: &IsolatedInitWorkspace) -> Output {
     command.arg("init").arg(&env.workspace_path);
     env.apply_xdg_env(&mut command);
     command.output().expect("run bob init")
+}
+
+fn run_bob_init_forced(env: &IsolatedInitWorkspace) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bob"));
+    command.arg("init").arg(&env.workspace_path).arg("--force");
+    env.apply_xdg_env(&mut command);
+    command.output().expect("run bob init --force")
 }
 
 fn run_chat_through_pty(env: &IsolatedInitWorkspace) -> Output {

@@ -1,7 +1,7 @@
 # Remove the agent configuration
 .codex
 .claude
-# Anchored to repo root: the-intern/email-skills/.pi/ is tracked package
+# Anchored to repo root: the-intern/bob-skills/.pi/ is tracked package
 # content (pi's cwd-relative skill discovery path), not local agent config.
 /.pi
 .agents
@@ -16,3 +16,6 @@ mise.toml
 
 # mdBook rendered output
 the-intern/docs/book/
+
+# python cache
+__pycache__

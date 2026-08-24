@@ -102,7 +102,14 @@ jobs:
             -C ${{ env.DOCS_DIR }} book
 
       - name: Archive bob extension
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
+          # Escape sed replacement metacharacters (& expands to the whole match,
+          # / is the delimiter) so a tag like v1&beta cannot corrupt package.json.
+          escaped_tag=$(printf '%s' "$RELEASE_TAG" | sed -e 's/[&/\]/\\&/g')
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${escaped_tag}\"/" \
+            "${{ env.EXTENSIONS_DIR }}/package.json"
           tar -czf the-intern-bob-extension-${{ github.ref_name }}.tar.gz \
             -C ${{ env.EXTENSIONS_DIR }} \
             bob.ts README.md package.json package-lock.json

@@ -92,14 +92,14 @@ check_absent_from_section "no longer instructs editing ~/.pi/agent/trust.json as
 check_absent_from_section "no longer instructs restarting bob serve for trust decisions" \
     "Restart \`bob serve\` afterward"
 check_absent_from_section "no longer copies the whole package into the per-job workspace" \
-    "cp -r the-intern/email-skills/."
+    "cp -r the-intern/bob-skills/."
 
 # The no-trust-step explanation must sit where the removed trust step used
 # to live: after the workspace is deployed and before the S-004 action rules
 # are added.
-DEPLOY_LINE="$(first_matching_line "Deploy an owner-only working directory")"
+DEPLOY_LINE="$(first_matching_line "Bootstrap the owner-only workspace")"
 NO_TRUST_LINE="$(first_matching_line "No pi project-trust step is required")"
-ACTION_RULES_LINE="$(first_matching_line "Add the S-004 action rules")"
+ACTION_RULES_LINE="$(first_matching_line "Replace the bootstrap-wide action rules")"
 
 if [ -n "${DEPLOY_LINE:-}" ] && [ -n "${NO_TRUST_LINE:-}" ] && [ "$NO_TRUST_LINE" -gt "$DEPLOY_LINE" ]; then
     echo "PASS: the no-trust-step explanation appears after the workspace-deployment step"

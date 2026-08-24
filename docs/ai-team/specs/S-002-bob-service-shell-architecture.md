@@ -148,7 +148,7 @@ admin actor never sees extension traffic and vice versa.
 | Monitoring actor | Scaffold for S-001 Phase 5 work — accepts events and report records, exposes a subscription stream for admin-RPC | Empty implementation; uses an in-memory ring buffer for early development |
 | Pi-agent Supervisor actor | Scaffold for S-001 Phase 2 work — owns the warm pool, spawn/reap, and prompt routing; spawns each worker with an explicit working directory resolved from `pi_agent_cwd` (inheriting the launch cwd when unset), and supports acquiring a session under a caller-supplied cwd for per-entry scheduled jobs | Warm workers carry the service-wide cwd; a per-entry-cwd request needs a dedicated worker (see Component 6) |
 | Persistence actor | Scaffold for the inbound queue, audit log, and session state stores | Empty implementation; trait-only |
-| `bob` client subcommands | Thin clients over the local control plane; resolve socket path from config, open `admin.sock`, perform one call (or one subscription, for `audit tail`), render results, exit. `bob chat` is the exception in shape but not ownership: it requires the running service and requests a supervised interactive `pi` session rather than feeding the request-intake path. | No business logic |
+| `bob` client subcommands | Thin clients over the local control plane; resolve socket path from config, open `admin.sock`, perform one call (or one subscription, for `audit tail`), render results, exit. `bob chat` is the exception in shape but not ownership: it requires the running service and requests a supervised interactive `pi` session rather than feeding the request-intake path. Filesystem-only subcommands, which contact no service at all, are a separate category owned by their own specifications. | No business logic |
 
 ## Components
 
@@ -161,7 +161,8 @@ and the discovery rules for socket paths.
 **Interfaces:**
 - *Subcommands:* `serve`, `status`, `sessions list`, `sessions kill`,
   `audit tail`, `policy reload`, `chat` (the catalogue is illustrative and
-  grows with later phases).
+  grows with later phases; not every later subcommand is a service client — see
+  Component 7).
 - *Configuration:* layered, per the Rust coding guidelines — defaults, config
   file, environment, CLI flags; concrete keys are defined in later phases.
 - *Exit codes:* zero on success, a stable non-zero taxonomy for the typed
@@ -281,8 +282,10 @@ failure record; the schedule entry remains and fires again on its next tick.
 
 ### Component 7: `bob` client subcommands
 
-**Purpose:** Operator and user surface; every non-`serve` subcommand is a
-thin JSON-RPC client.
+**Purpose:** Operator and user surface. A subcommand that needs the running
+service is a thin JSON-RPC client over `admin.sock` and uses no other transport
+(ADR-007). A subcommand that needs nothing from the service — `bob init`
+(S-012) — is filesystem-only and never opens the socket.
 **Estimated size:** Small.
 **Interfaces:**
 - *Socket discovery:* read the same configuration the service uses; default
@@ -484,3 +487,4 @@ present.
 | 2026-06-23 | `bob chat` redefined: it requires the running service and launches a supervised, directly-launched interactive `pi` session (exempt from pre-flight admission, ADR-010) instead of feeding the admin-socket interactive-chat adapter. The obsolete chat-subscription workflow was removed from the active spec text. | CR-002. | T-103, T-104, T-105, T-106, T-107, T-108 |
 | 2026-07-05 | Added the service-wide `pi_agent_cwd` config key (absolute-only; default = inherit launch cwd; existence handled lazily at spawn time — no startup gate); the supervisor spawns workers with an explicit resolved cwd; documented that a per-entry-cwd scheduled job spawns a dedicated worker (no warm-pool reuse), consumes a `max_processes` slot, and — when the pool is exhausted — skips that fire with a warning rather than blocking or evicting; clarified that `bob chat` ignores `pi_agent_cwd` and uses the invocation cwd. | CR-005. | T-119, T-121, T-122, T-126, T-127, T-129 |
 | 2026-08-06 | Added the service-wide skill install path config key (absolute-only; default = the ADR-009 `data` location alongside the extension; set-but-missing is fail-open with a warning, unlike the fail-closed `extension_path`). Removed skills from the `pi_agent_cwd` guidance, since skills no longer resolve from the working directory. | ADR-014 accepted 2026-08-06 / S-011. | S-011 breakdown tasks (Gate 2 pending). |
+| 2026-08-23 | Component 7, the Responsibility table, and the Component 1 subcommand catalogue no longer claim that every non-`serve` subcommand is a thin JSON-RPC client. A subcommand needing the service uses `admin.sock` and only `admin.sock`; a filesystem-only subcommand contacts nothing. | The claim has been false since S-012's `bob init` shipped, which is filesystem-only and never opens the socket; ADR-007 was amended the same day. Found by the architecture consistency review of the S-014 draft. | None (documentation reconciliation only). |

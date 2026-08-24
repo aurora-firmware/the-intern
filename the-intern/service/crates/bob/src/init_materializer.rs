@@ -13,7 +13,7 @@ use crate::{
 const CONTEXT_PLACEHOLDER: &str = "# Workspace Instructions\n\nWorkspace-specific instructions belong in this file. Bob treats this file as trusted pi context for this workspace.\n";
 const EMAIL_TRIAGE_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../email-skills/config/email-triage.example.toml"
+    "/../../../bob-skills/config/email-triage.example.toml"
 ));
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +87,7 @@ fn materialize_workspace_files(
     ensure_directory(workspace_path)?;
     ensure_directory(&workspace_path.join("config"))?;
     ensure_directory(&workspace_path.join("worklog"))?;
+    ensure_board_directory(&workspace_path.join("tasks"), report)?;
 
     write_generated_file(
         &workspace_path.join("AGENTS.md"),
@@ -200,6 +201,39 @@ fn write_generated_file(
         detail: format!("failed to write generated file {}: {err}", path.display()),
     })?;
     set_owner_only_mode(path, 0o600)?;
+    report.created_paths.push(path.to_path_buf());
+    Ok(())
+}
+
+/// Creates the empty task board directory this command scaffolds, or leaves
+/// an existing one entirely alone. Unlike `ensure_directory`, this never
+/// normalizes the mode of a pre-existing directory and is never overridden by
+/// `force`: the board holds operator and agent work product this command
+/// does not own, so an existing directory at this path is only ever skipped
+/// and named in the report, never mutated.
+fn ensure_board_directory(path: &Path, report: &mut MaterializationReport) -> ServiceResult<()> {
+    reject_symlink_target(path)?;
+
+    if path.exists() {
+        let metadata = fs::metadata(path).map_err(|err| ServiceError::Persistence {
+            detail: format!("failed to inspect existing path {}: {err}", path.display()),
+        })?;
+        if !metadata.is_dir() {
+            return Err(ServiceError::InvalidRequest {
+                detail: format!(
+                    "refusing to treat non-directory path {} as the task board; remove it manually first",
+                    path.display()
+                ),
+            });
+        }
+        report.skipped_paths.push(path.to_path_buf());
+        return Ok(());
+    }
+
+    fs::create_dir_all(path).map_err(|err| ServiceError::Persistence {
+        detail: format!("failed to create directory {}: {err}", path.display()),
+    })?;
+    set_owner_only_mode(path, 0o700)?;
     report.created_paths.push(path.to_path_buf());
     Ok(())
 }
@@ -449,6 +483,81 @@ mod tests {
         assert_mode(&workspace_config, 0o600);
         assert_mode(&shared_skill, 0o600);
         assert_mode(&live_config, 0o600);
+    }
+
+    #[test]
+    fn creates_an_empty_board_directory_with_owner_only_permissions() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+
+        let report = materialize_workspace_with_paths(
+            Path::new("workspace"),
+            temp.path(),
+            &resolved_paths,
+            false,
+        )
+        .expect("fresh materialization should succeed");
+
+        let board = temp.path().join("workspace").join("tasks");
+        assert!(
+            board.is_dir(),
+            "board directory should be created at {}",
+            board.display()
+        );
+        assert_mode(&board, 0o700);
+        assert_eq!(
+            fs::read_dir(&board)
+                .expect("board directory should be readable")
+                .count(),
+            0,
+            "board directory should be created empty, with no task files written into it"
+        );
+        assert!(
+            report.created_paths.contains(&board),
+            "report should record the created board directory"
+        );
+    }
+
+    #[test]
+    fn force_never_removes_or_replaces_existing_board_directory_contents() {
+        for force in [false, true] {
+            let temp = tempfile::tempdir().expect("tempdir should be created");
+            let env = init_env(&temp);
+            let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+            let workspace = temp.path().join("workspace");
+            let board = workspace.join("tasks");
+            fs::create_dir_all(&board).expect("board directory should be seeded");
+            let existing_task = board.join("2026-08-24-example.md");
+            fs::write(&existing_task, "keep me\n").expect("existing task file should be seeded");
+
+            let report = materialize_workspace_with_paths(
+                Path::new("workspace"),
+                temp.path(),
+                &resolved_paths,
+                force,
+            )
+            .expect("materialization should succeed even with a pre-existing board directory");
+
+            assert_eq!(
+                fs::read_to_string(&existing_task)
+                    .expect("existing task file should remain readable"),
+                "keep me\n",
+                "board content must remain unchanged regardless of force (force={force})"
+            );
+            assert!(
+                report.skipped_paths.contains(&board),
+                "report should name the pre-existing board directory as skipped (force={force})"
+            );
+            assert!(
+                !report.created_paths.contains(&board),
+                "pre-existing board directory must not be reported as created (force={force})"
+            );
+            assert!(
+                !report.replaced_paths.contains(&board),
+                "pre-existing board directory must never be reported as replaced (force={force})"
+            );
+        }
     }
 
     #[test]

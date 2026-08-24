@@ -3,18 +3,6 @@ use std::process::{Command, Stdio};
 
 use mdbook::book::{Book, BookItem, Chapter};
 
-/// Subcommands to document, in display order.
-const SUBCOMMANDS: &[&str] = &[
-    "init",
-    "serve",
-    "status",
-    "sessions",
-    "audit",
-    "policy",
-    "schedule",
-    "chat",
-];
-
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -185,6 +173,42 @@ fn capture_help(bob_bin: &std::path::Path, subcommand: Option<&str>) -> Result<S
     Ok(text)
 }
 
+/// Parse the top-level subcommand names out of `bob --help` output.
+///
+/// Reads clap's `Commands:` section and returns each listed command name, in
+/// the order clap lists them, excluding the auto-generated `help` command
+/// (which is not a documented subcommand of its own). Deriving the list from
+/// the binary's own `--help` output — rather than a hardcoded list — means a
+/// newly added top-level subcommand gets a generated CLI reference chapter
+/// automatically, with no matching edit required here.
+fn parse_subcommand_names(help_text: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_commands_section = false;
+
+    for line in help_text.lines() {
+        if line.trim_end() == "Commands:" {
+            in_commands_section = true;
+            continue;
+        }
+
+        if !in_commands_section {
+            continue;
+        }
+
+        if line.trim().is_empty() {
+            break;
+        }
+
+        if let Some(name) = line.trim_start().split_whitespace().next() {
+            if name != "help" {
+                names.push(name.to_string());
+            }
+        }
+    }
+
+    names
+}
+
 /// Wrap a `--help` capture in a markdown code block with a heading.
 fn format_help_page(command_display: &str, help_text: &str) -> String {
     format!(
@@ -221,8 +245,11 @@ fn run(book_root: PathBuf, mut book: Book) -> Result<Book, String> {
         format_help_page("bob", &root_help),
     ));
 
-    // Each first-level subcommand.
-    for &sub in SUBCOMMANDS {
+    // Each first-level subcommand, derived from the binary's own `--help`
+    // output so newly added subcommands are documented without a matching
+    // edit to this preprocessor.
+    let subcommands = parse_subcommand_names(&root_help);
+    for sub in &subcommands {
         let help = capture_help(&bob_bin, Some(sub))
             .map_err(|e| format!("failed to capture `bob {sub} --help`: {e}"))?;
         new_chapters.push((
@@ -522,6 +549,33 @@ mod tests {
             content.contains("[`bob serve`](serve.md)"),
             "missing serve link: {content}"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_subcommand_names: derives the documented subcommand list from the
+    // binary's own `--help` output instead of a hardcoded constant, so a new
+    // top-level subcommand (e.g. `task`) is picked up automatically.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn parse_subcommand_names_extracts_top_level_commands_excluding_help() {
+        let help_text = "Bob service CLI\n\
+             \n\
+             Usage: bob [OPTIONS] <COMMAND>\n\
+             \n\
+             Commands:\n\
+             \x20\x20init      \n\
+             \x20\x20task      \n\
+             \x20\x20serve     \n\
+             \x20\x20status    \n\
+             \x20\x20help      Print this message or the help of the given subcommand(s)\n\
+             \n\
+             Options:\n\
+             \x20\x20-h, --help     Print help\n";
+
+        let names = parse_subcommand_names(help_text);
+
+        assert_eq!(names, vec!["init", "task", "serve", "status"]);
     }
 
     #[test]

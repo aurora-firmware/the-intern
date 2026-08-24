@@ -13,9 +13,12 @@ pub mod config;
 pub mod init_assets;
 pub mod init_materializer;
 pub mod serve;
+pub mod task_board;
 pub mod telemetry;
 
-use cli::{AuditCommand, Cli, Command, PolicyCommand, ScheduleCommand, SessionsCommand};
+use cli::{
+    AuditCommand, Cli, Command, PolicyCommand, ScheduleCommand, SessionsCommand, TaskCommand,
+};
 use config::BobConfig;
 
 #[async_trait]
@@ -42,6 +45,34 @@ pub trait DispatchRuntime {
     fn schedule_list(&self, json: bool) -> ServiceResult<()>;
     fn schedule_reload(&self, json: bool) -> ServiceResult<()>;
     fn chat(&self, json: bool, session: Option<&str>) -> ServiceResult<()>;
+    fn task_new(
+        &self,
+        json: bool,
+        board: Option<&str>,
+        title: &str,
+        status: &str,
+        created_date: Option<&str>,
+        description: Option<&str>,
+        definition_of_done: &[String],
+    ) -> ServiceResult<()>;
+    fn task_show(
+        &self,
+        json: bool,
+        board: Option<&str>,
+        id: &str,
+        path_only: bool,
+    ) -> ServiceResult<()>;
+    fn task_list(&self, json: bool, board: Option<&str>, statuses: &[String]) -> ServiceResult<()>;
+    fn task_status(
+        &self,
+        json: bool,
+        board: Option<&str>,
+        id: &str,
+        status: &str,
+        reason: Option<&str>,
+    ) -> ServiceResult<()>;
+    fn task_note(&self, json: bool, board: Option<&str>, id: &str, text: &str)
+        -> ServiceResult<()>;
 }
 
 pub struct ProductionRuntime;
@@ -111,6 +142,62 @@ impl DispatchRuntime for ProductionRuntime {
     fn chat(&self, json: bool, session: Option<&str>) -> ServiceResult<()> {
         cli::commands::chat(json, session)
     }
+
+    fn task_new(
+        &self,
+        json: bool,
+        board: Option<&str>,
+        title: &str,
+        status: &str,
+        created_date: Option<&str>,
+        description: Option<&str>,
+        definition_of_done: &[String],
+    ) -> ServiceResult<()> {
+        cli::commands::task_new(
+            json,
+            board,
+            title,
+            status,
+            created_date,
+            description,
+            definition_of_done,
+        )
+    }
+
+    fn task_show(
+        &self,
+        json: bool,
+        board: Option<&str>,
+        id: &str,
+        path_only: bool,
+    ) -> ServiceResult<()> {
+        cli::commands::task_show(json, board, id, path_only)
+    }
+
+    fn task_list(&self, json: bool, board: Option<&str>, statuses: &[String]) -> ServiceResult<()> {
+        cli::commands::task_list(json, board, statuses)
+    }
+
+    fn task_status(
+        &self,
+        json: bool,
+        board: Option<&str>,
+        id: &str,
+        status: &str,
+        reason: Option<&str>,
+    ) -> ServiceResult<()> {
+        cli::commands::task_status(json, board, id, status, reason)
+    }
+
+    fn task_note(
+        &self,
+        json: bool,
+        board: Option<&str>,
+        id: &str,
+        text: &str,
+    ) -> ServiceResult<()> {
+        cli::commands::task_note(json, board, id, text)
+    }
 }
 
 pub async fn run_cli(cli: Cli) -> ServiceResult<()> {
@@ -121,6 +208,31 @@ pub async fn run_cli_with_runtime(runtime: &impl DispatchRuntime, cli: Cli) -> S
     let Cli { json, command } = cli;
     if let Command::Init { path, force } = command {
         return runtime.init(&path, force);
+    }
+    if let Command::Task { board, command } = command {
+        return match command {
+            TaskCommand::New {
+                title,
+                status,
+                created_date,
+                description,
+                definition_of_done,
+            } => runtime.task_new(
+                json,
+                board.as_deref(),
+                &title,
+                &status,
+                created_date.as_deref(),
+                description.as_deref(),
+                &definition_of_done,
+            ),
+            TaskCommand::Show { id, path } => runtime.task_show(json, board.as_deref(), &id, path),
+            TaskCommand::List { statuses } => runtime.task_list(json, board.as_deref(), &statuses),
+            TaskCommand::Status { id, status, reason } => {
+                runtime.task_status(json, board.as_deref(), &id, &status, reason.as_deref())
+            }
+            TaskCommand::Note { id, text } => runtime.task_note(json, board.as_deref(), &id, &text),
+        };
     }
 
     let cfg = runtime.load_config()?;
@@ -159,7 +271,9 @@ pub async fn run_cli_with_runtime(runtime: &impl DispatchRuntime, cli: Cli) -> S
             ScheduleCommand::Reload => runtime.schedule_reload(json),
         },
         Command::Chat { session } => runtime.chat(json, session.as_deref()),
-        Command::Init { .. } => unreachable!("init returns before config loading"),
+        Command::Init { .. } | Command::Task { .. } => {
+            unreachable!("filesystem-only commands return before config loading")
+        }
     }
 }
 
@@ -172,7 +286,7 @@ mod tests {
     use bob_core::types::AuditFilterKind;
 
     use crate::{
-        cli::{Cli, Command},
+        cli::{Cli, Command, TaskCommand},
         config::BobConfig,
         run_cli_with_runtime, DispatchRuntime,
     };
@@ -265,6 +379,64 @@ mod tests {
         fn chat(&self, _json: bool, _session: Option<&str>) -> ServiceResult<()> {
             Err(ServiceError::NotImplemented)
         }
+
+        fn task_new(
+            &self,
+            _json: bool,
+            _board: Option<&str>,
+            _title: &str,
+            _status: &str,
+            _created_date: Option<&str>,
+            _description: Option<&str>,
+            _definition_of_done: &[String],
+        ) -> ServiceResult<()> {
+            self.calls.lock().expect("lock").push("task_new");
+            Ok(())
+        }
+
+        fn task_show(
+            &self,
+            _json: bool,
+            _board: Option<&str>,
+            _id: &str,
+            _path_only: bool,
+        ) -> ServiceResult<()> {
+            self.calls.lock().expect("lock").push("task_show");
+            Ok(())
+        }
+
+        fn task_list(
+            &self,
+            _json: bool,
+            _board: Option<&str>,
+            _statuses: &[String],
+        ) -> ServiceResult<()> {
+            self.calls.lock().expect("lock").push("task_list");
+            Ok(())
+        }
+
+        fn task_status(
+            &self,
+            _json: bool,
+            _board: Option<&str>,
+            _id: &str,
+            _status: &str,
+            _reason: Option<&str>,
+        ) -> ServiceResult<()> {
+            self.calls.lock().expect("lock").push("task_status");
+            Ok(())
+        }
+
+        fn task_note(
+            &self,
+            _json: bool,
+            _board: Option<&str>,
+            _id: &str,
+            _text: &str,
+        ) -> ServiceResult<()> {
+            self.calls.lock().expect("lock").push("task_note");
+            Ok(())
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -304,6 +476,30 @@ mod tests {
         assert_eq!(
             runtime.init_calls.lock().expect("lock").as_slice(),
             [("./workspace".to_string(), true)]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn task_dispatch_bypasses_config_and_telemetry_loading() {
+        let runtime = FakeRuntime::new();
+        let cli = Cli {
+            json: false,
+            command: Command::Task {
+                board: Some("./workspace/tasks".to_string()),
+                command: TaskCommand::Show {
+                    id: "2026-08-24-fix-release-notes".to_string(),
+                    path: true,
+                },
+            },
+        };
+
+        run_cli_with_runtime(&runtime, cli)
+            .await
+            .expect("task dispatch succeeds");
+
+        assert_eq!(
+            runtime.calls.lock().expect("lock").as_slice(),
+            ["task_show"]
         );
     }
 }

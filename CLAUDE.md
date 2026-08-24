@@ -130,9 +130,11 @@ Two things live here, and they must not be confused:
 │   ├── bob-companion/
 │   │   └── claude/              # Claude Code plugin: skills for setting up, running, and
 │   │                            #   troubleshooting bob (separate from the gitignored .claude/ tree)
-│   ├── email-skills/            # himalaya + email-triage pi-agent skills package (S-010);
-│   │                            #   bob installs it to a shared path independent of any job's
-│   │                            #   cwd and supplies it via its extension (S-011, ADR-014)
+│   ├── bob-skills/              # core runtime skill set bob supplies to every
+│   │                            #   session it spawns; includes himalaya,
+│   │                            #   email-triage, and the domain-free worklog
+│   │                            #   skill, installed to a shared path
+│   │                            #   independent of any job's cwd (S-011, ADR-014)
 │   └── service/                 # Rust service workspace (`bob` and subsystem crates)
 └── docs/
     └── ai-team/                 # Source of truth for product lifecycle state (project.dir
@@ -166,7 +168,7 @@ Directory *is* the status for tasks and bugs — moving a file is how state tran
 | Branch | Who touches it |
 |---|---|
 | `main` | Human only — no automated role ever commits here |
-| `dev-agent` | Integration target + canonical lifecycle state; non-Developer roles & loops commit docs/specs/task files here (never source code) |
+| `dev-agent` | Integration target + canonical lifecycle state; non-Developer roles & loops commit docs/specs/task files here (source code when part of a review) |
 | `task/T-NNN-...` / `bug/B-NNN-...` | Developer only; source, tests, artifacts |
 
 Commit format: `<type>(<component>): <description>` — type ∈ `feat|fix|test|docs|chore`,

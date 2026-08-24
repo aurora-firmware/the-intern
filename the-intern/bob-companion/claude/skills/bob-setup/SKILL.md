@@ -81,11 +81,12 @@ bob init /path/to/workspace
 ```
 
 This creates an owner-only workspace directory containing `AGENTS.md`,
-`CLAUDE.md`, `config/email-triage.toml`, and `worklog/`. It also writes
-bob's live `config.toml` at the platform default config path (see the
-config file section below) and installs the shared `himalaya`/
-`email-triage`/`worklog` skill package at `skill_install_path` — it does
-**not** create a workspace-local `.pi/skills/` copy.
+`CLAUDE.md`, `config/email-triage.toml`, `worklog/`, and an empty `tasks/`
+task board directory. It also writes bob's live `config.toml` at the
+platform default config path (see the config file section below) and
+installs the shared `himalaya`/`email-triage`/`tasks`/`worklog` skill
+package at `skill_install_path` — it does **not** create a workspace-local
+`.pi/skills/` copy.
 
 The generated `config.toml` is a permissive bootstrap policy — it allows any
 arguments for `bash`, `read`, `write`, and `edit`, and keeps every other
