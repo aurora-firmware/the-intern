@@ -195,6 +195,14 @@ fn init_materializes_shared_skills_and_bootstrap_policy_in_isolated_xdg_dirs() {
         env.skill_install_path.display()
     );
     assert!(
+        env.skill_install_path
+            .join("tasks")
+            .join("SKILL.md")
+            .is_file(),
+        "tasks skill should be installed under {}",
+        env.skill_install_path.display()
+    );
+    assert!(
         !env.workspace_path.join(".pi").join("skills").exists(),
         "initialized workspace must not contain a workspace-local .pi/skills tree"
     );
@@ -252,7 +260,7 @@ fn initialized_workspace_chat_banner_lists_the_shared_skill_names() {
         transcript
     );
 
-    for skill in ["email-triage", "himalaya", "worklog"] {
+    for skill in ["email-triage", "himalaya", "worklog", "tasks"] {
         assert!(
             transcript.contains(skill),
             "chat banner should advertise {skill} in [Skills]; status={:?}\nstdout={}\nstderr={}\ntranscript={}",
