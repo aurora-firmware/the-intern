@@ -11,7 +11,7 @@ use serde_json::json;
 
 use crate::task_board::{
     board::{resolve_board_path, BoardOperation},
-    store::{CreateTask, FrontmatterField, TaskFile, TaskStatus, TaskStore},
+    store::{CreateTask, TaskFile, TaskStatus, TaskStore},
 };
 
 use super::{invalid_request_error, write_json_line};
@@ -293,10 +293,8 @@ fn run_status_with_context(
     let path = board_path.join(format!("{resolved_id}.md"));
 
     let previous_status = store.read_task(&path)?.status;
-    store.rewrite_frontmatter_field(&path, FrontmatterField::Status, &new_status.to_string())?;
-
     let entry = format_status_log_entry(previous_status, new_status, reason);
-    let updated = store.append_log_entry(&path, today, &entry)?;
+    let updated = store.apply_status_change(&path, new_status, today, &entry)?;
 
     write_status_changed(out, json_output, previous_status, &updated)
 }
@@ -396,6 +394,11 @@ fn resolve_board_path_for_operation(
 fn validate_title(title: &str) -> ServiceResult<()> {
     if title.trim().is_empty() {
         return Err(invalid_request_error("task title must not be empty"));
+    }
+    if title.contains(['\n', '\r']) {
+        return Err(invalid_request_error(
+            "task title must not contain line breaks",
+        ));
     }
     Ok(())
 }
@@ -686,6 +689,37 @@ mod tests {
 
         assert!(
             matches!(error, bob_core::error::ServiceError::InvalidRequest { ref detail } if detail == "task title must not be empty")
+        );
+        assert!(
+            !cwd.join("tasks").exists(),
+            "invalid input must fail before touching the filesystem"
+        );
+    }
+
+    #[test]
+    fn task_new_rejects_multiline_title_before_creating_the_board() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let cwd = temp.path().join("workspace");
+        fs::create_dir_all(&cwd).expect("cwd");
+        let mut out = Vec::new();
+
+        let error = run_new_with_context(
+            false,
+            None,
+            "first\nsecond",
+            "todo",
+            None,
+            None,
+            &[] as &[String],
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect_err("multiline title must fail");
+
+        assert!(
+            matches!(error, bob_core::error::ServiceError::InvalidRequest { ref detail } if detail == "task title must not contain line breaks")
         );
         assert!(
             !cwd.join("tasks").exists(),
@@ -1115,6 +1149,53 @@ mod tests {
         assert_eq!(
             before, after,
             "task file must be unchanged on validation failure"
+        );
+    }
+
+    #[test]
+    fn task_status_leaves_the_file_unchanged_when_the_log_section_is_missing() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        let path = board.join("2026-08-24-hand-authored-no-log.md");
+        fs::write(
+            &path,
+            concat!(
+                "---\n",
+                "title: Hand-authored task\n",
+                "status: todo\n",
+                "---\n\n",
+                "## Description\n",
+                "This file has no log section.\n",
+            ),
+        )
+        .expect("write hand-authored task");
+        let before = fs::read_to_string(&path).expect("task file");
+        let mut out = Vec::new();
+
+        let error = run_status_with_context(
+            false,
+            None,
+            "2026-08-24-hand-authored-no-log",
+            "doing",
+            None,
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect_err("missing log section must fail");
+
+        assert!(matches!(
+            error,
+            bob_core::error::ServiceError::InvalidRequest { ref detail }
+                if detail.contains("missing a log section")
+        ));
+        let after = fs::read_to_string(&path).expect("task file");
+        assert_eq!(
+            before, after,
+            "status must not change when the log entry cannot be recorded"
         );
     }
 

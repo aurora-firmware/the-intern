@@ -97,6 +97,29 @@ impl TaskStore {
         self.read_task(path)
     }
 
+    pub fn apply_status_change(
+        &self,
+        path: &Path,
+        status: TaskStatus,
+        date: NaiveDate,
+        entry: &str,
+    ) -> ServiceResult<TaskFile> {
+        let content = fs::read_to_string(path).map_err(|err| ServiceError::Persistence {
+            detail: format!("failed to read task file {}: {err}", path.display()),
+        })?;
+        let updated = rewrite_frontmatter_content(
+            &content,
+            FrontmatterField::Status,
+            &status.to_string(),
+            path,
+        )?;
+        let updated = append_log_entry_content(&updated, date, entry, path)?;
+        fs::write(path, updated.as_bytes()).map_err(|err| ServiceError::Persistence {
+            detail: format!("failed to rewrite task file {}: {err}", path.display()),
+        })?;
+        self.read_task(path)
+    }
+
     pub fn append_log_entry(
         &self,
         path: &Path,
