@@ -147,8 +147,8 @@ starts a session without its monitoring and authorization extension.
 
 ### Install the skill package
 
-Skill content — the `himalaya`, `email-triage`, and `worklog` skills packaged
-in `the-intern/bob-skills/.pi/skills/` — is supplied to every session bob
+Skill content — the `himalaya`, `email-triage`, `worklog`, and `tasks` skills
+packaged in `the-intern/bob-skills/.pi/skills/` — is supplied to every session bob
 spawns from a single, service-wide **skill install path**, independent of
 that session's working directory (`S-011`, `ADR-014`). Install it once; every
 RPC-worker, interactive, and scheduled-job session bob spawns afterward
@@ -230,6 +230,7 @@ bob init /srv/workspaces/email-triage
 - `CLAUDE.md`
 - `config/email-triage.toml`
 - `worklog/`
+- `tasks/` (empty task board directory)
 
 It also writes the live bob config file at the platform default config path and
 installs the shared skill package at `skill_install_path`. It does **not**
