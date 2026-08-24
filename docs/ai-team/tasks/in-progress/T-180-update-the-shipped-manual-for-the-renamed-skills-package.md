@@ -112,3 +112,27 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-24
+
+PASS
+
+**Stage 1 — Acceptance Criteria** (checked against `dev-agent...task/T-180-update-the-shipped-manual-for-the-renamed-skills-package`, commits `92baac4`, `6f25781`):
+
+- AC-1 (package named `the-intern/bob-skills` everywhere): met. Both prose references and the `SKILL_PACKAGE_SRC=` assignment in `operator-guide/index.md` were renamed; confirmed `! grep -rn "email-skills" the-intern/docs/src/` exits 0 on the branch (repo-wide, not just the two edited files).
+- AC-2 (trust test passes against the documented command carrying the new path): met. Ran `the-intern/docs/test_operator_guide_email_triage_trust.sh` on the branch — 9/9 checks pass, exit 0.
+- AC-3 (example workspace name that cannot be mistaken for the package directory): met. `email-skills` (workspace) renamed to `email-triage` in `operator-guide/index.md` (two spots) and `quickstart/index.md`, unambiguously distinct from the `bob-skills` package directory and consistent with the existing `config/email-triage.toml` naming used throughout the same examples.
+- AC-4 (manual builds without error): met. Ran `mdbook build` (with `BOB_BIN` pointed at a locally built debug binary, required for the `cli-reference` preprocessor) on the branch — completes with exit 0, only a pre-existing, unrelated mermaid-preprocessor version warning.
+- No unspecified behavior added; `git diff dev-agent...HEAD --stat` shows only the three files listed under "Files to Touch" were touched, matching the Work Log's claim.
+
+**Verification of the Work Log's stale-anchor claim** (specifically checked, not accepted on faith):
+
+- `git show 54419cd -- the-intern/docs/src/operator-guide/index.md` confirms that commit (2026-08-13, "docs(bob): document init bootstrap workflow") retitled the exact two headings the test anchors depended on: "Deploy an owner-only working directory for the job's mutable state." → "Bootstrap the owner-only workspace with `bob init`.", and "Add the S-004 action rules scoped to the skill install path, then reload policy." → "Replace the bootstrap-wide action rules with the S-004 rules scoped to the skill install path, then reload policy." That commit is unrelated to the skills-package rename.
+- `git merge-base --is-ancestor 54419cd task/T-180-...` and, more precisely, `git merge-base --is-ancestor 54419cd 2ad1269` (the branch's actual fork point from `dev-agent`) both succeed — `54419cd` was already on `dev-agent` before T-180 branched.
+- Checked out the branch's fork point (`2ad1269`) in a separate worktree and ran `the-intern/docs/test_operator_guide_email_triage_trust.sh` there directly (no Developer commits applied): it exits 1, aborting after 7 of 9 checks — exactly the `set -euo pipefail` abort-on-empty-`first_matching_line` failure mode the Work Log describes. This confirms the breakage predates the Developer's work and was not introduced by an over-eager rename edit.
+
+**Scope call — fixing the anchors inline vs. filing a separate bug**: reasonable. `the-intern/docs/test_operator_guide_email_triage_trust.sh` was already an explicit item in this task's "Files to Touch" list, and AC-2 requires that exact test to pass — the fix was not incidental, it was necessary to satisfy a stated acceptance criterion on a file already in scope. Per the Developer agent's own Decision Authority ("Minor refactoring within files the task owns, only if needed to implement the feature") and the `new-bug` skill's charter (reporting defects "discovered outside the current task's scope"), this defect was squarely inside scope, not outside it, so `new-bug` did not apply. The fix itself is minimal (two literal string replacements) and was committed separately (`92baac4`, type `fix`) from the rename commit (`6f25781`, type `docs`), keeping the two concerns cleanly separated for review.
+
+**Stage 2 — Code Quality**: diff is minimal and precisely scoped (3 files, 9 insertions/9 deletions total); no dead code, no unrelated refactor bundled in; test-script anchor names remain descriptive; commit messages conform to `git-conventions` (`fix(docs): repair stale anchors and rename cp -r path in trust test`, `docs(operator-guide): rename skills package path to bob-skills`, both ≤72 chars, imperative, no period). No source/Rust files touched, so `cargo fmt`/`clippy` are not implicated.
+
+Both stages pass. No blocking issues found.
