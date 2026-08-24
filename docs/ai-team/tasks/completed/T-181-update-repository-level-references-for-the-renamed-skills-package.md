@@ -1,7 +1,7 @@
 ---
 id: T-181
 title: Update repository-level references for the renamed skills package
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-23'
