@@ -1,7 +1,7 @@
 ---
 id: T-184
 title: Add bob task new and bob task show subcommands
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-23'
