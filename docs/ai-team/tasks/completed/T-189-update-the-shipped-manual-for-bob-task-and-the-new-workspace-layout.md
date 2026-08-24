@@ -1,7 +1,7 @@
 ---
 id: T-189
 title: Update the shipped manual for bob task and the new workspace layout
-status: in-progress
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-23'
