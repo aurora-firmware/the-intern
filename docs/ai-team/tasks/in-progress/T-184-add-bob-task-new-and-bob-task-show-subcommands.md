@@ -110,3 +110,10 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-24
+PASS
+
+- Stage 1 passed: `bob task new` creates board-backed markdown tasks, rejects empty titles / invalid statuses / malformed dates before filesystem mutation, `bob task show` supports full-file and `--path` output, both subcommands run successfully with no admin socket, and JSON output is covered for the same reported facts.
+- Stage 1 passed: the extra `the-intern/service/crates/bob/src/lib.rs` and `the-intern/service/crates/bob/tests/non_serve.rs` touches were necessary and appropriately scoped to top-level dispatch plus AC-4 verification.
+- Stage 2 passed: the implementation keeps validation local, reuses the board resolver and task store directly, and adds focused unit plus service-down integration coverage without unrelated behavior.
