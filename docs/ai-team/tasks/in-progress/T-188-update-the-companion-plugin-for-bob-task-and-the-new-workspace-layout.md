@@ -95,6 +95,24 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-24
+
+Implemented T-188 as documentation-only TDD: for each of the four acceptance criteria, wrote a grep/awk-based assertable check first, ran it to confirm it failed against the stale content, then edited the content and reran to confirm green, then committed the cycle.
+
+Read the source of truth before writing any docs: `TaskCommand` in `the-intern/service/crates/bob/src/cli/mod.rs` (subcommands `new`, `show`, `list`, `status`, `note`, plus the `--board` flag on the parent `Task` command), the handler in `cli/commands/task.rs`, and `resolve_board_path` in `task_board/board.rs` for the `--board`/`TASKS_DIR`/ancestor-search/`<cwd>/tasks` resolution order. Read `init_materializer.rs` and `init_assets.rs` to confirm `bob init` now creates an empty `tasks/` board directory (via `ensure_board_directory`) alongside `worklog/`, and installs a four-skill package (`email-triage`, `himalaya`, `tasks`, `worklog`) at `skill_install_path`.
+
+Four red→green cycles, each committed separately on the task branch:
+1. Added `task` to the `bob-cli` SKILL.md frontmatter description's subcommand enumeration and to the opening paragraph's subcommand list; also added a `bob task` row to the Quick command map and mentioned `task` in the "full flag-by-flag reference" pointer sentence, and a short paragraph noting the `tasks` pi-agent skill (not this plugin) owns board-usage discipline.
+2. Added a full `## `bob task [--board <PATH>] <subcommand>`` section to `references/command-reference.md`, documenting the `--board` resolution order and each of `new`/`show`/`list`/`status`/`note` with every flag from the clap grammar.
+3. Updated the two places that enumerate the workspace layout — the `bob init` section of `command-reference.md` and section 5 ("Initialize a workspace") of `bob-setup/SKILL.md` — to include the `tasks/` board directory in the file list and all four skill names (`himalaya`/`email-triage`/`tasks`/`worklog`) in the installed-skill-package description.
+4. Verified AC-4 (no new skill directory) — this was already true before any edit (still 4 dirs: `bob-cli`, `bob-health-check`, `bob-setup`, `bob-troubleshooting`), so no fix cycle was needed there, just a confirming check.
+
+A small follow-up refactor commit fixed an awkward sentence ("omitted it reads" → "if omitted, it reads") in the new `bob task status` doc, re-verified all checks stayed green, and committed separately.
+
+Tried and rejected: an early regex check for AC-1 used `\btask\b` which false-matched the pre-existing phrase "...accomplishes a task" in the description — had to scope the pattern to the specific subcommand-enumeration substring instead. Similarly for AC-3, an early `tasks/` grep against the whole `command-reference.md` file false-passed because my newly-added `bob task` section already mentioned `tasks/` in the `--board` resolution prose; fixed by scoping each check with `awk` to just the relevant `## ...` section before asserting.
+
+Nothing remains — all four ACs are green, the task's literal Verification block (four `grep`/`ls` commands) passes end-to-end, and only the three files listed under `Files to Touch` were modified. Ran the full check suite one final time after the grammar fix to confirm no regressions.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
