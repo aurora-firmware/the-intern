@@ -92,6 +92,22 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-24
+
+Implemented the remaining `bob task` CLI surface on `task/T-185-add-bob-task-list-status-and-note-subcommands`: `list`, `status`, and `note` subcommands extending the `new`/`show` pair from T-184.
+
+`list` takes a repeatable `--status` filter (mirroring the `audit tail --filter` pattern already in the codebase). With no filter it shows `todo`/`doing`/`blocked` grouped by canonical status order and hides `done`; with an explicit filter (including `done`) it shows only the requested statuses. Text output prints `"<status>:"` group headers followed by `"  <id>  <title>"` lines; JSON output is a flat `{"tasks": [{id, title, status, path}, ...]}` array, since the spec only requires the JSON form to carry the same facts, not mirror the text grouping.
+
+`status <id> <status> [--reason <text>]` validates the identifier and new status locally (before touching the board, consistent with `task new`'s pattern), resolves the board with `BoardOperation::Move` (fails on a missing board rather than creating one, per the spec's read/move-vs-write asymmetry), reads the task's current status, rewrites the frontmatter `status` field via the existing `FrontmatterField::Status` path, then appends a log entry: `"Status changed from {old} to {new}."` or, when a reason is supplied, `"Status changed from {old} to {new}: {reason}"`. No validation was added for the target status beyond the existing `TaskStatus::parse` allow-list, and no Definition-of-Done or reason enforcement was added — verified directly with tests that a move to `blocked` with no reason and a move to `done` with unticked DoD items both succeed and leave the checklist untouched, matching the spec's explicit rejection of discipline enforcement.
+
+`note <id> <text>` validates a non-empty id and non-empty text, resolves the board with `BoardOperation::Read` (same missing-board-fails semantics; `note` doesn't create anything either), resolves the partial identifier, and appends the note text verbatim as a dated log entry via the store's existing `append_log_entry`, leaving the status field untouched.
+
+I considered adding a dedicated `BoardOperation` variant to distinguish "must-exist mutation" from "must-exist read" more precisely for `note` vs `status`, but `Read` and `Move` are implemented identically in `board.rs` today (both fail the same way on a missing board), and `task_board/board.rs` isn't in this task's file list, so I reused the existing variants rather than touching that file for a distinction with no current behavioral difference.
+
+I wired the new subcommands through the same three-layer dispatch pattern T-184 established: parser variants in `cli/mod.rs`, thin wrapper functions in `cli/commands.rs`, and `DispatchRuntime` trait/`ProductionRuntime`/dispatch-match additions in `lib.rs` (including the test `FakeRuntime`). Those last two files aren't in the task's `Files to Touch` list, but the same gap existed in T-184 and was reviewed and passed as necessary and appropriately scoped; I followed that precedent rather than re-raising it.
+
+Testing: added CLI parser tests for all three subcommands (repeatable `--status`, optional `--reason`, positional `id`/`text` for `note`), and handler-level tests in `cli/commands/task.rs` covering AC-1 (hide-done-by-default, explicit status filter including `done`, repeated filters, JSON shape, invalid-filter rejection), AC-2 (default breadcrumb, reason-carrying breadcrumb, JSON `previous_status`/`status`, unknown-status rejected before the file is touched), AC-4 (blocked-with-no-reason and done-with-unticked-DoD both succeed), and AC-3/AC-5 for `note` (log entry appended without a status change, JSON output, empty-text rejected before the file is touched). `cargo test -p bob task` (the task's Verification command) and `cargo test --workspace` both pass; `cargo fmt --all -- --check` and `cargo clippy -p bob --all-targets` are clean on the touched files. Nothing remains for implementation; next is reviewer validation.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
