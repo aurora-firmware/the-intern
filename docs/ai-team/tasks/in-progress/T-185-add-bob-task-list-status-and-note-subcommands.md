@@ -1,7 +1,7 @@
 ---
 id: T-185
 title: Add bob task list, status, and note subcommands
-status: pending
+status: in-progress
 priority: high
 assigned-role: developer
 created: '2026-08-23'
