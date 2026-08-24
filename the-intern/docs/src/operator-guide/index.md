@@ -249,6 +249,51 @@ workspace:
 manager_address = "manager@example.com"
 ```
 
+### The task board (`bob task`)
+
+`bob init` creates the empty `tasks/` board directory listed above, and the
+shipped `tasks` skill drives it by running `bob task` subcommands — see the
+[CLI Reference](../cli-reference/index.md) for the exact `new`/`list`/`show`/
+`move`/`note` syntax; this guide covers only the deployment-relevant
+properties.
+
+`bob task` reads and writes board files directly and never opens
+`admin.sock`. That makes it, along with `init`, the only bob subcommand that
+works whether or not `bob serve` is running — every other subcommand needs
+the running service and fails without it.
+
+Like every other tool call a session makes, the `bash` calls the `tasks`
+skill issues to run `bob task` go through the policy engine's default-deny
+gate (see
+[Policy basics](#policy-basics)): an action is admitted only when an
+`[[policy.action_rules]]` rule matches it, and an absent rule denies by
+default. This is the same guidance already given for the `worklog` skill's
+writes and for reference reads at the skill install path (see
+[Install the skill package](#install-the-skill-package) and
+[Deploying the `email-triage` scheduled job](#deploying-the-email-triage-scheduled-job)).
+At minimum, admit the skill's own command calls and its `SKILL.md` read at
+the resolved `skill_install_path`:
+
+```toml
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "bob task*" },
+]
+
+[[policy.action_rules]]
+tool = "read"
+arg_matchers = [
+  { field_path = "path", pattern = "<skill_install_path>/tasks/SKILL.md" },
+]
+```
+
+A fresh `bob init` install works without these because the generated
+first-run policy permits `bash` and `read` with no argument matchers at all
+(see [Initialize a workspace with `bob init`](#initialize-a-workspace-with-bob-init)
+above). An operator who narrows that bootstrap policy without adding rules
+like these will silently disable the board skill instead of seeing an error.
+
 ### Remove stale extension copies from pi's own `packages` list
 
 pi loads extensions from two independent sources: the `--extension <path>`
