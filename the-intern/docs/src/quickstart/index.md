@@ -79,7 +79,7 @@ Pick the owner-only workspace directory you want bob sessions or scheduled jobs
 to run in, then initialize it:
 
 ```bash
-WORKSPACE="$HOME/workspaces/email-skills"
+WORKSPACE="$HOME/workspaces/email-triage"
 bob init "$WORKSPACE"
 ```
 

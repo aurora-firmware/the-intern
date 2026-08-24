@@ -148,7 +148,7 @@ starts a session without its monitoring and authorization extension.
 ### Install the skill package
 
 Skill content — the `himalaya`, `email-triage`, and `worklog` skills packaged
-in `the-intern/email-skills/.pi/skills/` — is supplied to every session bob
+in `the-intern/bob-skills/.pi/skills/` — is supplied to every session bob
 spawns from a single, service-wide **skill install path**, independent of
 that session's working directory (`S-011`, `ADR-014`). Install it once; every
 RPC-worker, interactive, and scheduled-job session bob spawns afterward
@@ -173,7 +173,7 @@ Install the packaged pi skill content there:
 
 ```bash
 mkdir -p ~/.local/share/bob/skills
-SKILL_PACKAGE_SRC=the-intern/email-skills/.pi/skills
+SKILL_PACKAGE_SRC=the-intern/bob-skills/.pi/skills
 cp -r "$SKILL_PACKAGE_SRC/." ~/.local/share/bob/skills/
 ```
 
@@ -221,7 +221,7 @@ For a first-time bootstrap, prefer `bob init` over creating a workspace and
 live config by hand:
 
 ```bash
-bob init /srv/workspaces/email-skills
+bob init /srv/workspaces/email-triage
 ```
 
 `bob init` creates an owner-only workspace containing:
@@ -873,7 +873,7 @@ externally (for example, by shipping the JSONL file to a log aggregator).
 ## Deploying the `email-triage` scheduled job
 
 This section shows the validated operator procedure for turning the shipped
-`the-intern/email-skills/` package into a live scheduled `email-triage` job.
+`the-intern/bob-skills/` package into a live scheduled `email-triage` job.
 It assumes the general policy model, `cwd` precedence, schedule-store
 behavior, and the skill install path already described in
 [Policy basics](#policy-basics),
@@ -906,7 +906,7 @@ the package as described in
    `.pi/skills/` tree at all.
 
    ```bash
-   WORKSPACE=/srv/workspaces/email-skills
+   WORKSPACE=/srv/workspaces/email-triage
    bob init "$WORKSPACE"
    ```
 
