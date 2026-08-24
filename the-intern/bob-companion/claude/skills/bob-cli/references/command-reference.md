@@ -10,8 +10,9 @@ Bootstraps a workspace at `<path>` and writes bob's live `config.toml` at
 the platform default config path, without needing `bob serve` running
 first. `<path>` is a required positional argument — the workspace
 directory to create/populate (`AGENTS.md`, `CLAUDE.md`,
-`config/email-triage.toml`, `worklog/`). Also installs the shared
-`himalaya`/`email-triage`/`worklog` skill package at `skill_install_path`.
+`config/email-triage.toml`, `worklog/`, and an empty `tasks/` task board
+directory). Also installs the shared `himalaya`/`email-triage`/`tasks`/
+`worklog` skill package at `skill_install_path`.
 
 `--force` is optional. Without it, if the resolved live `config.toml` path
 already exists, the command fails locally with `"live config already
