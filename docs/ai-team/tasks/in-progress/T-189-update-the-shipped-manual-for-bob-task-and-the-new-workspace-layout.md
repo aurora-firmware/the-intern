@@ -114,6 +114,18 @@ AC-3: verified via the task's own Verification block (`mdbook build` + grep). Di
 
 Nothing rejected or left half-done — all four ACs have red→green evidence and the task's own Verification block passes cleanly. Nothing remains for a future session on T-189 itself.
 
+### Session 2 — 2026-08-24
+
+Fixed the AC-3 gap the Reviewer found in cycle 1 (B-044): `the-intern/docs/preprocessors/cli-reference/src/main.rs`'s hardcoded `SUBCOMMANDS` constant predated `bob task` and silently omitted its chapter from the built manual. Confirmed the pre-fix state matched the Reviewer's independent finding (`ls the-intern/docs/book/cli-reference/` had no `task.html` on the stale build already on disk from cycle 1) before touching anything.
+
+Took the "derive from the binary" option rather than the minimal `"task"` string addition, per the task's own framing that it "closes the whole class of bug for any future subcommand." The file already has a `capture_help` helper that runs `bob --help` and captures clap's output, including its `Commands:` section — that section is a reliable, already-being-captured source of truth, so no new process invocation was needed. Added `parse_subcommand_names(help_text: &str) -> Vec<String>`, which walks the lines after the `Commands:` header until the first blank line and takes the first whitespace-delimited token per line, explicitly excluding the auto-generated `help` entry (which was never in the old hardcoded list either, since documenting `bob help` would just duplicate the root `--help` page). `run()` now calls this against the already-captured root `--help` text instead of iterating the constant, which is removed entirely.
+
+Followed the full red→green cycle: added `parse_subcommand_names_extracts_top_level_commands_excluding_help` first (confirmed it failed to compile — function undefined), then implemented the function and wired it in (10/10 preprocessor tests pass, including the new one). Ran the task's full expanded Verification block twice, once against the already-built `book/` output and once after `rm -rf the-intern/docs/book` for a clean rebuild — both pass all five steps: `cargo build -p bob`, `mdbook build`, `test -f cli-reference/task.html`, `grep "bob task"` in both `task.html` and `operator-guide/index.md`. `cli-reference/index.html` now links `task.html` alongside the other nine pages, in the binary's own declared subcommand order (`init, task, serve, status, sessions, audit, policy, schedule, chat`), which is a cosmetic reordering from the old hardcoded order (`init` first, then `serve/status/...`) but not something any existing test pinned. `cargo fmt --check` is clean on the preprocessor crate. Committed as a single cycle (`380f00a`) — the only file touched is the preprocessor source, matching the review-expanded `Files to Touch`.
+
+Did not fold sub-subcommand recursion (`bob task new/list/show/status/note` each getting their own page) into this fix — no existing subcommand page does that either (e.g. `policy.html`, `serve.html` are also one level deep), and it isn't required by AC-3 or by B-044's Fix Verification block, so adding it here would have been scope creep beyond what was reopened.
+
+Nothing remains for T-189 itself. B-044's own Fix Verification steps now pass; resolving its lifecycle state is the loop's job, not written here.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
