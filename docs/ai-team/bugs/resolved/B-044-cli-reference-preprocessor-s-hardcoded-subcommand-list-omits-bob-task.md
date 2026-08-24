@@ -2,7 +2,7 @@
 id: B-044
 title: CLI reference preprocessor's hardcoded subcommand list omits bob task
 severity: medium
-status: open
+status: resolved
 created: '2026-08-24'
 ---
 
@@ -106,33 +106,54 @@ grep -q "bob task" book/cli-reference/task.html
 
 ## Diagnosis Log
 
-<!-- Mandatory before implementation. Append one entry before changing production code. Format:
-### Diagnosis N — YYYY-MM-DD
-Reproduction status:
-Evidence captured:
-Isolated fault:
-Root cause or fault hypothesis:
-Planned verification:
--->
+### Diagnosis 1 — 2026-08-24
+Reproduction status: confirmed, per the Reproduction Steps above.
+Evidence captured: the `SUBCOMMANDS` constant in the preprocessor, unchanged
+since commit `54419cd` (before `task` existed); the missing `task.html` in
+the built book despite a clean `mdbook build` exit.
+Isolated fault: `SUBCOMMANDS` is a hardcoded list that nothing keeps in sync
+with the binary's actual top-level subcommand set, so any subcommand added
+after the list was last touched is silently omitted from the generated
+manual with no build failure to catch it.
+Root cause: the preprocessor derives its documented pages from a static list
+instead of from the binary it already runs to capture `--help` text.
+Planned verification: the Fix Verification block below.
 
 ## Work Log
 
-<!-- Mandatory. Append one entry per session boundary. Format:
-### Session N — YYYY-MM-DD
-Free-prose body: what was done this session, what was tried and
-rejected, decisions made, what remains for next session.
+### Session 1 — 2026-08-24
 
-Start every session by reading the entries below.
-The final entry serves as the handoff to the reviewer. -->
+This bug was discovered and diagnosed while implementing `T-189`, then fixed
+as part of that same task's review-remediation cycle rather than through a
+separate bug-fix pass: `T-189`'s reviewer FAILed the task on the equivalent
+gap in its own AC-3, the loop expanded `T-189`'s `Files to Touch` to cover
+this file, and the fix landed there as commit `380f00a` on
+`task/T-189-update-the-shipped-manual-for-bob-task-and-the-new-workspace-layout`
+(merged to `dev-agent`).
+
+The fix removes `SUBCOMMANDS` entirely rather than adding `"task"` to it —
+the second option this bug's own Suspected Area named — deriving the
+documented subcommand list from `bob --help`'s own `Commands:` section via a
+new `parse_subcommand_names` function, so no future subcommand can silently
+repeat this defect. The `help` entry clap auto-generates is explicitly
+excluded, matching the old list's behavior. Independently re-verified twice
+by `T-189`'s reviewer (cycle 3, from a clean `rm -rf book` rebuild) and once
+more here, directly: this bug's own Fix Verification block, run verbatim
+against `dev-agent` after the merge, passes — `task.html` exists and
+contains real `bob task --help` content.
+
+Closing as resolved. No further action needed; this bug's fix is already on
+`dev-agent`.
 
 ## Review
 
-<!-- Reviewer: append verdict here after each review cycle.
+### Review Verdict — 2026-08-24
+PASS
 
-### Review Verdict — YYYY-MM-DD
-PASS | FAIL | ESCALATE
-
-- For FAIL: file, location, what is wrong, what should change.
-- For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
-- For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
--->
+Resolved as a byproduct of `T-189`'s review cycle 2/3, not a standalone
+Developer/Reviewer pass — `T-189`'s own Reviewer independently verified this
+exact defect twice (diagnosing it in cycle 1, confirming the fix in cycle 3
+from a clean rebuild), and this bug's literal Fix Verification block was
+re-run here against `dev-agent` post-merge with the same result: PASS. No
+separate code-quality review is recorded here since none of this bug's code
+was touched outside what `T-189`'s Reviewer already assessed in full.
