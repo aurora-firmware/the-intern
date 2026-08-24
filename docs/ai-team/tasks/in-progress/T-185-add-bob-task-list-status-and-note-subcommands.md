@@ -155,3 +155,19 @@ Stage 2 (code quality) — checked in full so no second review cycle is needed f
 - `task_board/store.rs` and `task_board/board.rs` are unmodified — confirmed the Developer's claim of reusing existing `TaskStore`/`BoardOperation` primitives verbatim rather than adding a new `BoardOperation` variant.
 
 Next: Developer corrects the Work Log's T-184 precedent citation for `commands.rs` (or supplies an accurate independent justification) and resubmits. No code changes are expected based on this review.
+
+### Review Verdict — 2026-08-24
+PASS
+
+This is re-review cycle 2, scoped to the two open items from the prior FAIL: the corrected Work Log citation and confirmation that no code changed.
+
+1. Work Log correction verified against T-184's canonical file (`docs/ai-team/tasks/completed/T-184-add-bob-task-new-and-bob-task-show-subcommands.md`):
+   - T-184's `Files to Touch` list explicitly includes `the-intern/service/crates/bob/src/cli/commands.rs — register the module` (line 76). T-184's own Work Log names only `lib.rs` and `tests/non_serve.rs` as the files omitted from that list, and T-184's review verdict passes only those two as the necessary/appropriately-scoped exception.
+   - The rewritten Session 1 paragraph in this task's Work Log now matches that record exactly: `lib.rs` is stated as a genuine, direct T-184 precedent (unlisted dispatch-layer file, reviewed and passed); `cli/commands.rs` no longer claims any T-184 exception and is instead justified on its own terms (same thin-delegator pattern already established in that file for `task_new`/`task_show`, extended for the new `list`/`status`/`note` handlers, no unrelated changes bundled in). No false precedent remains.
+   - Diffed the correction directly (`git diff 0816653 9746249`): the only change is the Session 1 paragraph rewrite plus the new Session 2 entry explaining it. No other Work Log content, code, or tests were touched.
+
+2. Branch-tip confirmation: `task/T-185-add-bob-task-list-status-and-note-subcommands` is still at `49841cb` (`test(bob): cover task list, status, and note handlers`, 2026-08-24 14:48:33), the same commit reviewed in the prior cycle — timestamped before the prior review verdict commit (`0816653`, 14:57:13) and unchanged since. `git diff --stat` against the branch point confirms the same four touched files as before (`cli/mod.rs`, `cli/commands.rs`, `cli/commands/task.rs`, `lib.rs`), same line counts (903 insertions, 2 deletions). The Session 2 correction commit (`9746249`) touches only the canonical task `.md` file — documentation-only, no code or test changes, consistent with the Developer's own claim.
+
+Combined with the prior cycle's already-passed Stage 1 acceptance-criteria checks and fully-checked Stage 2 (correctness, tests, security, readability, verification commands all clean on this same commit), both stages now pass with no open items.
+
+Next: ready for integration.
