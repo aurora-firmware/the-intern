@@ -1,6 +1,7 @@
-# Email Skills Package
+# Bob Runtime Skills Package
 
-This package ships three pi-agent skills as a versioned, reviewable product
+This package is the core runtime skill set bob supplies to every session it
+spawns. It ships three pi-agent skills as a versioned, reviewable product
 artifact: `himalaya` (a generic CLI-reference skill) and `email-triage` (the
 triage policy skill), both defined by S-010, plus `worklog` (the domain-free
 diary-discipline skill S-011/T-154/T-155 extracted out of `email-triage`).
@@ -57,7 +58,7 @@ required for discovery to work at all, and is now the recorded form.
 ## Package layout
 
 ```
-the-intern/email-skills/
+the-intern/bob-skills/
 ├── README.md                       # this file
 ├── package-pi-skills.sh             # T-153: generates .pi/skills/ below from skills/ below
 ├── skills/                          # T-151/T-152/T-154/T-155: canonical, vendor-neutral
@@ -105,7 +106,7 @@ anything under `skills/`, regenerate and commit `.pi/skills/` from this
 directory:
 
 ```bash
-cd the-intern/email-skills && ./package-pi-skills.sh
+cd the-intern/bob-skills && ./package-pi-skills.sh
 ```
 
 The script regenerates each packaged skill's `.pi/skills/<name>/` tree from
@@ -146,7 +147,7 @@ SKILL_INSTALL_PATH=~/.local/share/bob/skills   # bob's Linux default — see
                                                 # macOS default and the
                                                 # skill_install_path override
 mkdir -p "$SKILL_INSTALL_PATH"
-SKILL_PACKAGE_SRC=the-intern/email-skills/.pi/skills
+SKILL_PACKAGE_SRC=the-intern/bob-skills/.pi/skills
 cp -r "$SKILL_PACKAGE_SRC/." "$SKILL_INSTALL_PATH/"
 ```
 
@@ -154,12 +155,12 @@ Then deploy an owner-only working directory holding only the job's mutable
 runtime state — `config/` and `worklog/`, not skill content:
 
 ```bash
-WORKSPACE=/absolute/path/outside/the-repo/email-skills
+WORKSPACE=/absolute/path/outside/the-repo/bob-skills
 
 install -d -m 700 "$WORKSPACE"
 install -d -m 700 "$WORKSPACE/config"
 install -d -m 700 "$WORKSPACE/worklog"
-cp the-intern/email-skills/config/email-triage.example.toml \
+cp the-intern/bob-skills/config/email-triage.example.toml \
    "$WORKSPACE/config/email-triage.toml"
 # then edit only the job workspace's config/email-triage.toml and set
 # manager_address there
