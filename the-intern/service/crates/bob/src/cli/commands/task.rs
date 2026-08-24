@@ -552,7 +552,10 @@ mod tests {
 
     use serde_json::Value;
 
-    use super::{run_new_with_context, run_show_with_context, DATE_FORMAT};
+    use super::{
+        run_list_with_context, run_new_with_context, run_note_with_context, run_show_with_context,
+        run_status_with_context, DATE_FORMAT,
+    };
     use crate::task_board::store::{CreateTask, TaskStore};
     use chrono::NaiveDate;
 
@@ -818,5 +821,389 @@ mod tests {
         assert_eq!(output["title"], task.title);
         assert_eq!(output["status"], "todo");
         assert_eq!(output["content"], task.content);
+    }
+
+    #[test]
+    fn task_list_hides_done_tasks_by_default_and_groups_by_status() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        seed_task(&board, "Todo item", "todo");
+        seed_task(&board, "Doing item", "doing");
+        seed_task(&board, "Blocked item", "blocked");
+        seed_task(&board, "Done item", "done");
+        let mut out = Vec::new();
+
+        run_list_with_context(false, None, &[], &cwd, None, &mut out).expect("list succeeds");
+
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(text.contains("todo:"), "missing todo group: {text}");
+        assert!(text.contains("doing:"), "missing doing group: {text}");
+        assert!(text.contains("blocked:"), "missing blocked group: {text}");
+        assert!(!text.contains("done:"), "done group must be hidden: {text}");
+        assert!(text.contains("Todo item"), "text: {text}");
+        assert!(!text.contains("Done item"), "text: {text}");
+    }
+
+    #[test]
+    fn task_list_with_status_filter_shows_requested_statuses_including_done() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        seed_task(&board, "Todo item", "todo");
+        seed_task(&board, "Done item", "done");
+        let mut out = Vec::new();
+
+        run_list_with_context(false, None, &["done".to_owned()], &cwd, None, &mut out)
+            .expect("list succeeds");
+
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(text.contains("done:"), "missing done group: {text}");
+        assert!(text.contains("Done item"), "text: {text}");
+        assert!(
+            !text.contains("todo:"),
+            "todo group must be excluded: {text}"
+        );
+        assert!(!text.contains("Todo item"), "text: {text}");
+    }
+
+    #[test]
+    fn task_list_supports_repeatable_status_filters() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        seed_task(&board, "Blocked item", "blocked");
+        seed_task(&board, "Done item", "done");
+        seed_task(&board, "Todo item", "todo");
+        let mut out = Vec::new();
+
+        run_list_with_context(
+            false,
+            None,
+            &["blocked".to_owned(), "done".to_owned()],
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect("list succeeds");
+
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(text.contains("Blocked item"), "text: {text}");
+        assert!(text.contains("Done item"), "text: {text}");
+        assert!(!text.contains("Todo item"), "text: {text}");
+    }
+
+    #[test]
+    fn task_list_json_output_reports_status_and_path_for_each_task() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        let task = seed_task(&board, "Todo item", "todo");
+        let mut out = Vec::new();
+
+        run_list_with_context(true, None, &[], &cwd, None, &mut out).expect("list succeeds");
+
+        let output = serde_json::from_slice::<Value>(&out).expect("json");
+        let tasks = output["tasks"].as_array().expect("tasks array");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0]["id"], task.identity);
+        assert_eq!(tasks[0]["title"], task.title);
+        assert_eq!(tasks[0]["status"], "todo");
+        assert_eq!(tasks[0]["path"], task.path.display().to_string());
+    }
+
+    #[test]
+    fn task_list_rejects_unknown_status_filter() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        let mut out = Vec::new();
+
+        let error =
+            run_list_with_context(false, None, &["waiting".to_owned()], &cwd, None, &mut out)
+                .expect_err("unknown status filter must fail");
+
+        assert!(matches!(
+            error,
+            bob_core::error::ServiceError::InvalidRequest { ref detail }
+                if detail.contains("invalid task status")
+        ));
+    }
+
+    #[test]
+    fn task_status_appends_default_breadcrumb_when_no_reason_given() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        let task = seed_task(&board, "Fix release notes", "todo");
+        let mut out = Vec::new();
+
+        run_status_with_context(
+            false,
+            None,
+            &task.identity,
+            "blocked",
+            None,
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect("status change succeeds");
+
+        let content = fs::read_to_string(&task.path).expect("task file");
+        assert!(
+            content.contains("status: blocked"),
+            "status not updated: {content}"
+        );
+        assert!(
+            content.contains("Status changed from todo to blocked."),
+            "missing breadcrumb: {content}"
+        );
+    }
+
+    #[test]
+    fn task_status_carries_the_supplied_reason_in_the_log_entry() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        let task = seed_task(&board, "Fix release notes", "todo");
+        let mut out = Vec::new();
+
+        run_status_with_context(
+            false,
+            None,
+            &task.identity,
+            "blocked",
+            Some("waiting on release manager"),
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect("status change succeeds");
+
+        let content = fs::read_to_string(&task.path).expect("task file");
+        assert!(
+            content.contains("Status changed from todo to blocked: waiting on release manager"),
+            "missing reason in breadcrumb: {content}"
+        );
+    }
+
+    #[test]
+    fn task_status_permits_move_to_blocked_with_no_reason() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        let task = seed_task(&board, "Fix release notes", "doing");
+        let mut out = Vec::new();
+
+        let result = run_status_with_context(
+            false,
+            None,
+            &task.identity,
+            "blocked",
+            None,
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        );
+
+        assert!(
+            result.is_ok(),
+            "move to blocked without reason must succeed"
+        );
+    }
+
+    #[test]
+    fn task_status_permits_move_to_done_with_unticked_definition_of_done_items() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        let task = seed_task(&board, "Fix release notes", "doing");
+        let mut out = Vec::new();
+
+        run_status_with_context(
+            false,
+            None,
+            &task.identity,
+            "done",
+            None,
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect("move to done with unticked items must succeed");
+
+        let content = fs::read_to_string(&task.path).expect("task file");
+        assert!(content.contains("status: done"), "content: {content}");
+        assert!(
+            content.contains("- [ ] observable outcome"),
+            "definition of done items must stay unticked: {content}"
+        );
+    }
+
+    #[test]
+    fn task_status_json_output_reports_previous_and_new_status() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        let task = seed_task(&board, "Fix release notes", "todo");
+        let mut out = Vec::new();
+
+        run_status_with_context(
+            true,
+            None,
+            &task.identity,
+            "doing",
+            None,
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect("status change succeeds");
+
+        let output = serde_json::from_slice::<Value>(&out).expect("json");
+        assert_eq!(output["id"], task.identity);
+        assert_eq!(output["previous_status"], "todo");
+        assert_eq!(output["status"], "doing");
+        assert_eq!(output["path"], task.path.display().to_string());
+    }
+
+    #[test]
+    fn task_status_rejects_unknown_status_before_touching_the_task_file() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        let task = seed_task(&board, "Fix release notes", "todo");
+        let before = fs::read_to_string(&task.path).expect("task file");
+        let mut out = Vec::new();
+
+        let error = run_status_with_context(
+            false,
+            None,
+            &task.identity,
+            "waiting",
+            None,
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect_err("unknown status must fail");
+
+        assert!(matches!(
+            error,
+            bob_core::error::ServiceError::InvalidRequest { ref detail }
+                if detail.contains("invalid task status")
+        ));
+        let after = fs::read_to_string(&task.path).expect("task file");
+        assert_eq!(
+            before, after,
+            "task file must be unchanged on validation failure"
+        );
+    }
+
+    #[test]
+    fn task_note_appends_dated_entry_without_changing_status() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        let task = seed_task(&board, "Fix release notes", "doing");
+        let mut out = Vec::new();
+
+        run_note_with_context(
+            false,
+            None,
+            &task.identity,
+            "Blocked on QA sign-off.",
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect("note succeeds");
+
+        let content = fs::read_to_string(&task.path).expect("task file");
+        assert!(content.contains("status: doing"), "content: {content}");
+        assert!(
+            content.contains("Blocked on QA sign-off."),
+            "missing note text: {content}"
+        );
+    }
+
+    #[test]
+    fn task_note_json_output_reports_id_and_path() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        let task = seed_task(&board, "Fix release notes", "doing");
+        let mut out = Vec::new();
+
+        run_note_with_context(
+            true,
+            None,
+            &task.identity,
+            "Blocked on QA sign-off.",
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect("note succeeds");
+
+        let output = serde_json::from_slice::<Value>(&out).expect("json");
+        assert_eq!(output["id"], task.identity);
+        assert_eq!(output["path"], task.path.display().to_string());
+    }
+
+    #[test]
+    fn task_note_rejects_empty_text_before_touching_the_task_file() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        let task = seed_task(&board, "Fix release notes", "doing");
+        let before = fs::read_to_string(&task.path).expect("task file");
+        let mut out = Vec::new();
+
+        let error = run_note_with_context(
+            false,
+            None,
+            &task.identity,
+            "   ",
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect_err("empty note text must fail");
+
+        assert!(matches!(
+            error,
+            bob_core::error::ServiceError::InvalidRequest { ref detail }
+                if detail == "note text must not be empty"
+        ));
+        let after = fs::read_to_string(&task.path).expect("task file");
+        assert_eq!(
+            before, after,
+            "task file must be unchanged on validation failure"
+        );
     }
 }
