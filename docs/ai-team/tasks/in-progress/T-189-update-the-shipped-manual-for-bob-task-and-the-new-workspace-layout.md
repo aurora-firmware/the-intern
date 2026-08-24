@@ -98,6 +98,18 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-24
+
+Implemented T-189 end to end in four small red→green cycles, each committed separately on `task/T-189-update-the-shipped-manual-for-bob-task-and-the-new-workspace-layout`. First confirmed via `init_materializer.rs`/`init_assets.rs` exactly what `bob init` now creates (an empty `tasks/` board dir alongside `worklog/`, and a fourth `tasks` skill installed alongside `himalaya`/`email-triage`/`worklog`), and confirmed via `task.rs`/`non_serve.rs` that `bob task` never opens `admin.sock`, unlike every subcommand except `init`.
+
+AC-1: added `tasks/` and the `tasks` skill to the two enumerations T-180 previously touched for the package rename — `quickstart/index.md`'s "Initialize a workspace" list/sentence, and `operator-guide/index.md`'s "Install the skill package" intro sentence and "Initialize a workspace with `bob init`" bullet list. Also found a third, near-duplicate enumeration of the same claim inside operator-guide's "Deploying the `email-triage` scheduled job" section (`bob init creates AGENTS.md, CLAUDE.md, config/email-triage.toml, and worklog/...`) and updated it too for internal consistency, since leaving it stale would have left two contradictory descriptions of `bob init`'s output in the same file. Grepped the rest of `the-intern/docs/src/` for the same enumeration pattern first and found no other occurrences, so no further edits were needed outside the two files in `Files to Touch`.
+
+AC-2 and AC-4: added a new `### The task board (bob task)` subsection in operator-guide, placed right after "Initialize a workspace with `bob init`" (since that's where the board directory is introduced) and before "Remove stale extension copies...". It states the `admin.sock`-independence fact plainly, then gives concrete action-rule guidance for the `tasks` skill's own surface — a `bash` rule admitting `bob task*` and a `read` rule admitting `<skill_install_path>/tasks/SKILL.md` — explicitly framed as the same default-deny/absent-rule-denies pattern already documented for `worklog`, with cross-links to "Policy basics", "Install the skill package", and "Deploying the `email-triage` scheduled job".
+
+AC-3: verified via the task's own Verification block (`mdbook build` + grep). Did not add a hand-written CLI reference page. While verifying this AC I discovered the CLI-reference preprocessor's `SUBCOMMANDS` constant was never updated for `task` (last touched when `init` was added), so the manual actually never generates a `task.html` chapter despite the build succeeding cleanly — filed as `B-044` via the `new-bug` skill rather than fixed, since the preprocessor source isn't in this task's `Files to Touch`. The literal task Verification command doesn't check for the generated chapter's existence, so AC-3 as literally specified still passes; flagging this for the loop/architect to decide whether it warrants a follow-up task.
+
+Nothing rejected or left half-done — all four ACs have red→green evidence and the task's own Verification block passes cleanly. Nothing remains for a future session on T-189 itself.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
