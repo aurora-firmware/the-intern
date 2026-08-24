@@ -94,6 +94,74 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-24
+
+Implemented CR-009's board-directory scaffolding in `bob init`. Read T-182's
+`resolve_board_path`/`BoardOperation::Write` and confirmed the board directory
+name the resolver expects is `tasks/` at the workspace root (hardcoded as a
+literal string there too — no shared constant exists to reuse). Read
+`init_materializer.rs`'s existing `--force` handling first, as instructed:
+`ensure_directory` unconditionally normalizes mode on existing directories
+(used for `worklog/`, `config/`), and `write_generated_file` skips-and-reports
+existing files unless `force` is set, then overwrites-and-reports under
+`force`. Neither pattern fits the board's requirement — content must never be
+touched, mode included, under any combination of existence/force — so I added
+a new `ensure_board_directory` helper that follows the same
+existence-check-then-branch structure but only ever does two things: create
+fresh (mode 0700, added to `created_paths`) or skip entirely and report
+(`skipped_paths`), regardless of the `force` flag. It also rejects symlinks
+and non-directory conflicts the same way the existing helpers do, for
+consistency. `init.rs`'s report renderer already prints `skipped_paths` under
+a "skipped existing:" section, so the CR-009/S-012 requirement that a
+pre-existing board be "named in the warnings" is satisfied by the existing
+generic reporting path — no change needed there, and it's outside this task's
+Files to Touch anyway.
+
+Verified rather than re-implemented the two assumptions the task called out:
+(1) `install_shared_skills` installs the embedded asset table generically, so
+the `tasks` skill tree that landed in T-186 is already installed by `bob
+init` with no code change — confirmed by rerunning
+`init_materializes_shared_skills_and_bootstrap_policy_in_isolated_xdg_dirs`,
+which already asserts `tasks/SKILL.md` is installed (added in T-186); (2)
+`bob task` still works without `bob init` ever having run — confirmed via the
+pre-existing `non_serve.rs::task_new_creates_board_and_task_without_an_admin_socket`
+test, since this task's board-directory code lives entirely inside
+`materialize_workspace_with_paths`, which only `bob init` calls, with zero
+coupling introduced into `task_board`/CLI task dispatch.
+
+TDD cycles, both committed separately: (1) two unit tests in
+`init_materializer.rs` — fresh-creation with mode 0700 and zero entries, and a
+force-guarantee test looping over `force ∈ {false, true}` against a
+pre-seeded board containing a task file, asserting the file's content is
+untouched and the directory lands in `skipped_paths` (not `created_paths` or
+`replaced_paths`) in both cases; confirmed both RED before implementing
+`ensure_board_directory`, then GREEN after. (2) two e2e tests in
+`init_e2e.rs` exercising the real `bob` binary end-to-end — board creation
+with mode/emptiness assertions, and a force-guarantee test that runs `bob
+init`, seeds a task file into the resulting `tasks/` directory, reruns `bob
+init --force` (needed because the live config already exists from the first
+run, so `--force` is required for the second invocation to succeed at all),
+and asserts the file survives untouched and the CLI's stdout names the board
+path under "skipped existing:". These e2e tests passed on first run rather
+than red-first, since the underlying behavior was already implemented and
+unit-tested earlier in this same session — noted as an intentional deviation,
+not a scope violation, since they add real full-CLI-path coverage the unit
+tests don't (actual env/XDG resolution, the real binary, the real report
+renderer).
+
+Verification: `cargo test -p bob --test init_e2e` (the task's specified
+command) passes 4/4. Full workspace suite `cargo test --workspace` passes
+clean on rerun; one unrelated flaky failure in `pi-agent-supervisor` (a
+process-count timing assertion, untouched by this task) surfaced once under
+parallel execution and passed both in isolation and on a full rerun, so it's
+pre-existing flakiness, not a regression. `cargo fmt --all -- --check` clean.
+Only the two files listed under Files to Touch were modified — confirmed via
+`git diff --stat` against the branch point.
+
+Nothing remains open for this task's four ACs. Documentation for the new
+workspace layout (bob-companion plugin, shipped mdBook manual) is explicitly
+out of scope per CR-009 and is already tracked as T-188 and T-189.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
