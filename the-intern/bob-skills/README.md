@@ -1,10 +1,12 @@
 # Bob Runtime Skills Package
 
 This package is the core runtime skill set bob supplies to every session it
-spawns. It ships three pi-agent skills as a versioned, reviewable product
+spawns. It ships four pi-agent skills as a versioned, reviewable product
 artifact: `himalaya` (a generic CLI-reference skill) and `email-triage` (the
 triage policy skill), both defined by S-010, plus `worklog` (the domain-free
-diary-discipline skill S-011/T-154/T-155 extracted out of `email-triage`).
+diary-discipline skill S-011/T-154/T-155 extracted out of `email-triage`) and
+`tasks` (the task-board discipline skill S-014/T-186 that drives the `bob
+task` board).
 The package is separate from `the-intern/bob-companion/claude` (Claude Code
 dev-tooling for operating `bob`) and from this repository's own
 `.claude/skills` (this repository's AI-team process tooling). Neither of
@@ -73,15 +75,18 @@ the-intern/bob-skills/
 │   │       └── categories/          #   taxonomy index + one workflow file per starter
 │   │           └── README.md        #   category (newsletter-bulk, automated-notification,
 │   │                                #   suspected-spam, direct-request, meeting-scheduling)
-│   └── worklog/                     # domain-free diary-discipline skill (S-011/T-154/T-155):
-│       ├── SKILL.md                 #   location, entry format, first-run detection,
-│       └── references/              #   reconciliation, and how an open item closes
+│   ├── worklog/                     # domain-free diary-discipline skill (S-011/T-154/T-155):
+│   │   ├── SKILL.md                 #   location, entry format, first-run detection,
+│   │   └── references/              #   reconciliation, and how an open item closes
+│   └── tasks/                       # task-board discipline skill (S-014/T-186): when work
+│       └── SKILL.md                 #   belongs on the `bob task` board, how to describe it
+│                                    #   for a cold reader, and what each status commits to
 ├── .pi/
 │   └── skills/                      # T-153/T-156: generated pi packaging target — produced
 │       ├── himalaya/                #   solely by running package-pi-skills.sh against skills/
 │       ├── email-triage/            #   above; never hand-edited. Committed tracked output (no
-│       └── worklog/                 #   CI or install-time build step regenerates it), so it
-│                                     #   must stay in sync with skills/ by re-running the
+│       ├── worklog/                 #   CI or install-time build step regenerates it), so it
+│       └── tasks/                   #   must stay in sync with skills/ by re-running the
 │                                     #   script and committing the result whenever skills/
 │                                     #   changes.
 ├── config/
