@@ -69,7 +69,7 @@ equivalent with `--json`).
   `task show`.
 - `<status>` is a required positional argument, not a flag.
 - `--reason` is optional text appended to the log entry
-  (`Status changed from <old> to <new>: <reason>`); omitted it reads
+  (`Status changed from <old> to <new>: <reason>`); if omitted, it reads
   `Status changed from <old> to <new>.`.
 
 ### `bob task note <id> <text>`
