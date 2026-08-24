@@ -80,11 +80,15 @@ guidance already given for the worklog.
 
 - `the-intern/docs/src/quickstart/index.md` — the workspace layout and installed skill set.
 - `the-intern/docs/src/operator-guide/index.md` — the same, plus a short section on the board.
+- `the-intern/docs/preprocessors/cli-reference/src/main.rs` — added during review cycle 2: the preprocessor's `SUBCOMMANDS` list predates `bob task` (last updated when `init` was added, per B-044), so no `cli-reference/task.html` chapter is generated despite `mdbook build` succeeding. AC-3 requires this page to actually generate, not just for the build to exit 0. Add `task` to the list (or derive the list from the binary's own top-level subcommand names, which also closes the class of bug for any future subcommand — Developer's call which is more appropriate given the file's existing shape).
 
 ## Verification
 
 ```bash
+cargo build -p bob
 (cd the-intern/docs && mdbook build)
+test -f the-intern/docs/book/cli-reference/task.html
+grep -q "bob task" the-intern/docs/book/cli-reference/task.html
 grep -q "bob task" the-intern/docs/src/operator-guide/index.md
 ```
 
