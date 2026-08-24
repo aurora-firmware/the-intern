@@ -912,8 +912,8 @@ the package as described in
    ```
 
    `bob init` creates `AGENTS.md`, `CLAUDE.md`, `config/email-triage.toml`,
-   and `worklog/`, installs the shared skills once at bob's service-wide
-   install path, and writes a broad bootstrap policy into bob's live
+   `worklog/`, and `tasks/`, installs the shared skills once at bob's
+   service-wide install path, and writes a broad bootstrap policy into bob's live
    `config.toml`. Do not use the repository checkout as `--cwd`: a shared
    checkout is not the trusted runtime boundary for scheduled jobs, and it
    would mix mutable worklog/config state into source-controlled files.
