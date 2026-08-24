@@ -97,6 +97,79 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-24
+
+Read S-014 and the existing worklog/himalaya/email-triage canonical skills for
+tone and precedent, and read board.rs, store.rs, task.rs (the T-182 through
+T-185 `bob task` implementation) and the build.rs / init_materializer.rs
+wiring to understand what the tasks skill needed to teach without restating.
+
+Wrote `the-intern/bob-skills/skills/tasks/SKILL.md`: when work belongs on the
+board versus an in-session checklist, how to write a description and
+Definition of Done a cold reader can act on, what todo/doing/blocked/done
+each commit to (including that a blocked task must name what it's waiting on
+and who owns lifting it, since the command itself enforces none of this),
+which subcommand performs each move (new/list/status/note/show, named by
+purpose rather than exact flags), and a short board-discovery note. Every
+syntax/format claim is deliberately deferred to the command's own `--help`
+rather than restated, per the task's constraint and S-014's "command is the
+normative definition" principle. Grepped the file for spec/ADR/task/bug
+tokens and repo-name references before committing — none present.
+
+Added `tasks` to `package-pi-skills.sh`'s `skill_names` array and regenerated
+`.pi/skills/tasks/` via the script; `test_package_pi_skills.sh` passed
+unmodified (its assertions are per-skill, not exhaustive, so it didn't need
+touching and wasn't touched).
+
+Confirmed the two exhaustive assertions broke exactly as flagged: ran
+`cargo test -p bob --lib init_assets` before touching the test file and got
+two failures (`exposes_a_stable_relative_path_list_and_matching_bytes`,
+`contains_the_three_shipped_skill_roots`) because the generated tree now
+includes `tasks/SKILL.md`. Updated `init_assets.rs`'s `expected_paths` list
+and renamed/updated the roots test to `contains_the_four_shipped_skill_roots`
+including `"tasks"`. Reran — green, and the full `cargo test -p bob --lib`
+suite (231 tests) stayed green.
+
+`init_e2e.rs`'s two tests turned out not to break automatically (their
+skill-presence checks are per-item `assert!`s and a non-exhaustive loop, not
+an exact-set comparison), so nothing there was actually red before editing —
+but AC-3 requires the installed-skill-set assertion to cover the tasks skill,
+so I added a fourth `assert!` for `skill_install_path/tasks/SKILL.md` in
+`init_materializes_shared_skills_and_bootstrap_policy_in_isolated_xdg_dirs`
+and added `"tasks"` to the loop array in
+`initialized_workspace_chat_banner_lists_the_shared_skill_names`. Ran
+`cargo test -p bob --test init_e2e` (real `pi` binary is on PATH in this
+sandbox, unlike the Unix-socket tests CLAUDE.md warns about) — both pass,
+confirming the shared skill install path and the chat `[Skills]` banner both
+now include `tasks` with no code changes needed in `init_materializer.rs` or
+the pi extension, since both already iterate the embedded asset table
+generically.
+
+Ran the task's full verification block (`package-pi-skills.sh`,
+`test_package_pi_skills.sh`, `cargo test -p bob`) plus `cargo fmt --all --
+--check` and `cargo test --workspace` end to end — everything passes, and
+`git status` is clean after regeneration (packaging is idempotent). Three
+commits on the task branch: skill authoring + packaging (feat), the
+init_assets.rs assertion update (test), and the init_e2e.rs assertion update
+(test). Only the four files named in Files to Touch were edited, plus the
+mechanically generated `.pi/skills/tasks/SKILL.md` that `package-pi-skills.sh`
+produces as its direct output.
+
+Nothing remains for this task; all four acceptance criteria are met and
+verified. Reviewer should read the new SKILL.md for tone/scope (it mirrors
+worklog's structure) and can spot-check AC-4 by re-running the same grep for
+spec/ADR/task/bug tokens.
+
+One correction to how this task was framed at handoff: the loop's briefing
+said both `init_assets.rs` and `init_e2e.rs` contained assertions that would
+break automatically. In practice only `init_assets.rs`'s two assertions are
+exhaustive (`assert_eq!` on a full list) and actually went red before the
+fix. `init_e2e.rs`'s checks are non-exhaustive per-item assertions and stayed
+green even before I touched them. I added the `tasks` assertions there anyway
+because AC-3 explicitly requires the installed-skill-set assertion to include
+the tasks skill — so that file's "red" step was really "AC-3 requires an
+assertion that doesn't yet exist," not an existing test breaking.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
