@@ -91,6 +91,16 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-24
+
+Confirmed all three Verification commands failed against the current (stale) content before making any change: `! grep -rn "email-skills" the-intern/docs/src/` failed because six literal `email-skills` references remained, and `./the-intern/docs/test_operator_guide_email_triage_trust.sh` exited 1 — not because of the rename, but because two of its `first_matching_line` anchor patterns (`"Deploy an owner-only working directory"` and `"Add the S-004 action rules"`) no longer matched the current operator-guide headings (`"Bootstrap the owner-only workspace with `bob init`."` and `"Replace the bootstrap-wide action rules..."`); under `set -euo pipefail` an empty `grep` match inside a `$(...)` assignment aborted the script before it could reach its pass/fail summary. That mismatch was introduced by an earlier, unrelated doc-wording commit (`54419cd`, "docs(bob): document init bootstrap workflow", 2026-08-13) and predates this task; since the file was already in this task's "Files to Touch" list and AC-2 requires the test to pass, I fixed both anchors in the same edit rather than filing a separate bug, and noted it here for visibility. `mdbook build` already passed at baseline, so it served as a regression guard rather than a red test.
+
+Cycle 1 (commit `92baac4`): updated `the-intern/docs/test_operator_guide_email_triage_trust.sh` — repaired the two stale anchor patterns and renamed the "asserted documented command" absence-check from `cp -r the-intern/email-skills/.` to `cp -r the-intern/bob-skills/.` (Files to Touch item 3). Verified the script now runs to completion and passes (9/9).
+
+Cycle 2 (commit `6f25781`): renamed all six `email-skills` references in `the-intern/docs/src/operator-guide/index.md` and `the-intern/docs/src/quickstart/index.md`. Two categories: (a) the package path in prose and in the `SKILL_PACKAGE_SRC=` assignment, renamed to `the-intern/bob-skills/...` per AC-1; (b) the example *workspace* directory name (`bob init /srv/workspaces/email-skills`, `WORKSPACE=/srv/workspaces/email-skills`, `WORKSPACE="$HOME/workspaces/email-skills"`), renamed to `email-triage` per AC-3 — chosen because it already matches the job name and `config/email-triage.toml` used throughout the same examples, and is unambiguously distinct from the `bob-skills` package directory.
+
+Re-ran all three Verification commands together after both cycles: the trust test passes (9/9), the repo-wide `email-skills` grep finds nothing under `the-intern/docs/src/`, and `mdbook build` completes without error. `git diff dev-agent...HEAD --stat` confirms only the three files named in "Files to Touch" were modified. Nothing remains for this task.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
