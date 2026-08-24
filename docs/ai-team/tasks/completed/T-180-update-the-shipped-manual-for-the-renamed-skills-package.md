@@ -1,7 +1,7 @@
 ---
 id: T-180
 title: Update the shipped manual for the renamed skills package
-status: in-progress
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-23'
