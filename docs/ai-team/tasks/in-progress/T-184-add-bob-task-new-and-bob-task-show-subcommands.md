@@ -92,6 +92,13 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-24
+Implemented the first `bob task` CLI surface on `task/T-184-add-bob-task-new-show`: added a top-level `task` command with `new` and `show` subcommands, a `--board` override, local validation for empty titles, invalid statuses, and malformed `--created` dates, and JSON/text renderers for creation, full-file display, and `--path`. I kept the command filesystem-only by routing `task` through the same pre-config dispatch path as `init`, so no admin-RPC client or socket lookup is involved.
+
+I added focused unit coverage for parser behavior, board resolution, invalid-input rejection before board creation, partial-id lookup, JSON output, and human output. I also added `non_serve` integration checks that run the real `bob` binary without an admin socket to prove `task new` can create a board/task and `task show --path` can find an ancestor board while the service is stopped.
+
+The task file's Files to Touch list omitted `the-intern/service/crates/bob/src/lib.rs`, which had to change to dispatch the new top-level command, and `the-intern/service/crates/bob/tests/non_serve.rs`, which had to change to satisfy the task's explicit verification command and AC-4. I kept those additions minimal and scoped to command dispatch plus service-down verification. Nothing remains for implementation; next is reviewer validation and integration if it passes.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
