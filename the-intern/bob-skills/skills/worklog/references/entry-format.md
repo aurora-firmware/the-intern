@@ -21,9 +21,8 @@ Use this exact append-command shape for the write step:
 NOW=$(date +%H:%M)
 TODAY=$(date +%F)
 mkdir -p worklog
+printf '## %s — <item-identifier>\n\n' "$NOW" >> worklog/$TODAY.md
 cat >> worklog/$TODAY.md <<'EOF'
-## <NOW> — <item-identifier>
-
 - Done: <what was done for this item this run>
 - Left: <what is still outstanding, or "nothing" if fully resolved>
 - Next: <what happens next, and on what trigger>
@@ -34,7 +33,7 @@ EOF
 Keep the redirect target exactly `worklog/$TODAY.md`: cwd-relative and
 unquoted immediately after `>>`. A deployed action-authorization rule for
 this append step may match the literal substring `>> worklog/`, so
-rewriting the redirect as `>> "worklog/$TODAY.md"` or as an absolute
+rewriting either redirect as `>> "worklog/$TODAY.md"` or as an absolute
 workspace path changes the command text enough to miss such a rule even
 though the append is otherwise legitimate. This unquoted form is still safe
 here because `TODAY` comes from `date +%F`, which yields only the calendar
@@ -43,24 +42,21 @@ same kind of `date` lookup (`date +%H:%M`) — never a guessed, estimated, or
 placeholder value — for the same reason `TODAY` does: it is the only source
 of the actual current time available to the run.
 
-Keep the heredoc delimiter quoted (`<<'EOF'`): the body typically contains
-text derived from whatever the item itself is — content the consuming
-skill does not fully control — so quoting the delimiter keeps any `$()`,
-backticks, backslashes, or variable references in that text inert rather
-than allowing the shell to expand them. Because the delimiter is quoted,
-the shell will **not** expand shell-variable syntax inside the heredoc
-body — a literal `$NOW` written there would stay literal `$NOW` text
-rather than becoming a real time. That is exactly why the header uses the
-bracketed placeholder `<NOW>` instead of `$NOW`: `<NOW>` cannot be mistaken
-for something the shell fills in automatically, the same way
-`<item-identifier>` already cannot. Before running the command, replace
-`<NOW>` in the header line with the literal `HH:MM` result of the
-`NOW=$(date +%H:%M)` lookup shown above it, the same way `<item-identifier>`
-and the `Done`/`Left`/`Next` text get replaced with their real values
-before the command runs. Never run the command with the literal text
-`<NOW>` still in place, and never substitute a guessed or estimated time in
-its place — the substituted value must be the result of that `date`
-lookup.
+The header line is written by its own unquoted `printf`, so `"$NOW"` expands
+directly to the real lookup result — there is no placeholder to
+hand-transcribe, and no way to run the command with a stale or guessed time
+left in place. This is safe to leave unquoted specifically because `NOW`
+comes from `date +%H:%M`, which yields only digits and a colon; it never
+carries item-derived text.
+
+Keep the heredoc delimiter quoted (`<<'EOF'`) for the body written by `cat`:
+that body typically contains text derived from whatever the item itself
+is — content the consuming skill does not fully control — so quoting the
+delimiter keeps any `$()`, backticks, backslashes, or variable references
+in that text inert rather than allowing the shell to expand them. Do not
+fold the header back into this quoted heredoc: doing so would reintroduce
+the original bug, since a quoted delimiter cannot expand `$NOW` and nothing
+else would supply the real time.
 
 ## Per-item entry format
 
