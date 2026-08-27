@@ -1,7 +1,7 @@
 ---
 title: bob worklog subcommand — append, list, and automatic first-run 
   reconciliation
-version: '0.3'
+version: '0.4'
 status: review  # draft | review | approved | superseded
 created: '2026-08-26'
 author: planner
@@ -121,12 +121,17 @@ What this specification explicitly does NOT cover:
 - **Carrying a still-open item forward must be idempotent by
   item-identifier, tested by presence, not by a separate marker.** An item
   is carried forward into today's file if and only if (a) today's file does
-  not already contain an entry for that item-identifier, and (b) the most
+  not already contain an entry for that item-identifier, and (b) in the most
   recent *prior worklog file that exists* — regardless of whether that file
-  currently shows anything else as open — has an entry for that
-  item-identifier whose `Left` field is not `nothing` per the Contract's
-  comparison rule. Condition (b) is deliberately "the nearest prior file
-  that exists", not "the nearest prior file with open items": filtering on
+  currently shows anything else as open — **that item-identifier's own most
+  recent (last) entry in that file** is open per the Contract's open test
+  below. Condition (b) tests the item's *last* entry in the source file, not
+  merely whether the source file contains any entry for it at all: a file
+  can hold both an earlier open entry and a later closing entry for the same
+  item-identifier (the ordinary within-day closure `S-010` describes), and
+  only the last one reflects that item's true state as of that file.
+  Condition (b) is also deliberately keyed on "the nearest prior file that
+  exists", not "the nearest prior file with open items": filtering on
   "has open items" at the whole-file level is wrong — a day that closes
   every item it mentions is real information and must not be skipped past
   in favor of an older file that never learned of that closure, which would
@@ -249,7 +254,7 @@ approval** (applied at Gate 1, not deferred):
   the skill no longer decides "is this my first run" or walks files itself.
   `S-010`'s Design Principle "the design must reconcile against the most
   recent worklog **containing open items**, not assume 'yesterday'" and its
-  Workflow diagram's matching comment use the same "containing open items"
+  System Diagram's matching comment use the same "containing open items"
   phrase this spec's Design Principles correct (a whole-file filter that can
   wrongly skip a day that closed every item it mentions); both are amended
   to "the most recent worklog **that exists**" to match.
@@ -309,12 +314,24 @@ omission); this spec must not repeat it.
 **Estimated size:** Small.
 **Interfaces:** Consumes the command's behaviour; changes the CLI-reference
 preprocessor's subcommand list, the `bob-companion` plugin's `bob-cli` and
-`bob-setup` skills, and the shipped mdBook operator guide's live-validated
-worklog action-rule set and prose (`the-intern/docs/src/operator-guide/
-index.md` — the eight worklog-specific `[[policy.action_rules]]` entries and
-the surrounding "now live-validated" prose, plus the `bob task` section's
-cross-reference to "the same guidance already given for the `worklog`
-skill's writes") — no new skill or documentation surface.
+`bob-setup` skills, and three things in the shipped mdBook operator guide
+(`the-intern/docs/src/operator-guide/index.md`): (1) its worklog action-rule
+set — of the ten worklog-driven `[[policy.action_rules]]` entries there
+(the two install-path reference-content reads for `worklog/SKILL.md` and
+`worklog/references/*.md`; the relative `worklog/*.md` read; six raw-shell
+`bash` rules for `find`/`ls`/`test -f`/`cat`/`mkdir -p`/`>>` against
+`worklog`; and `date +%H:%M*`), the two install-path reference-content reads
+are **kept** (`S-011` still requires them for the rewritten skill's own
+reference reads) and the other eight are **removed and replaced by one**
+`bash` rule prefix-anchored on `bob worklog append`/`bob worklog list`; (2)
+the surrounding "now live-validated" prose, including its quotation of
+`S-011`'s now-retired arbitrary-cwd rule-breadth clause; (3) the `bob task`
+section's two stale claims — its cross-reference to "the same guidance
+already given for the `worklog` skill's writes", and its claim that `bob
+task`, "along with `init`, [is] the only bob subcommand" needing nothing
+from the service, which `bob worklog` also falsifies (the same stale-
+enumeration class this spec already forces `S-002` to correct). No new
+skill or documentation surface.
 
 ## Workflow
 
@@ -372,11 +389,13 @@ Every session bob spawns carries the updated skill, whatever its cwd
   ↓
 An operator running the CR-007 bootstrap profile (a no-matcher bash rule)
 needs no migration at all — it already admits bob worklog's invocations.
-★ An operator who has already narrowed past bootstrap removes the eight
-  worklog-specific rules the operator guide documents (the reference-content
-  reads and the raw-shell append/check rules) and adds one new rule matching
-  bob worklog's invocation text, since none of the old rules match this
-  command's invocation text.
+★ An operator who has already narrowed past bootstrap keeps the two
+  install-path reference-content read rules (the rewritten skill still needs
+  them), removes the other eight worklog-specific rules the operator guide
+  documents (the relative worklog/*.md read, the six raw-shell append/check
+  rules, and the date +%H:%M lookup rule — obsolete now the command supplies
+  its own time), and adds one new rule matching bob worklog's invocation
+  text.
 ```
 
 ## Configuration Requirements
@@ -420,8 +439,11 @@ skill; the command is what enforces them.
   <HH:MM> — <item-identifier>`, a blank line, then `- Done: …`, `- Left: …`,
   `- Next: …` bullets, each exactly as `worklog/references/entry-format.md`
   already documents.
-- **An item is still open** if and only if its most recent entry's `Left`
-  field is not equivalent to `nothing`. This sentinel is this
+- **An item is still open** (this test is applied against whichever single
+  worklog file is being examined — today's file, or a prior file being
+  checked as a reconciliation source) if and only if that item-identifier's
+  most recent entry **in that file** has a `Left` field not equivalent to
+  `nothing`. This sentinel is this
   specification's own definition — inherited from the shipped
   `entry-format.md`'s existing prose, not stated as a literal comparison
   rule anywhere today — made precise here because the command must execute
