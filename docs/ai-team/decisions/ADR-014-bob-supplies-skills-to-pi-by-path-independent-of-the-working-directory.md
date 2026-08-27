@@ -218,6 +218,19 @@ interactive chat session journals into the directory it was invoked from, and
 the rule admitting those writes must be correspondingly broad — see the
 accepted risk recorded in the specification this decision supports.
 
+> **Amended (S-015, 2026-08-27).** The observation that an always-active
+> skill set means an interactive session journals wherever it was invoked
+> still stands, and is still why this alternative was rejected. Its
+> consequence for the *worklog write rule specifically* does not: S-015
+> replaces the worklog's raw shell append with a `bob worklog` command
+> invocation whose text never carries the working directory, so the
+> admitting rule no longer needs to be broad enough to cover arbitrary
+> working directories for worklog writes. The accepted risk this paragraph
+> pointed to is retired for worklog writes in the specification it
+> references (S-011, as amended by S-015); it may still apply to other
+> working-directory-relative state this ADR's always-active-set decision
+> covers.
+
 ### Alternative D: Keep working-directory discovery and require a deployed copy per job
 
 **Description:** Change nothing structural; continue requiring each working

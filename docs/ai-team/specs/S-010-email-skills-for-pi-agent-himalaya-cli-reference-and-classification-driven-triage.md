@@ -118,8 +118,11 @@ What this specification explicitly does NOT cover:
   `cwd` (S-009), or `max_processes` exhaustion preventing the dedicated
   worker a per-entry-`cwd` job requires (S-002) can all eliminate a given
   day's first run; the design must reconcile against the most recent worklog
-  containing open items, not assume "yesterday" is always the last time the
-  skill ran.
+  that exists, not assume "yesterday" is always the last time the skill ran.
+  (Amended by S-015: reconciliation is no longer a decision the skill makes
+  or a walk it performs — the `bob worklog` command performs it
+  automatically, per item, against the nearest prior worklog file that
+  exists, on every call.)
 - **The CLI-reference skill stays free of any single job's triage policy.**
   Nothing escalation-specific or taxonomy-specific belongs in the generic
   himalaya skill, so any other pi-agent invocation that happens to run with
@@ -160,10 +163,11 @@ pi-agent session (runs in <workspace>)
    |                     |
    +----------+----------+
               v
-   append entry to <workspace>/worklog/<today>.md
+   append entry via bob worklog append (S-015)
               |
-   (next executed run reads the most recent worklog
-    entry with open items — not necessarily yesterday's)
+   (every call reconciles automatically against the nearest prior worklog
+    file that exists — not necessarily yesterday's — and reports today's
+    carried-forward set)
 ```
 
 ### Responsibility Separation
@@ -173,7 +177,7 @@ pi-agent session (runs in <workspace>)
 | `himalaya` skill | Teaches pi-agent the himalaya CLI's commands and flags | Generic; carries no email-specific policy; reusable outside this job |
 | `email-triage` skill | Defines new-mail detection, classification, per-category action policy, escalation policy, and diary discipline | The only component that is triage-policy-aware |
 | Category reference workflows | One file per taxonomy category describing what a confident match in that category should do | Referenced by the `email-triage` skill; the taxonomy is fixed per release, not a user extension point |
-| Daily worklog | Record of what was done, what's left, and what's next per calendar day | Read at the start of each day's first executed run; appended to after every handled message |
+| Daily worklog | Record of what was done, what's left, and what's next per calendar day | Reconciled automatically by the `bob worklog` command on every call (S-015); appended to after every handled message |
 | Manager escalation channel | The addressable "ask for guidance" path for low-confidence classifications | An email sent via himalaya to an operator-configured address, falling back to the mail account's own address when that configuration is missing or malformed; no synchronous response expected within the run |
 | S-004 action ruleset (existing) | Default-deny allow-list gating every `bash` tool call this package makes | Unmodified by this spec; an allow rule admitting the package's himalaya invocations is a deployment prerequisite |
 | bob scheduler (S-009, existing) | Fires the periodic pi-agent session that discovers and runs these skills | Unmodified; this spec adds no bob-core or bob-service changes |
@@ -203,7 +207,7 @@ pi-agent session (runs in <workspace>)
 
 **Purpose:** A per-calendar-day markdown diary recording what was done, what's left, and what's next, and the sole record of anything left open by an escalation or an S-004 block once the underlying message is marked `\Seen`.
 **Estimated size:** Small.
-**Interfaces:** Appended to by the `email-triage` skill after each handled message; read by the `email-triage` skill at the start of each day's first executed run.
+**Interfaces:** Appended to and read by the `email-triage` skill via the `bob worklog` command (S-015), which owns reconciliation and first-run detection; the skill no longer performs either itself.
 
 ## Workflow
 
@@ -219,11 +223,15 @@ bob fires the periodic pi-agent session in the configured workspace cwd
   ↓
 pi-agent discovers the himalaya and email-triage skills from that cwd
   ↓
-email-triage skill: is this the day's first executed run (the most recent
-run may not have been yesterday, if ticks were skipped)?
-  → yes: read the most recent worklog entry that has open items and
-    reconcile against it, including any pending manager escalation
-  → no: continue
+email-triage skill calls bob worklog list (or, once handling a message,
+bob worklog append) for today (S-015)
+  → the command has already reconciled today's file automatically and
+    idempotently before responding, against the nearest prior worklog file
+    that exists (the most recent run may not have been yesterday, if ticks
+    were skipped) — the skill makes no first-run decision and performs no
+    file walk itself
+  → the response names today's full carried-forward item-identifier set,
+    including any pending manager escalation, for the skill to retry
   ↓
 email-triage skill lists unseen envelopes via the himalaya skill's commands
   ↓
@@ -255,14 +263,15 @@ worklog, not the mailbox, is what carries it forward as open.
  ADR-004; the next tick repeats this workflow)
 ```
 
-**How an open item closes.** Reconciliation happens only on each day's first
-executed run, not on every tick — a `*/15`-style cron does not revisit the
-open-item list intra-day. An item closes when its underlying cause resolves
-on some later run: an escalation closes when the manager's reply arrives as
-ordinary unseen mail and re-enters triage like any other message; an S-004
-block closes once the required allow rule is in place. Until then, the item
-is simply carried forward as still-open in each day's first-run
-reconciliation.
+**How an open item closes.** Reconciliation is no longer a skill-side,
+once-per-day decision (amended by S-015): the `bob worklog` command
+reconciles automatically and idempotently on every `append`/`list` call, and
+reports today's carried-forward items in its response. An item closes when
+its underlying cause resolves on some later run: an escalation closes when
+the manager's reply arrives as ordinary unseen mail and re-enters triage
+like any other message; an S-004 block closes once the required allow rule
+is in place. Until then, the command carries it forward as still-open every
+day, and the skill retries it whenever the command's response names it.
 
 ## Configuration Requirements
 
@@ -440,3 +449,4 @@ reconciliation.
 | 2026-08-07 | Three escalation- and taxonomy-related changes: (a) the category taxonomy is no longer a user extension point — it is fixed per release (Component 3 and the Responsibility Separation row); (b) a missing or malformed escalation configuration no longer hard-stops the message — the run escalates to the mail account's own address, stating that the configuration was missing and where it was expected, and records the message in the worklog without further action only when that address is undeterminable, while an escalation send blocked by S-004 remains a hard stop (Workflow, Configuration Requirements); (c) the taxonomy gains a terminal category for the skill's own escalation mail, which is filed and never escalated again (Component 3). | CR-006 items 3, 5, and 6, driven by the PR #42 review. Skill content ships with releases, so invited local category edits would be overwritten on upgrade; an escalation must still reach a human when its address configuration is absent, rather than stopping every message that needs one; and the self-addressed escalation that creates would otherwise re-escalate itself indefinitely. | T-143, T-144, T-145, T-146 |
 | 2026-08-12 | Permitted the documented `bob init` first-run policy exception: no-matcher rules for `bash`, `read`, `write`, and `edit`, with an explicit broad-authority warning and review obligation. | CR-007 prioritizes a working first installation; narrow `bash` matching remains the normal operator configuration after bootstrap. | S-012 tasks TBD |
 | 2026-08-12 | Corrected the Phase 4 scheduled-validation cwd to the initialized workspace; skills are supplied from S-011's shared install path. | Architecture consistency review found the older package-cwd wording stale against ADR-014 and the shared skill-delivery model. | S-012 tasks TBD |
+| 2026-08-27 | The Design Principle, System Diagram, Workflow branch, Component 4 Interfaces, Daily-worklog Responsibility row, and "How an open item closes" paragraph no longer describe `email-triage` itself detecting a day's first run or walking worklog files backward to reconcile. The `bob worklog` command now performs reconciliation automatically and idempotently on every `append`/`list` call, against the nearest prior worklog file that exists (not the prior file "containing open items" — a whole-file filter corrected because it could wrongly skip a day that closed every item it mentions), and reports today's carried-forward set in its response for the skill to retry against. | S-015 approval. The worklog's entry and reconciliation mechanics move from skill-executed prose into a real command, the same move S-014 made for the task board; the command owns first-run detection and the backward file walk instead of the skill. | S-015 breakdown tasks (Gate 2 pending). |
