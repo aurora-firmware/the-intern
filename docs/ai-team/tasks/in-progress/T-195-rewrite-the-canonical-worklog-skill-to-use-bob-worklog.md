@@ -161,3 +161,29 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-30
+
+PASS
+
+Both review stages pass. Diff reviewed: `git diff dev-agent...task/T-195-rewrite-the-canonical-worklog-skill-to-use-bob-worklog` — exactly the 4 files named in Files to Touch (`skills/worklog/SKILL.md`, `skills/worklog/references/entry-format.md`, `skills/worklog/references/reconciliation.md`, `test_worklog_entry_format_timestamp.sh`), 3 commits, no Rust/`Cargo`/`.pi/` changes. `.pi/` drift and `test_package_pi_skills.sh` are out of scope (T-199) and were not assessed.
+
+Stage 1 — acceptance criteria:
+- AC-1 (met): `SKILL.md` frontmatter `description` now instructs `bob worklog list` at start and `bob worklog append` per item, and explicitly disclaims ownership of entry format, day-file location, first-run detection, and carry-forward ("the `bob worklog` command owns all of that"). The "Determining whether this is the day's first executed run" section is deleted. "Tool usage" lists only `bash` running the two subcommands and drops the `read`-prior-files surface. Location section states `<cwd>/worklog/<YYYY-MM-DD>.md` with "no search upward through parent directories" and "no flag, environment variable, or configuration key" override. No `mkdir`/`>>`/`date +%H:%M`/`test -f`/`cat` worklog recipe remains (targeted greps clean; the sole `date` token is the disclaimer "never looks up the time or the date itself").
+- AC-2 (met): `references/entry-format.md` opens by stating it is "**not** the definition" and that `bob worklog` "is the sole definition of the format". No `NOW=$(date +%H:%M)` recipe and no `<NOW>` placeholder guidance (regression script asserts both).
+- AC-3 (met): `references/reconciliation.md` "## Reconciliation is automatic" states both `bob worklog list` and `bob worklog append` reconcile today's file on every call against "the nearest prior worklog file that exists". The manual "walk `worklog/*.md` backward" procedure and the "most recent worklog file with open items" phrasing are gone (grep for walk/backward/`worklog/*.md` clean).
+- AC-4 (met): no `S-NNN`/`T-NNN`/`B-NNN`/`ADR-NNN` in any of the three `.md` files (verification grep and a broader scan clean; only false positive is the word "specific").
+- AC-5 (met): `test_worklog_entry_format_timestamp.sh` runs 4/4 PASS, exit 0. Work Log records the keep-and-rewrite decision; the script retains a meaningful guard (entry-format.md must instruct `bob worklog append` and must never reintroduce a `date +%H:%M` lookup, `<NOW>`, `mkdir -p worklog`, or `>> worklog/` redirect).
+
+Verification block (run from `the-intern/bob-skills` on the task branch): all three lines pass — regression script exit 0; forbidden-token grep no matches; `bob worklog` referenced in all three `skills/worklog/` `.md` files. `cargo test --workspace` from `the-intern/service/`: 788 passed, 0 failed, exit 0 (unaffected — no Rust changed).
+
+Stage 2 — content quality:
+- Domain/vendor neutral: no email-triage or other consumer specifics (scan for email/triage/himalaya/imap/etc. clean); examples ("a specific reply arriving", "blocked by the action-authorization gate") stay generic.
+- Consistent with `bob worklog` behaviour, cross-checked against `crates/bob/src/cli/commands/worklog.rs`, `worklog/reconcile.rs`, `worklog/store.rs`: entry shape matches `render_entry_block`; carried-forward `Left`/`Next` copied verbatim and `Done` naming the source file matches `carried_forward_done`; nearest-prior-existing-file source that stops at a fully-closed nearest file matches `nearest_prior_existing_date` and its tests; presence-tested idempotence and "reports today's carried-forward set regardless of which call wrote it" match `report_carried_forward`; `bob worklog list` erroring and never inventing `worklog/` matches `require_worklog_dir`; cwd-strict resolution matches `WorklogStore::new` and the module docs (ADR-015); timestamp from the command's own clock matches `Local::now()`.
+- Reads as coherent skill guidance: the three-bullet run shape, the narrowed tool surface, and the two reference files marking themselves non-normative all hang together.
+
+Minor observations (non-blocking, no fix required):
+- `SKILL.md` run-shape bullet phrases the source as "the most recent prior day"; `reconciliation.md` then states the precise rule ("Do not assume the nearest prior file is yesterday's" / nearest file that exists). The two files are consistent read together.
+- `SKILL.md` Location says a run in the wrong directory "gets an error from `bob worklog list` ... rather than a silently empty or foreign diary". True whenever the wrong directory has no `worklog/` (the common case); a wrong directory that itself contains a `worklog/` would be read rather than error. The load-bearing claims (cwd-strict, no upward search, no override, runs in different directories never share) are accurate.
+
+Next owner: Development Loop.
