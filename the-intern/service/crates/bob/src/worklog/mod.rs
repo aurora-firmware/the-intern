@@ -6,4 +6,5 @@
 //! no override. This is a deliberate divergence from `task_board`'s
 //! upward-searching board resolver.
 
+pub mod reconcile;
 pub mod store;

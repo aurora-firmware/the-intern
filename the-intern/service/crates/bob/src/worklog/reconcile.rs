@@ -1,0 +1,204 @@
+//! Component 1 of S-015: the worklog reconciliation step.
+//!
+//! Exposes one operation — [`reconcile_today`] — that ensures today's
+//! worklog file has carried forward every still-open item from the nearest
+//! prior worklog file that exists, then reports today's full
+//! carried-forward set. It is invoked internally by `bob worklog append`
+//! and `bob worklog list` (T-192/T-193); it is not a standalone
+//! subcommand.
+
+use bob_core::error::ServiceResult;
+use chrono::{NaiveDate, NaiveDateTime};
+
+use std::path::Path;
+
+use super::store::{item_open_state, RecordedEntry, WorklogEntry, WorklogStore};
+
+/// The date format used for worklog file names and for the source-file
+/// reference in a carried-forward entry's `Done` field.
+const FILE_DATE_FORMAT: &str = "%Y-%m-%d";
+
+/// The prefix every carried-forward entry's `Done` field starts with. The
+/// reporting pass recognizes a carried-forward entry by this prefix alone,
+/// with no separate "reconciled today" marker (S-015 Contract).
+const CARRIED_FORWARD_DONE_PREFIX: &str = "Carried forward from ";
+
+/// Ensure today's worklog file has carried forward every still-open item
+/// from the nearest prior worklog file that exists, then return today's
+/// full carried-forward set.
+///
+/// `now` supplies both today's date — which worklog file counts as
+/// "today's" — and the `HH:MM` stamp on any entry this pass writes. The
+/// returned list holds every item-identifier whose most recent entry in
+/// today's file is a carried-forward entry that is still open, whether this
+/// call wrote it or found it already present. It is sorted and free of
+/// duplicates.
+///
+/// # Errors
+///
+/// Returns [`bob_core::error::ServiceError::Persistence`] when scanning the
+/// worklog directory or reading/writing a day file fails.
+pub fn reconcile_today(working_dir: &Path, now: NaiveDateTime) -> ServiceResult<Vec<String>> {
+    let store = WorklogStore::new(working_dir);
+    let today = now.date();
+
+    if let Some(source_date) = today.pred_opt() {
+        carry_forward_open_items(&store, source_date, now)?;
+    }
+
+    report_carried_forward(&store, today)
+}
+
+/// Append, to today's file, one carried-forward entry per item-identifier
+/// whose own last entry in the `source_date` file is open and that today's
+/// file has no entry for yet. Presence-tested, so a repeat pass writes
+/// nothing.
+fn carry_forward_open_items(
+    store: &WorklogStore,
+    source_date: NaiveDate,
+    now: NaiveDateTime,
+) -> ServiceResult<()> {
+    let source_entries = store.read_day(source_date)?;
+    let today_entries = store.read_day(now.date())?;
+
+    for item in distinct_items_in_order(&source_entries) {
+        if item_open_state(&source_entries, &item) != Some(true) {
+            continue;
+        }
+        if item_open_state(&today_entries, &item).is_some() {
+            continue;
+        }
+        let source_entry = last_entry_for(&source_entries, &item)
+            .expect("item came from the source file's own entries");
+        let carried = WorklogEntry {
+            item: item.clone(),
+            done: carried_forward_done(source_date),
+            left: source_entry.left.clone(),
+            next: source_entry.next.clone(),
+        };
+        store.append(now, &carried)?;
+    }
+
+    Ok(())
+}
+
+/// Every item-identifier whose most recent entry in today's file is a
+/// carried-forward entry that is still open per the open test. Sorted and
+/// deduplicated; independent of whether this process wrote those entries.
+fn report_carried_forward(store: &WorklogStore, today: NaiveDate) -> ServiceResult<Vec<String>> {
+    let today_entries = store.read_day(today)?;
+
+    let mut carried_open: Vec<String> = Vec::new();
+    for item in distinct_items_in_order(&today_entries) {
+        let latest =
+            last_entry_for(&today_entries, &item).expect("item came from today's own entries");
+        let is_carried_forward = latest.done.starts_with(CARRIED_FORWARD_DONE_PREFIX);
+        let is_open = item_open_state(&today_entries, &item) == Some(true);
+        if is_carried_forward && is_open {
+            carried_open.push(item);
+        }
+    }
+
+    carried_open.sort();
+    Ok(carried_open)
+}
+
+fn distinct_items_in_order(entries: &[RecordedEntry]) -> Vec<String> {
+    let mut ordered: Vec<String> = Vec::new();
+    for entry in entries {
+        if !ordered.iter().any(|seen| seen == &entry.item) {
+            ordered.push(entry.item.clone());
+        }
+    }
+    ordered
+}
+
+fn last_entry_for<'a>(entries: &'a [RecordedEntry], item: &str) -> Option<&'a RecordedEntry> {
+    entries.iter().rev().find(|entry| entry.item == item)
+}
+
+fn carried_forward_done(source_date: NaiveDate) -> String {
+    format!(
+        "{CARRIED_FORWARD_DONE_PREFIX}{}.md; it was still open in that file.",
+        source_date.format(FILE_DATE_FORMAT)
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reconcile_today;
+    use crate::worklog::store::{WorklogEntry, WorklogStore};
+    use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+
+    const CARRIED_FORWARD_DONE_PREFIX: &str = "Carried forward from ";
+
+    fn at(date: (i32, u32, u32), time: (u32, u32)) -> NaiveDateTime {
+        NaiveDate::from_ymd_opt(date.0, date.1, date.2)
+            .expect("valid date")
+            .and_time(NaiveTime::from_hms_opt(time.0, time.1, 0).expect("valid time"))
+    }
+
+    fn on(date: (i32, u32, u32)) -> NaiveDate {
+        NaiveDate::from_ymd_opt(date.0, date.1, date.2).expect("valid date")
+    }
+
+    fn entry(item: &str, done: &str, left: &str, next: &str) -> WorklogEntry {
+        WorklogEntry {
+            item: item.to_owned(),
+            done: done.to_owned(),
+            left: left.to_owned(),
+            next: next.to_owned(),
+        }
+    }
+
+    fn seed(store: &WorklogStore, when: NaiveDateTime, entry: &WorklogEntry) {
+        store
+            .append(when, entry)
+            .expect("seed append should succeed");
+    }
+
+    #[test]
+    fn carries_forward_an_open_item_from_the_nearest_prior_file_verbatim() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        seed(
+            &store,
+            at((2026, 8, 29), (9, 0)),
+            &entry(
+                "vendor-invoice",
+                "Chased the vendor for the missing PDF.",
+                "awaiting the corrected invoice",
+                "closes when the corrected invoice arrives",
+            ),
+        );
+
+        let carried = reconcile_today(temp.path(), at((2026, 8, 30), (8, 15)))
+            .expect("reconcile should succeed");
+
+        assert_eq!(carried, vec!["vendor-invoice".to_owned()]);
+
+        let today = store.read_day(on((2026, 8, 30))).expect("read today");
+        assert_eq!(
+            today.len(),
+            1,
+            "exactly one carried entry expected: {today:?}"
+        );
+        let carried_entry = &today[0];
+        assert_eq!(carried_entry.item, "vendor-invoice");
+        assert_eq!(carried_entry.left, "awaiting the corrected invoice");
+        assert_eq!(
+            carried_entry.next,
+            "closes when the corrected invoice arrives"
+        );
+        assert!(
+            carried_entry.done.starts_with(CARRIED_FORWARD_DONE_PREFIX),
+            "Done must mark the entry carried forward: {:?}",
+            carried_entry.done
+        );
+        assert!(
+            carried_entry.done.contains("2026-08-29.md"),
+            "Done must name the source file: {:?}",
+            carried_entry.done
+        );
+    }
+}
