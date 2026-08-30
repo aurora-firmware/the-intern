@@ -186,11 +186,9 @@ fn carried_forward_done(source_date: NaiveDate) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::reconcile_today;
+    use super::{reconcile_today, CARRIED_FORWARD_DONE_PREFIX};
     use crate::worklog::store::{WorklogEntry, WorklogStore};
     use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
-
-    const CARRIED_FORWARD_DONE_PREFIX: &str = "Carried forward from ";
 
     fn at(date: (i32, u32, u32), time: (u32, u32)) -> NaiveDateTime {
         NaiveDate::from_ymd_opt(date.0, date.1, date.2)
@@ -439,5 +437,155 @@ mod tests {
             today.is_empty(),
             "a within-day-closed item must not be carried forward: {today:?}"
         );
+    }
+
+    #[test]
+    fn reports_a_carried_forward_entry_that_an_earlier_run_wrote() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        // Today's file already holds a carried-forward entry, as if an
+        // earlier invocation that same day performed the carry-forward
+        // write. There is no prior file for this run's own pass to act on.
+        seed(
+            &store,
+            at((2026, 8, 30), (7, 0)),
+            &entry(
+                "vendor-invoice",
+                &format!("{CARRIED_FORWARD_DONE_PREFIX}2026-08-29.md; carried by an earlier run."),
+                "awaiting the corrected invoice",
+                "closes when the corrected invoice arrives",
+            ),
+        );
+
+        let carried = reconcile_today(temp.path(), at((2026, 8, 30), (9, 30)))
+            .expect("reconcile should succeed");
+
+        assert_eq!(
+            carried,
+            vec!["vendor-invoice".to_owned()],
+            "the set is reported even when this call wrote nothing"
+        );
+    }
+
+    #[test]
+    fn an_item_closed_later_the_same_day_drops_out_of_the_report() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        seed(
+            &store,
+            at((2026, 8, 29), (9, 0)),
+            &entry(
+                "vendor-invoice",
+                "Chased the vendor.",
+                "awaiting the corrected invoice",
+                "closes when the corrected invoice arrives",
+            ),
+        );
+
+        let before_close =
+            reconcile_today(temp.path(), at((2026, 8, 30), (8, 15))).expect("carry-forward run");
+        assert_eq!(before_close, vec!["vendor-invoice".to_owned()]);
+
+        // The item is resolved later the same day.
+        seed(
+            &store,
+            at((2026, 8, 30), (15, 0)),
+            &entry(
+                "vendor-invoice",
+                "Corrected invoice arrived; filed.",
+                "nothing",
+                "nothing further",
+            ),
+        );
+
+        let after_close =
+            reconcile_today(temp.path(), at((2026, 8, 30), (16, 0))).expect("later run");
+
+        assert!(
+            after_close.is_empty(),
+            "a carried item closed later the same day drops out: {after_close:?}"
+        );
+    }
+
+    #[test]
+    fn reports_exactly_the_still_open_carried_items() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        seed(
+            &store,
+            at((2026, 8, 29), (9, 0)),
+            &entry(
+                "alpha",
+                "Started alpha.",
+                "waiting on alpha",
+                "closes on the alpha reply",
+            ),
+        );
+        seed(
+            &store,
+            at((2026, 8, 29), (9, 30)),
+            &entry(
+                "beta",
+                "Started beta.",
+                "waiting on beta",
+                "closes on the beta reply",
+            ),
+        );
+        seed(
+            &store,
+            at((2026, 8, 29), (10, 0)),
+            &entry("gamma", "Finished gamma.", "nothing", "nothing further"),
+        );
+
+        let carried = reconcile_today(temp.path(), at((2026, 8, 30), (8, 0)))
+            .expect("reconcile should succeed");
+
+        assert_eq!(
+            carried,
+            vec!["alpha".to_owned(), "beta".to_owned()],
+            "only the still-open carried items, sorted, and not the closed one"
+        );
+    }
+
+    #[test]
+    fn does_not_carry_or_report_an_item_todays_file_already_has() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        seed(
+            &store,
+            at((2026, 8, 29), (9, 0)),
+            &entry(
+                "vendor-invoice",
+                "Chased the vendor.",
+                "awaiting the corrected invoice",
+                "closes when the corrected invoice arrives",
+            ),
+        );
+        // Today's file already has its own, non-carried entry for the item.
+        seed(
+            &store,
+            at((2026, 8, 30), (7, 30)),
+            &entry(
+                "vendor-invoice",
+                "Picked it back up this morning.",
+                "still awaiting the corrected invoice",
+                "closes when the corrected invoice arrives",
+            ),
+        );
+
+        let carried = reconcile_today(temp.path(), at((2026, 8, 30), (9, 0)))
+            .expect("reconcile should succeed");
+
+        assert!(
+            carried.is_empty(),
+            "an item already present is not reported as carried forward: {carried:?}"
+        );
+        let today = store.read_day(on((2026, 8, 30))).expect("read today");
+        assert_eq!(
+            today.len(),
+            1,
+            "no carried-forward duplicate should be appended: {today:?}"
+        );
+        assert_eq!(today[0].done, "Picked it back up this morning.");
     }
 }
