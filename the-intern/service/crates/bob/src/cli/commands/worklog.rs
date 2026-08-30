@@ -633,6 +633,50 @@ mod tests {
     }
 
     #[test]
+    fn worklog_list_renders_entries_ordered_by_time_not_write_order() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        for (time, item) in [
+            ((14, 0), "afternoon-item"),
+            ((8, 30), "early-item"),
+            ((11, 15), "midday-item"),
+        ] {
+            store
+                .append(
+                    at((2026, 8, 30), time),
+                    &WorklogEntry {
+                        item: item.to_owned(),
+                        done: "did some work".to_owned(),
+                        left: "nothing".to_owned(),
+                        next: "nothing further".to_owned(),
+                    },
+                )
+                .expect("seed today's entry");
+        }
+        let mut out = Vec::new();
+
+        run_list_with_context(
+            false,
+            None,
+            at((2026, 8, 30), (15, 0)),
+            temp.path(),
+            &mut out,
+        )
+        .expect("list should succeed");
+
+        let text = String::from_utf8(out).expect("utf8");
+        let early = text.find("early-item").expect("early-item rendered");
+        let midday = text.find("midday-item").expect("midday-item rendered");
+        let afternoon = text
+            .find("afternoon-item")
+            .expect("afternoon-item rendered");
+        assert!(
+            early < midday && midday < afternoon,
+            "entries must be ordered by HH:MM, not by write order: {text}"
+        );
+    }
+
+    #[test]
     fn worklog_list_errors_naming_the_worklog_directory_when_it_is_absent() {
         let temp = tempfile::tempdir().expect("temp dir");
         let mut out = Vec::new();
