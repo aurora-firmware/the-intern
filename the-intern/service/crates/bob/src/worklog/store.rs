@@ -247,8 +247,10 @@ fn parse_entries(content: &str) -> Vec<RecordedEntry> {
 }
 
 /// Sort entries by `recorded_time`, keeping physical file order for entries
-/// that share a time.
-fn order_entries(entries: Vec<RecordedEntry>) -> Vec<RecordedEntry> {
+/// that share a time. `HH:MM` is zero-padded, so a lexicographic compare is
+/// also a chronological one; the sort is stable, so ties keep file order.
+fn order_entries(mut entries: Vec<RecordedEntry>) -> Vec<RecordedEntry> {
+    entries.sort_by(|left, right| left.recorded_time.cmp(&right.recorded_time));
     entries
 }
 
@@ -549,5 +551,47 @@ mod tests {
             !temp.path().join("worklog").exists(),
             "a read must never invent the worklog directory"
         );
+    }
+
+    #[test]
+    fn read_day_orders_entries_by_recorded_time_not_physical_file_position() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        store
+            .append(at((2026, 8, 30), (14, 0)), &sample_entry("afternoon-item"))
+            .expect("append later time first");
+        store
+            .append(at((2026, 8, 30), (9, 0)), &sample_entry("morning-item"))
+            .expect("append earlier time second");
+
+        let items: Vec<String> = store
+            .read_day(date(2026, 8, 30))
+            .expect("read_day should succeed")
+            .into_iter()
+            .map(|entry| entry.item)
+            .collect();
+
+        assert_eq!(items, vec!["morning-item", "afternoon-item"]);
+    }
+
+    #[test]
+    fn read_day_breaks_recorded_time_ties_by_physical_file_order() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        store
+            .append(at((2026, 8, 30), (10, 15)), &sample_entry("written-first"))
+            .expect("append first");
+        store
+            .append(at((2026, 8, 30), (10, 15)), &sample_entry("written-second"))
+            .expect("append second");
+
+        let items: Vec<String> = store
+            .read_day(date(2026, 8, 30))
+            .expect("read_day should succeed")
+            .into_iter()
+            .map(|entry| entry.item)
+            .collect();
+
+        assert_eq!(items, vec!["written-first", "written-second"]);
     }
 }
