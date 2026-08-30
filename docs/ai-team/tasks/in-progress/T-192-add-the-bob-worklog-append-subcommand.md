@@ -99,6 +99,24 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-30
+
+Implemented `bob worklog append` end to end across the four files named in the task, using TDD with one commit per red→green→refactor cycle.
+
+**Cycle 1 — grammar + dispatch (AC-1, AC-5).** Added `WorklogCommand` (with the single `Append` variant carrying four required `String` flags `--item/--done/--left/--next`) and a `Worklog { command: WorklogCommand }` arm to `Command` in `cli/mod.rs`. Added `worklog` to the `help_lists_...` assertion list and five grammar parse tests (`worklog_append_parses_all_four_required_flags`, plus one `worklog_append_requires_the_*_flag` per field — clap already rejects a wholly missing flag). Wired dispatch in `lib.rs`: new `DispatchRuntime::worklog_append`, a `Command::Worklog` early-return block placed before `runtime.load_config()` (mirroring the `Init`/`Task` blocks), `Command::Worklog { .. }` added to the `unreachable!("filesystem-only commands return before config loading")` arm, and implementations on `ProductionRuntime` (delegates to `cli::commands::worklog_append`) and the test `FakeRuntime` (records `"worklog_append"`). New `lib.rs` test `worklog_append_dispatch_bypasses_config_and_telemetry_loading` asserts the call log is exactly `["worklog_append"]` — no config load, no telemetry, no admin socket. Added `mod worklog;` + a thin `worklog_append` wrapper to `cli/commands.rs`, and the new `cli/commands/worklog.rs` with a `run_append` / `run_append_with_context` split following `task.rs`, injecting `now: NaiveDateTime` via `Local::now().naive_local()` and taking `working_dir: &Path` + `out: &mut impl Write` for tests.
+
+**Cycle 2 — local field validation (AC-2).** Added `reject_empty_field(name, value)` — trims and rejects empty/whitespace with `ServiceError::InvalidRequest` naming the field (`worklog entry field --<name> must not be empty`); `main.rs` already maps any `Err` to a non-zero exit. Called for all four fields at the top of `run_append_with_context`, before any filesystem access. Tests cover each field plus a pre-seeded-day-file case proving no file is created or modified on failure.
+
+**Cycle 3 — reconcile before append (AC-3).** Inserted `reconcile_today(working_dir, now)?` from T-191 immediately before the T-190 `WorklogStore::append`. Test seeds a prior day's open item and asserts today's file contains the `Carried forward from 2026-08-29.md` marker (only the reconciliation pass writes it) at a byte offset earlier than the handler's own `Done` text — i.e. reconciliation ran and ran first.
+
+**Cycle 4 — carried-forward set in output (AC-4).** Captured the `Vec<String>` returned by `reconcile_today` into `AppendedEntryOutput { item, path, carried_forward }`. Default output is human-readable (`recorded worklog entry: <item>` / `path: <path>` / `carried forward: <comma-joined | (none)>`); `--json` emits the struct via the existing `write_json_line`. Tests assert the carried identifier appears in both forms, and that an empty set is still reported explicitly (`carried forward: (none)` / `[]`).
+
+**Tried and rejected.** Considered trimming the stored field values; kept them verbatim to match `task.rs`'s treatment of `title` (validate on trimmed, store raw). Considered omitting `path` from the confirmation to stay minimal; kept it because a write confirmation naturally states where it wrote and it matches the rest of the CLI. In cycle 3 the reconcile result was briefly discarded and then wired into output in cycle 4 to keep each cycle scoped to one AC.
+
+**Verification.** `cargo build -p bob && cargo test -p bob worklog` → 42 pass. `cargo fmt --all -- --check` clean. `cargo test -p bob` → 277 pass / 1 ignored. `cargo test --workspace` → all suites pass (no sandbox UDS failures this run). `cargo doc -p bob --no-deps` clean. `cargo clippy -p bob` introduced no new warnings in the touched files.
+
+**What remains.** Nothing for this task. `bob worklog list` (T-193) is the sibling subcommand and will reuse `reconcile_today` the same way; `format_carried_forward` and `AppendedEntryOutput` are local to `worklog.rs` and can be lifted to a shared helper if T-193 wants them.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
