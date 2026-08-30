@@ -17,6 +17,9 @@ const WORKLOG_DIR_NAME: &str = "worklog";
 const FILE_DATE_FORMAT: &str = "%Y-%m-%d";
 const ENTRY_TIME_FORMAT: &str = "%H:%M";
 
+/// The `Left` value that marks an item closed once normalized.
+const CLOSED_SENTINEL: &str = "nothing";
+
 /// A worklog entry to append, in the Contract shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorklogEntry {
@@ -45,7 +48,7 @@ pub struct RecordedEntry {
     pub next: String,
 }
 
-/// The outcome of an [`WorklogStore::append`] call.
+/// The outcome of a [`WorklogStore::append`] call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppendOutcome {
     /// The day file the entry was written to.
@@ -202,6 +205,28 @@ fn permissive_dir_warning(_path: &Path, _metadata: &fs::Metadata) -> Option<Stri
     None
 }
 
+/// Whether `item` is still open in `entries` — a single day's parsed,
+/// time-ordered entries (e.g. the output of [`WorklogStore::read_day`], or
+/// a prior day's file read the same way).
+///
+/// The item is open unless its most recent entry's `Left` field, after
+/// case-folding, trimming surrounding whitespace, and removing at most one
+/// trailing period, equals `nothing`. Returns `None` when `entries` has no
+/// entry for `item`.
+pub fn item_open_state(entries: &[RecordedEntry], item: &str) -> Option<bool> {
+    let latest = entries.iter().rev().find(|entry| entry.item == item)?;
+    Some(!left_field_marks_closed(&latest.left))
+}
+
+/// Apply the closed-sentinel normalization to a raw `Left` field value:
+/// case-fold, trim surrounding whitespace, and drop at most one trailing
+/// period, then compare to `nothing`.
+fn left_field_marks_closed(left: &str) -> bool {
+    let trimmed = left.trim();
+    let without_one_trailing_period = trimmed.strip_suffix('.').unwrap_or(trimmed);
+    without_one_trailing_period.eq_ignore_ascii_case(CLOSED_SENTINEL)
+}
+
 /// Parse every `## HH:MM — item` entry from a day's file, in physical file
 /// order. Lines that are not part of an entry are ignored, so an
 /// operator's hand-authored notes between entries do not break reading.
@@ -255,14 +280,13 @@ fn order_entries(mut entries: Vec<RecordedEntry>) -> Vec<RecordedEntry> {
 }
 
 fn render_entry_block(recorded_time: &str, entry: &WorklogEntry) -> String {
-    format!(
-        "## {time} — {item}\n\n- Done: {done}\n- Left: {left}\n- Next: {next}\n\n",
-        time = recorded_time,
-        item = entry.item,
-        done = entry.done,
-        left = entry.left,
-        next = entry.next,
-    )
+    let WorklogEntry {
+        item,
+        done,
+        left,
+        next,
+    } = entry;
+    format!("## {recorded_time} — {item}\n\n- Done: {done}\n- Left: {left}\n- Next: {next}\n\n")
 }
 
 fn append_block_to_file(path: &Path, block: &str) -> ServiceResult<()> {
@@ -360,11 +384,21 @@ fn create_file_owner_only(path: &Path) -> ServiceResult<fs::File> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RecordedEntry, WorklogEntry, WorklogStore};
+    use super::{item_open_state, RecordedEntry, WorklogEntry, WorklogStore};
     use chrono::{NaiveDate, NaiveTime};
 
     fn date(year: i32, month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).expect("valid date")
+    }
+
+    fn recorded(item: &str, left: &str) -> RecordedEntry {
+        RecordedEntry {
+            recorded_time: "09:00".to_owned(),
+            item: item.to_owned(),
+            done: "did the thing".to_owned(),
+            left: left.to_owned(),
+            next: "the trigger".to_owned(),
+        }
     }
 
     #[cfg(unix)]
@@ -593,5 +627,64 @@ mod tests {
             .collect();
 
         assert_eq!(items, vec!["written-first", "written-second"]);
+    }
+
+    #[test]
+    fn item_open_state_classifies_nothing_sentinel_variants_as_closed() {
+        for left in [
+            "nothing",
+            "Nothing",
+            "NOTHING",
+            "nothing.",
+            "Nothing.",
+            "  nothing  ",
+        ] {
+            let entries = [recorded("invoice", left)];
+            assert_eq!(
+                item_open_state(&entries, "invoice"),
+                Some(false),
+                "Left {left:?} should classify the item as closed"
+            );
+        }
+    }
+
+    #[test]
+    fn item_open_state_classifies_a_substantive_left_value_as_open() {
+        let entries = [recorded("invoice", "awaiting the corrected invoice")];
+        assert_eq!(item_open_state(&entries, "invoice"), Some(true));
+    }
+
+    #[test]
+    fn item_open_state_uses_the_items_most_recent_entry() {
+        let closed_then_reopened = [
+            recorded("invoice", "nothing"),
+            recorded("invoice", "vendor came back with a new query"),
+        ];
+        assert_eq!(
+            item_open_state(&closed_then_reopened, "invoice"),
+            Some(true)
+        );
+
+        let open_then_closed = [
+            recorded("invoice", "blocked on the vendor"),
+            recorded("invoice", "Nothing."),
+        ];
+        assert_eq!(item_open_state(&open_then_closed, "invoice"), Some(false));
+    }
+
+    #[test]
+    fn item_open_state_is_none_when_the_item_has_no_entry() {
+        let entries = [recorded("invoice", "nothing")];
+        assert_eq!(item_open_state(&entries, "shipping-label"), None);
+    }
+
+    #[test]
+    fn item_open_state_only_strips_one_trailing_period_from_left() {
+        let entries = [recorded("invoice", "Nothing..")];
+        assert_eq!(
+            item_open_state(&entries, "invoice"),
+            Some(true),
+            "only one trailing period is removed, so 'Nothing.' stays open"
+        );
     }
 }
