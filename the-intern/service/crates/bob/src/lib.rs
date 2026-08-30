@@ -15,6 +15,7 @@ pub mod init_materializer;
 pub mod serve;
 pub mod task_board;
 pub mod telemetry;
+pub mod worklog;
 
 use cli::{
     AuditCommand, Cli, Command, PolicyCommand, ScheduleCommand, SessionsCommand, TaskCommand,
