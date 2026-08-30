@@ -178,23 +178,24 @@ on a given run — never do both.
 ### 4. Record a worklog entry for the message
 
 Whatever the outcome above — acted, escalated, or blocked at either
-step — append one entry to today's worklog file for this message. Follow
-the `worklog` skill's own `references/entry-format.md` for how to create
-`worklog/` and today's file if either is still missing, the exact
-append-command shape, and the `Done`/`Left`/`Next` fields every entry
-carries — do not restate any of that here. This skill's own
-`references/worklog.md` defines the one thing specific to email triage: the
-entry's item identifier is the message's `<subject> (from <sender>)`. Do
-this before moving on to the next unseen message, so a run interrupted
-partway still leaves a complete record for every message it did handle
-before stopping.
+step — call `bob worklog append` once for this message. The command
+creates the worklog directory and today's file if either is still missing,
+stamps the entry from its own clock, and takes the item-identifier plus the
+`Done`/`Left`/`Next` fields every entry carries — the `worklog` skill
+covers when to make this call and what those fields mean; do not restate
+that here. This skill's own `references/worklog.md` defines the one thing
+specific to email triage: the entry's item identifier is the message's
+`<subject> (from <sender>)`. Do this before moving on to the next unseen
+message, so a run interrupted partway still leaves a complete record for
+every message it did handle before stopping.
 
 The entry must describe the actual outcome from step 3, not the intended one.
 If an escalation send was denied by the action-authorization gate, do
 **not** write that an escalation email was sent. Record a blocked open
 item instead, with `Done` describing the blocked escalation attempt,
-`Left` describing the still-open message, and `Next` pointing to retry at
-the next first-run reconciliation after the allow rule is fixed.
+`Left` describing the still-open message, and `Next` pointing to retry when
+the item appears in the carried-forward set `bob worklog list` reports at
+the start of a run, after the allow rule is fixed.
 
 A completed run leaves no unseen message from step 2 without exactly one
 of: an action taken, an escalation sent, or a block recorded as an open
