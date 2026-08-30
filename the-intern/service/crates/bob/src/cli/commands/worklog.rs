@@ -12,7 +12,10 @@ use chrono::{Local, NaiveDateTime};
 use serde::Serialize;
 use serde_json::json;
 
-use crate::worklog::store::{WorklogEntry, WorklogStore};
+use crate::worklog::{
+    reconcile::reconcile_today,
+    store::{WorklogEntry, WorklogStore},
+};
 
 use super::{invalid_request_error, write_json_line};
 
@@ -59,6 +62,10 @@ fn run_append_with_context(
     reject_empty_field("done", done)?;
     reject_empty_field("left", left)?;
     reject_empty_field("next", next)?;
+
+    // Reconcile today's file (carry forward any still-open items from the
+    // most recent prior worklog file) before this entry is written.
+    reconcile_today(working_dir, now)?;
 
     let entry = WorklogEntry {
         item: item.to_owned(),
@@ -141,6 +148,22 @@ mod tests {
             bob_core::error::ServiceError::InvalidRequest { detail } => detail,
             other => panic!("expected InvalidRequest, got {other:?}"),
         }
+    }
+
+    /// Seed a prior day's worklog file holding one still-open item, so a
+    /// later reconciliation pass has something to carry forward.
+    fn seed_prior_open_item(working_dir: &std::path::Path) {
+        WorklogStore::new(working_dir)
+            .append(
+                at((2026, 8, 29), (9, 0)),
+                &WorklogEntry {
+                    item: "vendor-invoice".to_owned(),
+                    done: "Chased the vendor for the missing PDF.".to_owned(),
+                    left: "awaiting the corrected invoice".to_owned(),
+                    next: "closes when the corrected invoice arrives".to_owned(),
+                },
+            )
+            .expect("seed prior day");
     }
 
     #[test]
@@ -301,5 +324,38 @@ mod tests {
         assert_eq!(entries[0].done, "Chased the vendor for the missing PDF.");
         assert_eq!(entries[0].left, "awaiting the corrected invoice");
         assert_eq!(entries[0].next, "closes when the corrected invoice arrives");
+    }
+
+    #[test]
+    fn worklog_append_runs_reconciliation_before_writing_its_own_entry() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        seed_prior_open_item(temp.path());
+        let mut out = Vec::new();
+
+        run_append_with_context(
+            false,
+            "todays-item",
+            "Did today's work.",
+            "still going",
+            "closes tomorrow",
+            at((2026, 8, 30), (9, 0)),
+            temp.path(),
+            &mut out,
+        )
+        .expect("append should succeed");
+
+        let day_path = temp.path().join("worklog").join("2026-08-30.md");
+        let content = std::fs::read_to_string(&day_path).expect("today's file");
+
+        let carried_at = content
+            .find("Carried forward from 2026-08-29.md")
+            .expect("reconciliation must carry the open prior item into today's file");
+        let own_at = content
+            .find("Did today's work.")
+            .expect("the handler's own entry must be present");
+        assert!(
+            carried_at < own_at,
+            "the carried-forward entry must be written before the handler's own entry:\n{content}"
+        );
     }
 }
