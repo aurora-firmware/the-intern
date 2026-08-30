@@ -128,9 +128,10 @@ For every envelope the previous step returned, in turn:
    - If any of those calls is denied by the action-authorization gate: stop
      acting on this message, do not substitute some other action instead,
      and record the block as an open worklog item in step 4 below (`Left`:
-     the blocked action; `Next`: retried at the next first-run
-     reconciliation once an admitting allow rule exists). The message is
-     not treated as handled.
+     the blocked action; `Next`: retried when it appears in the
+     carried-forward set `bob worklog list` reports at the start of a run,
+     once an admitting allow rule exists). The message is not treated as
+     handled.
 3. **No confident match** (including an ambiguous match between two
    categories, which `references/categories/README.md`'s confidence rubric
    treats as not confident, and a message that does not clearly satisfy any
@@ -168,8 +169,8 @@ For every envelope the previous step returned, in turn:
    gate, treat this message's outcome as **blocked**, not **escalated**:
    no escalation email was sent, so step 4's worklog entry must say the
    escalation attempt was blocked, leave the message open, and point the
-   retry to the next first-run reconciliation after an admitting allow
-   rule exists.
+   retry to the carried-forward set `bob worklog list` reports at the start
+   of a run, once an admitting allow rule exists.
 
 Escalating and acting are mutually exclusive outcomes for a given message
 on a given run — never do both.
