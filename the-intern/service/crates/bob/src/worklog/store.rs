@@ -11,7 +11,7 @@ use std::{
 };
 
 use bob_core::error::{ServiceError, ServiceResult};
-use chrono::NaiveDateTime;
+use chrono::{NaiveDate, NaiveDateTime};
 
 const WORKLOG_DIR_NAME: &str = "worklog";
 const FILE_DATE_FORMAT: &str = "%Y-%m-%d";
@@ -98,6 +98,58 @@ impl WorklogStore {
         })
     }
 
+    /// Read back the entries recorded for `date`, ordered by each entry's
+    /// `HH:MM` value with ties broken by physical file order.
+    ///
+    /// Returns an empty list when `<cwd>/worklog/` exists but has no file
+    /// for `date`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceError::Persistence`] when `<cwd>/worklog/` does not
+    /// exist — the directory is named in the error and is never created by a
+    /// read — or when a filesystem operation fails.
+    pub fn read_day(&self, date: NaiveDate) -> ServiceResult<Vec<RecordedEntry>> {
+        self.require_worklog_dir()?;
+
+        let day_path = self
+            .worklog_dir
+            .join(format!("{}.md", date.format(FILE_DATE_FORMAT)));
+        let content = match fs::read_to_string(&day_path) {
+            Ok(content) => content,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => {
+                return Err(ServiceError::Persistence {
+                    detail: format!("failed to read worklog file {}: {err}", day_path.display()),
+                })
+            }
+        };
+
+        Ok(order_entries(parse_entries(&content)))
+    }
+
+    /// Fail, naming `<cwd>/worklog/`, when it does not exist. A read must
+    /// never invent the directory (ADR-015).
+    fn require_worklog_dir(&self) -> ServiceResult<()> {
+        match fs::metadata(&self.worklog_dir) {
+            Ok(_) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                Err(ServiceError::Persistence {
+                    detail: format!(
+                        "worklog directory {} does not exist",
+                        self.worklog_dir.display()
+                    ),
+                })
+            }
+            Err(err) => Err(ServiceError::Persistence {
+                detail: format!(
+                    "failed to inspect worklog directory {}: {err}",
+                    self.worklog_dir.display()
+                ),
+            }),
+        }
+    }
+
     /// Ensure `<cwd>/worklog/` exists, creating it Unix-mode `0700` when
     /// absent. An existing directory is never re-permissioned; if it is more
     /// permissive than owner-only a warning is returned.
@@ -148,6 +200,56 @@ fn permissive_dir_warning(path: &Path, metadata: &fs::Metadata) -> Option<String
 #[cfg(not(unix))]
 fn permissive_dir_warning(_path: &Path, _metadata: &fs::Metadata) -> Option<String> {
     None
+}
+
+/// Parse every `## HH:MM — item` entry from a day's file, in physical file
+/// order. Lines that are not part of an entry are ignored, so an
+/// operator's hand-authored notes between entries do not break reading.
+fn parse_entries(content: &str) -> Vec<RecordedEntry> {
+    let mut entries = Vec::new();
+    let mut current: Option<RecordedEntry> = None;
+
+    for line in content.lines() {
+        if let Some(header) = line.strip_prefix("## ") {
+            if let Some(entry) = current.take() {
+                entries.push(entry);
+            }
+            if let Some((time, item)) = header.split_once('—') {
+                current = Some(RecordedEntry {
+                    recorded_time: time.trim().to_owned(),
+                    item: item.trim().to_owned(),
+                    done: String::new(),
+                    left: String::new(),
+                    next: String::new(),
+                });
+            }
+            continue;
+        }
+
+        let Some(entry) = current.as_mut() else {
+            continue;
+        };
+
+        if let Some(value) = line.strip_prefix("- Done:") {
+            entry.done = value.trim().to_owned();
+        } else if let Some(value) = line.strip_prefix("- Left:") {
+            entry.left = value.trim().to_owned();
+        } else if let Some(value) = line.strip_prefix("- Next:") {
+            entry.next = value.trim().to_owned();
+        }
+    }
+
+    if let Some(entry) = current.take() {
+        entries.push(entry);
+    }
+
+    entries
+}
+
+/// Sort entries by `recorded_time`, keeping physical file order for entries
+/// that share a time.
+fn order_entries(entries: Vec<RecordedEntry>) -> Vec<RecordedEntry> {
+    entries
 }
 
 fn render_entry_block(recorded_time: &str, entry: &WorklogEntry) -> String {
@@ -256,8 +358,12 @@ fn create_file_owner_only(path: &Path) -> ServiceResult<fs::File> {
 
 #[cfg(test)]
 mod tests {
-    use super::{WorklogEntry, WorklogStore};
+    use super::{RecordedEntry, WorklogEntry, WorklogStore};
     use chrono::{NaiveDate, NaiveTime};
+
+    fn date(year: i32, month: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(year, month, day).expect("valid date")
+    }
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -363,5 +469,52 @@ mod tests {
             temp.path().join("worklog").join("2026-08-30.md").is_file(),
             "the entry must still be written"
         );
+    }
+
+    #[test]
+    fn read_day_round_trips_every_field_of_an_appended_entry() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        store
+            .append(
+                at((2026, 8, 30), (14, 30)),
+                &WorklogEntry {
+                    item: "vendor-invoice".to_owned(),
+                    done: "Chased the vendor for the missing PDF.".to_owned(),
+                    left: "awaiting the corrected invoice".to_owned(),
+                    next: "closes when the corrected invoice arrives".to_owned(),
+                },
+            )
+            .expect("append should succeed");
+
+        let entries = store
+            .read_day(date(2026, 8, 30))
+            .expect("read_day should succeed");
+
+        assert_eq!(
+            entries,
+            vec![RecordedEntry {
+                recorded_time: "14:30".to_owned(),
+                item: "vendor-invoice".to_owned(),
+                done: "Chased the vendor for the missing PDF.".to_owned(),
+                left: "awaiting the corrected invoice".to_owned(),
+                next: "closes when the corrected invoice arrives".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn read_day_returns_no_entries_when_the_dated_file_is_absent() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        store
+            .append(at((2026, 8, 30), (9, 0)), &sample_entry("vendor-invoice"))
+            .expect("seed a different day");
+
+        let entries = store
+            .read_day(date(2026, 8, 29))
+            .expect("an existing worklog dir with no file for the day is not an error");
+
+        assert!(entries.is_empty());
     }
 }
