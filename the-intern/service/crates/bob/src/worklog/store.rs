@@ -387,6 +387,9 @@ mod tests {
     use super::{item_open_state, RecordedEntry, WorklogEntry, WorklogStore};
     use chrono::{NaiveDate, NaiveTime};
 
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     fn date(year: i32, month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).expect("valid date")
     }
@@ -400,9 +403,6 @@ mod tests {
             next: "the trigger".to_owned(),
         }
     }
-
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
 
     #[cfg(unix)]
     fn mode_of(path: &std::path::Path) -> u32 {
