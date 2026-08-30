@@ -8,23 +8,27 @@ description: >
   entry for every message handled either way. This is the triage-policy
   skill: it carries the confidence-gated act-or-escalate decision and the
   retry of a carried-forward blocked action. It delegates the diary
-  mechanics — where the worklog lives, how to create it, its entry format,
-  first-run detection, and reconciliation — to the `worklog` skill, and the
-  CLI mechanics to the `himalaya` skill: load `worklog` and `himalaya` for
-  those, and see `references/worklog.md` (this skill's own email-specific
-  diary notes) and `references/escalation.md` for the triage-specific rules
-  this loop follows rather than restating them here.
+  mechanics — where the worklog lives, how today's file is created, its
+  entry format, and the carry-forward of still-open items — to the
+  `bob worklog` command, and the CLI mechanics to the `himalaya` skill:
+  load the `worklog` skill for when a run journals and the item-identifier
+  convention, load `himalaya` for the mail commands, and see
+  `references/worklog.md` (this skill's own email-specific diary notes) and
+  `references/escalation.md` for the triage-specific rules this loop follows
+  rather than restating them here.
 ---
 
 # Email Triage
 
 This is the triage-policy skill: it decides what to do with a mailbox — not
 how to drive `himalaya`, and not how to keep a diary. Every run of this loop
-follows the same four steps — reconcile (first executed run of the day
-only), detect unseen mail, act on or escalate each unseen message, and
-record a worklog entry for it — and delegates the CLI mechanics to the
-`himalaya` skill, the diary mechanics to the `worklog` skill, and its own
-domain-specific reference detail to this skill's own `references/` files
+follows the same four steps — read today's carried-forward set from
+`bob worklog list` (the command has already reconciled before it responds),
+detect unseen mail, act on or escalate each unseen message, and record a
+worklog entry for it — and delegates the CLI mechanics to the `himalaya`
+skill, the diary mechanics to the `bob worklog` command (with the `worklog`
+skill for when a run journals and the item-identifier convention), and its
+own domain-specific reference detail to this skill's own `references/` files
 rather than restating any of it here.
 
 ---
