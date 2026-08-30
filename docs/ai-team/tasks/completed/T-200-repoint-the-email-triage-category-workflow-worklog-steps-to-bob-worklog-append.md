@@ -2,7 +2,7 @@
 id: T-200
 title: Repoint the email-triage category workflow worklog steps to bob worklog 
   append
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-30'
