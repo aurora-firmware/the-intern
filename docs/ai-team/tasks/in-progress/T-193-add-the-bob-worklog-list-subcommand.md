@@ -137,3 +137,93 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-30
+PASS
+
+**Stage 1 — Acceptance criteria: all five met.**
+
+- **AC-1** — `WorklogCommand::List { date }` routes through the existing
+  `Command::Worklog` early-return block in `lib.rs` `run_cli_with_runtime`,
+  above `runtime.load_config()` / `init_telemetry()`.
+  `worklog_list_dispatch_bypasses_config_and_telemetry_loading` and its
+  `_with_date_` twin assert the `FakeRuntime` call log is exactly
+  `["worklog_list"]` — the fake records `"load"`/`"telemetry"`, so their
+  absence proves no config load and no admin-socket path.
+  `ProductionRuntime::worklog_list` → `commands::worklog_list` →
+  `worklog::run_list` is filesystem-only.
+- **AC-2** — `run_list_with_context` calls `reconcile_today` (a no-op that
+  creates nothing when `worklog/` is absent, per T-191's own tests) then
+  `WorklogStore::read_day`, whose `require_worklog_dir` returns
+  `ServiceError::Persistence` naming `<cwd>/worklog` and never creates it;
+  `main.rs` maps any `Err` to exit 1.
+  `worklog_list_errors_naming_the_worklog_directory_when_it_is_absent`
+  asserts the detail names the directory, the directory does not exist
+  afterward, and nothing was written to `out`.
+- **AC-3** — `reconcile_today(working_dir, now)` runs unconditionally, keyed
+  on `now` (today) not `target_date`, before `read_day(target_date)` and
+  before any output; a past `--date` only ever reaches `read_day`.
+  `worklog_list_reconciles_todays_file_first_and_reads_a_past_date_as_is`
+  proves the past-dated file is byte-identical before/after while today's
+  file gains the `Carried forward from 2026-08-28.md` entry.
+- **AC-4** — `read_day` returns entries stably sorted by `recorded_time`;
+  `run_list` renders that slice without re-sorting.
+  `worklog_list_renders_entries_ordered_by_time_not_write_order` (write
+  order 14:00 / 08:30 / 11:15) asserts the rendered order is early < midday
+  < afternoon.
+- **AC-5** — text form prints `worklog for <date>`, the entries, then
+  `carried forward: <comma-joined | (none)>`; `--json` emits
+  `write_json_line(&json!(WorklogDayOutput))`, an object with `date`,
+  `entries`, and `carried_forward`. `carried_forward` is always
+  `reconcile_today`'s return (today's full set) regardless of `--date`.
+  Covered by the text, JSON-object, and empty-set tests.
+
+No unspecified behaviour added; exactly the four files in "Files to Touch"
+changed; `store.rs` / `reconcile.rs` untouched (T-190 / T-191 reused as
+intended).
+
+**Stage 2 — Code quality: pass.**
+
+- **Correctness** — `--date` is parsed to a `NaiveDate` and reformatted via
+  `FILE_DATE_FORMAT` before use as a filename, so a traversal-style `--date`
+  fails parsing before any filesystem work
+  (`worklog_list_rejects_a_malformed_date_flag_before_touching_the_filesystem`).
+  `now` is `Local::now().naive_local()`, consistent with `run_append`.
+  Errors propagate via `?`.
+- **Tests** — 53 `worklog` tests pass; success and failure paths both
+  covered; each test uses its own `tempfile::tempdir()`, no shared mutable
+  state. `run_list_with_context` mirrors `run_append_with_context`'s
+  injectable-context shape (`now`, `working_dir`, `out`).
+- **Security** — no secrets; the only external input (`--date`) is validated
+  before filesystem access; cwd-strict resolution via
+  `WorklogStore::new(working_dir)` (ADR-015).
+- **Readability / performance** — descriptive names, doc comments cite the
+  S-015 reconcile-first rule, no dead code, one file read per store /
+  reconcile call.
+
+**Verification re-run at review** (from `the-intern/service/`):
+`cargo build -p bob` clean; `cargo test -p bob worklog` → 53 passed;
+`cargo fmt --all -- --check` clean; `cargo test --workspace` green
+(288 bob lib + all other crates, 0 failed, 1 ignored, no sandbox UDS
+failures this run).
+
+**Minor observations (non-blocking):**
+
+- `write_worklog_day` maps a stdout write failure to `invalid_request_error`;
+  a persistence/IO category would fit better, but this matches the
+  pre-existing `write_appended_entry` convention in the same module (T-192),
+  so it is consistent rather than a regression.
+- `parse_target_date` inherits chrono's lenient `%Y-%m-%d` parsing (accepts
+  unpadded fields, e.g. `2026-8-1`); the ACs only require ISO input to work
+  and a clearly-malformed value to be rejected pre-filesystem, both of which
+  hold.
+- No test directly asserts the reported `carried forward` line while
+  `--date` points at a past date; it is covered indirectly (reconcile-
+  against-today proven with a past `--date`; carried-forward reporting
+  proven with today) and is structurally guaranteed by the single
+  `carried_forward` binding sourced from `reconcile_today(.., now)`.
+- Carried over from T-192's review: `WorklogStore`'s permissive-`worklog/`-dir
+  warnings are still discarded on the read path (via `reconcile_today`).
+  Pre-existing, out of scope for T-193.
+
+Next owner: Development Loop.
