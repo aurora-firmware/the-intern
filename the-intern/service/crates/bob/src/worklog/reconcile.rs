@@ -7,12 +7,21 @@
 //! and `bob worklog list` (T-192/T-193); it is not a standalone
 //! subcommand.
 
-use bob_core::error::ServiceResult;
+use bob_core::error::{ServiceError, ServiceResult};
 use chrono::{NaiveDate, NaiveDateTime};
 
-use std::path::Path;
+use std::{fs, path::Path};
 
 use super::store::{item_open_state, RecordedEntry, WorklogEntry, WorklogStore};
+
+/// The working-directory-relative subdirectory that holds the dated worklog
+/// files. Mirrors the private `store::WORKLOG_DIR_NAME`; both are fixed by
+/// the cwd-strict resolution rule of ADR-015 (`<cwd>/worklog/<date>.md`,
+/// with no upward search and no override).
+const WORKLOG_DIR_NAME: &str = "worklog";
+
+/// The extension every dated worklog file carries.
+const WORKLOG_FILE_EXTENSION: &str = "md";
 
 /// The date format used for worklog file names and for the source-file
 /// reference in a carried-forward entry's `Done` field.
@@ -39,14 +48,65 @@ const CARRIED_FORWARD_DONE_PREFIX: &str = "Carried forward from ";
 /// Returns [`bob_core::error::ServiceError::Persistence`] when scanning the
 /// worklog directory or reading/writing a day file fails.
 pub fn reconcile_today(working_dir: &Path, now: NaiveDateTime) -> ServiceResult<Vec<String>> {
+    let worklog_dir = working_dir.join(WORKLOG_DIR_NAME);
     let store = WorklogStore::new(working_dir);
     let today = now.date();
 
-    if let Some(source_date) = today.pred_opt() {
+    if let Some(source_date) = nearest_prior_existing_date(&worklog_dir, today)? {
         carry_forward_open_items(&store, source_date, now)?;
     }
 
     report_carried_forward(&store, today)
+}
+
+/// The latest date strictly before `today` that has a `<date>.md` file in
+/// `worklog_dir`. Existence is the only filter: a file that closed every
+/// item it mentions still counts, so an older file is never consulted past
+/// it (S-015 Design Principles). Returns `None` when no such file exists,
+/// including when `worklog_dir` itself is absent.
+fn nearest_prior_existing_date(
+    worklog_dir: &Path,
+    today: NaiveDate,
+) -> ServiceResult<Option<NaiveDate>> {
+    let read_dir = match fs::read_dir(worklog_dir) {
+        Ok(read_dir) => read_dir,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(ServiceError::Persistence {
+                detail: format!(
+                    "failed to list worklog directory {}: {err}",
+                    worklog_dir.display()
+                ),
+            })
+        }
+    };
+
+    let mut prior_dates: Vec<NaiveDate> = Vec::new();
+    for entry in read_dir {
+        let entry = entry.map_err(|err| ServiceError::Persistence {
+            detail: format!(
+                "failed to read an entry of worklog directory {}: {err}",
+                worklog_dir.display()
+            ),
+        })?;
+        if let Some(file_date) = worklog_file_date(&entry.path()) {
+            if file_date < today {
+                prior_dates.push(file_date);
+            }
+        }
+    }
+
+    Ok(prior_dates.into_iter().max())
+}
+
+/// The calendar date a worklog file path encodes, or `None` when the path
+/// is not a `<YYYY-MM-DD>.md` day file.
+fn worklog_file_date(path: &Path) -> Option<NaiveDate> {
+    if path.extension().and_then(|ext| ext.to_str()) != Some(WORKLOG_FILE_EXTENSION) {
+        return None;
+    }
+    let stem = path.file_stem().and_then(|stem| stem.to_str())?;
+    NaiveDate::parse_from_str(stem, FILE_DATE_FORMAT).ok()
 }
 
 /// Append, to today's file, one carried-forward entry per item-identifier
@@ -200,5 +260,110 @@ mod tests {
             "Done must name the source file: {:?}",
             carried_entry.done
         );
+    }
+
+    #[test]
+    fn carries_from_the_nearest_prior_file_not_an_earlier_one() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        seed(
+            &store,
+            at((2026, 8, 10), (9, 0)),
+            &entry(
+                "ancient-item",
+                "Opened it long ago.",
+                "still blocked on the ancient thing",
+                "closes some day",
+            ),
+        );
+        seed(
+            &store,
+            at((2026, 8, 28), (9, 0)),
+            &entry(
+                "recent-item",
+                "Opened it recently.",
+                "still blocked on the recent thing",
+                "closes soon",
+            ),
+        );
+
+        let carried = reconcile_today(temp.path(), at((2026, 8, 30), (9, 0)))
+            .expect("reconcile should succeed");
+
+        assert_eq!(
+            carried,
+            vec!["recent-item".to_owned()],
+            "only the nearest prior file is consulted as the source"
+        );
+    }
+
+    #[test]
+    fn does_not_walk_past_a_fully_closed_nearest_file_to_an_older_one() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        seed(
+            &store,
+            at((2026, 8, 20), (9, 0)),
+            &entry(
+                "older-open-item",
+                "Started it.",
+                "still blocked on legal",
+                "closes when legal signs off",
+            ),
+        );
+        seed(
+            &store,
+            at((2026, 8, 27), (9, 0)),
+            &entry(
+                "recent-closed-item",
+                "Wrapped it up.",
+                "nothing",
+                "nothing further",
+            ),
+        );
+
+        let carried = reconcile_today(temp.path(), at((2026, 8, 30), (9, 0)))
+            .expect("reconcile should succeed");
+
+        assert!(
+            carried.is_empty(),
+            "a fully closed nearest file carries nothing and stops the walk: {carried:?}"
+        );
+        let today = store.read_day(on((2026, 8, 30))).expect("read today");
+        assert!(
+            today.is_empty(),
+            "the older open item must not be resurrected: {today:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_files_dated_today_or_later_when_choosing_the_source() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        seed(
+            &store,
+            at((2026, 8, 28), (9, 0)),
+            &entry(
+                "real-prior-item",
+                "Opened it.",
+                "still open",
+                "closes later",
+            ),
+        );
+        seed(
+            &store,
+            at((2026, 9, 5), (9, 0)),
+            &entry(
+                "future-item",
+                "From a file dated after today.",
+                "still open in the future",
+                "closes later",
+            ),
+        );
+
+        let carried = reconcile_today(temp.path(), at((2026, 8, 30), (9, 0)))
+            .expect("reconcile should succeed");
+
+        assert_eq!(carried, vec!["real-prior-item".to_owned()]);
     }
 }
