@@ -718,6 +718,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn worklog_list_rejects_a_malformed_date_flag_before_touching_the_filesystem() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut out = Vec::new();
+
+        let detail = expect_invalid_request(run_list_with_context(
+            false,
+            Some("30 August 2026"),
+            at((2026, 8, 30), (9, 0)),
+            temp.path(),
+            &mut out,
+        ));
+
+        assert!(
+            detail.contains("YYYY-MM-DD"),
+            "the error must name the expected date shape: {detail}"
+        );
+        assert!(
+            !temp.path().join("worklog").exists(),
+            "a malformed --date must fail before any filesystem work"
+        );
+        assert!(out.is_empty(), "no output on a malformed --date");
+    }
+
     /// Seed a prior day's file with one still-open `vendor-invoice` item.
     fn seed_prior_open_vendor_invoice(working_dir: &std::path::Path) {
         WorklogStore::new(working_dir)
