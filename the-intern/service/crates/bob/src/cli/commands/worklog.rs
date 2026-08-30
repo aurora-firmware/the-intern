@@ -64,8 +64,9 @@ fn run_append_with_context(
     reject_empty_field("next", next)?;
 
     // Reconcile today's file (carry forward any still-open items from the
-    // most recent prior worklog file) before this entry is written.
-    reconcile_today(working_dir, now)?;
+    // most recent prior worklog file) before this entry is written. The
+    // returned set is today's full carried-forward item-identifier set.
+    let carried_forward = reconcile_today(working_dir, now)?;
 
     let entry = WorklogEntry {
         item: item.to_owned(),
@@ -81,7 +82,7 @@ fn run_append_with_context(
         AppendedEntryOutput {
             item: item.to_owned(),
             path: outcome.path.display().to_string(),
-            carried_forward: Vec::new(),
+            carried_forward,
         },
     )
 }
@@ -129,6 +130,7 @@ fn format_carried_forward(items: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+    use serde_json::Value;
 
     use super::run_append_with_context;
     use crate::worklog::store::{WorklogEntry, WorklogStore};
@@ -356,6 +358,109 @@ mod tests {
         assert!(
             carried_at < own_at,
             "the carried-forward entry must be written before the handler's own entry:\n{content}"
+        );
+    }
+
+    #[test]
+    fn worklog_append_prints_a_human_readable_confirmation_with_the_carried_forward_set() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        seed_prior_open_item(temp.path());
+        let mut out = Vec::new();
+
+        run_append_with_context(
+            false,
+            "todays-item",
+            "Did today's work.",
+            "still going",
+            "closes tomorrow",
+            at((2026, 8, 30), (9, 0)),
+            temp.path(),
+            &mut out,
+        )
+        .expect("append should succeed");
+
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(
+            text.contains("todays-item"),
+            "confirmation names the recorded item: {text}"
+        );
+        assert!(
+            text.contains("carried forward:") && text.contains("vendor-invoice"),
+            "confirmation lists today's carried-forward set: {text}"
+        );
+    }
+
+    #[test]
+    fn worklog_append_json_output_includes_the_carried_forward_set() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        seed_prior_open_item(temp.path());
+        let mut out = Vec::new();
+
+        run_append_with_context(
+            true,
+            "todays-item",
+            "Did today's work.",
+            "still going",
+            "closes tomorrow",
+            at((2026, 8, 30), (9, 0)),
+            temp.path(),
+            &mut out,
+        )
+        .expect("append should succeed");
+
+        let value: Value = serde_json::from_slice(&out).expect("json object");
+        assert_eq!(value["item"], "todays-item");
+        let carried: Vec<&str> = value["carried_forward"]
+            .as_array()
+            .expect("carried_forward array")
+            .iter()
+            .map(|entry| entry.as_str().expect("string identifier"))
+            .collect();
+        assert_eq!(carried, vec!["vendor-invoice"]);
+    }
+
+    #[test]
+    fn worklog_append_reports_an_empty_carried_forward_set_when_no_prior_file_exists() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut json_out = Vec::new();
+        let mut text_out = Vec::new();
+
+        run_append_with_context(
+            true,
+            "todays-item",
+            "Handled entirely today.",
+            "nothing",
+            "nothing further",
+            at((2026, 8, 30), (9, 0)),
+            temp.path(),
+            &mut json_out,
+        )
+        .expect("append should succeed");
+        run_append_with_context(
+            false,
+            "another-item",
+            "Also handled today.",
+            "nothing",
+            "nothing further",
+            at((2026, 8, 30), (10, 0)),
+            temp.path(),
+            &mut text_out,
+        )
+        .expect("append should succeed");
+
+        let value: Value = serde_json::from_slice(&json_out).expect("json object");
+        assert_eq!(
+            value["carried_forward"]
+                .as_array()
+                .expect("carried_forward array")
+                .len(),
+            0
+        );
+
+        let text = String::from_utf8(text_out).expect("utf8");
+        assert!(
+            text.contains("carried forward: (none)"),
+            "an empty set is still reported explicitly: {text}"
         );
     }
 }
