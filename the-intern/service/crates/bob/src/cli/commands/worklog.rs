@@ -8,22 +8,56 @@
 use std::{env, io, io::Write, path::Path};
 
 use bob_core::error::ServiceResult;
-use chrono::{Local, NaiveDateTime};
+use chrono::{Local, NaiveDate, NaiveDateTime};
 use serde::Serialize;
 use serde_json::json;
 
 use crate::worklog::{
     reconcile::reconcile_today,
-    store::{WorklogEntry, WorklogStore},
+    store::{RecordedEntry, WorklogEntry, WorklogStore},
 };
 
 use super::{invalid_request_error, write_json_line};
+
+/// Date format shared by worklog file names and the `--date` flag.
+const FILE_DATE_FORMAT: &str = "%Y-%m-%d";
 
 #[derive(Debug, Serialize)]
 struct AppendedEntryOutput {
     item: String,
     path: String,
     carried_forward: Vec<String>,
+}
+
+/// A single day's worklog, as `bob worklog list` renders it in text or JSON.
+#[derive(Debug, Serialize)]
+struct WorklogDayOutput {
+    date: String,
+    entries: Vec<WorklogEntryOutput>,
+    /// Today's full carried-forward item-identifier set, always today's and
+    /// independent of which invocation performed the carry-forward write.
+    carried_forward: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorklogEntryOutput {
+    time: String,
+    item: String,
+    done: String,
+    left: String,
+    next: String,
+}
+
+impl From<&RecordedEntry> for WorklogEntryOutput {
+    fn from(entry: &RecordedEntry) -> Self {
+        Self {
+            time: entry.recorded_time.clone(),
+            item: entry.item.clone(),
+            done: entry.done.clone(),
+            left: entry.left.clone(),
+            next: entry.next.clone(),
+        }
+    }
 }
 
 pub(super) fn run_append(
@@ -87,6 +121,97 @@ fn run_append_with_context(
     )
 }
 
+pub(super) fn run_list(json_output: bool, date: Option<&str>) -> ServiceResult<()> {
+    let current_dir = env::current_dir()
+        .map_err(|err| invalid_request_error(format!("current directory unavailable: {err}")))?;
+    let mut out = io::stdout();
+    run_list_with_context(
+        json_output,
+        date,
+        Local::now().naive_local(),
+        &current_dir,
+        &mut out,
+    )
+}
+
+fn run_list_with_context(
+    json_output: bool,
+    date: Option<&str>,
+    now: NaiveDateTime,
+    working_dir: &Path,
+    out: &mut impl Write,
+) -> ServiceResult<()> {
+    let target_date = match date {
+        Some(raw) => parse_target_date(raw)?,
+        None => now.date(),
+    };
+
+    // Reconciliation runs first, unconditionally, against TODAY'S file
+    // (S-015 Design Principles: "every entry point that touches today's
+    // file performs reconciliation first, unconditionally"), regardless of
+    // `--date`. It never writes to a past-dated file, and when `worklog/`
+    // is absent it is a no-op that creates nothing. The returned set is
+    // today's full carried-forward item-identifier set.
+    let carried_forward = reconcile_today(working_dir, now)?;
+
+    // `read_day` fails, naming `<cwd>/worklog/`, when that directory does
+    // not exist, and never creates it (ADR-015). A past-dated file is read
+    // exactly as it is on disk.
+    let entries = WorklogStore::new(working_dir).read_day(target_date)?;
+
+    write_worklog_day(
+        out,
+        json_output,
+        WorklogDayOutput {
+            date: target_date.format(FILE_DATE_FORMAT).to_string(),
+            entries: entries.iter().map(WorklogEntryOutput::from).collect(),
+            carried_forward,
+        },
+    )
+}
+
+/// Parse a `--date` value, which must be an ISO `YYYY-MM-DD` calendar date.
+fn parse_target_date(raw: &str) -> ServiceResult<NaiveDate> {
+    NaiveDate::parse_from_str(raw, FILE_DATE_FORMAT).map_err(|err| {
+        invalid_request_error(format!(
+            "worklog list --date must be a YYYY-MM-DD date: {err}"
+        ))
+    })
+}
+
+fn write_worklog_day(
+    out: &mut impl Write,
+    json_output: bool,
+    day: WorklogDayOutput,
+) -> ServiceResult<()> {
+    if json_output {
+        return write_json_line(out, &json!(day));
+    }
+
+    write_worklog_day_text(out, &day)
+        .map_err(|err| invalid_request_error(format!("failed to write worklog output: {err}")))
+}
+
+fn write_worklog_day_text(out: &mut impl Write, day: &WorklogDayOutput) -> io::Result<()> {
+    writeln!(out, "worklog for {}", day.date)?;
+    if day.entries.is_empty() {
+        writeln!(out, "(no entries)")?;
+    }
+    for entry in &day.entries {
+        writeln!(out)?;
+        writeln!(out, "## {} — {}", entry.time, entry.item)?;
+        writeln!(out, "- Done: {}", entry.done)?;
+        writeln!(out, "- Left: {}", entry.left)?;
+        writeln!(out, "- Next: {}", entry.next)?;
+    }
+    writeln!(out)?;
+    writeln!(
+        out,
+        "carried forward: {}",
+        format_carried_forward(&day.carried_forward)
+    )
+}
+
 fn write_appended_entry(
     out: &mut impl Write,
     json_output: bool,
@@ -132,7 +257,7 @@ mod tests {
     use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
     use serde_json::Value;
 
-    use super::run_append_with_context;
+    use super::{run_append_with_context, run_list_with_context};
     use crate::worklog::store::{WorklogEntry, WorklogStore};
 
     fn at(date: (i32, u32, u32), time: (u32, u32)) -> NaiveDateTime {
@@ -149,6 +274,13 @@ mod tests {
         match result.expect_err("expected an invalid-request error") {
             bob_core::error::ServiceError::InvalidRequest { detail } => detail,
             other => panic!("expected InvalidRequest, got {other:?}"),
+        }
+    }
+
+    fn expect_persistence_error(result: bob_core::error::ServiceResult<()>) -> String {
+        match result.expect_err("expected a persistence error") {
+            bob_core::error::ServiceError::Persistence { detail } => detail,
+            other => panic!("expected Persistence, got {other:?}"),
         }
     }
 
@@ -461,6 +593,265 @@ mod tests {
         assert!(
             text.contains("carried forward: (none)"),
             "an empty set is still reported explicitly: {text}"
+        );
+    }
+
+    #[test]
+    fn worklog_list_reconciles_todays_file_first_and_reads_a_past_date_as_is() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        // A prior day's file holding one still-open item.
+        WorklogStore::new(temp.path())
+            .append(
+                at((2026, 8, 28), (9, 0)),
+                &WorklogEntry {
+                    item: "vendor-invoice".to_owned(),
+                    done: "Chased the vendor for the missing PDF.".to_owned(),
+                    left: "awaiting the corrected invoice".to_owned(),
+                    next: "closes when the corrected invoice arrives".to_owned(),
+                },
+            )
+            .expect("seed prior day");
+        let past_path = temp.path().join("worklog").join("2026-08-28.md");
+        let past_before = std::fs::read_to_string(&past_path).expect("past day file");
+        let mut out = Vec::new();
+
+        run_list_with_context(
+            false,
+            Some("2026-08-28"),
+            at((2026, 8, 30), (8, 15)),
+            temp.path(),
+            &mut out,
+        )
+        .expect("list should succeed");
+
+        // The past-dated file is rendered as-is and never written to.
+        let past_after = std::fs::read_to_string(&past_path).expect("past day file");
+        assert_eq!(
+            past_before, past_after,
+            "a past target date must be read as-is, never reconciled or rewritten"
+        );
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(
+            text.contains("2026-08-28") && text.contains("vendor-invoice"),
+            "the output must render the requested past day's entries: {text}"
+        );
+
+        // Reconciliation still ran against TODAY'S file (2026-08-30),
+        // carrying the open prior item forward into it.
+        let today = std::fs::read_to_string(temp.path().join("worklog").join("2026-08-30.md"))
+            .expect("reconciliation must create and populate today's file");
+        assert!(
+            today.contains("Carried forward from 2026-08-28.md"),
+            "reconciliation against today's file must run before output: {today}"
+        );
+    }
+
+    #[test]
+    fn worklog_list_renders_entries_ordered_by_time_not_write_order() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        for (time, item) in [
+            ((14, 0), "afternoon-item"),
+            ((8, 30), "early-item"),
+            ((11, 15), "midday-item"),
+        ] {
+            store
+                .append(
+                    at((2026, 8, 30), time),
+                    &WorklogEntry {
+                        item: item.to_owned(),
+                        done: "did some work".to_owned(),
+                        left: "nothing".to_owned(),
+                        next: "nothing further".to_owned(),
+                    },
+                )
+                .expect("seed today's entry");
+        }
+        let mut out = Vec::new();
+
+        run_list_with_context(
+            false,
+            None,
+            at((2026, 8, 30), (15, 0)),
+            temp.path(),
+            &mut out,
+        )
+        .expect("list should succeed");
+
+        let text = String::from_utf8(out).expect("utf8");
+        let early = text.find("early-item").expect("early-item rendered");
+        let midday = text.find("midday-item").expect("midday-item rendered");
+        let afternoon = text
+            .find("afternoon-item")
+            .expect("afternoon-item rendered");
+        assert!(
+            early < midday && midday < afternoon,
+            "entries must be ordered by HH:MM, not by write order: {text}"
+        );
+    }
+
+    #[test]
+    fn worklog_list_errors_naming_the_worklog_directory_when_it_is_absent() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut out = Vec::new();
+
+        let detail = expect_persistence_error(run_list_with_context(
+            false,
+            None,
+            at((2026, 8, 30), (9, 0)),
+            temp.path(),
+            &mut out,
+        ));
+
+        let expected_dir = temp.path().join("worklog");
+        assert!(
+            detail.contains(&expected_dir.display().to_string()),
+            "the error must name the worklog directory it looked for: {detail}"
+        );
+        assert!(
+            !expected_dir.exists(),
+            "list must not create the worklog directory"
+        );
+        assert!(
+            out.is_empty(),
+            "no output is written when the worklog directory is absent"
+        );
+    }
+
+    #[test]
+    fn worklog_list_rejects_a_malformed_date_flag_before_touching_the_filesystem() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut out = Vec::new();
+
+        let detail = expect_invalid_request(run_list_with_context(
+            false,
+            Some("30 August 2026"),
+            at((2026, 8, 30), (9, 0)),
+            temp.path(),
+            &mut out,
+        ));
+
+        assert!(
+            detail.contains("YYYY-MM-DD"),
+            "the error must name the expected date shape: {detail}"
+        );
+        assert!(
+            !temp.path().join("worklog").exists(),
+            "a malformed --date must fail before any filesystem work"
+        );
+        assert!(out.is_empty(), "no output on a malformed --date");
+    }
+
+    /// Seed a prior day's file with one still-open `vendor-invoice` item.
+    fn seed_prior_open_vendor_invoice(working_dir: &std::path::Path) {
+        WorklogStore::new(working_dir)
+            .append(
+                at((2026, 8, 29), (9, 0)),
+                &WorklogEntry {
+                    item: "vendor-invoice".to_owned(),
+                    done: "Chased the vendor for the missing PDF.".to_owned(),
+                    left: "awaiting the corrected invoice".to_owned(),
+                    next: "closes when the corrected invoice arrives".to_owned(),
+                },
+            )
+            .expect("seed prior open item");
+    }
+
+    #[test]
+    fn worklog_list_text_output_reports_todays_carried_forward_set() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        seed_prior_open_vendor_invoice(temp.path());
+        let mut out = Vec::new();
+
+        run_list_with_context(
+            false,
+            None,
+            at((2026, 8, 30), (9, 0)),
+            temp.path(),
+            &mut out,
+        )
+        .expect("list should succeed");
+
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(
+            text.contains("carried forward: vendor-invoice"),
+            "text output must report today's carried-forward set: {text}"
+        );
+    }
+
+    #[test]
+    fn worklog_list_json_output_is_an_object_carrying_the_same_facts_as_the_text() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        seed_prior_open_vendor_invoice(temp.path());
+        let mut out = Vec::new();
+
+        run_list_with_context(true, None, at((2026, 8, 30), (9, 0)), temp.path(), &mut out)
+            .expect("list should succeed");
+
+        let value: Value = serde_json::from_slice(&out).expect("json object");
+        assert_eq!(value["date"], "2026-08-30");
+        assert!(
+            !value["entries"]
+                .as_array()
+                .expect("entries array")
+                .is_empty(),
+            "the carried-forward entry is part of today's rendered entries: {value}"
+        );
+        let carried: Vec<&str> = value["carried_forward"]
+            .as_array()
+            .expect("carried_forward array")
+            .iter()
+            .map(|item| item.as_str().expect("string identifier"))
+            .collect();
+        assert_eq!(carried, vec!["vendor-invoice"]);
+    }
+
+    #[test]
+    fn worklog_list_reports_an_empty_carried_forward_set_when_nothing_is_carried() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        WorklogStore::new(temp.path())
+            .append(
+                at((2026, 8, 30), (9, 0)),
+                &WorklogEntry {
+                    item: "todays-item".to_owned(),
+                    done: "Handled entirely today.".to_owned(),
+                    left: "nothing".to_owned(),
+                    next: "nothing further".to_owned(),
+                },
+            )
+            .expect("seed today's own entry, no prior file");
+        let mut text_out = Vec::new();
+        let mut json_out = Vec::new();
+
+        run_list_with_context(
+            false,
+            None,
+            at((2026, 8, 30), (10, 0)),
+            temp.path(),
+            &mut text_out,
+        )
+        .expect("list should succeed");
+        run_list_with_context(
+            true,
+            None,
+            at((2026, 8, 30), (10, 0)),
+            temp.path(),
+            &mut json_out,
+        )
+        .expect("list should succeed");
+
+        let text = String::from_utf8(text_out).expect("utf8");
+        assert!(
+            text.contains("carried forward: (none)"),
+            "an empty carried-forward set is still reported explicitly: {text}"
+        );
+        let value: Value = serde_json::from_slice(&json_out).expect("json object");
+        assert_eq!(
+            value["carried_forward"]
+                .as_array()
+                .expect("carried_forward array")
+                .len(),
+            0
         );
     }
 }
