@@ -1,12 +1,12 @@
 ---
 name: bob-cli
-description: Drive the bob CLI — task, status, sessions, audit, policy, schedule, and chat subcommands. Use whenever the user asks you to run a bob command, create or update a task on the task board, inspect or kill sessions, tail the audit log, reload policy, manage scheduled jobs, or start an interactive chat, and whenever you need to decide which bob subcommand accomplishes a task. Also use if a `bob <subcommand>` invocation errors or produces unexpected output.
+description: Drive the bob CLI — task, status, sessions, audit, policy, schedule, chat, and worklog subcommands. Use whenever the user asks you to run a bob command, create or update a task on the task board, append to or read the daily worklog, inspect or kill sessions, tail the audit log, reload policy, manage scheduled jobs, or start an interactive chat, and whenever you need to decide which bob subcommand accomplishes a task. Also use if a `bob <subcommand>` invocation errors or produces unexpected output.
 ---
 
 # bob-cli
 
 `bob` is a single binary with subcommands `init`, `task`, `serve`, `status`,
-`sessions`, `audit`, `policy`, `schedule`, `chat`. Every subcommand accepts a global
+`sessions`, `audit`, `policy`, `schedule`, `chat`, `worklog`. Every subcommand accepts a global
 `--json` flag for single-line JSON output instead of human-readable text —
 prefer `--json` when you (Claude) are the consumer, since it's stable to
 parse and the human text form is not guaranteed to match it field-for-field.
@@ -17,11 +17,14 @@ discipline for how to use the board (when to move a task, how to size work,
 etc.) lives in the `tasks` pi-agent skill that `bob init` installs, not in
 this plugin.
 
-All client subcommands talk to `bob serve` over the admin Unix socket
+Most client subcommands talk to `bob serve` over the admin Unix socket
 (`admin.sock`). If that socket is missing or unreachable you'll get
 `missing admin socket at <path>` — that's a "bob isn't running or the
 socket path doesn't match" problem, not a bug in the subcommand; see
-`bob-troubleshooting` and `bob-health-check`.
+`bob-troubleshooting` and `bob-health-check`. The exceptions are the
+filesystem-only subcommands — `bob init`, `bob task`, and `bob worklog` —
+which read and write files under the workspace directly and never open
+`admin.sock`, so they work whether or not `bob serve` is running.
 
 ## Quick command map
 
@@ -29,6 +32,7 @@ socket path doesn't match" problem, not a bug in the subcommand; see
 |---|---|
 | Bootstrap a new workspace | `bob init <path>` |
 | Create/list/show/move/note a task on the board | `bob task new\|list\|show\|status\|note` |
+| Append to / read the daily worklog | `bob worklog append\|list` |
 | Is bob up, and what version/uptime? | `bob status --json` |
 | List active sessions | `bob sessions list --json` |
 | Kill a session | `bob sessions kill <id>` |
@@ -39,7 +43,7 @@ socket path doesn't match" problem, not a bug in the subcommand; see
 | Start the service (foreground) | `bob serve` |
 
 Full flag-by-flag reference for every subcommand, including `init`, `task`,
-and `schedule`, is in `references/command-reference.md`.
+`worklog`, and `schedule`, is in `references/command-reference.md`.
 
 ## Things that are easy to get wrong
 
