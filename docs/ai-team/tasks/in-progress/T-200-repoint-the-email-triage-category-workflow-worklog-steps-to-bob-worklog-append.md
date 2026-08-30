@@ -95,6 +95,18 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-30
+
+Picked up T-200 on `task/T-200-...`. Treated the Verification block's two shell assertions as the failing tests: confirmed both red against current content (the forbidden-phrase grep matched 7 lines across all six files — `creating `worklog/` and today's file...` in every file plus `first-run` in `automated-notification.md`; the `bob worklog append` file count was 0, not 6).
+
+Made the six near-identical mechanical edits, all confined to each file's `## Worklog entry` paragraph. Each now opens with "Append one entry with `bob worklog append` (see `references/worklog.md`)." and keeps its own trailing category-specific guidance verbatim: the routine-vs-failure follow-up split in `automated-notification.md`; the "name the reply that was sent" text in `direct-request.md` and `meeting-scheduling.md` (including the latter's later-message-re-enters-triage and escalation-path notes); and the "record the filing as fully handled" line in `newsletter-bulk.md`, `self-escalation.md`, and `suspected-spam.md`. The dropped parenthetical also carried a "this file does not restate the entry format itself" clause — removed with the rest of the parenthetical since it is not Done/Left/Next guidance and the new "see `references/worklog.md`" pointer covers the same intent.
+
+In `automated-notification.md` additionally reworded the carry-forward sentence from "so it is not carried forward at first-run reconciliation the way an escalation or a block is" to "so `bob worklog` does not carry it forward the way it carries an escalation or a block." The surrounding phrase "not an open item under `references/worklog.md`'s reconciliation model" was left as-is — it does not contain the banned `first-run` token and removing it would have widened the diff past the sentence in scope.
+
+Considered and rejected: (a) collapsing each three-sentence worklog paragraph into a single sentence — rejected because the task explicitly says to keep the category-specific Done/Left/Next guidance; (b) touching `references/worklog.md` or `SKILL.md` to align phrasing — out of scope and forbidden by the task. Reflowed prose to the files' existing ~90-column wrap; one intermediate edit in `direct-request.md` left a stray short line that was fixed in the same cycle before committing.
+
+Committed as a single commit (`docs(skills): repoint email-triage category worklog steps at bob worklog append`) since the task permits grouping the six mechanical edits. Post-edit: both Verification assertions pass, `git diff --name-only dev-agent...HEAD` shows only the six files, and `cargo test --workspace` from `the-intern/service/` is fully green (no Rust touched). Nothing remains; task is ready for review.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
