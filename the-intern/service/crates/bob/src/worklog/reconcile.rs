@@ -401,4 +401,43 @@ mod tests {
             "the second run still reports the carried-forward item"
         );
     }
+
+    #[test]
+    fn treats_a_source_item_reopened_then_closed_the_same_day_as_closed() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        seed(
+            &store,
+            at((2026, 8, 29), (9, 0)),
+            &entry(
+                "shipping-label",
+                "Requested the label.",
+                "blocked on the carrier portal",
+                "closes when the portal is back",
+            ),
+        );
+        seed(
+            &store,
+            at((2026, 8, 29), (16, 30)),
+            &entry(
+                "shipping-label",
+                "Portal recovered; label printed.",
+                "nothing",
+                "nothing further",
+            ),
+        );
+
+        let carried = reconcile_today(temp.path(), at((2026, 8, 30), (8, 15)))
+            .expect("reconcile should succeed");
+
+        assert!(
+            carried.is_empty(),
+            "the item's later closing entry is its true state: {carried:?}"
+        );
+        let today = store.read_day(on((2026, 8, 30))).expect("read today");
+        assert!(
+            today.is_empty(),
+            "a within-day-closed item must not be carried forward: {today:?}"
+        );
+    }
 }
