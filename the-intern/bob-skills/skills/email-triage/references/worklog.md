@@ -1,12 +1,14 @@
 # Worklog — Email-Triage Specifics
 
-This skill delegates the diary mechanics — where the worklog lives, how to
-create it, the per-item entry format, how to tell whether a run is the
-day's first executed run, and how first-run reconciliation carries forward
-open items — to the canonical `worklog` skill. Load that skill's
-`references/entry-format.md` and `references/reconciliation.md` for those
-mechanics; do not re-derive or restate them here. This file covers only
-what is specific to email triage.
+This skill delegates the diary mechanics — where the worklog lives, how
+today's file is created, the per-item entry format, and how still-open
+items are carried forward — to the `bob worklog` command, with the
+canonical `worklog` skill for when a run journals and reads that
+continuity. `bob worklog` reconciles on every call: `bob worklog list` at
+the start of a run carries every still-open item forward from the most
+recent prior worklog file that exists and reports today's carried-forward
+set. Load the `worklog` skill for those mechanics; do not re-derive or
+restate them here. This file covers only what is specific to email triage.
 
 ## Item identifier
 
@@ -37,19 +39,20 @@ successful escalation just because the intended action was to escalate.
 
 ## How an open item closes, for email triage
 
-The `worklog` skill owns no closing conditions of its own — only the
-carry-forward mechanics (see its `references/reconciliation.md` "How an
-open item closes" section). For email triage, an open item has exactly two
-causes, and each closes differently:
+Neither the `worklog` skill nor `bob worklog` owns any closing condition of
+its own — the command only carries still-open items forward on every run.
+For email triage, an open item has exactly two causes, and each closes
+differently:
 
 - **Escalation.** Closes when the manager's reply arrives — see
   `references/escalation.md`'s "No synchronous reply is expected" section.
   It arrives as ordinary unseen mail and re-enters triage like any other
   message; nothing about the original entry auto-resolves it.
 - **Denied by the action-authorization gate.** Closes once an admitting
-  allow rule is added to bob's action ruleset. This skill's own loop step 1
-  is the point at which a carried-forward blocked action is retried.
+  allow rule is added to bob's action ruleset. The carried-forward set
+  `bob worklog list` reports at the start of a run is the point at which a
+  carried-forward blocked action is retried.
 
 There is no automatic expiry. An item stays open, carried forward day after
-day by the `worklog` skill's reconciliation mechanics, until whichever
-condition above genuinely closes it.
+day by `bob worklog` on every run, until whichever condition above
+genuinely closes it.
