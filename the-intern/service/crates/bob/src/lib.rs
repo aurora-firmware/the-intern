@@ -83,6 +83,7 @@ pub trait DispatchRuntime {
         left: &str,
         next: &str,
     ) -> ServiceResult<()>;
+    fn worklog_list(&self, json: bool, date: Option<&str>) -> ServiceResult<()>;
 }
 
 pub struct ProductionRuntime;
@@ -219,6 +220,10 @@ impl DispatchRuntime for ProductionRuntime {
     ) -> ServiceResult<()> {
         cli::commands::worklog_append(json, item, done, left, next)
     }
+
+    fn worklog_list(&self, json: bool, date: Option<&str>) -> ServiceResult<()> {
+        cli::commands::worklog_list(json, date)
+    }
 }
 
 pub async fn run_cli(cli: Cli) -> ServiceResult<()> {
@@ -263,6 +268,7 @@ pub async fn run_cli_with_runtime(runtime: &impl DispatchRuntime, cli: Cli) -> S
                 left,
                 next,
             } => runtime.worklog_append(json, &item, &done, &left, &next),
+            WorklogCommand::List { date } => runtime.worklog_list(json, date.as_deref()),
         };
     }
 
@@ -480,6 +486,11 @@ mod tests {
             self.calls.lock().expect("lock").push("worklog_append");
             Ok(())
         }
+
+        fn worklog_list(&self, _json: bool, _date: Option<&str>) -> ServiceResult<()> {
+            self.calls.lock().expect("lock").push("worklog_list");
+            Ok(())
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -544,6 +555,48 @@ mod tests {
         assert_eq!(
             runtime.calls.lock().expect("lock").as_slice(),
             ["worklog_append"]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worklog_list_dispatch_bypasses_config_and_telemetry_loading() {
+        let runtime = FakeRuntime::new();
+        let cli = Cli {
+            json: false,
+            command: Command::Worklog {
+                command: WorklogCommand::List { date: None },
+            },
+        };
+
+        run_cli_with_runtime(&runtime, cli)
+            .await
+            .expect("worklog dispatch succeeds");
+
+        assert_eq!(
+            runtime.calls.lock().expect("lock").as_slice(),
+            ["worklog_list"]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worklog_list_with_date_dispatch_bypasses_config_and_telemetry_loading() {
+        let runtime = FakeRuntime::new();
+        let cli = Cli {
+            json: false,
+            command: Command::Worklog {
+                command: WorklogCommand::List {
+                    date: Some("2026-08-29".to_string()),
+                },
+            },
+        };
+
+        run_cli_with_runtime(&runtime, cli)
+            .await
+            .expect("worklog dispatch succeeds");
+
+        assert_eq!(
+            runtime.calls.lock().expect("lock").as_slice(),
+            ["worklog_list"]
         );
     }
 

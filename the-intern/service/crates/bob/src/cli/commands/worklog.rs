@@ -87,6 +87,29 @@ fn run_append_with_context(
     )
 }
 
+pub(super) fn run_list(json_output: bool, date: Option<&str>) -> ServiceResult<()> {
+    let current_dir = env::current_dir()
+        .map_err(|err| invalid_request_error(format!("current directory unavailable: {err}")))?;
+    let mut out = io::stdout();
+    run_list_with_context(
+        json_output,
+        date,
+        Local::now().naive_local(),
+        &current_dir,
+        &mut out,
+    )
+}
+
+fn run_list_with_context(
+    _json_output: bool,
+    _date: Option<&str>,
+    _now: NaiveDateTime,
+    _working_dir: &Path,
+    _out: &mut impl Write,
+) -> ServiceResult<()> {
+    Ok(())
+}
+
 fn write_appended_entry(
     out: &mut impl Write,
     json_output: bool,

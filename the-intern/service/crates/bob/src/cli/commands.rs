@@ -120,6 +120,10 @@ pub fn worklog_append(
     worklog::run_append(json, item, done, left, next)
 }
 
+pub fn worklog_list(json: bool, date: Option<&str>) -> ServiceResult<()> {
+    worklog::run_list(json, date)
+}
+
 pub(crate) fn run_async<T>(future: impl Future<Output = ServiceResult<T>>) -> ServiceResult<T> {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         return tokio::task::block_in_place(|| handle.block_on(future));

@@ -163,6 +163,13 @@ pub enum WorklogCommand {
         #[arg(long)]
         next: String,
     },
+    /// Read back a day's worklog entries ordered by `HH:MM`, after
+    /// reconciling today's file first. Defaults to today's file.
+    List {
+        /// The day to read, as `YYYY-MM-DD`. Omit to read today's file.
+        #[arg(long)]
+        date: Option<String>,
+    },
 }
 
 #[cfg(test)]
@@ -272,6 +279,30 @@ mod tests {
             result.is_err(),
             "clap should reject worklog append without --next"
         );
+    }
+
+    #[test]
+    fn worklog_list_parses_without_a_date_flag() {
+        let cli = Cli::parse_from(["bob", "worklog", "list"]);
+
+        assert!(matches!(
+            cli.command,
+            Command::Worklog {
+                command: WorklogCommand::List { date: None },
+            }
+        ));
+    }
+
+    #[test]
+    fn worklog_list_parses_the_optional_date_flag() {
+        let cli = Cli::parse_from(["bob", "worklog", "list", "--date", "2026-08-29"]);
+
+        match cli.command {
+            Command::Worklog {
+                command: WorklogCommand::List { date },
+            } => assert_eq!(date.as_deref(), Some("2026-08-29")),
+            other => panic!("expected worklog list, got {other:?}"),
+        }
     }
 
     #[test]
