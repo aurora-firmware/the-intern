@@ -1,7 +1,7 @@
 ---
 id: T-194
 title: Add end-to-end bob worklog coverage without a running service
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-30'
