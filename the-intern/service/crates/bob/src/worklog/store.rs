@@ -103,7 +103,13 @@ impl WorklogStore {
     /// permissive than owner-only a warning is returned.
     fn ensure_worklog_dir(&self) -> ServiceResult<Vec<String>> {
         match fs::metadata(&self.worklog_dir) {
-            Ok(_) => Ok(Vec::new()),
+            Ok(metadata) => {
+                let mut warnings = Vec::new();
+                if let Some(warning) = permissive_dir_warning(&self.worklog_dir, &metadata) {
+                    warnings.push(warning);
+                }
+                Ok(warnings)
+            }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 create_dir_owner_only(&self.worklog_dir)?;
                 Ok(Vec::new())
@@ -116,6 +122,32 @@ impl WorklogStore {
             }),
         }
     }
+}
+
+/// A warning when an existing `worklog/` directory grants access beyond its
+/// owner. The directory is deliberately left unchanged (matching `bob
+/// task`'s board precedent); the caller surfaces the warning.
+#[cfg(unix)]
+fn permissive_dir_warning(path: &Path, metadata: &fs::Metadata) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = metadata.permissions().mode() & 0o777;
+    let grants_group_or_other_access = mode & 0o077 != 0;
+    if grants_group_or_other_access {
+        Some(format!(
+            "worklog directory {} has mode {:03o}, more permissive than owner-only (0700); \
+             leaving it unchanged",
+            path.display(),
+            mode
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(unix))]
+fn permissive_dir_warning(_path: &Path, _metadata: &fs::Metadata) -> Option<String> {
+    None
 }
 
 fn render_entry_block(recorded_time: &str, entry: &WorklogEntry) -> String {
@@ -298,5 +330,38 @@ mod tests {
         let worklog_dir = temp.path().join("worklog");
         assert_eq!(mode_of(&worklog_dir), 0o700, "new worklog dir must be 0700");
         assert_eq!(mode_of(&outcome.path), 0o600, "new day file must be 0600");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn append_leaves_a_more_permissive_worklog_dir_unchanged_and_warns_without_failing() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let worklog_dir = temp.path().join("worklog");
+        std::fs::create_dir(&worklog_dir).expect("pre-create worklog dir");
+        std::fs::set_permissions(&worklog_dir, std::fs::Permissions::from_mode(0o755))
+            .expect("relax perms");
+        let store = WorklogStore::new(temp.path());
+
+        let outcome = store
+            .append(at((2026, 8, 30), (9, 5)), &sample_entry("vendor-invoice"))
+            .expect("append must not fail on a pre-existing permissive dir");
+
+        assert_eq!(
+            mode_of(&worklog_dir),
+            0o755,
+            "existing worklog dir permissions must be left unchanged"
+        );
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(&worklog_dir.display().to_string())),
+            "a warning naming the worklog directory is expected: {:?}",
+            outcome.warnings
+        );
+        assert!(
+            temp.path().join("worklog").join("2026-08-30.md").is_file(),
+            "the entry must still be written"
+        );
     }
 }
