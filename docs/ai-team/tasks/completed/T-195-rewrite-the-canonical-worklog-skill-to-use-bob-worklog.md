@@ -1,7 +1,7 @@
 ---
 id: T-195
 title: Rewrite the canonical worklog skill to use bob worklog
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-30'
