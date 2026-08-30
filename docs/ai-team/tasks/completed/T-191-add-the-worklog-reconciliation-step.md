@@ -1,7 +1,7 @@
 ---
 id: T-191
 title: Add the worklog reconciliation step
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-30'
