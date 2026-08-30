@@ -93,6 +93,22 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-30
+
+Implemented the whole task in two TDD cycles, treating the Verification-block shell checks (plus per-AC content greps I wrote into `verify_ac1.sh` / `verify_ac2.sh`) as the failing tests.
+
+Confirmed the real CLI surface first by building `bob` and reading `bob worklog --help`, `bob worklog append --help`, `bob worklog list --help`, plus `crates/bob/src/cli/mod.rs`, `crates/bob/src/cli/commands/worklog.rs`, `crates/bob/src/worklog/reconcile.rs`, and ADR-015 / S-015. Verified flag names (`--item`, `--done`, `--left`, `--next` all required; `list --date`), the local empty/all-whitespace rejection (`worklog entry field --<name> must not be empty`), the cwd-strict `<cwd>/worklog/<date>.md` rule with no upward search / no override, the "reconcile today's file first, unconditionally, then report today's sorted de-duplicated carried-forward set" behaviour (including that `list --date <past>` still reconciles today and reads the past day as-is, and that an absent `worklog/` makes reconciliation a no-op), the `carried_forward` JSON key, and that the command loads no config and never touches `admin.sock`.
+
+Cycle 1 (AC-1): added `## `bob worklog [append|list]`` to `references/command-reference.md` between the `bob task` and `bob serve` sections, matching the house style — a level-2 heading with a signature, two prose paragraphs (filesystem-only + cwd-strict/ADR-015 contrast with `bob task`'s board walk-up and `--board`/`TASKS_DIR`; automatic first-run reconciliation and carried-forward reporting), then `###` subsections for `append` and `list` with bulleted flag notes. Committed as `docs(bob-cli): document bob worklog in the command reference`.
+
+Cycle 2 (AC-2): in `SKILL.md` added `worklog` to the "single binary with subcommands" line, to the frontmatter `description` subcommand list (`… chat, and worklog subcommands`) plus an "append to or read the daily worklog" clause in the "Use whenever" enumeration (following the precedent set when `task` was added for S-014), and a Quick-command-map row `| Append to / read the daily worklog | `bob worklog append|list` |`. Changed "All client subcommands talk to `bob serve` over the admin Unix socket" to "Most …" and appended a sentence naming `bob init`, `bob task`, and `bob worklog` as the filesystem-only exceptions that never open `admin.sock`. Also extended the "Full flag-by-flag reference … including `init`, `task`, `worklog`, and `schedule`" pointer for accuracy. Committed as `docs(bob-cli): add bob worklog to the skill overview and qualify the admin-socket claim`.
+
+AC-3 / AC-4: no change required. The CLI-reference preprocessor already derives its subcommand list from `bob --help` (B-044), so `BOB_BIN=… mdbook build` produced `book/cli-reference/worklog.html` from `bob worklog --help` with the preprocessor source untouched. Verified the page content and that `git diff --name-only dev-agent...HEAD` lists only the two in-scope files.
+
+Considered and rejected: adding a `bob worklog` bullet to SKILL.md's "Things that are easy to get wrong" section — out of scope per the task's "only add the `bob worklog` coverage and qualify the admin-socket claim" instruction, and the gotchas (cwd-strict resolution, local validation) are already spelled out in `command-reference.md`. Also rejected making the doc prose bend to my initial over-strict assertions; I fixed the assertions instead.
+
+Nothing remains. `cargo test --workspace` is green (788 passed, 0 failed).
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
