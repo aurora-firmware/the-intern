@@ -1,7 +1,7 @@
 ---
 id: T-197
 title: Document bob worklog in the bob-companion plugin and CLI reference
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-30'
