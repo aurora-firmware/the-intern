@@ -139,3 +139,85 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-30
+
+PASS
+
+**Stage 1 — Acceptance criteria.** All five ACs met and covered by dedicated
+in-file unit tests.
+
+- AC-1 — `carry_forward_open_items` selects the source item's chronologically
+  last entry (`last_entry_for`, a reverse scan over the time-ordered
+  `read_day` output), copies `left`/`next` into the new `WorklogEntry`
+  verbatim, and sets `Done` via `carried_forward_done`, which embeds the
+  `<YYYY-MM-DD>.md` source name. `store.append(now, …)` writes it to today's
+  file. Test: `carries_forward_an_open_item_from_the_nearest_prior_file_verbatim`.
+- AC-2 — `nearest_prior_existing_date` filters directory entries only on
+  "parses as a date `< today`" and returns the single `max()`, so a
+  fully-closed nearest file is still chosen as the source (every item then
+  fails the `!= Some(true)` open check → nothing carried) and no older file
+  is ever consulted. Tests: `does_not_walk_past_a_fully_closed_nearest_file_to_an_older_one`,
+  `carries_from_the_nearest_prior_file_not_an_earlier_one`,
+  `ignores_files_dated_today_or_later_when_choosing_the_source`.
+- AC-3 — presence test `item_open_state(&today_entries, &item).is_some()`
+  short-circuits the carry on any subsequent run; no "reconciled" marker.
+  Test `a_second_run_the_same_day_leaves_todays_file_unchanged` byte-compares
+  today's file across two runs.
+- AC-4 — the open test keys on the item's most recent entry in the source
+  file, so an open-then-closed pair classifies as closed. Test:
+  `treats_a_source_item_reopened_then_closed_the_same_day_as_closed`.
+- AC-5 — `report_carried_forward` runs on every call (even when no prior
+  file exists and `carry_forward_open_items` is skipped), returning each
+  item whose most-recent today entry both carries the `Done` prefix and is
+  still open, sorted. Tests: `reports_a_carried_forward_entry_that_an_earlier_run_wrote`,
+  `an_item_closed_later_the_same_day_drops_out_of_the_report`,
+  `reports_exactly_the_still_open_carried_items`,
+  `does_not_carry_or_report_an_item_todays_file_already_has`.
+
+Scope is clean: `git diff --stat dev-agent...task/T-191-...` shows only the
+new `reconcile.rs` and the one-line `pub mod reconcile;` in `mod.rs`. No CLI
+wiring, no changes to T-190's store. One public entry point,
+`reconcile_today`; all helpers private.
+
+**Stage 2 — Code quality.** Correctness holds for the edge cases: absent
+`worklog/` returns an empty set without inventing the directory
+(`is_dir()` short-circuit), the `is_dir()`→`read_dir` TOCTOU is covered by
+the `NotFound => Ok(None)` arm, non-date filenames are ignored by
+`worklog_file_date`, and distinct source items cannot collide on the
+single upfront `today_entries` read (the ADR-008 concurrent-first-run
+bound is a deliberate spec tradeoff). Tests are independent (per-test
+`tempfile::tempdir`) and cover the success and empty paths. Names are
+descriptive, every function is documented, no dead code, `item_open_state`
+and all file I/O are reused from T-190 unchanged. Reused constant marker
+`CARRIED_FORWARD_DONE_PREFIX` is referenced by the tests, so production and
+tests stay in sync.
+
+`cd the-intern/service && cargo test -p bob worklog::reconcile` → 12
+passed / 0 failed. `cargo fmt --all -- --check` → clean. `cargo test
+--workspace` → green (bob lib 261 passed / 1 ignored; all other crates and
+integration suites pass). Pre-existing `bob` clippy debt is not a gate
+(CLAUDE.md) and none of it references `reconcile.rs`.
+
+Minor, non-blocking observations:
+
+1. `worklog_file_date` does not check `entry.file_type().is_file()`. A
+   directory named `<YYYY-MM-DD>.md` inside `worklog/` would be treated as a
+   source date and then fail loudly in `store.read_day` (a `Persistence`
+   error, not silent misbehaviour). Vanishingly unlikely; T-190's store has
+   the same characteristic.
+2. `report_carried_forward` re-reads today's file after
+   `carry_forward_open_items` already read it — negligible redundancy on a
+   single small file, kept for a clean function boundary.
+3. `reports_exactly_the_still_open_carried_items` seeds items in
+   already-sorted order, so it does not truly exercise `carried_open.sort()`;
+   and there is no negative test for "most-recent today entry is a later
+   non-carried entry that keeps the item open" (correctly excluded by the
+   code). Consider strengthening in a follow-up if the reporting logic is
+   touched again.
+4. `WORKLOG_DIR_NAME` / `FILE_DATE_FORMAT` are re-declared locally because
+   T-190's copies are private and this task scopes edits to `reconcile.rs` +
+   `mod.rs`. Documented in-file and bounded by ADR-015's fixed
+   `<cwd>/worklog/<date>.md` rule.
+
+Next owner: Development Loop.
