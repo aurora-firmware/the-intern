@@ -118,3 +118,68 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-30
+
+PASS
+
+Reviewed `git diff dev-agent...task/T-200-...` — 1 commit, exactly the six
+`skills/email-triage/references/categories/` files (`automated-notification.md`,
+`direct-request.md`, `meeting-scheduling.md`, `newsletter-bulk.md`,
+`self-escalation.md`, `suspected-spam.md`), 26 insertions / 38 deletions, no
+Rust and no other files.
+
+Stage 1 — Acceptance criteria:
+
+- AC-1 met. All six `## Worklog entry` paragraphs now open with "Append one
+  entry with `bob worklog append` (see `references/worklog.md`)." and the
+  by-hand creation parenthetical (including its "does not restate the entry
+  format itself" sub-clause) is gone. `grep -REn 'creating .worklog/. and
+  today' skills/email-triage/references/categories/` returns nothing;
+  `grep -REl 'bob worklog append' …` returns 6 files. Confirmed by reading each
+  file — no residual "creating `worklog/`", "by hand", or "today's file"
+  language anywhere in the directory.
+- AC-2 met. `automated-notification.md`'s carry-forward sentence now reads "…
+  so `bob worklog` does not carry it forward the way it carries an escalation
+  or a block." It describes `bob worklog` not carrying the (still fully-handled)
+  item forward and contains no "first-run reconciliation" reference;
+  `grep first-run` returns nothing. The retained phrase "not an open item under
+  `references/worklog.md`'s reconciliation model" is outside the sentence in
+  scope and does not name first-run reconciliation — leaving it is consistent
+  with AC-2 and AC-3.
+- AC-3 met. Every hunk is confined to the `## Worklog entry` block, plus the
+  one `automated-notification.md` carry-forward sentence permitted by AC-2. All
+  non-worklog changes are line re-wrapping of text that is otherwise byte-for-
+  byte identical. Category matching signals, classification guidance, and
+  act-or-escalate sections are untouched in every file ("Flagging a failure
+  that needs attention", "Never escalate this message", "If the request needs
+  the owner's availability", "If the answer needs information this run doesn't
+  have", "Do not engage with the message", every "If the move/reply is blocked"
+  section). `categories/README.md` (the matching-signal / confidence rubric
+  reference) is correctly not touched.
+- AC-4 met. No `S-NNN` / `T-NNN` / `B-NNN` / `ADR-NNN` identifier in any of the
+  six files (the task Verification grep returns nothing across the whole
+  `categories/` directory, README included).
+
+Stage 2 — Quality (docs / skill content):
+
+- Each rewrite reads coherently and keeps that file's own trailing category-
+  specific Done/Left/Next guidance verbatim (routine-vs-failure follow-up split;
+  "name the reply that was sent"; the later-message-re-enters-triage and
+  escalation-path notes in `meeting-scheduling.md`; "record the filing as fully
+  handled" in the three file-only categories).
+- Prose reflowed to each file's existing ~92–95 column wrap; no trailing
+  whitespace, no over-long lines, no broken Markdown.
+- Verification block run from `the-intern/bob-skills`: forbidden-phrase grep
+  exits non-zero (no match); `bob worklog append` file count is 6. Both pass.
+- `git diff --name-only dev-agent...task/T-200-...` shows only the six files.
+- `cargo test --workspace` from `the-intern/service/` is fully green (all suites
+  pass; the single ignored test is pre-existing and unrelated) — no Rust
+  touched.
+- Commit message `docs(skills): repoint email-triage category worklog steps at
+  bob worklog append` follows the git conventions.
+
+Both stages pass. No blocking issues. Non-blocking observation only: the
+developer chose to drop the "this file does not restate the entry format itself"
+clause along with the rest of the parenthetical; the new "see
+`references/worklog.md`" pointer preserves that intent, so this is fine.
