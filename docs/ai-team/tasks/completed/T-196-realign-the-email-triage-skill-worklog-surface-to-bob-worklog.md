@@ -1,7 +1,7 @@
 ---
 id: T-196
 title: Realign the email-triage skill worklog surface to bob worklog
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-30'
