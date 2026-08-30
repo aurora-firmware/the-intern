@@ -72,22 +72,24 @@ run-ending problem.
 
 ## The loop
 
-### 1. Determine whether this is the day's first executed run, and reconcile
+### 1. Read today's carried-forward set from `bob worklog list`
 
-Follow the `worklog` skill's own logic for determining whether this is the
-day's first executed run and, if so, its `references/reconciliation.md`
-"First-run reconciliation" section to find the most recent worklog file
-with open items and carry every still-open entry forward into today's
-file — which file to walk back to, the entry format, and the generic
-carry-forward mechanics all live there; do not re-derive or restate them
-here.
+Call `bob worklog list` at the start of the run and read today's
+carried-forward set from its output. The command reconciles today's file
+before it responds — it finds the most recent prior worklog file that
+exists, carries every still-open entry forward into today's file, and
+reports the resulting carried-forward set — so this loop never decides
+whether a run is the day's first and never walks worklog files itself. The
+`worklog` skill covers when to make this call; do not re-derive or restate
+the carry-forward mechanics here.
 
-For this skill, the items carried forward are: any pending manager
-escalation (an open item left by a previous low-confidence classification)
-and any open block from the action-authorization gate. Reconciliation is
-also the point at which a carried-forward blocked action is retried — no
-other point in this loop revisits a blocked action, so carrying it forward
-without retrying it here would leave it stuck open indefinitely.
+For this skill, the items in that carried-forward set are: any pending
+manager escalation (an open item left by a previous low-confidence
+classification) and any open block from the action-authorization gate. This
+step is also the point at which a carried-forward blocked action is retried
+— no other point in this loop revisits a blocked action, so leaving it in
+the carried-forward set without retrying it here would keep it stuck open
+indefinitely.
 
 ### 2. List unseen mail
 
