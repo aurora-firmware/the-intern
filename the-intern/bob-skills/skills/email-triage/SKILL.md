@@ -38,32 +38,31 @@ rather than restating any of it here.
 Every tool call this skill, the `himalaya` skill, or the `worklog` skill
 calls for is subject to bob's action-authorization gate — not only the
 himalaya invocations. The action-authorization gate governs every pi-agent
-tool call, so the config read, the worklog reads and appends the `worklog`
-skill defines, and any on-demand `references/*.md` load are all gated the
-same way. This skill keeps that surface uniform and explicit, so one narrow
+tool call, so the config read, the `bob worklog` calls the `worklog` skill
+defines, and any on-demand `references/*.md` load are all gated the same
+way. This skill keeps that surface uniform and explicit, so one narrow
 allow-rule set can admit the whole package:
 
-- **`read`** — reference material and prior worklog contents only: any
-  `worklog/*.md` file's contents (read during reconciliation, per the
-  `worklog` skill's own `references/reconciliation.md`, via the job's own
-  `cwd`-relative path), and any `references/*.md` file — this skill's own
-  references, the `worklog` skill's own references, and the `himalaya`
-  skill's own reference file when that skill is in play.
-- **`bash`** — every himalaya CLI invocation (per the `himalaya` skill), and
-  the skill-local config read plus every worklog filesystem mutation (per
-  the `worklog` skill's own `references/entry-format.md`): loading
-  `config/email-triage.toml` from the job's own `cwd` (for example with
-  `cat`), checking whether `worklog/` or today's file exists, creating
-  either if missing, and appending each per-item entry. Keeping the config
+- **`read`** — reference material only: any `references/*.md` file — this
+  skill's own references, the `worklog` skill's own references, and the
+  `himalaya` skill's own reference file when that skill is in play. This
+  skill never reads a `worklog/*.md` file itself; `bob worklog list`
+  surfaces everything the loop needs from the diary.
+- **`bash`** — every himalaya CLI invocation (per the `himalaya` skill), the
+  skill-local config read (`config/email-triage.toml`, from the job's own
+  `cwd`), and every worklog operation: `bob worklog list` once at the start
+  of the run and `bob worklog append` once per message handled (per the
+  `worklog` skill). `bob worklog` creates the worklog directory and today's
+  file itself and stamps each entry from its own clock — this loop never
+  probes for, creates, or writes those files by hand. Keeping the config
   read and every mutation — worklog writes and himalaya calls alike — on
   the same `bash` tool, rather than also reaching for the `write`/`edit`
   tools, keeps this package's whole runtime surface behind one tool family
   for a later allow rule to admit by argument shape.
 
-If the `bash` call that reads `config/email-triage.toml`, a `read` for a
-worklog file, or a `bash` call to create or append to the worklog is itself
-denied by the action-authorization gate, that is a deployment gap in the
-admitting allow rule, not a per-message condition — there is no
+If the `bash` call that reads `config/email-triage.toml`, or a `bob worklog`
+call, is denied by the action-authorization gate, that is a deployment gap
+in the admitting allow rule, not a per-message condition — there is no
 lower-level record left to write for that run. Treat it as a run-ending
 problem for this run, the same way an unconfigured `himalaya` account is a
 run-ending problem.
