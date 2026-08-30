@@ -120,3 +120,72 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-30
+
+PASS
+
+Both review stages pass.
+
+**Stage 1 — Acceptance criteria (all met):**
+
+- AC-1 — `references/command-reference.md` gains a `## `bob worklog
+  [append|list]`` section, placed after `bob task` and before `bob serve`.
+  It documents: `append` with all four required flags (`--item`, `--done`,
+  `--left`, `--next`, non-empty, locally validated with the exact
+  `worklog entry field --<name> must not be empty` message before any
+  filesystem work); `list` with the optional `--date <YYYY-MM-DD>`;
+  cwd-strict `<cwd>/worklog/<date>.md` resolution with no upward search and
+  no override (explicit ADR-015 contrast with `bob task`'s upward `tasks/`
+  walk and `--board` / `TASKS_DIR`); automatic first-run reconciliation
+  carrying still-open items from the nearest prior file and reporting
+  today's sorted, de-duplicated carried-forward set (`carried forward:
+  <ids>` / `carried forward: (none)`, JSON key `carried_forward`);
+  reconciliation always targeting today even for `list --date <past>`;
+  `worklog/`-absent being a reconciliation no-op; `--json` on both
+  subcommands; and that the command never opens `admin.sock` or loads
+  service configuration. Cross-checked against `crates/bob/src/cli/mod.rs`,
+  `crates/bob/src/cli/commands/worklog.rs`,
+  `crates/bob/src/worklog/reconcile.rs`, `bob worklog {--help,append
+  --help,list --help}`, and ADR-015 — no misstatements found.
+- AC-2 — `SKILL.md` adds `worklog` to the body summary line
+  (`… `chat`, `worklog``), to the frontmatter `description` subcommand
+  enumeration (`… chat, and worklog subcommands`) plus a matching
+  "append to or read the daily worklog" clause, and to the Quick command
+  map (`| Append to / read the daily worklog | `bob worklog append|list`
+  |`). The blanket "All client subcommands talk to `bob serve` over the
+  admin Unix socket" claim is changed to "Most …" with an added sentence
+  naming `bob init`, `bob task`, and `bob worklog` as the filesystem-only
+  exceptions that never open `admin.sock`; the `missing admin socket`
+  troubleshooting guidance for the socket-using subcommands is preserved,
+  not deleted. The `references/command-reference.md` pointer is extended to
+  list `worklog` for accuracy.
+- AC-3 — `cd the-intern/service && cargo build -p bob` then `cd ../docs &&
+  BOB_BIN=… mdbook build` produces `book/cli-reference/worklog.html`
+  (`test -f` passes); its content is `bob worklog --help` rendered by the
+  B-044 preprocessor (`append` / `list` / `help` commands, `--json`
+  option).
+- AC-4 — `the-intern/docs/preprocessors/cli-reference/src/main.rs` is
+  untouched (`git diff dev-agent...task/T-197 -- …/main.rs` is empty; last
+  commit to that file is 380f00a, pre-dating this branch).
+
+**Stage 2 — Code quality:** Docs-only change. The new `bob worklog`
+section matches the depth and house style of the existing `bob task`
+section (level-2 heading + signature, prose paragraphs, `###` per-subcommand
+subsections with bulleted flag notes). Prose is accurate against the
+implementation and ADR-015. The diff is confined to the two in-scope files
+with no unrelated edits: `git diff --name-only dev-agent...task/T-197`
+lists only `SKILL.md` and `references/command-reference.md`, across 2
+commits. `cargo test --workspace` from `the-intern/service/` is green (788
+passed, 0 failed) — no Rust files changed.
+
+Minor, non-blocking observations:
+- `SKILL.md` body summary line is now ~91 characters after the inline
+  `` , `worklog` `` insertion, wider than the ~70-character wrap used
+  elsewhere in the file. Cosmetic only.
+- The `append`-from-the-wrong-directory phrase "a fresh empty diary" is
+  slightly loose, since `append` always writes at least its own entry; the
+  intent (a new diary at the wrong location rather than another session's)
+  is clear from context.
+
+Next owner: Development Loop.
