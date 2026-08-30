@@ -55,6 +55,11 @@ fn run_append_with_context(
     working_dir: &Path,
     out: &mut impl Write,
 ) -> ServiceResult<()> {
+    reject_empty_field("item", item)?;
+    reject_empty_field("done", done)?;
+    reject_empty_field("left", left)?;
+    reject_empty_field("next", next)?;
+
     let entry = WorklogEntry {
         item: item.to_owned(),
         done: done.to_owned(),
@@ -95,6 +100,18 @@ fn write_appended_entry(
         .map_err(|err| invalid_request_error(format!("failed to write worklog output: {err}")))
 }
 
+/// Reject an absent-in-spirit worklog entry field before any filesystem
+/// work happens. `clap` already rejects a wholly missing flag; this guards
+/// the `--field ""` and all-whitespace cases.
+fn reject_empty_field(name: &str, value: &str) -> ServiceResult<()> {
+    if value.trim().is_empty() {
+        return Err(invalid_request_error(format!(
+            "worklog entry field --{name} must not be empty"
+        )));
+    }
+    Ok(())
+}
+
 fn format_carried_forward(items: &[String]) -> String {
     if items.is_empty() {
         return "(none)".to_owned();
@@ -117,6 +134,146 @@ mod tests {
 
     fn on(date: (i32, u32, u32)) -> NaiveDate {
         NaiveDate::from_ymd_opt(date.0, date.1, date.2).expect("valid date")
+    }
+
+    fn expect_invalid_request(result: bob_core::error::ServiceResult<()>) -> String {
+        match result.expect_err("expected an invalid-request error") {
+            bob_core::error::ServiceError::InvalidRequest { detail } => detail,
+            other => panic!("expected InvalidRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn worklog_append_rejects_an_empty_item_field_before_touching_the_filesystem() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut out = Vec::new();
+
+        let detail = expect_invalid_request(run_append_with_context(
+            false,
+            "   ",
+            "did the thing",
+            "still open",
+            "the trigger",
+            at((2026, 8, 30), (9, 5)),
+            temp.path(),
+            &mut out,
+        ));
+
+        assert!(
+            detail.contains("item"),
+            "error must name the field: {detail}"
+        );
+        assert!(
+            !temp.path().join("worklog").exists(),
+            "invalid input must fail before touching the filesystem"
+        );
+        assert!(out.is_empty(), "no output on validation failure");
+    }
+
+    #[test]
+    fn worklog_append_rejects_an_empty_done_field_before_touching_the_filesystem() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut out = Vec::new();
+
+        let detail = expect_invalid_request(run_append_with_context(
+            false,
+            "vendor-invoice",
+            "",
+            "still open",
+            "the trigger",
+            at((2026, 8, 30), (9, 5)),
+            temp.path(),
+            &mut out,
+        ));
+
+        assert!(
+            detail.contains("done"),
+            "error must name the field: {detail}"
+        );
+        assert!(!temp.path().join("worklog").exists());
+    }
+
+    #[test]
+    fn worklog_append_rejects_an_empty_left_field_before_touching_the_filesystem() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut out = Vec::new();
+
+        let detail = expect_invalid_request(run_append_with_context(
+            false,
+            "vendor-invoice",
+            "did the thing",
+            "   ",
+            "the trigger",
+            at((2026, 8, 30), (9, 5)),
+            temp.path(),
+            &mut out,
+        ));
+
+        assert!(
+            detail.contains("left"),
+            "error must name the field: {detail}"
+        );
+        assert!(!temp.path().join("worklog").exists());
+    }
+
+    #[test]
+    fn worklog_append_rejects_an_empty_next_field_before_touching_the_filesystem() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut out = Vec::new();
+
+        let detail = expect_invalid_request(run_append_with_context(
+            false,
+            "vendor-invoice",
+            "did the thing",
+            "still open",
+            "",
+            at((2026, 8, 30), (9, 5)),
+            temp.path(),
+            &mut out,
+        ));
+
+        assert!(
+            detail.contains("next"),
+            "error must name the field: {detail}"
+        );
+        assert!(!temp.path().join("worklog").exists());
+    }
+
+    #[test]
+    fn worklog_append_leaves_an_existing_day_file_untouched_when_a_field_is_empty() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        WorklogStore::new(temp.path())
+            .append(
+                at((2026, 8, 30), (8, 0)),
+                &WorklogEntry {
+                    item: "existing".to_owned(),
+                    done: "earlier work".to_owned(),
+                    left: "still open".to_owned(),
+                    next: "the trigger".to_owned(),
+                },
+            )
+            .expect("seed today's file");
+        let day_path = temp.path().join("worklog").join("2026-08-30.md");
+        let before = std::fs::read_to_string(&day_path).expect("day file");
+        let mut out = Vec::new();
+
+        let detail = expect_invalid_request(run_append_with_context(
+            false,
+            "new-item",
+            "did the thing",
+            "   ",
+            "the trigger",
+            at((2026, 8, 30), (9, 5)),
+            temp.path(),
+            &mut out,
+        ));
+
+        assert!(detail.contains("left"));
+        let after = std::fs::read_to_string(&day_path).expect("day file");
+        assert_eq!(
+            before, after,
+            "the day file must be unchanged on validation failure"
+        );
     }
 
     #[test]
