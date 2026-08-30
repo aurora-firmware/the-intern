@@ -141,3 +141,94 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-30
+PASS
+
+Both review stages pass.
+
+**Stage 1 — Acceptance criteria (all met and tested):**
+
+- AC-1 (append creates `worklog/` + dated file, Unix `0700`/`0600`; pre-existing
+  permissive dir left unchanged with a warning, not a failure): met.
+  `store.rs` `ensure_worklog_dir` → `create_dir_owner_only`
+  (`DirBuilder::mode(0o700)`); `append_block_to_file` → `create_file_owner_only`
+  (`OpenOptions::create_new().mode(0o600)`); `permissive_dir_warning` returns a
+  warning string and append still writes. Covered by
+  `append_creates_worklog_directory_and_dated_file_with_entry_in_contract_shape`,
+  `append_gives_a_newly_created_worklog_dir_and_file_owner_only_modes`,
+  `append_leaves_a_more_permissive_worklog_dir_unchanged_and_warns_without_failing`.
+- AC-2 (entry written as `## <HH:MM> — <item>` + blank line + `- Done:`/`- Left:`/
+  `- Next:`, date and time from the injected source): met. `render_entry_block`
+  produces the exact shape; `now: NaiveDateTime` parameter is the injected source
+  (`now.format("%Y-%m-%d")` filename, `now.format("%H:%M")` header), mirroring the
+  `today: NaiveDate` injection in `cli/commands/task.rs`. Exact-bytes assertion in
+  `append_creates_worklog_directory_and_dated_file_with_entry_in_contract_shape`.
+- AC-3 (read of a directory with no `worklog/` errors, names the path, does not
+  create it): met. `read_day` → `require_worklog_dir` returns
+  `ServiceError::Persistence` naming `<cwd>/worklog/` and never creates it.
+  Covered by `read_day_errors_naming_the_worklog_path_when_the_directory_is_absent`
+  and `read_day_does_not_create_the_worklog_directory`.
+- AC-4 (entries returned ordered by `HH:MM`, ties by file order): met.
+  `order_entries` uses a stable `sort_by` on the zero-padded `recorded_time`
+  string. Covered by `read_day_orders_entries_by_recorded_time_not_physical_file_position`
+  and `read_day_breaks_recorded_time_ties_by_physical_file_order`.
+- AC-5 (item closed iff its most recent entry's `Left`, after case-fold,
+  whitespace-trim, and removing at most one trailing period, equals `nothing`):
+  met. `item_open_state` reverse-finds the latest entry for the item;
+  `left_field_marks_closed` does `trim()` → `strip_suffix('.')` (once) →
+  `eq_ignore_ascii_case("nothing")`. Covered by
+  `item_open_state_classifies_nothing_sentinel_variants_as_closed`,
+  `..._classifies_a_substantive_left_value_as_open`,
+  `..._uses_the_items_most_recent_entry`, `..._is_none_when_the_item_has_no_entry`,
+  `..._only_strips_one_trailing_period_from_left`.
+
+Resolution is cwd-strict per ADR-015: `WorklogStore::new` is
+`working_dir.join("worklog")` and nothing else — no upward search, no
+`explicit_override`/`env_override` params, no env-var or config read. This is the
+intended deliberate divergence from `task_board::board::resolve_board_path`,
+documented in `worklog/mod.rs` and `worklog/store.rs`. Files changed are exactly
+the three in "Files to Touch" (`worklog/mod.rs`, `worklog/store.rs`, one line in
+`lib.rs`); no reconciliation or CLI code was added. `AppendOutcome.warnings` and
+`item_open_state -> Option<bool>` are library-surface choices the task
+anticipates for T-191/T-193, not unspecified feature work.
+
+**Stage 2 — Code quality: pass.**
+
+- Correctness: append/read/parse/order/open-test logic handles the expected
+  inputs and the edge cases (empty file, missing day file vs missing dir,
+  hand-authored stray lines ignored, blank-line separator computed for append,
+  double trailing period). Structure mirrors `task_board` (`#[cfg(test)] mod
+  tests` in-file, `#[cfg(unix)]`/`#[cfg(not(unix))]` pairs, `ServiceError`
+  variants, `tempfile` in tests).
+- Tests: 14 in-file unit tests, success and failure paths, each isolated in its
+  own `tempfile::tempdir()`, no shared mutable state.
+- Security: no secrets; only filesystem paths as input; created artifacts are
+  owner-only per S-015 Filesystem protection.
+- Readability: focused, well-named helpers; doc comments cite ADR-015; no dead
+  code or commented-out blocks.
+- Performance: append adds bytes via `OpenOptions::append` rather than
+  rewriting; no leaks or blocking hot loops. File-locking is out of scope
+  (S-015 Exclusions, ADR-008 single-operator scope).
+
+**Verification run (reviewer, on `task/T-190-...`):**
+
+- `cd the-intern/service && cargo test -p bob worklog::store` → 14 passed, 0 failed.
+- `cargo fmt --all -- --check` → clean (exit 0).
+- `cargo test --workspace` → green, all suites `ok`, 0 failed.
+- Pre-existing `bob` clippy debt was not treated as a gate, per CLAUDE.md.
+
+**Non-blocking observations (no fix required for this verdict):**
+
+1. `crates/bob/src/worklog/store.rs` `left_field_marks_closed`: the spec phrase
+   "trimming surrounding whitespace and at most one trailing period" is
+   implemented as trim-then-strip-one-period with no re-trim, so a value like
+   `"nothing ."` (space before the period) classifies as open. All sentinel
+   examples the spec and AC-5 name (`nothing`, `Nothing`, `Nothing.`,
+   `  nothing  `) are handled correctly and tested; the space-before-period
+   form is not a case the Contract calls out.
+2. Commit `70fce93` uses type `refactor`, which is outside the
+   `feat|fix|test|docs|chore` set in the `git-conventions` skill and
+   `CLAUDE.md`. The commit is already pushed so it cannot be cleanly reworded;
+   flagging for future commits. The Work Log also says "seven commits" while the
+   branch carries eight.
