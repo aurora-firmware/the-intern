@@ -8,22 +8,56 @@
 use std::{env, io, io::Write, path::Path};
 
 use bob_core::error::ServiceResult;
-use chrono::{Local, NaiveDateTime};
+use chrono::{Local, NaiveDate, NaiveDateTime};
 use serde::Serialize;
 use serde_json::json;
 
 use crate::worklog::{
     reconcile::reconcile_today,
-    store::{WorklogEntry, WorklogStore},
+    store::{RecordedEntry, WorklogEntry, WorklogStore},
 };
 
 use super::{invalid_request_error, write_json_line};
+
+/// Date format shared by worklog file names and the `--date` flag.
+const FILE_DATE_FORMAT: &str = "%Y-%m-%d";
 
 #[derive(Debug, Serialize)]
 struct AppendedEntryOutput {
     item: String,
     path: String,
     carried_forward: Vec<String>,
+}
+
+/// A single day's worklog, as `bob worklog list` renders it in text or JSON.
+#[derive(Debug, Serialize)]
+struct WorklogDayOutput {
+    date: String,
+    entries: Vec<WorklogEntryOutput>,
+    /// Today's full carried-forward item-identifier set, always today's and
+    /// independent of which invocation performed the carry-forward write.
+    carried_forward: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorklogEntryOutput {
+    time: String,
+    item: String,
+    done: String,
+    left: String,
+    next: String,
+}
+
+impl From<&RecordedEntry> for WorklogEntryOutput {
+    fn from(entry: &RecordedEntry) -> Self {
+        Self {
+            time: entry.recorded_time.clone(),
+            item: entry.item.clone(),
+            done: entry.done.clone(),
+            left: entry.left.clone(),
+            next: entry.next.clone(),
+        }
+    }
 }
 
 pub(super) fn run_append(
@@ -102,20 +136,65 @@ pub(super) fn run_list(json_output: bool, date: Option<&str>) -> ServiceResult<(
 
 fn run_list_with_context(
     _json_output: bool,
-    _date: Option<&str>,
+    date: Option<&str>,
     now: NaiveDateTime,
     working_dir: &Path,
-    _out: &mut impl Write,
+    out: &mut impl Write,
 ) -> ServiceResult<()> {
-    // Reconciliation runs first, unconditionally, against today's file
-    // (S-015 Design Principles). When `worklog/` is absent it is a no-op
-    // and creates nothing.
-    reconcile_today(working_dir, now)?;
+    let target_date = match date {
+        Some(raw) => parse_target_date(raw)?,
+        None => now.date(),
+    };
+
+    // Reconciliation runs first, unconditionally, against TODAY'S file
+    // (S-015 Design Principles: "every entry point that touches today's
+    // file performs reconciliation first, unconditionally"), regardless of
+    // `--date`. It never writes to a past-dated file, and when `worklog/`
+    // is absent it is a no-op that creates nothing. The returned set is
+    // today's full carried-forward item-identifier set.
+    let carried_forward = reconcile_today(working_dir, now)?;
 
     // `read_day` fails, naming `<cwd>/worklog/`, when that directory does
-    // not exist, and never creates it (ADR-015).
-    let _entries = WorklogStore::new(working_dir).read_day(now.date())?;
+    // not exist, and never creates it (ADR-015). A past-dated file is read
+    // exactly as it is on disk.
+    let entries = WorklogStore::new(working_dir).read_day(target_date)?;
 
+    write_worklog_day(
+        out,
+        WorklogDayOutput {
+            date: target_date.format(FILE_DATE_FORMAT).to_string(),
+            entries: entries.iter().map(WorklogEntryOutput::from).collect(),
+            carried_forward,
+        },
+    )
+}
+
+/// Parse a `--date` value, which must be an ISO `YYYY-MM-DD` calendar date.
+fn parse_target_date(raw: &str) -> ServiceResult<NaiveDate> {
+    NaiveDate::parse_from_str(raw, FILE_DATE_FORMAT).map_err(|err| {
+        invalid_request_error(format!(
+            "worklog list --date must be a YYYY-MM-DD date: {err}"
+        ))
+    })
+}
+
+fn write_worklog_day(out: &mut impl Write, day: WorklogDayOutput) -> ServiceResult<()> {
+    write_worklog_day_text(out, &day)
+        .map_err(|err| invalid_request_error(format!("failed to write worklog output: {err}")))
+}
+
+fn write_worklog_day_text(out: &mut impl Write, day: &WorklogDayOutput) -> io::Result<()> {
+    writeln!(out, "worklog for {}", day.date)?;
+    if day.entries.is_empty() {
+        writeln!(out, "(no entries)")?;
+    }
+    for entry in &day.entries {
+        writeln!(out)?;
+        writeln!(out, "## {} — {}", entry.time, entry.item)?;
+        writeln!(out, "- Done: {}", entry.done)?;
+        writeln!(out, "- Left: {}", entry.left)?;
+        writeln!(out, "- Next: {}", entry.next)?;
+    }
     Ok(())
 }
 
@@ -500,6 +579,56 @@ mod tests {
         assert!(
             text.contains("carried forward: (none)"),
             "an empty set is still reported explicitly: {text}"
+        );
+    }
+
+    #[test]
+    fn worklog_list_reconciles_todays_file_first_and_reads_a_past_date_as_is() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        // A prior day's file holding one still-open item.
+        WorklogStore::new(temp.path())
+            .append(
+                at((2026, 8, 28), (9, 0)),
+                &WorklogEntry {
+                    item: "vendor-invoice".to_owned(),
+                    done: "Chased the vendor for the missing PDF.".to_owned(),
+                    left: "awaiting the corrected invoice".to_owned(),
+                    next: "closes when the corrected invoice arrives".to_owned(),
+                },
+            )
+            .expect("seed prior day");
+        let past_path = temp.path().join("worklog").join("2026-08-28.md");
+        let past_before = std::fs::read_to_string(&past_path).expect("past day file");
+        let mut out = Vec::new();
+
+        run_list_with_context(
+            false,
+            Some("2026-08-28"),
+            at((2026, 8, 30), (8, 15)),
+            temp.path(),
+            &mut out,
+        )
+        .expect("list should succeed");
+
+        // The past-dated file is rendered as-is and never written to.
+        let past_after = std::fs::read_to_string(&past_path).expect("past day file");
+        assert_eq!(
+            past_before, past_after,
+            "a past target date must be read as-is, never reconciled or rewritten"
+        );
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(
+            text.contains("2026-08-28") && text.contains("vendor-invoice"),
+            "the output must render the requested past day's entries: {text}"
+        );
+
+        // Reconciliation still ran against TODAY'S file (2026-08-30),
+        // carrying the open prior item forward into it.
+        let today = std::fs::read_to_string(temp.path().join("worklog").join("2026-08-30.md"))
+            .expect("reconciliation must create and populate today's file");
+        assert!(
+            today.contains("Carried forward from 2026-08-28.md"),
+            "reconciliation against today's file must run before output: {today}"
         );
     }
 
