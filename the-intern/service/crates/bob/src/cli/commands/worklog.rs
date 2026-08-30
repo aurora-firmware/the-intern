@@ -103,10 +103,19 @@ pub(super) fn run_list(json_output: bool, date: Option<&str>) -> ServiceResult<(
 fn run_list_with_context(
     _json_output: bool,
     _date: Option<&str>,
-    _now: NaiveDateTime,
-    _working_dir: &Path,
+    now: NaiveDateTime,
+    working_dir: &Path,
     _out: &mut impl Write,
 ) -> ServiceResult<()> {
+    // Reconciliation runs first, unconditionally, against today's file
+    // (S-015 Design Principles). When `worklog/` is absent it is a no-op
+    // and creates nothing.
+    reconcile_today(working_dir, now)?;
+
+    // `read_day` fails, naming `<cwd>/worklog/`, when that directory does
+    // not exist, and never creates it (ADR-015).
+    let _entries = WorklogStore::new(working_dir).read_day(now.date())?;
+
     Ok(())
 }
 
@@ -155,7 +164,7 @@ mod tests {
     use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
     use serde_json::Value;
 
-    use super::run_append_with_context;
+    use super::{run_append_with_context, run_list_with_context};
     use crate::worklog::store::{WorklogEntry, WorklogStore};
 
     fn at(date: (i32, u32, u32), time: (u32, u32)) -> NaiveDateTime {
@@ -172,6 +181,13 @@ mod tests {
         match result.expect_err("expected an invalid-request error") {
             bob_core::error::ServiceError::InvalidRequest { detail } => detail,
             other => panic!("expected InvalidRequest, got {other:?}"),
+        }
+    }
+
+    fn expect_persistence_error(result: bob_core::error::ServiceResult<()>) -> String {
+        match result.expect_err("expected a persistence error") {
+            bob_core::error::ServiceError::Persistence { detail } => detail,
+            other => panic!("expected Persistence, got {other:?}"),
         }
     }
 
@@ -484,6 +500,34 @@ mod tests {
         assert!(
             text.contains("carried forward: (none)"),
             "an empty set is still reported explicitly: {text}"
+        );
+    }
+
+    #[test]
+    fn worklog_list_errors_naming_the_worklog_directory_when_it_is_absent() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut out = Vec::new();
+
+        let detail = expect_persistence_error(run_list_with_context(
+            false,
+            None,
+            at((2026, 8, 30), (9, 0)),
+            temp.path(),
+            &mut out,
+        ));
+
+        let expected_dir = temp.path().join("worklog");
+        assert!(
+            detail.contains(&expected_dir.display().to_string()),
+            "the error must name the worklog directory it looked for: {detail}"
+        );
+        assert!(
+            !expected_dir.exists(),
+            "list must not create the worklog directory"
+        );
+        assert!(
+            out.is_empty(),
+            "no output is written when the worklog directory is absent"
         );
     }
 }
