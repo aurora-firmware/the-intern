@@ -227,6 +227,18 @@ mod tests {
     use super::{WorklogEntry, WorklogStore};
     use chrono::{NaiveDate, NaiveTime};
 
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    #[cfg(unix)]
+    fn mode_of(path: &std::path::Path) -> u32 {
+        std::fs::metadata(path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
     fn at(date: (i32, u32, u32), time: (u32, u32)) -> chrono::NaiveDateTime {
         NaiveDate::from_ymd_opt(date.0, date.1, date.2)
             .expect("valid date")
@@ -271,5 +283,20 @@ mod tests {
                 "\n",
             )
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn append_gives_a_newly_created_worklog_dir_and_file_owner_only_modes() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+
+        let outcome = store
+            .append(at((2026, 8, 30), (9, 5)), &sample_entry("vendor-invoice"))
+            .expect("append should succeed");
+
+        let worklog_dir = temp.path().join("worklog");
+        assert_eq!(mode_of(&worklog_dir), 0o700, "new worklog dir must be 0700");
+        assert_eq!(mode_of(&outcome.path), 0o600, "new day file must be 0600");
     }
 }
