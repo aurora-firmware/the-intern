@@ -104,6 +104,28 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-30
+
+Implemented `bob worklog list` end to end across the four files named in the task, TDD with one commit per cycle.
+
+**Cycle 1 — grammar + dispatch (AC-1).** Added a `List { #[arg(long)] date: Option<String> }` variant to `WorklogCommand` in `cli/mod.rs` with two parse tests (`worklog_list_parses_without_a_date_flag`, `worklog_list_parses_the_optional_date_flag`). Wired dispatch in `lib.rs`: new `DispatchRuntime::worklog_list(&self, json, date: Option<&str>)`, `ProductionRuntime` delegates to `cli::commands::worklog_list`, test `FakeRuntime` records `"worklog_list"`, and `WorklogCommand::List { date } => runtime.worklog_list(json, date.as_deref())` added to the existing `Command::Worklog` early-return block (before `load_config()`); the `unreachable!("filesystem-only commands return before config loading")` arm already covers `Command::Worklog { .. }`. Two `lib.rs` dispatch tests (with and without `--date`) assert the runtime call log is exactly `["worklog_list"]` — no `load`, no `telemetry`, no admin socket. Added the thin `worklog_list` wrapper to `cli/commands.rs` and a `run_list` / `run_list_with_context` split to `cli/commands/worklog.rs` mirroring `run_append`, injecting `now` via `Local::now().naive_local()` and taking `working_dir: &Path` + `out: &mut impl Write` for tests.
+
+**Cycle 2 — missing worklog directory (AC-2).** `run_list_with_context` calls `reconcile_today(working_dir, now)?` (a no-op returning an empty set and creating nothing when `worklog/` is absent — verified by T-191's own tests) then `WorklogStore::new(working_dir).read_day(target_date)?`, whose `require_worklog_dir` fails with `ServiceError::Persistence` naming `<cwd>/worklog/` and never creates it. `main.rs` already maps any `Err` to exit 1. Test asserts the detail names the directory, the directory does not exist afterward, and nothing was written to `out`.
+
+**Cycle 3 — target date + reconcile-first + past file as-is (AC-3).** Added `parse_target_date` (`NaiveDate::parse_from_str(raw, "%Y-%m-%d")`, mapped to `InvalidRequest` on failure); target date is `--date` if given else `now.date()`. Reconciliation runs unconditionally against **today's** file (keyed on `now`, not the target date) before any output. Introduced `WorklogDayOutput { date, entries, carried_forward }` + `WorklogEntryOutput` (`From<&RecordedEntry>`), and text rendering (`worklog for <date>`, then each entry as `## HH:MM — item` / `- Done/Left/Next`). Test seeds an open prior-day item, lists `--date <past>` with `now` a later day, and asserts: the past file is byte-identical before/after, the output renders the past day's entries, and today's file was created with the `Carried forward from …` marker (reconciliation ran, and ran against today).
+
+**Cycle 4 — HH:MM ordering (AC-4).** Added `worklog_list_renders_entries_ordered_by_time_not_write_order` (seed times 14:00, 08:30, 11:15 in that write order; assert rendered positions early < midday < afternoon). This passed on first run: T-190's `WorklogStore::read_day` already returns entries sorted by `recorded_time` (stable, file-order ties) and the renderer iterates that slice without re-sorting. Kept as a regression guard at the `list` layer; committed as a `test(bob)` change.
+
+**Cycle 5 — output forms + carried set (AC-5).** `write_worklog_day` now takes `json_output` and early-returns `write_json_line(out, &json!(day))` for `--json`; the text form gained a trailing `carried forward: <comma-joined | (none)>` line reusing T-192's `format_carried_forward`. `carried_forward` is always today's full set from `reconcile_today`, regardless of `--date` or which invocation performed the carry-forward write. Three tests: text reports the carried item; JSON is an object with `date`, a non-empty `entries` array, and `carried_forward == ["vendor-invoice"]`; and the empty case reports `carried forward: (none)` / `[]`.
+
+**Extra coverage.** Added `worklog_list_rejects_a_malformed_date_flag_before_touching_the_filesystem` for the `--date` parse-failure path I introduced (asserts the error names `YYYY-MM-DD`, no `worklog/` created, no output).
+
+**Tried and rejected.** An early attempt at the AC-5 parity test used a `for out in [&mut text_out, &mut json_out]` loop with a `std::ptr::eq` hack to pick the JSON branch — replaced with two straightforward single-purpose tests sharing a `seed_prior_open_vendor_invoice` helper. Considered folding the carried-forward line into cycle 3's text output; kept it in cycle 5 so each cycle maps to one AC. Considered `--date "2026-8-1"` as the malformed-date fixture; chrono's parser accepts unpadded fields, so switched to `"30 August 2026"`.
+
+**Verification.** `cargo build -p bob` clean; `cargo test -p bob worklog` → 53 passed; `cargo fmt --all -- --check` clean; `cargo test --workspace` → 783 passed / 0 failed / 1 ignored (no sandbox UDS failures this run); `cargo doc -p bob --no-deps` clean; `cargo clippy -p bob --lib` introduces no warnings citing the touched files.
+
+**What remains.** Nothing for this task. `cli/commands/worklog.rs` is now 857 lines (≈255 production, ≈600 tests) — consistent with the in-file `#[cfg(test)]` pattern the crate already uses (`task.rs`, and `worklog.rs` itself pre-T-193); splitting was not in scope. The non-blocking observation from T-192's review still stands: `WorklogStore::append`'s permissive-directory `warnings` are still discarded by both `run_append` and `run_list`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
