@@ -128,3 +128,76 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-30
+
+PASS
+
+Both review stages pass.
+
+**Stage 1 — acceptance criteria (all five met):**
+
+- **AC-1** — `run_cli_with_runtime` (`lib.rs`) handles `Command::Worklog` in an
+  early-return `if let` block placed **before** `runtime.load_config()` /
+  `runtime.init_telemetry()`, mirroring the `Command::Init` / `Command::Task`
+  blocks, and `Command::Worklog { .. }` is added to the
+  `unreachable!("filesystem-only commands return before config loading")` arm.
+  The handler (`cli/commands/worklog.rs`) touches only `env::current_dir()`,
+  `WorklogStore`, `reconcile_today`, and stdout — no `AdminClient`, no config.
+  `lib.rs` test `worklog_append_dispatch_bypasses_config_and_telemetry_loading`
+  asserts the runtime call log is exactly `["worklog_append"]`.
+- **AC-2** — clap marks all four `--item/--done/--left/--next` as required
+  `String` args (missing-flag → clap error naming the flag, non-zero exit);
+  `reject_empty_field` runs for all four as the first statements of
+  `run_append_with_context`, before `reconcile_today` / `WorklogStore::append`,
+  returning `ServiceError::InvalidRequest { detail: "worklog entry field
+  --<name> must not be empty" }`, which `main.rs` renders to stderr and maps to
+  exit 1. Tests cover each empty field and prove no `worklog/` dir is created
+  and a pre-seeded day file is byte-for-byte unchanged on validation failure.
+- **AC-3** — `let carried_forward = reconcile_today(working_dir, now)?;`
+  precedes the `WorklogStore::new(working_dir).append(now, &entry)?` call. Test
+  `worklog_append_runs_reconciliation_before_writing_its_own_entry` seeds a
+  prior-day open item and asserts the `Carried forward from 2026-08-29.md`
+  marker lands at a byte offset earlier than the handler's own `Done` text.
+- **AC-4** — success prints `recorded worklog entry: <item>` / `path: <path>` /
+  `carried forward: <comma-joined | (none)>` by default, and with `--json`
+  emits the `AppendedEntryOutput { item, path, carried_forward }` object on one
+  line via `write_json_line`. Both forms carry the full carried-forward set
+  returned by `reconcile_today` (not just this call's writes). Tests assert the
+  carried identifier in both forms and explicit empty-set reporting
+  (`carried forward: (none)` / `[]`).
+- **AC-5** — `"worklog"` is added to the subcommand list asserted by
+  `cli/mod.rs` test `help_lists_global_json_flag_and_all_subcommands`.
+
+Scope is exactly the four files named in "Files to Touch"; no unexpected files
+or unspecified behaviour. The `run_*` / `run_*_with_context` split, injected
+`now`/`working_dir`/`out`, and `env::current_dir()` error mapping all follow the
+established `cli/commands/task.rs` pattern.
+
+**Stage 2 — code quality:** Correctness, tests (success + failure paths, each
+with its own `tempdir`, independent), security (input validated, paths strictly
+scoped to `<cwd>/worklog/` by the store per ADR-015, no secrets), readability
+(focused functions, descriptive names, doc comments, no dead code), and
+performance all pass.
+
+**Verification (task branch `task/T-192-...`):**
+`cargo build -p bob` clean; `cargo test -p bob worklog` → 42 passed;
+`cargo fmt --all -- --check` clean; `cargo test --workspace` → all suites green
+(no sandbox UDS failures this run). Pre-existing `bob` clippy debt not assessed
+per CLAUDE.md.
+
+**Minor observations (non-blocking, not in scope of the five ACs):**
+
+1. `WorklogStore::append` returns `AppendOutcome { path, warnings }`; the
+   handler uses `path` and discards `warnings`, so a pre-existing
+   over-permissive `worklog/` directory (S-015 "Filesystem protection" —
+   "a warning is the appropriate response") produces no user-visible notice.
+   T-190's own AC is still satisfied at the store layer. Worth surfacing in a
+   follow-up (e.g. alongside T-193) rather than blocking here.
+2. Two modules are now named `worklog` — `crate::worklog` (store + reconcile)
+   and `crate::cli::commands::worklog` (CLI handler). This mirrors the
+   `task_board` / `task` split but with an identical leaf name; imports use
+   fully-qualified paths so there is no ambiguity.
+3. The thin `run_append` wrapper (`env::current_dir()` + `Local::now()`) has no
+   direct unit test, consistent with how `task.rs` leaves its `run_*` wrappers
+   untested and covers `run_*_with_context` instead.
