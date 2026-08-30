@@ -35,10 +35,8 @@ response.
 
 ## Worklog entry
 
-Append one entry to today's worklog file in the format `references/worklog.md` defines
-(creating `worklog/` and today's file first if either is missing, per that reference; this
-file does not restate the entry format itself). Record the filing as fully handled: nothing
-is left outstanding and nothing further happens for this message.
+Append one entry with `bob worklog append` (see `references/worklog.md`). Record the filing
+as fully handled: nothing is left outstanding and nothing further happens for this message.
 
 ## If the move is blocked
 
