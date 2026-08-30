@@ -1,7 +1,7 @@
 ---
 id: T-190
 title: Add the worklog entry file store
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-30'
