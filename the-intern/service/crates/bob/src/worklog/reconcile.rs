@@ -366,4 +366,39 @@ mod tests {
 
         assert_eq!(carried, vec!["real-prior-item".to_owned()]);
     }
+
+    #[test]
+    fn a_second_run_the_same_day_leaves_todays_file_unchanged() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        seed(
+            &store,
+            at((2026, 8, 29), (9, 0)),
+            &entry(
+                "vendor-invoice",
+                "Chased the vendor.",
+                "awaiting the corrected invoice",
+                "closes when the corrected invoice arrives",
+            ),
+        );
+        let today_path = temp.path().join("worklog").join("2026-08-30.md");
+
+        reconcile_today(temp.path(), at((2026, 8, 30), (8, 15))).expect("first run");
+        let after_first = std::fs::read_to_string(&today_path).expect("today file after first run");
+
+        let carried =
+            reconcile_today(temp.path(), at((2026, 8, 30), (11, 45))).expect("second run");
+        let after_second =
+            std::fs::read_to_string(&today_path).expect("today file after second run");
+
+        assert_eq!(
+            after_first, after_second,
+            "a repeat run must not append a second carried-forward entry"
+        );
+        assert_eq!(
+            carried,
+            vec!["vendor-invoice".to_owned()],
+            "the second run still reports the carried-forward item"
+        );
+    }
 }
