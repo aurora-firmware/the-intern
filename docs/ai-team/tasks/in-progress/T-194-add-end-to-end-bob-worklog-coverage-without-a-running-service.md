@@ -121,3 +121,69 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-30
+
+PASS
+
+**Stage 1 — Acceptance criteria: all five met.**
+
+Only `the-intern/service/crates/bob/tests/non_serve.rs` changed (test-only,
++350 lines, 1 commit). No production code, no `Cargo.toml`. Each AC has a
+dedicated test that drives the real `bob` binary with no `bob serve` running,
+using the existing `bob_command_with_temp_state` helper and a per-test
+`tempfile::tempdir()` `workspace/` set with `.current_dir(...)`.
+
+- AC-1 `worklog_append_creates_todays_file_without_a_worklog_dir_or_admin_socket`
+  — fresh temp dir, no `worklog/`, no socket; asserts exit 0, parses the
+  `path:` line, checks the parent is `<cwd>/worklog/`, checks the `<YYYY-MM-DD>.md`
+  name shape, and reads all four entry fields back off disk. Asserts content,
+  not just the exit code.
+- AC-2 `worklog_list_reads_back_an_entry_a_prior_invocation_appended` — a
+  separate `append` process then a separate `list` process in the same dir;
+  asserts exit 0 and every field value in stdout. Genuine cross-process read.
+- AC-3 `worklog_list_exits_non_zero_and_names_the_missing_worklog_directory` —
+  asserts exit 1, stderr contains the full `<cwd>/worklog` path (matches
+  `require_worklog_dir`'s "worklog directory {} does not exist"), and the dir
+  was not created.
+- AC-4 `worklog_list_carries_a_prior_day_open_item_forward_and_reports_it` —
+  hand-writes `worklog/2000-01-01.md` in Contract shape with `Left` != nothing;
+  asserts both halves of the AC: the rendered `- Done: Carried forward from
+  2000-01-01.md` entry line AND the `carried forward: vendor-invoice` summary
+  line.
+- AC-5 `worklog_append_twice_the_same_day_keeps_exactly_one_carried_forward_entry`
+  — two separate `append` invocations after a carry-forward; reads today's file
+  from the first append's recorded path and asserts exactly one "Carried
+  forward from 2000-01-01.md" marker and exactly one "— vendor-invoice" header,
+  plus both own entries still present. Exercises cross-invocation idempotency
+  that the in-process `reconcile.rs` unit test cannot.
+
+**Stage 2 — Code quality: pass.**
+
+- Follows the existing `bob task` non_serve pattern (shared helper, per-test
+  tempdir, `env!("CARGO_BIN_EXE_bob")`, UTF-8 stdout/stderr decode).
+- Deterministic / not clock-flaky: AC-1..AC-3 are date-independent; AC-4/AC-5
+  use a fixed far-past `2000-01-01` prior-day file that the reconciler always
+  selects as the nearest prior existing file regardless of the binary's clock;
+  AC-5 resolves today's file from the recorded `path:` line, robust to a
+  midnight rollover. No `sleep`, no wall-clock assertions.
+- Tests are independent (own tempdir, no shared mutable state), cover the
+  failure path (AC-3), and assert observable behaviour (file content on disk,
+  stdout/stderr text) rather than exit codes alone.
+- Import change (`PathBuf`) is minimal and used. Helpers `parse_recorded_path`,
+  `is_iso_dated_markdown_name`, `write_prior_day_open_item` are documented and
+  focused. No dead code.
+
+**Verification re-run on the branch:**
+- `cargo test -p bob --test non_serve` → 10 passed, 0 failed (5 new).
+- `cargo fmt --all -- --check` → clean.
+- `cargo test --workspace` → all green; 0 failures; the single ignored test is
+  the pre-existing, unrelated `serve.rs` B-028 case.
+- `cargo clippy` not run — not a clean gate for the `bob` crate per CLAUDE.md.
+
+**Minor, non-blocking:**
+- `parse_recorded_path` is coupled to the text (non-JSON) append output; fine
+  for these tests since they never pass `--json`.
+- `is_iso_dated_markdown_name` checks digit/dash shape only, not month/day
+  ranges; acceptable, as the binary owns the real date and this is only a
+  shape guard.
