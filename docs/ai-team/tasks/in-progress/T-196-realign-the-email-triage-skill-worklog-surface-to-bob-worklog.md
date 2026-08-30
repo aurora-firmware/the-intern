@@ -140,6 +140,20 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-30
+
+Pointed every worklog-related surface of the `email-triage` skill at the `bob worklog` command that T-190..T-193 introduced, following the Verification block's grep assertions as the red/green gate and committing one cycle per surface.
+
+SKILL.md changes: the frontmatter `description` and the intro delegation list no longer claim the `worklog` skill owns "first-run detection, and reconciliation" — they now attribute where-the-file-lives, creation, entry format, and carry-forward to the `bob worklog` command, and keep the `worklog` skill only for "when a run journals and the item-identifier convention". The four-step run summary's opening step and the numbered "### 1." step were rewritten from "Determine whether this is the day's first executed run, and reconcile" to "Read today's carried-forward set from `bob worklog list`", with an explicit statement that the loop never decides first-run and never walks worklog files itself (the command reconciles before it responds). The dangling cross-reference to the `worklog` skill's `references/reconciliation.md` "First-run reconciliation" section is gone. The Tool usage section was reduced: `read` is now "reference material only" plus an explicit "never reads a `worklog/*.md` file itself"; the `bash` bullet drops the `cat`/`test`/`mkdir`/append worklog choreography (and the `references/entry-format.md` append-command cross-ref) in favour of `bob worklog list` once per run and `bob worklog append` once per message, noting the command creates the directory and today's file itself. Step 3's blocked-action `Next` and blocked-escalation-send `Next`, and step 4's write instruction and its blocked-outcome `Next`, all now name "the carried-forward set `bob worklog list` reports at the start of a run" as the retry trigger instead of "the next first-run reconciliation"; step 4's write instruction is a single `bob worklog append` call.
+
+references/worklog.md: the intro delegation text drops "how to tell whether a run is the day's first executed run" and "how first-run reconciliation carries forward open items", and now describes `bob worklog` reconciling on every call with `bob worklog list` reporting today's carried-forward set. In "How an open item closes, for email triage" the framing sentences were realigned to `bob worklog` carry-forward on every run, and "This skill's own loop step 1 is the point at which a carried-forward blocked action is retried" became "The carried-forward set `bob worklog list` reports at the start of a run is the point...". The item-identifier section and the two email-specific open/close causes (escalation closes on the manager's reply; a gate denial closes once an admitting allow rule exists) were left verbatim.
+
+references/escalation.md: the ~L114 sentence "carried forward at each day's first-run reconciliation" became "carried forward by `bob worklog` on every run".
+
+Tried and rejected: keeping a named reference to `references/entry-format.md` in SKILL.md step 4 for field semantics — dropped the filename entirely to stay clear of AC-1's "no `entry-format.md` append-command section" bar, pointing at the `worklog` skill generally instead. Also considered stripping the `cat config/email-triage.toml` example from step 3 for token-consistency, but that is the `manager_address` config read on the escalation path, which S-015 excludes from change and this task's scope does not cover; only the Tool usage section's worklog-specific `cat`/`test`/`mkdir` calls were removed.
+
+Verification: the negative grep is clean and all three files contain `bob worklog`. `cargo test --workspace` from `the-intern/service/` is green (0 failed, 1 ignored); no Rust files were touched. Remaining for the spec's Component 4 rollout but out of this task: the `.pi/skills/...` package mirror regeneration (T-199) and the six `references/categories/*.md` files (T-200).
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
