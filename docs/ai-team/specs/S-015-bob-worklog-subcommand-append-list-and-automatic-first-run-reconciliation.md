@@ -2,7 +2,7 @@
 title: bob worklog subcommand — append, list, and automatic first-run 
   reconciliation
 version: '0.4'
-status: review  # draft | review | approved | superseded
+status: approved  # draft | review | approved | superseded
 created: '2026-08-26'
 author: planner
 id: S-015
@@ -56,8 +56,8 @@ What this specification explicitly does NOT cover:
   worklog storage out of the working directory"). Because
   this sets a resolution convention a future filesystem-only subcommand
   might otherwise assume applies universally, the divergence is recorded as
-  its own ADR at Gate 1 approval rather than left as an unexplained spec
-  bullet.
+  its own decision, `ADR-015`, accepted at this spec's Gate 1 approval,
+  rather than left as an unexplained spec bullet.
 - **Keeping the existing raw-shell append/reconciliation prose as a
   documented fallback.** Rejected: the mechanics are fully replaced by the
   command, matching how `bob task` (S-014) replaced its own hand-written
@@ -108,7 +108,8 @@ What this specification explicitly does NOT cover:
 - **A session's worklog must depend only on its own working directory.**
   The command must never search outward for one; two sessions with
   different working directories must never be able to see or extend the
-  same diary. This is this specification's own decision (see Exclusions).
+  same diary. This is this specification's own decision (see Exclusions;
+  recorded as `ADR-015`).
 - **A missing `worklog/` directory must never be silently invented by a
   read.** `list` fails, naming the directory it looked for, rather than
   reporting an empty day and concealing a wrong working directory — the same
@@ -312,26 +313,36 @@ preprocessor's hardcoded subcommand list omitted `bob task`) and its
 companion `B-042` (the `bob-companion` plugin's CLI reference had the same
 omission); this spec must not repeat it.
 **Estimated size:** Small.
-**Interfaces:** Consumes the command's behaviour; changes the CLI-reference
-preprocessor's subcommand list, the `bob-companion` plugin's `bob-cli` and
-`bob-setup` skills, and three things in the shipped mdBook operator guide
-(`the-intern/docs/src/operator-guide/index.md`): (1) its worklog action-rule
-set — of the ten worklog-driven `[[policy.action_rules]]` entries there
-(the two install-path reference-content reads for `worklog/SKILL.md` and
-`worklog/references/*.md`; the relative `worklog/*.md` read; six raw-shell
-`bash` rules for `find`/`ls`/`test -f`/`cat`/`mkdir -p`/`>>` against
-`worklog`; and `date +%H:%M*`), the two install-path reference-content reads
-are **kept** (`S-011` still requires them for the rewritten skill's own
-reference reads) and the other eight are **removed and replaced by one**
-`bash` rule prefix-anchored on `bob worklog append`/`bob worklog list`; (2)
-the surrounding "now live-validated" prose, including its quotation of
-`S-011`'s now-retired arbitrary-cwd rule-breadth clause; (3) the `bob task`
-section's two stale claims — its cross-reference to "the same guidance
-already given for the `worklog` skill's writes", and its claim that `bob
-task`, "along with `init`, [is] the only bob subcommand" needing nothing
-from the service, which `bob worklog` also falsifies (the same stale-
-enumeration class this spec already forces `S-002` to correct). No new
-skill or documentation surface.
+**Interfaces:** Consumes the command's behaviour. The CLI-reference
+preprocessor (`the-intern/docs/preprocessors/cli-reference/src/main.rs`)
+derives its subcommand list from `bob --help` at build time and needs no
+change — the requirement is only to verify a `bob worklog` page is
+generated. The `bob-companion` plugin's `bob-cli` skill (`SKILL.md` body
+and frontmatter, and `references/command-reference.md`) gains a `bob
+worklog` account; its `bob-setup` skill needs no change (its worklog
+mentions are `bob init` scaffolding, still accurate). Both hand-written
+worklog action-rule listings — the shipped mdBook operator guide
+(`the-intern/docs/src/operator-guide/index.md`) and the `bob-skills`
+package `README.md` — are migrated the same way: of the ten worklog-driven
+`[[policy.action_rules]]` entries in each (the two install-path
+reference-content reads for `worklog/SKILL.md` and `worklog/references/*.md`;
+the relative `worklog/*.md` read; six raw-shell `bash` rules for
+`find`/`ls`/`test -f`/`cat`/`mkdir -p`/`>>` against `worklog`; and
+`date +%H:%M*`), the two install-path reads are **kept** (`S-011` still
+requires them for the rewritten skill's own reference reads) and the other
+eight are **removed and replaced by one** `bash` rule prefix-anchored on
+`bob worklog append`/`bob worklog list`. The prose around each listing is
+brought in line: the "now live-validated" narrative, its quotation of
+`S-011`'s now-retired arbitrary-cwd rule-breadth clause, the operator
+guide's later instruction to keep the removed relative `worklog/*.md`
+matcher for cross-day continuity, and the `bob task` section's two stale
+claims — its cross-reference to "the same guidance already given for the
+`worklog` skill's writes", and its claim that `bob task`, "along with
+`init`, [is] the only bob subcommand" needing nothing from the service,
+which `bob worklog` also falsifies (the same stale-enumeration class this
+spec already forces `S-002` to correct). Historical validation-outcome
+records describing what past live runs observed are left as-is. No new
+skill or documentation surface, and no change to the packaging mechanism.
 
 ## Workflow
 
@@ -552,12 +563,10 @@ skill; the command is what enforces them.
 | 2 | Reconciliation step: presence-tested, idempotent, per-item carry-forward from the nearest prior existing file, reporting today's full carried-forward set regardless of which call wrote it. | Phase 1 |
 | 3 | The `bob worklog append` and `bob worklog list` CLI surface, with text and JSON output (including carried-forward reporting) and local validation of invalid input. | Phases 1, 2 |
 | 4 | The canonical `worklog` skill rewritten to call the command instead of prescribing the raw shell recipe; delivered to the pi package by the existing packaging script. | Phase 3 |
-| 5 | Operator-facing documentation updated: the CLI-reference preprocessor's subcommand list, the `bob-companion` plugin's `bob-cli`/`bob-setup` skills, and the action-rule migration note for narrowed deployments; #62 and #63 closed, referencing this work. | Phase 3; the documentation half also depends on Phase 4 |
+| 5 | Operator-facing documentation updated: the `bob-companion` plugin's `bob-cli` skill, a verification that the self-deriving CLI-reference preprocessor emits a `bob worklog` page, and the worklog action-rule migration across both hand-written listings (the operator guide and `bob-skills/README.md`); #62 and #63 closed, referencing this work. | Phase 3; the documentation half also depends on Phase 4 |
 
 ## Amendment Log
 
-<!-- Optional. Use when an approved spec is amended after tasks are in flight.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| YYYY-MM-DD | Description of change | Reason for amendment | T-XXX, T-YYY |
--->
+| 2026-08-30 | Component 5 corrected in three ways while breaking S-015 into tasks: (a) the CLI-reference preprocessor no longer has a hardcoded subcommand list (removed by `B-044`) — it derives the list from `bob --help`, so the work is to verify a `bob worklog` page is generated, not to edit a list; (b) the `bob-companion` `bob-setup` skill is not an affected surface — its only worklog mentions are `bob init` scaffolding, which S-015 preserves; (c) the worklog action-rule listing is duplicated in `bob-skills/README.md` as well as the operator guide, and the operator guide has a later paragraph telling operators to keep the relative `worklog/*.md` matcher — both are inside Component 5's stated Purpose ("every hand-written account … of the worklog's action rules") and are now named explicitly. No requirement changed; the delivered behaviour is identical. | Found by the Gate 2 spec-breakdown review of the S-015 task plan. | T-197, T-198 |
