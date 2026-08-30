@@ -1,7 +1,7 @@
 ---
 id: T-192
 title: Add the bob worklog append subcommand
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-08-30'
