@@ -185,7 +185,8 @@ Do not point `--cwd` at this repository checkout, and do not copy this
 package's skill content into `$WORKSPACE` — that content now reaches the
 session from the skill install path above, independent of `--cwd`. The
 workspace exists only for `config/email-triage.toml` and `worklog/*.md`, and
-it is the path the S-004 worklog rules below must match.
+it is the `--cwd` the deployed job runs in — where its `config/email-triage.toml`
+read resolves and where `bob worklog` writes the diary.
 
 The live T-139/T-140 happy-path and continuity validation (see
 [Validation outcomes](#validation-outcomes) below) ran under the earlier
@@ -263,12 +264,6 @@ arg_matchers = [
 ]
 
 [[policy.action_rules]]
-tool = "read"
-arg_matchers = [
-  { field_path = "path", pattern = "worklog/*.md" },
-]
-
-[[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
   { field_path = "command", pattern = "himalaya --version*" },
@@ -337,70 +332,40 @@ arg_matchers = [
 [[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
-  { field_path = "command", pattern = "*find worklog*" },
-]
-
-[[policy.action_rules]]
-tool = "bash"
-arg_matchers = [
-  { field_path = "command", pattern = "*ls *worklog*" },
-]
-
-[[policy.action_rules]]
-tool = "bash"
-arg_matchers = [
-  { field_path = "command", pattern = "date +%H:%M*" },
-]
-
-[[policy.action_rules]]
-tool = "bash"
-arg_matchers = [
-  { field_path = "command", pattern = "test -f worklog/*" },
-]
-
-[[policy.action_rules]]
-tool = "bash"
-arg_matchers = [
-  { field_path = "command", pattern = "cat worklog/*.md*" },
-]
-
-[[policy.action_rules]]
-tool = "bash"
-arg_matchers = [
-  { field_path = "command", pattern = "mkdir -p worklog*" },
-]
-
-[[policy.action_rules]]
-tool = "bash"
-arg_matchers = [
-  { field_path = "command", pattern = "*>> worklog/*.md*" },
+  { field_path = "command", pattern = "bob worklog*" },
 ]
 ```
 
-**The `worklog` skill's rules are now live-validated under the install-path
-model.** The `worklog/SKILL.md` and `worklog/references/*.md` read rules
-above admit the `worklog` skill (`T-154`/`T-155`) that the reduced
-`email-triage` `SKILL.md` now delegates diary mechanics to. `T-164` re-ran
-this exact rule set live, end to end, twice — once against a scheduled
-`email-triage` job and once against an interactive `bob chat` session asked
-to record a worklog entry directly — both from working directories holding
-no skill files of their own, both served entirely from a single shared
-skill install path with no per-workspace copy anywhere. See
-[Validation outcomes](#validation-outcomes) below for the full T-164
-record, including two real rule-set gaps that live run found and closed
-(the broadened `*ls *worklog*` pattern and the new `date +%H:%M*` rule
-above) and one skill-behavior defect it found and filed rather than papered
-over (`B-039`: a scheduled run can write a wrong placeholder worklog
-timestamp).
+**The `worklog` skill's rules now follow the `bob worklog` command.** The
+`worklog/SKILL.md` and `worklog/references/*.md` read rules above still admit
+the reference reads the `worklog` skill (`T-154`/`T-155`) makes; the reduced
+`email-triage` `SKILL.md` delegates diary mechanics to it. Every other diary
+call now goes through one `bash` rule, `bob worklog*`: the rewritten skill
+runs `bob worklog list` once at the start of a run and `bob worklog append`
+once per item handled, and the command creates `worklog/` and today's file,
+reads the prior day's entries to reconcile still-open items, and stamps each
+entry from its own clock. The seven raw-shell rules that used to admit the
+skill's own `find`/`ls`/`test`/`cat`/`mkdir`/`>>` calls against `worklog/`,
+and the `date +%H:%M*` rule for an entry's `<HH:MM>` header, are all removed
+— `bob worklog` does that work internally. The `bob worklog*` matcher
+mirrors the `bob task*` rule's shape (prefix-anchored on the subcommand,
+wildcard tail), so it stays stable regardless of the free-text
+`--item`/`--done`/`--left`/`--next` values a call carries. The
+[Validation outcomes](#validation-outcomes) section below records the
+earlier T-139/T-140/T-164 live runs as history; those predate the
+`bob worklog` command and exercised the raw-shell worklog recipe it
+replaces.
 
-The absolute-path `worklog` rule the per-workspace deployment model used
-(`{ field_path = "path", pattern = "<workspace>/worklog/*.md" }`) is dropped
-entirely: the relative `worklog/*.md` rule above already matches worklog
-reads issued from any working directory, which is what S-011's Configuration
-Requirements call for ("the rule admitting worklog writes must be broad
-enough to cover arbitrary working directories") — one relative rule now
-covers every deployment's worklog reads instead of one absolute rule per
-workspace.
+Both worklog `read` rules the earlier deployment models used are dropped:
+the per-workspace absolute-path rule
+(`{ field_path = "path", pattern = "<workspace>/worklog/*.md" }`) and the
+relative `worklog/*.md` rule that briefly replaced it. The `worklog` skill
+never opens a diary file through `read` now — `bob worklog` performs every
+diary read and write itself — so no `read` rule for `worklog/` is needed at
+any path. This retires, for worklog writes, S-011's earlier accepted risk
+that the admitting rule be "broad enough to cover arbitrary working
+directories": a `bob worklog` command string never contains the working
+directory, so the `bash` matcher above is exact-prefix, not path-broad.
 
 **This rule set covers the live T-139/T-140 validation runs** —
 `automated-notification` (file, no reply), escalation, S-004 block handling,
@@ -455,14 +420,14 @@ Replace `/abs/skill-install-path` with your resolved `skill_install_path`. Do
 not collapse these into a blanket `tool = "bash"` rule: the T-139 denial
 evidence showed the job blocked until the shell commands were admitted one
 scoped shape at a time, and the successful retry used the narrowed patterns
-above. In particular, the deployed package's runtime surface is broader than
-"himalaya commands plus append": the skill reads `config/email-triage.toml`
-through `bash`, checks and lists today's `worklog/` files through `bash`,
-opens prior worklog contents through `read`, and uses one pipe-shaped
-escalation send. The first-run reconciliation read was later observed in
-T-140 as a `cwd`-relative `read.path` such as `worklog/2026-07-29.md`, so the
-deployed allow rules must admit that relative shape as well as any
-install-path-qualified paths used elsewhere.
+above. The deployed package's runtime surface is still broader than "himalaya
+commands": the skill reads `config/email-triage.toml` through `bash`, records
+the day's diary through `bob worklog append` / `bob worklog list`, and uses
+one pipe-shaped escalation send. First-run reconciliation — including the
+cross-day carry-forward T-140 observed as a `cwd`-relative worklog read —
+now runs inside `bob worklog` on every call, so the single `bob worklog*`
+rule above is all the deployed policy needs for the diary; there is no
+separate relative `read` shape to admit.
 
 ## Validation outcomes
 
