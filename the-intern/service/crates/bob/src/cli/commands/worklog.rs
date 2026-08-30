@@ -135,7 +135,7 @@ pub(super) fn run_list(json_output: bool, date: Option<&str>) -> ServiceResult<(
 }
 
 fn run_list_with_context(
-    _json_output: bool,
+    json_output: bool,
     date: Option<&str>,
     now: NaiveDateTime,
     working_dir: &Path,
@@ -161,6 +161,7 @@ fn run_list_with_context(
 
     write_worklog_day(
         out,
+        json_output,
         WorklogDayOutput {
             date: target_date.format(FILE_DATE_FORMAT).to_string(),
             entries: entries.iter().map(WorklogEntryOutput::from).collect(),
@@ -178,7 +179,15 @@ fn parse_target_date(raw: &str) -> ServiceResult<NaiveDate> {
     })
 }
 
-fn write_worklog_day(out: &mut impl Write, day: WorklogDayOutput) -> ServiceResult<()> {
+fn write_worklog_day(
+    out: &mut impl Write,
+    json_output: bool,
+    day: WorklogDayOutput,
+) -> ServiceResult<()> {
+    if json_output {
+        return write_json_line(out, &json!(day));
+    }
+
     write_worklog_day_text(out, &day)
         .map_err(|err| invalid_request_error(format!("failed to write worklog output: {err}")))
 }
@@ -195,7 +204,12 @@ fn write_worklog_day_text(out: &mut impl Write, day: &WorklogDayOutput) -> io::R
         writeln!(out, "- Left: {}", entry.left)?;
         writeln!(out, "- Next: {}", entry.next)?;
     }
-    Ok(())
+    writeln!(out)?;
+    writeln!(
+        out,
+        "carried forward: {}",
+        format_carried_forward(&day.carried_forward)
+    )
 }
 
 fn write_appended_entry(
@@ -701,6 +715,119 @@ mod tests {
         assert!(
             out.is_empty(),
             "no output is written when the worklog directory is absent"
+        );
+    }
+
+    /// Seed a prior day's file with one still-open `vendor-invoice` item.
+    fn seed_prior_open_vendor_invoice(working_dir: &std::path::Path) {
+        WorklogStore::new(working_dir)
+            .append(
+                at((2026, 8, 29), (9, 0)),
+                &WorklogEntry {
+                    item: "vendor-invoice".to_owned(),
+                    done: "Chased the vendor for the missing PDF.".to_owned(),
+                    left: "awaiting the corrected invoice".to_owned(),
+                    next: "closes when the corrected invoice arrives".to_owned(),
+                },
+            )
+            .expect("seed prior open item");
+    }
+
+    #[test]
+    fn worklog_list_text_output_reports_todays_carried_forward_set() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        seed_prior_open_vendor_invoice(temp.path());
+        let mut out = Vec::new();
+
+        run_list_with_context(
+            false,
+            None,
+            at((2026, 8, 30), (9, 0)),
+            temp.path(),
+            &mut out,
+        )
+        .expect("list should succeed");
+
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(
+            text.contains("carried forward: vendor-invoice"),
+            "text output must report today's carried-forward set: {text}"
+        );
+    }
+
+    #[test]
+    fn worklog_list_json_output_is_an_object_carrying_the_same_facts_as_the_text() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        seed_prior_open_vendor_invoice(temp.path());
+        let mut out = Vec::new();
+
+        run_list_with_context(true, None, at((2026, 8, 30), (9, 0)), temp.path(), &mut out)
+            .expect("list should succeed");
+
+        let value: Value = serde_json::from_slice(&out).expect("json object");
+        assert_eq!(value["date"], "2026-08-30");
+        assert!(
+            !value["entries"]
+                .as_array()
+                .expect("entries array")
+                .is_empty(),
+            "the carried-forward entry is part of today's rendered entries: {value}"
+        );
+        let carried: Vec<&str> = value["carried_forward"]
+            .as_array()
+            .expect("carried_forward array")
+            .iter()
+            .map(|item| item.as_str().expect("string identifier"))
+            .collect();
+        assert_eq!(carried, vec!["vendor-invoice"]);
+    }
+
+    #[test]
+    fn worklog_list_reports_an_empty_carried_forward_set_when_nothing_is_carried() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        WorklogStore::new(temp.path())
+            .append(
+                at((2026, 8, 30), (9, 0)),
+                &WorklogEntry {
+                    item: "todays-item".to_owned(),
+                    done: "Handled entirely today.".to_owned(),
+                    left: "nothing".to_owned(),
+                    next: "nothing further".to_owned(),
+                },
+            )
+            .expect("seed today's own entry, no prior file");
+        let mut text_out = Vec::new();
+        let mut json_out = Vec::new();
+
+        run_list_with_context(
+            false,
+            None,
+            at((2026, 8, 30), (10, 0)),
+            temp.path(),
+            &mut text_out,
+        )
+        .expect("list should succeed");
+        run_list_with_context(
+            true,
+            None,
+            at((2026, 8, 30), (10, 0)),
+            temp.path(),
+            &mut json_out,
+        )
+        .expect("list should succeed");
+
+        let text = String::from_utf8(text_out).expect("utf8");
+        assert!(
+            text.contains("carried forward: (none)"),
+            "an empty carried-forward set is still reported explicitly: {text}"
+        );
+        let value: Value = serde_json::from_slice(&json_out).expect("json object");
+        assert_eq!(
+            value["carried_forward"]
+                .as_array()
+                .expect("carried_forward array")
+                .len(),
+            0
         );
     }
 }
