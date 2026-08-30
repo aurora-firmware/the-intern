@@ -517,4 +517,37 @@ mod tests {
 
         assert!(entries.is_empty());
     }
+
+    #[test]
+    fn read_day_errors_naming_the_worklog_path_when_the_directory_is_absent() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+
+        let error = store
+            .read_day(date(2026, 8, 30))
+            .expect_err("a missing worklog directory must be an error, not an empty day");
+
+        let detail = match error {
+            bob_core::error::ServiceError::Persistence { detail } => detail,
+            other => panic!("expected a persistence error, got {other:?}"),
+        };
+        let expected_dir = temp.path().join("worklog");
+        assert!(
+            detail.contains(&expected_dir.display().to_string()),
+            "the error must name the worklog directory it looked for: {detail}"
+        );
+    }
+
+    #[test]
+    fn read_day_does_not_create_the_worklog_directory() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+
+        let _ = store.read_day(date(2026, 8, 30));
+
+        assert!(
+            !temp.path().join("worklog").exists(),
+            "a read must never invent the worklog directory"
+        );
+    }
 }
