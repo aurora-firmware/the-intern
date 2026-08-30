@@ -49,6 +49,14 @@ const CARRIED_FORWARD_DONE_PREFIX: &str = "Carried forward from ";
 /// worklog directory or reading/writing a day file fails.
 pub fn reconcile_today(working_dir: &Path, now: NaiveDateTime) -> ServiceResult<Vec<String>> {
     let worklog_dir = working_dir.join(WORKLOG_DIR_NAME);
+    if !worklog_dir.is_dir() {
+        // Nothing has ever been logged in this working directory, so there
+        // is nothing to carry forward and nothing to report. A read must
+        // never invent `worklog/` (ADR-015); creating it is left to the
+        // first `append`.
+        return Ok(Vec::new());
+    }
+
     let store = WorklogStore::new(working_dir);
     let today = now.date();
 
@@ -587,5 +595,41 @@ mod tests {
             "no carried-forward duplicate should be appended: {today:?}"
         );
         assert_eq!(today[0].done, "Picked it back up this morning.");
+    }
+
+    #[test]
+    fn returns_an_empty_set_when_no_prior_worklog_file_exists() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        // Only today's file exists, holding a normal entry.
+        seed(
+            &store,
+            at((2026, 8, 30), (9, 0)),
+            &entry(
+                "todays-item",
+                "Handled it entirely today.",
+                "nothing",
+                "nothing further",
+            ),
+        );
+
+        let carried = reconcile_today(temp.path(), at((2026, 8, 30), (10, 0)))
+            .expect("reconcile should succeed with no prior file");
+
+        assert!(carried.is_empty(), "{carried:?}");
+    }
+
+    #[test]
+    fn returns_an_empty_set_and_creates_nothing_when_the_worklog_directory_is_absent() {
+        let temp = tempfile::tempdir().expect("temp dir");
+
+        let carried = reconcile_today(temp.path(), at((2026, 8, 30), (9, 0)))
+            .expect("reconcile should succeed without a worklog directory");
+
+        assert!(carried.is_empty(), "{carried:?}");
+        assert!(
+            !temp.path().join("worklog").exists(),
+            "reconciliation must never invent the worklog directory"
+        );
     }
 }
