@@ -135,6 +135,30 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-08-30
+
+Implemented T-198 as a pure docs migration across the two files listed in the task (`the-intern/docs/src/operator-guide/index.md`, `the-intern/bob-skills/README.md`), one commit per file on `task/T-198-migrate-the-hand-written-worklog-action-rules-to-bob-worklog`. The task lifecycle file was left untouched on the branch.
+
+Action-rule migration (both listings, identical in substance): kept the two install-path worklog reference reads (`.../worklog/SKILL.md` and `.../worklog/references/*.md`); removed the relative `read` `worklog/*.md` and the six raw-shell `bash` rules (`*find worklog*`, `*ls *worklog*`, `test -f worklog/*`, `cat worklog/*.md*`, `mkdir -p worklog*`, `*>> worklog/*.md*`) plus `date +%H:%M*`; replaced those eight with a single `bash` rule `{ field_path = "command", pattern = "bob worklog*" }`, placed where the removed raw-shell rules were. I read the existing `bob task*` rule first and copied its exact shape — `tool = "bash"`, one `arg_matchers` entry on `field_path = "command"`, prefix + wildcard tail, no explicit decision field (the ruleset is allow-only by match). `bob worklog*` (rather than two rules or `bob worklog append*`) is the one-rule form that admits both `bob worklog append` and `bob worklog list` while mirroring `bob task*` exactly; it also satisfies the `grep 'pattern = "bob worklog'` verification.
+
+Prose updates: rewrote the "now live-validated" paragraph in each file to describe the single `bob worklog` rule (skill calls `bob worklog list` once per run and `bob worklog append` once per item; the command creates `worklog/`, reconciles prior-day open items, and stamps its own clock), and dropped the description of the removed raw-shell rules, the `date +%H:%M` gap, and the (now-resolved) B-039 wrong-timestamp follow-up. Reframed S-011's "broad enough to cover arbitrary working directories" clause in both files as explicitly retired for worklog writes (the working directory never appears in a `bob worklog` command string). Operator guide: fixed the `bob task` section so it names `bob worklog` alongside `bob init` and `bob task` as serve-independent, and adjusted the "same guidance already given for the `worklog` skill's writes" cross-reference to "the `worklog` skill's own `bob worklog` calls"; repointed the later cross-day-continuity paragraph (previously "keep that rule in place" for the relative `read.path = "worklog/*.md"` matcher) to `bob worklog`'s built-in reconciliation. README: repointed the prescriptive paragraph immediately above `## Validation outcomes` — both the "checks and lists today's `worklog/` files through `bash`, opens prior worklog contents through `read`" sentence and the "the deployed allow rules must admit that relative shape" sentence — at the single `bob worklog` rule, and made a small companion fix to the earlier "it is the path the S-004 worklog rules below must match" sentence since the worklog rule is now a command matcher, not a path matcher. Everything under `## Validation outcomes` in README, and the historical T-139/T-140/T-164 validation-outcome prose in the operator guide, was left unchanged.
+
+Tried and rejected: (a) unifying the two kept-read placeholder paths (`/opt/bob/skills/...` vs `/abs/skill-install-path/...`) across the two files — rejected as out of scope and not required by the ACs or verification; each file keeps its own convention. (b) Keeping a trimmed mention of the `*ls *worklog*` / `date +%H:%M*` gaps in the README prescriptive prose with a pointer to Validation outcomes — rejected because the task says to drop that description; the Validation outcomes section still records those gaps as history and the prose now frames T-139/T-140/T-164 as predating the `bob worklog` command.
+
+Verification run and passing: `cargo build -p bob`; `BOB_BIN=.../target/debug/bob mdbook build` (exit 0, AC-4); all four grep assertions; `git diff --name-only dev-agent...HEAD` shows only the two files; `cargo test --workspace` from `the-intern/service/` has 0 failures (no Rust touched). Note: `mdbook build` emits a pre-existing `mdbook-mermaid` version-mismatch warning that does not fail the build.
+
+Nothing remains for a follow-up session on this task.
+
+Issue closure for the integrator to run at merge (AC-5) — do NOT run from the task branch:
+
+```
+gh issue close 62 --comment "Fixed by construction in S-015 (bob worklog subcommand — append, list, and automatic first-run reconciliation): reconciliation is presence-tested per item-identifier, so a still-open item is carried forward exactly once per day no matter how many times append/list run. The hand-written worklog action-rule listings were migrated to the bob worklog command rule in T-198."
+```
+
+```
+gh issue close 63 --comment "Fixed by construction in S-015 (bob worklog subcommand — append, list, and automatic first-run reconciliation): bob worklog owns entry ordering and reconciliation, replacing the raw-shell append recipe whose file was append-ordered rather than time-ordered under concurrent scheduled runs. The hand-written worklog action-rule listings were migrated to the bob worklog command rule in T-198."
+```
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
