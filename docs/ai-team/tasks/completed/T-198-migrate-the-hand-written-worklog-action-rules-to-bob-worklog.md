@@ -1,7 +1,7 @@
 ---
 id: T-198
 title: Migrate the hand-written worklog action rules to bob worklog
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-30'
