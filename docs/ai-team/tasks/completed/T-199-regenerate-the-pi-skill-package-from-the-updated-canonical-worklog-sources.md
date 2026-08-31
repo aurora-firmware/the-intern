@@ -2,7 +2,7 @@
 id: T-199
 title: Regenerate the pi skill package from the updated canonical worklog 
   sources
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-08-30'
