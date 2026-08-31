@@ -27,6 +27,7 @@ struct AppendedEntryOutput {
     item: String,
     path: String,
     carried_forward: Vec<String>,
+    warnings: Vec<String>,
 }
 
 /// A single day's worklog, as `bob worklog list` renders it in text or JSON.
@@ -37,6 +38,7 @@ struct WorklogDayOutput {
     /// Today's full carried-forward item-identifier set, always today's and
     /// independent of which invocation performed the carry-forward write.
     carried_forward: Vec<String>,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -92,15 +94,15 @@ fn run_append_with_context(
     working_dir: &Path,
     out: &mut impl Write,
 ) -> ServiceResult<()> {
-    reject_empty_field("item", item)?;
-    reject_empty_field("done", done)?;
-    reject_empty_field("left", left)?;
-    reject_empty_field("next", next)?;
+    reject_entry_field("item", item)?;
+    reject_entry_field("done", done)?;
+    reject_entry_field("left", left)?;
+    reject_entry_field("next", next)?;
 
     // Reconcile today's file (carry forward any still-open items from the
     // most recent prior worklog file) before this entry is written. The
     // returned set is today's full carried-forward item-identifier set.
-    let carried_forward = reconcile_today(working_dir, now)?;
+    let reconcile = reconcile_today(working_dir, now)?;
 
     let entry = WorklogEntry {
         item: item.to_owned(),
@@ -109,6 +111,10 @@ fn run_append_with_context(
         next: next.to_owned(),
     };
     let outcome = WorklogStore::new(working_dir).append(now, &entry)?;
+    let mut warnings = reconcile.warnings;
+    warnings.extend(outcome.warnings);
+    warnings.sort();
+    warnings.dedup();
 
     write_appended_entry(
         out,
@@ -116,7 +122,8 @@ fn run_append_with_context(
         AppendedEntryOutput {
             item: item.to_owned(),
             path: outcome.path.display().to_string(),
-            carried_forward,
+            carried_forward: reconcile.carried_forward,
+            warnings,
         },
     )
 }
@@ -152,7 +159,7 @@ fn run_list_with_context(
     // `--date`. It never writes to a past-dated file, and when `worklog/`
     // is absent it is a no-op that creates nothing. The returned set is
     // today's full carried-forward item-identifier set.
-    let carried_forward = reconcile_today(working_dir, now)?;
+    let reconcile = reconcile_today(working_dir, now)?;
 
     // `read_day` fails, naming `<cwd>/worklog/`, when that directory does
     // not exist, and never creates it (ADR-015). A past-dated file is read
@@ -165,7 +172,8 @@ fn run_list_with_context(
         WorklogDayOutput {
             date: target_date.format(FILE_DATE_FORMAT).to_string(),
             entries: entries.iter().map(WorklogEntryOutput::from).collect(),
-            carried_forward,
+            carried_forward: reconcile.carried_forward,
+            warnings: reconcile.warnings,
         },
     )
 }
@@ -209,7 +217,8 @@ fn write_worklog_day_text(out: &mut impl Write, day: &WorklogDayOutput) -> io::R
         out,
         "carried forward: {}",
         format_carried_forward(&day.carried_forward)
-    )
+    )?;
+    write_warnings(out, &day.warnings)
 }
 
 fn write_appended_entry(
@@ -230,16 +239,29 @@ fn write_appended_entry(
                 format_carried_forward(&response.carried_forward)
             )
         })
+        .and_then(|_| write_warnings(out, &response.warnings))
         .map_err(|err| invalid_request_error(format!("failed to write worklog output: {err}")))
 }
 
-/// Reject an absent-in-spirit worklog entry field before any filesystem
-/// work happens. `clap` already rejects a wholly missing flag; this guards
-/// the `--field ""` and all-whitespace cases.
-fn reject_empty_field(name: &str, value: &str) -> ServiceResult<()> {
+fn write_warnings(out: &mut impl Write, warnings: &[String]) -> io::Result<()> {
+    for warning in warnings {
+        writeln!(out, "warning: {warning}")?;
+    }
+    Ok(())
+}
+
+/// Reject an absent-in-spirit or multiline worklog entry field before any
+/// filesystem work happens. `clap` already rejects a wholly missing flag;
+/// this guards the `--field ""`, all-whitespace, and line-break cases.
+fn reject_entry_field(name: &str, value: &str) -> ServiceResult<()> {
     if value.trim().is_empty() {
         return Err(invalid_request_error(format!(
             "worklog entry field --{name} must not be empty"
+        )));
+    }
+    if value.contains(['\n', '\r']) {
+        return Err(invalid_request_error(format!(
+            "worklog entry field --{name} must not contain line breaks"
         )));
     }
     Ok(())
@@ -397,6 +419,33 @@ mod tests {
     }
 
     #[test]
+    fn worklog_append_rejects_multiline_fields_before_touching_the_filesystem() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut out = Vec::new();
+
+        let detail = expect_invalid_request(run_append_with_context(
+            false,
+            "vendor-invoice",
+            "line one\nline two",
+            "still open",
+            "the trigger",
+            at((2026, 8, 30), (9, 5)),
+            temp.path(),
+            &mut out,
+        ));
+
+        assert!(
+            detail.contains("done") && detail.contains("line breaks"),
+            "error must name the multiline field and why: {detail}"
+        );
+        assert!(
+            !temp.path().join("worklog").exists(),
+            "multiline input must fail before touching the filesystem"
+        );
+        assert!(out.is_empty(), "no output on validation failure");
+    }
+
+    #[test]
     fn worklog_append_leaves_an_existing_day_file_untouched_when_a_field_is_empty() {
         let temp = tempfile::tempdir().expect("temp dir");
         WorklogStore::new(temp.path())
@@ -549,6 +598,62 @@ mod tests {
             .map(|entry| entry.as_str().expect("string identifier"))
             .collect();
         assert_eq!(carried, vec!["vendor-invoice"]);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn worklog_append_surfaces_permissive_directory_warnings_in_text_and_json() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let worklog_dir = temp.path().join("worklog");
+        std::fs::create_dir(&worklog_dir).expect("pre-create worklog dir");
+        std::fs::set_permissions(&worklog_dir, std::fs::Permissions::from_mode(0o755))
+            .expect("relax perms");
+        let mut text_out = Vec::new();
+        let mut json_out = Vec::new();
+
+        run_append_with_context(
+            false,
+            "text-item",
+            "Did today's work.",
+            "nothing",
+            "nothing further",
+            at((2026, 8, 30), (9, 0)),
+            temp.path(),
+            &mut text_out,
+        )
+        .expect("append should succeed");
+        run_append_with_context(
+            true,
+            "json-item",
+            "Did today's work.",
+            "nothing",
+            "nothing further",
+            at((2026, 8, 30), (9, 5)),
+            temp.path(),
+            &mut json_out,
+        )
+        .expect("append should succeed");
+
+        let text = String::from_utf8(text_out).expect("utf8");
+        assert!(
+            text.contains("warning: worklog directory") && text.contains("755"),
+            "text output must surface the warning: {text}"
+        );
+
+        let value: Value = serde_json::from_slice(&json_out).expect("json object");
+        let warnings: Vec<&str> = value["warnings"]
+            .as_array()
+            .expect("warnings array")
+            .iter()
+            .map(|entry| entry.as_str().expect("warning string"))
+            .collect();
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("755"),
+            "json warning must include the mode"
+        );
     }
 
     #[test]
@@ -804,6 +909,67 @@ mod tests {
             .map(|item| item.as_str().expect("string identifier"))
             .collect();
         assert_eq!(carried, vec!["vendor-invoice"]);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn worklog_list_surfaces_reconciliation_warnings_in_text_and_json() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let seed_temp = || {
+            let temp = tempfile::tempdir().expect("temp dir");
+            let worklog_dir = temp.path().join("worklog");
+            std::fs::create_dir(&worklog_dir).expect("pre-create worklog dir");
+            std::fs::set_permissions(&worklog_dir, std::fs::Permissions::from_mode(0o755))
+                .expect("relax perms");
+            std::fs::write(
+                worklog_dir.join("2026-08-29.md"),
+                "## 09:00 — vendor-invoice\n\n- Done: Chased the vendor.\n- Left: awaiting the corrected invoice\n- Next: closes when the corrected invoice arrives\n\n",
+            )
+            .expect("seed prior day");
+            temp
+        };
+
+        let text_temp = seed_temp();
+        let json_temp = seed_temp();
+        let mut text_out = Vec::new();
+        let mut json_out = Vec::new();
+
+        run_list_with_context(
+            false,
+            None,
+            at((2026, 8, 30), (9, 0)),
+            text_temp.path(),
+            &mut text_out,
+        )
+        .expect("list should succeed");
+        run_list_with_context(
+            true,
+            None,
+            at((2026, 8, 30), (9, 5)),
+            json_temp.path(),
+            &mut json_out,
+        )
+        .expect("list should succeed");
+
+        let text = String::from_utf8(text_out).expect("utf8");
+        assert!(
+            text.contains("warning: worklog directory") && text.contains("755"),
+            "text output must surface reconciliation warnings: {text}"
+        );
+
+        let value: Value = serde_json::from_slice(&json_out).expect("json object");
+        let warnings: Vec<&str> = value["warnings"]
+            .as_array()
+            .expect("warnings array")
+            .iter()
+            .map(|entry| entry.as_str().expect("warning string"))
+            .collect();
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("755"),
+            "json warning must include the mode"
+        );
     }
 
     #[test]

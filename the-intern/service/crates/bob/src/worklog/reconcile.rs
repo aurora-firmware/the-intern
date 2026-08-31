@@ -14,6 +14,12 @@ use std::{fs, path::Path};
 
 use super::store::{item_open_state, RecordedEntry, WorklogEntry, WorklogStore};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconcileOutcome {
+    pub carried_forward: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
 /// The working-directory-relative subdirectory that holds the dated worklog
 /// files. Mirrors the private `store::WORKLOG_DIR_NAME`; both are fixed by
 /// the cwd-strict resolution rule of ADR-015 (`<cwd>/worklog/<date>.md`,
@@ -47,24 +53,31 @@ const CARRIED_FORWARD_DONE_PREFIX: &str = "Carried forward from ";
 ///
 /// Returns [`bob_core::error::ServiceError::Persistence`] when scanning the
 /// worklog directory or reading/writing a day file fails.
-pub fn reconcile_today(working_dir: &Path, now: NaiveDateTime) -> ServiceResult<Vec<String>> {
+pub fn reconcile_today(working_dir: &Path, now: NaiveDateTime) -> ServiceResult<ReconcileOutcome> {
     let worklog_dir = working_dir.join(WORKLOG_DIR_NAME);
     if !worklog_dir.is_dir() {
         // Nothing has ever been logged in this working directory, so there
         // is nothing to carry forward and nothing to report. A read must
         // never invent `worklog/` (ADR-015); creating it is left to the
         // first `append`.
-        return Ok(Vec::new());
+        return Ok(ReconcileOutcome {
+            carried_forward: Vec::new(),
+            warnings: Vec::new(),
+        });
     }
 
     let store = WorklogStore::new(working_dir);
     let today = now.date();
+    let mut warnings = Vec::new();
 
     if let Some(source_date) = nearest_prior_existing_date(&worklog_dir, today)? {
-        carry_forward_open_items(&store, source_date, now)?;
+        warnings = carry_forward_open_items(&store, source_date, now)?;
     }
 
-    report_carried_forward(&store, today)
+    Ok(ReconcileOutcome {
+        carried_forward: report_carried_forward(&store, today)?,
+        warnings,
+    })
 }
 
 /// The latest date strictly before `today` that has a `<date>.md` file in
@@ -125,9 +138,11 @@ fn carry_forward_open_items(
     store: &WorklogStore,
     source_date: NaiveDate,
     now: NaiveDateTime,
-) -> ServiceResult<()> {
+) -> ServiceResult<Vec<String>> {
     let source_entries = store.read_day(source_date)?;
     let today_entries = store.read_day(now.date())?;
+
+    let mut warnings = Vec::new();
 
     for item in distinct_items_in_order(&source_entries) {
         if item_open_state(&source_entries, &item) != Some(true) {
@@ -144,10 +159,13 @@ fn carry_forward_open_items(
             left: source_entry.left.clone(),
             next: source_entry.next.clone(),
         };
-        store.append(now, &carried)?;
+        warnings.extend(store.append(now, &carried)?.warnings);
     }
 
-    Ok(())
+    warnings.sort();
+    warnings.dedup();
+
+    Ok(warnings)
 }
 
 /// Every item-identifier whose most recent entry in today's file is a
@@ -239,7 +257,8 @@ mod tests {
         );
 
         let carried = reconcile_today(temp.path(), at((2026, 8, 30), (8, 15)))
-            .expect("reconcile should succeed");
+            .expect("reconcile should succeed")
+            .carried_forward;
 
         assert_eq!(carried, vec!["vendor-invoice".to_owned()]);
 
@@ -294,7 +313,8 @@ mod tests {
         );
 
         let carried = reconcile_today(temp.path(), at((2026, 8, 30), (9, 0)))
-            .expect("reconcile should succeed");
+            .expect("reconcile should succeed")
+            .carried_forward;
 
         assert_eq!(
             carried,
@@ -329,7 +349,8 @@ mod tests {
         );
 
         let carried = reconcile_today(temp.path(), at((2026, 8, 30), (9, 0)))
-            .expect("reconcile should succeed");
+            .expect("reconcile should succeed")
+            .carried_forward;
 
         assert!(
             carried.is_empty(),
@@ -368,7 +389,8 @@ mod tests {
         );
 
         let carried = reconcile_today(temp.path(), at((2026, 8, 30), (9, 0)))
-            .expect("reconcile should succeed");
+            .expect("reconcile should succeed")
+            .carried_forward;
 
         assert_eq!(carried, vec!["real-prior-item".to_owned()]);
     }
@@ -392,8 +414,9 @@ mod tests {
         reconcile_today(temp.path(), at((2026, 8, 30), (8, 15))).expect("first run");
         let after_first = std::fs::read_to_string(&today_path).expect("today file after first run");
 
-        let carried =
-            reconcile_today(temp.path(), at((2026, 8, 30), (11, 45))).expect("second run");
+        let carried = reconcile_today(temp.path(), at((2026, 8, 30), (11, 45)))
+            .expect("second run")
+            .carried_forward;
         let after_second =
             std::fs::read_to_string(&today_path).expect("today file after second run");
 
@@ -434,7 +457,8 @@ mod tests {
         );
 
         let carried = reconcile_today(temp.path(), at((2026, 8, 30), (8, 15)))
-            .expect("reconcile should succeed");
+            .expect("reconcile should succeed")
+            .carried_forward;
 
         assert!(
             carried.is_empty(),
@@ -466,7 +490,8 @@ mod tests {
         );
 
         let carried = reconcile_today(temp.path(), at((2026, 8, 30), (9, 30)))
-            .expect("reconcile should succeed");
+            .expect("reconcile should succeed")
+            .carried_forward;
 
         assert_eq!(
             carried,
@@ -490,8 +515,9 @@ mod tests {
             ),
         );
 
-        let before_close =
-            reconcile_today(temp.path(), at((2026, 8, 30), (8, 15))).expect("carry-forward run");
+        let before_close = reconcile_today(temp.path(), at((2026, 8, 30), (8, 15)))
+            .expect("carry-forward run")
+            .carried_forward;
         assert_eq!(before_close, vec!["vendor-invoice".to_owned()]);
 
         // The item is resolved later the same day.
@@ -506,8 +532,9 @@ mod tests {
             ),
         );
 
-        let after_close =
-            reconcile_today(temp.path(), at((2026, 8, 30), (16, 0))).expect("later run");
+        let after_close = reconcile_today(temp.path(), at((2026, 8, 30), (16, 0)))
+            .expect("later run")
+            .carried_forward;
 
         assert!(
             after_close.is_empty(),
@@ -546,7 +573,8 @@ mod tests {
         );
 
         let carried = reconcile_today(temp.path(), at((2026, 8, 30), (8, 0)))
-            .expect("reconcile should succeed");
+            .expect("reconcile should succeed")
+            .carried_forward;
 
         assert_eq!(
             carried,
@@ -582,7 +610,8 @@ mod tests {
         );
 
         let carried = reconcile_today(temp.path(), at((2026, 8, 30), (9, 0)))
-            .expect("reconcile should succeed");
+            .expect("reconcile should succeed")
+            .carried_forward;
 
         assert!(
             carried.is_empty(),
@@ -614,7 +643,8 @@ mod tests {
         );
 
         let carried = reconcile_today(temp.path(), at((2026, 8, 30), (10, 0)))
-            .expect("reconcile should succeed with no prior file");
+            .expect("reconcile should succeed with no prior file")
+            .carried_forward;
 
         assert!(carried.is_empty(), "{carried:?}");
     }
@@ -624,7 +654,8 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp dir");
 
         let carried = reconcile_today(temp.path(), at((2026, 8, 30), (9, 0)))
-            .expect("reconcile should succeed without a worklog directory");
+            .expect("reconcile should succeed without a worklog directory")
+            .carried_forward;
 
         assert!(carried.is_empty(), "{carried:?}");
         assert!(
