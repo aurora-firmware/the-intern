@@ -170,3 +170,90 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-08-31
+
+PASS
+
+Reviewed the Session 1 diff on `task/T-198-migrate-the-hand-written-worklog-action-rules-to-bob-worklog`
+(`git diff dev-agent...` — two files only: `the-intern/docs/src/operator-guide/index.md`,
+`the-intern/bob-skills/README.md`). Pure docs migration; no Rust touched.
+
+**Stage 1 — Acceptance (all five ACs met):**
+
+- **AC-1 — PASS.** Both hand-written listings keep exactly the two worklog reference
+  reads (operator guide: `/opt/bob/skills/worklog/SKILL.md` +
+  `/opt/bob/skills/worklog/references/*.md`; README:
+  `/abs/skill-install-path/worklog/{SKILL.md,references/*.md}`) and remove the eight
+  worklog rules (the relative `read` `worklog/*.md` plus the seven `bash` rules
+  `*find worklog*`, `*ls *worklog*`, `date +%H:%M*`, `test -f worklog/*`,
+  `cat worklog/*.md*`, `mkdir -p worklog*`, `*>> worklog/*.md*`). Each listing now
+  carries exactly one replacement `bash` rule
+  `{ field_path = "command", pattern = "bob worklog*" }`, placed where the removed
+  raw-shell rules were. `bob worklog*` admits both `bob worklog append …` and
+  `bob worklog list …` (confirmed against the freshly built binary: `bob worklog`
+  exposes `append` and `list` subcommands).
+- **AC-2 — PASS.** The "now live-validated" paragraph in each file is rewritten to
+  describe the single `bob worklog` rule and its `bob task*`-mirrored shape; the
+  removed raw-shell rules and the `date +%H:%M` gap are dropped from the
+  prescriptive prose. S-011's "broad enough to cover arbitrary working directories"
+  clause is explicitly framed as retired for worklog writes in both files
+  (`grep -q 'must admit that relative shape' README.md` → absent). Neither file
+  instructs keeping a removed matcher: the operator guide's cross-day-continuity
+  paragraph (was "keep that rule in place" for `read.path = "worklog/*.md"`) and
+  README's prescriptive paragraph above `## Validation outcomes` are both repointed
+  at `bob worklog`'s built-in reconciliation. Past-tense narration of the relative
+  `read` matcher survives only under README's `## Validation outcomes` history,
+  which the task explicitly directs leaving unchanged; the diff does not touch that
+  section.
+- **AC-3 — PASS.** Operator guide `bob task` section now reads "along with `bob init`
+  and `bob worklog`, one of the bob subcommands that work whether or not `bob serve`
+  is running". Verified behaviourally: `bob worklog list` run with no service reaches
+  persistence logic (fails only on a missing `worklog/` dir), never an admin-socket
+  error — it is serve-independent like `bob task`/`bob init`.
+- **AC-4 — PASS.** `cargo build -p bob` then
+  `cd ../docs && BOB_BIN="$PWD/../service/target/debug/bob" mdbook build` → exit 0.
+  Only the pre-existing `mdbook-mermaid` 0.4.36-vs-0.4.52 version-mismatch warning
+  is emitted; it does not fail the build (per the task note).
+- **AC-5 — PASS.** Work Log records both `gh issue close 62` and `gh issue close 63`
+  commands with `--comment` text referencing S-015, under a header that explicitly
+  says not to run them from the task branch (integrator runs them at merge).
+
+All four Verification greps pass in a clean checkout of the branch head.
+
+**Stage 2 — Code quality (PASS):**
+
+- The replacement `bash` rule is a structural copy of the existing `bob task*` rule
+  (`tool = "bash"`, one `arg_matchers` entry on `field_path = "command"`,
+  prefix + `*` tail, no explicit decision field). Correct placement and shape.
+- Prose accuracy checks out: the `bob worklog` behaviour described (creates
+  `worklog/`, reconciles prior-day open items, stamps its own clock, one `list` per
+  run + one `append` per item) matches the built binary's `append`/`list` help text.
+  The operator guide `bob task` cross-reference ("the `worklog` skill's own
+  `bob worklog` calls") now reads correctly.
+- README line ~187 companion fix ("it is the `--cwd` the deployed job runs in …
+  where `bob worklog` writes the diary", replacing "the path the S-004 worklog rules
+  below must match") is accurate and in-scope — the worklog rule is now a command
+  matcher, not a path matcher.
+- Scope is clean: only the two "Files to Touch" changed; the canonical task file was
+  not modified on the branch; historical validation-outcome prose (README
+  `## Validation outcomes`; operator guide T-139/T-140/T-164 mentions) is untouched.
+
+**Minor observations (non-blocking):**
+
+- README `the-intern/bob-skills/README.md` (paragraph beginning "The `worklog`
+  skill's rules now follow the `bob worklog` command."): the sentence "The seven
+  raw-shell rules that used to admit the skill's own
+  `find`/`ls`/`test`/`cat`/`mkdir`/`>>` calls against `worklog/`, and the
+  `date +%H:%M*` rule …, are all removed" lists six command shapes then appends the
+  `date` rule with "and", so it can read as 7 + 1 = 8 while only seven `bash` rules
+  were actually removed. The count "seven" is correct; the operator guide's parallel
+  sentence phrases the same fact unambiguously. Safe to tighten on a later pass.
+- README `## Validation outcomes` still describes "the relative `worklog/*.md` rule"
+  and "the relative `read` matcher required for this cross-day carry-forward path"
+  as past-tense facts about the T-140/T-164 runs. This is correct per the task's
+  instruction to leave that section unchanged, but a reader moving between the
+  repointed prescriptive prose and the untouched history should note the history is
+  describing the older rule set.
+
+Next owner: Development Loop.
