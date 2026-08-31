@@ -111,5 +111,5 @@ addressed back through normal delivery like any other message. It re-enters
 triage on whatever later run first lists unseen mail, and is classified and
 handled from there — nothing about the original escalation auto-resolves
 it. Per `references/worklog.md`, the escalated message's open worklog item
-stays open, carried forward at each day's first-run reconciliation, until
-the reply's own per-message entry marks the matter handled.
+stays open, carried forward by `bob worklog` on every run, until the
+reply's own per-message entry marks the matter handled.
