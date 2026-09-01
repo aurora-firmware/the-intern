@@ -1,0 +1,255 @@
+---
+id: T-196
+title: Realign the email-triage skill worklog surface to bob worklog
+status: completed
+priority: medium
+assigned-role: developer
+created: '2026-08-30'
+---
+
+# Realign the email-triage skill worklog surface to bob worklog
+
+<!--
+Task Quality Rules (see the new-task skill for full details):
+  - Atomic — one clear outcome.
+  - One-shottable — ≤ 3–4 files touched, ≤ 5 ACs, Description ≈ 20 lines.
+  - Verifiable — concrete Verification command or explicit manual steps.
+  - Self-contained — Description is enough to start without follow-up questions.
+  - EARS — every AC matches one of the five EARS patterns below.
+  - Dependency-honest — list every prior task this one reads from or modifies.
+-->
+
+## Description
+
+Component 4, canonical email-triage edits: point every part of the
+`email-triage` skill that still describes hand-run diary mechanics or a
+"first-run reconciliation" retry point at the `bob worklog` command.
+S-015's Exclusions bar changes to `email-triage` *beyond* pointing it at
+the new command — this task is exactly that (classification signals,
+category matching, and the act-or-escalate decision stay untouched).
+Canonical (vendor-neutral) files only; pi-package regeneration is T-199;
+the six `references/categories/*.md` files are T-200.
+
+**1. `the-intern/bob-skills/skills/email-triage/SKILL.md`** — the following
+stale surfaces (line numbers approximate):
+
+- The four-step run summary (~L23, "reconcile (first executed run of the
+  day…)") and the numbered step "### 1. Determine whether this is the day's
+  first executed run, and reconcile" (~L71): the run no longer decides
+  first-run; the loop's opening step is to read today's carried-forward set
+  from `bob worklog list` output (the command has already reconciled before
+  it responds).
+- The cross-reference to the `worklog` skill's `references/reconciliation.md`
+  "First-run reconciliation" section (~L74) — T-195 deletes that section;
+  drop the reference.
+- The frontmatter `description` / intro delegation list that still claims
+  `worklog` owns "first-run detection, and reconciliation" — align with
+  `S-011`'s amended Responsibility row (the command owns those).
+- The "Tool usage" section (~L42–L60): rewrite from `read` of `worklog/*.md`
+  plus `bash` `cat` / `test` / `mkdir` / append to the single `bash` surface
+  invoking `bob worklog append` / `bob worklog list`. Its cross-reference to
+  the `worklog` skill's `references/entry-format.md` append-command shape
+  (~L50) goes away with it.
+- Step 3, blocked action (~L123–L128, where "first-run" and
+  "reconciliation" are split across two lines) and blocked escalation send
+  (~L162–L167): the
+  `Next` guidance "retry at the next first-run reconciliation once an
+  admitting allow rule exists" — repoint the retry trigger to "the
+  carried-forward set reported by `bob worklog list` at the start of any
+  run".
+- Step 4, "Record a worklog entry for the message" (~L175–L191): the
+  primary write instruction "Follow the `worklog` skill's own
+  `references/entry-format.md` for how to create `worklog/` and today's
+  file if either is still missing, the exact append-command shape" — T-195
+  deletes that content; replace with a single `bob worklog append` call
+  (the command creates `worklog/` and today's file itself). Fix the `Next`
+  "next first-run reconciliation" phrasing here too.
+
+**2. `the-intern/bob-skills/skills/email-triage/references/worklog.md`** —
+its delegation text lists "how to tell whether a run is the day's first
+executed run" and "how first-run reconciliation carries forward open items"
+among the mechanics it defers, and says "This skill's own loop step 1 is
+the point at which a carried-forward blocked action is retried." Rewrite so
+the consuming skill reads today's carried-forward set from `bob worklog`
+output and retries carried-forward blocked actions against that set. Do not
+change the item-identifier definition or the email-specific open/close
+causes.
+
+**3. `the-intern/bob-skills/skills/email-triage/references/escalation.md`**
+(~L113–L115) — "the escalated message's open worklog item stays open,
+carried forward at each day's first-run reconciliation": repoint to "…
+carried forward by `bob worklog` on every run until the reply arrives".
+
+All three files must stay free of this project's internal identifiers.
+
+## Acceptance Criteria
+
+AC-1: The `email-triage` `SKILL.md` shall contain no step that decides
+whether a run is the day's first executed run, no cross-reference to a
+`worklog` "First-run reconciliation" or `entry-format.md` append-command
+section, and no instruction to create `worklog/` or today's file by hand;
+its run loop's opening step and its per-message write step shall use
+`bob worklog list` / `bob worklog append`.
+
+AC-2: The `email-triage` `SKILL.md` "Tool usage" section and frontmatter /
+intro delegation list shall describe only `bash` invocations of
+`bob worklog append` / `bob worklog list` for diary mechanics — no `read`
+of `worklog/*.md`, no `cat`/`test`/`mkdir` shell calls, and no claim that
+the `worklog` skill owns first-run detection or reconciliation.
+
+AC-3: WHERE `SKILL.md` step 3 or step 4 describes retrying a carried-forward
+blocked action THE SYSTEM SHALL name the carried-forward set reported by
+`bob worklog list` at the start of a run as the retry trigger, not a
+"first-run reconciliation".
+
+AC-4: The `references/worklog.md` and `references/escalation.md` worklog
+text shall describe `bob worklog` performing carry-forward on every run,
+with the item-identifier definition and the email-specific open/close
+causes left unchanged.
+
+AC-5: IF any of the three edited files contains a project-internal
+identifier (a spec, task, bug, or ADR number) THEN the task is not
+complete.
+
+## Dependencies
+
+- `T-193` — the `bob worklog` surface the rewritten skill text points at
+- `T-195` — rewrites the `worklog` skill (and deletes the `reconciliation.md` / `entry-format.md` sections this file cross-references), so the two stay consistent
+
+## Files to Touch
+
+- `the-intern/bob-skills/skills/email-triage/SKILL.md` — first-run step, four-step summary, delegation list, Tool usage, step-3/step-4 retry points and hand-creation instruction
+- `the-intern/bob-skills/skills/email-triage/references/worklog.md` — delegation text realigned to the command
+- `the-intern/bob-skills/skills/email-triage/references/escalation.md` — carry-forward sentence repointed to `bob worklog`
+
+## Verification
+
+```bash
+cd the-intern/bob-skills
+! grep -REn 'S-[0-9]{3}|T-[0-9]{3}|B-[0-9]{3}|ADR-[0-9]{3}|first executed run|first-run|>> worklog|mkdir -p worklog|test -f worklog' skills/email-triage/SKILL.md skills/email-triage/references/worklog.md skills/email-triage/references/escalation.md
+grep -RIl 'bob worklog' skills/email-triage/
+```
+
+## Work Log
+
+<!-- Mandatory. Append one entry per session boundary. Format:
+### Session N — YYYY-MM-DD
+Free-prose body: what was done this session, what was tried and
+rejected, decisions made, what remains for next session.
+
+Start every session by reading the entries below.
+The final entry serves as the handoff to the reviewer. -->
+
+### Session 1 — 2026-08-30
+
+Pointed every worklog-related surface of the `email-triage` skill at the `bob worklog` command that T-190..T-193 introduced, following the Verification block's grep assertions as the red/green gate and committing one cycle per surface.
+
+SKILL.md changes: the frontmatter `description` and the intro delegation list no longer claim the `worklog` skill owns "first-run detection, and reconciliation" — they now attribute where-the-file-lives, creation, entry format, and carry-forward to the `bob worklog` command, and keep the `worklog` skill only for "when a run journals and the item-identifier convention". The four-step run summary's opening step and the numbered "### 1." step were rewritten from "Determine whether this is the day's first executed run, and reconcile" to "Read today's carried-forward set from `bob worklog list`", with an explicit statement that the loop never decides first-run and never walks worklog files itself (the command reconciles before it responds). The dangling cross-reference to the `worklog` skill's `references/reconciliation.md` "First-run reconciliation" section is gone. The Tool usage section was reduced: `read` is now "reference material only" plus an explicit "never reads a `worklog/*.md` file itself"; the `bash` bullet drops the `cat`/`test`/`mkdir`/append worklog choreography (and the `references/entry-format.md` append-command cross-ref) in favour of `bob worklog list` once per run and `bob worklog append` once per message, noting the command creates the directory and today's file itself. Step 3's blocked-action `Next` and blocked-escalation-send `Next`, and step 4's write instruction and its blocked-outcome `Next`, all now name "the carried-forward set `bob worklog list` reports at the start of a run" as the retry trigger instead of "the next first-run reconciliation"; step 4's write instruction is a single `bob worklog append` call.
+
+references/worklog.md: the intro delegation text drops "how to tell whether a run is the day's first executed run" and "how first-run reconciliation carries forward open items", and now describes `bob worklog` reconciling on every call with `bob worklog list` reporting today's carried-forward set. In "How an open item closes, for email triage" the framing sentences were realigned to `bob worklog` carry-forward on every run, and "This skill's own loop step 1 is the point at which a carried-forward blocked action is retried" became "The carried-forward set `bob worklog list` reports at the start of a run is the point...". The item-identifier section and the two email-specific open/close causes (escalation closes on the manager's reply; a gate denial closes once an admitting allow rule exists) were left verbatim.
+
+references/escalation.md: the ~L114 sentence "carried forward at each day's first-run reconciliation" became "carried forward by `bob worklog` on every run".
+
+Tried and rejected: keeping a named reference to `references/entry-format.md` in SKILL.md step 4 for field semantics — dropped the filename entirely to stay clear of AC-1's "no `entry-format.md` append-command section" bar, pointing at the `worklog` skill generally instead. Also considered stripping the `cat config/email-triage.toml` example from step 3 for token-consistency, but that is the `manager_address` config read on the escalation path, which S-015 excludes from change and this task's scope does not cover; only the Tool usage section's worklog-specific `cat`/`test`/`mkdir` calls were removed.
+
+Verification: the negative grep is clean and all three files contain `bob worklog`. `cargo test --workspace` from `the-intern/service/` is green (0 failed, 1 ignored); no Rust files were touched. Remaining for the spec's Component 4 rollout but out of this task: the `.pi/skills/...` package mirror regeneration (T-199) and the six `references/categories/*.md` files (T-200).
+
+## Review
+
+<!-- Reviewer: append verdict here after each review cycle.
+
+### Review Verdict — YYYY-MM-DD
+PASS | FAIL | ESCALATE
+
+- For FAIL: file, location, what is wrong, what should change.
+- For PASS: brief confirmation that both stages passed.
+- For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
+-->
+
+### Review Verdict — 2026-08-30
+
+PASS
+
+Both stages pass. Diff is `git diff dev-agent...task/T-196-...` — exactly the
+three canonical files (`SKILL.md`, `references/worklog.md`,
+`references/escalation.md`), 7 commits, no Rust, no
+`references/categories/*.md`, no `.pi/` mirror.
+
+Stage 1 — acceptance criteria (all met):
+
+- AC-1: `SKILL.md` step 1 is now "Read today's carried-forward set from
+  `bob worklog list`" and states the loop "never decides whether a run is the
+  day's first and never walks worklog files itself". No cross-reference to a
+  `worklog` "First-run reconciliation" section or an `entry-format.md`
+  append-command section remains (grep clean; step 4 now points at the
+  `worklog` skill generally). No hand-creation instruction — Tool usage and
+  step 4 both state `bob worklog` creates the directory and today's file
+  itself. Opening step uses `bob worklog list`; per-message write step (step
+  4) is a single `bob worklog append` call.
+- AC-2: Tool usage `read` bullet is "reference material only … never reads a
+  `worklog/*.md` file itself"; `bash` bullet lists only `bob worklog list`
+  once per run and `bob worklog append` once per message — no `cat`/`test`/
+  `mkdir`. Frontmatter/intro delegate diary mechanics to "the `bob worklog`
+  command" and keep the `worklog` skill only for "when a run journals and the
+  item-identifier convention"; no claim the `worklog` skill owns first-run
+  detection or reconciliation.
+- AC-3: Every retry-of-a-carried-forward-blocked-action trigger in step 3
+  (confident-match denial, escalation-send denial) and step 4 (blocked
+  escalation `Next`) now names "the carried-forward set `bob worklog list`
+  reports at the start of a run"; no "first-run reconciliation" phrasing
+  remains.
+- AC-4: `references/worklog.md` intro and closing paragraph describe
+  `bob worklog` reconciling on every call and carrying still-open items
+  forward "on every run"; `references/escalation.md` L114 now reads "carried
+  forward by `bob worklog` on every run". The `## Item identifier` section is
+  unchanged, and both email-specific open-item causes (escalation closes on
+  the manager's reply; a gate denial closes once an admitting allow rule
+  exists) are unchanged.
+- AC-5: negative grep for `S-\d{3}|T-\d{3}|B-\d{3}|ADR-\d{3}` over the three
+  files is clean.
+
+Verification block (run from `the-intern/bob-skills` on the task branch): the
+negative grep (`… |first executed run|first-run|>> worklog|mkdir -p worklog|
+test -f worklog`) produces no output (exit 1); `grep -RIl 'bob worklog'`
+lists all three files.
+
+S-015 Exclusions honoured: the diff touches only worklog/diary wording.
+Classification signals, the category taxonomy references, the confidence
+rubric, the confident/no-confident-match branches, the escalation-email
+content requirements, and the `manager_address` config read
+(`cat config/email-triage.toml`, on the excluded escalation path) are all
+unchanged.
+
+Stage 2 — quality: the rewritten prose is coherent and matches actual
+`bob worklog` behaviour as documented in the canonical `worklog` skill
+(SKILL.md / `references/reconciliation.md` / `references/entry-format.md`) —
+"reconciles before it responds", "nearest/most recent prior file that
+exists", "carries every still-open entry forward", "reports the
+carried-forward set", "creates `worklog/` and today's file", "stamps the
+entry from its own clock", "no other point revisits a blocked action". The
+removed cross-references pointed at content T-195 deleted (the canonical
+worklog skill has no "First-run reconciliation" section and no "first
+executed run" language). YAML frontmatter parses; no trailing whitespace.
+
+Non-blocking observations:
+
+1. `references/worklog.md` "How an open item closes" dropped the parenthetical
+   "(see its `references/reconciliation.md` "How an open item closes"
+   section)"; that section still exists in the canonical file, but the
+   rewritten sentence ("Neither the `worklog` skill nor `bob worklog` owns
+   any closing condition of its own") is self-contained and the email-specific
+   closing causes remain fully specified locally. Within the task's
+   worklog-wording scope; no correctness loss.
+2. Tool usage phrase "the `bob worklog` calls the `worklog` skill defines"
+   reads densely but is consistent with that skill's stated role ("says WHEN
+   a run records").
+
+Tests: no Rust changed, so the suite result equals the `dev-agent` baseline.
+`cargo test --workspace` from `the-intern/service/` showed one failure,
+`scheduler_execution_e2e::scheduled_entry_with_per_entry_cwd_runs_pi_session_in_that_directory_honouring_precedence`
+(`canonicalize actual reported cwd: NotFound`) — a parallel-execution flake:
+the full `scheduler_execution_e2e.rs` file passes in isolation on both
+`dev-agent` and the task branch (4/4). Not attributable to a markdown-only
+change. Remaining workspace totals: 420 passed, 0 failed, 1 ignored.
+
+Next owner: Development Loop.

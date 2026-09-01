@@ -34,14 +34,12 @@ handling.
 
 ## Worklog entry
 
-Append one entry to today's worklog file in the format `references/worklog.md` defines
-(creating `worklog/` and today's file first if either is missing, per that reference; this
-file does not restate the entry format itself). Name the reply that was sent — enough of its
-content (the question answered, the gist of the answer) that a human reading the worklog
-knows what was told to the sender without re-opening the mailbox. Record the message as
-fully handled: nothing is left outstanding and nothing further happens for this message,
-the same "fully handled" outcome the file-without-reply categories record, just reached by
-replying instead of filing.
+Append one entry with `bob worklog append` (see `references/worklog.md`). Name the reply
+that was sent — enough of its content (the question answered, the gist of the answer) that a
+human reading the worklog knows what was told to the sender without re-opening the mailbox.
+Record the message as fully handled: nothing is left outstanding and nothing further happens
+for this message, the same "fully handled" outcome the file-without-reply categories record,
+just reached by replying instead of filing.
 
 ## If the reply is blocked
 

@@ -48,6 +48,10 @@ pub enum Command {
         #[arg(long)]
         session: Option<String>,
     },
+    Worklog {
+        #[command(subcommand)]
+        command: WorklogCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -141,11 +145,40 @@ pub enum TaskCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum WorklogCommand {
+    /// Append an entry to today's worklog file, after carrying forward any
+    /// still-open items from the most recent prior worklog file.
+    Append {
+        /// Short identifier for the item this entry is about.
+        #[arg(long)]
+        item: String,
+        /// What was done for the item this run.
+        #[arg(long)]
+        done: String,
+        /// What is still outstanding, or `nothing` if fully resolved.
+        #[arg(long)]
+        left: String,
+        /// What happens next, and on what trigger.
+        #[arg(long)]
+        next: String,
+    },
+    /// Read back a day's worklog entries ordered by `HH:MM`, after
+    /// reconciling today's file first. Defaults to today's file.
+    List {
+        /// The day to read, as `YYYY-MM-DD`. Omit to read today's file.
+        #[arg(long)]
+        date: Option<String>,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use clap::{CommandFactory, Parser};
 
-    use super::{AuditCommand, Cli, Command, ScheduleCommand, SessionsCommand, TaskCommand};
+    use super::{
+        AuditCommand, Cli, Command, ScheduleCommand, SessionsCommand, TaskCommand, WorklogCommand,
+    };
     use bob_core::types::AuditFilterKind;
 
     #[test]
@@ -159,8 +192,116 @@ mod tests {
         assert!(help.contains("--json"), "help text was: {help}");
         for name in [
             "init", "task", "serve", "status", "sessions", "audit", "policy", "schedule", "chat",
+            "worklog",
         ] {
             assert!(help.contains(name), "missing {name} in help text: {help}");
+        }
+    }
+
+    #[test]
+    fn worklog_append_parses_all_four_required_flags() {
+        let cli = Cli::parse_from([
+            "bob",
+            "worklog",
+            "append",
+            "--item",
+            "vendor-invoice",
+            "--done",
+            "Chased the vendor for the missing PDF.",
+            "--left",
+            "awaiting the corrected invoice",
+            "--next",
+            "closes when the corrected invoice arrives",
+        ]);
+
+        match cli.command {
+            Command::Worklog {
+                command:
+                    WorklogCommand::Append {
+                        item,
+                        done,
+                        left,
+                        next,
+                    },
+            } => {
+                assert_eq!(item, "vendor-invoice");
+                assert_eq!(done, "Chased the vendor for the missing PDF.");
+                assert_eq!(left, "awaiting the corrected invoice");
+                assert_eq!(next, "closes when the corrected invoice arrives");
+            }
+            other => panic!("expected worklog append, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn worklog_append_requires_the_item_flag() {
+        let result = Cli::try_parse_from([
+            "bob", "worklog", "append", "--done", "d", "--left", "l", "--next", "n",
+        ]);
+
+        assert!(
+            result.is_err(),
+            "clap should reject worklog append without --item"
+        );
+    }
+
+    #[test]
+    fn worklog_append_requires_the_done_flag() {
+        let result = Cli::try_parse_from([
+            "bob", "worklog", "append", "--item", "i", "--left", "l", "--next", "n",
+        ]);
+
+        assert!(
+            result.is_err(),
+            "clap should reject worklog append without --done"
+        );
+    }
+
+    #[test]
+    fn worklog_append_requires_the_left_flag() {
+        let result = Cli::try_parse_from([
+            "bob", "worklog", "append", "--item", "i", "--done", "d", "--next", "n",
+        ]);
+
+        assert!(
+            result.is_err(),
+            "clap should reject worklog append without --left"
+        );
+    }
+
+    #[test]
+    fn worklog_append_requires_the_next_flag() {
+        let result = Cli::try_parse_from([
+            "bob", "worklog", "append", "--item", "i", "--done", "d", "--left", "l",
+        ]);
+
+        assert!(
+            result.is_err(),
+            "clap should reject worklog append without --next"
+        );
+    }
+
+    #[test]
+    fn worklog_list_parses_without_a_date_flag() {
+        let cli = Cli::parse_from(["bob", "worklog", "list"]);
+
+        assert!(matches!(
+            cli.command,
+            Command::Worklog {
+                command: WorklogCommand::List { date: None },
+            }
+        ));
+    }
+
+    #[test]
+    fn worklog_list_parses_the_optional_date_flag() {
+        let cli = Cli::parse_from(["bob", "worklog", "list", "--date", "2026-08-29"]);
+
+        match cli.command {
+            Command::Worklog {
+                command: WorklogCommand::List { date },
+            } => assert_eq!(date.as_deref(), Some("2026-08-29")),
+            other => panic!("expected worklog list, got {other:?}"),
         }
     }
 

@@ -80,6 +80,60 @@ the task id and path (or the JSON equivalent with `--json`).
   `task show`.
 - `<text>` is a required positional argument and must not be empty.
 
+## `bob worklog [append|list]`
+
+Maintains a daily markdown worklog — a per-session continuity record,
+distinct from the shared task board. Filesystem-only: like `bob init` and
+`bob task` it never opens `admin.sock` and never loads service
+configuration, so it works whether or not `bob serve` is running.
+
+Worklog resolution is **cwd-strict** (ADR-015): both subcommands resolve the
+file to exactly `<cwd>/worklog/<date>.md`, relative to the invoking
+process's working directory. There is **no upward directory search** and
+**no override** by flag, environment variable, or configuration key — a
+deliberate divergence from `bob task`, whose board resolver walks up through
+ancestor `tasks/` directories and honours `--board` / `TASKS_DIR`. Running
+`bob worklog` from the wrong directory therefore surfaces as an error
+(`list`) or as a fresh empty diary (`append`), never as a silently adopted
+worklog that belongs to another session.
+
+Both subcommands run first-run reconciliation automatically before doing
+their own work: every still-open item from the most recent prior worklog
+file is carried forward into today's file, and the command then reports
+today's full carried-forward item-identifier set (a sorted, de-duplicated
+list, printed as `carried forward: <ids>` or `carried forward: (none)`; the
+`--json` form carries the same list under `carried_forward`).
+Reconciliation always targets *today's* file — `bob worklog list --date`
+with a past date still reconciles today, then reads the requested day
+exactly as it is on disk. When `<cwd>/worklog/` does not exist,
+reconciliation is a no-op that creates nothing.
+
+### `bob worklog append --item <ITEM> --done <DONE> --left <LEFT> --next <NEXT>`
+
+Appends one entry to today's file (`<cwd>/worklog/<date>.md`), creating
+`<cwd>/worklog/` and the day file if needed, then prints the recorded item,
+the file path, and today's carried-forward set (or the JSON equivalent with
+`--json`).
+- All four flags — `--item`, `--done`, `--left`, `--next` — are **required**
+  and must be non-empty. A wholly missing flag is rejected by clap; an empty
+  or all-whitespace value is validated locally and fails with
+  `worklog entry field --<name> must not be empty` before any filesystem
+  work happens, leaving an existing day file untouched.
+- `--item` is a short identifier for the thing the entry is about; `--done`
+  is what was done this run; `--left` is what is still outstanding (or
+  `nothing`); `--next` is what happens next, and on what trigger.
+
+### `bob worklog list [--date <YYYY-MM-DD>]`
+
+Reconciles today's file, then prints the target day's entries ordered by
+`HH:MM` (not by write order), followed by today's carried-forward set (or
+`{"date", "entries", "carried_forward"}` with `--json`).
+- `--date` is optional and must be an ISO `YYYY-MM-DD` calendar date;
+  anything else is validated locally and fails with a message naming the
+  expected shape, before any filesystem work. Omit it to read today's file.
+- If `<cwd>/worklog/` does not exist the command fails locally, naming the
+  directory it looked for; it never creates it (contrast with `append`).
+
 ## `bob serve`
 
 No flags. Foreground, long-running. Builds `BobConfig`, starts every

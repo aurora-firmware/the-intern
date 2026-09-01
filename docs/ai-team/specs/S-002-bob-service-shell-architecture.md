@@ -284,8 +284,9 @@ failure record; the schedule entry remains and fires again on its next tick.
 
 **Purpose:** Operator and user surface. A subcommand that needs the running
 service is a thin JSON-RPC client over `admin.sock` and uses no other transport
-(ADR-007). A subcommand that needs nothing from the service — `bob init`
-(S-012) — is filesystem-only and never opens the socket.
+(ADR-007). A subcommand that needs nothing from the service — for example
+`bob init` (S-012), `bob task` (S-014), and `bob worklog` (S-015) — is
+filesystem-only and never opens the socket.
 **Estimated size:** Small.
 **Interfaces:**
 - *Socket discovery:* read the same configuration the service uses; default
@@ -488,3 +489,4 @@ present.
 | 2026-07-05 | Added the service-wide `pi_agent_cwd` config key (absolute-only; default = inherit launch cwd; existence handled lazily at spawn time — no startup gate); the supervisor spawns workers with an explicit resolved cwd; documented that a per-entry-cwd scheduled job spawns a dedicated worker (no warm-pool reuse), consumes a `max_processes` slot, and — when the pool is exhausted — skips that fire with a warning rather than blocking or evicting; clarified that `bob chat` ignores `pi_agent_cwd` and uses the invocation cwd. | CR-005. | T-119, T-121, T-122, T-126, T-127, T-129 |
 | 2026-08-06 | Added the service-wide skill install path config key (absolute-only; default = the ADR-009 `data` location alongside the extension; set-but-missing is fail-open with a warning, unlike the fail-closed `extension_path`). Removed skills from the `pi_agent_cwd` guidance, since skills no longer resolve from the working directory. | ADR-014 accepted 2026-08-06 / S-011. | S-011 breakdown tasks (Gate 2 pending). |
 | 2026-08-23 | Component 7, the Responsibility table, and the Component 1 subcommand catalogue no longer claim that every non-`serve` subcommand is a thin JSON-RPC client. A subcommand needing the service uses `admin.sock` and only `admin.sock`; a filesystem-only subcommand contacts nothing. | The claim has been false since S-012's `bob init` shipped, which is filesystem-only and never opens the socket; ADR-007 was amended the same day. Found by the architecture consistency review of the S-014 draft. | None (documentation reconciliation only). |
+| 2026-08-27 | Component 7's filesystem-only-subcommand example list generalized from `bob init` (S-012) alone to also name `bob task` (S-014) and `bob worklog` (S-015), so the passage reads as an example set rather than an exhaustive enumeration of one. | Found by the architecture consistency review of the S-015 draft: the same drift Component 7 already had once (see the 2026-08-23 entry) recurred because the passage names an example rather than stating the rule generically. | None (documentation reconciliation only). |

@@ -59,14 +59,12 @@ handling.
 
 ## Worklog entry
 
-Append one entry to today's worklog file in the format `references/worklog.md` defines
-(creating `worklog/` and today's file first if either is missing, per that reference; this
-file does not restate the entry format itself). When a reply was sent (previous section),
-name it — enough of its content that a human reading the worklog knows what was
-acknowledged or confirmed — and record the message as fully handled: nothing is left
-outstanding and nothing further happens for this message. A later message from the same
-sender proposing or confirming a new time is a new unseen message that re-enters triage on
-its own, on some later run, the same way an escalation's reply does — not something this
+Append one entry with `bob worklog append` (see `references/worklog.md`). When a reply was
+sent (previous section), name it — enough of its content that a human reading the worklog
+knows what was acknowledged or confirmed — and record the message as fully handled: nothing
+is left outstanding and nothing further happens for this message. A later message from the
+same sender proposing or confirming a new time is a new unseen message that re-enters triage
+on its own, on some later run, the same way an escalation's reply does — not something this
 entry stays open waiting for. When the message was escalated instead, this workflow adds
 nothing to `references/escalation.md`'s and `references/worklog.md`'s already-defined
 open-item handling.

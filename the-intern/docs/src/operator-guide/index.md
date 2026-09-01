@@ -258,9 +258,9 @@ shipped `tasks` skill drives it by running `bob task` subcommands — see the
 properties.
 
 `bob task` reads and writes board files directly and never opens
-`admin.sock`. That makes it, along with `init`, the only bob subcommand that
-works whether or not `bob serve` is running — every other subcommand needs
-the running service and fails without it.
+`admin.sock`. That makes it, along with `bob init` and `bob worklog`, one of
+the bob subcommands that work whether or not `bob serve` is running — every
+other subcommand needs the running service and fails without it.
 
 Like every other tool call a session makes, the `bash` calls the `tasks`
 skill issues to run `bob task` go through the policy engine's default-deny
@@ -268,7 +268,8 @@ gate (see
 [Policy basics](#policy-basics)): an action is admitted only when an
 `[[policy.action_rules]]` rule matches it, and an absent rule denies by
 default. This is the same guidance already given for the `worklog` skill's
-writes and for reference reads at the skill install path (see
+own `bob worklog` calls and for reference reads at the skill install path
+(see
 [Install the skill package](#install-the-skill-package) and
 [Deploying the `email-triage` scheduled job](#deploying-the-email-triage-scheduled-job)).
 At minimum, admit the skill's own command calls and its `SKILL.md` read at
@@ -1066,12 +1067,6 @@ the package as described in
    ]
 
    [[policy.action_rules]]
-   tool = "read"
-   arg_matchers = [
-     { field_path = "path", pattern = "worklog/*.md" },
-   ]
-
-   [[policy.action_rules]]
    tool = "bash"
    arg_matchers = [
      { field_path = "command", pattern = "himalaya --version*" },
@@ -1140,79 +1135,40 @@ the package as described in
    [[policy.action_rules]]
    tool = "bash"
    arg_matchers = [
-     { field_path = "command", pattern = "*find worklog*" },
-   ]
-
-   [[policy.action_rules]]
-   tool = "bash"
-   arg_matchers = [
-     { field_path = "command", pattern = "*ls *worklog*" },
-   ]
-
-   [[policy.action_rules]]
-   tool = "bash"
-   arg_matchers = [
-     { field_path = "command", pattern = "date +%H:%M*" },
-   ]
-
-   [[policy.action_rules]]
-   tool = "bash"
-   arg_matchers = [
-     { field_path = "command", pattern = "test -f worklog/*" },
-   ]
-
-   [[policy.action_rules]]
-   tool = "bash"
-   arg_matchers = [
-     { field_path = "command", pattern = "cat worklog/*.md*" },
-   ]
-
-   [[policy.action_rules]]
-   tool = "bash"
-   arg_matchers = [
-     { field_path = "command", pattern = "mkdir -p worklog*" },
-   ]
-
-   [[policy.action_rules]]
-   tool = "bash"
-   arg_matchers = [
-     { field_path = "command", pattern = "*>> worklog/*.md*" },
+     { field_path = "command", pattern = "bob worklog*" },
    ]
    ```
 
-   **The `worklog` skill's rules are now live-validated under the
-   install-path model.** The `worklog/SKILL.md` and `worklog/references/*.md`
-   read rules above admit the `worklog` skill `T-154`/`T-155` extracted from
-   `email-triage`'s own reference content; the reduced `email-triage`
-   `SKILL.md` now delegates diary mechanics to it (S-011 Responsibility
-   Separation). `T-164` re-ran this exact rule set — including these
-   `worklog` rules — live, end to end, twice: once against a scheduled
-   `email-triage` job (`automated-notification` happy path, worklog entry
-   written into the job's own `--cwd`) and once against an interactive
-   `bob chat` session asked to record a worklog entry directly, both from
-   working directories holding no skill files of their own and both served
-   entirely from a single shared skill install path. Live validation
-   surfaced two real gaps this exact rule set had before `T-164`: the `ls
-   worklog` bash pattern above is now `*ls *worklog*` (broadened to match
-   flag variants such as `ls -ld worklog`, which the earlier narrower
-   pattern missed), and the `date +%H:%M*` rule above is new — the
-   `worklog` skill needs it to look up the current time for an entry's
-   `<HH:MM>` header. Without that rule, a run may write a wrong placeholder
-   timestamp instead of the real time and then be unable to correct it,
-   since correcting it would need `edit` or an arbitrary script — tools
-   this skill's own documented surface deliberately excludes; see `B-039`
-   for the open follow-up on that specific defect (the `date` rule closes
-   the *policy* gap, but does not by itself guarantee the model always
-   calls it).
+   **The `worklog` skill's rules now follow the `bob worklog` command.** The
+   `worklog/SKILL.md` and `worklog/references/*.md` read rules above still
+   admit the reference reads the `worklog` skill (`T-154`/`T-155`, extracted
+   from `email-triage`'s own reference content) makes; the reduced
+   `email-triage` `SKILL.md` delegates diary mechanics to it (S-011
+   Responsibility Separation). Everything else the diary needs now runs
+   through a single `bash` rule, `bob worklog*`. The rewritten skill calls
+   `bob worklog list` once at the start of a run and `bob worklog append`
+   once per item handled; the command itself creates `worklog/` and today's
+   file, reads the prior day's entries to reconcile still-open items, and
+   stamps each entry from its own clock. The skill no longer runs `find`,
+   `ls`, `test`, `cat`, `mkdir`, or a `>>` append against `worklog/`, and no
+   longer calls `date` for an entry's `<HH:MM>` header, so the seven
+   raw-shell rules that used to admit those calls are removed. The
+   `bob worklog*` matcher mirrors the `bob task*` rule's shape —
+   prefix-anchored on the subcommand with a wildcard tail — so it stays
+   stable regardless of the free-text `--item`/`--done`/`--left`/`--next`
+   values a call carries or how they are quoted.
 
-   The absolute-path `worklog` rule the per-workspace deployment model used
-   (`{ field_path = "path", pattern = "<workspace>/worklog/*.md" }`) is
-   dropped entirely: the relative `worklog/*.md` rule above already matches
-   worklog reads issued from any working directory, which is what S-011's
-   Configuration Requirements call for ("the rule admitting worklog writes
-   must be broad enough to cover arbitrary working directories") — one
-   relative rule now covers every deployment's worklog reads instead of one
-   absolute rule per workspace.
+   Both worklog `read` rules the earlier deployment models used are dropped:
+   the per-workspace absolute-path rule
+   (`{ field_path = "path", pattern = "<workspace>/worklog/*.md" }`) and the
+   relative `worklog/*.md` rule that briefly replaced it. The `worklog` skill
+   never opens a diary file through `read` now — `bob worklog` performs every
+   diary read and write itself — so no `read` rule for `worklog/` is needed
+   at any path. This also retires, for worklog writes, S-011's earlier
+   accepted risk that the admitting rule be "broad enough to cover arbitrary
+   working directories": the working directory never appears in a
+   `bob worklog` command string, so the `bash` matcher above is
+   exact-prefix, not path-broad.
 
    **This rule set covers the live-validated paths** — `automated-notification`
    (file, no reply), escalation, S-004 block handling, and skipped-tick
@@ -1314,10 +1270,12 @@ the package as described in
    ls "$WORKSPACE/worklog"
    ```
 
-   The cross-day continuity path verified in T-140 also reads prior worklog
-   entries through the relative `read.path = "worklog/*.md"` matcher above, so
-   keep that rule in place even if the first happy-path run appears to work
-   without it.
+   Cross-day continuity — carrying a still-open item forward from the most
+   recent prior day — now runs inside `bob worklog` itself: every
+   `bob worklog list` and `bob worklog append` call reconciles today's file
+   before it returns, so the `bob worklog*` `bash` rule above is the only
+   rule this path needs. There is no separate worklog `read` rule to keep in
+   place.
 
 ---
 

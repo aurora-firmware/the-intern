@@ -15,9 +15,11 @@ pub mod init_materializer;
 pub mod serve;
 pub mod task_board;
 pub mod telemetry;
+pub mod worklog;
 
 use cli::{
     AuditCommand, Cli, Command, PolicyCommand, ScheduleCommand, SessionsCommand, TaskCommand,
+    WorklogCommand,
 };
 use config::BobConfig;
 
@@ -73,6 +75,15 @@ pub trait DispatchRuntime {
     ) -> ServiceResult<()>;
     fn task_note(&self, json: bool, board: Option<&str>, id: &str, text: &str)
         -> ServiceResult<()>;
+    fn worklog_append(
+        &self,
+        json: bool,
+        item: &str,
+        done: &str,
+        left: &str,
+        next: &str,
+    ) -> ServiceResult<()>;
+    fn worklog_list(&self, json: bool, date: Option<&str>) -> ServiceResult<()>;
 }
 
 pub struct ProductionRuntime;
@@ -198,6 +209,21 @@ impl DispatchRuntime for ProductionRuntime {
     ) -> ServiceResult<()> {
         cli::commands::task_note(json, board, id, text)
     }
+
+    fn worklog_append(
+        &self,
+        json: bool,
+        item: &str,
+        done: &str,
+        left: &str,
+        next: &str,
+    ) -> ServiceResult<()> {
+        cli::commands::worklog_append(json, item, done, left, next)
+    }
+
+    fn worklog_list(&self, json: bool, date: Option<&str>) -> ServiceResult<()> {
+        cli::commands::worklog_list(json, date)
+    }
 }
 
 pub async fn run_cli(cli: Cli) -> ServiceResult<()> {
@@ -232,6 +258,17 @@ pub async fn run_cli_with_runtime(runtime: &impl DispatchRuntime, cli: Cli) -> S
                 runtime.task_status(json, board.as_deref(), &id, &status, reason.as_deref())
             }
             TaskCommand::Note { id, text } => runtime.task_note(json, board.as_deref(), &id, &text),
+        };
+    }
+    if let Command::Worklog { command } = command {
+        return match command {
+            WorklogCommand::Append {
+                item,
+                done,
+                left,
+                next,
+            } => runtime.worklog_append(json, &item, &done, &left, &next),
+            WorklogCommand::List { date } => runtime.worklog_list(json, date.as_deref()),
         };
     }
 
@@ -271,7 +308,7 @@ pub async fn run_cli_with_runtime(runtime: &impl DispatchRuntime, cli: Cli) -> S
             ScheduleCommand::Reload => runtime.schedule_reload(json),
         },
         Command::Chat { session } => runtime.chat(json, session.as_deref()),
-        Command::Init { .. } | Command::Task { .. } => {
+        Command::Init { .. } | Command::Task { .. } | Command::Worklog { .. } => {
             unreachable!("filesystem-only commands return before config loading")
         }
     }
@@ -286,7 +323,7 @@ mod tests {
     use bob_core::types::AuditFilterKind;
 
     use crate::{
-        cli::{Cli, Command, TaskCommand},
+        cli::{Cli, Command, TaskCommand, WorklogCommand},
         config::BobConfig,
         run_cli_with_runtime, DispatchRuntime,
     };
@@ -437,6 +474,23 @@ mod tests {
             self.calls.lock().expect("lock").push("task_note");
             Ok(())
         }
+
+        fn worklog_append(
+            &self,
+            _json: bool,
+            _item: &str,
+            _done: &str,
+            _left: &str,
+            _next: &str,
+        ) -> ServiceResult<()> {
+            self.calls.lock().expect("lock").push("worklog_append");
+            Ok(())
+        }
+
+        fn worklog_list(&self, _json: bool, _date: Option<&str>) -> ServiceResult<()> {
+            self.calls.lock().expect("lock").push("worklog_list");
+            Ok(())
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -476,6 +530,73 @@ mod tests {
         assert_eq!(
             runtime.init_calls.lock().expect("lock").as_slice(),
             [("./workspace".to_string(), true)]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worklog_append_dispatch_bypasses_config_and_telemetry_loading() {
+        let runtime = FakeRuntime::new();
+        let cli = Cli {
+            json: false,
+            command: Command::Worklog {
+                command: WorklogCommand::Append {
+                    item: "vendor-invoice".to_string(),
+                    done: "Chased the vendor for the missing PDF.".to_string(),
+                    left: "awaiting the corrected invoice".to_string(),
+                    next: "closes when the corrected invoice arrives".to_string(),
+                },
+            },
+        };
+
+        run_cli_with_runtime(&runtime, cli)
+            .await
+            .expect("worklog dispatch succeeds");
+
+        assert_eq!(
+            runtime.calls.lock().expect("lock").as_slice(),
+            ["worklog_append"]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worklog_list_dispatch_bypasses_config_and_telemetry_loading() {
+        let runtime = FakeRuntime::new();
+        let cli = Cli {
+            json: false,
+            command: Command::Worklog {
+                command: WorklogCommand::List { date: None },
+            },
+        };
+
+        run_cli_with_runtime(&runtime, cli)
+            .await
+            .expect("worklog dispatch succeeds");
+
+        assert_eq!(
+            runtime.calls.lock().expect("lock").as_slice(),
+            ["worklog_list"]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn worklog_list_with_date_dispatch_bypasses_config_and_telemetry_loading() {
+        let runtime = FakeRuntime::new();
+        let cli = Cli {
+            json: false,
+            command: Command::Worklog {
+                command: WorklogCommand::List {
+                    date: Some("2026-08-29".to_string()),
+                },
+            },
+        };
+
+        run_cli_with_runtime(&runtime, cli)
+            .await
+            .expect("worklog dispatch succeeds");
+
+        assert_eq!(
+            runtime.calls.lock().expect("lock").as_slice(),
+            ["worklog_list"]
         );
     }
 

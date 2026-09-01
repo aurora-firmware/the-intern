@@ -147,7 +147,7 @@ What this specification explicitly does NOT cover:
 | Skill install path | The deployed, read-only location bob resolves and makes available to its extension | A trusted, un-checked input; operator-protected by filesystem permissions |
 | bob service | Resolve the install path and make it available to the extension on every session spawned | Uses the existing per-session environment contract; bob never reads skill content |
 | bob extension | Answer pi's resource-discovery event with the resolved skill path | Already supplied on all three spawn paths and already subscribed to the event; governed by `ADR-014` |
-| `worklog` skill | Owns the entire diary discipline: location, entry format, creation, first-run detection, reconciliation, and how an open item closes | Domain-free; consumed by any work that needs continuity |
+| `worklog` skill | Owns when and how a session uses the diary, and the item-identifier convention | Domain-free; defers to the `bob worklog` command for entry format, first-run detection, and reconciliation rather than restating them (S-015) |
 | `email-triage` skill | Owns detection, classification, and the act-or-escalate decision | Delegates all diary mechanics to `worklog`; retains retry of a carried-forward blocked action |
 | `himalaya` skill | Owns CLI reference knowledge | Carries no triage policy; unchanged in role |
 | `tasks` skill | Owns the task-board discipline: when work belongs on a board, how to describe it so a later run can pick it up cold, and what each status commits to | Domain-free; defers to the `bob task` command for the file format rather than restating it (S-014) |
@@ -189,14 +189,16 @@ exposes no new external interface. Governed by `ADR-014`.
 
 ### Component 4: `worklog` skill
 
-**Purpose:** Define the daily diary discipline — where it lives, the entry
-format, creating what is missing, detecting a day's first executed run,
-reconciling carried-forward open items, and how an open item closes — with no
-reference to email or any other domain.
+**Purpose:** Teach a session when and how to use the `bob worklog` command —
+the item-identifier convention and when a run should call `append` vs
+`list` — with no reference to email or any other domain. Entry format,
+first-run detection, and reconciliation are owned by the command itself
+(S-015), not restated here.
 **Estimated size:** Medium — extraction of existing validated content, with its
 domain-specific parts left behind.
-**Interfaces:** Exposes diary discipline to any consuming skill; consumes the
-session's own working directory. Its only state is files under that directory.
+**Interfaces:** Exposes usage guidance to any consuming skill; consumes the
+`bob worklog` command. Its only state is files under the session's own
+working directory, owned by the command.
 
 ### Component 5: `email-triage` skill, reduced
 
@@ -269,18 +271,21 @@ A later session reconciles carried-forward open items from that same directory
 
 - **What must exist:** rules admitting the tool calls the shipped skills make —
   reads of skill reference content at the install path, and the worklog's
-  directory checks, reads, and appends.
+  `bob worklog append`/`list` invocations (S-015).
 - **Where it lives:** the existing action ruleset, as ordinary operator
   configuration.
 - **Constraints:** rules admitting reads of skill reference content are scoped
   to the single install path and are therefore stable across deployments,
-  replacing today's per-working-directory rules. **Accepted risk:** because the
-  skill set is always active, an interactive session journals into whatever
-  directory it was started from, so the rule admitting worklog writes must be
-  broad enough to cover arbitrary working directories. This is a deliberate
-  departure from the narrowly-matched rule shape the action model otherwise
-  favours; the operator accepted it in preference to confining journaling to
-  configured directories or reverting to scheduled-only journaling.
+  replacing today's per-working-directory rules. **Formerly accepted risk,
+  retired by S-015 for worklog writes:** because the skill set is always
+  active, an interactive session journals into whatever directory it was
+  started from; before S-015 this meant the rule admitting worklog writes
+  had to be broad enough to cover arbitrary working directories, a
+  deliberate departure from the narrowly-matched rule shape the action
+  model otherwise favours. S-015's `bob worklog` command never places the
+  working directory in its own invocation text, so the admitting rule is
+  now narrowly matched on the command's fixed prefix instead — see S-015
+  Configuration Requirements.
 - **Bootstrap profile exception:** CR-007 permits `bob init` to generate
   no-matcher rules for exactly `bash`, `read`, `write`, and `edit` as a
   deliberately broad first-run profile. This is an operator-usability
@@ -338,3 +343,4 @@ A later session reconciles carried-forward open items from that same directory
 | 2026-08-12 | Added the CR-007 `bob init` bootstrap exception allowing no-matcher rules for four named standard pi tools. | A fresh operator installation must work without manually discovering tool-call argument shapes; normal install-path-scoped and worklog guidance remains the recommended steady state. | S-012 tasks TBD |
 | 2026-08-23 | The canonical skill set gains a fourth skill, `tasks`, in the System Diagram and the Responsibility Separation table. No principle, packaging target, install path, or delivery mechanism changes. | CR-009 / S-014. The command's operating instructions ship with the skills bob supplies through its extension rather than with operator tooling, so the set this specification defines grows by one. | Tasks TBD |
 | 2026-08-23 | The Claude packaging target is removed, leaving the pi target as the only one. The Purpose's success criterion no longer requires the content to be loadable by two vendors, and now requires the canonical source to stay free of vendor-specific layout so a second target can be added when a consumer exists. Diagram, Component 2, and the packaging responsibility row follow. | CR-011. The Claude target demonstrated the two-vendor principle rather than serving a consumer, and carrying it through CR-010's rename and S-014's fourth skill would cost work on output nobody installs. The canonical-source layer is deliberately kept so re-adding a vendor stays cheap. | Tasks TBD |
+| 2026-08-27 | The `worklog` skill row and Component 4 no longer claim the skill itself owns entry format, first-run detection, or reconciliation — it now defers to the `bob worklog` command for those, the same way this table already describes `tasks` deferring to `bob task`. The "Action rules admitting skill tool calls" section's worklog line now names `bob worklog append`/`list` invocations instead of raw "directory checks, reads, and appends", and its accepted risk that the admitting rule "must be broad enough to cover arbitrary working directories" is marked retired for worklog writes, since the command's invocation text never carries the working directory. | S-015 approval. The worklog mechanics move from skill prose into a real command, mirroring S-014's earlier move for the task board; the working directory dropping out of the command's own text is what lets the admitting rule narrow. | S-015 breakdown tasks (Gate 2 pending). |

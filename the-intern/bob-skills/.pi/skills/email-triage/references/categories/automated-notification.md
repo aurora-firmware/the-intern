@@ -29,19 +29,17 @@ act on the failure; that stays out of this skill's per-category business logic.
 This is a note for the operator's own attention, not an open item under
 `references/worklog.md`'s reconciliation model: it does not close via a manager reply or a
 retried call previously denied by the action-authorization gate, the way that model's two
-defined open-item causes do, so it is not carried forward at first-run reconciliation the
-way an escalation or a block is. The message itself is still fully handled by filing it —
-the flag exists only so the failure does not go unnoticed once the message leaves `INBOX`.
+defined open-item causes do, so `bob worklog` does not carry it forward the way it carries
+an escalation or a block. The message itself is still fully handled by filing it — the flag
+exists only so the failure does not go unnoticed once the message leaves `INBOX`.
 
 ## Worklog entry
 
-Append one entry to today's worklog file in the format `references/worklog.md` defines
-(creating `worklog/` and today's file first if either is missing, per that reference; this
-file does not restate the entry format itself). For a routine notification, record the
-filing as fully handled: nothing is left outstanding and nothing further happens for this
-message. For a notification that reports a failure needing attention (previous section),
-name that failure in the entry as the reason for a follow-up, distinct from the entry's own
-"nothing left" filing outcome.
+Append one entry with `bob worklog append` (see `references/worklog.md`). For a routine
+notification, record the filing as fully handled: nothing is left outstanding and nothing
+further happens for this message. For a notification that reports a failure needing
+attention (previous section), name that failure in the entry as the reason for a follow-up,
+distinct from the entry's own "nothing left" filing outcome.
 
 ## If the move is blocked
 
