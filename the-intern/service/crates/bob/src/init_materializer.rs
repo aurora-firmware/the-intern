@@ -23,6 +23,7 @@ pub struct MaterializationReport {
     pub skill_install_path: PathBuf,
     pub created_paths: Vec<PathBuf>,
     pub replaced_paths: Vec<PathBuf>,
+    pub backed_up_paths: Vec<PathBuf>,
     pub skipped_paths: Vec<PathBuf>,
 }
 
@@ -45,17 +46,20 @@ pub(crate) fn materialize_workspace_with_paths(
     resolved_paths: &ResolvedInitPaths,
     force: bool,
 ) -> ServiceResult<MaterializationReport> {
-    if resolved_paths.config_path.exists() && !force {
-        return Err(ServiceError::InvalidRequest {
-            detail: format!(
-                "live config already exists at {}; rerun with --force to replace it",
-                resolved_paths.config_path.display()
-            ),
-        });
-    }
-
+    // Resolve and validate the workspace path before the live-config conflict
+    // check so the refusal can name the workspace files `--force` would also
+    // replace. Neither `resolve_workspace_path` nor `reject_git_metadata_target`
+    // touches the filesystem, so a conflict still fails before any mutation.
     let workspace_path = resolve_workspace_path(workspace_path, current_dir);
     reject_git_metadata_target(&workspace_path)?;
+
+    if resolved_paths.config_path.exists() && !force {
+        return Err(live_config_conflict_error(
+            &resolved_paths.config_path,
+            &workspace_path,
+        ));
+    }
+
     ensure_directory(&workspace_path)?;
 
     let mut report = MaterializationReport {
@@ -64,6 +68,7 @@ pub(crate) fn materialize_workspace_with_paths(
         skill_install_path: resolved_paths.skill_install_path.clone(),
         created_paths: vec![],
         replaced_paths: vec![],
+        backed_up_paths: vec![],
         skipped_paths: vec![],
     };
 
@@ -77,6 +82,35 @@ pub(crate) fn materialize_workspace_with_paths(
     )?;
 
     Ok(report)
+}
+
+/// Builds the refusal returned when a live config already exists and `--force`
+/// was not given. It names every operator-editable file the matching `--force`
+/// run would replace — not just the live config — because `--force` also
+/// re-scaffolds the workspace instruction files and the example email-triage
+/// config. Each existing file is copied to `<file>.bak` before it is
+/// overwritten (see `back_up_existing_file`).
+fn live_config_conflict_error(config_path: &Path, workspace_path: &Path) -> ServiceError {
+    ServiceError::InvalidRequest {
+        detail: format!(
+            "live config already exists at {config}; rerun with --force to replace it \
+and re-scaffold the workspace.\n\
+--force overwrites these operator-editable files when they already exist, \
+copying each to <file>.bak first:\n\
+  {config}\n\
+  {agents}\n\
+  {claude}\n\
+  {email_triage}\n\
+The tasks/ board and the worklog/ directory are left untouched.",
+            config = config_path.display(),
+            agents = workspace_path.join("AGENTS.md").display(),
+            claude = workspace_path.join("CLAUDE.md").display(),
+            email_triage = workspace_path
+                .join("config")
+                .join("email-triage.toml")
+                .display(),
+        ),
+    }
 }
 
 fn materialize_workspace_files(
@@ -93,18 +127,21 @@ fn materialize_workspace_files(
         &workspace_path.join("AGENTS.md"),
         CONTEXT_PLACEHOLDER.as_bytes(),
         force,
+        BackupPolicy::BackUpBeforeReplace,
         report,
     )?;
     write_generated_file(
         &workspace_path.join("CLAUDE.md"),
         CONTEXT_PLACEHOLDER.as_bytes(),
         force,
+        BackupPolicy::BackUpBeforeReplace,
         report,
     )?;
     write_generated_file(
         &workspace_path.join("config").join("email-triage.toml"),
         EMAIL_TRIAGE_TEMPLATE.as_bytes(),
         force,
+        BackupPolicy::BackUpBeforeReplace,
         report,
     )?;
 
@@ -129,7 +166,16 @@ fn install_shared_skills(
                 ),
             })?;
         ensure_directory(parent)?;
-        write_generated_file(&asset_path, asset.bytes(), force, report)?;
+        // Shared skill assets are managed content `bob init` owns outright, not
+        // operator-editable files; a per-run `.bak` beside each of them would be
+        // noise. Refreshing them without a full re-scaffold is issue #55.
+        write_generated_file(
+            &asset_path,
+            asset.bytes(),
+            force,
+            BackupPolicy::ReplaceWithoutBackup,
+            report,
+        )?;
     }
 
     Ok(())
@@ -141,6 +187,10 @@ fn write_live_config(
     force: bool,
     report: &mut MaterializationReport,
 ) -> ServiceResult<()> {
+    // Defensive re-check only: `materialize_workspace_with_paths` already
+    // rejects this case up front with `live_config_conflict_error`, which names
+    // every path `--force` replaces. This terser guard just protects
+    // `write_live_config` against a future direct caller.
     if config_path.exists() && !force {
         return Err(ServiceError::InvalidRequest {
             detail: format!(
@@ -161,14 +211,26 @@ fn write_live_config(
         config_path,
         render_live_config(skill_install_path).as_bytes(),
         force,
+        BackupPolicy::BackUpBeforeReplace,
         report,
     )
+}
+
+/// Whether `write_generated_file` copies an existing file aside before `--force`
+/// overwrites it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackupPolicy {
+    /// Copy the existing file to `<path>.bak` first (operator-editable files).
+    BackUpBeforeReplace,
+    /// Overwrite in place with no copy-aside (managed content `bob init` owns).
+    ReplaceWithoutBackup,
 }
 
 fn write_generated_file(
     path: &Path,
     contents: &[u8],
     force: bool,
+    backup: BackupPolicy,
     report: &mut MaterializationReport,
 ) -> ServiceResult<()> {
     reject_symlink_target(path)?;
@@ -189,6 +251,10 @@ fn write_generated_file(
             report.skipped_paths.push(path.to_path_buf());
             return Ok(());
         }
+        if backup == BackupPolicy::BackUpBeforeReplace {
+            let backup_path = back_up_existing_file(path)?;
+            report.backed_up_paths.push(backup_path);
+        }
         fs::write(path, contents).map_err(|err| ServiceError::Persistence {
             detail: format!("failed to replace generated file {}: {err}", path.display()),
         })?;
@@ -203,6 +269,36 @@ fn write_generated_file(
     set_owner_only_mode(path, 0o600)?;
     report.created_paths.push(path.to_path_buf());
     Ok(())
+}
+
+/// Copies an operator-editable file that `bob init --force` is about to replace
+/// to `<path>.bak`, so a mistaken `--force` never destroys operator content with
+/// no recourse. One `.bak` slot is kept per file: it always holds the contents
+/// from immediately before the most recent `--force`, so any earlier backup at
+/// that path is overwritten. Returns the backup path for the report.
+fn back_up_existing_file(path: &Path) -> ServiceResult<PathBuf> {
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| ServiceError::InvalidRequest {
+            detail: format!(
+                "cannot back up a path with no file name: {}",
+                path.display()
+            ),
+        })?;
+    let mut backup_name = file_name.to_os_string();
+    backup_name.push(".bak");
+    let backup_path = path.with_file_name(backup_name);
+
+    reject_symlink_target(&backup_path)?;
+    fs::copy(path, &backup_path).map_err(|err| ServiceError::Persistence {
+        detail: format!(
+            "failed to back up {} to {}: {err}",
+            path.display(),
+            backup_path.display()
+        ),
+    })?;
+    set_owner_only_mode(&backup_path, 0o600)?;
+    Ok(backup_path)
 }
 
 /// Creates the empty task board directory this command scaffolds, or leaves
@@ -411,6 +507,29 @@ mod tests {
             "unexpected mode for {}",
             path.display()
         );
+    }
+
+    fn collect_bak_files(root: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(root) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_bak_files(&path, out);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("bak") {
+                out.push(path);
+            }
+        }
+    }
+
+    fn dot_bak(path: &Path) -> PathBuf {
+        let mut name = path
+            .file_name()
+            .expect("path should have a file name")
+            .to_os_string();
+        name.push(".bak");
+        path.with_file_name(name)
     }
 
     #[test]
@@ -986,6 +1105,226 @@ mod tests {
         assert!(
             !resolved_paths.skill_install_path.exists(),
             "shared skill install path must not be created when the live-config conflict is caught up front"
+        );
+    }
+
+    #[test]
+    fn live_config_conflict_error_names_every_path_force_replaces() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+
+        let config_parent = resolved_paths
+            .config_path
+            .parent()
+            .expect("config path should have a parent");
+        fs::create_dir_all(config_parent).expect("config parent should be created");
+        fs::write(
+            &resolved_paths.config_path,
+            "skill_install_path = \"/keep/me\"\n",
+        )
+        .expect("existing live config should be seeded");
+
+        let err = materialize_workspace_with_paths(
+            Path::new("workspace"),
+            temp.path(),
+            &resolved_paths,
+            false,
+        )
+        .expect_err("existing live config must block no-force materialization");
+
+        let ServiceError::InvalidRequest { detail } = err else {
+            panic!("expected InvalidRequest, got {err:?}");
+        };
+
+        let workspace = temp.path().join("workspace");
+        for needle in [
+            "live config already exists".to_string(),
+            resolved_paths.config_path.display().to_string(),
+            workspace.join("AGENTS.md").display().to_string(),
+            workspace.join("CLAUDE.md").display().to_string(),
+            workspace
+                .join("config")
+                .join("email-triage.toml")
+                .display()
+                .to_string(),
+            ".bak".to_string(),
+        ] {
+            assert!(
+                detail.contains(&needle),
+                "refusal detail should mention {needle:?}, got:\n{detail}"
+            );
+        }
+    }
+
+    #[test]
+    fn force_backs_up_replaced_operator_files_to_dot_bak_before_overwriting() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+        let workspace = temp.path().join("workspace");
+        let workspace_config_dir = workspace.join("config");
+        fs::create_dir_all(&workspace_config_dir).expect("config dir should be created");
+
+        fs::write(workspace.join("AGENTS.md"), "operator agents\n").expect("seed AGENTS.md");
+        fs::write(workspace.join("CLAUDE.md"), "operator claude\n").expect("seed CLAUDE.md");
+        fs::write(
+            workspace_config_dir.join("email-triage.toml"),
+            "manager_address = \"real@corp.example\"\n",
+        )
+        .expect("seed workspace email-triage config");
+
+        let config_parent = resolved_paths
+            .config_path
+            .parent()
+            .expect("config path should have a parent");
+        fs::create_dir_all(config_parent).expect("config parent should be created");
+        fs::write(
+            &resolved_paths.config_path,
+            "skill_install_path = \"/old/skills\"\n# operator-narrowed rule\n",
+        )
+        .expect("seed live config");
+
+        let report = materialize_workspace_with_paths(
+            Path::new("workspace"),
+            temp.path(),
+            &resolved_paths,
+            true,
+        )
+        .expect("force should replace generated files");
+
+        for (original, old_contents) in [
+            (workspace.join("AGENTS.md"), "operator agents\n"),
+            (workspace.join("CLAUDE.md"), "operator claude\n"),
+            (
+                workspace_config_dir.join("email-triage.toml"),
+                "manager_address = \"real@corp.example\"\n",
+            ),
+            (
+                resolved_paths.config_path.clone(),
+                "skill_install_path = \"/old/skills\"\n# operator-narrowed rule\n",
+            ),
+        ] {
+            let backup = dot_bak(&original);
+            assert_eq!(
+                fs::read_to_string(&backup).unwrap_or_else(|err| panic!(
+                    "backup {} should exist: {err}",
+                    backup.display()
+                )),
+                old_contents,
+                "backup must hold the pre-force content of {}",
+                original.display()
+            );
+            assert_mode(&backup, 0o600);
+            assert!(
+                report.backed_up_paths.contains(&backup),
+                "report should name the backup {}, got {:?}",
+                backup.display(),
+                report.backed_up_paths
+            );
+            assert_ne!(
+                fs::read_to_string(&original).expect("the live file should still exist"),
+                old_contents,
+                "the live file {} should have been rewritten",
+                original.display()
+            );
+            assert!(
+                report.replaced_paths.contains(&original),
+                "report should also record {} as replaced",
+                original.display()
+            );
+        }
+    }
+
+    #[test]
+    fn force_overwrites_an_existing_dot_bak_rather_than_failing() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+        let workspace = temp.path().join("workspace");
+        fs::create_dir_all(&workspace).expect("workspace dir should be created");
+
+        fs::write(workspace.join("AGENTS.md"), "current agents\n").expect("seed AGENTS.md");
+        fs::write(workspace.join("AGENTS.md.bak"), "stale earlier backup\n")
+            .expect("seed a stale .bak from a prior run");
+
+        materialize_workspace_with_paths(
+            Path::new("workspace"),
+            temp.path(),
+            &resolved_paths,
+            true,
+        )
+        .expect("force should succeed even with a pre-existing .bak");
+
+        assert_eq!(
+            fs::read_to_string(workspace.join("AGENTS.md.bak")).expect(".bak should exist"),
+            "current agents\n",
+            ".bak should hold the content from immediately before this --force run"
+        );
+    }
+
+    #[test]
+    fn force_on_a_fresh_workspace_creates_no_bak_files() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+
+        let report = materialize_workspace_with_paths(
+            Path::new("workspace"),
+            temp.path(),
+            &resolved_paths,
+            true,
+        )
+        .expect("fresh force materialization should succeed");
+
+        assert!(
+            report.backed_up_paths.is_empty(),
+            "nothing pre-existing means nothing to back up, got {:?}",
+            report.backed_up_paths
+        );
+        let mut bak_files = Vec::new();
+        collect_bak_files(temp.path(), &mut bak_files);
+        assert!(
+            bak_files.is_empty(),
+            "force on a fresh workspace must not create .bak files, found {bak_files:?}"
+        );
+    }
+
+    #[test]
+    fn force_does_not_back_up_shared_skill_assets() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+
+        materialize_workspace_with_paths(
+            Path::new("workspace"),
+            temp.path(),
+            &resolved_paths,
+            false,
+        )
+        .expect("first materialization should install the shared skills");
+
+        let report = materialize_workspace_with_paths(
+            Path::new("workspace"),
+            temp.path(),
+            &resolved_paths,
+            true,
+        )
+        .expect("second, forced run should rewrite the shared skill assets");
+
+        assert!(
+            report
+                .backed_up_paths
+                .iter()
+                .all(|path| !path.starts_with(&resolved_paths.skill_install_path)),
+            "shared skill assets must not be backed up, got {:?}",
+            report.backed_up_paths
+        );
+        let mut bak_files = Vec::new();
+        collect_bak_files(&resolved_paths.skill_install_path, &mut bak_files);
+        assert!(
+            bak_files.is_empty(),
+            "no .bak files should be written under the shared skill tree, found {bak_files:?}"
         );
     }
 }
