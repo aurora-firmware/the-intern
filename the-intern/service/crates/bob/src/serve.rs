@@ -339,6 +339,10 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
         schedule_store_path: maybe_schedule_store_path,
         schedule_store_uid: maybe_schedule_store_uid,
         interactive_session: Some(build_interactive_session_config(cfg)),
+        // Report the binary's release version from `service.status` so it
+        // matches `bob --version` (both derive from `APP_VERSION`, set by
+        // `build.rs` from the release tag). Issue #52.
+        version: env!("APP_VERSION"),
         ..admin_rpc::Config::default()
     };
     let (admin_rpc_handle, admin_rpc_join) = admin_rpc::start(admin_rpc_cfg).map_err(|e| {
