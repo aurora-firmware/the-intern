@@ -606,8 +606,9 @@ fn set_owner_only_permissions(_path: &Path) -> ServiceResult<()> {
 ///
 /// The fallback root is per-uid (`<temp>/bob-<uid>`), because `env::temp_dir()`
 /// (`/tmp`) is shared and world-writable and the socket directory must stay
-/// `0700` owner-only (ADR-009, ADR-005/ADR-007). When the platform variable is
-/// set its value is already per-user, so the root is the plain `<dir>/bob`.
+/// `0700` owner-only (ADR-009, ADR-005/ADR-007). On Linux a set
+/// `XDG_RUNTIME_DIR` is already per-user, so that path stays the plain
+/// `<dir>/bob`; the macOS arm always appends `-<uid>`.
 fn resolve_runtime_root(sources: &ConfigSources) -> ServiceResult<(PathBuf, bool)> {
     if cfg!(target_os = "macos") {
         let (tmpdir, used_fallback) = match sources.env.get("TMPDIR").cloned() {
