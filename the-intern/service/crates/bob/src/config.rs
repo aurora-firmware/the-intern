@@ -603,6 +603,11 @@ fn set_owner_only_permissions(_path: &Path) -> ServiceResult<()> {
 /// was absent from the process environment and the `env::temp_dir()` fallback
 /// was used. Clients surface that flag to explain a "missing admin socket"
 /// failure that is really an unresolved runtime directory (issue #60).
+///
+/// The fallback root is per-uid (`<temp>/bob-<uid>`), because `env::temp_dir()`
+/// (`/tmp`) is shared and world-writable and the socket directory must stay
+/// `0700` owner-only (ADR-009, ADR-005/ADR-007). When the platform variable is
+/// set its value is already per-user, so the root is the plain `<dir>/bob`.
 fn resolve_runtime_root(sources: &ConfigSources) -> ServiceResult<(PathBuf, bool)> {
     if cfg!(target_os = "macos") {
         let (tmpdir, used_fallback) = match sources.env.get("TMPDIR").cloned() {
@@ -616,12 +621,16 @@ fn resolve_runtime_root(sources: &ConfigSources) -> ServiceResult<(PathBuf, bool
         ));
     }
 
-    let (runtime, used_fallback) = match sources.env.get("XDG_RUNTIME_DIR").cloned() {
-        Some(dir) => (dir, false),
-        None => (env::temp_dir().to_string_lossy().into_owned(), true),
+    let (runtime, leaf, used_fallback) = match sources.env.get("XDG_RUNTIME_DIR").cloned() {
+        Some(dir) => (dir, "bob".to_string(), false),
+        None => (
+            env::temp_dir().to_string_lossy().into_owned(),
+            format!("bob-{}", sources.uid),
+            true,
+        ),
     };
 
-    Ok((Path::new(&runtime).join("bob"), used_fallback))
+    Ok((Path::new(&runtime).join(leaf), used_fallback))
 }
 
 fn defaults_with_runtime_root(
@@ -1016,12 +1025,66 @@ mod tests {
 
         assert_eq!(
             config.admin_sock_path,
-            std::env::temp_dir().join("bob").join("admin.sock")
+            std::env::temp_dir().join("bob-4242").join("admin.sock")
         );
         assert!(
             config.admin_sock_is_tmp_fallback,
             "an unresolved runtime dir must flag the socket path as the tmp fallback"
         );
+    }
+
+    #[test]
+    fn tmp_fallback_runtime_root_is_per_uid_but_xdg_runtime_dir_is_not() {
+        // B-045 / ADR-009: /tmp is shared, so the XDG_RUNTIME_DIR-unset fallback
+        // root must be per-uid; two uids must not collide on one directory.
+        let load_for_uid = |uid: u32| {
+            BobConfig::load_with_sources(ConfigSources {
+                env: BTreeMap::new(),
+                config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+                cli_overrides: BTreeMap::new(),
+                uid,
+            })
+            .expect("defaults should load without a runtime dir")
+            .admin_sock_path
+        };
+
+        assert_eq!(
+            load_for_uid(4242),
+            std::env::temp_dir().join("bob-4242").join("admin.sock"),
+        );
+        assert_ne!(
+            load_for_uid(4242),
+            load_for_uid(4243),
+            "distinct uids must resolve distinct fallback runtime roots"
+        );
+
+        // When the platform runtime-dir variable is set it is already per-user:
+        // the root stays the plain `<dir>/bob`, with no `-<uid>` suffix.
+        let mut env = BTreeMap::new();
+        let (var, dir) = if cfg!(target_os = "macos") {
+            ("TMPDIR", "/tmp/bob-tests")
+        } else {
+            ("XDG_RUNTIME_DIR", "/run/user/4242")
+        };
+        env.insert(var.to_string(), dir.to_string());
+        let with_runtime_dir = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("defaults should load with a runtime dir");
+
+        let expected_root = if cfg!(target_os = "macos") {
+            PathBuf::from(dir).join("bob-4242")
+        } else {
+            PathBuf::from(dir).join("bob")
+        };
+        assert_eq!(
+            with_runtime_dir.admin_sock_path,
+            expected_root.join("admin.sock")
+        );
+        assert!(!with_runtime_dir.admin_sock_is_tmp_fallback);
     }
 
     #[test]
