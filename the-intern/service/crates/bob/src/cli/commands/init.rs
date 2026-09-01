@@ -38,7 +38,6 @@ fn write_report(out: &mut impl Write, report: &MaterializationReport) -> Service
         .map_err(write_error)?;
 
     write_path_section(out, "created", &report.created_paths)?;
-    write_path_section(out, "backed up", &report.backed_up_paths)?;
     write_path_section(out, "replaced", &report.replaced_paths)?;
     write_path_section(out, "skipped existing", &report.skipped_paths)?;
 
@@ -130,7 +129,6 @@ mod tests {
                 config_path.clone(),
             ],
             replaced_paths: vec![skill_install_path.join("email-triage").join("SKILL.md")],
-            backed_up_paths: vec![config_path.with_file_name("config.toml.bak")],
             skipped_paths: vec![workspace.join("CLAUDE.md")],
         };
 
@@ -148,8 +146,6 @@ mod tests {
             "shared skills: /tmp/xdg-data/bob/skills",
             "created:",
             "/tmp/project/workspace/AGENTS.md",
-            "backed up:",
-            "/tmp/xdg-config/bob/config.toml.bak",
             "replaced:",
             "/tmp/xdg-data/bob/skills/email-triage/SKILL.md",
             "skipped existing:",
