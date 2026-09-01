@@ -90,6 +90,13 @@ pub struct Config {
     /// executable as the extension path (the latter is overridden in production by
     /// the real `bob.ts` extension path).
     pub interactive_session: Option<InteractiveSessionConfig>,
+    /// Version string reported by the `service.status` RPC.
+    ///
+    /// Defaults to this crate's compile-time `CARGO_PKG_VERSION`. `bob serve`
+    /// overrides it with the binary's release version (`APP_VERSION`, derived
+    /// from the release tag in `bob/build.rs`) so that `service.status` and
+    /// `bob --version` report the same value.
+    pub version: &'static str,
 }
 
 /// Spawn parameters used by `session.interactive.open` (T-105 / ADR-011).
@@ -126,6 +133,7 @@ impl Default for Config {
             schedule_store_path: None,
             schedule_store_uid: None,
             interactive_session: None,
+            version: env!("CARGO_PKG_VERSION"),
         }
     }
 }
@@ -852,6 +860,39 @@ async fn run_listener(
     }
 }
 
+/// Assemble the JSON-RPC [`Dispatcher`] from an actor [`Config`].
+///
+/// Split out from [`start`] so the wiring is unit-testable without binding a
+/// socket — in particular that the `service.status` version string comes from
+/// [`Config::version`] (the binary's release version, supplied by `bob serve`)
+/// rather than this crate's own `CARGO_PKG_VERSION`.
+fn build_dispatcher(cfg: &Config) -> Dispatcher {
+    let mut dispatcher = Dispatcher::new(
+        cfg.supervisor.clone(),
+        cfg.policy.clone(),
+        cfg.monitoring.clone(),
+        cfg.version,
+    );
+    // Inject the scheduler-adapter handle when provided (AC-2 of T-096).
+    if let Some(h) = cfg.scheduler.clone() {
+        dispatcher = dispatcher.with_scheduler_handle(h);
+    }
+    // Inject the JSON schedule store path when provided (T-115 / ADR-012).
+    if let Some(p) = cfg.schedule_store_path.clone() {
+        dispatcher = dispatcher.with_schedule_store_path(p);
+    }
+    // Inject the trusted service-principal uid for the schedule-store trust
+    // boundary (ADR-012 / ADR-005).
+    if let Some(uid) = cfg.schedule_store_uid {
+        dispatcher = dispatcher.with_schedule_store_uid(uid);
+    }
+    // Inject the interactive-session spawn config when provided (T-105).
+    if let Some(interactive_cfg) = cfg.interactive_session.clone() {
+        dispatcher = dispatcher.with_interactive_session_config(interactive_cfg);
+    }
+    dispatcher
+}
+
 /// Starts the admin-rpc actor and, when `cfg.admin_sock_path` is non-empty,
 /// binds the Unix domain socket listener and spawns an accept loop task.
 ///
@@ -871,29 +912,7 @@ pub fn start(cfg: Config) -> Result<(Handle, JoinHandle<()>), std::io::Error> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     // Build the dispatcher from the optional handles in the config.
-    let mut dispatcher = Dispatcher::new(
-        cfg.supervisor.clone(),
-        cfg.policy.clone(),
-        cfg.monitoring.clone(),
-        env!("CARGO_PKG_VERSION"),
-    );
-    // Inject the scheduler-adapter handle when provided (AC-2 of T-096).
-    if let Some(h) = cfg.scheduler.clone() {
-        dispatcher = dispatcher.with_scheduler_handle(h);
-    }
-    // Inject the JSON schedule store path when provided (T-115 / ADR-012).
-    if let Some(p) = cfg.schedule_store_path.clone() {
-        dispatcher = dispatcher.with_schedule_store_path(p);
-    }
-    // Inject the trusted service-principal uid for the schedule-store trust
-    // boundary (ADR-012 / ADR-005).
-    if let Some(uid) = cfg.schedule_store_uid {
-        dispatcher = dispatcher.with_schedule_store_uid(uid);
-    }
-    // Inject the interactive-session spawn config when provided (T-105).
-    if let Some(interactive_cfg) = cfg.interactive_session.clone() {
-        dispatcher = dispatcher.with_interactive_session_config(interactive_cfg);
-    }
+    let dispatcher = build_dispatcher(&cfg);
 
     // Use the configured audit bus or create an internal one.
     let bus = cfg
@@ -1025,6 +1044,41 @@ mod tests {
             result.is_err(),
             "start must return Err when the socket bind fails"
         );
+    }
+
+    // Regression (issue #52): the `service.status` version string must be taken
+    // from `Config::version` — the binary's release version supplied by
+    // `bob serve` — and not from this crate's own `CARGO_PKG_VERSION`, which is
+    // pinned at 0.1.0 and never bumped.
+    #[tokio::test(flavor = "current_thread")]
+    async fn build_dispatcher_threads_config_version_into_service_status() {
+        let cfg = Config {
+            version: "9.9.9-test",
+            ..Config::default()
+        };
+
+        let dispatcher = build_dispatcher(&cfg);
+        let mut registry = ConnectionRegistry::new();
+        let req = crate::protocol::Request {
+            jsonrpc: "2.0".to_string(),
+            method: "service.status".to_string(),
+            params: None,
+            id: json!(1),
+        };
+
+        match dispatcher.dispatch(req, &mut registry).await {
+            DispatchOutcome::Ok(resp) => {
+                assert_eq!(resp.result["ok"], json!(true));
+                assert_eq!(resp.result["version"], json!("9.9.9-test"));
+            }
+            DispatchOutcome::Err(e) => {
+                panic!(
+                    "expected Ok service.status outcome, got error: {}",
+                    e.error.message
+                )
+            }
+            _ => panic!("expected Ok service.status outcome, got another variant"),
+        }
     }
 
     // Helper: build a dispatcher and bus with no optional handles.
