@@ -141,9 +141,9 @@ pub(crate) fn load_config() -> ServiceResult<BobConfig> {
 }
 
 pub(crate) async fn connect_admin(cfg: &BobConfig) -> ServiceResult<AdminClient> {
-    AdminClient::connect(cfg)
-        .await
-        .map_err(|e| map_service_down_to_missing_socket(e, &cfg.admin_sock_path))
+    AdminClient::connect(cfg).await.map_err(|e| {
+        map_service_down_to_missing_socket(e, &cfg.admin_sock_path, cfg.admin_sock_is_tmp_fallback)
+    })
 }
 
 pub(crate) async fn call_admin<P>(cfg: &BobConfig, method: &str, params: P) -> ServiceResult<Value>
@@ -168,9 +168,32 @@ pub(crate) fn invalid_request_error(detail: impl Into<String>) -> ServiceError {
     }
 }
 
-fn map_service_down_to_missing_socket(error: ServiceError, path: &Path) -> ServiceError {
+/// `(env var, user-session socket dir)` for the current platform: the
+/// environment variable that resolves bob's runtime (socket) directory, and the
+/// directory a service started from a user session resolves it to. Used to
+/// explain a "missing admin socket" failure that is really the `env::temp_dir()`
+/// fallback kicking in because that variable is unset (issue #60).
+#[cfg(target_os = "macos")]
+const RUNTIME_DIR_HINT: (&str, &str) = ("TMPDIR", "$TMPDIR/bob-<uid>");
+#[cfg(not(target_os = "macos"))]
+const RUNTIME_DIR_HINT: (&str, &str) = ("XDG_RUNTIME_DIR", "/run/user/<uid>/bob");
+
+fn map_service_down_to_missing_socket(
+    error: ServiceError,
+    path: &Path,
+    admin_sock_is_tmp_fallback: bool,
+) -> ServiceError {
     if matches!(error, ServiceError::ServiceDown) {
-        return invalid_request_error(format!("missing admin socket at {}", path.display()));
+        let mut detail = format!("missing admin socket at {}", path.display());
+        if admin_sock_is_tmp_fallback {
+            let (var, session_dir) = RUNTIME_DIR_HINT;
+            detail.push_str(&format!(
+                " ({var} is unset, so this is a fallback path; a service running \
+                 under a user session listens at {session_dir} instead — set \
+                 {var} and retry)"
+            ));
+        }
+        return invalid_request_error(detail);
     }
     error
 }
@@ -181,13 +204,14 @@ mod tests {
 
     use bob_core::error::ServiceError;
 
-    use crate::cli::commands::map_service_down_to_missing_socket;
+    use crate::cli::commands::{map_service_down_to_missing_socket, RUNTIME_DIR_HINT};
 
     #[test]
     fn missing_socket_error_names_path_for_service_down() {
         let error = map_service_down_to_missing_socket(
             ServiceError::ServiceDown,
             &PathBuf::from("/tmp/bob/admin.sock"),
+            false,
         );
 
         assert!(matches!(
@@ -198,10 +222,36 @@ mod tests {
     }
 
     #[test]
+    fn missing_socket_error_adds_runtime_dir_hint_for_tmp_fallback() {
+        let error = map_service_down_to_missing_socket(
+            ServiceError::ServiceDown,
+            &PathBuf::from("/tmp/bob/admin.sock"),
+            true,
+        );
+
+        let ServiceError::InvalidRequest { detail } = error else {
+            panic!("expected InvalidRequest, got {error:?}");
+        };
+        let (var, session_dir) = RUNTIME_DIR_HINT;
+        assert!(
+            detail.starts_with("missing admin socket at /tmp/bob/admin.sock ("),
+            "hint must be appended to the base message: {detail}"
+        );
+        assert!(detail.contains(var), "hint must name {var}: {detail}");
+        assert!(
+            detail.contains(session_dir),
+            "hint must point at the user-session socket dir: {detail}"
+        );
+    }
+
+    #[test]
     fn non_service_down_errors_pass_through() {
         let original = ServiceError::NotImplemented;
-        let mapped =
-            map_service_down_to_missing_socket(original, &PathBuf::from("/tmp/bob/admin.sock"));
+        let mapped = map_service_down_to_missing_socket(
+            original,
+            &PathBuf::from("/tmp/bob/admin.sock"),
+            true,
+        );
         assert!(matches!(mapped, ServiceError::NotImplemented));
     }
 }

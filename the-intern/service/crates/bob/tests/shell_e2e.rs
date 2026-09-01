@@ -729,6 +729,7 @@ fn send_extension_frame(extension_sock_path: &Path, frame: &str) {
 fn client_cfg(admin_sock_path: PathBuf) -> BobConfig {
     BobConfig {
         admin_sock_path,
+        admin_sock_is_tmp_fallback: false,
         extension_sock_path: PathBuf::new(),
         extension_path: PathBuf::new(),
         request_queue_capacity: 1024,

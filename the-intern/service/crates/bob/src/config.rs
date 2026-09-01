@@ -18,6 +18,15 @@ use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 #[derive(Debug, Clone)]
 pub struct BobConfig {
     pub admin_sock_path: PathBuf,
+    /// `true` when `admin_sock_path` is the `env::temp_dir()` fallback that
+    /// `resolve_runtime_root` uses when the platform runtime-dir variable
+    /// (`XDG_RUNTIME_DIR` on Linux, `TMPDIR` on macOS) is unset, and no explicit
+    /// override (`BOB_ADMIN_SOCK_PATH` or a `config.toml` key) replaced it.
+    ///
+    /// Clients use this to turn a bare "missing admin socket" failure into a
+    /// message that names the real cause — an unresolved runtime directory —
+    /// instead of implying the service is down (issue #60).
+    pub admin_sock_is_tmp_fallback: bool,
     pub extension_sock_path: PathBuf,
     pub extension_path: PathBuf,
     pub request_queue_capacity: usize,
@@ -116,6 +125,7 @@ impl BobConfig {
     pub(crate) fn test_base() -> Self {
         Self {
             admin_sock_path: PathBuf::new(),
+            admin_sock_is_tmp_fallback: false,
             extension_sock_path: PathBuf::new(),
             extension_path: PathBuf::new(),
             request_queue_capacity: 1024,
@@ -152,7 +162,8 @@ impl BobConfig {
     }
 
     fn load_with_sources(sources: ConfigSources) -> ServiceResult<Self> {
-        let runtime_root = resolve_runtime_root(&sources)?;
+        let (runtime_root, runtime_dir_unresolved) = resolve_runtime_root(&sources)?;
+        let fallback_admin_sock_path = runtime_root.join("admin.sock");
         let defaults = defaults_with_runtime_root(runtime_root, &sources.env, sources.uid);
 
         let config_path = if let Some(path) = sources.config_path.clone() {
@@ -200,8 +211,15 @@ impl BobConfig {
             None => default_extension_path_for_env(&sources.env, sources.uid)?,
         };
 
+        // Only flag the fallback when it is actually the socket path in effect:
+        // an explicit `BOB_ADMIN_SOCK_PATH` / `config.toml` override moves the
+        // path off the fallback location and makes the runtime-dir hint wrong.
+        let admin_sock_is_tmp_fallback =
+            runtime_dir_unresolved && raw.admin_sock_path == fallback_admin_sock_path;
+
         let cfg = BobConfig {
             admin_sock_path: raw.admin_sock_path,
+            admin_sock_is_tmp_fallback,
             extension_sock_path: raw.extension_sock_path,
             extension_path,
             request_queue_capacity: raw.request_queue_capacity,
@@ -578,24 +596,32 @@ fn set_owner_only_permissions(_path: &Path) -> ServiceResult<()> {
     Ok(())
 }
 
-fn resolve_runtime_root(sources: &ConfigSources) -> ServiceResult<PathBuf> {
+/// Resolve the directory that holds bob's Unix domain sockets.
+///
+/// Returns the resolved path together with a flag that is `true` when the
+/// platform runtime-dir variable (`TMPDIR` on macOS, `XDG_RUNTIME_DIR` on Linux)
+/// was absent from the process environment and the `env::temp_dir()` fallback
+/// was used. Clients surface that flag to explain a "missing admin socket"
+/// failure that is really an unresolved runtime directory (issue #60).
+fn resolve_runtime_root(sources: &ConfigSources) -> ServiceResult<(PathBuf, bool)> {
     if cfg!(target_os = "macos") {
-        let tmpdir = sources
-            .env
-            .get("TMPDIR")
-            .cloned()
-            .unwrap_or_else(|| env::temp_dir().to_string_lossy().into_owned());
+        let (tmpdir, used_fallback) = match sources.env.get("TMPDIR").cloned() {
+            Some(dir) => (dir, false),
+            None => (env::temp_dir().to_string_lossy().into_owned(), true),
+        };
 
-        return Ok(Path::new(&tmpdir).join(format!("bob-{}", sources.uid)));
+        return Ok((
+            Path::new(&tmpdir).join(format!("bob-{}", sources.uid)),
+            used_fallback,
+        ));
     }
 
-    let runtime = sources
-        .env
-        .get("XDG_RUNTIME_DIR")
-        .cloned()
-        .unwrap_or_else(|| env::temp_dir().to_string_lossy().into_owned());
+    let (runtime, used_fallback) = match sources.env.get("XDG_RUNTIME_DIR").cloned() {
+        Some(dir) => (dir, false),
+        None => (env::temp_dir().to_string_lossy().into_owned(), true),
+    };
 
-    Ok(Path::new(&runtime).join("bob"))
+    Ok((Path::new(&runtime).join("bob"), used_fallback))
 }
 
 fn defaults_with_runtime_root(
@@ -969,6 +995,61 @@ mod tests {
                     .join("extension.sock")
             );
         }
+
+        assert!(
+            !config.admin_sock_is_tmp_fallback,
+            "a resolved runtime dir must not be flagged as the tmp fallback"
+        );
+    }
+
+    #[test]
+    fn admin_sock_is_flagged_as_tmp_fallback_when_runtime_dir_is_unset() {
+        // Env carries no XDG_RUNTIME_DIR / TMPDIR, so resolve_runtime_root uses
+        // the env::temp_dir() fallback.
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env: BTreeMap::new(),
+            config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("defaults should load without a runtime dir");
+
+        assert_eq!(
+            config.admin_sock_path,
+            std::env::temp_dir().join("bob").join("admin.sock")
+        );
+        assert!(
+            config.admin_sock_is_tmp_fallback,
+            "an unresolved runtime dir must flag the socket path as the tmp fallback"
+        );
+    }
+
+    #[test]
+    fn admin_sock_is_not_flagged_when_an_override_replaces_the_fallback_path() {
+        // No runtime dir in env, but BOB_ADMIN_SOCK_PATH pins the socket
+        // explicitly — the runtime-dir hint would be wrong, so the flag clears.
+        let mut env = BTreeMap::new();
+        env.insert(
+            "BOB_ADMIN_SOCK_PATH".to_string(),
+            "/srv/bob/run/admin.sock".to_string(),
+        );
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env,
+            config_path: Some(PathBuf::from("/tmp/does-not-exist.toml")),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("override should load");
+
+        assert_eq!(
+            config.admin_sock_path,
+            PathBuf::from("/srv/bob/run/admin.sock")
+        );
+        assert!(
+            !config.admin_sock_is_tmp_fallback,
+            "an explicit socket-path override must not be flagged as the tmp fallback"
+        );
     }
 
     #[test]

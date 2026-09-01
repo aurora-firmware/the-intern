@@ -22,6 +22,35 @@ fn status_exits_non_zero_when_admin_socket_is_missing() {
     );
 }
 
+/// Issue #60: with `XDG_RUNTIME_DIR` unset the client resolves the socket path
+/// from the `/tmp` fallback. A bare "missing admin socket" then reads as "the
+/// service is down" even when it is running under `/run/user/<uid>/bob`, so the
+/// error must name the unresolved runtime directory as the likely real cause.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn missing_socket_error_flags_unresolved_runtime_dir() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let state_home = temp.path().join("state");
+    let home_dir = temp.path().join("home");
+    let output = bob_command_with_temp_state(&state_home, &home_dir)
+        .env_remove("XDG_RUNTIME_DIR")
+        .arg("status")
+        .output()
+        .expect("bob binary to run");
+
+    assert_eq!(output.status.code(), Some(1));
+
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(
+        stderr.contains("missing admin socket"),
+        "stderr did not include marker: {stderr}"
+    );
+    assert!(
+        stderr.contains("XDG_RUNTIME_DIR") && stderr.contains("/run/user/<uid>/bob"),
+        "stderr must point at the unresolved runtime dir: {stderr}"
+    );
+}
+
 // ── AC-4: bob audit tail --filter reports filters at the CLI level ────────────
 
 /// AC-4 (CLI level): WHEN `bob audit tail --filter reports` is invoked without
