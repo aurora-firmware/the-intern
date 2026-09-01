@@ -3,7 +3,7 @@ id: B-045
 title: bob Linux runtime-dir fallback is a shared /tmp/bob, not the per-uid dir 
   ADR-009 specifies
 severity: medium
-status: open
+status: resolved
 created: '2026-09-01'
 ---
 
@@ -203,6 +203,24 @@ passes; `status_exits_non_zero_when_admin_socket_is_missing` fails pre-existing
 Handoff to reviewer: single-function change plus tests; the follow-up noted in
 Diagnosis 1 (fail-closed trust check on a pre-created `/tmp/bob-<uid>`) is
 deliberately out of scope. PR opened into `dev-agent`.
+
+### Session 2 — 2026-09-01
+
+Resolved. The Session 1 fix was reviewed through the GitHub PR review flow on
+PR #79 (report `pr-79-review.md`): the source and security passes found no
+blocking issues. One doc-comment suggestion — the new `resolve_runtime_root`
+note stated a general claim ("when the platform variable is set … the root is
+the plain `<dir>/bob`") that only holds for the Linux `XDG_RUNTIME_DIR` arm and
+contradicts the macOS arm — was applied in `a2165d9` (`docs(config): scope the
+runtime-root fallback note to the linux arm`).
+
+PR #79 merged into `dev-agent` via merge commit `28d8f6a`, all CI checks green
+(Build, Format, Documentation, Tests, User Documentation). Bug file moved to
+`resolved/`.
+
+Still open as a separate bug: the out-of-scope follow-up from Diagnosis 1 — a
+fail-closed owner/mode precondition check on a pre-created `/tmp/bob-<uid>`,
+mirroring `bob_core::types::schedule::verify_trusted_store` (ADR-012).
 
 ## Review
 
