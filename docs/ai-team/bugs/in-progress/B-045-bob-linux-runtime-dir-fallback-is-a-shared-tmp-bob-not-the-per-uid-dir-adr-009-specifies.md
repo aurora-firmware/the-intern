@@ -173,6 +173,37 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-09-01
+
+Implemented the minimal fix from Diagnosis 1 on branch
+`bug/B-045-linux-runtime-dir-per-uid` (off `dev-agent` at `377e7bf`).
+
+`resolve_runtime_root` (`crates/bob/src/config.rs`), Linux arm: the
+`XDG_RUNTIME_DIR`-unset branch now names the runtime root
+`env::temp_dir()/bob-<uid>` (via `format!("bob-{}", sources.uid)`) instead of
+the literal `bob`. The `XDG_RUNTIME_DIR`-set branch is unchanged
+(`$XDG_RUNTIME_DIR/bob`) — that directory is already per-user and `0700` by the
+XDG spec. Matches the macOS arm. No change to `Listener::bind`; it already
+`create_dir_all` + `chmod 0700`s the parent on every start.
+
+Tests (`crates/bob/src/config.rs`):
+- Updated `admin_sock_is_flagged_as_tmp_fallback_when_runtime_dir_is_unset` to
+  expect `bob-<uid>`.
+- Added `tmp_fallback_runtime_root_is_per_uid_but_xdg_runtime_dir_is_not`:
+  distinct uids ⇒ distinct fallback roots; `XDG_RUNTIME_DIR`-set root stays
+  `<dir>/bob` and is not flagged as the tmp fallback.
+
+Verification: `cargo test -p bob --lib` → 294 pass, 1 pre-existing sandbox
+failure (`loads_schedule_entries_from_json_store_when_store_exists` — `/tmp` is
+mode 775 here; identical on `dev-agent`). `cargo fmt --all -- --check` and
+`cargo doc -p bob --no-deps` clean. `non_serve::missing_socket_error_flags_unresolved_runtime_dir`
+passes; `status_exits_non_zero_when_admin_socket_is_missing` fails pre-existing
+(a live `bob.service` is running on this host). Full workspace left to CI.
+
+Handoff to reviewer: single-function change plus tests; the follow-up noted in
+Diagnosis 1 (fail-closed trust check on a pre-created `/tmp/bob-<uid>`) is
+deliberately out of scope. PR opened into `dev-agent`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
