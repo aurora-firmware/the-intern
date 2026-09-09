@@ -47,11 +47,13 @@ that already existed. On `board_created` = `true` the text output adds a
 - `--done` is repeatable — each occurrence adds one unticked Definition of
   Done item.
 
-`<title>`, `--description`, and each `--done` value are written **verbatim**
-into the task file — bob applies no markup handling or escaping. Pass each as
-a single quoted argument (single quotes are safest); an unquoted or
-double-quoted backtick, `$(...)`, or `$VAR` is interpreted by the shell
-before bob sees it, which silently drops or rewrites part of the value.
+`--description` and each `--done` value are written into the task file
+**verbatim** — bob applies no markup handling or escaping (`<title>` is
+slugified for the file name and recorded in the frontmatter). Pass these,
+and `<title>`, as single quoted arguments (single quotes are safest): an
+unquoted or double-quoted backtick, `$(...)`, or `$VAR` is interpreted by the
+shell before bob sees the argument, which silently drops or rewrites part of
+it.
 
 ### `bob task show <id> [--path]`
 
