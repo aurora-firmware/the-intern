@@ -12,12 +12,35 @@ pub enum BoardOperation {
     Move,
 }
 
+/// A resolved board location, together with whether this call brought the
+/// board directory into existence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedBoard {
+    /// The absolute path of the board directory.
+    pub path: PathBuf,
+    /// `true` only when this resolution created the board directory. That can
+    /// happen only for [`BoardOperation::Write`] when the upward search found
+    /// no existing board.
+    pub created: bool,
+}
+
+/// Resolve the board directory from an explicit override, the environment
+/// override, or an upward search from `current_dir`, reporting whether the
+/// board had to be created.
+///
+/// # Errors
+///
+/// Returns [`ServiceError::InvalidRequest`] when an override path is empty, when
+/// the resolved path exists but is not a directory, or when a
+/// [`BoardOperation::Read`] or [`BoardOperation::Move`] finds no board.
+/// Returns [`ServiceError::Persistence`] when the filesystem cannot be
+/// inspected or a board directory cannot be created.
 pub fn resolve_board_path(
     current_dir: &Path,
     explicit_override: Option<&Path>,
     env_override: Option<&Path>,
     operation: BoardOperation,
-) -> ServiceResult<PathBuf> {
+) -> ServiceResult<ResolvedBoard> {
     let current_dir = absolute_path_from_base(
         current_dir,
         &std::env::current_dir().map_err(|err| ServiceError::InvalidRequest {
@@ -38,7 +61,10 @@ pub fn resolve_board_path(
     match fs::metadata(&candidate) {
         Ok(metadata) => {
             if metadata.is_dir() {
-                Ok(candidate)
+                Ok(ResolvedBoard {
+                    path: candidate,
+                    created: false,
+                })
             } else {
                 Err(ServiceError::InvalidRequest {
                     detail: format!(
@@ -51,7 +77,10 @@ pub fn resolve_board_path(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => match operation {
             BoardOperation::Write => {
                 create_board_directory(&candidate)?;
-                Ok(candidate)
+                Ok(ResolvedBoard {
+                    path: candidate,
+                    created: true,
+                })
             }
             BoardOperation::Read | BoardOperation::Move => Err(ServiceError::InvalidRequest {
                 detail: format!(
@@ -220,7 +249,7 @@ mod tests {
         )
         .expect("explicit board should resolve");
 
-        assert_eq!(resolved, explicit_board);
+        assert_eq!(resolved.path, explicit_board);
     }
 
     #[test]
@@ -237,7 +266,7 @@ mod tests {
             resolve_board_path(&current_dir, None, Some(&env_board), BoardOperation::Read)
                 .expect("env board should resolve");
 
-        assert_eq!(resolved, env_board);
+        assert_eq!(resolved.path, env_board);
     }
 
     #[test]
@@ -253,7 +282,7 @@ mod tests {
         let resolved = resolve_board_path(&current_dir, None, None, BoardOperation::Read)
             .expect("ancestor board should resolve");
 
-        assert_eq!(resolved, project_board);
+        assert_eq!(resolved.path, project_board);
     }
 
     #[test]
@@ -273,9 +302,9 @@ mod tests {
         )
         .expect("relative board should resolve");
 
-        assert_eq!(resolved, expected);
+        assert_eq!(resolved.path, expected);
         assert!(
-            resolved.is_absolute(),
+            resolved.path.is_absolute(),
             "resolver must return an absolute path"
         );
     }
@@ -289,12 +318,15 @@ mod tests {
         let resolved = resolve_board_path(&current_dir, None, None, BoardOperation::Write)
             .expect("write should create board");
 
-        assert_eq!(resolved, current_dir.join("tasks"));
-        assert!(resolved.is_dir(), "write should create the board directory");
+        assert_eq!(resolved.path, current_dir.join("tasks"));
+        assert!(
+            resolved.path.is_dir(),
+            "write should create the board directory"
+        );
 
         #[cfg(unix)]
         {
-            let mode = fs::metadata(&resolved)
+            let mode = fs::metadata(&resolved.path)
                 .expect("metadata")
                 .permissions()
                 .mode()
@@ -339,7 +371,7 @@ mod tests {
         let resolved = resolve_board_path(&current_dir, None, None, BoardOperation::Write)
             .expect("existing board should resolve");
 
-        let mode = fs::metadata(&resolved)
+        let mode = fs::metadata(&resolved.path)
             .expect("metadata")
             .permissions()
             .mode()
@@ -356,7 +388,41 @@ mod tests {
         let resolved = resolve_board_path(&current_dir, None, None, BoardOperation::Write)
             .expect("write should resolve default board path");
 
-        let segments = path_segments(&resolved);
+        let segments = path_segments(&resolved.path);
         assert_eq!(segments.last().expect("board path segment"), "tasks");
+    }
+
+    #[test]
+    fn resolve_board_path_reports_a_new_board_was_created_when_a_write_finds_none() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let current_dir = temp.path().join("workspace");
+        fs::create_dir_all(&current_dir).expect("create current dir");
+
+        let resolved = resolve_board_path(&current_dir, None, None, BoardOperation::Write)
+            .expect("write should create board");
+
+        assert_eq!(resolved.path, current_dir.join("tasks"));
+        assert!(
+            resolved.created,
+            "resolver must report that it created a new board"
+        );
+    }
+
+    #[test]
+    fn resolve_board_path_reports_no_creation_when_an_existing_board_is_resolved() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace_board = temp.path().join("workspace").join("tasks");
+        let current_dir = temp.path().join("workspace").join("project");
+        fs::create_dir_all(&workspace_board).expect("create workspace board");
+        fs::create_dir_all(&current_dir).expect("create current dir");
+
+        let resolved = resolve_board_path(&current_dir, None, None, BoardOperation::Write)
+            .expect("existing ancestor board should resolve");
+
+        assert_eq!(resolved.path, workspace_board);
+        assert!(
+            !resolved.created,
+            "resolving an existing board must not report a creation"
+        );
     }
 }
