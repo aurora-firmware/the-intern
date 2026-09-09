@@ -115,6 +115,9 @@ pub enum TaskCommand {
         status: String,
         #[arg(long = "created")]
         created_date: Option<String>,
+        /// Free text for the task's Description section, stored verbatim.
+        /// Pass it as a single quoted argument so the shell does not interpret
+        /// backticks, `$(...)`, or `$VAR` before bob receives the text.
         #[arg(long)]
         description: Option<String>,
         #[arg(long = "done", value_name = "ITEM")]
@@ -135,7 +138,10 @@ pub enum TaskCommand {
     Status {
         id: String,
         status: String,
-        /// Reason recorded in the task's log entry for this transition.
+        /// Reason recorded verbatim in the task's log entry for this
+        /// transition. Pass it as a single quoted argument so the shell does
+        /// not interpret backticks, `$(...)`, or `$VAR` before bob receives
+        /// the text.
         #[arg(long)]
         reason: Option<String>,
     },
