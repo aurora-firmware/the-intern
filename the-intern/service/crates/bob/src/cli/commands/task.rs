@@ -153,12 +153,21 @@ fn run_new_with_context(
     )?;
     let store = TaskStore::new(&board.path);
     let created = store.create_task(&request)?;
+
+    // The board location is resolved by an upward search only when neither an
+    // explicit `--board` nor `TASKS_DIR` was given; otherwise the operator
+    // named the path and the "ancestor directory" phrasing would be wrong.
+    let searched_from = if board_override.is_none() && env_override.is_none() {
+        Some(current_dir)
+    } else {
+        None
+    };
     write_created_task(
         out,
         json_output,
         &created,
         board.created,
-        current_dir,
+        searched_from,
         &board.path,
     )
 }
@@ -433,7 +442,7 @@ fn write_created_task(
     json_output: bool,
     task: &TaskFile,
     board_created: bool,
-    search_start: &Path,
+    searched_from: Option<&Path>,
     board_path: &Path,
 ) -> ServiceResult<()> {
     let response = CreatedTaskOutput {
@@ -450,18 +459,20 @@ fn write_created_task(
     writeln!(out, "created task: {}", response.id)
         .and_then(|_| writeln!(out, "status: {}", response.status))
         .and_then(|_| writeln!(out, "path: {}", response.path))
-        .and_then(|_| {
-            if board_created {
-                writeln!(
-                    out,
-                    "warning: no task board found in {} or any ancestor directory; \
-                     created a new board at {}",
-                    search_start.display(),
-                    board_path.display()
-                )
-            } else {
-                Ok(())
-            }
+        .and_then(|_| match (board_created, searched_from) {
+            (true, Some(dir)) => writeln!(
+                out,
+                "warning: no task board found in {} or any ancestor directory; \
+                 created a new board at {}",
+                dir.display(),
+                board_path.display()
+            ),
+            (true, None) => writeln!(
+                out,
+                "warning: no task board at {}; created a new board there",
+                board_path.display()
+            ),
+            (false, _) => Ok(()),
         })
         .map_err(|err| invalid_request_error(format!("failed to write task output: {err}")))
 }
@@ -939,6 +950,40 @@ mod tests {
         assert!(
             !text.contains("warning:"),
             "filing into an existing board must not warn: {text}"
+        );
+    }
+
+    #[test]
+    fn task_new_warning_does_not_claim_an_ancestor_search_for_an_explicit_board_override() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let cwd = temp.path().join("workspace");
+        let target = temp.path().join("explicit-board");
+        fs::create_dir_all(&cwd).expect("cwd");
+        let mut out = Vec::new();
+
+        run_new_with_context(
+            false,
+            Some(target.as_path()),
+            "Inspect logs",
+            "todo",
+            None,
+            None,
+            &[] as &[String],
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect("task new succeeds");
+
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(
+            text.contains("warning:") && text.contains(&target.display().to_string()),
+            "an override-created board must still be reported: {text}"
+        );
+        assert!(
+            !text.contains("ancestor directory"),
+            "an explicit --board override runs no ancestor search: {text}"
         );
     }
 
