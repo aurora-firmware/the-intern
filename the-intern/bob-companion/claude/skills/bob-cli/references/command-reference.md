@@ -82,7 +82,12 @@ Appends a dated log entry to the task without changing its status; prints
 the task id and path (or the JSON equivalent with `--json`).
 - `<id>` accepts a partial identifier prefix, resolved the same way as
   `task show`.
-- `<text>` is a required positional argument and must not be empty.
+- `<text>` is a required positional argument and must not be empty. It is
+  stored **verbatim** as the log entry — bob applies no markup handling or
+  escaping. Pass it as a single quoted argument (single quotes are safest);
+  an unquoted or double-quoted backtick, `$(...)`, or `$VAR` is interpreted
+  by the shell before bob sees it, which silently drops or rewrites part of
+  the note.
 
 ## `bob worklog [append|list]`
 
