@@ -24,6 +24,9 @@ struct CreatedTaskOutput {
     id: String,
     status: String,
     path: String,
+    /// `true` when this invocation had to start a new board because the upward
+    /// search from the working directory found none.
+    board_created: bool,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -150,7 +153,14 @@ fn run_new_with_context(
     )?;
     let store = TaskStore::new(&board.path);
     let created = store.create_task(&request)?;
-    write_created_task(out, json_output, &created)
+    write_created_task(
+        out,
+        json_output,
+        &created,
+        board.created,
+        current_dir,
+        &board.path,
+    )
 }
 
 fn run_show_with_context(
@@ -422,11 +432,15 @@ fn write_created_task(
     out: &mut impl Write,
     json_output: bool,
     task: &TaskFile,
+    board_created: bool,
+    search_start: &Path,
+    board_path: &Path,
 ) -> ServiceResult<()> {
     let response = CreatedTaskOutput {
         id: task.identity.clone(),
         status: task.status.to_string(),
         path: task.path.display().to_string(),
+        board_created,
     };
 
     if json_output {
@@ -436,6 +450,19 @@ fn write_created_task(
     writeln!(out, "created task: {}", response.id)
         .and_then(|_| writeln!(out, "status: {}", response.status))
         .and_then(|_| writeln!(out, "path: {}", response.path))
+        .and_then(|_| {
+            if board_created {
+                writeln!(
+                    out,
+                    "warning: no task board found in {} or any ancestor directory; \
+                     created a new board at {}",
+                    search_start.display(),
+                    board_path.display()
+                )
+            } else {
+                Ok(())
+            }
+        })
         .map_err(|err| invalid_request_error(format!("failed to write task output: {err}")))
 }
 
@@ -794,6 +821,124 @@ mod tests {
         assert!(
             !cwd.join("tasks").exists(),
             "invalid input must fail before touching the filesystem"
+        );
+    }
+
+    #[test]
+    fn task_new_json_flags_board_created_when_discovery_finds_no_board() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let cwd = temp.path().join("workspace");
+        fs::create_dir_all(&cwd).expect("cwd");
+        let mut out = Vec::new();
+
+        run_new_with_context(
+            true,
+            None,
+            "Inspect logs",
+            "todo",
+            None,
+            None,
+            &[] as &[String],
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect("task new succeeds");
+
+        let output = serde_json::from_slice::<Value>(&out).expect("json");
+        assert_eq!(output["board_created"], true);
+    }
+
+    #[test]
+    fn task_new_text_warns_and_names_the_new_board_when_discovery_finds_none() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let cwd = temp.path().join("workspace");
+        fs::create_dir_all(&cwd).expect("cwd");
+        let mut out = Vec::new();
+
+        run_new_with_context(
+            false,
+            None,
+            "Inspect logs",
+            "todo",
+            None,
+            None,
+            &[] as &[String],
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect("task new succeeds");
+
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(
+            text.contains("warning:") && text.contains("created a new board"),
+            "text output must warn that a new board was started: {text}"
+        );
+        assert!(
+            text.contains(&cwd.join("tasks").display().to_string()),
+            "warning must name the created board path: {text}"
+        );
+    }
+
+    #[test]
+    fn task_new_json_reports_board_created_false_when_filing_into_an_existing_board() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("workspace").join("tasks");
+        let cwd = temp.path().join("workspace").join("project");
+        fs::create_dir_all(&board).expect("board");
+        fs::create_dir_all(&cwd).expect("cwd");
+        let mut out = Vec::new();
+
+        run_new_with_context(
+            true,
+            None,
+            "Inspect logs",
+            "todo",
+            None,
+            None,
+            &[] as &[String],
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect("task new succeeds");
+
+        let output = serde_json::from_slice::<Value>(&out).expect("json");
+        assert_eq!(output["board_created"], false);
+    }
+
+    #[test]
+    fn task_new_text_is_silent_when_filing_into_an_existing_board() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("workspace").join("tasks");
+        let cwd = temp.path().join("workspace").join("project");
+        fs::create_dir_all(&board).expect("board");
+        fs::create_dir_all(&cwd).expect("cwd");
+        let mut out = Vec::new();
+
+        run_new_with_context(
+            false,
+            None,
+            "Inspect logs",
+            "todo",
+            None,
+            None,
+            &[] as &[String],
+            created_date(),
+            &cwd,
+            None,
+            &mut out,
+        )
+        .expect("task new succeeds");
+
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(
+            !text.contains("warning:"),
+            "filing into an existing board must not warn: {text}"
         );
     }
 
