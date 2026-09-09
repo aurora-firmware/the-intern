@@ -47,6 +47,14 @@ that already existed. On `board_created` = `true` the text output adds a
 - `--done` is repeatable — each occurrence adds one unticked Definition of
   Done item.
 
+`--description` and each `--done` value are written into the task file
+**verbatim** — bob applies no markup handling or escaping (`<title>` is
+slugified for the file name and recorded in the frontmatter). Pass these,
+and `<title>`, as single quoted arguments (single quotes are safest): an
+unquoted or double-quoted backtick, `$(...)`, or `$VAR` is interpreted by the
+shell before bob sees the argument, which silently drops or rewrites part of
+it.
+
 ### `bob task show <id> [--path]`
 
 Prints the task file's full content (or `{"id", "path", "title", "status",
@@ -72,9 +80,12 @@ equivalent with `--json`).
 - `<id>` accepts a partial identifier prefix, resolved the same way as
   `task show`.
 - `<status>` is a required positional argument, not a flag.
-- `--reason` is optional text appended to the log entry
+- `--reason` is optional text appended **verbatim** to the log entry
   (`Status changed from <old> to <new>: <reason>`); if omitted, it reads
-  `Status changed from <old> to <new>.`.
+  `Status changed from <old> to <new>.`. Pass it as a single quoted argument
+  (single quotes are safest); an unquoted or double-quoted backtick,
+  `$(...)`, or `$VAR` is interpreted by the shell before bob sees it, which
+  silently drops or rewrites part of the reason.
 
 ### `bob task note <id> <text>`
 
