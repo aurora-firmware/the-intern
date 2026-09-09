@@ -10,7 +10,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::task_board::{
-    board::{resolve_board_path, BoardOperation},
+    board::{resolve_board_path, BoardOperation, ResolvedBoard},
     store::{CreateTask, TaskFile, TaskStatus, TaskStore},
 };
 
@@ -142,13 +142,13 @@ fn run_new_with_context(
         definition_of_done: definition_of_done.to_vec(),
     };
 
-    let board_path = resolve_board_path_for_operation(
+    let board = resolve_board_path_for_operation(
         current_dir,
         board_override,
         env_override,
         BoardOperation::Write,
     )?;
-    let store = TaskStore::new(board_path);
+    let store = TaskStore::new(&board.path);
     let created = store.create_task(&request)?;
     write_created_task(out, json_output, &created)
 }
@@ -171,7 +171,8 @@ fn run_show_with_context(
         board_override,
         env_override,
         BoardOperation::Read,
-    )?;
+    )?
+    .path;
     let store = TaskStore::new(&board_path);
     let resolved_id = store.resolve_partial_identifier(id)?;
     let task = store.read_task(&board_path.join(format!("{resolved_id}.md")))?;
@@ -258,7 +259,8 @@ fn run_list_with_context(
         board_override,
         env_override,
         BoardOperation::Read,
-    )?;
+    )?
+    .path;
     let store = TaskStore::new(&board_path);
     let tasks = store.list_tasks()?;
 
@@ -287,7 +289,8 @@ fn run_status_with_context(
         board_override,
         env_override,
         BoardOperation::Move,
-    )?;
+    )?
+    .path;
     let store = TaskStore::new(&board_path);
     let resolved_id = store.resolve_partial_identifier(id)?;
     let path = board_path.join(format!("{resolved_id}.md"));
@@ -321,7 +324,8 @@ fn run_note_with_context(
         board_override,
         env_override,
         BoardOperation::Read,
-    )?;
+    )?
+    .path;
     let store = TaskStore::new(&board_path);
     let resolved_id = store.resolve_partial_identifier(id)?;
     let path = board_path.join(format!("{resolved_id}.md"));
@@ -387,7 +391,7 @@ fn resolve_board_path_for_operation(
     board_override: Option<&Path>,
     env_override: Option<&Path>,
     operation: BoardOperation,
-) -> ServiceResult<PathBuf> {
+) -> ServiceResult<ResolvedBoard> {
     resolve_board_path(current_dir, board_override, env_override, operation)
 }
 
