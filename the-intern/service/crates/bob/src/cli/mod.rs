@@ -141,6 +141,10 @@ pub enum TaskCommand {
     },
     Note {
         id: String,
+        /// Note body, appended verbatim as a dated entry in the task's log.
+        /// Pass it as a single quoted argument — single quotes are safest — so
+        /// the shell does not interpret backticks, `$(...)`, or `$VAR` before
+        /// bob receives the text.
         text: String,
     },
 }
