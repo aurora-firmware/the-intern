@@ -26,14 +26,19 @@ the shared skill package) are overwritten.
 individual subcommands, and applies to all of them. Board resolution order:
 `--board` if given, else the `TASKS_DIR` env var if set, else the nearest
 ancestor directory named `tasks/` found by walking up from the current
-working directory, else `<cwd>/tasks` (only auto-created for `task new`;
+working directory, else `<cwd>/tasks` (only auto-created for `task new`,
+which then prints a `warning:` line and sets `board_created` in its JSON;
 `show`/`list`/`status`/`note` fail locally with "no task board found" if
 nothing is found by the search).
 
 ### `bob task new <title> [--status <STATUS>] [--created <DATE>] [--description <TEXT>] [--done <ITEM>]...`
 
 Creates `<board>/<YYYY-MM-DD>-<slugified-title>.md` and prints its id,
-status, and path (or the JSON equivalent with `--json`).
+status, and path (or `{"id", "status", "path", "board_created"}` with
+`--json`). When the board resolution above found no existing board and had
+to create one, the text output adds a `warning:` line naming the search
+directory and the new board path, and `board_created` is `true` in the JSON
+(`false` when the task was filed into a board that already existed).
 - `<title>` is a required positional argument.
 - `--status` defaults to `todo`. Accepted values: `todo`, `doing`,
   `blocked`, `done`.
