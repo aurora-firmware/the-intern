@@ -45,17 +45,21 @@ pub(crate) fn materialize_workspace_with_paths(
     resolved_paths: &ResolvedInitPaths,
     force: bool,
 ) -> ServiceResult<MaterializationReport> {
-    if resolved_paths.config_path.exists() && !force {
-        return Err(ServiceError::InvalidRequest {
-            detail: format!(
-                "live config already exists at {}; rerun with --force to replace it",
-                resolved_paths.config_path.display()
-            ),
-        });
-    }
-
+    // Resolve and validate the workspace path before the live-config conflict
+    // check so the refusal can name the fixed scaffold files the matching
+    // `--force` run would also replace. Neither `resolve_workspace_path` nor
+    // `reject_git_metadata_target` touches the filesystem, so a no-force
+    // conflict still fails before any mutation (as 1f2c9aa requires).
     let workspace_path = resolve_workspace_path(workspace_path, current_dir);
     reject_git_metadata_target(&workspace_path)?;
+
+    if resolved_paths.config_path.exists() && !force {
+        return Err(live_config_conflict_error(
+            &resolved_paths.config_path,
+            &workspace_path,
+        ));
+    }
+
     ensure_directory(&workspace_path)?;
 
     let mut report = MaterializationReport {
@@ -77,6 +81,33 @@ pub(crate) fn materialize_workspace_with_paths(
     )?;
 
     Ok(report)
+}
+
+/// Builds the refusal returned when a live config already exists and `--force`
+/// was not given. It names every fixed scaffold file the matching `--force`
+/// run would replace wholesale — not just the live config — so an operator
+/// deciding whether to pass `--force` sees its full blast radius up front.
+/// `--force`'s set of replaced files is unchanged; only this message is.
+fn live_config_conflict_error(config_path: &Path, workspace_path: &Path) -> ServiceError {
+    ServiceError::InvalidRequest {
+        detail: format!(
+            "live config already exists at {config}; rerun with --force to replace it \
+and re-scaffold the workspace.\n\
+--force replaces these generated files wholesale when they already exist:\n\
+  {config}\n\
+  {agents}\n\
+  {claude}\n\
+  {email_triage}\n\
+The tasks/ board and the worklog/ directory are left untouched.",
+            config = config_path.display(),
+            agents = workspace_path.join("AGENTS.md").display(),
+            claude = workspace_path.join("CLAUDE.md").display(),
+            email_triage = workspace_path
+                .join("config")
+                .join("email-triage.toml")
+                .display(),
+        ),
+    }
 }
 
 fn materialize_workspace_files(
@@ -141,6 +172,10 @@ fn write_live_config(
     force: bool,
     report: &mut MaterializationReport,
 ) -> ServiceResult<()> {
+    // Defensive re-check only: `materialize_workspace_with_paths` already
+    // rejects this case up front with `live_config_conflict_error`, which names
+    // every path `--force` replaces. This terser guard just protects
+    // `write_live_config` against a future direct caller.
     if config_path.exists() && !force {
         return Err(ServiceError::InvalidRequest {
             detail: format!(
@@ -987,5 +1022,53 @@ mod tests {
             !resolved_paths.skill_install_path.exists(),
             "shared skill install path must not be created when the live-config conflict is caught up front"
         );
+    }
+
+    #[test]
+    fn live_config_conflict_error_names_every_path_force_replaces() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+
+        let config_parent = resolved_paths
+            .config_path
+            .parent()
+            .expect("config path should have a parent");
+        fs::create_dir_all(config_parent).expect("config parent should be created");
+        fs::write(
+            &resolved_paths.config_path,
+            "skill_install_path = \"/keep/me\"\n",
+        )
+        .expect("existing live config should be seeded");
+
+        let err = materialize_workspace_with_paths(
+            Path::new("workspace"),
+            temp.path(),
+            &resolved_paths,
+            false,
+        )
+        .expect_err("existing live config must block no-force materialization");
+
+        let ServiceError::InvalidRequest { detail } = err else {
+            panic!("expected InvalidRequest, got {err:?}");
+        };
+
+        let workspace = temp.path().join("workspace");
+        for needle in [
+            "live config already exists".to_string(),
+            resolved_paths.config_path.display().to_string(),
+            workspace.join("AGENTS.md").display().to_string(),
+            workspace.join("CLAUDE.md").display().to_string(),
+            workspace
+                .join("config")
+                .join("email-triage.toml")
+                .display()
+                .to_string(),
+        ] {
+            assert!(
+                detail.contains(&needle),
+                "refusal detail should mention {needle:?}, got:\n{detail}"
+            );
+        }
     }
 }

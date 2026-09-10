@@ -26,14 +26,18 @@ the shared skill package) are overwritten.
 individual subcommands, and applies to all of them. Board resolution order:
 `--board` if given, else the `TASKS_DIR` env var if set, else the nearest
 ancestor directory named `tasks/` found by walking up from the current
-working directory, else `<cwd>/tasks` (only auto-created for `task new`;
-`show`/`list`/`status`/`note` fail locally with "no task board found" if
-nothing is found by the search).
+working directory, else `<cwd>/tasks` (auto-created for `task new`, which
+then prints a `warning:` line; `show`/`list`/`status`/`note` fail locally
+with "no task board found" if nothing is found by the search).
 
 ### `bob task new <title> [--status <STATUS>] [--created <DATE>] [--description <TEXT>] [--done <ITEM>]...`
 
 Creates `<board>/<YYYY-MM-DD>-<slugified-title>.md` and prints its id,
-status, and path (or the JSON equivalent with `--json`).
+status, and path (or the JSON equivalent with `--json`). The `--json` object
+also carries `board_created`: `true` when no existing board was found and
+`task new` had to start one, `false` when the task was filed into a board
+that already existed. On `board_created` = `true` the text output adds a
+`warning:` line identifying the new board.
 - `<title>` is a required positional argument.
 - `--status` defaults to `todo`. Accepted values: `todo`, `doing`,
   `blocked`, `done`.
@@ -42,6 +46,14 @@ status, and path (or the JSON equivalent with `--json`).
 - `--description` is optional free text for the task's Description section.
 - `--done` is repeatable — each occurrence adds one unticked Definition of
   Done item.
+
+`--description` and each `--done` value are written into the task file
+**verbatim** — bob applies no markup handling or escaping (`<title>` is
+slugified for the file name and recorded in the frontmatter). Pass these,
+and `<title>`, as single quoted arguments (single quotes are safest): an
+unquoted or double-quoted backtick, `$(...)`, or `$VAR` is interpreted by the
+shell before bob sees the argument, which silently drops or rewrites part of
+it.
 
 ### `bob task show <id> [--path]`
 
@@ -68,9 +80,12 @@ equivalent with `--json`).
 - `<id>` accepts a partial identifier prefix, resolved the same way as
   `task show`.
 - `<status>` is a required positional argument, not a flag.
-- `--reason` is optional text appended to the log entry
+- `--reason` is optional text appended **verbatim** to the log entry
   (`Status changed from <old> to <new>: <reason>`); if omitted, it reads
-  `Status changed from <old> to <new>.`.
+  `Status changed from <old> to <new>.`. Pass it as a single quoted argument
+  (single quotes are safest); an unquoted or double-quoted backtick,
+  `$(...)`, or `$VAR` is interpreted by the shell before bob sees it, which
+  silently drops or rewrites part of the reason.
 
 ### `bob task note <id> <text>`
 
@@ -78,7 +93,12 @@ Appends a dated log entry to the task without changing its status; prints
 the task id and path (or the JSON equivalent with `--json`).
 - `<id>` accepts a partial identifier prefix, resolved the same way as
   `task show`.
-- `<text>` is a required positional argument and must not be empty.
+- `<text>` is a required positional argument and must not be empty. It is
+  stored **verbatim** as the log entry — bob applies no markup handling or
+  escaping. Pass it as a single quoted argument (single quotes are safest);
+  an unquoted or double-quoted backtick, `$(...)`, or `$VAR` is interpreted
+  by the shell before bob sees it, which silently drops or rewrites part of
+  the note.
 
 ## `bob worklog [append|list]`
 
