@@ -69,6 +69,23 @@ Download the zip that matches your platform
 That installs the `bob` binary and `bob.ts` into their default user-local
 locations without `sudo`.
 
+### Upgrading a running install
+
+`install.sh` replaces the `bob` binary atomically, so it is safe to run while
+`bob.service` is up — a process already running the old binary keeps running
+on it until it restarts. To upgrade:
+
+```bash
+./install.sh
+systemctl --user restart bob.service
+```
+
+Run the upgrade from a shell that is independent of `bob.service` — not a
+session `bob` itself spawned. Stopping `bob.service` from inside its own
+cgroup terminates that shell along with the service before the upgrade
+commands can finish, leaving the old binary in place and the service down
+until someone stops and restarts it from outside the cgroup.
+
 If no release zip exists for your target platform, or you are working from a
 source checkout on purpose, use the manual source-build path below.
 
