@@ -116,8 +116,20 @@ fi
 mkdir -p "$(dirname "$install_binary_path")"
 mkdir -p "$(dirname "$install_extension_path")"
 
-cp "$bundle_binary_path" "$install_binary_path"
-chmod +x "$install_binary_path"
+# Replace the binary atomically: write to a sibling temp file in the same
+# directory, then rename(2) it over the target. rename(2) only swaps the
+# directory entry and never opens the target for writing, so it succeeds
+# even when install_binary_path is the executable of a running `bob serve`
+# (a plain in-place `cp` fails there with ETXTBSY, "Text file busy"). The
+# temp file must stay in the same directory so this rename can't fall back
+# to a cross-filesystem copy, which would reopen the busy target.
+install_binary_tmp="$(mktemp "${install_binary_path}.XXXXXX")"
+trap 'rm -f "$install_binary_tmp"' EXIT
+cp "$bundle_binary_path" "$install_binary_tmp"
+chmod 755 "$install_binary_tmp"
+mv "$install_binary_tmp" "$install_binary_path"
+trap - EXIT
+
 cp "$bundle_extension_path" "$install_extension_path"
 
 if ! command -v pi >/dev/null 2>&1; then

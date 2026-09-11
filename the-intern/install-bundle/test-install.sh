@@ -39,6 +39,59 @@ make_bundle() {
   chmod +x "$dir/install.sh" "$dir/bob"
 }
 
+test_replaces_a_running_binary_atomically() {
+  local tmp_dir
+  local home_dir
+  local bundle_dir
+  local stdout_file
+  local stderr_file
+  local running_pid=""
+
+  tmp_dir="$(mktemp -d)"
+  trap 'kill "$running_pid" 2>/dev/null || true; rm -rf "$tmp_dir"' RETURN
+  home_dir="$tmp_dir/home"
+  bundle_dir="$tmp_dir/bundle"
+  stdout_file="$tmp_dir/stdout"
+  stderr_file="$tmp_dir/stderr"
+
+  mkdir -p "$home_dir/.local/bin" "$home_dir/.local/share/bob/extensions"
+
+  # A running `#!` script at the target path never hits ETXTBSY -- only a
+  # file currently execve()d as a program image does. Copy a real ELF (the
+  # `sleep` binary) to the target and run it, so the path is genuinely busy
+  # the same way a running `bob serve` executable is.
+  cp "$(command -v sleep)" "$home_dir/.local/bin/bob"
+  chmod +x "$home_dir/.local/bin/bob"
+  "$home_dir/.local/bin/bob" 300 &
+  running_pid=$!
+  sleep 0.2
+
+  make_bundle "$bundle_dir"
+
+  if ! printf 'y\n' | (
+    cd "$bundle_dir"
+    PATH="/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+  ); then
+    printf 'expected install.sh to succeed while overwriting a running binary\n' >&2
+    printf 'stdout:\n' >&2
+    cat "$stdout_file" >&2
+    printf 'stderr:\n' >&2
+    cat "$stderr_file" >&2
+    return 1
+  fi
+
+  if ! diff -q "$bundle_dir/bob" "$home_dir/.local/bin/bob" >/dev/null; then
+    printf 'expected the installed binary to be replaced with the bundle binary\n' >&2
+    return 1
+  fi
+
+  if compgen -G "$home_dir/.local/bin/bob.??????" >/dev/null; then
+    printf 'expected no leftover install temp file in %s\n' "$home_dir/.local/bin" >&2
+    ls -la "$home_dir/.local/bin" >&2
+    return 1
+  fi
+}
+
 test_abort_when_overwrite_prompt_hits_eof() {
   local tmp_dir
   local home_dir
@@ -139,6 +192,7 @@ test_empty_path_entry_uses_current_directory() {
   assert_not_contains "$stdout_file" "Warning: $home_dir/.local/bin is not on PATH."
 }
 
+test_replaces_a_running_binary_atomically
 test_abort_when_overwrite_prompt_hits_eof
 test_trailing_slash_path_entry_counts_as_present
 test_empty_path_entry_uses_current_directory
