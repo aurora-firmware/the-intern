@@ -140,5 +140,14 @@ if ! path_contains_dir "${HOME}/.local/bin"; then
   printf 'Warning: %s is not on PATH.\n' "${HOME}/.local/bin"
 fi
 
+# A different bob install (e.g. a mise-managed one) can already sit earlier
+# on PATH than the binary this script just wrote. When that happens, PATH
+# order alone decides which bob actually runs, silently, so surface it.
+resolved_bob_path="$(command -v bob 2>/dev/null || true)"
+if [ -n "$resolved_bob_path" ] && [ "$resolved_bob_path" != "$install_binary_path" ]; then
+  printf 'Warning: another `bob` is on PATH at %s, which differs from the installed binary at %s. PATH order decides which one runs; consider removing the other install or reordering PATH.\n' \
+    "$resolved_bob_path" "$install_binary_path"
+fi
+
 printf 'Installed bob binary: %s\n' "$install_binary_path"
 printf 'Installed bob extension: %s\n' "$install_extension_path"

@@ -192,7 +192,93 @@ test_empty_path_entry_uses_current_directory() {
   assert_not_contains "$stdout_file" "Warning: $home_dir/.local/bin is not on PATH."
 }
 
+test_warns_when_another_bob_shadows_the_install() {
+  local tmp_dir
+  local home_dir
+  local bundle_dir
+  local other_dir
+  local stdout_file
+  local stderr_file
+
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' RETURN
+  home_dir="$tmp_dir/home"
+  bundle_dir="$tmp_dir/bundle"
+  other_dir="$tmp_dir/other-install"
+  stdout_file="$tmp_dir/stdout"
+  stderr_file="$tmp_dir/stderr"
+
+  mkdir -p "$home_dir" "$other_dir"
+  make_bundle "$bundle_dir"
+
+  # A second, unrelated `bob` (e.g. a mise shim) earlier on PATH than
+  # ~/.local/bin, the way the reported mise/install.sh collision has it.
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$other_dir/bob"
+  chmod +x "$other_dir/bob"
+
+  (
+    cd "$bundle_dir"
+    PATH="$other_dir:/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+  )
+
+  assert_contains "$stdout_file" "Warning: another \`bob\` is on PATH at $other_dir/bob"
+  assert_contains "$stdout_file" "$home_dir/.local/bin/bob"
+}
+
+test_no_shadow_warning_when_path_agrees_with_the_install() {
+  local tmp_dir
+  local home_dir
+  local bundle_dir
+  local stdout_file
+  local stderr_file
+
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' RETURN
+  home_dir="$tmp_dir/home"
+  bundle_dir="$tmp_dir/bundle"
+  stdout_file="$tmp_dir/stdout"
+  stderr_file="$tmp_dir/stderr"
+
+  mkdir -p "$home_dir"
+  make_bundle "$bundle_dir"
+
+  (
+    cd "$bundle_dir"
+    PATH="$home_dir/.local/bin:/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+  )
+
+  assert_not_contains "$stdout_file" "is on PATH at"
+}
+
+test_no_shadow_warning_when_no_other_bob_on_path() {
+  local tmp_dir
+  local home_dir
+  local bundle_dir
+  local stdout_file
+  local stderr_file
+
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' RETURN
+  home_dir="$tmp_dir/home"
+  bundle_dir="$tmp_dir/bundle"
+  stdout_file="$tmp_dir/stdout"
+  stderr_file="$tmp_dir/stderr"
+
+  mkdir -p "$home_dir"
+  make_bundle "$bundle_dir"
+
+  (
+    cd "$bundle_dir"
+    PATH="/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+  )
+
+  assert_not_contains "$stdout_file" "is on PATH at"
+}
+
 test_replaces_a_running_binary_atomically
 test_abort_when_overwrite_prompt_hits_eof
 test_trailing_slash_path_entry_counts_as_present
 test_empty_path_entry_uses_current_directory
+test_warns_when_another_bob_shadows_the_install
+test_no_shadow_warning_when_path_agrees_with_the_install
+test_no_shadow_warning_when_no_other_bob_on_path
