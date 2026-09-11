@@ -72,19 +72,26 @@ locations without `sudo`.
 ### Upgrading a running install
 
 `install.sh` replaces the `bob` binary atomically, so it is safe to run while
-`bob.service` is up — a process already running the old binary keeps running
-on it until it restarts. To upgrade:
+bob is already running — a process already running the old binary keeps
+running on it until it restarts. To upgrade, run `./install.sh`, then
+restart bob however you normally do:
 
 ```bash
 ./install.sh
-systemctl --user restart bob.service
+systemctl --user restart bob.service   # Linux, if you run bob under systemd
 ```
 
-Run the upgrade from a shell that is independent of `bob.service` — not a
-session `bob` itself spawned. Stopping `bob.service` from inside its own
-cgroup terminates that shell along with the service before the upgrade
-commands can finish, leaving the old binary in place and the service down
-until someone stops and restarts it from outside the cgroup.
+On macOS, or if you run bob some other way, restart it using whatever you
+normally use to stop and start it (see [Shutdown](#shutdown) for the
+generic `SIGTERM`/Ctrl-C path).
+
+Whichever way you restart it, run the upgrade from a shell that is
+independent of the bob process itself — not a session bob spawned, and not
+a supervisor unit's own shell. Stopping bob from inside its own process
+tree (for example, a systemd user unit's cgroup) terminates that shell
+along with the service before the upgrade commands can finish, leaving the
+old binary in place and the service down until someone stops and restarts
+it from outside.
 
 If no release zip exists for your target platform, or you are working from a
 source checkout on purpose, use the manual source-build path below.

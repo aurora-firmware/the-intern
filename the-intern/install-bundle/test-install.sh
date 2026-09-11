@@ -77,18 +77,18 @@ test_replaces_a_running_binary_atomically() {
     cat "$stdout_file" >&2
     printf 'stderr:\n' >&2
     cat "$stderr_file" >&2
-    exit 1
+    return 1
   fi
 
   if ! diff -q "$bundle_dir/bob" "$home_dir/.local/bin/bob" >/dev/null; then
     printf 'expected the installed binary to be replaced with the bundle binary\n' >&2
-    exit 1
+    return 1
   fi
 
   if compgen -G "$home_dir/.local/bin/bob.??????" >/dev/null; then
     printf 'expected no leftover install temp file in %s\n' "$home_dir/.local/bin" >&2
     ls -la "$home_dir/.local/bin" >&2
-    exit 1
+    return 1
   fi
 }
 
