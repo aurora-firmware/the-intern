@@ -403,6 +403,58 @@ test_skills_only_success_output_is_not_suppressed() {
   assert_contains "$stdout_file" "created skill: example"
 }
 
+test_skills_only_failure_warns_and_does_not_block_install() {
+  local tmp_dir
+  local home_dir
+  local bundle_dir
+  local stdout_file
+  local stderr_file
+  local status
+
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' RETURN
+  home_dir="$tmp_dir/home"
+  bundle_dir="$tmp_dir/bundle"
+  stdout_file="$tmp_dir/stdout"
+  stderr_file="$tmp_dir/stderr"
+
+  mkdir -p "$home_dir"
+  make_bundle "$bundle_dir"
+
+  if (
+    cd "$bundle_dir"
+    PATH="/usr/bin:/bin" HOME="$home_dir" \
+      BOB_STUB_SKILLS_ONLY_EXIT=7 \
+      ./install.sh >"$stdout_file" 2>"$stderr_file"
+  ); then
+    status=0
+  else
+    status=$?
+  fi
+
+  if [ "$status" -ne 0 ]; then
+    printf 'expected install.sh to succeed even when the skills-only refresh fails\n' >&2
+    printf 'stdout:\n' >&2
+    cat "$stdout_file" >&2
+    printf 'stderr:\n' >&2
+    cat "$stderr_file" >&2
+    return 1
+  fi
+
+  assert_contains "$stderr_file" "init --skills-only"
+  assert_contains "$stderr_file" "Warning"
+
+  if [ ! -f "$home_dir/.local/bin/bob" ]; then
+    printf 'expected the binary to still be installed despite the skills-only refresh failure\n' >&2
+    return 1
+  fi
+
+  if [ ! -f "$home_dir/.local/share/bob/extensions/bob.ts" ]; then
+    printf 'expected the extension to still be installed despite the skills-only refresh failure\n' >&2
+    return 1
+  fi
+}
+
 test_replaces_a_running_binary_atomically
 test_abort_when_overwrite_prompt_hits_eof
 test_trailing_slash_path_entry_counts_as_present
@@ -413,3 +465,4 @@ test_no_shadow_warning_when_no_other_bob_on_path
 test_invokes_installed_binary_directly_for_skills_only_refresh
 test_never_passes_force_to_skills_only_invocation
 test_skills_only_success_output_is_not_suppressed
+test_skills_only_failure_warns_and_does_not_block_install
