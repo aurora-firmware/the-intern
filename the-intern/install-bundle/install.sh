@@ -132,6 +132,12 @@ trap - EXIT
 
 cp "$bundle_extension_path" "$install_extension_path"
 
+# Refresh the shared skill package via the binary this script just wrote —
+# not a PATH-resolved `bob`, which could be a different install entirely
+# (see the PATH-shadow warning below). Never pass --force here: this must
+# stay non-destructive to any skill file an operator has already edited.
+"$install_binary_path" init --skills-only
+
 if ! command -v pi >/dev/null 2>&1; then
   printf 'Warning: `pi` was not found on PATH. Install it first: %s\n' "$pi_install_guide"
 fi
