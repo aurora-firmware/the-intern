@@ -124,3 +124,63 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-14
+
+PASS
+
+Reviewed branch `task/T-201-invoke-bob-init-skills-only-from-install-sh` (3
+commits: ea89a4e, b3bdbf2, 2b7fc06) diffed against `dev-agent`, against S-013
+v0.3 (CR-012) and this task's five acceptance criteria.
+
+**Stage 1 — Acceptance criteria (all met, with evidence):**
+- AC-1: `install.sh` invokes `"$install_binary_path" init --skills-only`
+  (not a PATH-resolved `bob`), placed after the binary replace + extension
+  copy, before the `pi`/PATH checks — matching the flow order the task
+  description specifies. Verified `test_invokes_installed_binary_directly_for_skills_only_refresh`
+  genuinely catches a regression: swapping in an unqualified `bob` call
+  made the test fail (the PATH-shadowing stub is never invoked; the
+  install-path binary's own invocation log goes missing).
+- AC-2: no `--force` is passed. Verified `test_never_passes_force_to_skills_only_invocation`
+  passes and is a real check (asserts against the stub's invocation log).
+- AC-3: the call is guarded with `if ... ; then :; else skills_only_status=$?; printf 'Warning: ...' >&2; fi`,
+  so a non-zero exit only warns (naming the failure) and never propagates
+  through `set -e`. Verified `test_skills_only_failure_warns_and_does_not_block_install`
+  forces exit 7, asserts `install.sh` still exits 0, still installs the
+  binary/extension, and prints the warning to stderr.
+- AC-4: no output redirection on the invocation, so `bob init --skills-only`'s
+  own report streams to stdout. Verified `test_skills_only_success_output_is_not_suppressed`.
+- AC-5: `the-intern/docs/src/operator-guide/index.md`'s "Install the skill
+  package" section now states a zip-based `install.sh` run performs this
+  refresh automatically (never `--force`, warns and continues on failure),
+  with a cross-link from "Upgrading a running install". Confirmed both
+  anchors exist and `mdbook build` (with `BOB_BIN` pointed at a freshly
+  built debug binary) completes cleanly — the only warning present is the
+  pre-existing, unrelated mdbook-mermaid version-mismatch notice.
+
+Exactly the three files listed in "Files to Touch" were modified (stat:
+`install.sh` +15, `test-install.sh` +190/-3, `operator-guide/index.md` +16).
+No unspecified behavior or scope creep.
+
+**Stage 2 — Code quality:** Correctness confirmed by running
+`bash the-intern/install-bundle/test-install.sh` (exits 0; all 4 new tests
+plus the full pre-existing suite ran, confirmed via targeted regression
+breaks above). Tests are independent (each uses its own `mktemp -d`) and
+cover the success, PATH-shadow, `--force`-absence, non-suppressed-output,
+and non-blocking-failure paths. No secrets or unvalidated external input.
+Naming and comments are clear; the guard block's rationale is documented
+inline. No dead code. Commit history is clean and matches the work log
+narrative (cycle 1 adds the unguarded call + AC-1/2/4 tests, cycle 2 adds
+the non-blocking guard + AC-3 test, cycle 3 is docs-only).
+
+Minor non-blocking observation: commit ea89a4e also fixes a pre-existing
+`assert_contains`/`assert_not_contains` bug (`grep -Fq "$pattern"` treating
+a `--force`-shaped pattern as an option) by adding a `--` separator. This is
+in scope — it was required to write the AC-2 test in the same file already
+listed under "Files to Touch" — and is minimal.
+
+Manual verification section of the task's Work Log (real `cargo build -p bob`
+debug binary, isolated `$HOME`, fresh install + forced-failure re-run) is
+consistent with the automated evidence above.
+
+Next owner: Development Loop.
