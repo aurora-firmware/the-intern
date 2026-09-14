@@ -99,6 +99,20 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-09-14
+
+Implemented T-201 end to end in three TDD cycles on `task/T-201-invoke-bob-init-skills-only-from-install-sh`.
+
+Cycle 1 (AC-1, AC-2, AC-4): extended `test-install.sh`'s shared `make_bundle` stub `bob` script so it can log its own invocation args (`BOB_STUB_INVOCATION_LOG`), print a fake `init --skills-only` report, and exit with a controllable status (`BOB_STUB_SKILLS_ONLY_EXIT`) — all opt-in via env vars so every pre-existing test keeps its old default (silent, exit 0) behavior. Added `test_invokes_installed_binary_directly_for_skills_only_refresh` (proves `install.sh` calls `$install_binary_path` even when a different `bob` shadows it earlier on `PATH`, reusing the same PATH-shadow scenario the existing shadow-warning test already sets up), `test_never_passes_force_to_skills_only_invocation`, and `test_skills_only_success_output_is_not_suppressed`. Confirmed all three failed for the expected reason, then added the minimal `install.sh` line — `"$install_binary_path" init --skills-only` right after the extension copy — which made all three pass. Along the way found and fixed a pre-existing bug in `assert_contains`/`assert_not_contains`: `grep -Fq "$pattern"` without a `--` separator treats a `--force`-shaped pattern as an option and errors out; added `--` to both helpers.
+
+Cycle 2 (AC-3): added `test_skills_only_failure_warns_and_does_not_block_install`, which forces the stub to exit 7 for `init --skills-only` and asserts `install.sh` still exits 0, still reports the binary/extension as installed, and prints a warning naming the failure. First draft of the test had a bug — capturing `$?` right after a negated `if ! (subshell); then` clobbers the value with the `if`'s own boolean result, not the subshell's real exit code, so `status` was always read as 0 — caught this because the test failed with an unexpected assertion message rather than the expected one; rewrote it using the same `if (...); then status=0; else status=$?; fi` shape already used by `test_abort_when_overwrite_prompt_hits_eof`. Confirmed genuine red (install.sh was exiting 7 due to `set -e` propagating the unguarded call's failure), then wrapped the invocation in `if ... ; then :; else skills_only_status=$?; printf 'Warning: ...' >&2; fi`, which made the test pass without affecting any other test.
+
+AC-5 was a docs-only change: added a note in "Install the skill package" stating that a zip-based `install.sh` run already performs this refresh automatically (never passing `--force`, warning and continuing on failure) so a manual `bob init --skills-only` is only needed for non-zip upgrade paths (`mise`, source build), plus a one-line cross-reference from "Upgrading a running install" pointing at that note. Verified with `mdbook build` (clean, no new warnings).
+
+After all three commits, did a manual end-to-end check per the task's Verification section using a real `cargo build -p bob` debug binary in an isolated `$HOME`: a fresh `./install.sh` run populated `skill_install_path` with all four skill packages and no separate `bob init --skills-only` call, streaming the subcommand's own `created:` report; a second run with a stub `bob` that exits 3 for `init --skills-only` still installed the binary/extension successfully and printed only the expected warning to stderr, with `install.sh`'s own exit code staying 0.
+
+Nothing was rejected or deferred; all five acceptance criteria are implemented and covered by automated tests plus the manual verification above. Nothing remains for this task.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
