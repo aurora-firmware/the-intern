@@ -93,6 +93,11 @@ along with the service before the upgrade commands can finish, leaving the
 old binary in place and the service down until someone stops and restarts
 it from outside.
 
+`install.sh` also refreshes the shared skill package automatically as part
+of the same run, immediately after replacing the binary — see
+[Install the skill package](#install-the-skill-package) for what that
+refresh does and does not touch.
+
 If no release zip exists for your target platform, or you are working from a
 source checkout on purpose, use the manual source-build path below.
 
@@ -210,6 +215,17 @@ pass `--force`, which replaces every packaged skill file with the version
 embedded in the running `bob` binary. See
 [Initialize a workspace with `bob init`](#initialize-a-workspace-with-bob-init)
 for the equivalent full-workspace bootstrap.
+
+**A zip-based install or upgrade already does this for you.** `install.sh`
+(see [Upgrading a running install](#upgrading-a-running-install)) invokes
+`bob init --skills-only` itself — against the binary it just installed, never
+passing `--force` — immediately after every run, so running `./install.sh`
+refreshes the skill package as part of the same step that replaces the
+binary. You only need to run `bob init --skills-only` by hand for a non-zip
+upgrade path, such as `mise` or a source build, where `install.sh` never
+runs. If the automatic refresh fails, `install.sh` prints a warning and
+still reports the binary and extension install as successful; rerun `bob
+init --skills-only` yourself to retry it.
 
 To use another location, set the top-level `skill_install_path` key in
 `config.toml`:
