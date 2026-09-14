@@ -16,9 +16,18 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Init {
-        path: String,
+        /// Workspace directory to scaffold. Required unless `--skills-only`
+        /// is given, since a skills-only refresh touches no workspace.
+        #[arg(required_unless_present = "skills_only")]
+        path: Option<String>,
         #[arg(long)]
         force: bool,
+        /// Install or refresh the shared skill package at `skill_install_path`
+        /// only, without scaffolding a workspace, writing the live config, or
+        /// requiring `--force`. Existing skill files are left untouched
+        /// unless `--force` is also given.
+        #[arg(long)]
+        skills_only: bool,
     },
     Task {
         #[arg(long)]
@@ -323,8 +332,9 @@ mod tests {
             cli.command,
             Command::Init {
                 ref path,
-                force: true
-            } if path == "./workspace"
+                force: true,
+                skills_only: false,
+            } if path.as_deref() == Some("./workspace")
         ));
     }
 
@@ -336,6 +346,34 @@ mod tests {
             result.is_err(),
             "clap should reject bob init without a path"
         );
+    }
+
+    #[test]
+    fn init_skills_only_does_not_require_a_path_argument() {
+        let cli = Cli::parse_from(["bob", "init", "--skills-only"]);
+
+        assert!(matches!(
+            cli.command,
+            Command::Init {
+                path: None,
+                force: false,
+                skills_only: true,
+            }
+        ));
+    }
+
+    #[test]
+    fn init_skills_only_accepts_force() {
+        let cli = Cli::parse_from(["bob", "init", "--skills-only", "--force"]);
+
+        assert!(matches!(
+            cli.command,
+            Command::Init {
+                path: None,
+                force: true,
+                skills_only: true,
+            }
+        ));
     }
 
     #[test]

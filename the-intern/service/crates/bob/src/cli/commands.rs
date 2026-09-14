@@ -17,8 +17,8 @@ mod status;
 mod task;
 mod worklog;
 
-pub fn init(path: &str, force: bool) -> ServiceResult<()> {
-    init::run(path, force)
+pub fn init(path: Option<&str>, force: bool, skills_only: bool) -> ServiceResult<()> {
+    init::run(path, force, skills_only)
 }
 
 pub fn status(json: bool) -> ServiceResult<()> {
