@@ -1,6 +1,6 @@
 ---
 title: Cross-platform bob install bundle release packaging
-version: '0.2'
+version: '0.3'
 status: approved  # draft | review | approved | superseded
 created: '2026-08-15'
 author: planner
@@ -40,12 +40,18 @@ for your platform, run `install.sh`" — for both platforms.
 
 What this specification explicitly does NOT cover:
 
-- **`bob init` / workspace scaffolding.** Owned by S-012. This spec ends at
-  "bob is installed, on `PATH`, and the extension is in place" — it does not
-  create or touch any workspace. This handoff is only correct because
-  `bob init`'s generated `config.toml` does not set `extension_path`, so bob
+- **`bob init` workspace scaffolding.** Owned by S-012. This spec's install
+  flow still ends at "bob is installed, on `PATH`, and the extension is in
+  place" — it does not create or touch any workspace, and does not modify
+  S-012's config generation (this handoff is only correct because `bob
+  init`'s generated `config.toml` does not set `extension_path`, so bob
   keeps resolving the extension at the location `install.sh` wrote; this
-  spec assumes that invariant and does not modify S-012's config generation.
+  spec assumes that invariant). The one exception is `bob init --skills-only`
+  (S-012, added by CR-012): `install.sh` MAY invoke it, non-blocking on
+  failure, immediately after installing the binary — it touches only the
+  shared skill install path, never a workspace and never `config.toml`, so
+  it does not cross into workspace scaffolding or config generation and
+  does not weaken this exclusion for anything else `bob init` does.
 - **Installing or managing the `pi` prerequisite.** `install.sh` may check
   and report whether `pi` is on `PATH`, but must never substitute a mock or
   wrapper for it — this is a hard, pre-existing project rule (see root
@@ -183,9 +189,9 @@ What this specification explicitly does NOT cover:
 
 ### Component 3: install.sh
 
-**Purpose:** Install the bob binary and pi-agent extension to their default locations without sudo, using the same XDG data-home cases as bob's runtime extension resolver, and safely handling an existing install and an unsupported platform.
-**Estimated size:** Medium — per-platform path resolution, existing-install detection, interactive confirmation, clear unsupported-platform messaging.
-**Interfaces:** Reads its own zip-local sibling files (the bob binary, `bob.ts`) and the `XDG_DATA_HOME` environment variable; writes to `~/.local/bin` and the resolved extension data path; rejects non-empty relative `XDG_DATA_HOME` before writing anything; probes `PATH` for `pi` and prompts on the terminal. Reads no configuration file (`config.toml`) and makes no network calls.
+**Purpose:** Install the bob binary and pi-agent extension to their default locations without sudo, using the same XDG data-home cases as bob's runtime extension resolver, refresh the shared skill package via the just-installed binary, and safely handle an existing install and an unsupported platform.
+**Estimated size:** Medium — per-platform path resolution, existing-install detection, interactive confirmation, clear unsupported-platform messaging, skill-refresh invocation.
+**Interfaces:** Reads its own zip-local sibling files (the bob binary, `bob.ts`) and the `XDG_DATA_HOME` environment variable; writes to `~/.local/bin` and the resolved extension data path; rejects non-empty relative `XDG_DATA_HOME` before writing anything; probes `PATH` for `pi` and prompts on the terminal; invokes the binary it just installed as `$install_binary_path init --skills-only` (S-012, CR-012) to refresh the shared skill package, printing a warning and continuing the install on failure rather than exiting non-zero. Reads no configuration file (`config.toml`) and makes no network calls — the skill-refresh invocation does not change this: `bob init --skills-only` resolves its paths from environment variables alone and never loads `config.toml`.
 
 ### Component 4: README.txt
 
@@ -245,6 +251,10 @@ Binary copied to ~/.local/bin (created if missing) and marked executable
 Extension copied to the platform default when XDG_DATA_HOME is unset or empty,
 or to $XDG_DATA_HOME/bob/extensions/bob.ts when XDG_DATA_HOME is non-empty absolute.
 If XDG_DATA_HOME is non-empty relative, install.sh exits non-zero before writing.
+  ↓
+install.sh invokes the just-installed binary: `bob init --skills-only`,
+refreshing the shared skill package; a failure here prints a warning and
+does not fail the install (S-012, CR-012)
   ↓
 install.sh reports what it did and warns if pi is not found on PATH
   ↓
@@ -307,6 +317,20 @@ Operator proceeds to `bob init <workspace>` (S-012, unchanged)
   produces one correctly-named install-bundle archive per supported
   platform on every tag push.
 
+- **What:** the shared skill package refresh `install.sh` triggers after
+  installing the binary. **Why:** an operator upgrading via the release
+  bundle should not need a separate manual step to pick up a skill a newer
+  release adds — matching what `--skills-only` already gives an operator
+  upgrading through any other route (`mise`, `cargo`, a source build).
+  **Where it lives:** a runtime step inside `install.sh`, invoking `bob init
+  --skills-only` (S-012) on the binary it just wrote — not a config value.
+  **Constraints:** never passes `--force`, so an operator's own edits to an
+  already-installed skill file are never overwritten by this step; failure
+  is informational only and must never block or fail the install, matching
+  the `pi`-presence check's existing non-blocking pattern. **Default
+  behavior when missing:** not applicable — `install.sh` always attempts
+  this step on every run.
+
 - **What:** the `pi` prerequisite check inside `install.sh`. **Why:** bob is
   unusable without `pi` on `PATH`, and the operator should learn this
   immediately — but `install.sh` must never install or substitute `pi`
@@ -335,3 +359,4 @@ Operator proceeds to `bob init <workspace>` (S-012, unchanged)
 | YYYY-MM-DD | Description of change | Reason for amendment | T-XXX, T-YYY |
 -->
 | 2026-08-15 | Replaced the prior literal "`XDG_DATA_HOME` is set" extension-path rule with XDG Base Directory semantics for both `install.sh` and bob's runtime resolver: unset or empty uses the platform default, non-empty absolute is honored, and non-empty relative is invalid. Added Component 6 for runtime resolver alignment and made the documentation phase wait for that behavior. | CR-008 / Architect consistency review PASS. The old rule made empty `XDG_DATA_HOME` resolve to `bob/extensions/bob.ts`, colliding with the bundle's sibling `./bob` executable; HOME-normalizing relative values made install/runtime lookup diverge. | T-170, T-173, T-174 |
+| 2026-09-14 | `install.sh` (Component 3) now invokes the just-installed binary as `bob init --skills-only` immediately after the binary replace step, refreshing the shared skill package; failure is non-blocking. The Exclusions section's `bob init` bullet is narrowed to carve out this one invocation, which touches neither a workspace nor `config.toml`. | CR-012 / Architect consistency review PASS, driven by issue #55: a zip-based upgrade should pick up a newer release's skill without a separate manual step. | Tasks TBD |

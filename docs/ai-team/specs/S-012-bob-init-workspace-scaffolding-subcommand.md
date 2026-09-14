@@ -1,6 +1,6 @@
 ---
 title: bob init workspace-scaffolding subcommand
-version: '0.2'
+version: '0.3'
 status: approved
 created: '2026-08-09'
 author: planner
@@ -26,6 +26,12 @@ The intended fresh-machine flow is: install the released `bob` binary, ensure
 `manager_address` in the generated workspace configuration when desired, then
 run `bob serve` and `bob chat` or schedule a job with `--cwd <workspace>`.
 `bob init` is filesystem-only and never contacts a running service.
+
+A second mode, `bob init --skills-only`, refreshes only the shared skill
+package — independent of any workspace and of the live config — so an
+operator upgrading bob (by any route: the release bundle, `mise`, a source
+build) can pick up a skill a newer release adds without re-scaffolding
+anything or accepting `--force`'s workspace/config-file replacement.
 
 ## Exclusions
 
@@ -66,7 +72,7 @@ run `bob serve` and `bob chat` or schedule a job with `--cwd <workspace>`.
 | Shared-skill installer | Materialize the assets at the resolved shared install path, with owner-only permissions and non-destructive/force semantics. |
 | Workspace materializer | Create `AGENTS.md`, `CLAUDE.md`, `config/email-triage.toml`, `worklog/`, and `tasks/`; all are owner-only. |
 | Config generator | Write the complete live config at the same path used by bob's loader, including its shared install path and CR-007 policy profile. |
-| `bob init` command | Parse path and `--force`, resolve paths, run the filesystem steps, report conflicts, warnings, and next steps. |
+| `bob init` command | Parse path/`--force`/`--skills-only`, resolve paths, run the filesystem steps, report conflicts, warnings, and next steps. |
 
 ## Workflow
 
@@ -77,24 +83,44 @@ bob init <workspace> [--force]
   → create/layer workspace context files, local email configuration, worklog/
   → create or replace live XDG config.toml (guarded by --force)
   → print broad-policy warning and next steps
+
+bob init --skills-only [--force]
+  → resolve the shared skill install path
+  → install the embedded pi skill package once at the shared install path
+  → print the installed/refreshed/skipped skill file report
 ```
 
 Existing workspace files are skipped and named in warnings without `--force`.
 With `--force`, only the fixed scaffold files and the shared installed skill
-files may be replaced. A target `.git` directory is never touched. Existing
-live config is an all-or-nothing guard: if it exists and `--force` is absent,
-the command exits non-zero after leaving it unchanged.
+files may be replaced. A target `.git` directory is never touched. In the
+default (workspace-scaffolding) mode, existing live config is an
+all-or-nothing guard: if it exists and `--force` is absent, the command
+exits non-zero after leaving it unchanged. `--skills-only` mode is
+independent of this guard — it never reads or writes the live config or any
+workspace file, so an existing live config neither blocks it nor is touched
+by it, with or without `--force`.
 
 ## Configuration Requirements
 
 ### CLI
 
-- `<path>` is required and resolves relative input against the current working
-  directory to an absolute workspace path. An uncreatable path fails without
-  partial writes where feasible.
+- `<path>` is required unless `--skills-only` is given, and resolves relative
+  input against the current working directory to an absolute workspace path.
+  An uncreatable path fails without partial writes where feasible.
 - `--force` is optional. It enables replacement of only the fixed generated
   files; its absence skips workspace conflicts and refuses a live config
   conflict.
+- `--skills-only` is optional and mutually exclusive with `<path>`. It
+  installs or refreshes the shared skill package at the resolved
+  `skill_install_path` only, and is not subject to the live-config-exists
+  guard: it creates or writes no workspace file and no live config, so there
+  is nothing for that guard to protect. Per-file semantics match the
+  Shared-skill installer's existing non-destructive/force behavior: each
+  embedded skill file is created if missing and left untouched unless
+  `--force` is also given, which then replaces every packaged skill file
+  with the version embedded in the running binary. `--skills-only` remains
+  filesystem-only and contacts no running service, consistent with `bob
+  init`'s existing classification (S-002, ADR-007).
 
 ### Files created
 
@@ -136,6 +162,11 @@ workspace files, mode bits, and a loader-valid config with precisely the four
 no-matcher rules; an unsupported tool remains denied. It must also prove
 relative-path resolution, no-force conflicts, force replacement, `.git`
 preservation, live-config refusal, and that no admin socket is opened.
+It must additionally prove that `--skills-only` installs a missing skill
+file and leaves an existing one untouched without `--force`, replaces it
+with `--force`, and behaves identically whether or not a live config
+already exists — and that plain `bob init`'s live-config refusal is
+unaffected by `--skills-only`'s existence.
 
 An end-to-end command test must use isolated XDG paths, run `bob init`, then
 start `bob serve` and verify a `bob chat` or scheduled session can discover
@@ -158,3 +189,4 @@ the shared skills from the initialized workspace without a workspace
 | 2026-08-12 | Redrafted against S-011/ADR-014: skills install once at a shared path, while init creates workspace-local state and the CR-007 permissive bootstrap policy. | The earlier draft's per-workspace skill deployment contradicted the approved shared install-path architecture. | Tasks TBD |
 | 2026-08-23 | `bob init` also creates an empty `<workspace>/tasks/` board directory and installs a fourth `tasks` pi-package tree at the shared install path. `--force` never removes or replaces board content. | CR-009, driven by S-014: the task board resolves from the working directory, so scaffolding it fixes the resolution point at the workspace root, and the skill that teaches the command reaches sessions only through the shared install path this command populates. | Tasks TBD |
 | 2026-08-23 | The canonical skills source and the embedded pi-package output are named under `the-intern/bob-skills/` instead of `the-intern/email-skills/`. | CR-010. The package holds domain-free skills — `worklog` by S-011's design and `tasks` by S-014 — so its email-oriented directory name no longer describes it. Rename only; no behaviour, layout, or install-path change. | Tasks TBD |
+| 2026-09-14 | Added `bob init --skills-only`: installs/refreshes the shared skill package at `skill_install_path` independent of the live-config-exists guard, mutually exclusive with `<path>`. The guard's "all-or-nothing" language is scoped explicitly to the workspace-scaffolding mode. | CR-012, driven by issue #55: an operator upgrading bob had no way to pick up a skill a newer release adds without `bob init --force`, which is destructive to operator-authored workspace/config files (issue #56, kept out of this change's scope). | Tasks TBD |
