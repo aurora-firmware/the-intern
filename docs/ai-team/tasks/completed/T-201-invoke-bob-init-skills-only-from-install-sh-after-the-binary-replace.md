@@ -1,7 +1,7 @@
 ---
 id: T-201
 title: Invoke bob init --skills-only from install.sh after the binary replace
-status: in-progress
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-09-14'
