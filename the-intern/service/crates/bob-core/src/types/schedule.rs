@@ -881,7 +881,17 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn verify_trusted_store_accepts_owner_only_store() {
+        use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().expect("tempdir");
+        // tempfile::tempdir() does not force 0700 — its directory is mkdir's
+        // OS default (0777) minus the process umask, so a permissive umask
+        // (e.g. 0002) leaves it group-writable. Harden it explicitly, the
+        // same way verify_trusted_store_fails_closed_on_world_writable_parent
+        // below sets a permissive mode explicitly rather than trusting the
+        // ambient default.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("harden tempdir");
         let path = dir.path().join("schedule.json");
         write_schedule_store(&path, &[entry("a")]).expect("write must succeed");
 
