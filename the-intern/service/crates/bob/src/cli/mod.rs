@@ -18,14 +18,19 @@ pub enum Command {
     Init {
         /// Workspace directory to scaffold. Required unless `--skills-only`
         /// is given, since a skills-only refresh touches no workspace.
-        #[arg(required_unless_present = "skills_only")]
+        /// Mutually exclusive with `--skills-only`.
+        #[arg(
+            required_unless_present = "skills_only",
+            conflicts_with = "skills_only"
+        )]
         path: Option<String>,
         #[arg(long)]
         force: bool,
         /// Install or refresh the shared skill package at `skill_install_path`
         /// only, without scaffolding a workspace, writing the live config, or
         /// requiring `--force`. Existing skill files are left untouched
-        /// unless `--force` is also given.
+        /// unless `--force` is also given. Mutually exclusive with a
+        /// workspace path.
         #[arg(long)]
         skills_only: bool,
     },
@@ -360,6 +365,17 @@ mod tests {
                 skills_only: true,
             }
         ));
+    }
+
+    #[test]
+    fn init_rejects_a_path_combined_with_skills_only() {
+        let result = Cli::try_parse_from(["bob", "init", "./workspace", "--skills-only"]);
+
+        assert!(
+            result.is_err(),
+            "clap should reject a workspace path combined with --skills-only, \
+             not silently discard it"
+        );
     }
 
     #[test]
