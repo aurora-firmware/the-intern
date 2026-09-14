@@ -25,7 +25,7 @@ use config::BobConfig;
 
 #[async_trait]
 pub trait DispatchRuntime {
-    fn init(&self, path: &str, force: bool) -> ServiceResult<()>;
+    fn init(&self, path: Option<&str>, force: bool, skills_only: bool) -> ServiceResult<()>;
     fn load_config(&self) -> ServiceResult<BobConfig>;
     fn init_telemetry(&self, cfg: &BobConfig) -> ServiceResult<()>;
     async fn run_serve(&self, cfg: BobConfig) -> ServiceResult<()>;
@@ -90,8 +90,8 @@ pub struct ProductionRuntime;
 
 #[async_trait]
 impl DispatchRuntime for ProductionRuntime {
-    fn init(&self, path: &str, force: bool) -> ServiceResult<()> {
-        cli::commands::init(path, force)
+    fn init(&self, path: Option<&str>, force: bool, skills_only: bool) -> ServiceResult<()> {
+        cli::commands::init(path, force, skills_only)
     }
 
     fn load_config(&self) -> ServiceResult<BobConfig> {
@@ -232,8 +232,13 @@ pub async fn run_cli(cli: Cli) -> ServiceResult<()> {
 
 pub async fn run_cli_with_runtime(runtime: &impl DispatchRuntime, cli: Cli) -> ServiceResult<()> {
     let Cli { json, command } = cli;
-    if let Command::Init { path, force } = command {
-        return runtime.init(&path, force);
+    if let Command::Init {
+        path,
+        force,
+        skills_only,
+    } = command
+    {
+        return runtime.init(path.as_deref(), force, skills_only);
     }
     if let Command::Task { board, command } = command {
         return match command {
@@ -331,7 +336,7 @@ mod tests {
     #[derive(Clone)]
     struct FakeRuntime {
         calls: Arc<Mutex<Vec<&'static str>>>,
-        init_calls: Arc<Mutex<Vec<(String, bool)>>>,
+        init_calls: Arc<Mutex<Vec<(Option<String>, bool, bool)>>>,
     }
 
     impl FakeRuntime {
@@ -345,12 +350,13 @@ mod tests {
 
     #[async_trait]
     impl DispatchRuntime for FakeRuntime {
-        fn init(&self, path: &str, force: bool) -> ServiceResult<()> {
+        fn init(&self, path: Option<&str>, force: bool, skills_only: bool) -> ServiceResult<()> {
             self.calls.lock().expect("lock").push("init");
-            self.init_calls
-                .lock()
-                .expect("lock")
-                .push((path.to_string(), force));
+            self.init_calls.lock().expect("lock").push((
+                path.map(str::to_string),
+                force,
+                skills_only,
+            ));
             Ok(())
         }
 
@@ -517,8 +523,9 @@ mod tests {
         let cli = Cli {
             json: false,
             command: Command::Init {
-                path: "./workspace".to_string(),
+                path: Some("./workspace".to_string()),
                 force: true,
+                skills_only: false,
             },
         };
 
@@ -529,7 +536,29 @@ mod tests {
         assert_eq!(runtime.calls.lock().expect("lock").as_slice(), ["init"]);
         assert_eq!(
             runtime.init_calls.lock().expect("lock").as_slice(),
-            [("./workspace".to_string(), true)]
+            [(Some("./workspace".to_string()), true, false)]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn init_dispatch_passes_skills_only_through_with_no_path() {
+        let runtime = FakeRuntime::new();
+        let cli = Cli {
+            json: false,
+            command: Command::Init {
+                path: None,
+                force: false,
+                skills_only: true,
+            },
+        };
+
+        run_cli_with_runtime(&runtime, cli)
+            .await
+            .expect("skills-only init dispatch succeeds");
+
+        assert_eq!(
+            runtime.init_calls.lock().expect("lock").as_slice(),
+            [(None, false, true)]
         );
     }
 

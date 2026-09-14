@@ -142,6 +142,41 @@ fn materialize_workspace_files(
     Ok(())
 }
 
+/// Installs (or tops up) the shared skill package at the configured
+/// `skill_install_path`, independent of the workspace-scaffold and
+/// live-config machinery `materialize_workspace_with_paths` owns. Unlike a
+/// plain `bob init`, this never refuses to run just because a live config
+/// already exists — that guard protects the destructive workspace-scaffold
+/// replace (`--force`), which this path never touches. It reuses
+/// `install_shared_skills`, which is already safe to run repeatedly: each
+/// embedded skill file is created if missing and left alone unless `force`
+/// is given, so an upgrade that adds a skill (e.g. `tasks`) can be picked up
+/// without disturbing skills already on disk or requiring `--force`.
+pub fn install_skills_only(force: bool) -> ServiceResult<MaterializationReport> {
+    let env = std::env::vars().collect();
+    let resolved_paths = resolve_init_paths_for_env(&env, current_uid());
+
+    install_skills_only_with_paths(&resolved_paths, force)
+}
+
+fn install_skills_only_with_paths(
+    resolved_paths: &ResolvedInitPaths,
+    force: bool,
+) -> ServiceResult<MaterializationReport> {
+    let mut report = MaterializationReport {
+        workspace_path: PathBuf::new(),
+        config_path: resolved_paths.config_path.clone(),
+        skill_install_path: resolved_paths.skill_install_path.clone(),
+        created_paths: vec![],
+        replaced_paths: vec![],
+        skipped_paths: vec![],
+    };
+
+    install_shared_skills(&resolved_paths.skill_install_path, force, &mut report)?;
+
+    Ok(report)
+}
+
 fn install_shared_skills(
     skill_install_path: &Path,
     force: bool,
@@ -1070,5 +1105,97 @@ mod tests {
                 "refusal detail should mention {needle:?}, got:\n{detail}"
             );
         }
+    }
+
+    #[test]
+    fn install_skills_only_installs_a_newly_shipped_skill_without_force_or_disturbing_existing_ones(
+    ) {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+
+        // Simulate an operator who already ran `bob init` on an older bob
+        // release: a live config exists, and the skill install path holds
+        // every skill except one a newer release adds (`tasks`, as in the
+        // upgrade this reproduces).
+        let config_parent = resolved_paths
+            .config_path
+            .parent()
+            .expect("config path should have a parent");
+        fs::create_dir_all(config_parent).expect("config parent should be created");
+        fs::write(
+            &resolved_paths.config_path,
+            "skill_install_path = \"/keep/me\"\n",
+        )
+        .expect("existing live config should be seeded");
+
+        let stale_himalaya_skill = resolved_paths
+            .skill_install_path
+            .join("himalaya")
+            .join("SKILL.md");
+        fs::create_dir_all(stale_himalaya_skill.parent().expect("parent dir"))
+            .expect("himalaya skill dir should be created");
+        fs::write(&stale_himalaya_skill, "operator-edited content\n")
+            .expect("existing skill file should be seeded");
+
+        let missing_tasks_skill = resolved_paths
+            .skill_install_path
+            .join("tasks")
+            .join("SKILL.md");
+
+        let report = install_skills_only_with_paths(&resolved_paths, false)
+            .expect("skills-only install must succeed even with an existing live config");
+
+        assert!(
+            missing_tasks_skill.is_file(),
+            "a skill added since the operator's last init must be installed at {}",
+            missing_tasks_skill.display()
+        );
+        assert!(
+            report.created_paths.contains(&missing_tasks_skill),
+            "created_paths should list the newly installed skill file"
+        );
+        assert_eq!(
+            fs::read_to_string(&stale_himalaya_skill)
+                .expect("pre-existing skill file should still exist"),
+            "operator-edited content\n",
+            "an existing skill file must not be overwritten without --force"
+        );
+        assert!(
+            report.skipped_paths.contains(&stale_himalaya_skill),
+            "skipped_paths should list the untouched pre-existing skill file"
+        );
+        assert_eq!(
+            fs::read_to_string(&resolved_paths.config_path)
+                .expect("live config should be readable"),
+            "skill_install_path = \"/keep/me\"\n",
+            "a skills-only install must not touch the live config"
+        );
+    }
+
+    #[test]
+    fn install_skills_only_replaces_existing_skill_files_when_forced() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+
+        let stale_himalaya_skill = resolved_paths
+            .skill_install_path
+            .join("himalaya")
+            .join("SKILL.md");
+        fs::create_dir_all(stale_himalaya_skill.parent().expect("parent dir"))
+            .expect("himalaya skill dir should be created");
+        fs::write(&stale_himalaya_skill, "operator-edited content\n")
+            .expect("existing skill file should be seeded");
+
+        let report = install_skills_only_with_paths(&resolved_paths, true)
+            .expect("forced skills-only install must succeed");
+
+        assert_ne!(
+            fs::read_to_string(&stale_himalaya_skill).expect("skill file should exist"),
+            "operator-edited content\n",
+            "--force must replace an existing skill file with the embedded content"
+        );
+        assert!(report.replaced_paths.contains(&stale_himalaya_skill));
     }
 }

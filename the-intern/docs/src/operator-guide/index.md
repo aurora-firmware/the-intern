@@ -193,13 +193,23 @@ extension). A non-empty relative `XDG_DATA_HOME` value does not fail config
 loading here; `skill_install_path` deliberately falls back to the same platform
 default used for unset or empty values.
 
-Install the packaged pi skill content there:
+Install (or refresh) the packaged skill content with `bob init --skills-only`,
+rather than copying it by hand — the content is embedded in the `bob` binary
+itself, so this works from a release install with no source checkout:
 
 ```bash
-mkdir -p ~/.local/share/bob/skills
-SKILL_PACKAGE_SRC=the-intern/bob-skills/.pi/skills
-cp -r "$SKILL_PACKAGE_SRC/." ~/.local/share/bob/skills/
+bob init --skills-only
 ```
+
+`--skills-only` writes only the skill package at `skill_install_path`: it
+does not scaffold a workspace, does not write the live config, and — unlike a
+plain `bob init` — never refuses to run just because a live config already
+exists. Run it again after upgrading `bob` to pick up any skill a new release
+adds; existing skill files already on disk are left untouched unless you also
+pass `--force`, which replaces every packaged skill file with the version
+embedded in the running `bob` binary. See
+[Initialize a workspace with `bob init`](#initialize-a-workspace-with-bob-init)
+for the equivalent full-workspace bootstrap.
 
 To use another location, set the top-level `skill_install_path` key in
 `config.toml`:
@@ -259,6 +269,13 @@ bob init /srv/workspaces/email-triage
 It also writes the live bob config file at the platform default config path and
 installs the shared skill package at `skill_install_path`. It does **not**
 create a workspace-local `.pi/skills/` tree.
+
+Re-running plain `bob init` on an already-initialized workspace refuses
+unless `--force` is given, and `--force` replaces the live config, `AGENTS.md`,
+`CLAUDE.md`, and `config/email-triage.toml` wholesale. To pick up a skill a
+newer `bob` release adds — without touching any of those — use
+`bob init --skills-only` instead; see
+[Install the skill package](#install-the-skill-package).
 
 The generated live config is a permissive bootstrap: it allows any arguments
 for `bash`, `read`, `write`, and `edit`, keeps every other tool default-denied,
