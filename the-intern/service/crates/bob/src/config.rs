@@ -1831,6 +1831,17 @@ audit_log_path = "{}"
     #[test]
     fn loads_schedule_entries_from_json_store_when_store_exists() {
         let temp = tempfile::tempdir().expect("tempdir should be created");
+        // tempfile::tempdir() does not force 0700 — its directory is mkdir's
+        // OS default (0777) minus the process umask, so a permissive umask
+        // (e.g. 0002) leaves it group-writable and verify_trusted_store
+        // (called during config load, below) correctly refuses it. Harden
+        // it explicitly rather than relying on the ambient umask.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700))
+                .expect("harden tempdir");
+        }
         let store_path = temp.path().join("schedules.json");
 
         // Write two entries to the JSON store before loading config.
