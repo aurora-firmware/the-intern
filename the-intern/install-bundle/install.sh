@@ -116,9 +116,36 @@ fi
 mkdir -p "$(dirname "$install_binary_path")"
 mkdir -p "$(dirname "$install_extension_path")"
 
-cp "$bundle_binary_path" "$install_binary_path"
-chmod +x "$install_binary_path"
+# Replace the binary atomically: write to a sibling temp file in the same
+# directory, then rename(2) it over the target. rename(2) only swaps the
+# directory entry and never opens the target for writing, so it succeeds
+# even when install_binary_path is the executable of a running `bob serve`
+# (a plain in-place `cp` fails there with ETXTBSY, "Text file busy"). The
+# temp file must stay in the same directory so this rename can't fall back
+# to a cross-filesystem copy, which would reopen the busy target.
+install_binary_tmp="$(mktemp "${install_binary_path}.XXXXXX")"
+trap 'rm -f "$install_binary_tmp"' EXIT
+cp "$bundle_binary_path" "$install_binary_tmp"
+chmod 755 "$install_binary_tmp"
+mv "$install_binary_tmp" "$install_binary_path"
+trap - EXIT
+
 cp "$bundle_extension_path" "$install_extension_path"
+
+# Refresh the shared skill package via the binary this script just wrote —
+# not a PATH-resolved `bob`, which could be a different install entirely
+# (see the PATH-shadow warning below). Never pass --force here: this must
+# stay non-destructive to any skill file an operator has already edited.
+# Failure here is informational only, mirroring the `pi`-on-PATH check
+# below: it must never fail an otherwise-successful binary/extension
+# install.
+if "$install_binary_path" init --skills-only; then
+  :
+else
+  skills_only_status=$?
+  printf 'Warning: `%s init --skills-only` exited %s; skill package refresh was skipped.\n' \
+    "$install_binary_path" "$skills_only_status" >&2
+fi
 
 if ! command -v pi >/dev/null 2>&1; then
   printf 'Warning: `pi` was not found on PATH. Install it first: %s\n' "$pi_install_guide"
@@ -126,6 +153,15 @@ fi
 
 if ! path_contains_dir "${HOME}/.local/bin"; then
   printf 'Warning: %s is not on PATH.\n' "${HOME}/.local/bin"
+fi
+
+# A different bob install (e.g. a mise-managed one) can already sit earlier
+# on PATH than the binary this script just wrote. When that happens, PATH
+# order alone decides which bob actually runs, silently, so surface it.
+resolved_bob_path="$(command -v bob 2>/dev/null || true)"
+if [ -n "$resolved_bob_path" ] && [ "$resolved_bob_path" != "$install_binary_path" ]; then
+  printf 'Warning: another `bob` is on PATH at %s, which differs from the installed binary at %s. PATH order decides which one runs; consider removing the other install or reordering PATH.\n' \
+    "$resolved_bob_path" "$install_binary_path"
 fi
 
 printf 'Installed bob binary: %s\n' "$install_binary_path"

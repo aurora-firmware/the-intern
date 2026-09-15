@@ -5,10 +5,20 @@ use std::{
 
 use bob_core::error::ServiceResult;
 
-use crate::init_materializer::{materialize_workspace, MaterializationReport};
+use crate::init_materializer::{install_skills_only, materialize_workspace, MaterializationReport};
 
-pub(super) fn run(path: &str, force: bool) -> ServiceResult<()> {
+pub(super) fn run(path: Option<&str>, force: bool, skills_only: bool) -> ServiceResult<()> {
     let mut out = io::stdout();
+
+    if skills_only {
+        return run_with_skills_installer(force, &mut out, install_skills_only);
+    }
+
+    let path = path.ok_or_else(|| {
+        crate::cli::commands::invalid_request_error(
+            "workspace path is required unless --skills-only is given",
+        )
+    })?;
     run_with_materializer(path, force, &mut out, |workspace_path, force| {
         materialize_workspace(Path::new(workspace_path), force)
     })
@@ -22,6 +32,34 @@ fn run_with_materializer(
 ) -> ServiceResult<()> {
     let report = materialize(path, force)?;
     write_report(out, &report)
+}
+
+fn run_with_skills_installer(
+    force: bool,
+    out: &mut impl Write,
+    mut install: impl FnMut(bool) -> ServiceResult<MaterializationReport>,
+) -> ServiceResult<()> {
+    let report = install(force)?;
+    write_skills_only_report(out, &report)
+}
+
+fn write_skills_only_report(
+    out: &mut impl Write,
+    report: &MaterializationReport,
+) -> ServiceResult<()> {
+    writeln!(out, "refreshed shared skills")
+        .and_then(|_| {
+            writeln!(
+                out,
+                "shared skills: {}",
+                report.skill_install_path.display()
+            )
+        })
+        .map_err(write_error)?;
+
+    write_path_section(out, "created", &report.created_paths)?;
+    write_path_section(out, "replaced", &report.replaced_paths)?;
+    write_path_section(out, "skipped existing", &report.skipped_paths)
 }
 
 fn write_report(out: &mut impl Write, report: &MaterializationReport) -> ServiceResult<()> {
@@ -196,5 +234,66 @@ mod tests {
         materialize: impl FnMut(&str, bool) -> ServiceResult<MaterializationReport>,
     ) -> ServiceResult<()> {
         super::run_with_materializer(path, force, out, materialize)
+    }
+
+    fn run_with_skills_installer(
+        force: bool,
+        out: &mut Vec<u8>,
+        install: impl FnMut(bool) -> ServiceResult<MaterializationReport>,
+    ) -> ServiceResult<()> {
+        super::run_with_skills_installer(force, out, install)
+    }
+
+    #[test]
+    fn skills_only_report_lists_shared_skills_and_paths_without_workspace_sections() {
+        let skill_install_path = PathBuf::from("/tmp/xdg-data/bob/skills");
+        let mut out = Vec::new();
+
+        let report = MaterializationReport {
+            workspace_path: PathBuf::new(),
+            config_path: PathBuf::from("/tmp/xdg-config/bob/config.toml"),
+            skill_install_path: skill_install_path.clone(),
+            created_paths: vec![skill_install_path.join("tasks").join("SKILL.md")],
+            replaced_paths: vec![],
+            skipped_paths: vec![skill_install_path.join("himalaya").join("SKILL.md")],
+        };
+
+        run_with_skills_installer(false, &mut out, move |force| {
+            assert!(!force);
+            Ok(report.clone())
+        })
+        .expect("skills-only install should render success output");
+
+        let text = String::from_utf8(out).expect("utf8 output");
+        for expected in [
+            "refreshed shared skills",
+            "shared skills: /tmp/xdg-data/bob/skills",
+            "created:",
+            "/tmp/xdg-data/bob/skills/tasks/SKILL.md",
+            "skipped existing:",
+            "/tmp/xdg-data/bob/skills/himalaya/SKILL.md",
+        ] {
+            assert!(
+                text.contains(expected),
+                "expected output to contain {expected:?}, got:\n{text}"
+            );
+        }
+        for unexpected in ["workspace:", "live config:", "Warning:", "Next steps:"] {
+            assert!(
+                !text.contains(unexpected),
+                "skills-only output should not mention {unexpected:?}, got:\n{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn run_requires_a_path_when_not_skills_only() {
+        let error = super::run(None, false, false).expect_err("missing path must fail");
+
+        assert!(matches!(
+            error,
+            ServiceError::InvalidRequest { ref detail }
+                if detail.contains("--skills-only")
+        ));
     }
 }

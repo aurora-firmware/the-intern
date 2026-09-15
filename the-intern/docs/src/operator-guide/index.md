@@ -69,6 +69,35 @@ Download the zip that matches your platform
 That installs the `bob` binary and `bob.ts` into their default user-local
 locations without `sudo`.
 
+### Upgrading a running install
+
+`install.sh` replaces the `bob` binary atomically, so it is safe to run while
+bob is already running — a process already running the old binary keeps
+running on it until it restarts. To upgrade, run `./install.sh`, then
+restart bob however you normally do:
+
+```bash
+./install.sh
+systemctl --user restart bob.service   # Linux, if you run bob under systemd
+```
+
+On macOS, or if you run bob some other way, restart it using whatever you
+normally use to stop and start it (see [Shutdown](#shutdown) for the
+generic `SIGTERM`/Ctrl-C path).
+
+Whichever way you restart it, run the upgrade from a shell that is
+independent of the bob process itself — not a session bob spawned, and not
+a supervisor unit's own shell. Stopping bob from inside its own process
+tree (for example, a systemd user unit's cgroup) terminates that shell
+along with the service before the upgrade commands can finish, leaving the
+old binary in place and the service down until someone stops and restarts
+it from outside.
+
+`install.sh` also refreshes the shared skill package automatically as part
+of the same run, immediately after replacing the binary — see
+[Install the skill package](#install-the-skill-package) for what that
+refresh does and does not touch.
+
 If no release zip exists for your target platform, or you are working from a
 source checkout on purpose, use the manual source-build path below.
 
@@ -169,13 +198,34 @@ extension). A non-empty relative `XDG_DATA_HOME` value does not fail config
 loading here; `skill_install_path` deliberately falls back to the same platform
 default used for unset or empty values.
 
-Install the packaged pi skill content there:
+Install (or refresh) the packaged skill content with `bob init --skills-only`,
+rather than copying it by hand — the content is embedded in the `bob` binary
+itself, so this works from a release install with no source checkout:
 
 ```bash
-mkdir -p ~/.local/share/bob/skills
-SKILL_PACKAGE_SRC=the-intern/bob-skills/.pi/skills
-cp -r "$SKILL_PACKAGE_SRC/." ~/.local/share/bob/skills/
+bob init --skills-only
 ```
+
+`--skills-only` writes only the skill package at `skill_install_path`: it
+does not scaffold a workspace, does not write the live config, and — unlike a
+plain `bob init` — never refuses to run just because a live config already
+exists. Run it again after upgrading `bob` to pick up any skill a new release
+adds; existing skill files already on disk are left untouched unless you also
+pass `--force`, which replaces every packaged skill file with the version
+embedded in the running `bob` binary. See
+[Initialize a workspace with `bob init`](#initialize-a-workspace-with-bob-init)
+for the equivalent full-workspace bootstrap.
+
+**A zip-based install or upgrade already does this for you.** `install.sh`
+(see [Upgrading a running install](#upgrading-a-running-install)) invokes
+`bob init --skills-only` itself — against the binary it just installed, never
+passing `--force` — immediately after every run, so running `./install.sh`
+refreshes the skill package as part of the same step that replaces the
+binary. You only need to run `bob init --skills-only` by hand for a non-zip
+upgrade path, such as `mise` or a source build, where `install.sh` never
+runs. If the automatic refresh fails, `install.sh` prints a warning and
+still reports the binary and extension install as successful; rerun `bob
+init --skills-only` yourself to retry it.
 
 To use another location, set the top-level `skill_install_path` key in
 `config.toml`:
@@ -235,6 +285,13 @@ bob init /srv/workspaces/email-triage
 It also writes the live bob config file at the platform default config path and
 installs the shared skill package at `skill_install_path`. It does **not**
 create a workspace-local `.pi/skills/` tree.
+
+Re-running plain `bob init` on an already-initialized workspace refuses
+unless `--force` is given, and `--force` replaces the live config, `AGENTS.md`,
+`CLAUDE.md`, and `config/email-triage.toml` wholesale. To pick up a skill a
+newer `bob` release adds — without touching any of those — use
+`bob init --skills-only` instead; see
+[Install the skill package](#install-the-skill-package).
 
 The generated live config is a permissive bootstrap: it allows any arguments
 for `bash`, `read`, `write`, and `edit`, keeps every other tool default-denied,
