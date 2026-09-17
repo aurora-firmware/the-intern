@@ -1,6 +1,6 @@
 ---
 title: Vendor-neutral skills package and bob-side skill loading
-version: '0.1'
+version: '0.2'
 status: approved  # draft | review | approved | superseded
 created: '2026-08-06'
 author: planner
@@ -135,7 +135,8 @@ What this specification explicitly does NOT cover:
                         │
                         │ writes, relative to its own cwd
                         v
-        <cwd>/worklog/<date>.md   +   <cwd> skill-local config
+        <cwd>/worklog/<date>.md   +   <cwd>/tasks/ board
+                                  +   <cwd> skill-local config
 ```
 
 ### Responsibility Separation
@@ -147,8 +148,8 @@ What this specification explicitly does NOT cover:
 | Skill install path | The deployed, read-only location bob resolves and makes available to its extension | A trusted, un-checked input; operator-protected by filesystem permissions |
 | bob service | Resolve the install path and make it available to the extension on every session spawned | Uses the existing per-session environment contract; bob never reads skill content |
 | bob extension | Answer pi's resource-discovery event with the resolved skill path | Already supplied on all three spawn paths and already subscribed to the event; governed by `ADR-014` |
-| `worklog` skill | Owns when and how a session uses the diary, and the item-identifier convention | Domain-free; defers to the `bob worklog` command for entry format, first-run detection, and reconciliation rather than restating them (S-015) |
-| `email-triage` skill | Owns detection, classification, and the act-or-escalate decision | Delegates all diary mechanics to `worklog`; retains retry of a carried-forward blocked action |
+| `worklog` skill | Owns when and how a session uses the diary, and the item-identifier convention | Domain-free; defers to the `bob worklog` command for the entry format and same-day duplicate suppression rather than restating them (S-015). A day's diary holds only what that day's runs recorded, so a session that needs to track something as still outstanding keeps that record elsewhere |
+| `email-triage` skill | Owns detection, classification, and the act-or-escalate decision | Delegates all diary mechanics to `worklog` and all open-item tracking to `tasks`: anything it cannot finish in one run — an escalation awaiting a reply, an action the gate refused — is filed as a task, and a later run picks it up from there |
 | `himalaya` skill | Owns CLI reference knowledge | Carries no triage policy; unchanged in role |
 | `tasks` skill | Owns the task-board discipline: when work belongs on a board, how to describe it so a later run can pick it up cold, and what each status commits to | Domain-free; defers to the `bob task` command for the file format rather than restating it (S-014) |
 | Action-authorization gate (existing) | Gates every tool call a skill makes | Unmodified; admitting rules are an operator deployment concern |
@@ -190,10 +191,11 @@ exposes no new external interface. Governed by `ADR-014`.
 ### Component 4: `worklog` skill
 
 **Purpose:** Teach a session when and how to use the `bob worklog` command —
-the item-identifier convention and when a run should call `append` vs
-`list` — with no reference to email or any other domain. Entry format,
-first-run detection, and reconciliation are owned by the command itself
-(S-015), not restated here.
+the item-identifier convention, when a run should call `append` vs `list`,
+and that a day's diary records only what that day's runs did — with no
+reference to email or any other domain. The entry format and same-day
+duplicate suppression are owned by the command itself (S-015), not restated
+here, and nothing in the diary carries across days.
 **Estimated size:** Medium — extraction of existing validated content, with its
 domain-specific parts left behind.
 **Interfaces:** Exposes usage guidance to any consuming skill; consumes the
@@ -203,10 +205,12 @@ working directory, owned by the command.
 ### Component 5: `email-triage` skill, reduced
 
 **Purpose:** Retain detection, classification, and the act-or-escalate decision
-while delegating all diary mechanics to the `worklog` skill.
+while delegating all diary mechanics to the `worklog` skill and all tracking of
+what it could not finish this run to the `tasks` skill.
 **Estimated size:** Small — removal and delegation, not new behaviour.
-**Interfaces:** Consumes the `worklog` skill's discipline, the `himalaya`
-skill's CLI knowledge, and its own skill-local configuration.
+**Interfaces:** Consumes the `worklog` skill's discipline, the `tasks` skill's
+board discipline, the `himalaya` skill's CLI knowledge, and its own skill-local
+configuration.
 
 ## Workflow
 
@@ -229,15 +233,20 @@ pi fires resource discovery; the extension answers with the skill path
   ↓
 pi extends its resources and rebuilds the system prompt before the first turn
   ↓
-Session has himalaya, email-triage, and worklog available regardless of cwd
+Session has himalaya, email-triage, worklog, and tasks available regardless of
+  cwd
   ↓
 Work is performed; every tool call passes the action-authorization gate
   → a call is denied: the outcome is recorded, never worked around
   ↓
 Work actually performed is journaled per the worklog skill,
-  into the session's own working directory
+  into the session's own working directory — that day's diary and no other
   ↓
-A later session reconciles carried-forward open items from that same directory
+Anything the session could not finish is left on the board per the tasks
+  skill, described well enough for a cold reader to pick up
+  ↓
+A later session discovers what is still outstanding from that board, in that
+  same working directory, however long the gap between the two
 ```
 
 ## Configuration Requirements
@@ -270,8 +279,13 @@ A later session reconciles carried-forward open items from that same directory
 **Action rules admitting skill tool calls**
 
 - **What must exist:** rules admitting the tool calls the shipped skills make —
-  reads of skill reference content at the install path, and the worklog's
-  `bob worklog append`/`list` invocations (S-015).
+  reads of skill reference content at the install path, the worklog's
+  `bob worklog append`/`list` invocations (S-015), and the `bob task`
+  invocations the `tasks` skill teaches and `email-triage` now makes for the
+  items it cannot finish in one run (S-014, S-010). A deployment that admits
+  the diary calls but not the board calls leaves a session able to record what
+  it did but unable to record what it left, which is a silent loss of
+  continuity rather than a visible failure.
 - **Where it lives:** the existing action ruleset, as ordinary operator
   configuration.
 - **Constraints:** rules admitting reads of skill reference content are scoped
@@ -295,14 +309,17 @@ A later session reconciles carried-forward open items from that same directory
 - **Missing-value behaviour:** absent rules deny, as the action model already
   requires. A denied call is recorded by the skill and never worked around.
 
-**Skill-local configuration and worklog storage**
+**Skill-local configuration, worklog storage, and board storage**
 
 - **What must exist:** unchanged from today — the skill-local configuration
   file and the daily worklog remain relative to the session's own working
-  directory.
+  directory. The task board a session leaves its unfinished work on belongs to
+  the same per-job state: it must resolve inside that session's own working
+  directory, never to an ancestor shared with another job (`S-010` requires
+  `email-triage` to name it explicitly for that reason).
 - **Where it lives:** the session's working directory.
-- **Constraints:** both remain owner-only. The skill package itself no longer
-  needs to be a mutable per-job copy, so only these two remain
+- **Constraints:** all three remain owner-only. The skill package itself no
+  longer needs to be a mutable per-job copy, so only these remain
   permission-sensitive per deployment.
 - **Missing-value behaviour:** governed by `S-010` and `CR-006`, not by this
   specification.
@@ -332,7 +349,7 @@ A later session reconciles carried-forward open items from that same directory
 |---|---|---|
 | 1 | Reconcile the three disagreeing pi-agent version records and update the README compatibility section. Confirm the extension resource-discovery event fires and its contributed skills reach the system prompt on all three spawn paths, including the non-interactive scheduled path. | Nothing |
 | 2 | Restructure the package into a canonical vendor-neutral source with per-vendor packaging targets carrying no duplicated content. Includes removing the one frontmatter field whose format differs between vendors. | Nothing |
-| 3 | Extract the `worklog` skill as a domain-free skill and reduce `email-triage` to delegate its diary mechanics. | Phase 2 |
+| 3 | Extract the `worklog` skill as a domain-free skill and reduce `email-triage` to delegate its diary mechanics to it and its tracking of unfinished work to the `tasks` skill. | Phase 2 |
 | 4 | Add the service-side skill install path setting with its resolution and fail-open absence behaviour, extend the per-session environment contract with the resolved path, and answer the resource-discovery event in the extension. | Phase 1 |
 | 5 | Update the operator-facing deployment procedure and the action-rule guidance to the install-path model, and re-validate the previously live-validated paths against the new deployment shape. | Phases 3, 4 |
 
@@ -344,3 +361,4 @@ A later session reconciles carried-forward open items from that same directory
 | 2026-08-23 | The canonical skill set gains a fourth skill, `tasks`, in the System Diagram and the Responsibility Separation table. No principle, packaging target, install path, or delivery mechanism changes. | CR-009 / S-014. The command's operating instructions ship with the skills bob supplies through its extension rather than with operator tooling, so the set this specification defines grows by one. | Tasks TBD |
 | 2026-08-23 | The Claude packaging target is removed, leaving the pi target as the only one. The Purpose's success criterion no longer requires the content to be loadable by two vendors, and now requires the canonical source to stay free of vendor-specific layout so a second target can be added when a consumer exists. Diagram, Component 2, and the packaging responsibility row follow. | CR-011. The Claude target demonstrated the two-vendor principle rather than serving a consumer, and carrying it through CR-010's rename and S-014's fourth skill would cost work on output nobody installs. The canonical-source layer is deliberately kept so re-adding a vendor stays cheap. | Tasks TBD |
 | 2026-08-27 | The `worklog` skill row and Component 4 no longer claim the skill itself owns entry format, first-run detection, or reconciliation — it now defers to the `bob worklog` command for those, the same way this table already describes `tasks` deferring to `bob task`. The "Action rules admitting skill tool calls" section's worklog line now names `bob worklog append`/`list` invocations instead of raw "directory checks, reads, and appends", and its accepted risk that the admitting rule "must be broad enough to cover arbitrary working directories" is marked retired for worklog writes, since the command's invocation text never carries the working directory. | S-015 approval. The worklog mechanics move from skill prose into a real command, mirroring S-014's earlier move for the task board; the working directory dropping out of the command's own text is what lets the admitting rule narrow. | S-015 breakdown tasks (Gate 2 pending). |
+| 2026-09-17 | `email-triage` now consumes the `tasks` skill as well as `worklog` and `himalaya`: its Responsibility Separation row and Component 5 drop the "retains retry of a carried-forward blocked action" language and state that anything it cannot finish in one run is filed as a task and picked up from the board by a later run. The `worklog` skill row and Component 4 say the command owns the entry format and same-day duplicate suppression, and that a day's diary holds only what that day's runs recorded. The Workflow's closing line becomes task discovery instead of reconciling carried-forward items; the System Diagram's per-cwd state, the action-rule requirement, the per-job storage requirement, and Phase 3 follow. | CR-013 removes cross-day carry-forward from `bob worklog`, so the retry mechanism the `email-triage` row described no longer exists; S-010 moves that continuity onto the job's own `bob task` board. This specification's own principle that continuity stay reconstructable from the job's working directory now applies to that board, which is why the per-job storage requirement names it explicitly. | Tasks TBD (skill-content updates follow from the CR-013 breakdown) |
