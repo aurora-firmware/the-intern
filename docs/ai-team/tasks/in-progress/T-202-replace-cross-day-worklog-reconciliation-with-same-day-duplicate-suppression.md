@@ -249,3 +249,96 @@ tasks in this subsystem: `worklog::` as a test filter is ambiguous between
 `crate::worklog::` and `crate::cli::commands::worklog::` — a narrower filter
 (e.g. `--lib worklog::`) in the Verification command would avoid this
 scope-bleed recurring.
+
+### Review Verdict — 2026-09-17 (cycle 2)
+
+PASS
+
+This cycle reviews only Session 2's new work — the widened-scope deletion of
+7 obsolete CLI tests and 2 dead fixture helpers from
+`cli/commands/worklog.rs`, committed as `2fdecce`
+(`test(worklog): delete obsolete cross-day carried-forward CLI tests`) on
+`task/T-202-...`. The Session 1 PASS verdict above stands unchanged for
+`is_same_day_duplicate`, the `reconcile_today` no-op, and the
+`item_open_state` deletion; I spot-checked (not re-litigated) that
+`reconcile.rs` and `store.rs` are byte-identical between the reviewed
+Session-1 tip (`0ccd896`) and the current task-branch tip (`2fdecce`) via
+`git diff 0ccd896..2fdecce --stat`, which shows only
+`cli/commands/worklog.rs` touched.
+
+**Stage 1 — Scope check against the amended Files to Touch**
+
+- Diff scope: `git show --stat 2fdecce` shows exactly one file touched,
+  `crates/bob/src/cli/commands/worklog.rs`, 282 deletions, 0 insertions.
+  Reproduced independently (`git diff b5586cd..2fdecce -- .../worklog.rs |
+  grep '^+' | grep -v '^+++'` returns nothing — confirms zero net
+  insertions to this file across the entire task branch, not just this
+  commit).
+- Read the full diff (`git show 2fdecce -- .../worklog.rs`). It removes
+  exactly the 7 named tests
+  (`worklog_append_runs_reconciliation_before_writing_its_own_entry`,
+  `worklog_append_prints_a_human_readable_confirmation_with_the_carried_forward_set`,
+  `worklog_append_json_output_includes_the_carried_forward_set`,
+  `worklog_list_reconciles_todays_file_first_and_reads_a_past_date_as_is`,
+  `worklog_list_text_output_reports_todays_carried_forward_set`,
+  `worklog_list_json_output_is_an_object_carrying_the_same_facts_as_the_text`,
+  `worklog_list_surfaces_reconciliation_warnings_in_text_and_json`) and
+  exactly the 2 named helpers (`seed_prior_open_item`,
+  `seed_prior_open_vendor_invoice`) — matched one-to-one against the
+  amended Files to Touch list. No other test, helper, or production code
+  in the file was touched. Confirmed all removed hunks fall inside
+  `mod tests` (starts at line 278 in the pre-T-202 baseline;
+  `git show b5586cd:.../worklog.rs | grep -n mod`), so no production code
+  in this file was edited — deletion-only, as required.
+- Confirmed no collateral breakage: `git grep` for both deleted helper
+  names against the file content at commit `2fdecce`
+  (`git show 2fdecce:.../worklog.rs`) returns zero matches — no surviving
+  test still calls either deleted helper. The two CLI tests that remain
+  with "carried_forward" in their names
+  (`worklog_append_reports_an_empty_carried_forward_set_when_no_prior_file_exists`,
+  `worklog_list_reports_an_empty_carried_forward_set_when_nothing_is_carried`)
+  were correctly left alone — they were not in the named-7 list, still
+  pass (the carried-forward set is always empty under the `reconcile_today`
+  no-op, so their assertions still hold), and are explicitly out of this
+  task's scope to touch.
+- Scope boundary respected: `git grep -n is_same_day_duplicate --
+  .../worklog.rs` returns nothing — `is_same_day_duplicate` is not wired
+  into the CLI layer. No new CLI-level tests were added (net 0 insertions
+  confirms this). The `carried_forward` field/output shape in the CLI's
+  production code is untouched (same zero-insertion evidence). All of
+  this matches the amended Files to Touch note verbatim: "Deletion only:
+  do not wire `is_same_day_duplicate` into the CLI layer, add new
+  CLI-level tests for same-day suppression, or touch the `carried_forward`
+  field/output shape — that is T-203's scope."
+
+**Stage 2 — Verification command, run independently**
+
+Checked out `task/T-202-...` (tip `2fdecce`) and ran the task's literal
+Verification command myself:
+
+```
+cd the-intern/service && cargo build -p bob && cargo test -p bob worklog::
+```
+
+`cargo build -p bob` succeeds cleanly. `cargo test -p bob worklog::`
+reports **30 passed, 0 failed** (previously 30 passed / 7 failed before
+this session's commit) — matches the Work Log's claim exactly. Listed
+tests individually (`cargo test -p bob --lib worklog:: -- --list`): 13
+`cli::commands::worklog::tests::*`, 8 `worklog::reconcile::tests::*`, 9
+`worklog::store::tests::*` = 30, consistent with 13 CLI tests surviving
+after 7 of the original 20 were deleted. Also re-ran `cargo fmt --all --
+--check` (clean) and forced a full rebuild with `cargo build -p bob
+--tests` after `touch`ing the file (zero warnings, no dead-code lint from
+the removed helpers/tests).
+
+**Code quality**
+
+The change is a pure test-deletion diff with no logic to assess for
+correctness, security, or performance. Readability: fine — no orphaned
+comments or dangling references left behind. This is exactly the kind of
+minimal, scoped change the human's post-review scope-widening called for,
+and it does not reintroduce or presage any T-203 work.
+
+Both stages pass. No blocking issues. T-202 is ready for re-integration.
+
+Next owner: active Development Loop.
