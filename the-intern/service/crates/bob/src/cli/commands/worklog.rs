@@ -5,7 +5,11 @@
 //! worklog strictly to `<cwd>/worklog/<date>.md` (ADR-015) via the
 //! caller-supplied working directory.
 
-use std::{env, io, io::Write, path::Path};
+use std::{
+    env, io,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use bob_core::error::ServiceResult;
 use chrono::{Local, NaiveDate, NaiveDateTime};
@@ -13,7 +17,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::worklog::{
-    reconcile::reconcile_today,
+    reconcile::is_same_day_duplicate,
     store::{RecordedEntry, WorklogEntry, WorklogStore},
 };
 
@@ -22,23 +26,29 @@ use super::{invalid_request_error, write_json_line};
 /// Date format shared by worklog file names and the `--date` flag.
 const FILE_DATE_FORMAT: &str = "%Y-%m-%d";
 
+/// The fixed worklog subdirectory name (ADR-015: `<cwd>/worklog/<date>.md`,
+/// as this module's own header doc states). Used to report a suppressed
+/// `append` call's day-file path without writing to it.
+const WORKLOG_SUBDIR: &str = "worklog";
+
 #[derive(Debug, Serialize)]
 struct AppendedEntryOutput {
     item: String,
     path: String,
-    carried_forward: Vec<String>,
+    /// Whether this call wrote a new entry (`true`) or suppressed an
+    /// exact-match same-day repeat (`false`) — Contract, S-015 as amended
+    /// by `CR-013`.
+    written: bool,
     warnings: Vec<String>,
 }
 
 /// A single day's worklog, as `bob worklog list` renders it in text or JSON.
+/// Carries only what is physically present in the requested day's file — no
+/// cross-day-derived field of any kind (S-015 as amended by `CR-013`).
 #[derive(Debug, Serialize)]
 struct WorklogDayOutput {
     date: String,
     entries: Vec<WorklogEntryOutput>,
-    /// Today's full carried-forward item-identifier set, always today's and
-    /// independent of which invocation performed the carry-forward write.
-    carried_forward: Vec<String>,
-    warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,22 +109,36 @@ fn run_append_with_context(
     reject_entry_field("left", left)?;
     reject_entry_field("next", next)?;
 
-    // Reconcile today's file (carry forward any still-open items from the
-    // most recent prior worklog file) before this entry is written. The
-    // returned set is today's full carried-forward item-identifier set.
-    let reconcile = reconcile_today(working_dir, now)?;
-
     let entry = WorklogEntry {
         item: item.to_owned(),
         done: done.to_owned(),
         left: left.to_owned(),
         next: next.to_owned(),
     };
-    let outcome = WorklogStore::new(working_dir).append(now, &entry)?;
-    let mut warnings = reconcile.warnings;
-    warnings.extend(outcome.warnings);
-    warnings.sort();
-    warnings.dedup();
+
+    let store = WorklogStore::new(working_dir);
+    let today = now.date();
+    // The worklog directory may not exist yet for the very first `append`
+    // in a fresh working directory — `WorklogStore::append` below creates
+    // it. Any read failure here, including a missing directory, is treated
+    // as "no entries recorded yet today"; a genuine filesystem problem
+    // still surfaces from the `append` call, which touches the same path.
+    let todays_entries = store.read_day(today).unwrap_or_default();
+
+    if is_same_day_duplicate(&todays_entries, &entry) {
+        return write_appended_entry(
+            out,
+            json_output,
+            AppendedEntryOutput {
+                item: item.to_owned(),
+                path: day_file_path(working_dir, today).display().to_string(),
+                written: false,
+                warnings: Vec::new(),
+            },
+        );
+    }
+
+    let outcome = store.append(now, &entry)?;
 
     write_appended_entry(
         out,
@@ -122,10 +146,21 @@ fn run_append_with_context(
         AppendedEntryOutput {
             item: item.to_owned(),
             path: outcome.path.display().to_string(),
-            carried_forward: reconcile.carried_forward,
-            warnings,
+            written: true,
+            warnings: outcome.warnings,
         },
     )
+}
+
+/// Where `date`'s worklog file lives, independent of whether it has been
+/// written to yet by this call. Used to report a suppressed `append`
+/// call's path without writing to it (the file must already exist in that
+/// case, since suppression only triggers when the item already has an
+/// entry there today).
+fn day_file_path(working_dir: &Path, date: NaiveDate) -> PathBuf {
+    working_dir
+        .join(WORKLOG_SUBDIR)
+        .join(format!("{}.md", date.format(FILE_DATE_FORMAT)))
 }
 
 pub(super) fn run_list(json_output: bool, date: Option<&str>) -> ServiceResult<()> {
@@ -153,17 +188,10 @@ fn run_list_with_context(
         None => now.date(),
     };
 
-    // Reconciliation runs first, unconditionally, against TODAY'S file
-    // (S-015 Design Principles: "every entry point that touches today's
-    // file performs reconciliation first, unconditionally"), regardless of
-    // `--date`. It never writes to a past-dated file, and when `worklog/`
-    // is absent it is a no-op that creates nothing. The returned set is
-    // today's full carried-forward item-identifier set.
-    let reconcile = reconcile_today(working_dir, now)?;
-
     // `read_day` fails, naming `<cwd>/worklog/`, when that directory does
-    // not exist, and never creates it (ADR-015). A past-dated file is read
-    // exactly as it is on disk.
+    // not exist, and never creates it (ADR-015). The requested day's file
+    // is read exactly as it physically stands, with no write of any kind
+    // and no other day's file ever opened (S-015 as amended by `CR-013`).
     let entries = WorklogStore::new(working_dir).read_day(target_date)?;
 
     write_worklog_day(
@@ -172,8 +200,6 @@ fn run_list_with_context(
         WorklogDayOutput {
             date: target_date.format(FILE_DATE_FORMAT).to_string(),
             entries: entries.iter().map(WorklogEntryOutput::from).collect(),
-            carried_forward: reconcile.carried_forward,
-            warnings: reconcile.warnings,
         },
     )
 }
@@ -212,13 +238,7 @@ fn write_worklog_day_text(out: &mut impl Write, day: &WorklogDayOutput) -> io::R
         writeln!(out, "- Left: {}", entry.left)?;
         writeln!(out, "- Next: {}", entry.next)?;
     }
-    writeln!(out)?;
-    writeln!(
-        out,
-        "carried forward: {}",
-        format_carried_forward(&day.carried_forward)
-    )?;
-    write_warnings(out, &day.warnings)
+    Ok(())
 }
 
 fn write_appended_entry(
@@ -230,15 +250,14 @@ fn write_appended_entry(
         return write_json_line(out, &json!(response));
     }
 
-    writeln!(out, "recorded worklog entry: {}", response.item)
+    let summary = if response.written {
+        format!("recorded worklog entry: {}", response.item)
+    } else {
+        format!("suppressed duplicate worklog entry: {}", response.item)
+    };
+
+    writeln!(out, "{summary}")
         .and_then(|_| writeln!(out, "path: {}", response.path))
-        .and_then(|_| {
-            writeln!(
-                out,
-                "carried forward: {}",
-                format_carried_forward(&response.carried_forward)
-            )
-        })
         .and_then(|_| write_warnings(out, &response.warnings))
         .map_err(|err| invalid_request_error(format!("failed to write worklog output: {err}")))
 }
@@ -265,13 +284,6 @@ fn reject_entry_field(name: &str, value: &str) -> ServiceResult<()> {
         )));
     }
     Ok(())
-}
-
-fn format_carried_forward(items: &[String]) -> String {
-    if items.is_empty() {
-        return "(none)".to_owned();
-    }
-    items.join(", ")
 }
 
 #[cfg(test)]
@@ -550,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn worklog_append_reports_an_empty_carried_forward_set_when_no_prior_file_exists() {
+    fn worklog_append_reports_written_true_in_text_and_json_when_a_new_entry_is_written() {
         let temp = tempfile::tempdir().expect("temp dir");
         let mut json_out = Vec::new();
         let mut text_out = Vec::new();
@@ -579,18 +591,71 @@ mod tests {
         .expect("append should succeed");
 
         let value: Value = serde_json::from_slice(&json_out).expect("json object");
-        assert_eq!(
-            value["carried_forward"]
-                .as_array()
-                .expect("carried_forward array")
-                .len(),
-            0
-        );
+        assert_eq!(value["written"], serde_json::json!(true));
 
         let text = String::from_utf8(text_out).expect("utf8");
         assert!(
-            text.contains("carried forward: (none)"),
-            "an empty set is still reported explicitly: {text}"
+            text.contains("recorded worklog entry: another-item"),
+            "a written entry must be reported as recorded, not suppressed: {text}"
+        );
+    }
+
+    #[test]
+    fn worklog_append_reports_suppressed_in_text_and_json_and_writes_nothing_for_an_exact_duplicate_repeat(
+    ) {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        store
+            .append(
+                at((2026, 8, 30), (9, 0)),
+                &WorklogEntry {
+                    item: "vendor-invoice".to_owned(),
+                    done: "Chased the vendor.".to_owned(),
+                    left: "awaiting the corrected invoice".to_owned(),
+                    next: "closes when the corrected invoice arrives".to_owned(),
+                },
+            )
+            .expect("seed today's entry");
+        let mut json_out = Vec::new();
+        let mut text_out = Vec::new();
+
+        run_append_with_context(
+            true,
+            "vendor-invoice",
+            "Chased the vendor.",
+            "awaiting the corrected invoice",
+            "closes when the corrected invoice arrives",
+            at((2026, 8, 30), (11, 0)),
+            temp.path(),
+            &mut json_out,
+        )
+        .expect("a suppressed duplicate must still be a successful call");
+        run_append_with_context(
+            false,
+            "vendor-invoice",
+            "Chased the vendor.",
+            "awaiting the corrected invoice",
+            "closes when the corrected invoice arrives",
+            at((2026, 8, 30), (12, 0)),
+            temp.path(),
+            &mut text_out,
+        )
+        .expect("a suppressed duplicate must still be a successful call");
+
+        let value: Value = serde_json::from_slice(&json_out).expect("json object");
+        assert_eq!(value["written"], serde_json::json!(false));
+
+        let text = String::from_utf8(text_out).expect("utf8");
+        assert!(
+            !text.contains("recorded worklog entry:"),
+            "a suppressed call must not read as a successful write: {text}"
+        );
+
+        let entries = store.read_day(on((2026, 8, 30))).expect("read today");
+        assert_eq!(
+            entries.len(),
+            1,
+            "a suppressed duplicate must not add a second entry: {entries:?}"
         );
     }
 
@@ -691,7 +756,48 @@ mod tests {
     }
 
     #[test]
-    fn worklog_list_reports_an_empty_carried_forward_set_when_nothing_is_carried() {
+    fn worklog_append_output_never_includes_a_carried_forward_field_in_text_or_json() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut text_out = Vec::new();
+        let mut json_out = Vec::new();
+
+        run_append_with_context(
+            false,
+            "todays-item",
+            "Handled entirely today.",
+            "nothing",
+            "nothing further",
+            at((2026, 8, 30), (9, 0)),
+            temp.path(),
+            &mut text_out,
+        )
+        .expect("append should succeed");
+        run_append_with_context(
+            true,
+            "another-item",
+            "Also handled today.",
+            "nothing",
+            "nothing further",
+            at((2026, 8, 30), (10, 0)),
+            temp.path(),
+            &mut json_out,
+        )
+        .expect("append should succeed");
+
+        let text = String::from_utf8(text_out).expect("utf8");
+        assert!(
+            !text.to_lowercase().contains("carried forward"),
+            "append output must not mention carried forward at all: {text}"
+        );
+        let value: Value = serde_json::from_slice(&json_out).expect("json object");
+        assert!(
+            value.get("carried_forward").is_none(),
+            "append JSON output must not include a carried_forward field: {value}"
+        );
+    }
+
+    #[test]
+    fn worklog_list_output_never_includes_a_carried_forward_field_in_text_or_json() {
         let temp = tempfile::tempdir().expect("temp dir");
         WorklogStore::new(temp.path())
             .append(
@@ -703,7 +809,7 @@ mod tests {
                     next: "nothing further".to_owned(),
                 },
             )
-            .expect("seed today's own entry, no prior file");
+            .expect("seed today's own entry");
         let mut text_out = Vec::new();
         let mut json_out = Vec::new();
 
@@ -726,16 +832,48 @@ mod tests {
 
         let text = String::from_utf8(text_out).expect("utf8");
         assert!(
-            text.contains("carried forward: (none)"),
-            "an empty carried-forward set is still reported explicitly: {text}"
+            !text.to_lowercase().contains("carried forward"),
+            "list output must not mention carried forward at all: {text}"
         );
         let value: Value = serde_json::from_slice(&json_out).expect("json object");
+        assert!(
+            value.get("carried_forward").is_none(),
+            "list JSON output must not include a carried_forward field: {value}"
+        );
+    }
+
+    #[test]
+    fn worklog_list_performs_no_write_of_any_kind_to_the_requested_days_file() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = WorklogStore::new(temp.path());
+        store
+            .append(
+                at((2026, 8, 30), (9, 0)),
+                &WorklogEntry {
+                    item: "todays-item".to_owned(),
+                    done: "Handled entirely today.".to_owned(),
+                    left: "nothing".to_owned(),
+                    next: "nothing further".to_owned(),
+                },
+            )
+            .expect("seed today's entry");
+        let day_path = temp.path().join("worklog").join("2026-08-30.md");
+        let before = std::fs::read_to_string(&day_path).expect("day file");
+        let mut out = Vec::new();
+
+        run_list_with_context(
+            false,
+            None,
+            at((2026, 8, 30), (10, 0)),
+            temp.path(),
+            &mut out,
+        )
+        .expect("list should succeed");
+
+        let after = std::fs::read_to_string(&day_path).expect("day file");
         assert_eq!(
-            value["carried_forward"]
-                .as_array()
-                .expect("carried_forward array")
-                .len(),
-            0
+            before, after,
+            "list must never write to the requested day's file as a side effect"
         );
     }
 }
