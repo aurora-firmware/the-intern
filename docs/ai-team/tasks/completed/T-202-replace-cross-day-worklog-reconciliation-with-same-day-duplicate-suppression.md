@@ -2,7 +2,7 @@
 id: T-202
 title: Replace cross-day worklog reconciliation with same-day duplicate 
   suppression
-status: in-progress
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-09-17'
