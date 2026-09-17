@@ -117,3 +117,48 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-17
+
+PASS
+
+**Stage 1 — Acceptance Criteria** (checked against `crates/bob/src/cli/commands/worklog.rs` and `crates/bob/src/cli/mod.rs` on `task/T-203-...`, tip `8a561f5`)
+
+- AC-1 (written entry reported as written, text + JSON): met. `AppendedEntryOutput.written: bool`; text prints `recorded worklog entry: <item>` when `true`. Covered by `worklog_append_reports_written_true_in_text_and_json_when_a_new_entry_is_written`, reran independently — passes.
+- AC-2 (suppressed exact-duplicate reported as suppressed, text + JSON): met. `written: false`; text prints `suppressed duplicate worklog entry: <item>`, store is never called on this path. Covered by `worklog_append_reports_suppressed_in_text_and_json_and_writes_nothing_for_an_exact_duplicate_repeat`, which also asserts the day file still holds exactly 1 entry — reran independently, passes.
+- AC-3 (no `carried_forward` or any other cross-day-derived field in `append`/`list` output): met. `AppendedEntryOutput` and `WorklogDayOutput` no longer declare the field at all (not just an empty array) — confirmed by reading both struct definitions. `WorklogDayOutput` also correctly drops `warnings` entirely, since `WorklogStore::read_day` never produces any (verified by reading `store.rs`) — removing it isn't scope creep, it's a required consequence of AC-3/AC-4 once cross-day reconciliation is gone. Two tests assert field *absence* on both output shapes, in both text and JSON.
+- AC-4 (`list` renders only what's physically in the requested day's file, ordered by `HH:MM`, no write side effect): met. `run_list_with_context` no longer calls `reconcile_today`; it reads via `store.read_day` only. Ordering is unchanged, pre-existing `store.rs` behavior, not touched by this diff. No-write-side-effect is covered by a new test (`worklog_list_performs_no_write_of_any_kind_to_the_requested_days_file`) that byte-compares the day file before/after — reran independently, passes.
+- AC-5 (`WorklogCommand::Append`/`List` doc comments describe same-day suppression and per-invocation-only access, not cross-day reconciliation): met. Both doc comments rewritten in `cli/mod.rs`; two new tests render the actual generated `--help` text via `clap`'s `write_long_help` (not just the source doc comment) and assert it mentions "duplicate" (append) / "no write" (list) and never "carr"/"reconcil" — a stronger check than reading the comment text, reran independently, passes.
+- No unspecified behavior added, no unexpected files modified: `git diff --stat dev-agent..task/T-203-...` under `crates/bob/src` touches exactly `cli/commands/worklog.rs` and `cli/mod.rs`, matching Files to Touch. The new `day_file_path`/`WORKLOG_SUBDIR` helper in `worklog.rs` is justified — `store.rs` has no existing public path-getter (confirmed by reading its `fn`/`pub fn` list) and adding one there would have exceeded this task's Files to Touch; keeping the helper local and small is the right call.
+
+**On the Verification command's 2 failures (independently checked, not taken on trust)**
+
+Reran the task's literal command in a clean state on the task branch: `cd the-intern/service && cargo build -p bob && cargo test -p bob worklog` builds clean, then reports exactly 2 failures, both in `crates/bob/tests/non_serve.rs`: `worklog_list_carries_a_prior_day_open_item_forward_and_reports_it` and `worklog_append_twice_the_same_day_keeps_exactly_one_carried_forward_entry` — matches the Work Log's claim exactly, including panic messages ("list must render a carried-forward entry sourced from the prior-day file", "a second same-day append must not add a second carried-forward copy").
+
+Read `docs/ai-team/tasks/pending/T-204-...` on `dev-agent` directly (not inferred from the Developer's summary): its Description names both test identifiers verbatim as its own AC-4/AC-5 tests-to-rewrite ("AC-4 (`worklog_list_carries_a_prior_day_open_item_forward_and_reports_it`) and AC-5 (`worklog_append_twice_the_same_day_keeps_exactly_one_carried_forward_entry`) assert the old cross-day carry-forward behavior `T-202`/`T-203` remove"), and T-204's own Dependencies section lists `T-203 — provides the final CLI output shape this test asserts against`. The names match exactly, character for character. This confirms the claim rather than taking it on trust: these 2 failures are T-204's explicit, already-sequenced scope, not a T-203 regression.
+
+The narrower, task-scoped commands are fully green, reran independently: `cargo test -p bob --lib worklog::` → 33 passed, 0 failed; `cargo test -p bob --lib cli::` → 122 passed, 0 failed. `cargo fmt --all -- --check` is clean. `cargo build -p bob` (task branch) and a `cargo build -p bob` diff-check against `dev-agent` both produce zero warnings.
+
+**Stage 2 — Code Quality**
+
+- Correctness: `is_same_day_duplicate`'s wiring into `run_append_with_context` is sound — reads today's entries via `store.read_day`, falls back to empty on a read error (the directory may not exist yet for a fresh cwd), and the subsequent `store.append` call still surfaces a genuine filesystem fault, so no error is silently swallowed. Suppression path correctly never calls `store.append`.
+- Tests: new/rewritten tests cover both the write and suppress paths, field-absence in both text and JSON, no-write-on-list, and generated `--help` text; independent (fresh `tempfile::tempdir()` per test, no shared state).
+- Security: N/A — no new external input handling, nothing hardcoded, no query construction.
+- Readability: names and doc comments are clear; the new `day_file_path` helper and `WORKLOG_SUBDIR` constant are small, well-scoped, and documented.
+- Performance: no loops beyond linear scans already present in `is_same_day_duplicate` (reviewed and passed under T-202), no new I/O in a hot path.
+
+**On the flagged deviation — `reconcile_today`/`ReconcileOutcome` left dead in `reconcile.rs`**
+
+Confirmed independently (checked out the task branch, `grep -rn "reconcile_today\|ReconcileOutcome"` across `crates/`): both items now have zero call sites outside `reconcile.rs` itself (only the `use` import + 2 call sites in `worklog.rs` were removed by this task; nothing else in the workspace ever referenced them). They remain `pub`, so `bob` (lib+bin crate) builds with zero warnings — matches the Developer's claim exactly. `reconcile.rs`'s own module doc, written during T-202, does say T-203 "removes this function," but T-203's Files to Touch names only `worklog.rs` and `cli/mod.rs`; none of T-203's 5 ACs mention `reconcile.rs` or require deleting anything in it.
+
+Judgment: this does **not** count against this review, and PASS stands as-is. Reasoning:
+- `reconcile.rs` was not touched by this diff at all — the Stage 2 "no dead code" check applies to code this task changed, not to unrelated pre-existing files (`code-review` skill's own "Common Pitfalls: Scope creep in review — reviewing code outside the task's scope. Only review what the task changed.").
+- T-202's own review history (its Session 1 verdict) establishes the operative precedent here directly: expanding a task's Files to Touch to reach into another file requires an explicit, human-approved scope-widening (as happened for T-202's Session 2, adding `cli/commands/worklog.rs` to its Files to Touch by human approval mid-task) — not something the Developer or the Reviewer can decide unilaterally mid-cycle. Forcing the Developer to delete `reconcile_today` now, inside T-203, would mean editing a file outside the approved Files to Touch without that approval.
+- Checked whether any already-pending task (`T-204` through `T-213`, the full CR-013 worklog/email-triage pipeline) covers this: none does — `grep` across `docs/ai-team/tasks/pending/` and `in-progress/` for `reconcile.rs`/`reconcile_today`/`ReconcileOutcome` returns only this task file. So this is a real, currently-unscheduled cleanup gap, not something already covered downstream.
+- It is genuinely small (~30 lines + 1 test) and low-risk to remove, but "small" doesn't override the Files-to-Touch boundary this project deliberately enforces for scope discipline — a fast-follow task is the correct mechanism, not a FAIL-and-fix-now inside this review cycle, and not a silent reviewer-authorized scope widening either.
+
+Non-blocking recommendation for the Development Loop / a human: file a small follow-up task (e.g. "delete dead `reconcile_today`/`ReconcileOutcome` and their test from `reconcile.rs`") so this doesn't linger indefinitely — this is not a defect (nothing is broken; it's inert, unreachable code), so it does not belong in `project/bugs/`, and creating a new task is outside this review's write scope.
+
+Both stages pass. No blocking issues. T-203 is ready for re-integration.
+
+Next owner: active Development Loop.
