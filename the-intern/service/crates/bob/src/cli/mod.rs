@@ -171,8 +171,11 @@ pub enum TaskCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum WorklogCommand {
-    /// Append an entry to today's worklog file, after carrying forward any
-    /// still-open items from the most recent prior worklog file.
+    /// Append an entry to today's worklog file. When the incoming `--done`,
+    /// `--left`, and `--next` values all exactly match that item's most
+    /// recent entry already in today's file, this is a same-day duplicate
+    /// and nothing is written; any one differing value writes a new entry.
+    /// Never reads or writes any other day's file.
     Append {
         /// Short identifier for the item this entry is about.
         #[arg(long)]
@@ -187,8 +190,10 @@ pub enum WorklogCommand {
         #[arg(long)]
         next: String,
     },
-    /// Read back a day's worklog entries ordered by `HH:MM`, after
-    /// reconciling today's file first. Defaults to today's file.
+    /// Read back a day's worklog entries, ordered by `HH:MM`, exactly as
+    /// they physically stand in that day's file. Defaults to today's file.
+    /// Performs no write of any kind, and never reads or writes any other
+    /// day's file.
     List {
         /// The day to read, as `YYYY-MM-DD`. Omit to read today's file.
         #[arg(long)]
@@ -327,6 +332,64 @@ mod tests {
             } => assert_eq!(date.as_deref(), Some("2026-08-29")),
             other => panic!("expected worklog list, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn worklog_append_help_describes_same_day_duplicate_suppression_not_cross_day_reconciliation() {
+        let cli_cmd = Cli::command();
+        let worklog_cmd = cli_cmd
+            .find_subcommand("worklog")
+            .expect("worklog subcommand exists");
+        let append_cmd = worklog_cmd
+            .find_subcommand("append")
+            .expect("worklog append subcommand exists");
+        let mut output = Vec::new();
+        append_cmd
+            .clone()
+            .write_long_help(&mut output)
+            .expect("help to render");
+        let help = String::from_utf8(output)
+            .expect("valid utf8 help")
+            .to_lowercase();
+
+        assert!(
+            help.contains("duplicate"),
+            "worklog append help must describe same-day duplicate suppression: {help}"
+        );
+        assert!(
+            !help.contains("carr") && !help.contains("reconcil"),
+            "worklog append help must not describe cross-day reconciliation or carrying \
+             forward any more: {help}"
+        );
+    }
+
+    #[test]
+    fn worklog_list_help_describes_per_invocation_only_file_access_not_cross_day_reconciliation() {
+        let cli_cmd = Cli::command();
+        let worklog_cmd = cli_cmd
+            .find_subcommand("worklog")
+            .expect("worklog subcommand exists");
+        let list_cmd = worklog_cmd
+            .find_subcommand("list")
+            .expect("worklog list subcommand exists");
+        let mut output = Vec::new();
+        list_cmd
+            .clone()
+            .write_long_help(&mut output)
+            .expect("help to render");
+        let help = String::from_utf8(output)
+            .expect("valid utf8 help")
+            .to_lowercase();
+
+        assert!(
+            help.contains("no write"),
+            "worklog list help must describe performing no write as a side effect: {help}"
+        );
+        assert!(
+            !help.contains("carr") && !help.contains("reconcil"),
+            "worklog list help must not describe cross-day reconciliation or carrying \
+             forward any more: {help}"
+        );
     }
 
     #[test]
