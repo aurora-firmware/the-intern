@@ -70,6 +70,21 @@ chronologically last one, not any earlier entry for that item.
   spec-mandated behavior)
 - `the-intern/service/crates/bob/src/worklog/store.rs` — delete the now-
   unused `item_open_state` helper and its tests
+- `the-intern/service/crates/bob/src/cli/commands/worklog.rs` — **scope
+  added post-review, 2026-09-17, human-approved**: delete the 7 existing
+  tests that assert the now-removed cross-day carried-forward behavior
+  (`worklog_append_runs_reconciliation_before_writing_its_own_entry`,
+  `worklog_append_prints_a_human_readable_confirmation_with_the_carried_forward_set`,
+  `worklog_append_json_output_includes_the_carried_forward_set`,
+  `worklog_list_reconciles_todays_file_first_and_reads_a_past_date_as_is`,
+  `worklog_list_text_output_reports_todays_carried_forward_set`,
+  `worklog_list_json_output_is_an_object_carrying_the_same_facts_as_the_text`,
+  `worklog_list_surfaces_reconciliation_warnings_in_text_and_json`) — they
+  test behavior that no longer exists. Deletion only: do **not** wire
+  `is_same_day_duplicate` into the CLI layer, add new CLI-level tests for
+  same-day suppression, or touch the `carried_forward` field/output shape —
+  that is `T-203`'s scope. This keeps `dev-agent` green after this task
+  merges without pulling T-203's work forward.
 
 ## Verification
 
