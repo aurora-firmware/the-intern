@@ -120,6 +120,22 @@ Nothing remains for T-202 itself; `is_same_day_duplicate` is implemented, tested
 
 Obstacles Encountered: the task's literal Verification command (`cargo test -p bob worklog::`) also matches `cli::commands::worklog::tests` by substring, not just `worklog::reconcile`/`worklog::store`. Implementing AC-1 necessarily breaks 7 of those CLI tests, since they assert the now-removed carried-forward behavior via the CLI layer — confirmed via CR-013 and T-203's already-pending scope that this is intentional and sequenced, not a contradiction. Did not hit the sandbox's known socket/tmpdir issues — `worklog` tests are filesystem-only.
 
+### Session 2 — 2026-09-17
+
+Continued T-202 after review passed but `integrate` hard-stopped: the task's Verification command (`cargo test -p bob worklog::`) matches `crates/bob/src/cli/commands/worklog.rs` by module-path substring alongside the two modules (`worklog::reconcile`, `worklog::store`) this task actually owns, sweeping in 7 pre-existing CLI-layer tests asserting the cross-day carried-forward behavior this task's Session 1 correctly deleted from `reconcile.rs`. The human approved widening this task's Files to Touch (2026-09-17) to delete those 7 now-obsolete tests directly, rather than amending the Verification command or overriding the merge check, so `dev-agent` stays green after this task merges.
+
+Deleted exactly the 7 named tests from `worklog.rs`: `worklog_append_runs_reconciliation_before_writing_its_own_entry`, `worklog_append_prints_a_human_readable_confirmation_with_the_carried_forward_set`, `worklog_append_json_output_includes_the_carried_forward_set`, `worklog_list_reconciles_todays_file_first_and_reads_a_past_date_as_is`, `worklog_list_text_output_reports_todays_carried_forward_set`, `worklog_list_json_output_is_an_object_carrying_the_same_facts_as_the_text`, and `worklog_list_surfaces_reconciliation_warnings_in_text_and_json`. Also removed two test-only fixture helpers, `seed_prior_open_item` and `seed_prior_open_vendor_invoice`, after confirming via `grep` that each had no remaining callers once its associated tests were gone — leaving them in place would have been dead code.
+
+Deliberately did not wire `is_same_day_duplicate` into the CLI layer, add any new CLI-level same-day-suppression tests, or touch the `carried_forward` field/output shape in `worklog.rs`'s production code — that remains `T-203`'s scope, per the amended task instructions. `git diff --stat` against the prior commit confirms this: exactly one file touched, 282 deletions, 0 insertions, no production code changed.
+
+Verification: `cd the-intern/service && cargo build -p bob && cargo test -p bob worklog::` now reports 30 passed / 0 failed (previously 30 passed / 7 failed). `cargo fmt --all -- --check` is clean; `cargo build -p bob --tests` produces zero warnings.
+
+Committed as `test(worklog): delete obsolete cross-day carried-forward CLI tests` (`2fdecce`) on `task/T-202-replace-cross-day-worklog-reconciliation-with-same-day-duplicate-suppression`.
+
+Nothing remains for T-202. The task's Verification command is now fully green and ready for re-integration.
+
+Obstacles Encountered: none — the amended Files to Touch section named the exact 7 test identifiers, and grep confirmed both shared fixture helpers were exclusively used by tests in that same set before removing them.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
