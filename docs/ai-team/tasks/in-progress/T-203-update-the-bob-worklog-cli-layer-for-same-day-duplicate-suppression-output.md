@@ -2,7 +2,7 @@
 id: T-203
 title: Update the bob worklog CLI layer for same-day duplicate suppression 
   output
-status: pending
+status: in-progress
 priority: high
 assigned-role: developer
 created: '2026-09-17'
