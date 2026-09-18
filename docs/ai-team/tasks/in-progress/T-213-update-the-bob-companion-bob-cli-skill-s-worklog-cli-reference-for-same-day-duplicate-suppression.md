@@ -2,7 +2,7 @@
 id: T-213
 title: Update the bob-companion bob-cli skill's worklog CLI reference for 
   same-day duplicate suppression
-status: pending
+status: in-progress
 priority: high
 assigned-role: developer
 created: '2026-09-17'
