@@ -3,92 +3,128 @@ name: email-triage
 description: >
   Runs the scheduled email-triage workflow: on a "Check email" (or an
   equivalent scheduled triage) prompt fired from this package's own working
-  directory, detect unseen mail and, for each unseen message, either act on
-  it or escalate it to the configured manager address — recording a worklog
-  entry for every message handled either way. This is the triage-policy
-  skill: it carries the confidence-gated act-or-escalate decision and the
-  retry of a carried-forward blocked action. It delegates the diary
-  mechanics — where the worklog lives, how today's file is created, its
-  entry format, and the carry-forward of still-open items — to the
-  `bob worklog` command, and the CLI mechanics to the `himalaya` skill:
-  load the `worklog` skill for when a run journals and the item-identifier
-  convention, load `himalaya` for the mail commands, and see
-  `references/worklog.md` (this skill's own email-specific diary notes) and
-  `references/escalation.md` for the triage-specific rules this loop follows
-  rather than restating them here.
+  directory, retry this job's own still-open tasks, detect unseen mail, and,
+  for each unseen message, either act on it or escalate it to the
+  configured manager address — filing a `bob task` for anything the run
+  cannot finish this pass and recording a worklog entry for every message
+  handled. This is the triage-policy skill: it carries the confidence-gated
+  act-or-escalate decision and the retry, on every run, of every task still
+  `blocked` or `todo` on this job's own task board. It delegates the diary
+  mechanics — where the worklog lives, how today's file is created, and its
+  entry format — to the `bob worklog` command, and the task-board
+  mechanics — where the board lives, how a task is filed, moved, and read
+  back — to the `bob task` command: load the `worklog` skill for when a run
+  journals and the item-identifier convention, load the `tasks` skill for
+  when work belongs on the board and what each status commits to, load
+  `himalaya` for the mail commands, and see `references/worklog.md` (this
+  skill's own email-specific diary notes) and `references/escalation.md`
+  for the triage-specific rules this loop follows rather than restating
+  them here.
 ---
 
 # Email Triage
 
 This is the triage-policy skill: it decides what to do with a mailbox — not
-how to drive `himalaya`, and not how to keep a diary. Every run of this loop
-follows the same four steps — read today's carried-forward set from
-`bob worklog list` (the command has already reconciled before it responds),
-detect unseen mail, act on or escalate each unseen message, and record a
-worklog entry for it — and delegates the CLI mechanics to the `himalaya`
-skill, the diary mechanics to the `bob worklog` command (with the `worklog`
-skill for when a run journals and the item-identifier convention), and its
-own domain-specific reference detail to this skill's own `references/` files
-rather than restating any of it here.
+how to drive `himalaya`, not how to keep a diary, and not how the task
+board itself works. Every run of this loop follows the same four steps —
+list this job's own task board and retry every task still `blocked` or
+`todo`, detect unseen mail, act on or escalate each unseen message (filing
+a task for anything this run cannot finish), and record a worklog entry
+for it, naming any task filed or closed — and delegates the CLI mechanics
+to the `himalaya` skill, the diary mechanics to the `bob worklog` command
+(with the `worklog` skill for when a run journals and the item-identifier
+convention), the task-board mechanics to the `bob task` command (with the
+`tasks` skill for when work belongs on the board and what each status
+commits to), and its own domain-specific reference detail to this skill's
+own `references/` files rather than restating any of it here.
 
 ---
 
 ## Tool usage
 
-Every tool call this skill, the `himalaya` skill, or the `worklog` skill
-calls for is subject to bob's action-authorization gate — not only the
-himalaya invocations. The action-authorization gate governs every pi-agent
-tool call, so the config read, the `bob worklog` calls the `worklog` skill
-defines, and any on-demand `references/*.md` load are all gated the same
-way. This skill keeps that surface uniform and explicit, so one narrow
-allow-rule set can admit the whole package:
+Every tool call this skill, the `himalaya` skill, the `worklog` skill, or
+the `tasks` skill calls for is subject to bob's action-authorization gate —
+not only the himalaya invocations. The action-authorization gate governs
+every pi-agent tool call, so the config read, the `bob worklog` calls the
+`worklog` skill defines, the `bob task` calls the `tasks` skill defines,
+and any on-demand `references/*.md` load are all gated the same way. This
+skill keeps that surface uniform and explicit, so one narrow allow-rule set
+can admit the whole package:
 
 - **`read`** — reference material only: any `references/*.md` file — this
   skill's own references, the `worklog` skill's own references, and the
   `himalaya` skill's own reference file when that skill is in play. This
   skill never reads a `worklog/*.md` file itself; `bob worklog list`
-  surfaces everything the loop needs from the diary.
+  surfaces everything the loop needs from the diary. It never reads a task
+  file directly either; `bob task list` surfaces everything the loop needs
+  from the board.
 - **`bash`** — every himalaya CLI invocation (per the `himalaya` skill), the
   skill-local config read (`config/email-triage.toml`, from the job's own
-  `cwd`), and every worklog operation: `bob worklog list` once at the start
-  of the run and `bob worklog append` once per message handled (per the
-  `worklog` skill). `bob worklog` creates the worklog directory and today's
-  file itself and stamps each entry from its own clock — this loop never
-  probes for, creates, or writes those files by hand. Keeping the config
-  read and every mutation — worklog writes and himalaya calls alike — on
-  the same `bash` tool, rather than also reaching for the `write`/`edit`
-  tools, keeps this package's whole runtime surface behind one tool family
-  for a later allow rule to admit by argument shape.
+  `cwd`), every worklog operation (`bob worklog list` once at the start of
+  the run and `bob worklog append` once per message handled, per the
+  `worklog` skill), and every task-board operation (`bob task list` once
+  at the start of the run, and `bob task new` / `bob task status` as this
+  run's outcomes require, per the `tasks` skill). `bob worklog` creates the
+  worklog directory and today's file itself and stamps each entry from its
+  own clock, and `bob task` creates the board itself where this job's own
+  working directory names it — this loop never probes for, creates, or
+  writes those files by hand. Keeping the config read and every mutation —
+  worklog writes, task-board writes, and himalaya calls alike — on the
+  same `bash` tool, rather than also reaching for the `write`/`edit` tools,
+  keeps this package's whole runtime surface behind one tool family for a
+  later allow rule to admit by argument shape.
 
-If the `bash` call that reads `config/email-triage.toml`, or a `bob worklog`
-call, is denied by the action-authorization gate, that is a deployment gap
-in the admitting allow rule, not a per-message condition — there is no
-lower-level record left to write for that run. Treat it as a run-ending
-problem for this run, the same way an unconfigured `himalaya` account is a
-run-ending problem.
+If the `bash` call that reads `config/email-triage.toml`, a `bob worklog`
+call, or a `bob task` call is denied by the action-authorization gate, that
+is a deployment gap in the admitting allow rule, not a per-message
+condition — there is no lower-level record left to write for that run.
+Treat it as a run-ending problem for this run, the same way an unconfigured
+`himalaya` account is a run-ending problem.
 
 ---
 
 ## The loop
 
-### 1. Read today's carried-forward set from `bob worklog list`
+### 1. List this job's own task board and retry open tasks
 
-Call `bob worklog list` at the start of the run and read today's
-carried-forward set from its output. The command reconciles today's file
-before it responds — it finds the most recent prior worklog file that
-exists, carries every still-open entry forward into today's file, and
-reports the resulting carried-forward set — so this loop never decides
-whether a run is the day's first and never walks worklog files itself. The
-`worklog` skill covers when to make this call; do not re-derive or restate
-the carry-forward mechanics here.
+Call `bob task list`, with the board resolved **explicitly** to this job's
+own working directory rather than through `bob task`'s own default upward
+search — see the `tasks` skill's own "Where the board lives" section and
+S-010's "Task board location" Configuration Requirement for why: an upward
+search could let two independently scheduled jobs converge on one shared
+board, each retrying the other's open items. Use `bob task`'s explicit
+board-selection flag (or its documented environment-variable override —
+run `bob task --help` for the current syntax) scoped to this job's own
+working directory on every `bob task` call this skill makes, not only this
+one. The `tasks` skill covers the command's own mechanics — how a task is
+filed, listed, moved, and read back; do not re-derive or restate them here.
 
-For this skill, the items in that carried-forward set are: any pending
-manager escalation (an open item left by a previous low-confidence
-classification) and any open block from the action-authorization gate. This
-step is also the point at which a carried-forward blocked action is retried
-— no other point in this loop revisits a blocked action, so leaving it in
-the carried-forward set without retrying it here would keep it stuck open
-indefinitely.
+For this skill, every task still `blocked` or `todo` on that board is
+something an earlier run could not finish: a pending manager escalation
+(`todo`, awaiting a reply) or an action the action-authorization gate
+refused (`blocked`, awaiting an admitting allow rule). Retry each of them
+this run, before or alongside the new unseen mail below — no other point
+in this loop revisits an unfinished item, so leaving one open on the board
+without retrying it here would keep it stuck indefinitely:
+
+- For a `blocked` task naming an action the gate refused, attempt that
+  same `himalaya` `bash` call again.
+  - If it now succeeds, the item is resolved: move the task to `done` via
+    `bob task status`, then call `bob worklog append` once for it — the
+    same item-identifier convention step 4 below uses (`<subject> (from
+    <sender>)` of the message the task named) — with `Done` naming the
+    task closed and describing the now-successful action, and `Left`:
+    nothing.
+  - If it is still refused, leave the task `blocked`. Record the attempt
+    on the task itself (per the `tasks` skill's "Record progress without
+    changing status") rather than in the worklog, so the board keeps
+    showing what has already been tried.
+- For a `todo` task naming an escalation still awaiting a manager's reply,
+  there is nothing to actively resend this step: the reply, once it
+  arrives, surfaces as ordinary unseen mail in step 2 below and is
+  classified and handled like any other message. Closing that reply
+  message's outcome — moving the task to `done` and naming it in that
+  message's own worklog entry — is what resolves the item; see step 4.
 
 ### 2. List unseen mail
 
@@ -127,28 +163,32 @@ For every envelope the previous step returned, in turn:
    per the `himalaya` skill.
    - If any of those calls is denied by the action-authorization gate: stop
      acting on this message, do not substitute some other action instead,
-     and record the block as an open worklog item in step 4 below (`Left`:
-     the blocked action; `Next`: retried when it appears in the
-     carried-forward set `bob worklog list` reports at the start of a run,
-     once an admitting allow rule exists). The message is not treated as
-     handled.
+     and file a `bob task` for it — status `blocked`, naming the message,
+     the action that was refused, and what would need to change (an
+     admitting allow rule) before it can be retried. Name that task in this
+     message's worklog entry in step 4 below (`Left`: the blocked action;
+     `Next`: retried the next time step 1 lists this job's own board). The
+     message is not treated as handled.
 3. **No confident match** (including an ambiguous match between two
    categories, which `references/categories/README.md`'s confidence rubric
    treats as not confident, and a message that does not clearly satisfy any
    one category's signals): escalate per `references/escalation.md` — send
    exactly one escalation email to the configured manager address and take
-   no further action on this message this run. Never fall back to choosing
-   the closest category and acting on it anyway — "closest" is not
-   "confident" (`references/categories/README.md`'s "No confident match"
-   section). `references/escalation.md` defines the full escalation
-   policy — the email's required content, what happens if the send is
-   denied by the action-authorization gate, and what happens if
-   `manager_address` is missing or malformed, including the fallback path
-   for that missing-configuration case; do not restate any of it here.
-   Never fall back to acting on the message autonomously because
-   escalation failed or could not be attempted for any reason —
-   `references/escalation.md` governs the outcome in every one of those
-   cases.
+   no further action on this message this run. When the send succeeds,
+   file a `bob task` for it — status `todo`, naming the message and the
+   question the escalation asked — so a later run can tell this item is
+   still awaiting the manager's reply; name that task in this message's
+   worklog entry in step 4 below. Never fall back to choosing the closest
+   category and acting on it anyway — "closest" is not "confident"
+   (`references/categories/README.md`'s "No confident match" section).
+   `references/escalation.md` defines the full escalation policy — the
+   email's required content, what happens if the send is denied by the
+   action-authorization gate, and what happens if `manager_address` is
+   missing or malformed, including the fallback path for that
+   missing-configuration case; do not restate any of it here. Never fall
+   back to acting on the message autonomously because escalation failed or
+   could not be attempted for any reason — `references/escalation.md`
+   governs the outcome in every one of those cases.
 
    The `manager_address` lookup comes from the skill-local
    `config/email-triage.toml` in this job's own `cwd`; load it with `bash`
@@ -167,10 +207,11 @@ For every envelope the previous step returned, in turn:
    draft workflow.
    If that explicit send command is denied by the action-authorization
    gate, treat this message's outcome as **blocked**, not **escalated**:
-   no escalation email was sent, so step 4's worklog entry must say the
-   escalation attempt was blocked, leave the message open, and point the
-   retry to the carried-forward set `bob worklog list` reports at the start
-   of a run, once an admitting allow rule exists.
+   no escalation email was sent, so file a `bob task` for it instead of the
+   `todo` task above — status `blocked`, naming the message and the refused
+   send — and name that task in this message's worklog entry in step 4
+   below (`Left`: the blocked escalation attempt; `Next`: retried the next
+   time step 1 lists this job's own board).
 
 Escalating and acting are mutually exclusive outcomes for a given message
 on a given run — never do both.
@@ -189,14 +230,25 @@ specific to email triage: the entry's item identifier is the message's
 message, so a run interrupted partway still leaves a complete record for
 every message it did handle before stopping.
 
-The entry must describe the actual outcome from step 3, not the intended one.
+The entry must describe the actual outcome from step 3, not the intended
+one, and must name the identifier of any `bob task` this message's
+handling filed or closed, so the diary and the board stay
+cross-referenced:
+
+- Filed a `blocked` or `todo` task this step (a blocked action, a blocked
+  escalation send, or a successfully sent escalation)? Name that task's
+  identifier in whichever of `Done`/`Left` describes the condition the
+  task now tracks.
+- Closed a task this step (this message was the manager's reply an earlier
+  task was awaiting)? Name that task's identifier in `Done`, alongside
+  moving it to `done` via `bob task status`.
+
 If an escalation send was denied by the action-authorization gate, do
-**not** write that an escalation email was sent. Record a blocked open
-item instead, with `Done` describing the blocked escalation attempt,
-`Left` describing the still-open message, and `Next` pointing to retry when
-the item appears in the carried-forward set `bob worklog list` reports at
-the start of a run, after the allow rule is fixed.
+**not** write that an escalation email was sent. Record the blocked
+attempt instead, with `Done` naming the blocked task filed for it, `Left`
+describing the still-open message, and `Next` pointing to the retry the
+next time step 1 lists this job's own board.
 
 A completed run leaves no unseen message from step 2 without exactly one
-of: an action taken, an escalation sent, or a block recorded as an open
-item — never silently skipped.
+of: an action taken, an escalation sent, or a block recorded as a filed
+task — never silently skipped.
