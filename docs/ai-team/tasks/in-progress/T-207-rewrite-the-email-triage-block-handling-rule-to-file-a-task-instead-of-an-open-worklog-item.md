@@ -99,3 +99,93 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-18
+
+PASS
+
+Stage 1 (Acceptance Criteria) — all four ACs verified against the literal
+post-change text of `references/escalation.md` on
+`task/T-207-rewrite-the-email-triage-block-handling-rule-to-file-a-task-instead-of-an-open-worklog-item`,
+not just the task's grep-based Verification command:
+
+- AC-1: confirmed — no "open worklog item"/"carried forward"/"reconcil"/
+  "open item" phrasing anywhere in the file (checked beyond the task's own
+  grep list).
+- AC-2: confirmed — the merged "If an action is blocked" section instructs
+  filing a `blocked` `bob task` "naming the message and the refused
+  action, and stating what would unblock it," and states the message "is
+  not treated as handled."
+- AC-3: confirmed — "No synchronous reply is expected" instructs filing a
+  `todo` task for the awaited reply on send success, and states "a later
+  run discovers it... by listing this job's own task board (`bob task
+  list`)... not by reading a previous day's worklog."
+- AC-4: confirmed — all three task-filing/closing points in the file
+  ("If an action is blocked," the missing-`From:`-header fallback, and the
+  "No synchronous reply is expected" closing paragraph) state the worklog
+  entry names the task rather than recording the open condition itself.
+
+Files to Touch: confirmed exactly one file changed
+(`the-intern/bob-skills/skills/email-triage/references/escalation.md`,
+`git diff --stat dev-agent..task/T-207-...`); the task file's own diff is
+only the Work Log entry the loop had already committed separately to
+`dev-agent`, not branch scope creep.
+
+Cross-reference contract (item 5): independently grepped all six
+`references/categories/*.md` files plus `references/categories/README.md`
+— each still says "follow the block-handling rule
+`references/escalation.md` already establishes," confirming the
+Developer's claim that this file is the single cross-referenced authority
+by name, not by section anchor. The rewritten "If an action is blocked"
+section explicitly covers both a category workflow's own blocked action
+("a category workflow's own action against a confidently classified
+message, or the escalation send below") and, in a following paragraph,
+the escalation-send-specific case ("For a denied escalation send
+specifically, the refused action named in the filed task is the
+escalation send itself..."). Confirmed this is a merge, not a
+find-replace: the old escalation-only section was folded into one
+generic rule plus one specific clarifying paragraph, matching the
+Description's "single place that wording changes" instruction.
+
+Broken-reference check (item 6): grepped the full `the-intern/` and
+`docs/` trees for the literal old header text "If the escalation send is
+denied." The only remaining occurrences are (a) the file's own git
+history/diff, (b) completed tasks' historical Work Log prose (not live
+cross-references), and (c) the generated, not-yet-regenerated
+`the-intern/bob-skills/.pi/skills/email-triage/references/escalation.md`
+mirror. That `.pi/` drift is expected and tracked separately —
+`the-intern/bob-skills/README.md`'s "Regenerating the pi package" section
+documents `.pi/skills/` as generated output requiring a dedicated
+`package-pi-skills.sh` run after canonical `skills/` changes, and
+`T-210` (pending, depends on `T-207`/`T-208`/`T-209`) is the task
+responsible for that regeneration — not a T-207 defect. No live
+cross-reference to the renamed header remains broken. Also confirmed
+`references/worklog.md` line 60's cross-reference to the "No synchronous
+reply is expected" header (kept unchanged) still resolves.
+
+Cross-check against `S-010` (v0.3) Workflow and Configuration
+Requirements sections: wording for the blocked-action case ("file a
+`blocked` task naming the message, the action that was refused, and what
+would unblock it") and the escalation-reply case ("file a task for the
+awaited reply, naming the message and what the escalation asked") match
+the spec's own phrasing closely. Cross-check against T-206's merged
+`SKILL.md`/`references/worklog.md`: vocabulary (`bob task`,
+`blocked`/`todo`, "action-authorization gate," "task names the
+identifier, worklog entry names the task") is consistent throughout, and
+SKILL.md step 3's blocked-action and escalation-send-denied instructions
+match this file's rule near-verbatim.
+
+Stage 2 (Code Quality) — this is a docs-only change; correctness
+(wording matches spec/AC and sibling files), readability (clear section
+structure, no dead prose), and no unrelated edits all check out. No
+build/test commands apply to this task.
+
+Minor observation (non-blocking): the six `references/categories/*.md`
+files still literally say "record the block as an open worklog item,"
+which is stale relative to this file's rewritten rule until `T-208`/
+`T-209` land — already tracked and correctly out of this task's scope.
+
+Both stages pass. No new bugs filed — the two out-of-scope items found
+during review (`.pi/` package drift, category-file staleness) are already
+covered by existing pending tasks `T-210` and `T-208`/`T-209`
+respectively.
