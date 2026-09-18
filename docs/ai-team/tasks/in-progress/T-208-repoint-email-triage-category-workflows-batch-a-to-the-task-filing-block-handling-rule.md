@@ -74,6 +74,18 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-09-18
+
+Read T-207's rewritten "If an action is blocked" rule in `the-intern/bob-skills/skills/email-triage/references/escalation.md` and the current content of `references/worklog.md` before touching any category file, per the task's own guidance that escalation.md is meant to be the single place block-handling wording changes.
+
+Updated all three "If the move/reply is blocked" sections (automated-notification.md, direct-request.md, meeting-scheduling.md) from the retired "record the block as an open worklog item" phrasing to T-207's current rule — "file a `blocked` `bob task` for it and do not treat the message as handled" — while continuing to cross-reference `references/escalation.md` rather than restating its mechanics, matching the existing one-line cross-reference style already used elsewhere in these files (e.g. the escalation cross-references in direct-request.md and meeting-scheduling.md's "answer needs information" sections). This satisfies AC-1 and AC-2.
+
+For AC-3, updated automated-notification.md's routine-failure-note paragraph, which previously said the note is "not an open item under `references/worklog.md`'s reconciliation model" and explained the distinction via "`bob worklog` does not carry it forward the way it carries an escalation or a block." I considered a minimal find-and-replace of just the term "reconciliation model" but rejected it: `references/worklog.md`'s current model states that `bob worklog` never carries anything forward for any item, regardless of type — carry-forward of open items happens exclusively through a filed `bob task`. Keeping the old "`bob worklog` does not carry it forward" framing after swapping only the model's name would have left a now-inaccurate claim in place. Instead I rewrote the paragraph so the actual distinguishing fact is correct against the current model: unlike the model's two defined open-item causes (an escalation awaiting a manager's reply, or an action the action-authorization gate blocked), no `bob task` is filed for a routine failure note, so nothing tracks it as outstanding once the worklog entry is appended. The paragraph now references `references/worklog.md`'s "worklog/task-board model" (matching the task description's own suggested phrasing) instead of "reconciliation model."
+
+Verified via the task's own Verification command (`grep -n "open worklog item\|reconciliation model" <3 files>`): confirmed 4 matches before the edits (red state) and zero matches after (green state, matching the task's "expect no output"). Re-read all three files in full afterward to confirm each AC's literal text is satisfied, not just the grep pattern, and checked line lengths stayed within the files' existing ~95-character wrap convention.
+
+Nothing remains for this task — all three files and all three ACs are covered. Committed as a single docs commit (`d148ae7`, `docs(email-triage): repoint category blocked-handling to task filing`) on the task branch. Did not touch the task lifecycle file on this branch, per instructions; this Work Log entry is handed off for the loop to append to the canonical file on `dev-agent`.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
