@@ -2,7 +2,7 @@
 id: T-212
 title: Update bob-skills README's worklog continuity prose for same-day 
   duplicate suppression
-status: in-progress
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-09-17'
