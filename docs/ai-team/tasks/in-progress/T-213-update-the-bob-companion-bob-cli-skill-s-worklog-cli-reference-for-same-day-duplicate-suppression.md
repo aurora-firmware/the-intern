@@ -102,3 +102,26 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-18
+
+PASS
+
+Stage 1 (acceptance criteria), checked against the literal AC text and the post-change `## bob worklog [append|list]` section on `task/T-213-update-the-bob-companion-bob-cli-skill-s-worklog-cli-reference-for-same-day-duplicate-suppression` (`the-intern/bob-companion/claude/skills/bob-cli/references/command-reference.md`):
+
+- AC-1 (no reconciliation/carried-forward statement anywhere): confirmed by full read of the changed section — the "first-run reconciliation"/"carried forward" paragraph is replaced with "Both subcommands only ever touch the day's file the invocation names ... never any other day's file, and neither ever derives its output from any other day." Reproduced the task's literal Verification grep myself (`grep -n "reconciliation\|carried.forward\|carried_forward" ...`) against the task-branch file content — no output, matching "expect no output." Ran a broader case-insensitive sweep (`reconcil|carr`) across the whole file: only two unrelated hits remain (`board_created`'s pre-existing "also carries" sentence in the `bob task new --json` section, and the new "carries no field derived from any other day" sentence in `list`'s intro) — neither is a reconciliation/carried-forward claim about `bob worklog`. Met.
+- AC-2 (`append` reports, text and JSON, wrote-vs-suppressed): confirmed — the append subsection states "the call reports, in text and JSON, whether it wrote a new entry or suppressed a duplicate," with a bullet giving the exact text (`recorded worklog entry: <item>` / `suppressed duplicate worklog entry: <item>`) and JSON (`{"item", "path", "written", "warnings"}`, `written` true/false) shapes, plus the duplicate condition ("`--item`'s most recent entry already recorded today"). Met.
+- AC-3 (`list` renders only the requested day's file, no field derived from any other day): confirmed — "Renders the requested day's file ... exactly as it stands on disk ... its output carries no field derived from any other day," JSON stated as exactly `{"date", "entries"}`. Met.
+- No unspecified behavior or functionality was added; no unexpected files were modified — `git diff --stat dev-agent..task/T-213-...` (restricted to non-task-file paths, since the canonical task file's Work Log is committed to `dev-agent` directly by the loop rather than carried on the task branch — consistent with the pattern across T-190–T-212) shows exactly one file changed: `the-intern/bob-companion/claude/skills/bob-cli/references/command-reference.md`, matching Files to Touch.
+
+Stage 2 (code quality / doc accuracy), with the critical byte-accuracy check against source:
+
+- Read `the-intern/service/crates/bob/src/cli/commands/worklog.rs` on the task branch directly (not the Work Log's claims). `AppendedEntryOutput { item, path, written, warnings }` and its text branch (`format!("recorded worklog entry: {}", ...)` / `format!("suppressed duplicate worklog entry: {}", ...)`, then `path: {}`, then `warning: {warning}` per line) match the doc's text and JSON examples exactly, including field order and names. `WorklogDayOutput { date, entries }` and its text branch (`"worklog for {}"`, `"(no entries)"` when empty) match the doc's `list` text/JSON examples exactly, including field order and names.
+- Read `the-intern/service/crates/bob/src/worklog/reconcile.rs`'s `is_same_day_duplicate` on the task branch: compares only the item-identifier's chronologically last entry already in today's entries, on trimmed `done`/`left`/`next` with no case-folding — matches the doc's duplicate-check description exactly.
+- The doc's per-entry list-output format (`## <time> — <item>` / Done/Left/Next lines) is not spelled out in the new text, but this level of detail was never present pre-change either (the prior text only said "prints the target day's entries ordered by `HH:MM`") — a pre-existing gap outside this task's scope, not a regression introduced here.
+- Cwd-strict/ADR-015 paragraph and the file/permission/validation-error bullets (four-required-flags/empty-value rejection, `--date` ISO validation, missing-`worklog/`-directory-fails-for-`list`) are present unchanged in the diff context — confirmed left untouched as the task's Description requires.
+- Diff is a single contiguous hunk confined to the `## bob worklog [append|list]` section; no changes outside Files to Touch.
+
+Evidence commands run directly by the Reviewer (not just trusted from the Work Log): the literal Verification grep against the task-branch file (no output, as required); a broader `reconcil|carr` sweep; `git diff --stat` scoped to non-task-file paths; direct reads of `worklog.rs` and `reconcile.rs` on the task branch compared line-by-line against the doc's output examples.
+
+Both stages pass. No blocking issues found.
