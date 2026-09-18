@@ -117,23 +117,31 @@ ancestor `tasks/` directories and honours `--board` / `TASKS_DIR`. Running
 (`list`) or as a fresh empty diary (`append`), never as a silently adopted
 worklog that belongs to another session.
 
-Both subcommands run first-run reconciliation automatically before doing
-their own work: every still-open item from the most recent prior worklog
-file is carried forward into today's file, and the command then reports
-today's full carried-forward item-identifier set (a sorted, de-duplicated
-list, printed as `carried forward: <ids>` or `carried forward: (none)`; the
-`--json` form carries the same list under `carried_forward`).
-Reconciliation always targets *today's* file — `bob worklog list --date`
-with a past date still reconciles today, then reads the requested day
-exactly as it is on disk. When `<cwd>/worklog/` does not exist,
-reconciliation is a no-op that creates nothing.
+Both subcommands only ever touch the day's file the invocation names —
+today's by default for both, or the day named by `--date` for `list` —
+never any other day's file, and neither ever derives its output from any
+other day. `append` additionally performs same-day exact-duplicate
+suppression: before writing, it checks today's file for an entry that
+exactly repeats `--item`'s most recent entry already recorded today (same
+`--done`, `--left`, and `--next`, compared after trimming surrounding
+whitespace), and suppresses the write instead of adding a new entry when it
+finds one. `list` never writes to any file.
 
 ### `bob worklog append --item <ITEM> --done <DONE> --left <LEFT> --next <NEXT>`
 
 Appends one entry to today's file (`<cwd>/worklog/<date>.md`), creating
-`<cwd>/worklog/` and the day file if needed, then prints the recorded item,
-the file path, and today's carried-forward set (or the JSON equivalent with
-`--json`).
+`<cwd>/worklog/` and the day file if needed — unless the call is suppressed
+as an exact-duplicate repeat of `--item`'s most recent entry already
+recorded today, in which case nothing is written. Either way, the call
+reports, in text and JSON, whether it wrote a new entry or suppressed a
+duplicate:
+- Text output is `recorded worklog entry: <item>` when a new entry is
+  written, or `suppressed duplicate worklog entry: <item>` when the write is
+  suppressed, followed by `path: <path>` naming the day file and any
+  `warning:` lines.
+- `--json` output is `{"item", "path", "written", "warnings"}`, where
+  `written` is `true` when a new entry was recorded and `false` when the
+  call suppressed a duplicate instead.
 - All four flags — `--item`, `--done`, `--left`, `--next` — are **required**
   and must be non-empty. A wholly missing flag is rejected by clap; an empty
   or all-whitespace value is validated locally and fails with
@@ -145,9 +153,14 @@ the file path, and today's carried-forward set (or the JSON equivalent with
 
 ### `bob worklog list [--date <YYYY-MM-DD>]`
 
-Reconciles today's file, then prints the target day's entries ordered by
-`HH:MM` (not by write order), followed by today's carried-forward set (or
-`{"date", "entries", "carried_forward"}` with `--json`).
+Renders the requested day's file — today's by default, or the day named by
+`--date` — exactly as it stands on disk, with entries ordered by `HH:MM`
+(not by write order). `list` performs no write of any kind and never reads
+any file but the one requested; its output carries no field derived from
+any other day.
+- Text output is `worklog for <date>` followed by each entry, or
+  `(no entries)` when the file has none.
+- `--json` output is exactly `{"date", "entries"}`, with no other field.
 - `--date` is optional and must be an ISO `YYYY-MM-DD` calendar date;
   anything else is validated locally and fails with a message naming the
   expected shape, before any filesystem work. Omit it to read today's file.
