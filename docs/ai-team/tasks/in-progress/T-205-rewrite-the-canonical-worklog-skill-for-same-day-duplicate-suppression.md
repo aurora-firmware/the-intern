@@ -111,3 +111,98 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-18
+
+PASS
+
+**Stage 1 — Acceptance Criteria.** Verified against the full text of all
+three files on `task/T-205-rewrite-the-canonical-worklog-skill-for-same-day-duplicate-suppression`
+(not the task's grep alone), independently, and cross-checked against
+`CR-013` and current `S-015` (v0.5).
+
+- AC-1 (no carry-forward/reconcile/carried-forward-set language anywhere):
+  met. Read `SKILL.md`, `references/reconciliation.md`, and
+  `references/entry-format.md` end to end; no statement anywhere claims
+  `bob worklog` carries an item forward, reconciles against a prior file,
+  or reports a carried-forward set. Broader greps for `carr`, `walk`,
+  `nearest`, `yesterday`, `still open`, `outstanding` turn up only
+  correctly-scoped usages (e.g. "never opens yesterday's file", "a
+  consuming skill... keeps that record itself") — none imply automatic
+  cross-day behavior.
+- AC-2 (`references/reconciliation.md` describes same-day exact-duplicate
+  suppression as the *only* automatic behavior `append` performs): met.
+  The file's "The only thing `append` does automatically" section states
+  this in the AC's own framing almost verbatim, matches `S-015`'s Contract
+  clause (compare incoming `Done`/`Left`/`Next` against the
+  item-identifier's most recent entry in today's file only; identical on
+  all three → no write; only the chronologically last entry is consulted).
+- AC-3 (a session needing a previous day's record must call `bob worklog
+  list --date <date>` itself, nothing about that read is automatic): met,
+  stated in both `SKILL.md` ("That read never happens on a run's behalf:
+  this skill does not call `list` for a run...") and
+  `references/reconciliation.md`'s "What is not automatic" section.
+- AC-4 (no first-run detection described anywhere): met — grep for
+  `first.run|detect` across all three files returns nothing; the old
+  frontmatter's "detect whether a run is the day's first" clause is gone.
+
+**Verification command re-run independently** in a clean worktree of the
+task branch: `grep -rniL "carried.forward\|carry.forward\|first-run\|reconcil" ...`
+lists all three files (pass), and a positive-match grep for the same
+pattern across the three files' content returns no matches (exit 1) —
+confirms the Developer's claim that no file's *content* contains
+`reconcil` etc., independent of `reconciliation.md`'s filename.
+
+**`references/reconciliation.md` repurposed in place, not deleted/renamed,
+substantively rewritten**: `git diff dev-agent...task/T-205-... --summary`
+shows no renames/creations/deletions under the skill directory — same
+path, `git diff --stat` shows the file's full ~80 lines replaced with ~60
+new lines that are entirely about same-day duplicate suppression (four
+sections: the one automatic check, same-day-file scoping, safe-to-repeat
+same-day appends, and what is *not* automatic). The developer's stated
+reasoning for referring to the file only as "the file beside it" in
+`SKILL.md`, rather than by literal filename, to simultaneously satisfy
+AC-1's literal text and the Description's "keep the file at its existing
+path so cross-references keep resolving" holds up: confirmed via
+`grep -rn "reconciliation.md"` that on the task branch (not `dev-agent`),
+no file under `the-intern/bob-skills/skills/worklog/` names
+`reconciliation.md` literally anywhere — the only remaining literal
+`reconciliation.md` references in the repo are in `dev-agent`'s stale
+baseline (`entry-format.md`), the packaged `.pi/skills/` copy (out of
+scope, `T-210`), and historical task files.
+
+**Scope discipline.** `git diff dev-agent...task/T-205-... --stat` touches
+exactly the three Files to Touch (`SKILL.md`, `references/reconciliation.md`,
+`references/entry-format.md`), single commit `ad37fcf`, no Rust/code
+changes, no other files touched.
+
+**Cross-check against `CR-013`/`S-015` v0.5 contract**: the rewritten
+content matches the approved amended contract, not just the Developer's
+own paraphrase — the "most recent entry only" / "any differing field
+writes a new entry, however similar or late in the day" language in
+`reconciliation.md` tracks `S-015`'s Contract clause closely; `SKILL.md`'s
+"Tracking whether an item is still open" section matches `S-015`'s
+Exclusions ("Any command-side notion of whether an item is still open...
+is rejected") and Component 4's Purpose; `entry-format.md`'s edited `Left`
+bullet and removed "Carried-forward entries" section match `S-015`'s
+retirement of the "carried-forward entry copies its source entry's
+`Left`/`Next`" Contract clause. The `--date <YYYY-MM-DD>` flag syntax and
+the "wrote a new entry / found today's file already recording the same
+thing" response-legibility claim both match the actual CLI behavior
+verified against `cli/commands/worklog.rs` and the completed `T-203`
+Work Log (`written: bool`; `recorded worklog entry: …` /
+`suppressed duplicate worklog entry: …`).
+
+**Stage 2 — Quality.** Content is accurate, internally consistent across
+all three files, and appropriately defers exact mechanics (e.g. no
+case-folding, whitespace-trimming details) to the command itself per
+`S-015`'s own Design Principle that skill prose must not redefine the
+command's contract — a correct choice, not an omission. No dead content,
+no stale cross-references, no unspecified behavior added.
+
+**Minor, non-blocking observation:** the commit subject
+`docs(worklog): rewrite canonical skill for same-day duplicate
+suppression` is 73 characters, one over the `git-conventions` skill's
+`≤72 chars total` guidance. Not worth a fix cycle on its own.
+
+Next owner: Development Loop.
