@@ -102,3 +102,62 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-18
+
+PASS
+
+Reviewed branch `task/T-210-...` at `cf01d24` (1 commit ahead of `dev-agent`)
+in an isolated `git worktree`. `git diff dev-agent...cf01d24 --name-only`:
+exactly 12 files, all under `the-intern/bob-skills/.pi/skills/worklog/` and
+`.pi/skills/email-triage/` — matches the declared Files to Touch, nothing
+else touched (`package-pi-skills.sh` and `test_package_pi_skills.sh` diffs
+against `dev-agent` are empty).
+
+Stage 1 — acceptance (all three ACs independently reproduced, not taken on
+trust):
+
+- AC-1: For every file under both packaged skill trees (11 files each side,
+  1:1 file-set match), independently diffed against canonical `skills/`.
+  Both `SKILL.md` files contain exactly one injected
+  `allowed-tools: Read Bash` line (frontmatter line 23, well-formed) and are
+  otherwise `diff`-identical to canonical after stripping that line; every
+  non-`SKILL.md` file (`references/*.md`, `references/categories/*.md`,
+  `references/categories/README.md`) is `cmp` byte-identical to canonical.
+  Confirms the Developer's claim.
+- AC-2: Ran `grep -rn "carried forward\|carry forward\|reconcil\|open
+  worklog item" .pi/skills/worklog .pi/skills/email-triage` from
+  `the-intern/bob-skills/` on the checked-out branch — zero matches (grep
+  exit 1).
+- AC-3: Ran `./package-pi-skills.sh && ./test_package_pi_skills.sh` fresh —
+  script exits 0, test suite reports 5 passed / 0 failed, same five AC
+  labels as before (test script unmodified). `git status --porcelain`
+  after the script run is empty, confirming the regeneration is idempotent
+  (item 4 of the review brief) — strong evidence the committed diff is
+  genuine, unedited script output.
+
+Embedding step (item 5 of the review brief): read
+`the-intern/service/crates/bob/build.rs` and
+`crates/bob/src/init_assets.rs` directly. Confirmed the Developer's
+reasoning is correct — `build.rs` walks `bob-skills/.pi/skills` at build
+time (`cargo:rerun-if-changed` on the directory and every file in it),
+generates `OUT_DIR/embedded_pi_skill_assets.rs` with one `include_bytes!`
+per file, and `init_assets.rs` `include!`s that generated file as
+`EMBEDDED_PI_SKILL_ASSETS`; there is no hand-maintained, tracked asset
+table to edit. Independently ran `cargo build -p bob` (succeeded, fresh
+`target/debug/bob` binary produced) and `cargo test -p bob init_assets`
+from the branch checkout: all three `init_assets::tests` passed
+(`embeds_assets_from_the_canonical_pi_package_path`,
+`contains_the_four_shipped_skill_roots`,
+`exposes_a_stable_relative_path_list_and_matching_bytes` — the last of
+which byte-compares every embedded asset against the on-disk regenerated
+file, positively confirming the new content is embedded). `git status
+--porcelain` after the build/test run stayed empty (`OUT_DIR` build output
+is gitignored, no tracked-file side effects).
+
+Stage 2 — code/quality review: this is a pure regeneration task with no
+hand-authored logic to review beyond the packaging output itself, which
+Stage 1 already verified byte-for-byte against canonical source. No
+unspecified behavior, no unexpected files, no dead code, nothing to flag.
+
+No blocking or minor observations. Next owner: Development Loop.
