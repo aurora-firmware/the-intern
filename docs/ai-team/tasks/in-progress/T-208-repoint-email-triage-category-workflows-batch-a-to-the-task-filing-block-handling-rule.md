@@ -97,3 +97,55 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-18
+
+PASS
+
+**Stage 1 — Acceptance Criteria.** Read the full post-change text of all three files on
+`task/T-208-...` (not just the grep output) and cross-checked against the current
+`references/escalation.md` (T-207's rewritten rule) and `references/worklog.md`.
+
+- AC-1: Confirmed no occurrence of "open worklog item" in any of the three files
+  (`grep -rn "open worklog item" <3 files>` on the task branch: no matches). The retired
+  phrase only remains in the untouched `suspected-spam.md`, `newsletter-bulk.md`, and
+  `self-escalation.md`, which are correctly out of this batch's scope.
+- AC-2: All three "If the move/reply is blocked" sections instruct "follow the
+  block-handling rule `references/escalation.md` already establishes: file a `blocked`
+  `bob task` for it and do not treat the message as handled" — matching T-207's rule in
+  `escalation.md`'s "If an action is blocked" section ("file a `bob task` for it — status
+  `blocked` ... do not treat the message as handled").
+- AC-3: `automated-notification.md`'s routine-failure-note paragraph now reads "not an open
+  item under `references/worklog.md`'s worklog/task-board model" — the "reconciliation
+  model" phrase is gone and replaced with the task description's own suggested phrasing.
+
+**Fact-check of the rewritten AC-3 paragraph.** The Work Log claims a straight
+find-and-replace of "reconciliation model" would have left an inaccurate sentence in place
+("`bob worklog` does not carry it forward the way it carries an escalation or a block").
+Verified against `references/worklog.md`'s current content: "`bob worklog` records only what
+a run explicitly appended on the day it ran, and never carries anything into another day's
+file" — worklog itself never carries anything forward for any item type; tracking happens
+exclusively via a filed `bob task` (worklog.md's "How an open item closes" section names
+exactly two open-item causes: escalation `todo` and gate-blocked `todo`/`blocked`). The
+rewritten paragraph correctly relocates the distinguishing fact to "no `bob task` is filed
+for it, so nothing tracks it as outstanding" — this is accurate under the current model. The
+Developer's reasoning for rejecting a minimal find-replace holds up.
+
+**Cross-reference discipline (T-207 intent).** All three "If ... is blocked" sections still
+point to `references/escalation.md` for the mechanics ("follow the block-handling rule
+`references/escalation.md` already establishes") and state only the outcome in one line,
+consistent with this file set's existing pointer style (e.g. direct-request.md's and
+meeting-scheduling.md's "Escalate the message per `references/escalation.md` instead...this
+file does not restate..."). No file restates `escalation.md`'s task-status, worklog-naming,
+or denied-escalation mechanics.
+
+**Scope.** `git diff dev-agent...task/T-208-...` touches exactly the three files in Files to
+Touch (`automated-notification.md`, `direct-request.md`, `meeting-scheduling.md`) and
+nothing else.
+
+**Stage 2 — Code Quality.** Docs-only change; no build/test applies. Prose reads clearly,
+each rewritten sentence is grammatically sound, no leftover inconsistent phrasing, and line
+lengths stay within the files' existing ~95-character wrap convention (spot-checked longest
+lines in `automated-notification.md`, max 94 chars).
+
+Both stages pass. No blocking issues found.
