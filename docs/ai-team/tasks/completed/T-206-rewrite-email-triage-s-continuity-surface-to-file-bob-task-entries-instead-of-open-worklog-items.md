@@ -2,7 +2,7 @@
 id: T-206
 title: Rewrite email-triage's continuity surface to file bob task entries 
   instead of open worklog items
-status: in-progress
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-09-17'
