@@ -1,7 +1,7 @@
 ---
 id: T-205
 title: Rewrite the canonical worklog skill for same-day duplicate suppression
-status: pending
+status: in-progress
 priority: high
 assigned-role: developer
 created: '2026-09-17'
