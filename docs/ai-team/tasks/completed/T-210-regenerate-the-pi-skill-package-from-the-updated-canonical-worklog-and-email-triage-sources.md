@@ -2,7 +2,7 @@
 id: T-210
 title: Regenerate the pi skill package from the updated canonical worklog and 
   email-triage sources
-status: in-progress
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-09-17'
