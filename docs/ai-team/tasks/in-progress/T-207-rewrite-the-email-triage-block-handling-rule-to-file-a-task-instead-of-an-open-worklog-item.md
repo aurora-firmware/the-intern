@@ -2,7 +2,7 @@
 id: T-207
 title: Rewrite the email-triage block-handling rule to file a task instead of an
   open worklog item
-status: pending
+status: in-progress
 priority: high
 assigned-role: developer
 created: '2026-09-17'
