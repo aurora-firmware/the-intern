@@ -25,6 +25,6 @@ as fully handled: nothing is left outstanding and nothing further happens for th
 ## If the move is blocked
 
 If the move is blocked, follow the block-handling rule `references/escalation.md` already
-establishes: record the block as an open worklog item and do not treat the message as
-handled. Do not substitute some other action — a blocked filing is a hard stop for this
-message, not a reason to try replying, forwarding, or anything else instead.
+establishes: file a `blocked` `bob task` for it and do not treat the message as handled. Do
+not substitute some other action — a blocked filing is a hard stop for this message, not a
+reason to try replying, forwarding, or anything else instead.
