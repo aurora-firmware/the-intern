@@ -89,8 +89,12 @@ Verification command is narrowed instead to the files this task actually
 owns:
 
 ```bash
-cd the-intern/service && cargo build -p bob && cargo test -p bob --lib worklog:: cli::
+cd the-intern/service && cargo build -p bob && cargo test -p bob --lib
 ```
+
+(`cargo test` accepts only a single positional test-name filter, so this
+runs the full `--lib` unit-test suite — still correctly scoped, since
+`--lib` excludes the `non_serve` integration-test binary entirely.)
 
 Original (superseded) command, retained for context:
 
