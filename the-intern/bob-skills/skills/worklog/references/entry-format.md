@@ -39,28 +39,23 @@ three bullets:
 - **`<item-identifier>`** — the short, human-readable label the calling run
   passes for the item. It should be enough on its own to identify which
   item the entry describes when the file is scanned later, and it stays the
-  same for as long as the item stays open so the command can recognise the
-  item when it carries it forward.
+  same every time the item recurs, the same day or on a later one, so the
+  same-day duplicate check can recognise a repeat and a reader can tell
+  which entries belong to the same item.
 - **Done** — the concrete action taken this run: whatever outcome the
   consuming skill's own domain workflow reached, including an action that
   was attempted and blocked by the action-authorization gate. When the
   blocked call was itself the action that would have closed the item,
   `Done` must say that attempt was blocked — not that the closing action
   succeeded.
-- **Left** — what remains open, if anything. "Nothing" for a fully-handled
-  item; otherwise a short description of the open condition (for example,
-  "awaiting a reply", or "blocked by the action-authorization gate — no
-  admitting allow rule"). This field is what marks an item open or closed:
-  any value other than "nothing" keeps the item open and carried forward.
+- **Left** — what remains open, if anything, at the time this entry was
+  written. "Nothing" for a fully-handled item; otherwise a short description
+  of the open condition (for example, "awaiting a reply", or "blocked by
+  the action-authorization gate — no admitting allow rule"). `bob worklog`
+  does not act on this value itself — it does not classify the item as open
+  or closed and does not track it across entries or across days; a
+  consuming skill that needs to know whether an item is still outstanding
+  keeps that record itself.
 - **Next** — what will resolve the item and how it will be noticed (for
   example, "closes when the expected reply arrives", or "closes once an
   allow rule admits this call").
-
-## Carried-forward entries
-
-When the command carries a still-open item into today's file, the
-carried-forward entry has this same shape. Its `Left` and `Next` are copied
-verbatim from the item's most recent prior entry; its `Done` records that
-the item was carried forward and names the file it came from. The reader
-does not write these — the command does, automatically. See
-`references/reconciliation.md`.
