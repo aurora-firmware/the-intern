@@ -99,3 +99,128 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-18
+
+PASS
+
+Reviewed the full post-change text of `the-intern/docs/src/operator-guide/index.md`
+on `task/T-211-...` (tip `0616bfa`), not just the task's grep-based
+Verification command, against the 3 ACs' literal text, and cross-checked the
+corrected prose against `T-203`'s and `T-206`'s actual completed/reviewed
+behavior (both read directly from `docs/ai-team/tasks/completed/` on
+`dev-agent`, not inferred from the Developer's summary).
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1 (no statement that `bob worklog` reconciles against a prior day's
+  file or carries an item forward, document-wide): met. Grepped the entire
+  post-change file for `reconcil`/`carr` (both narrowly and broadly, not
+  just the task's own grep pattern) — the only remaining "carr" hits are
+  unrelated senses ("carries it, regardless of `--cwd`", "may also carry an
+  optional...", "values a call carries", "not any variant carrying
+  arguments"). No claim anywhere that `bob worklog` reconciles against or
+  reads a prior day's file.
+- AC-2 (state that a day's file holds only what that day's runs appended):
+  met verbatim — the rewritten "Cross-day continuity" paragraph states "a
+  day's file holds only what that day's runs appended."
+- AC-3 (scheduled walkthrough states escalation/S-004-block continuity
+  depends on `bob task*`, not `bob worklog`): met. Confirmed via heading
+  sweep that the paragraph sits under "## Deploying the `email-triage`
+  scheduled job" (opens at line 977), the correct WHERE location, and
+  states continuity "now lives on the job's task board instead, which is
+  why the `bob task*` rule ... is required for this workflow too."
+- No unexpected files modified: `git diff --stat dev-agent..task/T-211-...`
+  touches only `the-intern/docs/src/operator-guide/index.md` under
+  `the-intern/`, matching Files to Touch exactly (the task-file diff is
+  only the Work Log entries that were committed separately on `dev-agent`,
+  the same established pattern `T-206`'s review already confirmed as
+  correct).
+
+**Cross-reference link.** Independently reproduced the Developer's claim
+rather than taking it on trust: added a worktree for the task branch and
+ran `mdbook build` with `BOB_BIN` pointed at an already-built `bob` debug
+binary. Build succeeds. Inspected the generated
+`book/operator-guide/index.html` directly: `<h3
+id="the-task-board-bob-task">` exists (from "### The task board (`bob
+task`)"), and the new link `<a href="#the-task-board-bob-task">` resolves
+to it exactly. Confirmed.
+
+**Accuracy cross-check against T-203/T-206 (not just internal consistency).**
+- Cross-day continuity paragraph: "`bob worklog` never reads or writes any
+  day's file but the one an invocation names" and "a day's file holds only
+  what that day's runs appended" match T-203's actual, reviewed CLI
+  behavior (`run_append_with_context` reads only `store.read_day(today)`;
+  `run_list_with_context` renders only the requested day's file with no
+  write side effect; no `carried_forward` field in either output).
+  "`email-triage`'s own continuity ... now lives on the job's task board"
+  matches T-206's actual, reviewed `SKILL.md` rewrite (step 1 lists the
+  job's own task board via `bob task list`; blocked/todo tasks filed and
+  closed via `bob task status`).
+- Second-location edit (see Scope judgment below): "checks only today's
+  already-written entries for an exact-duplicate repeat before writing a
+  new one" matches T-203's `is_same_day_duplicate` wiring (reads today's
+  entries only, exact-match on `Done`/`Left`/`Next`, suppresses without
+  writing on a match) exactly.
+
+**Scope judgment — the second-paragraph edit (~130 lines earlier, "reads
+the prior day's entries to reconcile still-open items" →  "checks only
+today's already-written entries for an exact-duplicate repeat before
+writing a new one").** Judged appropriate; not scope creep, and not a FAIL
+point. Reasoning, checked independently against the actual before/after
+text and CR-013 rather than deferring to the Developer's own framing:
+- The untouched original text at that second location ("reads the prior
+  day's entries to reconcile still-open items") is itself a direct AC-1
+  violation on AC-1's own literal, document-level wording ("The system
+  shall not state that `bob worklog` reconciles against a prior day's file
+  ... anywhere," per this review's framing) — leaving it in place would
+  have left AC-1 unmet regardless of what the Description's illustrative
+  replacement text covered.
+- CR-013's Potential Impact section (read directly, not taken on trust)
+  names "the operator guide's worklog action-rule listing" — not one
+  paragraph — as needing review for stale claims. The second location sits
+  inside the same step-4 "action rules" explanatory prose (the paragraph
+  immediately follows the `bob worklog*` policy-rule TOML block and exists
+  specifically to explain what that rule covers), arguably a more literal
+  match for "action-rule listing" than the first, "Cross-day continuity"
+  paragraph, which sits one step later.
+- Files to Touch was strictly respected (same single file, no other file
+  touched) — this is a materially smaller scope question than T-203's
+  `reconcile.rs` precedent, which would have required editing a file
+  entirely outside Files to Touch. Editing a second paragraph inside the
+  one named file, to satisfy an AC phrased at the document level, does not
+  cross that boundary.
+- The edit itself is minimal (one clause), directly on-topic (same class of
+  false claim AC-1 forbids), was disclosed with full reasoning in the Work
+  Log, and is trivially revertible in isolation if judged otherwise. No
+  unspecified functionality was added — this is the same class of wording
+  correction AC-1/AC-2 already require, applied a second time where the
+  same false claim recurred.
+
+**Stage 2 — Code Quality.** Docs-only change; no test suite applicable
+(confirmed the task's own Verification grep produces no output, reran
+independently on the task branch: exit 1, no match). Correctness and
+readability: both edited passages read coherently, are grammatically clean,
+and are consistent with the rest of the file and with `S-010`/`S-015`
+(v0.3/v0.5, CR-013-amended). No dead prose, no unrelated changes bundled in.
+Security/performance: n/a (documentation).
+
+**Separate finding, filed as a bug, not a FAIL point.** While cross-checking
+the "Deploying the `email-triage` scheduled job" walkthrough's own step-4
+policy TOML block against `T-206`'s actual behavior, found that the printed
+TOML admits `bob worklog*` but has no rule admitting `bob task*` — yet
+`email-triage`'s `SKILL.md` (post-`T-206`) now calls `bob task list`
+unconditionally on every run. An operator following the walkthrough's step
+4 literally would have every run denied at its first action by the
+default-deny gate. This predates `T-211` (it is a `T-206` fallout that was
+never propagated into the operator guide's concrete policy example) and is
+outside `T-211`'s Files to Touch and all 3 ACs — the task's own Description
+explicitly states no new rule needs adding, which is true of the *prose*
+fix this task made but does not extend to the walkthrough's separate,
+untouched TOML example. Filed as `B-047` (`docs/ai-team/bugs/open/`,
+severity `high`, committed on `dev-agent` `af9e615`) rather than folding it
+into this verdict.
+
+Both stages pass. T-211 is ready for re-integration.
+
+Next owner: active Development Loop.
