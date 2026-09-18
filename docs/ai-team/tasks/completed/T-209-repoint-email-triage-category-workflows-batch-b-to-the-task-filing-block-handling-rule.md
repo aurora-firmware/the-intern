@@ -2,7 +2,7 @@
 id: T-209
 title: Repoint email-triage category workflows batch B to the task-filing 
   block-handling rule
-status: in-progress
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-09-17'
