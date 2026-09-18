@@ -2,7 +2,7 @@
 id: T-204
 title: Rewrite bob worklog end-to-end coverage for same-day duplicate 
   suppression
-status: in-progress
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-09-17'
