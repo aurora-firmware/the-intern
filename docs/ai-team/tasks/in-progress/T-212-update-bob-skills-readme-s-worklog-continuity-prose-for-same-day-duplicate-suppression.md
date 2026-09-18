@@ -102,3 +102,137 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-18
+
+PASS
+
+Reviewed the full post-change text of `the-intern/bob-skills/README.md` on
+`task/T-212-...` (tip `ce3f7f7`), not just the task's grep-based Verification
+command, against the 3 ACs' literal text, cross-checked against `T-202`'s and
+`T-206`'s actual completed/reviewed behavior, and compared the scope
+decisions against `T-211`'s precedent rather than deferring to the
+Developer's framing.
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1 (no statement that `bob worklog` reconciles against a prior day's
+  file or carries an item forward, document-wide): met. Grepped the whole
+  post-change file for `reconcil`/`carr`/`prior day`/`cross-day` and
+  reviewed every hit. Unrelated senses ("carries no independent copy",
+  "carries it, regardless of `--cwd`", "values a call carries") are fine.
+  The remaining `reconcil`/`carr` hits in the "Validation outcomes" section
+  ("early `bob worklog` reconciliation model in force at the time," "next
+  first-run reconciliation" (a direct quote of a historical worklog entry's
+  own `Next` line), "reached that reconciliation path," "the carried item,"
+  "That era's validated allow-rule set included the relative `read`
+  matcher") are all clearly framed as dated history, governed by the new
+  intro sentence "the bullets below are that era's historical record, not
+  current behavior" and closed out by an explicit present-tense contrast
+  ("a rule the current `bob worklog*` matcher above replaces entirely,
+  since today's `bob worklog` never reads any day's file but the one it is
+  writing to"). Cross-checked the historical claim itself against `T-202`
+  (completed, `PASS`): before `T-202`, `reconcile_today` genuinely did read
+  a prior day's file and carry items forward (`nearest_prior_existing_date`,
+  `carry_forward_open_items`), so "early `bob worklog` reconciliation model"
+  is accurate history, not a fabrication. No statement anywhere asserts
+  cross-day reconciliation as *current* `bob worklog` behavior. The one
+  remaining stale label ("first-run detection," "reconciliation" in the
+  Package-layout ASCII-tree comment, line ~80) is a topic label, not a
+  behavioral claim about what `bob worklog` does — see scope judgment below.
+- AC-2 (state that a day's file holds only what that day's runs appended):
+  met verbatim, in two places — the escalation-rule paragraph ("a day's
+  worklog file holds only what that day's runs appended") and the
+  Validation-outcomes intro ("Today a day's worklog file holds only what
+  that day's runs appended").
+- AC-3 (attribute email-triage's escalation/S-004-block continuity to the
+  job's `bob task` board and the `bob task*` rule, not `bob worklog`): met,
+  in the same two places — "`email-triage`'s own continuity ... is not a
+  `bob worklog` behavior at all: it now runs through the job's own `bob
+  task` board instead, which is why the `bob task*` rule ... is required
+  for this workflow too" and "`email-triage`'s own continuity ... runs
+  through the job's own `bob task` board instead, never through `bob
+  worklog`."
+- No unexpected files modified: `git show --stat ce3f7f7` touches exactly
+  one file, `the-intern/bob-skills/README.md`; `git diff dev-agent
+  task/T-212-... --stat` scoped away from that file, the canonical task
+  file, and `B-048` shows nothing else changed.
+- Verification command reproduced independently: `grep -n "reconciles
+  today's file\|carrying a still-open item forward\|cross-day
+  carry-forward" the-intern/bob-skills/README.md` on the task branch
+  produces no output (exit 1), as required.
+
+**Point 4 — Edits 3/4's historical-preservation approach (Validation
+outcomes intro + Skipped-tick continuity closing sentence).** Judged
+correct, checked independently against the actual before/after text and
+against `T-202`, not just accepted on the Developer's say-so. Rewriting the
+historical T-139/T-140 bullets to claim `bob task` involvement would have
+been false (email-triage's `bob task` continuity did not exist at that
+time — `T-206`, which introduced it, postdates T-139/T-140 by design). The
+chosen approach — one new framing sentence up front stating the bullets are
+"that era's historical record, not current behavior" plus a present-tense
+restatement of AC-2/AC-3, and one reworded closing sentence per bullet that
+explicitly contrasts the old validated rule with "today's `bob worklog`" —
+reads unambiguously as historical throughout; there is no sentence in the
+touched paragraphs that could be misread as a current-behavior claim.
+
+**Point 5 — Package-layout ASCII-tree comment ("first-run detection,"
+"reconciliation") left untouched.** Judged a defensible scope boundary,
+independently of the Developer's reasoning. Read `skills/worklog/SKILL.md`
+and `skills/worklog/references/reconciliation.md` directly: the skill
+states plainly "This skill defines no closing conditions of its own" and
+never discusses first-run detection; the reference file is retitled
+"Worklog Same-Day Duplicate Suppression" and states the comparison "never
+any other day's file." So the two-word labels are stale relative to the
+skill's actual current content — a legitimate documentation-quality gap.
+But it is distinguishable from T-211's in-scope second-paragraph fix in a
+way that matters: T-211's second location used the literal AC-1-forbidden
+phrase ("reads the prior day's entries to reconcile still-open items")
+verbatim, inside the same "action-rule listing" CR-013 named by section.
+This Package-layout comment does not state that `bob worklog` reconciles
+against a prior day's file or carries an item forward — it is a two-word
+topic label with no behavioral claim attached, so it does not trip AC-1's
+literal text the way T-211's duplicate paragraph did. It also sits outside
+both locations T-212's own Description names as needing correction (the
+action-rule listing/cross-day continuity prose, and the live-validation
+narrative), unlike T-211's second location, which CR-013's own Potential
+Impact section named by covering the whole "action-rule listing." Leaving
+it as a disclosed deviation, flagged for a follow-up rather than folded
+into this task or into `B-048`, is consistent with the project's scope
+discipline and with how T-211 handled `B-047` (a separate, out-of-scope
+finding filed as its own bug rather than bundled into the task).
+
+**Point 6 — `B-048` spot-check.** Read the bug file in full and verified its
+central claim independently rather than trusting the report. Read
+`the-intern/bob-skills/skills/email-triage/SKILL.md` directly: step 1 of
+the loop ("List this job's own task board and retry open tasks") calls
+`bob task list` unconditionally on every run, and blocked/todo items are
+retried and closed via `bob task status`/`bob task new`, matching the bug's
+claim exactly. Read the README's "Verified S-004 action rules for the
+install-path model" `[[policy.action_rules]]` TOML block in full (19
+rules): 7 `read` rules for each skill's `SKILL.md`/`references/*.md`
+(`email-triage`, `himalaya`, `worklog` — no `tasks/SKILL.md` rule) and 12
+`bash` rules for `himalaya*`/`cat config/email-triage.toml*`/
+`bob worklog*` — no rule matches `bob task*`. This confirms the bug's core
+claim: an operator who deploys this README's rule set verbatim would have
+every run's first action (`bob task list`) denied by the default-deny
+policy gate. Same defect class as the already-reviewed `B-047`, correctly
+cross-referenced, and not a duplicate — `B-047` covers the operator guide's
+own separate walkthrough TOML, `B-048` covers this package's own separate
+README TOML. Severity `high` is appropriate (every scheduled run's first
+step would fail). Filed correctly under `docs/ai-team/bugs/open/`, already
+committed to `dev-agent` (`4845b19`), and out of `T-212`'s own Files to
+Touch/ACs (a policy-example gap, not a prose-attribution issue).
+
+**Stage 2 — Code Quality.** Docs-only change; no test suite applicable.
+Correctness and readability: both fully-rewritten passages (worklog
+action-rule paragraph, escalation-rule closing sentence) and both
+lighter-touch edits (Validation-outcomes intro, Skipped-tick closing
+sentence) read coherently, are grammatically clean, and are internally
+consistent with the rest of the file and with `S-010`/`S-015` (v0.3/v0.5,
+`CR-013`-amended). No dead prose, no unrelated changes bundled in.
+Security/performance: n/a (documentation).
+
+Both stages pass. `T-212` is ready for re-integration.
+
+Next owner: active Development Loop.
