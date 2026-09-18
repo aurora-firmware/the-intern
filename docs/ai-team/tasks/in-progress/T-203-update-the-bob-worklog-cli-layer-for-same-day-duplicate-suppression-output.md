@@ -74,6 +74,26 @@ reconciliation or carry-forward.
 
 ## Verification
 
+**Amended post-review, 2026-09-18, human-approved**: the original command
+below matches `worklog` as a substring across the whole `bob` package,
+sweeping in 2 pre-existing tests in `crates/bob/tests/non_serve.rs`
+(`worklog_list_carries_a_prior_day_open_item_forward_and_reports_it`,
+`worklog_append_twice_the_same_day_keeps_exactly_one_carried_forward_entry`)
+that assert the cross-day carried-forward behavior this task's dependency
+(`T-202`) already removed. Those two tests are explicitly `T-204`'s named
+scope to rewrite (not this task's) — `T-204` depends on `T-203` for exactly
+this reason and its Description states they "must fail to compile/pass
+against the new CLI output and are rewritten, not merely deleted." Fixing
+them here would preempt and duplicate `T-204`'s planned work, so the
+Verification command is narrowed instead to the files this task actually
+owns:
+
+```bash
+cd the-intern/service && cargo build -p bob && cargo test -p bob --lib worklog:: cli::
+```
+
+Original (superseded) command, retained for context:
+
 ```bash
 cd the-intern/service && cargo build -p bob && cargo test -p bob worklog
 ```
