@@ -94,3 +94,51 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-18
+
+PASS
+
+**Stage 1 — Acceptance Criteria.** Read the full post-change text of all three files on
+`task/T-209-...` (via `git show`, not just the grep output) and cross-checked against the
+current `references/escalation.md` "If an action is blocked" rule (T-207's rewritten rule)
+and T-208's already-approved pattern.
+
+- AC-1: Confirmed no occurrence of "open worklog item" in any of the three files
+  (`grep -n "open worklog item"` on the task branch's copies: no matches, exit 1). The retired
+  phrase no longer appears anywhere in this batch.
+- AC-2: All three "If the move is blocked" sections now read "...follow the block-handling
+  rule `references/escalation.md` already establishes: file a `blocked` `bob task` for it and
+  do not treat the message as handled" — matching `escalation.md`'s current rule ("file a
+  `bob task` for it — status `blocked` ... do not treat the message as handled").
+
+**Pattern match against T-208.** The substituted clause — "file a `blocked` `bob task` for it
+and do not treat the message as handled" — is character-for-character identical to the
+phrasing T-208 already used and had approved in its Review Verdict for the sibling batch
+(`automated-notification.md`, `direct-request.md`, `meeting-scheduling.md`). No divergence in
+wording, punctuation, or cross-reference style.
+
+**Unrelated content left untouched.** Diffed each file (`git diff dev-agent...task/T-209-...`)
+and confirmed only the "If the move is blocked" paragraph changed in each: 3 lines touched in
+`newsletter-bulk.md` and `suspected-spam.md`, 2 lines in `self-escalation.md` (shorter because
+the retired phrase originally split differently across the paragraph's line wrap). Each
+file's file-specific caveat sentence is intact and unchanged — `self-escalation.md`'s "never
+a reason to send an escalation for this message instead" and `suspected-spam.md`'s "never a
+reason to reply, follow a link, or otherwise engage" both remain verbatim after the swapped
+clause. The "Do not substitute some other action" follow-on sentence is preserved in all
+three files, and each file still cross-references `references/escalation.md` for the
+mechanics rather than restating them (T-207 intent), consistent with T-208's approved
+pointer-style discipline.
+
+**Scope.** `git diff dev-agent...task/T-209-...` touches exactly the three files in Files to
+Touch (`newsletter-bulk.md`, `self-escalation.md`, `suspected-spam.md`) and nothing else — no
+other category file, no `references/escalation.md`, no lifecycle file changes on the task
+branch. Single commit (`c8cd09d`, `docs(email-triage): repoint remaining categories to task
+filing`).
+
+**Stage 2 — Code Quality.** Docs-only change; no build/test applies. Prose reads clearly, each
+rewritten sentence is grammatically sound, no leftover inconsistent phrasing or dangling
+references. Re-wrapped lines stay within the files' existing ~95-character convention
+(spot-checked; longest line 94 chars, matching the Work Log's own reported 93-char max).
+
+Both stages pass. No blocking issues found.
