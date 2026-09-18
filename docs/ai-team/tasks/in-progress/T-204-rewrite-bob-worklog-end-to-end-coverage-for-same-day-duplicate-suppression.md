@@ -111,3 +111,76 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-18
+
+PASS
+
+**Stage 1 — Acceptance Criteria.** Reviewed `task/T-204-...` (commit
+`c73b14e`) against `dev-agent`; the commit touches only
+`the-intern/service/crates/bob/tests/non_serve.rs`, matching the task's
+sole Files-to-Touch entry. Checked each AC against the actual rewritten
+test bodies, not just names:
+
+- AC-1 (identical repeat suppresses second write) —
+  `worklog_append_twice_the_same_day_with_identical_fields_suppresses_the_second_write`
+  asserts the second call exits 0, stdout contains `"suppressed duplicate
+  worklog entry: vendor-invoice"` and not `"recorded worklog entry:"`, and
+  the day file has exactly one `"— vendor-invoice"` header remaining. Met.
+- AC-2 (differing `--done` keeps both entries) —
+  `worklog_append_twice_the_same_day_with_a_different_done_value_keeps_both_entries`
+  asserts the second call's stdout contains `"recorded worklog entry:
+  vendor-invoice"`, the day file has two `"— vendor-invoice"` headers, and
+  both distinct `- Done:` values are present. Met.
+- AC-3 (prior day's item never surfaces in a later day's `list`) —
+  `worklog_list_does_not_show_a_prior_days_item_for_a_later_day` seeds a
+  `2000-01-01.md` file via `write_prior_day_open_item`, runs `bob worklog
+  list` against the real clock's "today", and asserts stdout excludes
+  `"vendor-invoice"` and any case-insensitive `"carried forward"`
+  substring, and renders `"(no entries)"`. Met.
+- AC-4 (missing worklog directory still exits non-zero, unchanged) —
+  `worklog_list_exits_non_zero_and_names_the_missing_worklog_directory`
+  body is unchanged from the pre-T-204 version (only its doc-comment label
+  moved from the old AC-3 to the new AC-4); still asserts exit code 1 and
+  that stderr names the expected `worklog/` path. Met.
+- AC-5 (fresh-directory append still works with no admin socket, unchanged)
+  — `worklog_append_creates_todays_file_without_a_worklog_dir_or_admin_socket`
+  body is unchanged (doc-comment label moved from the old AC-1 to the new
+  AC-5); still asserts exit 0, the day file's location/name shape, and all
+  four written fields. Met.
+
+No unspecified behavior was added. The supporting read-back test
+(`worklog_list_reads_back_an_entry_a_prior_invocation_appended`) was kept
+as unlabeled supporting coverage per the task's own Description, which is
+accurate — it isn't one of the five named ACs. Cross-checked the new
+AC-1/AC-2 test bodies against `crates/bob/src/worklog/reconcile.rs`'s
+`is_same_day_duplicate` (exact-match on the chronologically-last same-day
+entry per item, `done`/`left`/`next` compared trimmed) and
+`crates/bob/src/cli/commands/worklog.rs`'s `AppendedEntryOutput`/text
+summary contract — the assertions faithfully exercise that contract at
+the binary level.
+
+**Stage 2 — Code Quality.** Tests are independent (each uses its own
+`tempfile::tempdir()`, no shared mutable state), names are descriptive of
+actual behavior asserted, no dead code or commented-out blocks introduced,
+no security concerns (test-only file, no external input). No unnecessary
+loops or resource leaks.
+
+**Verification.** Ran the task's own command in a clean worktree of the
+task branch:
+`cd the-intern/service && cargo test -p bob --test non_serve worklog --
+--nocapture` → `test result: ok. 6 passed; 0 failed`, matching the
+Developer's Work Log. Also ran `cargo fmt --all -- --check` (clean) and,
+as an extra bounded sanity check beyond the task's own Verification scope,
+`timeout 60 cargo test -p bob --test non_serve -- --nocapture` on the full
+binary, which hit the timeout — consistent with the project's known
+pre-existing sandbox socket-suite hang (CLAUDE.md, memory note
+`project_sandbox_test_failures.md`), not a regression from this change.
+
+Not counted against this review, per the task's own instruction: the dead
+`reconcile_today`/`ReconcileOutcome` function in
+`crates/bob/src/worklog/reconcile.rs`, already flagged by the T-203
+Reviewer as an out-of-scope follow-up; this task's diff does not touch
+that file.
+
+Next owner: Development Loop.
