@@ -207,3 +207,76 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-19
+PASS
+
+Diagnosis→fix evidence chain: complete. "Diagnosis 1 — 2026-09-19" records
+reproduction status (confirmed by document inspection, same method as
+B-047/B-048), evidence (grep counts before the fix, line ranges for the
+step-4 block, `git show 640507d` and `git show 528096e` cross-checks, the
+`email-triage/SKILL.md` reference, and an empty pre-fix diff against
+`dev-agent`), an isolated fault (missing `read` rule for
+`/opt/bob/skills/tasks/SKILL.md` in the step-4 `[[policy.action_rules]]`
+block), a root cause (B-047's commit `640507d` added only the `bash` half of
+the documented rule pair), and a planned verification (the same grep the bug
+file's Fix Verification section specifies).
+
+Stage 1 (bug criteria):
+- Fix addresses the isolated fault: commit `54babe6` adds exactly one
+  `[[policy.action_rules]]` block (`tool = "read"`, `arg_matchers = [
+  { field_path = "path", pattern = "/opt/bob/skills/tasks/SKILL.md" } ]`) —
+  6 lines, no other changes, confirmed via `git show --stat 54babe6` (1 file,
+  6 insertions, 0 deletions).
+- Fix Verification followed and independently reproduced: `grep -n 'pattern
+  = ".*tasks/SKILL.md"' the-intern/docs/src/operator-guide/index.md` against
+  the fixed content returns exactly two matches — line 345 (pre-existing,
+  "The task board (`bob task`)" section) and line 1105 (new). Read the
+  surrounding content directly: line 1105 sits inside the step-4 TOML fence
+  (opens line 1083, closes line 1209), placed immediately after the
+  `worklog/SKILL.md` read rule and before the `references/*.md` glob rules —
+  matching the Work Log's claimed placement.
+- Rule shape matches sibling rules: identical `tool = "read"` /
+  `field_path = "path"` shape to the adjacent `email-triage/SKILL.md`,
+  `himalaya/SKILL.md`, and `worklog/SKILL.md` read rules in the same block,
+  and matches the paired shape documented in "The task board (`bob task`)"
+  section (lines 336-346, using the `<skill_install_path>` placeholder form
+  vs. this block's concrete `/opt/bob/skills` form — consistent with that
+  section's own established convention).
+- Step-4 block's `tasks` skill support is now complete: the pre-existing
+  `bob task*` `bash` rule (B-047, now lines 1198-1202) plus this new `read`
+  rule (lines 1102-1106) together mirror the "task board" section's
+  documented minimum pair and B-048's complete fix shape (`git show 528096e
+  -- the-intern/bob-skills/README.md` added both halves in one commit).
+- No unrelated behavior added; only the operator guide file was touched
+  (confirmed via `git show --stat`).
+
+Stage 2 (code quality):
+- Correctness: extracted the step-4 TOML block (lines 1084-1208, excluding
+  fence markers) and parsed it with Python's `tomllib` — valid TOML, 21
+  `action_rules` entries, confirming the insertion did not break the
+  surrounding block's syntax.
+- Minimal, targeted diff; indentation and formatting match the six sibling
+  `read` rule blocks already in the same list item.
+- Regression test: none automated (docs-only cross-section consistency,
+  same as B-047/B-048; the bug's own Fix Verification section specifies
+  only the grep check, which passes). Work Log documents a red/green grep
+  cycle (one match pre-fix, two post-fix) consistent with the tdd skill's
+  documentation-only mode.
+- No dead code, no secrets, no unrelated refactoring.
+
+Minor observation (non-blocking): the Work Log states "this file is not
+part of the mdBook build target," but `the-intern/docs/src/SUMMARY.md` line
+5 lists `operator-guide/index.md`, so it *is* part of the `user-docs` mdBook
+build CI checks (unlike B-048's `the-intern/bob-skills/README.md`, which
+genuinely is not). This doesn't affect the fix's correctness — mdBook
+renders fenced code blocks as literal text without parsing TOML, so running
+`mdbook build` would not have validated this change any further than the
+`tomllib` check already performed above, and the bug's own required Fix
+Verification (the grep check) was correctly executed. No action required,
+but the stated rationale for skipping `mdbook build` should be corrected in
+future similar entries (cite "mdBook does not parse fenced TOML content" or
+"not required by the bug's Fix Verification steps," not "not part of the
+build target").
+
+Both stages pass. Verdict: PASS.
