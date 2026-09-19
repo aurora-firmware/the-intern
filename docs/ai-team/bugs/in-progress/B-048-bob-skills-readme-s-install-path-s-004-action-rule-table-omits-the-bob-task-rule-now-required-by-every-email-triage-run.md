@@ -3,7 +3,7 @@ id: B-048
 title: bob-skills README's install-path S-004 action-rule table omits the bob 
   task* rule now required by every email-triage run
 severity: high
-status: open
+status: in-progress
 created: '2026-09-18'
 task: T-212
 ---
