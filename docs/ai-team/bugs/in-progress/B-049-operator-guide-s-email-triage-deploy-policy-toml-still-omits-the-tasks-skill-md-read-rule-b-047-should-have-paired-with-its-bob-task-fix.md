@@ -3,7 +3,7 @@ id: B-049
 title: Operator guide's email-triage deploy policy TOML still omits the 
   tasks/SKILL.md read rule B-047 should have paired with its bob task* fix
 severity: high
-status: open
+status: in-progress
 created: '2026-09-19'
 ---
 
