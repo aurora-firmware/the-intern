@@ -194,3 +194,62 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-19
+PASS
+
+Diagnosis→fix evidence chain: "Diagnosis 1 — 2026-09-19" records reproduction
+status (confirmed, by document inspection, matching the bug's own stated
+method), evidence captured (grep results, TOML block line range 224-336,
+the contradictory "bob task* rule noted above" prose, git blame for the
+prose's origin, and confirmation of no automated test coverage), an isolated
+fault (the `[[policy.action_rules]]` TOML block in the "Verified S-004
+action rules for the install-path model" section, missing both the `bob
+task*` bash rule and the `tasks/SKILL.md` read rule), and a root cause
+hypothesis (documentation drift: continuity prose added by T-212 referenced
+a `bob task*` rule as already present without the rule ever having been
+added). All required fields present.
+
+Stage 1 (bug criteria): Both isolated faults from the fix contract are
+addressed. Verified against commit `528096e` (bug branch
+`bug/B-048-bob-skills-readme-install-path-missing-bob-task-rule`), the only
+commit ahead of `dev-agent`, touching only
+`the-intern/bob-skills/README.md` (+12/-0 lines):
+- `read` rule for `/abs/skill-install-path/tasks/SKILL.md` added at line
+  245, immediately after the `worklog/SKILL.md` read rule and before the
+  `email-triage/references/*.md` rule, matching the shape of the other
+  per-skill `SKILL.md` read rules.
+- `bash` rule for `bob task*` added at line 347, immediately after the
+  existing `bob worklog*` rule, matching its shape exactly.
+- Confirmed both additions land inside the "Verified S-004 action rules for
+  the install-path model" section's fenced ```toml block (section heading
+  at line 202, fenced block at lines 223-349) — not some other section —
+  by reading the full block from the fixed README.
+- Ran the bug's own Fix Verification greps against the fixed file: both
+  `grep -n 'pattern = "bob task\*"'` and
+  `grep -n 'pattern = "/abs/skill-install-path/tasks/SKILL.md"'` return
+  exactly one match each, at lines 347 and 245 respectively, matching the
+  Work Log's claim.
+- No unrelated behavior added; diff is exactly the two rule blocks.
+
+Stage 2 (code quality / bug-fix addendum): Fix is minimal (12 lines added,
+nothing else changed). Regression test: none exists or is practical (this
+is a static docs-accuracy defect over a Markdown README with no automated
+consumer — confirmed by `grep -rn "bob-skills/README.md" the-intern/service
+--include="*.rs"` returning no matches in Diagnosis 1). Verified the Work
+Log's mdBook-inapplicability claim directly: `the-intern/docs/book.toml`
+sets `src = "src"`, `the-intern/docs/src/SUMMARY.md` lists only chapter
+files under `the-intern/docs/src/` (quickstart, end-user-guide,
+operator-guide, architecture-overview, extension-author-guide,
+cli-reference), and the only two files under `the-intern/docs/src/`
+mentioning `bob-skills` (`operator-guide/index.md`, lines 180 and 980) do so
+in prose only, with no `{{#include}}` or path reference pulling in
+`the-intern/bob-skills/README.md`'s content. So `the-intern/bob-skills/
+README.md` is confirmed outside the mdBook build, and `mdbook build`
+genuinely does not exercise this file — targeted grep plus manual
+line-range inspection (as the Work Log describes and as independently
+repeated above) is the correct verification method here. Diagnosis fix
+contract (isolated fault, planned fix, planned verification) matches what
+was implemented; no scope creep.
+
+Next owner: Bug-Fix Loop.
