@@ -55,17 +55,19 @@ can admit the whole package:
 - **`read`** — reference material only: any `references/*.md` file — this
   skill's own references, the `worklog` skill's own references, and the
   `himalaya` skill's own reference file when that skill is in play. This
-  skill never reads a `worklog/*.md` file itself; `bob worklog list`
-  surfaces everything the loop needs from the diary. It never reads a task
-  file directly either; `bob task list` surfaces everything the loop needs
-  from the board.
+  skill never reads a `worklog/*.md` file itself; `bob worklog append`
+  handles diary writes without a separate read, and this loop never calls
+  `bob worklog list` on a run's behalf. It never reads a task file directly
+  either; `bob task list` surfaces everything the loop needs from the
+  board.
 - **`bash`** — every himalaya CLI invocation (per the `himalaya` skill), the
   skill-local config read (`config/email-triage.toml`, from the job's own
-  `cwd`), every worklog operation (`bob worklog list` once at the start of
-  the run and `bob worklog append` once per message handled, per the
-  `worklog` skill), and every task-board operation (`bob task list` once
-  at the start of the run, and `bob task new` / `bob task status` as this
-  run's outcomes require, per the `tasks` skill). `bob worklog` creates the
+  `cwd`), every worklog operation (`bob worklog append` once per message
+  handled, per the `worklog` skill — this loop never calls
+  `bob worklog list` on a run's behalf), and every task-board operation
+  (`bob task list` once at the start of the run, and `bob task new` /
+  `bob task status` as this run's outcomes require, per the `tasks`
+  skill). `bob worklog` creates the
   worklog directory and today's file itself and stamps each entry from its
   own clock, and `bob task` creates the board itself where this job's own
   working directory names it — this loop never probes for, creates, or

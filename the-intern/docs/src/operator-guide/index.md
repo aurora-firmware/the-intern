@@ -1215,8 +1215,8 @@ the package as described in
    `email-triage` `SKILL.md` delegates diary mechanics to it (S-011
    Responsibility Separation). Everything else the diary needs now runs
    through a single `bash` rule, `bob worklog*`. The rewritten skill calls
-   `bob worklog list` once at the start of a run and `bob worklog append`
-   once per item handled; the command itself creates `worklog/` and today's
+   `bob worklog append` once per item handled — `list` is never called on a
+   run's behalf; the command itself creates `worklog/` and today's
    file, checks only today's already-written entries for an exact-duplicate
    repeat before writing a new one, and stamps each entry from its own
    clock. The skill no longer runs `find`,

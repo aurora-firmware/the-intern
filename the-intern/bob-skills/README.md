@@ -353,8 +353,8 @@ arg_matchers = [
 the reference reads the `worklog` skill (`T-154`/`T-155`) makes; the reduced
 `email-triage` `SKILL.md` delegates diary mechanics to it. Every other diary
 call now goes through one `bash` rule, `bob worklog*`: the rewritten skill
-runs `bob worklog list` once at the start of a run and `bob worklog append`
-once per item handled, and the command creates `worklog/` and today's file,
+calls `bob worklog append` once per item handled — `list` is never called
+on a run's behalf — and the command creates `worklog/` and today's file,
 checks only today's already-written entries for an exact-duplicate repeat
 before writing a new one, and stamps each entry from its own clock. The
 seven raw-shell rules that used to admit the skill's own
