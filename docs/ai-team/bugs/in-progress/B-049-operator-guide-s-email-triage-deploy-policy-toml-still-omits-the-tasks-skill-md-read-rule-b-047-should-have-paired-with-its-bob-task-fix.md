@@ -161,6 +161,22 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-09-19
+Reproduction status: Confirmed (by document inspection, same method as B-047/B-048; not run against a live `bob` instance).
+Evidence captured:
+- `grep -n 'tasks/SKILL.md' the-intern/docs/src/operator-guide/index.md` returns exactly one match (line 345, inside "The task board (`bob task`)" section), zero matches inside the step-4 `[[policy.action_rules]]` block (lines 1083-1203) of "Deploying the `email-triage` scheduled job".
+- Lines 336-346 document the required pair: a `bash` rule for `bob task*` and a `read` rule for `<skill_install_path>/tasks/SKILL.md`, introduced by "At minimum, admit the skill's own command calls and its `SKILL.md` read at the resolved `skill_install_path`."
+- Lines 1083-1203 (step-4 block) contain `read` rules for `/opt/bob/skills/email-triage/SKILL.md`, `/opt/bob/skills/himalaya/SKILL.md`, `/opt/bob/skills/worklog/SKILL.md`, plus four `references/*.md` glob rules, and a `bash` rule for `bob task*` (added by commit `640507d` / B-047) and `bob worklog*` — but no `read` rule for `/opt/bob/skills/tasks/SKILL.md`.
+- `git show 640507d` (B-047's fix) confirms only the `bob task*` bash rule was added (6 inserted lines), no paired read rule.
+- `git show 528096e -- the-intern/bob-skills/README.md` (B-048's fix) confirms the sibling walkthrough added both the `read` rule for `tasks/SKILL.md` and the `bash` rule for `bob task*` together, giving the expected fix shape.
+- `the-intern/bob-skills/skills/email-triage/SKILL.md` (lines 16-17, 43-60) confirms the skill instructs loading the `tasks` skill and that all of its tool calls, reads included, are gated by the same action-authorization policy.
+- `git diff dev-agent -- the-intern/docs/src/operator-guide/index.md` on the bug branch is empty, confirming the branch reflects the same unfixed content as canonical `dev-agent`.
+Isolated fault: `the-intern/docs/src/operator-guide/index.md`, "Deploying the `email-triage` scheduled job" section, step 4's `[[policy.action_rules]]` TOML block (currently lines 1083-1203) — missing a `read` rule for `/opt/bob/skills/tasks/SKILL.md`.
+Root cause or fault hypothesis: B-047's fix (commit `640507d`) added only the `bash` rule half of the documented rule pair (bash for `bob task*` + read for `tasks/SKILL.md`, per lines 336-346's own worked example) to the step-4 block, omitting the `read` rule half. This left the block internally inconsistent with its own established pattern (every other loaded skill — email-triage, himalaya, worklog — has both a functional rule and a `SKILL.md` read rule in this same block), and inconsistent with the sibling fix in `bob-skills/README.md` (B-048, commit `528096e`) which added both halves together.
+Planned verification:
+- `grep -n 'pattern = ".*tasks/SKILL.md"' the-intern/docs/src/operator-guide/index.md`
+- Expect at least two matches: the existing one in "The task board (`bob task`)" section (~line 345) and a new one in the "Deploying the `email-triage` scheduled job" section's step-4 policy TOML block (landing near the other `read` rules, within lines 1083-1203).
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
