@@ -242,6 +242,12 @@ arg_matchers = [
 [[policy.action_rules]]
 tool = "read"
 arg_matchers = [
+  { field_path = "path", pattern = "/abs/skill-install-path/tasks/SKILL.md" },
+]
+
+[[policy.action_rules]]
+tool = "read"
+arg_matchers = [
   { field_path = "path", pattern = "/abs/skill-install-path/email-triage/references/*.md" },
 ]
 
@@ -334,6 +340,12 @@ tool = "bash"
 arg_matchers = [
   { field_path = "command", pattern = "bob worklog*" },
 ]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "bob task*" },
+]
 ```
 
 **The `worklog` skill's rules now follow the `bob worklog` command.** The
@@ -341,13 +353,14 @@ arg_matchers = [
 the reference reads the `worklog` skill (`T-154`/`T-155`) makes; the reduced
 `email-triage` `SKILL.md` delegates diary mechanics to it. Every other diary
 call now goes through one `bash` rule, `bob worklog*`: the rewritten skill
-runs `bob worklog list` once at the start of a run and `bob worklog append`
-once per item handled, and the command creates `worklog/` and today's file,
-reads the prior day's entries to reconcile still-open items, and stamps each
-entry from its own clock. The seven raw-shell rules that used to admit the
-skill's own `find`/`ls`/`test`/`cat`/`mkdir`/`>>` calls against `worklog/`,
-and the `date +%H:%M*` rule for an entry's `<HH:MM>` header, are all removed
-— `bob worklog` does that work internally. The `bob worklog*` matcher
+calls `bob worklog append` once per item handled — `list` is never called
+on a run's behalf — and the command creates `worklog/` and today's file,
+checks only today's already-written entries for an exact-duplicate repeat
+before writing a new one, and stamps each entry from its own clock. The
+seven raw-shell rules that used to admit the skill's own
+`find`/`ls`/`test`/`cat`/`mkdir`/`>>` calls against `worklog/`, and the
+`date +%H:%M*` rule for an entry's `<HH:MM>` header, are all removed —
+`bob worklog` does that work internally. The `bob worklog*` matcher
 mirrors the `bob task*` rule's shape (prefix-anchored on the subcommand,
 wildcard tail), so it stays stable regardless of the free-text
 `--item`/`--done`/`--left`/`--next` values a call carries. The
@@ -423,17 +436,28 @@ scoped shape at a time, and the successful retry used the narrowed patterns
 above. The deployed package's runtime surface is still broader than "himalaya
 commands": the skill reads `config/email-triage.toml` through `bash`, records
 the day's diary through `bob worklog append` / `bob worklog list`, and uses
-one pipe-shaped escalation send. First-run reconciliation — including the
-cross-day carry-forward T-140 observed as a `cwd`-relative worklog read —
-now runs inside `bob worklog` on every call, so the single `bob worklog*`
-rule above is all the deployed policy needs for the diary; there is no
-separate relative `read` shape to admit.
+one pipe-shaped escalation send. `bob worklog` never reads or writes any
+day's file but the one an invocation names — a day's worklog file holds
+only what that day's runs appended — so the single `bob worklog*` rule
+above is all the deployed policy needs for the diary; there is no separate
+relative `read` shape to admit. `email-triage`'s own continuity (an
+escalation awaiting a reply, an action the S-004 gate blocked) is not a
+`bob worklog` behavior at all: it now runs through the job's own `bob task`
+board instead, which is why the `bob task*` rule noted above (the one the
+`bob worklog*` matcher's shape mirrors) is required for this workflow too,
+not only for `bob task` users generally.
 
 ## Validation outcomes
 
 T-139 established the happy path on the live deployed copy. T-140 then
 validated the remaining continuity and failure-path behaviors against the
-same mailbox and scheduled-job setup.
+same mailbox and scheduled-job setup, under the raw-shell and early
+`bob worklog` reconciliation model in force at the time — the bullets below
+are that era's historical record, not current behavior. Today a day's
+worklog file holds only what that day's runs appended, and `email-triage`'s
+own continuity for an awaiting-reply escalation or an S-004-blocked action
+runs through the job's own `bob task` board instead, never through
+`bob worklog`.
 
 - Escalation: on 2026-08-03, fixture `92` (`Unclear task`) was picked up by
   the live `check-email` run and recorded in
@@ -457,9 +481,11 @@ same mailbox and scheduled-job setup.
   to the carried item instead of assuming the previous run was "yesterday." In
   the resulting `2026-08-03.md` worklog continuation for the same validation
   flow, the item remained open and its follow-up advanced to retrying the
-  escalation send once the command succeeds. The validated allow-rule set now
-  includes the relative `read` matcher required for this cross-day
-  carry-forward path.
+  escalation send once the command succeeds. That era's validated allow-rule
+  set included the relative `read` matcher this reconciliation path needed —
+  a rule the current `bob worklog*` matcher above replaces entirely, since
+  today's `bob worklog` never reads any day's file but the one it is writing
+  to.
 
 ### T-164 — skill install-path model, end to end (2026-08-10)
 

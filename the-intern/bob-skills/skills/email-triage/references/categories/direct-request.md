@@ -44,7 +44,7 @@ just reached by replying instead of filing.
 ## If the reply is blocked
 
 If drafting or sending the reply is blocked, follow the block-handling rule
-`references/escalation.md` already establishes: record the block as an open worklog item
-and do not treat the message as handled. Do not substitute some other action — a blocked
-reply is a hard stop for this message, not a reason to file it, forward it, or do anything
-else instead.
+`references/escalation.md` already establishes: file a `blocked` `bob task` for it and do
+not treat the message as handled. Do not substitute some other action — a blocked reply is a
+hard stop for this message, not a reason to file it, forward it, or do anything else
+instead.

@@ -1,45 +1,52 @@
 ---
-title: bob worklog subcommand — append, list, and automatic first-run 
-  reconciliation
-version: '0.4'
+title: bob worklog subcommand — append, list, and same-day duplicate
+  suppression
+version: '0.5'
 status: approved  # draft | review | approved | superseded
 created: '2026-08-26'
 author: planner
 id: S-015
 ---
 
-# bob worklog subcommand — append, list, and automatic first-run reconciliation
+# bob worklog subcommand — append, list, and same-day duplicate suppression
 
 ## Purpose
 
-The `worklog` skill's entry and reconciliation mechanics are entirely prose
-today: a session must hand-run an exact shell append, and hand-run a
-separate carry-forward procedure on a day's first run, getting both exactly
-right every time. This has already produced two fixed defects on the same
+The `worklog` skill's entry mechanics are entirely prose today: a session
+must hand-run an exact shell append, and hand-run a separate cross-day
+carry-forward procedure on a day's first run, getting both exactly right
+every time. This has already produced two fixed defects on the same
 mechanism — `B-039` (no instruction to look up the real time at all) and its
 successor GitHub #64 (the fix for `B-039` introduced a hand-transcribed
 `<NOW>` placeholder that was itself routinely transcribed wrong) — and two
-currently open ones: #62 (carry-forward has no dedup rule, so a still-open
-item accumulates one extra copy every day it stays open) and #63 (the file
-is append-ordered, not time-ordered, under concurrent scheduled runs, and
-nothing says so). `bob` already has a working precedent for replacing
-exactly this kind of prose-executed-by-an-LLM mechanism with a real command
-— `bob task` (S-014) — so this spec applies the same move to the worklog.
-When this work is done, a session writes and reads worklog entries through a
-`bob worklog` command instead of a raw shell recipe, first-run reconciliation
-happens automatically and correctly on every invocation rather than
-depending on a session getting a multi-step procedure right, and #62 and #63
-are closed as fixed by construction rather than left open in prose.
+currently open ones: #62 (the hand-run carry-forward procedure has no dedup
+rule, so a still-open item accumulates one extra copy every day it stays
+open) and #63 (the file is append-ordered, not time-ordered, under
+concurrent scheduled runs, and nothing says so). `bob` already has a working
+precedent for replacing exactly this kind of prose-executed-by-an-LLM
+mechanism with a real command — `bob task` (S-014) — so this spec applies
+the same move to the worklog. When this work is done, a session writes and
+reads worklog entries through a `bob worklog` command instead of a raw shell
+recipe; a day's file holds exactly what was appended to it that day and
+nothing else, because the carry-forward procedure is retired rather than
+carried into the command; #62 is closed as moot by construction, since
+nothing is ever copied forward and so nothing can accumulate copies; and #63
+is closed as fixed by construction, since a day's entries are presented in
+their own timestamp order rather than file order. Whether a domain item is
+still outstanding across days becomes the calling agent's or skill's
+question, answered with whatever record that caller keeps, never something
+the worklog command decides on the caller's behalf.
 
 ## Exclusions
 
 What this specification explicitly does NOT cover:
 
-- **A standalone `reconcile` subcommand.** Considered during brainstorming
-  and explicitly rejected: reconciliation is triggered unconditionally and
-  internally by both `append` and `list`, with no separate entry point. This
-  was chosen specifically to remove "did I remember to reconcile first" as a
-  failure mode; a standalone command would reintroduce it as an optional
+- **A standalone `reconcile` or de-duplication subcommand.** Considered
+  during brainstorming and explicitly rejected: `append` and `list` are the
+  only entry points, and the same-day duplicate check below happens inside
+  `append` itself rather than as a step a caller invokes. This was chosen
+  specifically to remove "did I remember to run the other command first" as
+  a failure mode; a standalone command would reintroduce it as an optional
   step someone could still forget to run.
 - **Upward directory search for the worklog location, mirroring `bob
   task`'s board resolver.** This is this specification's own decision, not
@@ -59,17 +66,22 @@ What this specification explicitly does NOT cover:
   its own decision, `ADR-015`, accepted at this spec's Gate 1 approval,
   rather than left as an unexplained spec bullet.
 - **Keeping the existing raw-shell append/reconciliation prose as a
-  documented fallback.** Rejected: the mechanics are fully replaced by the
-  command, matching how `bob task` (S-014) replaced its own hand-written
-  prototype outright rather than carrying two descriptions of one mechanism
-  that could drift apart.
-- **Computing "what is still open" at `list`-time without ever writing
-  carried-forward copies to the file.** Considered: it would fix #62 by
-  construction, since nothing would ever be duplicated. Rejected: today's
-  worklog file is the durable record of what was known-open on that
-  specific day; computing this at read time would break that guarantee
-  without also reading backward through prior days on every query — a
-  larger semantic change than requested.
+  documented fallback.** Rejected: the append mechanics are fully replaced
+  by the command and the carry-forward procedure is retired outright, so
+  neither survives as a second, hand-run description — matching how `bob
+  task` (S-014) replaced its own hand-written prototype rather than carrying
+  two descriptions of one mechanism that could drift apart.
+- **Any command-side notion of whether an item is still open, in either
+  direction.** Two shapes were considered and both are rejected: writing
+  carried-forward copies of a prior day's still-open items into today's file
+  on every call, and computing the same set at `list`-time without writing
+  it. Either makes the command the arbiter of a domain question it has no
+  policy for, and the first also lets a day's file fill with entries nobody
+  wrote that day. Whether something is still outstanding belongs to the
+  caller and to whatever record the caller keeps for it — `email-triage`
+  keeps that record on its own `bob task` board (`S-010`), not in the
+  worklog. A caller that wants to see what a previous day recorded reads
+  that day explicitly with `list --date`.
 - **Changes to the `email-triage` skill beyond pointing it at the new
   command.** Its detection, classification, and act-or-escalate logic are
   unrelated to how the diary is written; `S-011` already scoped
@@ -84,12 +96,14 @@ What this specification explicitly does NOT cover:
   second sorting axis is out of scope, mirroring `bob task`'s own exclusion
   of the same idea.
 - **File-locking or an atomic-transaction guard against two truly
-  simultaneous first invocations of the day.** Following `S-014`'s own
+  simultaneous appends of the same entry.** Following `S-014`'s own
   precedent of excluding locking/merge/sync mechanisms under `ADR-008`'s
-  single-operator scope: the idempotency rule below (Design Principles)
-  bounds the exposure to at most one duplicate carried-forward entry in that
-  narrow race window, rather than eliminating the race entirely. That bound
-  is still a strict improvement over #62's current unbounded growth.
+  single-operator scope: the same-day duplicate check below reads today's
+  file and then writes without holding a lock, so two genuinely simultaneous
+  appends of an identical entry can each find no match and each write. The
+  exposure is bounded at one redundant entry in that narrow race window
+  rather than eliminated, which is still a strict improvement over #62's
+  current unbounded growth.
 - **Extending `S-012`'s `tasks/`-style "`--force` never removes or replaces
   anything inside it" guarantee to `worklog/`.** `worklog/` has never carried
   that guarantee and this spec does not regress it, but granting it is a
@@ -116,33 +130,19 @@ What this specification explicitly does NOT cover:
   guarantee `bob task`'s board resolver gives reads (S-014 Design
   Principles: "reading must never invent one"). `append`, being a write, may
   still create `worklog/` and today's file when neither exists.
-- **Ensuring the day is reconciled must never be a step a caller can skip
-  or forget.** Every entry point that touches today's file performs
-  reconciliation first, unconditionally, before doing its own work.
-- **Carrying a still-open item forward must be idempotent by
-  item-identifier, tested by presence, not by a separate marker.** An item
-  is carried forward into today's file if and only if (a) today's file does
-  not already contain an entry for that item-identifier, and (b) in the most
-  recent *prior worklog file that exists* — regardless of whether that file
-  currently shows anything else as open — **that item-identifier's own most
-  recent (last) entry in that file** is open per the Contract's open test
-  below. Condition (b) tests the item's *last* entry in the source file, not
-  merely whether the source file contains any entry for it at all: a file
-  can hold both an earlier open entry and a later closing entry for the same
-  item-identifier (the ordinary within-day closure `S-010` describes), and
-  only the last one reflects that item's true state as of that file.
-  Condition (b) is also deliberately keyed on "the nearest prior file that
-  exists", not "the nearest prior file with open items": filtering on
-  "has open items" at the whole-file level is wrong — a day that closes
-  every item it mentions is real information and must not be skipped past
-  in favor of an older file that never learned of that closure, which would
-  wrongly resurrect a genuinely closed item. This makes repeated
-  reconciliation attempts naturally idempotent — a second attempt finds the
-  entry already present under condition (a) and does nothing — with no "has
-  today been reconciled" flag to keep in sync separately. However many days
-  an item has stayed open, at most one carried-forward copy of it can exist
-  in any single day's file under this rule, outside the narrow
-  concurrent-first-run race excluded above.
+- **A day's file must contain only what was appended to it that day.** No
+  entry may ever appear in a day's file that a caller did not explicitly
+  append on that day, and neither `append` nor `list` may read from, copy
+  from, or write to any day's file other than the one the invocation names.
+  Whether an item is still outstanding across days is the calling agent's or
+  skill's question, answered against whatever record that caller keeps for
+  it, and the command takes no part in it.
+- **Suppressing a redundant same-day repeat must never be a step a caller
+  can skip or forget.** `append` performs the duplicate check below itself,
+  on every call, before writing — it is neither an option a caller passes
+  nor a separate command a caller can omit. The check is scoped strictly to
+  the file being appended to, so it never becomes a reason to open another
+  day's file.
 - **A day's presented order must reflect actual entry time, not physical
   file position.** Concurrent writers make write order an unreliable proxy
   for chronological order; anything that presents a day's entries must sort
@@ -177,10 +177,10 @@ What this specification explicitly does NOT cover:
                            │
                            ▼
               ┌───────────────────────┐
-              │  Reconciliation step  │   runs first, unconditionally:
-              │ (presence-tested,     │   per item, iff today's file holds no
-              │  idempotent)          │   entry for it yet AND the nearest
-              │                       │   prior existing file shows it open
+              │  Same-day duplicate   │   append only, before writing:
+              │  check                │   incoming Done/Left/Next identical to
+              │  (today's file only)  │   this item's most recent entry already
+              │                       │   in today's file → write nothing
               └───────────┬───────────┘
                            │
                            ▼
@@ -191,7 +191,9 @@ What this specification explicitly does NOT cover:
 
         (no admin socket, no bob serve, no service state,
          no upward directory search — strictly <cwd>/worklog/;
-         list fails if worklog/ itself is missing, never invents one)
+         list fails if worklog/ itself is missing, never invents one;
+         no day's file is ever read or written except the one the
+         invocation names — nothing is carried across days)
 
    Skill delivery (existing mechanisms, unchanged):
 
@@ -212,8 +214,8 @@ What this specification explicitly does NOT cover:
 
 | Component | Responsibility | Notes |
 |---|---|---|
-| `bob worklog` subcommands | Parse arguments, reject invalid input before touching the filesystem, render human-readable or JSON output | Consumes the reconciliation step and the entry file store; exposes the `append` and `list` CLI surface |
-| Reconciliation step | Carry forward, into today's file, exactly one entry per item-identifier that is open per the nearest prior *existing* worklog file and absent from today's file | Runs unconditionally at the start of both `append` and `list`; presence-tested per item so repeat runs are idempotent; not independently callable; also reports today's full carried-forward set on every call (see Contract) |
+| `bob worklog` subcommands | Parse arguments, reject invalid input before touching the filesystem, render human-readable or JSON output | Consumes the same-day duplicate check and the entry file store; exposes the `append` and `list` CLI surface |
+| Same-day duplicate check | Compare an incoming entry's `Done`, `Left`, and `Next` against that item-identifier's most recent entry already in today's file, and suppress the write when all three match (see Contract) | Runs inside `append` only, before the write; scoped strictly to the file being appended to; never opens another day's file; not independently callable |
 | Entry file store | Read and write `<cwd>/worklog/<date>.md`; own the entry format (the Contract below); supply the real `HH:MM`/`YYYY-MM-DD` values | Owns the file format; strictly scoped to the invoking working directory; never creates `worklog/` itself on a read |
 | Canonical `worklog` skill, updated | State when and how a session uses `bob worklog`; teach the item-identifier convention | Content lives once in the vendor-neutral skill source (`S-011`); defers to the command for the format, the same way `tasks` already defers to `bob task` |
 | Existing packaging target | Deliver the updated canonical skill | No new packaging mechanism |
@@ -224,9 +226,12 @@ approval** (applied at Gate 1, not deferred):
 
 - `S-011`'s `worklog` skill row and Component 4 currently state the skill
   itself "owns the entire diary discipline: …entry format, creation,
-  first-run detection, reconciliation…" — after this spec that ownership
-  moves to the command, and the skill defers to it, exactly as `S-011`
-  already describes `tasks` deferring to `bob task`. `S-011`'s "Action rules
+  first-run detection, reconciliation…" — after this spec the entry format
+  and the same-day duplicate check belong to the command and the skill
+  defers to it, exactly as `S-011` already describes `tasks` deferring to
+  `bob task`, while first-run detection and cross-day reconciliation stop
+  being anyone's responsibility in this mechanism at all (`CR-013`).
+  `S-011`'s "Action rules
   admitting skill tool calls" section describes worklog rules in terms of
   "directory checks, reads, and appends" and an accepted risk that the rule
   "must be broad enough to cover arbitrary working directories" — after this
@@ -248,31 +253,29 @@ approval** (applied at Gate 1, not deferred):
   the accurate reason the two-set alternative was rejected.
 - `S-010`'s Workflow (the "is this the day's first executed run?" branch),
   Component 4's Interfaces, the Daily-worklog Responsibility row, and the
-  "How an open item closes" paragraph all describe `email-triage` itself
-  performing first-run detection and a backward file walk. After this spec
-  the command performs reconciliation automatically on every call and
-  reports today's carried-forward set in its response (see Contract below);
-  the skill no longer decides "is this my first run" or walks files itself.
-  `S-010`'s Design Principle "the design must reconcile against the most
-  recent worklog **containing open items**, not assume 'yesterday'" and its
-  System Diagram's matching comment use the same "containing open items"
-  phrase this spec's Design Principles correct (a whole-file filter that can
-  wrongly skip a day that closed every item it mentions); both are amended
-  to "the most recent worklog **that exists**" to match.
+  "How an open item closes" paragraph originally described `email-triage`
+  itself performing first-run detection and a backward worklog file walk.
+  Neither the skill nor the command does that now: the command never reads a
+  day's file other than the one an invocation names (Design Principles
+  above), and `S-010` tracks anything left open by an escalation or an
+  `S-004` block as an entry on its own `bob task` board (`S-014`) instead of
+  as an open worklog item. The division is that the worklog records what a
+  run did and the board records what is still outstanding; `S-010`'s
+  continuity Design Principle, System Diagram, Workflow, Component 4, and
+  "How an open item closes" paragraph are amended to that shape (`CR-013`).
 
 ## Components
 
-### Component 1: Reconciliation step
+### Component 1: Same-day duplicate check
 
-**Purpose:** Carry forward, into today's file, exactly one entry per
-item-identifier that the nearest prior *existing* worklog file shows open
-and that today's file does not yet have; report today's full carried-forward
-set to the caller.
-**Estimated size:** Medium — the core logic fixing #62; a presence-tested
-pass per item over the nearest prior existing file.
-**Interfaces:** Exposes an "ensure reconciled, then report today's
-carried-forward set" operation invoked internally by `append` and `list`;
-consumes the entry file store.
+**Purpose:** Before `append` writes, compare the incoming entry's `Done`,
+`Left`, and `Next` against that item-identifier's most recent entry already
+in today's file, and suppress the write when all three are identical.
+**Estimated size:** Small — one comparison against a single already-parsed
+file, with no cross-day logic of any kind.
+**Interfaces:** Exposes a "would this be a redundant repeat of this item's
+last entry today?" decision invoked internally by `append`; consumes the
+entry file store for the day being appended to and for no other day.
 
 ### Component 2: Entry file store
 
@@ -291,15 +294,22 @@ validation, and the CLI's existing text/JSON output convention.
 **Estimated size:** Small — thin argument parsing and dispatch over
 Components 1 and 2, mirroring `bob task`'s CLI layer.
 **Interfaces:** Exposes the CLI surface described under Configuration
-Requirements; consumes the reconciliation step and entry file store.
+Requirements; consumes the same-day duplicate check and the entry file
+store.
 
 ### Component 4: Canonical `worklog` skill, updated
 
-**Purpose:** Replace the raw shell append/reconciliation prose with
-instructions to call `bob worklog append`/`list`, retaining the
-item-identifier and per-item conventions the skill already teaches.
-**Estimated size:** Small — a rewrite of `references/entry-format.md` and
-`references/reconciliation.md`, not new content.
+**Purpose:** Replace the raw shell append and hand-run carry-forward prose
+with instructions to call `bob worklog append`/`list`, retaining the
+item-identifier and per-item conventions the skill already teaches, and
+state plainly that a day's file holds only what that day's runs appended —
+a session that needs to know what an earlier day recorded asks for that day
+explicitly, and a session that needs to track something as still outstanding
+keeps that record elsewhere.
+**Estimated size:** Small — a rewrite of the existing reference content, not
+new content; the reference material describing cross-day reconciliation is
+either retired with the behaviour it described or repurposed to describe
+deliberate prior-day inspection, decided during task breakdown.
 **Interfaces:** Exposes updated skill content through the existing
 vendor-neutral packaging pipeline; consumed unchanged by the existing
 packaging target.
@@ -353,20 +363,17 @@ Session invokes bob worklog append --item ... --done ... --left ... --next ...
   ↓
 Arguments validated locally (all four fields present and non-empty)
   ↓
-Reconciliation step runs unconditionally
-  → find the nearest prior worklog file that exists (regardless of whether
-    it currently shows anything open)
-  → for each item-identifier that file's own last entry shows open:
-    today's file already has an entry for it → skip; otherwise → carry it
-    forward
-  ↓
 worklog/ and today's file created if missing
   ↓
-New entry appended with a real HH:MM from the command's own time lookup
+Same-day duplicate check, against today's file and nothing else
+  → this item-identifier's most recent entry in today's file has identical
+    Done, Left and Next → nothing is written
+  → otherwise (no entry for this item today, or any of the three fields
+    differs) → a new entry is appended with a real HH:MM from the command's
+    own time lookup
   ↓
-Result reported as human-readable text, or JSON when requested —
-  including today's full carried-forward item-identifier set, regardless of
-  which invocation actually performed the carry-forward write
+Result reported as human-readable text, or JSON when requested — stating
+  whether the call wrote an entry or suppressed a redundant repeat
 ```
 
 Reading a day, end to end:
@@ -376,15 +383,14 @@ Session or operator invokes bob worklog list [--date ...]
   ↓
 worklog/ itself missing → fail, naming the directory searched for
   ↓
-Reconciliation step runs unconditionally for today's file
-  (a --date in the past is read as-is, never reconciled retroactively)
+Exactly one day's file is read — today's by default, or the day a --date
+  names — as it physically stands; no other day's file is opened, and
+  nothing is written by a read
   ↓
 Entries read back and sorted by HH:MM (ties broken by file order), not raw
 file position
   ↓
-Result reported as human-readable text, or JSON when requested —
-  including today's full carried-forward item-identifier set, regardless of
-  which invocation actually performed the carry-forward write
+Result reported as human-readable text, or JSON when requested
 ```
 
 Reaching a session, and keeping the skill accurate:
@@ -439,10 +445,10 @@ guarantee `S-014` states for `bob task`. `S-012` already creates
 convenience, not a dependency: `append` creates `worklog/` itself if it is
 missing, in any directory.
 
-### Entry format and reconciliation (**Contract**)
+### Entry format and same-day duplicate suppression (**Contract**)
 
-These are the fixed properties every worklog entry and every reconciliation
-pass has. They are the contract between the command and anything that reads
+These are the fixed properties every worklog entry and every `append` call
+has. They are the contract between the command and anything that reads
 a worklog, including a human, `email-triage`, or any future consuming
 skill; the command is what enforces them.
 
@@ -450,52 +456,36 @@ skill; the command is what enforces them.
   <HH:MM> — <item-identifier>`, a blank line, then `- Done: …`, `- Left: …`,
   `- Next: …` bullets, each exactly as `worklog/references/entry-format.md`
   already documents.
-- **An item is still open** (this test is applied against whichever single
-  worklog file is being examined — today's file, or a prior file being
-  checked as a reconciliation source) if and only if that item-identifier's
-  most recent entry **in that file** has a `Left` field not equivalent to
-  `nothing`. This sentinel is this
-  specification's own definition — inherited from the shipped
-  `entry-format.md`'s existing prose, not stated as a literal comparison
-  rule anywhere today — made precise here because the command must execute
-  it exactly: `Left` is compared to `nothing` case-insensitively, after
-  trimming surrounding whitespace and at most one trailing period, so
-  entries already on disk written as `nothing`, `Nothing`, or `Nothing.`
-  under today's non-normative prose all classify as closed. `S-010`
-  separately requires that open-ness live in the worklog rather than in
-  mailbox flag state; this sentinel is how the worklog itself expresses
-  that, not a rule `S-010` states directly.
-- **A carried-forward entry** copies its source entry's `Left` and `Next`
-  fields verbatim — the command has no domain policy to re-author `Next`
-  the way a skill previously could by hand — with a `Done` field stating
-  that the item was carried forward and naming the source file. When the
-  source file holds more than one entry for the same item-identifier, the
-  chronologically last one is the source.
-- **A caller must be able to learn today's full carried-forward set,
-  regardless of which invocation actually performed the carry-forward
-  write.** Because reconciliation is presence-tested (Design Principles),
-  only the invocation that finds an item's entry still absent actually
-  writes it; every other invocation that same day is a no-op for that item.
-  If `append`/`list` reported only what *that call* wrote, a caller that is
-  not the first to touch the file that day would see an empty set even
-  though the item is sitting in today's file, carried forward earlier by
-  someone else — an operator's `bob worklog list`, or an interactive `bob
-  chat` session sharing the same cwd (a real scenario `ADR-014`'s
-  Alternative C records, not a hypothetical). So both `append` and `list`,
-  in text and JSON output, report every item-identifier whose most recent
-  entry in **today's file** is both a carried-forward entry (identifiable by
-  construction: its `Done` field states it was carried forward) and still
-  open per the open test above — so an item closed later the same day drops
-  out of the reported set once its closing entry is written, and the report
-  reflects today's current state regardless of whether this call's own
-  reconciliation pass wrote the carry-forward entry or found it already
-  present. This is
-  required because `S-011` (`email-triage` "retains retry of a
-  carried-forward blocked action") and `S-010` (reconciling "against it,
-  including any pending manager escalation") both depend on a consuming
-  skill discovering today's carried-forward items on whichever call it
-  happens to make first each day, not only on a call that coincides with
-  the moment reconciliation actually wrote them.
+- **A day's file contains exactly the entries appended to it on that day.**
+  No entry is ever written to a day's file that a caller did not explicitly
+  append that day, and neither subcommand reads, copies from, or writes to
+  any day's file other than the one the invocation names. Reading an earlier
+  day is something a caller asks for explicitly with `list --date`, never
+  something the command does on a caller's behalf, and such a read is
+  reported as it physically stands. Nothing in this command classifies an
+  item as open or closed: a consuming skill that needs to know what is still
+  outstanding keeps that record itself — `email-triage` keeps it on its own
+  `bob task` board (`S-010`).
+- **A redundant same-day repeat is suppressed, by exact match, within one
+  day's file only.** When `append` is called for an item-identifier that
+  already has at least one entry in that day's file, the incoming `Done`,
+  `Left`, and `Next` values are compared against that item-identifier's
+  chronologically last entry in that same file. If all three match, no entry
+  is written — the entry already present records exactly that state, so a
+  second copy would add nothing. If any one of the three differs, the entry
+  is written as its own new entry, however similar it is to an earlier one
+  and however late in the day it arrives; `Left` and `Next` being unchanged
+  does not suppress a changed `Done`, and the same is true of any other
+  single differing field. The comparison is against that one most recent
+  entry only — an earlier entry the same day that happens to match is not
+  consulted — and it never opens another day's file, so an identical entry
+  appended on a later day is always written. Matching is literal on the
+  field values as the command would write them, after the same trimming of
+  surrounding whitespace it applies before writing a field, with no
+  case-folding and no other normalisation. A caller must be able to tell
+  from the response, in both the text and JSON forms, whether the call wrote
+  an entry or suppressed a redundant repeat, so that a suppressed write is
+  never indistinguishable from a failed one.
 
 ### Action rules admitting worklog tool calls
 
@@ -537,8 +527,8 @@ skill; the command is what enforces them.
 - **Where it lives:** the existing global JSON flag on the CLI, consistent
   with `bob task`.
 - **Constraints:** the JSON form carries the same facts as the text form
-  for the same invocation, including the carried-forward item-identifiers
-  the Contract above requires.
+  for the same invocation, including whether an `append` wrote an entry or
+  suppressed a redundant repeat, as the Contract above requires.
 - **Missing-value behaviour:** human-readable text.
 
 ### Filesystem protection
@@ -559,9 +549,9 @@ skill; the command is what enforces them.
 
 | Phase | What | Depends On |
 |---|---|---|
-| 1 | Entry file store: an entry can be written to and read back from `<cwd>/worklog/<date>.md` per the Contract, with correct permissions and with `list` refusing to invent a missing `worklog/`, and with no reconciliation logic yet. | Nothing |
-| 2 | Reconciliation step: presence-tested, idempotent, per-item carry-forward from the nearest prior existing file, reporting today's full carried-forward set regardless of which call wrote it. | Phase 1 |
-| 3 | The `bob worklog append` and `bob worklog list` CLI surface, with text and JSON output (including carried-forward reporting) and local validation of invalid input. | Phases 1, 2 |
+| 1 | Entry file store: an entry can be written to and read back from `<cwd>/worklog/<date>.md` per the Contract, with correct permissions and with `list` refusing to invent a missing `worklog/`, and with no duplicate-suppression logic yet. | Nothing |
+| 2 | Same-day duplicate suppression inside `append`: an exact repeat of an item-identifier's most recent entry in that day's file writes nothing, any differing `Done`, `Left`, or `Next` writes a new entry, and no file for another day is opened by either subcommand. | Phase 1 |
+| 3 | The `bob worklog append` and `bob worklog list` CLI surface, with text and JSON output (including whether an `append` wrote or suppressed) and local validation of invalid input. | Phases 1, 2 |
 | 4 | The canonical `worklog` skill rewritten to call the command instead of prescribing the raw shell recipe; delivered to the pi package by the existing packaging script. | Phase 3 |
 | 5 | Operator-facing documentation updated: the `bob-companion` plugin's `bob-cli` skill, a verification that the self-deriving CLI-reference preprocessor emits a `bob worklog` page, and the worklog action-rule migration across both hand-written listings (the operator guide and `bob-skills/README.md`); #62 and #63 closed, referencing this work. | Phase 3; the documentation half also depends on Phase 4 |
 
@@ -570,3 +560,4 @@ skill; the command is what enforces them.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-08-30 | Component 5 corrected in three ways while breaking S-015 into tasks: (a) the CLI-reference preprocessor no longer has a hardcoded subcommand list (removed by `B-044`) — it derives the list from `bob --help`, so the work is to verify a `bob worklog` page is generated, not to edit a list; (b) the `bob-companion` `bob-setup` skill is not an affected surface — its only worklog mentions are `bob init` scaffolding, which S-015 preserves; (c) the worklog action-rule listing is duplicated in `bob-skills/README.md` as well as the operator guide, and the operator guide has a later paragraph telling operators to keep the relative `worklog/*.md` matcher — both are inside Component 5's stated Purpose ("every hand-written account … of the worklog's action rules") and are now named explicitly. No requirement changed; the delivered behaviour is identical. | Found by the Gate 2 spec-breakdown review of the S-015 task plan. | T-197, T-198 |
+| 2026-09-17 | Cross-day reconciliation is removed from this specification entirely, and a narrower same-day behaviour replaces it. Gone: the carry-forward idempotency and "ensure the day is reconciled" Design Principles, the reconciliation box in the System Diagram, the reconciliation Responsibility row and Component 1, the cross-day steps in both Workflow blocks, and three Contract clauses (the "an item is still open" test, the carried-forward entry shape, and the carried-forward-set reporting requirement). Added: a Design Principle that a day's file holds only what was appended to it that day, a same-day duplicate check as Component 1, and a Contract clause defining exact-match suppression — an `append` whose `Done`, `Left`, and `Next` all match that item-identifier's most recent entry in the same day's file writes nothing, any differing field writes a new entry, and the caller can tell from the response which happened. The Purpose, Exclusions, forced-amendment notes, Output form, and Phases 1–3 follow. The spec title becomes "…and same-day duplicate suppression"; the filename keeps its original slug so existing references stay valid. | CR-013. A day's worklog is meant to record what that day's runs did, not to be silently mutated into a rolling tracker of what is still outstanding; that question moves to whatever record a consuming skill keeps (`email-triage` keeps it on its own `bob task` board, per the matching S-010 amendment). Same-day duplicate suppression is new behaviour introduced alongside the removal, not a retained part of reconciliation. | Tasks TBD (the S-015 breakdown is revised against this amendment) |

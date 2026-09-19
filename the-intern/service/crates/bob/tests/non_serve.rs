@@ -191,16 +191,18 @@ fn task_show_path_succeeds_without_an_admin_socket_and_finds_the_ancestor_board(
     );
 }
 
-// ── bob worklog: end-to-end coverage with no running service (T-194) ──────────
+// ── bob worklog: end-to-end coverage with no running service (T-204) ──────────
 //
 // These cases drive the real `bob` binary across separate process invocations
 // that share a working directory, covering the cross-invocation guarantees
 // S-015 makes that in-crate unit tests cannot: that `bob worklog` is
 // filesystem-only (no admin socket, no `bob serve`), that a read refuses to
-// invent a missing `worklog/`, and that carried-forward reporting and
-// carry-forward idempotency hold when one process writes what another reads.
+// invent a missing `worklog/`, and that same-day duplicate suppression
+// (S-015 as amended by `CR-013`) holds when one process writes what another
+// reads. Cross-day carry-forward was removed by `CR-013`; a prior day's file
+// must never surface in a later day's output (AC-3 below).
 
-/// AC-1: WHEN `bob worklog append` runs in a fresh temp directory with no
+/// AC-5: WHEN `bob worklog append` runs in a fresh temp directory with no
 /// `worklog/` and no admin socket THE SYSTEM SHALL exit 0 and create
 /// `<dir>/worklog/<today>.md` containing the entry.
 #[test]
@@ -268,8 +270,11 @@ fn worklog_append_creates_todays_file_without_a_worklog_dir_or_admin_socket() {
     );
 }
 
-/// AC-2: WHEN `bob worklog list` runs in the directory a prior `bob worklog
-/// append` wrote to THE SYSTEM SHALL exit 0 and print the entry just written.
+/// WHEN `bob worklog list` runs in the directory a prior `bob worklog
+/// append` wrote to THE SYSTEM SHALL exit 0 and print the entry just
+/// written. (Supporting coverage for the same-day duplicate-suppression ACs
+/// below, which each rely on this read-back working — not itself a
+/// numbered AC.)
 #[test]
 fn worklog_list_reads_back_an_entry_a_prior_invocation_appended() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -332,7 +337,7 @@ fn worklog_list_reads_back_an_entry_a_prior_invocation_appended() {
     );
 }
 
-/// AC-3: IF `bob worklog list` runs in a temp directory that has no `worklog/`
+/// AC-4: IF `bob worklog list` runs in a temp directory that has no `worklog/`
 /// THEN THE SYSTEM SHALL exit non-zero and name the `worklog/` path it
 /// expected.
 #[test]
@@ -368,11 +373,156 @@ fn worklog_list_exits_non_zero_and_names_the_missing_worklog_directory() {
     );
 }
 
-/// AC-4: WHEN a prior-day worklog file with an open item exists and `bob
-/// worklog list` runs for a later day THE SYSTEM SHALL show a carried-forward
-/// entry for that item and report it in the carried-forward set.
+/// AC-1: WHEN `bob worklog append` is invoked twice for the same item the
+/// same day with identical `--done`/`--left`/`--next` values THE SYSTEM
+/// SHALL leave exactly one entry for that item-identifier in today's file,
+/// and the second invocation's output shall report the write as suppressed.
 #[test]
-fn worklog_list_carries_a_prior_day_open_item_forward_and_reports_it() {
+fn worklog_append_twice_the_same_day_with_identical_fields_suppresses_the_second_write() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let state_home = temp.path().join("state");
+    let home_dir = temp.path().join("home");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let append_args = [
+        "worklog",
+        "append",
+        "--item",
+        "vendor-invoice",
+        "--done",
+        "Chased the vendor for the missing PDF.",
+        "--left",
+        "awaiting the corrected invoice",
+        "--next",
+        "closes when the corrected invoice arrives",
+    ];
+
+    let first = bob_command_with_temp_state(&state_home, &home_dir)
+        .current_dir(&workspace)
+        .args(append_args)
+        .output()
+        .expect("bob binary to run");
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "first append must succeed; stderr: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_stdout = String::from_utf8(first.stdout).expect("utf8 stdout");
+    let day_file = parse_recorded_path(&first_stdout);
+
+    let second = bob_command_with_temp_state(&state_home, &home_dir)
+        .current_dir(&workspace)
+        .args(append_args)
+        .output()
+        .expect("bob binary to run");
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "a suppressed duplicate must still exit 0; stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_stdout = String::from_utf8(second.stdout).expect("utf8 stdout");
+    assert!(
+        second_stdout.contains("suppressed duplicate worklog entry: vendor-invoice"),
+        "the second, identical-fields invocation must report the write as suppressed: {second_stdout}"
+    );
+    assert!(
+        !second_stdout.contains("recorded worklog entry:"),
+        "a suppressed call must not also read as a successful write: {second_stdout}"
+    );
+
+    let content = std::fs::read_to_string(&day_file).expect("today's worklog file");
+    assert_eq!(
+        content.matches("\u{2014} vendor-invoice").count(),
+        1,
+        "exactly one entry for the item must remain after the identical-fields repeat: {content}"
+    );
+}
+
+/// AC-2: WHEN `bob worklog append` is invoked twice for the same item the
+/// same day with a different `--done` value (holding `--left`/`--next`
+/// fixed) THE SYSTEM SHALL leave two entries for that item-identifier in
+/// today's file.
+#[test]
+fn worklog_append_twice_the_same_day_with_a_different_done_value_keeps_both_entries() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let state_home = temp.path().join("state");
+    let home_dir = temp.path().join("home");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+
+    let first = bob_command_with_temp_state(&state_home, &home_dir)
+        .current_dir(&workspace)
+        .args([
+            "worklog",
+            "append",
+            "--item",
+            "vendor-invoice",
+            "--done",
+            "Chased the vendor for the missing PDF.",
+            "--left",
+            "awaiting the corrected invoice",
+            "--next",
+            "closes when the corrected invoice arrives",
+        ])
+        .output()
+        .expect("bob binary to run");
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "first append must succeed; stderr: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_stdout = String::from_utf8(first.stdout).expect("utf8 stdout");
+    let day_file = parse_recorded_path(&first_stdout);
+
+    let second = bob_command_with_temp_state(&state_home, &home_dir)
+        .current_dir(&workspace)
+        .args([
+            "worklog",
+            "append",
+            "--item",
+            "vendor-invoice",
+            "--done",
+            "Received the corrected invoice and closed it out.",
+            "--left",
+            "awaiting the corrected invoice",
+            "--next",
+            "closes when the corrected invoice arrives",
+        ])
+        .output()
+        .expect("bob binary to run");
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "second append must succeed; stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_stdout = String::from_utf8(second.stdout).expect("utf8 stdout");
+    assert!(
+        second_stdout.contains("recorded worklog entry: vendor-invoice"),
+        "a differing --done value must not be suppressed as a duplicate: {second_stdout}"
+    );
+
+    let content = std::fs::read_to_string(&day_file).expect("today's worklog file");
+    assert_eq!(
+        content.matches("\u{2014} vendor-invoice").count(),
+        2,
+        "a differing --done value must leave two entries for the item: {content}"
+    );
+    assert!(
+        content.contains("- Done: Chased the vendor for the missing PDF.")
+            && content.contains("- Done: Received the corrected invoice and closed it out."),
+        "both done values must be present in today's file: {content}"
+    );
+}
+
+/// AC-3: IF a prior-day worklog file exists with an open item THEN `bob
+/// worklog list` for a later day SHALL render only that later day's own
+/// file and SHALL NOT show the prior day's item anywhere in its output.
+#[test]
+fn worklog_list_does_not_show_a_prior_days_item_for_a_later_day() {
     let temp = tempfile::tempdir().expect("temp dir");
     let state_home = temp.path().join("state");
     let home_dir = temp.path().join("home");
@@ -389,101 +539,21 @@ fn worklog_list_carries_a_prior_day_open_item_forward_and_reports_it() {
     assert_eq!(
         output.status.code(),
         Some(0),
-        "bob worklog list must succeed; stderr: {}",
+        "bob worklog list must succeed even though only a prior day's file exists; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(
-        stdout.contains("- Done: Carried forward from 2000-01-01.md"),
-        "list must render a carried-forward entry sourced from the prior-day file: {stdout}"
+        !stdout.contains("vendor-invoice"),
+        "a later day's list must not show a prior day's item anywhere in its output: {stdout}"
     );
     assert!(
-        stdout.contains("vendor-invoice"),
-        "the carried-forward entry must name the open item: {stdout}"
+        !stdout.to_lowercase().contains("carried forward"),
+        "list output must not mention carried-forward at all: {stdout}"
     );
     assert!(
-        stdout.contains("carried forward: vendor-invoice"),
-        "list must report the item in today's carried-forward set: {stdout}"
-    );
-}
-
-/// AC-5: WHEN `bob worklog append` is invoked twice for the same day after a
-/// carry-forward THE SYSTEM SHALL leave exactly one carried-forward entry for
-/// that item in today's file.
-#[test]
-fn worklog_append_twice_the_same_day_keeps_exactly_one_carried_forward_entry() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let state_home = temp.path().join("state");
-    let home_dir = temp.path().join("home");
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(&workspace).expect("workspace");
-    write_prior_day_open_item(&workspace, "2000-01-01", "vendor-invoice");
-
-    let first = bob_command_with_temp_state(&state_home, &home_dir)
-        .current_dir(&workspace)
-        .args([
-            "worklog",
-            "append",
-            "--item",
-            "morning-standup",
-            "--done",
-            "Reviewed the overnight alerts.",
-            "--left",
-            "nothing",
-            "--next",
-            "nothing further",
-        ])
-        .output()
-        .expect("bob binary to run");
-    assert_eq!(
-        first.status.code(),
-        Some(0),
-        "first append must succeed; stderr: {}",
-        String::from_utf8_lossy(&first.stderr)
-    );
-
-    let second = bob_command_with_temp_state(&state_home, &home_dir)
-        .current_dir(&workspace)
-        .args([
-            "worklog",
-            "append",
-            "--item",
-            "afternoon-review",
-            "--done",
-            "Walked the release checklist.",
-            "--left",
-            "nothing",
-            "--next",
-            "nothing further",
-        ])
-        .output()
-        .expect("bob binary to run");
-    assert_eq!(
-        second.status.code(),
-        Some(0),
-        "second append must succeed; stderr: {}",
-        String::from_utf8_lossy(&second.stderr)
-    );
-
-    let first_stdout = String::from_utf8(first.stdout).expect("utf8 stdout");
-    let day_file = parse_recorded_path(&first_stdout);
-    let content = std::fs::read_to_string(&day_file).expect("today's worklog file");
-
-    assert_eq!(
-        content
-            .matches("Carried forward from 2000-01-01.md")
-            .count(),
-        1,
-        "a second same-day append must not add a second carried-forward copy: {content}"
-    );
-    assert_eq!(
-        content.matches("\u{2014} vendor-invoice").count(),
-        1,
-        "exactly one carried-forward entry header for the item must remain: {content}"
-    );
-    assert!(
-        content.contains("morning-standup") && content.contains("afternoon-review"),
-        "both same-day appends must still be recorded: {content}"
+        stdout.contains("(no entries)"),
+        "a later day with no entries of its own must render as empty: {stdout}"
     );
 }
 
@@ -529,9 +599,11 @@ fn is_iso_dated_markdown_name(path: &Path) -> bool {
 /// Hand-write a prior-day worklog file `<dir>/worklog/<date>.md` holding one
 /// still-open item, in the S-015 Contract shape: a `## HH:MM — <item>` header,
 /// a blank line, then `- Done:` / `- Left:` / `- Next:` bullets with `- Left:`
-/// set to something other than `nothing`, so the item classifies as open.
-/// This is the nearest existing prior file, so its open item carries forward
-/// into today's file on the next `bob worklog` invocation.
+/// set to something other than `nothing`. Used to set up a scenario where a
+/// prior day's file exists on disk so a later day's `bob worklog list` can be
+/// checked to still show only its own day — `S-015` as amended by `CR-013`
+/// removed cross-day carry-forward, so this item must never surface in a
+/// later day's output.
 fn write_prior_day_open_item(working_dir: &Path, date: &str, item: &str) {
     let worklog_dir = working_dir.join("worklog");
     std::fs::create_dir_all(&worklog_dir).expect("create prior-day worklog dir");

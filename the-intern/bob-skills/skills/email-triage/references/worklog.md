@@ -1,21 +1,27 @@
 # Worklog — Email-Triage Specifics
 
 This skill delegates the diary mechanics — where the worklog lives, how
-today's file is created, the per-item entry format, and how still-open
-items are carried forward — to the `bob worklog` command, with the
-canonical `worklog` skill for when a run journals and reads that
-continuity. `bob worklog` reconciles on every call: `bob worklog list` at
-the start of a run carries every still-open item forward from the most
-recent prior worklog file that exists and reports today's carried-forward
-set. Load the `worklog` skill for those mechanics; do not re-derive or
-restate them here. This file covers only what is specific to email triage.
+today's file is created, and the per-item entry format — to the
+`bob worklog` command, with the canonical `worklog` skill for when a run
+journals and reads that day's entries back. `bob worklog append` writes
+exactly the entry it is given into today's file, stamped with the current
+time, and suppresses only an exact-match repeat of that item-identifier's
+most recent entry already in today's file; it never reads or writes any
+other day's file, and it never decides on its own whether an item is still
+outstanding. Load the `worklog` skill for those mechanics; do not
+re-derive or restate them here. This file covers only what is specific to
+email triage: the item-identifier convention, and how this skill uses
+`bob task` (the `tasks` skill) to track anything a run could not finish.
 
 ## Item identifier
 
 Each worklog entry's `<item-identifier>` (per the `worklog` skill's entry
-format) is this message's `<subject> (from <sender>)`.
+format) is this message's `<subject> (from <sender>)`. Use the same
+identifier when naming the message inside a `bob task` filed for it, so a
+reader can tell at a glance which board entry and which diary entries
+describe the same message.
 
-## Open items live in the worklog only, never in mailbox flag state
+## Open items live on the task board, never in mailbox flag state or in the worklog
 
 Classifying a message requires reading it, and reading a message sets its
 `\Seen` flag as a side effect regardless of what the classification decides
@@ -25,34 +31,47 @@ cannot be used to tell "still needs attention" apart from "fully handled":
 once read, a message never reappears as unseen on a later tick no matter how
 the run left it.
 
-Because of this, an escalated or blocked message is carried forward as an
-open item through the worklog **only** — its `Left` field staying anything
-other than "nothing" is what marks it open. Never infer that a message
-still needs attention from its `Seen`/unseen state, and never rely on
-toggling `Seen` back off as a way to mark something open; the worklog entry
-is the sole record.
+The worklog cannot fill that role either: `bob worklog` records only what a
+run explicitly appended on the day it ran, and never carries anything into
+another day's file. Because of this, an escalated or blocked message is
+tracked as an open item exclusively through a `bob task` filed for it —
+status `blocked` for an action the action-authorization gate refused,
+`todo` for an escalation still awaiting a manager's reply (see `SKILL.md`
+step 3). Never infer that a message still needs attention from its
+`Seen`/unseen state, and never rely on toggling `Seen` back off as a way to
+mark something open; the filed task is the sole record of what is still
+outstanding, and the worklog is the record of what each run did about it.
 
 That applies equally to a blocked escalation send. Once the message has been
 read, it may already be `Seen`, but the open blocked-escalation item still
-lives only in the worklog entry. The entry must not be rewritten as a
-successful escalation just because the intended action was to escalate.
+lives only in the `bob task` filed for it. That task must not be closed, and
+the message's worklog entry must not be rewritten, as if the intended
+escalation had actually gone out.
 
 ## How an open item closes, for email triage
 
 Neither the `worklog` skill nor `bob worklog` owns any closing condition of
-its own — the command only carries still-open items forward on every run.
-For email triage, an open item has exactly two causes, and each closes
-differently:
+its own, and `bob task` does not decide on a run's behalf when an item it
+holds is resolved — a consuming skill supplies that domain judgment and
+moves the task itself. For email triage, an open item has exactly two
+causes, and each closes differently:
 
-- **Escalation.** Closes when the manager's reply arrives — see
+- **Escalation (`todo`).** Closes when the manager's reply arrives — see
   `references/escalation.md`'s "No synchronous reply is expected" section.
   It arrives as ordinary unseen mail and re-enters triage like any other
-  message; nothing about the original entry auto-resolves it.
-- **Denied by the action-authorization gate.** Closes once an admitting
-  allow rule is added to bob's action ruleset. The carried-forward set
-  `bob worklog list` reports at the start of a run is the point at which a
-  carried-forward blocked action is retried.
+  message on some later run (`SKILL.md` step 2); handling it (`SKILL.md`
+  step 3) is what resolves the item.
+- **Blocked by the action-authorization gate (`blocked`).** Closes once an
+  admitting allow rule is added to bob's action ruleset and the retried
+  action succeeds. `SKILL.md` step 1 is the point at which a still-blocked
+  action is retried on every run.
 
-There is no automatic expiry. An item stays open, carried forward day after
-day by `bob worklog` on every run, until whichever condition above
-genuinely closes it.
+Either way, the run that resolves the item moves its task to `done` via
+`bob task status` and names that task's identifier in the worklog entry it
+writes for the message that closed it (`SKILL.md` step 1 for a successful
+retry, step 4 for a manager's reply) — the worklog records that the item
+closed and how; the task board is what stopped tracking it as outstanding.
+A retry that is still refused, or an escalation still unanswered, leaves
+its task open, to be listed and retried again the next time `SKILL.md`
+step 1 runs. There is no automatic expiry: an item stays open only for as
+long as its task does.

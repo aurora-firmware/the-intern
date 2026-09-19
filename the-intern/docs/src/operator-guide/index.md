@@ -1102,6 +1102,12 @@ the package as described in
    [[policy.action_rules]]
    tool = "read"
    arg_matchers = [
+     { field_path = "path", pattern = "/opt/bob/skills/tasks/SKILL.md" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "read"
+   arg_matchers = [
      { field_path = "path", pattern = "/opt/bob/skills/email-triage/references/*.md" },
    ]
 
@@ -1192,6 +1198,12 @@ the package as described in
    [[policy.action_rules]]
    tool = "bash"
    arg_matchers = [
+     { field_path = "command", pattern = "bob task*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
      { field_path = "command", pattern = "bob worklog*" },
    ]
    ```
@@ -1203,10 +1215,11 @@ the package as described in
    `email-triage` `SKILL.md` delegates diary mechanics to it (S-011
    Responsibility Separation). Everything else the diary needs now runs
    through a single `bash` rule, `bob worklog*`. The rewritten skill calls
-   `bob worklog list` once at the start of a run and `bob worklog append`
-   once per item handled; the command itself creates `worklog/` and today's
-   file, reads the prior day's entries to reconcile still-open items, and
-   stamps each entry from its own clock. The skill no longer runs `find`,
+   `bob worklog append` once per item handled — `list` is never called on a
+   run's behalf; the command itself creates `worklog/` and today's
+   file, checks only today's already-written entries for an exact-duplicate
+   repeat before writing a new one, and stamps each entry from its own
+   clock. The skill no longer runs `find`,
    `ls`, `test`, `cat`, `mkdir`, or a `>>` append against `worklog/`, and no
    longer calls `date` for an entry's `<HH:MM>` header, so the seven
    raw-shell rules that used to admit those calls are removed. The
@@ -1327,12 +1340,14 @@ the package as described in
    ls "$WORKSPACE/worklog"
    ```
 
-   Cross-day continuity — carrying a still-open item forward from the most
-   recent prior day — now runs inside `bob worklog` itself: every
-   `bob worklog list` and `bob worklog append` call reconciles today's file
-   before it returns, so the `bob worklog*` `bash` rule above is the only
-   rule this path needs. There is no separate worklog `read` rule to keep in
-   place.
+   Cross-day continuity — a still-open item surviving from a prior day — is
+   not something `bob worklog` provides: `bob worklog` never reads or writes
+   any day's file but the one an invocation names, so a day's file holds
+   only what that day's runs appended. `email-triage`'s own continuity (an
+   escalation awaiting a reply, an action the S-004 gate blocked) now lives
+   on the job's task board instead, which is why the `bob task*` rule
+   documented in [The task board (`bob task`)](#the-task-board-bob-task) is
+   required for this workflow too, not only for `bob task` users generally.
 
 ---
 

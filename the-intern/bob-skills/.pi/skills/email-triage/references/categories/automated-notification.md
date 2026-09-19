@@ -27,11 +27,12 @@ human reviewing the day's worklog notices it — this skill does not itself inve
 act on the failure; that stays out of this skill's per-category business logic.
 
 This is a note for the operator's own attention, not an open item under
-`references/worklog.md`'s reconciliation model: it does not close via a manager reply or a
-retried call previously denied by the action-authorization gate, the way that model's two
-defined open-item causes do, so `bob worklog` does not carry it forward the way it carries
-an escalation or a block. The message itself is still fully handled by filing it — the flag
-exists only so the failure does not go unnoticed once the message leaves `INBOX`.
+`references/worklog.md`'s worklog/task-board model: unlike that model's two defined
+open-item causes — an escalation awaiting a manager's reply, or an action the
+action-authorization gate blocked — no `bob task` is filed for it, so nothing tracks it as
+outstanding once this entry is appended. The message itself is still fully handled by filing
+it — the flag exists only so the failure does not go unnoticed once the message leaves
+`INBOX`.
 
 ## Worklog entry
 
@@ -44,6 +45,6 @@ distinct from the entry's own "nothing left" filing outcome.
 ## If the move is blocked
 
 If the move is blocked, follow the block-handling rule `references/escalation.md` already
-establishes: record the block as an open worklog item and do not treat the message as
-handled. Do not substitute some other action — a blocked filing is a hard stop for this
-message, not a reason to try replying, forwarding, or anything else instead.
+establishes: file a `blocked` `bob task` for it and do not treat the message as handled. Do
+not substitute some other action — a blocked filing is a hard stop for this message, not a
+reason to try replying, forwarding, or anything else instead.

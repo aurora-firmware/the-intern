@@ -1,7 +1,7 @@
 ---
 title: 'Email Skills for pi-agent: Himalaya CLI Reference and Classification-Driven
   Triage'
-version: '0.2'
+version: '0.3'
 status: approved  # draft | review | approved | superseded
 created: '2026-08-01'
 author: planner
@@ -58,6 +58,13 @@ What this specification explicitly does NOT cover:
 - **Exhaustive per-category business logic.** The starter taxonomy and its
   reference workflows are an initial, adjustable sketch, not committed final
   policy for every kind of email a user might receive.
+- **Any change to the task-board mechanism itself.** This spec requires
+  `email-triage` to keep its open items on a `bob task` board (S-014) and to
+  name that board explicitly, but it adds no board behaviour, no new status,
+  and no carry-forward semantics of its own — it is one consuming skill
+  choosing an existing tool, which is precisely the independence S-014's own
+  Exclusion preserves. Extending `bob task` to model "retry this on a
+  schedule" was not requested and is not covered here.
 - **Read-only scope.** A read-only "detect and summarize only" version was
   considered and rejected; this skill composes, sends, replies, and
   organizes mail, not just reports on it.
@@ -73,8 +80,10 @@ What this specification explicitly does NOT cover:
   `report.submit` (S-005) was evaluated directly: it is a structured record
   (submitting tool/action name, outcome status, optional session id, optional
   human-readable summary) that explicitly excludes arbitrary tool-defined
-  metadata, so it cannot hold a real day-by-day working record. This spec
-  uses a local diary for that purpose and makes no `report.submit` calls.
+  metadata, so it cannot hold a real day-by-day working record, nor a
+  description of an unfinished item complete enough to retry cold. This spec
+  uses a local diary and the job's own task board for those purposes and
+  makes no `report.submit` calls.
   This is additive, not a loss of visibility: bob already records each
   scheduled firing as an `event` audit record carrying the resolved working
   directory (S-005, amended 2026-07-05), and every himalaya `tool_call` this
@@ -97,8 +106,9 @@ What this specification explicitly does NOT cover:
   `\Seen` regardless of outcome. The design must not introduce its own
   last-seen tracking file for detecting new mail, and must not rely on
   `\Seen` alone to represent "still needs attention": an escalated or
-  blocked message is tracked as open exclusively through the worklog, not
-  through its mailbox flag state.
+  blocked message is tracked as open exclusively through a task on the job's
+  own `bob task` board (S-014), not through its mailbox flag state and not
+  through the worklog, which records only what each run actually did.
 - **Autonomy is gated on classification confidence for the specific message,
   not on the action's reversibility or a static allowlist.** Whether the
   skill acts or escalates must be determined per-message by how confident the
@@ -108,21 +118,26 @@ What this specification explicitly does NOT cover:
   (ADR-004), "escalate" must mean producing something a human can act on
   later (an email to a configured recipient), not pausing for a synchronous
   reply within the same run. If that escalation email itself is blocked by
-  the S-004 action gate, the block must be recorded as an open item, and
-  must never be treated as license to act on the message autonomously
-  instead.
+  the S-004 action gate, the block must be filed as an open task on the
+  job's board, and must never be treated as license to act on the message
+  autonomously instead.
 - **Continuity across independent firings must be reconstructable entirely
   from the job's own working directory, and must tolerate skipped ticks.**
   No bob-side session or queue state may be relied upon to persist between
   scheduler ticks. Bob being stopped at a tick (ADR-006), a missing per-entry
   `cwd` (S-009), or `max_processes` exhaustion preventing the dedicated
-  worker a per-entry-`cwd` job requires (S-002) can all eliminate a given
-  day's first run; the design must reconcile against the most recent worklog
-  that exists, not assume "yesterday" is always the last time the skill ran.
-  (Amended by S-015: reconciliation is no longer a decision the skill makes
-  or a walk it performs — the `bob worklog` command performs it
-  automatically, per item, against the nearest prior worklog file that
-  exists, on every call.)
+  worker a per-entry-`cwd` job requires (S-002) can all eliminate any given
+  day's runs entirely, so the design must never assume the last run was
+  yesterday, or that any particular day's worklog exists at all. What is
+  still outstanding is therefore reconstructed from the job's own task board
+  (`bob task`, S-014) rather than from any worklog file: the board states
+  what is unfinished and why, independently of how many ticks were skipped
+  or how long ago the item was filed, while the worklog stays a record of
+  what each run did on the day it ran. That board must be the one in the
+  job's own working directory, resolved explicitly rather than by S-014's
+  upward search, so that the record carrying this job's continuity is as
+  strictly scoped to its working directory as this principle requires (see
+  Configuration Requirements, "Task board location").
 - **The CLI-reference skill stays free of any single job's triage policy.**
   Nothing escalation-specific or taxonomy-specific belongs in the generic
   himalaya skill, so any other pi-agent invocation that happens to run with
@@ -162,12 +177,19 @@ pi-agent session (runs in <workspace>)
   gated by S-004)        gated by S-004)
    |                     |
    +----------+----------+
+              |
+              +--> anything not finished this run (escalation awaiting a
+              |    reply, action blocked by S-004) is filed on the job's own
+              |    task board via bob task (S-014), board resolved explicitly
+              |    at <cwd>/tasks/ — the board is what a later run reads to
+              |    know what still needs retrying
+              |
               v
    append entry via bob worklog append (S-015)
               |
-   (every call reconciles automatically against the nearest prior worklog
-    file that exists — not necessarily yesterday's — and reports today's
-    carried-forward set)
+   (records only what this run did, in today's file — including the task it
+    filed; no day's file is read or written except today's, and nothing is
+    carried across days)
 ```
 
 ### Responsibility Separation
@@ -175,9 +197,10 @@ pi-agent session (runs in <workspace>)
 | Component | Responsibility | Notes |
 |---|---|---|
 | `himalaya` skill | Teaches pi-agent the himalaya CLI's commands and flags | Generic; carries no email-specific policy; reusable outside this job |
-| `email-triage` skill | Defines new-mail detection, classification, per-category action policy, escalation policy, and diary discipline | The only component that is triage-policy-aware |
+| `email-triage` skill | Defines new-mail detection, classification, per-category action policy, escalation policy, diary discipline, and when an unfinished item is filed on the task board | The only component that is triage-policy-aware; consumes both the `bob worklog` and `bob task` commands |
 | Category reference workflows | One file per taxonomy category describing what a confident match in that category should do | Referenced by the `email-triage` skill; the taxonomy is fixed per release, not a user extension point |
-| Daily worklog | Record of what was done, what's left, and what's next per calendar day | Reconciled automatically by the `bob worklog` command on every call (S-015); appended to after every handled message |
+| Daily worklog | Record of what each run actually did, what it left, and what it intends next, per calendar day | Written and read through the `bob worklog` command (S-015), which carries nothing across days: a day's file holds only what that day's runs appended, including the identifier of any task filed that day |
+| Per-job task board | The sole record of anything left open by an escalation awaiting a reply or by an S-004 block, and the only thing a later run consults to learn what still needs retrying | The job's own `bob task` board (S-014), held in its working directory and resolved explicitly rather than by upward search; this spec adds no board mechanism, it depends on the existing one |
 | Manager escalation channel | The addressable "ask for guidance" path for low-confidence classifications | An email sent via himalaya to an operator-configured address, falling back to the mail account's own address when that configuration is missing or malformed; no synchronous response expected within the run |
 | S-004 action ruleset (existing) | Default-deny allow-list gating every `bash` tool call this package makes | Unmodified by this spec; an allow rule admitting the package's himalaya invocations is a deployment prerequisite |
 | bob scheduler (S-009, existing) | Fires the periodic pi-agent session that discovers and runs these skills | Unmodified; this spec adds no bob-core or bob-service changes |
@@ -192,22 +215,28 @@ pi-agent session (runs in <workspace>)
 
 ### Component 2: `email-triage` skill
 
-**Purpose:** Defines the end-to-end triage workflow: detect unseen mail, classify it, act or escalate per the Design Principles, and maintain the daily diary.
+**Purpose:** Defines the end-to-end triage workflow: pick up what earlier runs left open, detect unseen mail, classify it, act or escalate per the Design Principles, maintain the daily diary, and file anything it could not finish on the job's task board.
 **Estimated size:** Medium.
-**Interfaces:** Exposes markdown instructions discoverable from the same `cwd`; consumes the `himalaya` skill's CLI knowledge, the category reference workflows, and the local diary file; produces himalaya invocations and diary entries.
+**Interfaces:** Exposes markdown instructions discoverable from the same `cwd`; consumes the `himalaya` skill's CLI knowledge, the category reference workflows, the local diary, and the job's own task board; produces himalaya invocations, diary entries, and task-board entries.
 
 ### Component 3: Category reference workflows
 
 **Purpose:** One reference file per taxonomy category, describing the concrete steps to take once a message is confidently classified into that category.
-**Terminal category:** Beyond the starter taxonomy, one category recognizes the skill's own escalation mail — a self-addressed escalation, produced by the fallback in Configuration Requirements, that arrives back in the same mailbox as unseen mail and re-enters triage on a later run. A confident match there is filed and neither replied to nor escalated again, so the fallback cannot re-escalate its own output indefinitely. Unlike the starter categories, this one is a structural guard on the escalation path rather than adjustable business policy: if filing it is blocked by S-004, the block is recorded as an open worklog item and the message is still never escalated.
+**Terminal category:** Beyond the starter taxonomy, one category recognizes the skill's own escalation mail — a self-addressed escalation, produced by the fallback in Configuration Requirements, that arrives back in the same mailbox as unseen mail and re-enters triage on a later run. A confident match there is filed and neither replied to nor escalated again, so the fallback cannot re-escalate its own output indefinitely. Unlike the starter categories, this one is a structural guard on the escalation path rather than adjustable business policy: if filing it is blocked by S-004, the block is filed as an open task on the job's board and the message is still never escalated.
 **Estimated size:** Small per file; the starter taxonomy is a handful of files.
 **Interfaces:** Referenced by the `email-triage` skill; the taxonomy is fixed at release time — adding or changing a category means shipping a new version of the package, because a deployed workspace's skill content is replaced on upgrade and local additions would not survive it.
 
 ### Component 4: Daily worklog
 
-**Purpose:** A per-calendar-day markdown diary recording what was done, what's left, and what's next, and the sole record of anything left open by an escalation or an S-004 block once the underlying message is marked `\Seen`.
+**Purpose:** A per-calendar-day markdown diary recording what each run did, what it left, and what it intends next — including the identifier of any task it filed for work it could not finish — and nothing that did not happen on that day.
 **Estimated size:** Small.
-**Interfaces:** Appended to and read by the `email-triage` skill via the `bob worklog` command (S-015), which owns reconciliation and first-run detection; the skill no longer performs either itself.
+**Interfaces:** Appended to and read by the `email-triage` skill via the `bob worklog` command (S-015), which owns the entry format and same-day duplicate suppression and carries nothing across days; the skill neither performs nor expects any cross-day reconciliation here.
+
+### Component 5: Per-job task board
+
+**Purpose:** Hold the sole record of anything the run could not finish — an escalation awaiting a manager's reply, or an action the S-004 gate blocked — once the underlying message is marked `\Seen`, in terms complete enough for a later run to pick the item up cold without reading any previous day's worklog.
+**Estimated size:** Small — this spec adds no board mechanism; it states when `email-triage` files, discovers, and closes entries on the existing one.
+**Interfaces:** Written and read by the `email-triage` skill via the `bob task` command (S-014), against the board in the job's own working directory resolved explicitly rather than by upward search; consumed by every later run of the same job as its list of what still needs retrying.
 
 ## Workflow
 
@@ -223,64 +252,80 @@ bob fires the periodic pi-agent session in the configured workspace cwd
   ↓
 pi-agent discovers the himalaya and email-triage skills from that cwd
   ↓
-email-triage skill calls bob worklog list (or, once handling a message,
-bob worklog append) for today (S-015)
-  → the command has already reconciled today's file automatically and
-    idempotently before responding, against the nearest prior worklog file
-    that exists (the most recent run may not have been yesterday, if ticks
-    were skipped) — the skill makes no first-run decision and performs no
-    file walk itself
-  → the response names today's full carried-forward item-identifier set,
-    including any pending manager escalation, for the skill to retry
+email-triage skill lists the job's own task board (bob task list, S-014,
+board resolved explicitly at the job's cwd, not by upward search)
+  → every task still `blocked` or `todo` is something an earlier run could
+    not finish: a pending manager escalation, or an action S-004 blocked
+  → the skill retries each of them this run, before or alongside new mail;
+    nothing about how long ago they were filed, or how many ticks were
+    skipped since, changes what the board says
+  → the board is the only place this is read from — no previous day's
+    worklog file is consulted, and bob worklog carries nothing across days
   ↓
 email-triage skill lists unseen envelopes via the himalaya skill's commands
   ↓
 For each unseen message, classify against the taxonomy:
   → high confidence: act per the matched category's reference workflow via
     a himalaya `bash` call
-    → S-004 blocks the call: record the block as an open worklog item;
-      the message is not treated as handled
+    → S-004 blocks the call: file a `blocked` task naming the message, the
+      action that was refused, and what would unblock it; the message is
+      not treated as handled
   → ★ low confidence: send an escalation email to the configured manager
     address via a himalaya `bash` call, describing the situation and the
-    question; take no further action on this message this run
+    question; file a task for the awaited reply, naming the message and
+    what the escalation asked; take no further action on this message this
+    run
     → escalation configuration missing or its address malformed: send the
       same escalation to the mail account's own address instead, also
       stating that the configuration was missing and where it was
       expected; that mail returns as unseen mail on a later run, matches
       the terminal category, and is filed rather than escalated again
-      → account's own address undeterminable: record it in the worklog
-        and take no further action on this message this run
-    → S-004 blocks the send: record the block as an open worklog item;
-      never fall back to acting on the message autonomously because
-      escalation failed
+      → account's own address undeterminable: file a `blocked` task saying
+        so, record it in the worklog, and take no further action on this
+        message this run
+    → S-004 blocks the send: file a `blocked` task for the refused
+      escalation; never fall back to acting on the message autonomously
+      because escalation failed
   ↓
-Append a worklog entry for the message: what was done / what's left / next.
-Reading the message already set its `\Seen` flag, so an escalated or
-blocked message will not reappear as "unseen" on the next tick — the
-worklog, not the mailbox, is what carries it forward as open.
+Append a worklog entry for the message: what was done / what's left / next,
+naming the identifier of any task filed for it. Reading the message already
+set its `\Seen` flag, so an escalated or blocked message will not reappear
+as "unseen" on the next tick — the task board, not the mailbox and not the
+worklog, is what keeps it outstanding until some later run finishes it.
   ↓
 (no response path back to bob — periodic requests are fire-and-forget,
  ADR-004; the next tick repeats this workflow)
 ```
 
-**How an open item closes.** Reconciliation is no longer a skill-side,
-once-per-day decision (amended by S-015): the `bob worklog` command
-reconciles automatically and idempotently on every `append`/`list` call, and
-reports today's carried-forward items in its response. An item closes when
-its underlying cause resolves on some later run: an escalation closes when
-the manager's reply arrives as ordinary unseen mail and re-enters triage
-like any other message; an S-004 block closes once the required allow rule
-is in place. Until then, the command carries it forward as still-open every
-day, and the skill retries it whenever the command's response names it.
+**How an open item closes.** An open item is a task on the job's board, not
+a worklog entry (amended by CR-013): the worklog says what a run did on the
+day it ran, and nothing in it is carried into another day. Every run begins
+by listing the board, so an item stays visible for exactly as long as its
+task is unfinished, however many ticks were skipped in between. An item
+closes when its underlying cause resolves on some later run: an escalation
+closes when the manager's reply arrives as ordinary unseen mail and
+re-enters triage like any other message; an S-004 block closes once the
+required allow rule is in place and the retried action succeeds. The run
+that finishes it moves the task to `done` and records that outcome in that
+day's worklog entry for the item. A retry that is still refused, or an
+escalation still unanswered, leaves the task open — with a note recording
+the attempt, so the board shows what has already been tried rather than
+only that something remains — and the run tries again on the next tick.
 
 ## Configuration Requirements
 
 - **S-004 action-ruleset allow rule.** An explicit allow rule in bob's
   existing action ruleset admitting the `bash` tool calls this package
-  issues. **Why:** S-004's action gate is default-deny — a missing or empty
-  action list denies all tool calls — so neither skill can act at all
-  without one. **Where:** bob's existing S-004 action-ruleset configuration;
-  this spec adds no new bob-side mechanism, only a required entry in it.
+  issues — the himalaya invocations, and the `bob worklog` (S-015) and `bob
+  task` (S-014) invocations the skill makes to journal its work and to keep
+  its open items. **Why:** S-004's action gate is default-deny — a missing
+  or empty action list denies all tool calls — so neither skill can act at
+  all without one, and a deployment that admits himalaya but not `bob task`
+  would lose its continuity record silently. **Where:** bob's existing
+  S-004 action-ruleset configuration; this spec adds no new bob-side
+  mechanism, only required entries in it. The rule shapes for the two
+  commands are already defined by S-015 and S-014 respectively and are not
+  restated here.
   **Constraints:** outside the documented `bob init` bootstrap profile, the
   rule must be scoped narrowly enough to admit this package's himalaya
   invocations without being a blanket `bash` allow. CR-007 permits `bob init`
@@ -290,8 +335,12 @@ day, and the skill retries it whenever the command's response names it.
   warns that this grants broad authority and directs the operator to narrow it
   after confirming the installation works.
   **Default behavior:** an unadmitted `bash` call is blocked by S-004; per
-  the Workflow, the block is recorded in the day's worklog as an open item,
-  never silently dropped.
+  the Workflow, the block is filed as an open task on the job's board and
+  recorded in that day's worklog, never silently dropped. A deployment in
+  which `bob task` itself is the unadmitted call cannot record the block
+  anywhere durable; the run still records it in the day's worklog and still
+  never acts on the message autonomously, and the missing rule is the
+  operator's to add.
 
 - **Manager escalation address.** A single email address the skill sends
   low-confidence escalations to. **Why:** gives a fire-and-forget periodic
@@ -301,9 +350,9 @@ day, and the skill retries it whenever the command's response names it.
   ADR-008 §5's precedent that actions use their own configuration.
   **Constraints:** must be a single well-formed email address. **Default
   behavior:** an escalation send blocked by S-004 is a hard stop for that
-  message — the skill must record the block in the day's worklog and must
-  never fall back to acting autonomously because escalation didn't go
-  through. A missing configuration file, or an address that is absent or
+  message — the skill must file the block as an open task on the job's
+  board, record it in the day's worklog, and must never fall back to acting
+  autonomously because escalation didn't go through. A missing configuration file, or an address that is absent or
   malformed, is *not* a hard stop: the run must still escalate, addressed
   instead to the mail account's own address, so the escalation surfaces in
   the mailbox the human already reads. That address must come from what
@@ -318,9 +367,9 @@ day, and the skill retries it whenever the command's response names it.
   file was expected, and this substitution applies to every message
   needing escalation for as long as the configuration stays missing or
   malformed. If the account's own address cannot be determined either, the
-  skill must record that in the day's worklog and take no further action
-  on that message this run — never hard-stopping the run, guessing an
-  address, or acting on the message autonomously instead.
+  skill must file that as an open task, record it in the day's worklog, and
+  take no further action on that message this run — never hard-stopping the
+  run, guessing an address, or acting on the message autonomously instead.
 
 - **himalaya account.** A working IMAP/SMTP account already known to the
   himalaya CLI. **Why:** both skills assume himalaya can already read and
@@ -331,18 +380,49 @@ day, and the skill retries it whenever the command's response names it.
   not configured, the first command fails and that failure is recorded in
   the day's worklog like any other run-ending problem.
 
+- **Task board location (explicitly resolved, never searched for).** The
+  board `email-triage` files, lists, and closes its open items on must be
+  the board inside the job's own working directory — the `tasks/` directory
+  `bob init` (S-012) already scaffolds at a workspace root — and the skill
+  must name it explicitly on every `bob task` call rather than letting the
+  command find one. **Why:** `bob task`'s default resolution walks upward
+  from the working directory to the nearest ancestor holding a board
+  (S-014), so two scheduled jobs whose working directories share an
+  ancestor that holds a board would converge on that single board, each
+  seeing and retrying the other's outstanding items. The worklog cannot do
+  this — its resolution is cwd-strict with no upward search and no
+  override, precisely so an invocation cannot adopt a diary that is not its
+  own (ADR-015) — and once the board, not the worklog, is what carries this
+  job's continuity, the same care is owed to it. Relying instead on `bob
+  init`'s scaffolding to make the upward search stop at the right place was
+  considered and rejected: it makes isolation an artefact of how the
+  workspace happened to be created rather than a property of the design,
+  and it silently degrades for a job whose `--cwd` is a subdirectory, was
+  never initialized, or had its board directory removed. **Where:** S-014
+  already provides explicit board selection by flag and by environment
+  variable, both taking precedence over the upward search; this spec
+  requires that mechanism to be used and adds no new one. **Constraints:**
+  the board named must resolve inside the job's own `--cwd`; two jobs with
+  different working directories must never resolve to the same board.
+  **Default behavior:** if the named location holds no board yet, S-014's
+  own rule applies — the first write creates one there — so a workspace
+  that was never initialized still gets its own isolated board instead of
+  attaching to an ancestor's.
+
 - **Scheduled job working directory (per-entry `--cwd`, required).** The
   workspace a scheduled "check-email" job resolves to, set via S-009's
-  per-entry `--cwd`. **Why:** the manager-address configuration and the
-  daily worklog are read from and written to this directory. Per S-011 and
+  per-entry `--cwd`. **Why:** the manager-address configuration, the daily
+  worklog, and the task board holding this job's open items are read from
+  and written to this directory. Per S-011 and
   ADR-014, skill *discovery* no longer depends on this directory — bob
   resolves a single shared install path for both skills and supplies it
   through its extension regardless of where a session runs — but the
-  manager-address configuration and worklog diary remain per-job state and
-  stay `--cwd`-scoped. `pi_agent_cwd` is not an acceptable alternative for
-  that state: it is shared by every warm-pool worker (S-002), so routing it
-  through there would leak one job's manager address and diary into
-  unrelated sessions, contradicting this spec's isolation principle.
+  manager-address configuration, the worklog diary, and the task board
+  remain per-job state and stay `--cwd`-scoped. `pi_agent_cwd` is not an
+  acceptable alternative for that state: it is shared by every warm-pool
+  worker (S-002), so routing it through there would leak one job's manager
+  address, diary, and open items into unrelated sessions, contradicting
+  this spec's isolation principle.
   **Where:** bob's existing schedule-entry
   configuration (S-009); this spec adds no new bob-side setting.
   **Constraints:** must be an absolute path, kept under the same owner-only
@@ -368,7 +448,8 @@ day, and the skill retries it whenever the command's response names it.
   **deployed copy** placed inside each scheduled job's own working
   directory. The scheduled job's per-entry `--cwd` still holds the mutable
   runtime state scoped to that job (the skill-local manager-address
-  configuration and the `worklog/` diary), which must be owner-only
+  configuration, the `worklog/` diary, and the `tasks/` board holding its
+  open items), which must be owner-only
   permissioned per the requirement above, but no longer needs to hold a copy
   of the skill content itself. **Constraints:** the job's `--cwd` is
   owner-only, matching the requirement above; the repository checkout is
@@ -385,10 +466,10 @@ day, and the skill retries it whenever the command's response names it.
 | Phase | What | Depends On |
 |---|---|---|
 | 1 | Author and ship the `himalaya` skill (adapted CLI-reference package) as a standalone product artifact, at the package location defined above. | Nothing |
-| 2 | Author the `email-triage` skill's core loop: unseen-mail detection via the `\Seen` flag, diary read/write with skip-tolerant reconciliation, and the escalation-to-manager path (including S-004-block handling), without the full category taxonomy (a single generic act-or-escalate behavior). | Phase 1 |
+| 2 | Author the `email-triage` skill's core loop: unseen-mail detection via the `\Seen` flag, diary writes for what each run did, skip-tolerant pickup of still-open items from the job's own task board, and the escalation-to-manager path (including filing a task when S-004 blocks a call), without the full category taxonomy (a single generic act-or-escalate behavior). | Phase 1 |
 | 3 | Draft the starter category taxonomy and one reference workflow file per category; wire classification into the `email-triage` skill so it selects and follows the matched category's workflow. | Phase 2 |
-| 4 | End-to-end validation against a real scheduled job (`bob schedule add` with a per-entry `--cwd` pointing at the initialized workspace containing local configuration and `worklog/`; the package is supplied from the shared S-011 install path; plus the required S-004 allow rule): confirm ticks produce worklog entries, escalations reach the manager address, blocks are recorded rather than dropped, and the next executed run picks up prior open items. | Phase 3 |
-| 5 | Document operator setup — himalaya account, manager address, the S-004 allow rule (with a concrete worked example of the allow rule's argument-matcher shape, since S-004's own glob/argument-path syntax is still an open question there), and `bob schedule add --cwd` usage — in the S-007 operator guide. | Phase 4 |
+| 4 | End-to-end validation against a real scheduled job (`bob schedule add` with a per-entry `--cwd` pointing at the initialized workspace containing local configuration, `worklog/`, and `tasks/`; the package is supplied from the shared S-011 install path; plus the required S-004 allow rules): confirm ticks produce worklog entries containing only that day's work, escalations reach the manager address, blocks are filed as open tasks rather than dropped, the next executed run picks up those prior open items from the task board and retries them, and a resolved item is moved to `done` and recorded in that day's worklog. | Phase 3 |
+| 5 | Document operator setup — himalaya account, manager address, the S-004 allow rules for himalaya, `bob worklog`, and `bob task` (with a concrete worked example of the allow rule's argument-matcher shape, since S-004's own glob/argument-path syntax is still an open question there), and `bob schedule add --cwd` usage — in the S-007 operator guide. | Phase 4 |
 
 ## Alternatives Considered
 
@@ -431,10 +512,31 @@ day, and the skill retries it whenever the command's response names it.
   *Rejected* after checking S-005 directly: it is a structured record (tool/
   action name, outcome status, optional session id, optional summary) that
   explicitly excludes arbitrary tool-defined metadata, so it cannot hold a
-  real day-by-day working record. A local daily diary is used instead; this
-  is additive to, not a replacement for, the existing audit trail — bob
+  real day-by-day working record or a retryable description of an unfinished
+  item. A local daily diary and the job's own task board are used instead;
+  this is additive to, not a replacement for, the existing audit trail — bob
   already records each scheduled firing as an `event` record and every
   himalaya `tool_call` as a `verdict` record independently of this skill.
+- **Keeping open items in the worklog, carried across days by the command.**
+  The original design made the daily worklog the sole record of anything an
+  escalation or an S-004 block left open, and relied on `bob worklog`
+  copying a still-open item forward into each new day's file so a later run
+  would find it. *Rejected* (CR-013): it made a day's diary a mixture of
+  what that day's runs did and what earlier days left behind, mutated by the
+  command rather than written by a caller, and it gave the worklog a
+  domain-flavoured "is this still open" test it has no policy for. The task
+  board already exists for exactly this question and states why an item is
+  outstanding, not merely that it is.
+- **Letting `bob task` find the board by its own upward search.** Rely on
+  S-014's default resolution — walk up from the working directory to the
+  nearest `tasks/` — on the grounds that `bob init` scaffolds a board at
+  each job's workspace root, so the search normally stops there.
+  *Rejected:* it makes this job's continuity isolation an artefact of how
+  the workspace happened to be created rather than a property of the design,
+  and it fails quietly in exactly the cases that matter — a `--cwd` one
+  level inside a workspace, an uninitialized directory, or a removed board —
+  by attaching the job to some ancestor's board shared with another job.
+  The explicit board selection S-014 already provides is used instead.
 - **A per-conversation worklog layout.** An earlier draft proposed
   `<date>/<conversation-id>_<email-from>/log.md`, one folder per email
   thread. *Superseded* by a simpler one-file-per-calendar-day diary that the
@@ -450,3 +552,4 @@ day, and the skill retries it whenever the command's response names it.
 | 2026-08-12 | Permitted the documented `bob init` first-run policy exception: no-matcher rules for `bash`, `read`, `write`, and `edit`, with an explicit broad-authority warning and review obligation. | CR-007 prioritizes a working first installation; narrow `bash` matching remains the normal operator configuration after bootstrap. | S-012 tasks TBD |
 | 2026-08-12 | Corrected the Phase 4 scheduled-validation cwd to the initialized workspace; skills are supplied from S-011's shared install path. | Architecture consistency review found the older package-cwd wording stale against ADR-014 and the shared skill-delivery model. | S-012 tasks TBD |
 | 2026-08-27 | The Design Principle, System Diagram, Workflow branch, Component 4 Interfaces, Daily-worklog Responsibility row, and "How an open item closes" paragraph no longer describe `email-triage` itself detecting a day's first run or walking worklog files backward to reconcile. The `bob worklog` command now performs reconciliation automatically and idempotently on every `append`/`list` call, against the nearest prior worklog file that exists (not the prior file "containing open items" — a whole-file filter corrected because it could wrongly skip a day that closed every item it mentions), and reports today's carried-forward set in its response for the skill to retry against. | S-015 approval. The worklog's entry and reconciliation mechanics move from skill-executed prose into a real command, the same move S-014 made for the task board; the command owns first-run detection and the backward file walk instead of the skill. | S-015 breakdown tasks (Gate 2 pending). |
+| 2026-09-17 | Continuity across firings moves from the worklog to the job's own task board, superseding the 2026-08-27 row above. The `\Seen`-detection and escalation Design Principles now track an escalated or blocked message as an open `bob task` entry; the continuity Design Principle reconciles against the board rather than "the most recent worklog that exists"; the System Diagram gains the task-filing step; the Daily-worklog Responsibility row and Component 4 lose the "sole record of anything left open" role, which moves to a new Component 5 and a new Responsibility row for the per-job task board; the Workflow opens by listing the board instead of reading a carried-forward set, files a task on every escalation and every S-004 block, and names the filed task in the worklog entry; "How an open item closes" is rewritten around moving the task to `done`; Phase 2 and Phase 4's acceptance criteria follow; and the S-004 allow-rule requirement now covers the `bob task` and `bob worklog` invocations as well as himalaya's. A new Configuration Requirement, "Task board location", requires the board to be named explicitly at the job's own working directory rather than found by S-014's upward search. Two rejected alternatives are recorded: keeping open items in the worklog by cross-day carry-forward, and relying on the upward search. | CR-013 removes `bob worklog`'s cross-day carry-forward, which was this spec's only mechanism for retrying an escalation awaiting a reply or an action the S-004 gate blocked. The task board (S-014) already answers "what is still outstanding and why", so this spec gains a real dependency on it rather than a second carry-forward mechanism. S-014 itself is unchanged and uncontradicted: its Exclusion rejected building worklog carry-forward semantics into the board generically, not a single consuming skill choosing the board for its own open items. Explicit board resolution is required because the board now carries the continuity this spec's own isolation principle demands stay inside the job's working directory, a guarantee the upward search cannot make. | Tasks TBD (S-010 skill-content updates follow from the CR-013 breakdown) |

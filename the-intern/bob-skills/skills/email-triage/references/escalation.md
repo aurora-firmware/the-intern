@@ -16,7 +16,8 @@ read from:
 ```
 
 `<workspace>` is the job's own working directory (the scheduled entry's
-per-entry `--cwd`) — the same directory the daily worklog lives in.
+per-entry `--cwd`) — the same directory the daily worklog and the job's own
+task board live in.
 
 This file requires exactly one key:
 
@@ -54,23 +55,39 @@ The escalation email must describe:
 
 Sending the escalation email is a `himalaya` `bash` call like any other this
 package makes, so it is gated by the action-authorization gate exactly the
-same way — see "If the escalation send is denied" below.
+same way — see "If an action is blocked" below.
 
-## If the escalation send is denied
+## If an action is blocked
 
-Every `bash` call this package makes — including the escalation send — is
+Every `bash` call this package makes — a category workflow's own action
+against a confidently classified message, or the escalation send below — is
 gated by the action-authorization gate, which denies by default; an
 admitting allow rule is a deployment prerequisite that this reference does
 not grant. A call denied by policy is recorded and never worked around.
 
-If the action-authorization gate denies the escalation send:
+This is the block-handling rule every category workflow file
+(`references/categories/*.md`) cross-references for its own action being
+blocked; it governs the escalation send the same way.
 
-- record the denial as an open item in the day's worklog entry for that
-  message (`references/worklog.md` defines the entry format and how a
-  worklog-tracked open item closes — refer to it, do not restate it here);
-- do **not** fall back to acting on the message autonomously because the
-  escalation didn't go through. A denied escalation is a hard stop for that
+When the action-authorization gate denies an action this package attempts
+on a message:
+
+- file a `bob task` for it — status `blocked`, naming the message and the
+  refused action, and stating what would unblock it (an admitting allow
+  rule);
+- name that task's identifier in the message's worklog entry
+  (`references/worklog.md` defines the entry format and how a `blocked`
+  task closes) instead of recording the open condition itself there;
+- do not treat the message as handled: do not substitute some other action,
+  and do not fall back to acting on the message autonomously because the
+  intended action didn't go through. A block is a hard stop for that
   message, not a license to proceed some other way.
+
+For a denied escalation send specifically, the refused action named in the
+filed task is the escalation send itself — no escalation email went out, so
+do not fall back to some other outcome for the message (for example, acting
+on it per a category workflow "just in case") just because the escalation
+could not be sent.
 
 ## If the escalation configuration is missing or malformed
 
@@ -90,9 +107,12 @@ to the mail account's own address instead of `manager_address`:
 
 If the account's own address cannot be determined either — `himalaya
 template write` fails, or its output has no usable `From:` header — do not
-hard-stop the run and do not guess an address. Record the problem in the
-worklog and take no further action on that message this run. Do not fall
-back to acting on the message autonomously.
+hard-stop the run and do not guess an address. File a `blocked` `bob task`
+for the message, naming that the account's own address could not be
+determined, and name that task in the message's worklog entry instead of
+recording the condition itself there. Take no further action on that
+message this run, and do not fall back to acting on the message
+autonomously.
 
 This fallback path applies to every message this run that needs escalation,
 for as long as the configuration remains missing or malformed — not just
@@ -105,11 +125,19 @@ Escalating never blocks the run waiting for an answer. Scheduled firings are
 response back to — so the escalation email is sent and the run continues
 (or ends) without waiting for anything synchronous.
 
+When the send succeeds, file a `bob task` for the awaited reply — status
+`todo`, naming the message and the question the escalation asked — so a
+later run can tell this item is still outstanding. A later run discovers it
+the same way it discovers any other unfinished item: by listing this job's
+own task board (`bob task list`) at the start of its loop, not by reading a
+previous day's worklog.
+
 The manager's reply, when it comes, is not a response bob routes back to
 anything: it arrives later as ordinary unseen mail in the same mailbox,
 addressed back through normal delivery like any other message. It re-enters
 triage on whatever later run first lists unseen mail, and is classified and
 handled from there — nothing about the original escalation auto-resolves
-it. Per `references/worklog.md`, the escalated message's open worklog item
-stays open, carried forward by `bob worklog` on every run, until the
-reply's own per-message entry marks the matter handled.
+it. Per `references/worklog.md`, the filed task stays open — listed and
+retried at the start of every later run — until the reply's own per-message
+worklog entry closes it by moving the task to `done`; that worklog entry
+names the task closed, rather than recording the open condition itself.
