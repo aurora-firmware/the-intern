@@ -1102,6 +1102,12 @@ the package as described in
    [[policy.action_rules]]
    tool = "read"
    arg_matchers = [
+     { field_path = "path", pattern = "/opt/bob/skills/tasks/SKILL.md" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "read"
+   arg_matchers = [
      { field_path = "path", pattern = "/opt/bob/skills/email-triage/references/*.md" },
    ]
 
