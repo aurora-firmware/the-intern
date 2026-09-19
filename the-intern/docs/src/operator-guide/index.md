@@ -1192,6 +1192,12 @@ the package as described in
    [[policy.action_rules]]
    tool = "bash"
    arg_matchers = [
+     { field_path = "command", pattern = "bob task*" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
      { field_path = "command", pattern = "bob worklog*" },
    ]
    ```
