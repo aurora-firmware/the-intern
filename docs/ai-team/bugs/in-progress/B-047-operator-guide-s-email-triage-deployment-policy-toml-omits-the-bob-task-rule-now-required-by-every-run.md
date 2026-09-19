@@ -132,6 +132,23 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-09-19
+Reproduction status: Confirmed, by direct document inspection (not a live-`bob` run — matches the bug's own reported reproduction method; no runtime reproduction is possible for this class of defect since the defect is an omission in a documentation walkthrough, not executable code).
+Evidence captured:
+- `sed -n '1083,1197p' the-intern/docs/src/operator-guide/index.md | grep -in "task"` → no output. The full step-4 `[[policy.action_rules]]` TOML block (the block the walkthrough instructs operators to copy over their bootstrap policy) contains zero mentions of "task" in any form, confirming no rule matches `bob task*`.
+- `grep -n 'pattern = "bob task\*"' the-intern/docs/src/operator-guide/index.md` → single match at line 339, inside the separate "The task board (`bob task`)" section (lines 309-347), not inside the step-4 block (lines 1083-1197). Note: the bug's own Fix Verification grep command, run as literally written, currently returns exit 0 / a match at line 339 even though the defect is present — the command alone cannot distinguish "matched anywhere in the file" from "matched inside the step-4 block", so verification of the fix must also confirm the match's line number falls within the step-4 block, not rely on grep exit status alone.
+- Confirmed the correct rule shape to mirror, at lines 336-340: `tool = "bash"`, `arg_matchers = [{ field_path = "command", pattern = "bob task*" }]`, immediately followed by a `read` rule admitting `<skill_install_path>/tasks/SKILL.md` — same shape as the existing `bob worklog*` rule at lines 1192-1196.
+- `grep -n "bob task" the-intern/bob-skills/skills/email-triage/SKILL.md` → 15 matches, including line 90 ("Call `bob task list`") as an unconditional step in every run's loop, and further `bob task status`/`bob task new` calls on escalation and S-004-blocked paths (lines 65-69, 113, 166, 178, 210, 244) — confirms the runtime dependency T-206 introduced that the step-4 block fails to admit.
+- `git log --oneline -3 -- the-intern/docs/src/operator-guide/index.md` → most recent commit `0616bfa docs(operator-guide): correct worklog cross-day continuity prose` (the T-211 commit referenced in the bug's Environment section), confirming this file's last touch did not add the missing rule.
+- `git log -1 -- the-intern/bob-skills/skills/email-triage/SKILL.md` → `1ecff4e docs(email-triage): move continuity from worklog carry-forward to bob task`, consistent with T-206/T-211's documented history.
+- `git status --short` → clean before and after diagnosis; no production files modified.
+Isolated fault: `the-intern/docs/src/operator-guide/index.md`, "Deploying the `email-triage` scheduled job" section, step 4's `[[policy.action_rules]]` TOML code block (lines 1083-1197). Missing rule: a `bash` rule matching `command` field pattern `bob task*`.
+Root cause or fault hypothesis: Documentation-synchronization gap. T-206 (merged, per S-010 v0.3 / CR-013) added an unconditional `bob task list` call plus escalation-path `bob task status`/`bob task new` calls to `email-triage`'s `SKILL.md`, creating a new runtime dependency on a `bob task*` policy-admission rule for every deployed run. The step-4 walkthrough's concrete policy example was never updated to include this rule — T-211 explicitly left it untouched per its Files to Touch/Acceptance Criteria, only correcting nearby "Cross-day continuity" prose. No automated test covers cross-file/cross-section documentation consistency between the SKILL.md's actual command usage and the operator guide's copy-paste policy block, so the gap was not caught by CI.
+Planned verification:
+- `sed -n '1083,1197p' the-intern/docs/src/operator-guide/index.md | grep -n 'pattern = "bob task\*"'` should return a match once the fix lands (currently returns nothing, confirming the pre-fix state).
+- Manually confirm the added rule sits within the step-4 block (between the existing `read` rules and the closing code fence, alongside the `bob worklog*` rule) and mirrors the exact shape at lines 336-340 (`tool = "bash"`, `field_path = "command"`, `pattern = "bob task*"`).
+- Re-run `mdbook build the-intern/docs` (the `user-docs` CI check) to confirm the doc still builds cleanly after the edit.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
