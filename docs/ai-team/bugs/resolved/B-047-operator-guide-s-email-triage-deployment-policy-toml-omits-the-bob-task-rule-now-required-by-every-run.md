@@ -3,7 +3,7 @@ id: B-047
 title: Operator guide's email-triage deployment policy TOML omits the bob task* 
   rule now required by every run
 severity: high
-status: in-progress
+status: resolved
 created: '2026-09-18'
 task: T-211
 ---
