@@ -187,6 +187,15 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-09-19
+Implemented the fix specified in the Diagnosis Log's fix contract: added the missing `[[policy.action_rules]]` `read` rule for `/opt/bob/skills/tasks/SKILL.md` to the step-4 policy TOML block in the "Deploying the `email-triage` scheduled job" section of `the-intern/docs/src/operator-guide/index.md`. This completes the bash/read rule pair that B-047 left half-done — B-047 added the `bash` rule for `bob task*` commands but omitted the paired `read` rule for the skill's `SKILL.md` file.
+
+Applied the tdd skill's discipline in its documentation-only mode: confirmed red state first (`grep -n 'pattern = ".*tasks/SKILL.md"' the-intern/docs/src/operator-guide/index.md` returned exactly one match, at line 345 in the unrelated "task board" reference section, and none inside the step-4 block), then made the minimal one-block insertion using the exact TOML shape specified in the Diagnosis Log, then confirmed green state (grep now returns two matches, with the new one at line 1105 verified by direct read to fall inside the step-4 TOML fence, positioned immediately after the `worklog/SKILL.md` read rule and before the `references/*.md` glob rules, matching the placement and shape of its sibling per-skill `SKILL.md` read rules).
+
+Nothing was tried and rejected — the fix contract was complete and specific enough (exact rule text, exact placement description) that a single direct edit sufficed. Did not run `mdbook build` since this file is not part of the mdBook build target (confirmed by the bug's own diagnosis and prior sibling bugs B-047/B-048), and this step was optional/not required.
+
+Nothing remains outstanding for this bug's fix. The single commit (`54babe6`, `docs(operator-guide): add tasks/SKILL.md read rule to step-4 policy toml`) is on the bug branch `bug/B-049-operator-guide-email-triage-policy-toml-missing-tasks-skill-read-rule`, ready for review.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
