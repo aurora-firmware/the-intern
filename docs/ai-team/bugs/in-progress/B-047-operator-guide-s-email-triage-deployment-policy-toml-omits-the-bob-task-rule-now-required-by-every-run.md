@@ -173,3 +173,81 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-19
+
+PASS
+
+Reviewed on `dev-agent` against branch
+`bug/B-047-operator-guide-email-triage-policy-toml-missing-bob-task-rule`
+(single commit `640507d`, "docs(operator-guide): add bob task* rule to
+email-triage deploy policy", based on `dev-agent` @ `50e5806` — confirmed via
+`git log` showing `50e5806` as `640507d`'s direct parent).
+
+**Evidence-chain pre-check:** Diagnosis Log ("Diagnosis 1 — 2026-09-19") is
+complete — reproduction status (confirmed, by direct document inspection;
+explicitly notes no live-`bob` reproduction is possible for this defect
+class), evidence captured (targeted `sed`/`grep` output pinpointing the
+step-4 block's missing "task" mentions, the reference rule shape at lines
+336-340, `email-triage`'s `SKILL.md` runtime dependency at 15 matched call
+sites, and git provenance for both files), isolated fault (step 4's
+`[[policy.action_rules]]` block, lines 1083-1197, missing a `bob task*`
+rule), and root cause (T-206 added the runtime dependency; T-211 explicitly
+left the step-4 block out of scope; no automated cross-file consistency test
+exists) are all present. Chain is sufficient to proceed.
+
+**Stage 1 — Bug criteria:**
+- Fix addresses the isolated fault: confirmed via `git show 640507d` — a new
+  `[[policy.action_rules]]` block (`tool = "bash"`, `arg_matchers = [{
+  field_path = "command", pattern = "bob task*" }]`) is inserted at line
+  1192-1196 of the fixed file, immediately before the existing `bob
+  worklog*` rule, inside the step-4 TOML block. Matches the isolated fault
+  and the reference shape (lines 336-340) recorded in the Diagnosis Log
+  exactly.
+- Fix Verification steps followed, with the bug file's own noted caveat
+  honored: the bug's literal `grep -n 'pattern = "bob task\*"'` command
+  matches at two locations post-fix — line 339 (pre-existing, inside "The
+  task board (`bob task`)" section, unaffected by this change) and line 1195
+  (new). Independently confirmed the new match's location, not just grep's
+  exit status: extracted the full file's `##`/`###` heading list and
+  confirmed line 1195 falls inside "## Deploying the `email-triage`
+  scheduled job" (opens line 977, next `##` at 1348), and read lines
+  1083-1203 directly to confirm 1195 sits inside the step-4 fenced TOML
+  block (step 4 itself begins at line 1056, "Replace the bootstrap-wide
+  action rules..."). This satisfies the Diagnosis Log's planned verification
+  of confirming the match falls within the step-4 block rather than relying
+  on the file-wide grep's exit status alone.
+- Independently re-ran `mdbook build the-intern/docs` against a worktree
+  checked out at `640507d` (using a pre-built `bob` debug binary via
+  `BOB_BIN`, since the CLI-reference preprocessor requires one): build
+  completed cleanly, with only the pre-existing, unrelated
+  mdbook-mermaid/mdbook version-mismatch informational warning — matching
+  the Work Log's claim.
+- No unrelated behavior added: `git diff --stat 50e5806 640507d` shows
+  exactly one file changed, 6 insertions, 0 deletions —
+  `the-intern/docs/src/operator-guide/index.md` only. No prose changes, no
+  other files touched.
+
+**Stage 2 — Code quality:**
+- Correctness: the new rule's TOML syntax and `arg_matchers` shape are
+  byte-for-byte structurally identical to both the reference `bob task*`
+  rule (lines 336-340) and the adjacent `bob worklog*` rule it now precedes,
+  so it will parse and match the same way at runtime.
+- Fix is minimal: a single 6-line addition, no incidental edits, no
+  refactoring, no prose changes bundled in — consistent with the Work Log's
+  stated rationale that the "Cross-day continuity" prose (already corrected
+  by T-211) needed no further change.
+- Diagnosis Log fix contract vs. implementation: the Diagnosis Log's planned
+  fix (add a `bob task*` bash rule mirroring the lines-336-340 shape, placed
+  within the step-4 block alongside the `bob worklog*` rule) matches exactly
+  what was implemented, including placement immediately adjacent to the
+  `bob worklog*` rule.
+- Regression test: none added, and none practical — this is a
+  documentation-only fix to a Markdown walkthrough with no automated
+  cross-file consistency test between `SKILL.md` command usage and the
+  operator guide's copy-paste policy examples. The Work Log explains this
+  gap explicitly and substitutes `mdbook build` (the `user-docs` CI check,
+  independently re-run above) plus targeted line-range `grep`/`awk`
+  verification. Proportionate for this bug's scope; does not block PASS.
+
+Both stages pass. No issues found.
