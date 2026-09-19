@@ -242,6 +242,12 @@ arg_matchers = [
 [[policy.action_rules]]
 tool = "read"
 arg_matchers = [
+  { field_path = "path", pattern = "/abs/skill-install-path/tasks/SKILL.md" },
+]
+
+[[policy.action_rules]]
+tool = "read"
+arg_matchers = [
   { field_path = "path", pattern = "/abs/skill-install-path/email-triage/references/*.md" },
 ]
 
@@ -333,6 +339,12 @@ arg_matchers = [
 tool = "bash"
 arg_matchers = [
   { field_path = "command", pattern = "bob worklog*" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "bob task*" },
 ]
 ```
 
