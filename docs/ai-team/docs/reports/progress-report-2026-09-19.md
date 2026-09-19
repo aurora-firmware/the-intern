@@ -8,7 +8,7 @@ created: 2026-09-19
 
 ## Summary
 
-Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 213. Blocked tasks: 0. Open bugs: 0. Bugs in progress: 0. Resolved bugs: 48. ADRs: 15. Latest integration result: chore(bugs): merge B-048 bob-skills readme install-path missing bob task rule.
+Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 213. Blocked tasks: 0. Open bugs: 0. Bugs in progress: 0. Resolved bugs: 49. ADRs: 15. Latest integration result: chore(bugs): merge B-049 operator-guide email-triage policy toml missing tasks skill read rule.
 
 ## Specifications
 
@@ -31,7 +31,7 @@ Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 213. 
 
 ## Integration Evidence
 
-- Latest integration-test result: chore(bugs): merge B-048 bob-skills readme install-path missing bob task rule
+- Latest integration-test result: chore(bugs): merge B-049 operator-guide email-triage policy toml missing tasks skill read rule
 - Source: git log --all --grep=merge|integration|verification|test -n 1
 - Date: 2026-09-19
 
@@ -317,6 +317,7 @@ Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 213. 
 | B-046 | verify_trusted_store tests assume tempdir defaults to 0700 | medium | resolved | complete |
 | B-047 | Operator guide's email-triage deployment policy TOML omits the bob task* rule now required by every run | high | resolved | complete |
 | B-048 | bob-skills README's install-path S-004 action-rule table omits the bob task* rule now required by every email-triage run | high | resolved | complete |
+| B-049 | Operator guide's email-triage deploy policy TOML still omits the tasks/SKILL.md read rule B-047 should have paired with its bob task* fix | high | resolved | complete |
 
 ## Decisions
 
