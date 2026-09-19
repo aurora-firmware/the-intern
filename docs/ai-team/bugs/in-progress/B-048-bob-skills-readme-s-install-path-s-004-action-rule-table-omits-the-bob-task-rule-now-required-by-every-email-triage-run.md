@@ -152,6 +152,24 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-09-19
+Reproduction status: Confirmed (by document inspection, matching the bug's own stated reproduction method — this is a static docs-accuracy defect with no runnable test surface).
+Evidence captured:
+- `grep -c 'pattern = "bob task' the-intern/bob-skills/README.md` → 0 (whole file, not just the TOML block).
+- `grep -n 'pattern = "bob task\*"' the-intern/bob-skills/README.md` → no match (exit 1).
+- `grep -n 'pattern = "/abs/skill-install-path/tasks/SKILL.md"' the-intern/bob-skills/README.md` → no match (exit 1).
+- The "Verified S-004 action rules for the install-path model" TOML block (README.md lines 224-336) contains exactly 19 `[[policy.action_rules]]` entries — 7 `read` (email-triage/himalaya/worklog `SKILL.md` + `references/*.md`, none for `tasks/SKILL.md`) and 12 `bash` (himalaya*/cat config*/bob worklog*, none for `bob task*`) — confirming both pieces the bug's Summary/Expected Behavior sections call out are absent from the table.
+- `grep -n "tasks/SKILL.md" the-intern/bob-skills/README.md` → zero mentions anywhere in the file (not even in prose), so the missing read rule has no partial coverage at all.
+- `grep -n "bob task" the-intern/bob-skills/README.md` → only prose mentions (lines 82, 352, 433-436); notably lines 433-436 assert "the `bob task*` rule noted above ... is required for this workflow too" even though no such rule exists anywhere above it in the document — the README's own prose contradicts its TOML block, corroborating the gap.
+- `git log --oneline -- the-intern/bob-skills/README.md` shows the contradictory prose was introduced by `ce3f7f7` (docs(bob-skills): correct worklog cross-day continuity prose, T-212), which per the bug's Related section corrected nearby prose but was out of scope to touch the policy TOML.
+- `grep -rn "bob-skills/README.md" the-intern/service --include="*.rs"` → no matches; no automated test exercises this README's TOML content, consistent with the bug's Evidence section stating this is docs-only with no CI coverage.
+Isolated fault: `the-intern/bob-skills/README.md`, "Verified S-004 action rules for the install-path model" section, `[[policy.action_rules]]` TOML block (lines 224-336). The block is missing (1) a `bash` rule with `pattern = "bob task*"` and (2) a `read` rule with `pattern = "/abs/skill-install-path/tasks/SKILL.md"`.
+Root cause or fault hypothesis: Documentation drift — the TOML block was last substantively edited by `c562793` (migrate worklog action rules to bob worklog) and then referenced by name in continuity prose added by `ce3f7f7` (T-212) as though a `bob task*` rule already existed in it ("the `bob task*` rule noted above"), but neither commit actually added the rule to the TOML block or added any read rule for `tasks/SKILL.md`. Neither commit's task scope (per T-212's Related-section note) included updating the install-path policy TOML, so the runtime dependency T-206 introduced (email-triage's SKILL.md step 1 calling `bob task list` unconditionally, plus task-board escalation continuity) was never reflected back into this README's example policy.
+Planned verification:
+- `grep -n 'pattern = "bob task\*"' the-intern/bob-skills/README.md`
+- `grep -n 'pattern = "/abs/skill-install-path/tasks/SKILL.md"' the-intern/bob-skills/README.md`
+- Expect one match each, both inside the "Verified S-004 action rules for the install-path model" section's policy.action_rules TOML block (lines 224-336), mirroring the existing `bob worklog*` bash rule's shape and the existing per-skill SKILL.md read rules' shape respectively.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
