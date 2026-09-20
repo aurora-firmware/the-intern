@@ -230,6 +230,12 @@ himalaya template reply 42 -- "$BODY" | himalaya template send
 himalaya template reply -A 42 -- "$BODY" | himalaya template send
 ```
 
+**To attach a real file to a reply, do not use this `-- "$BODY"` shape.**
+`template reply`'s own `BODY` argument silently escapes MML attachment
+syntax instead of sending it (Observed, B-051) — see [Sending an
+Attachment](#sending-an-attachment-mml-syntax) for the working,
+no-`BODY`-argument composition pattern.
+
 ---
 
 ## Forwarding
@@ -252,6 +258,16 @@ shape [Composing and Sending](#composing-and-sending) explains:
 ```bash
 himalaya template forward 42 -- "$BODY" | himalaya template send
 ```
+
+`template forward` was Observed to share `template write`/`template
+reply`'s MML attachment-escaping defect on its own `BODY` argument
+(Observed, B-051) — the same `-- "$BODY"` shape above silently drops any
+`<#part>` attachment in `BODY` instead of sending it. See [Sending an
+Attachment](#sending-an-attachment-mml-syntax) for the working pattern;
+the no-`BODY`-argument-plus-splice approach documented there for
+`template reply` is expected to apply the same way to `template forward`'s
+own quoted-original skeleton, though this was not itself re-verified for
+`forward` in the B-051 session.
 
 ---
 
@@ -305,6 +321,11 @@ himalaya template write \
   -- "$BODY" | himalaya template send
 ```
 
+To attach a real file, do not put an MML `<#part>` block in `BODY` this
+way — `template write`'s own `BODY` argument silently escapes it instead
+of sending it (Observed, B-051). See [Sending an
+Attachment](#sending-an-attachment-mml-syntax) for the working pattern.
+
 To save a draft instead of sending, pipe the same way into `himalaya
 template save [OPTIONS]` (same corrected pipe shape as `template send`,
 plus `-f, --folder <NAME>`, default `INBOX` — point it at the account's
@@ -330,6 +351,155 @@ by a live escalation-send that actually completed using the pipe form.
 `template write`'s own output format was Observed directly (the "Hello
 world" transcript above); the remaining command shapes and flags are
 confirmed from `--help`.
+
+---
+
+## Sending an Attachment (MML Syntax)
+
+A real file attachment is an MML *part* directive, compiled by `template
+send` into a real MIME attachment when it appears anywhere in the
+template text handed to it:
+
+```text
+<#part type=<MIME-TYPE> filename="<ABSOLUTE-PATH>"><#/part>
+```
+
+`type` is the attachment's MIME type (e.g. `application/pdf`,
+`application/octet-stream`); `filename` must be an absolute path to a file
+that already exists on disk. `himalaya template --help` documents MML as
+backed by the [`mml-lib`](https://crates.io/crates/mml-lib) crate.
+
+**MML attachment-escaping pitfall (Observed, B-051).** `template write`,
+`template reply`, and `template forward` (confirmed for all three)
+unconditionally escape any `<#...>`/`<#/...>` MML syntax found in their
+own `BODY` positional argument into inert `<#!...>` text — before the
+result is ever piped anywhere. Passing an MML `<#part>` block as `BODY`
+the same way the rest of this reference passes ordinary message text (see
+[Embedding message-derived text
+safely](#embedding-message-derived-text-safely)) silently fails to attach
+anything:
+
+```text
+$ BODY='<#part type=application/pdf filename="/home/daneel/Documents/quarterly-report.pdf"><#/part>'
+$ himalaya template write -H 'To:daneel@aurorafw.com' -H 'Subject:Quarterly report' -- "$BODY"
+From: Daneel AFW <daneel@aurorafw.com>
+To: daneel@aurorafw.com
+Subject: Quarterly report
+
+<#!part type=application/pdf filename="/home/daneel/Documents/quarterly-report.pdf"><#!/part>
+```
+
+The `<#!part ...><#!/part>` above is `template write`'s own stdout, before
+any piping — the escaping happens inside `template write`/`template
+reply`/`template forward` themselves, not in `template send`'s parsing of
+piped input. Piped into `template send` regardless, the message still
+sends (`Message successfully sent!`), but `envelope list -o json` shows
+`"has_attachment":false` and the recipient sees the escaped tag text
+verbatim instead of a file — nothing in the command's output signals the
+failure.
+
+**Verified working pattern.** Call `template write`/`template reply` with
+**no `BODY` argument at all** — the escaping only happens when `BODY` is
+given, so the headers-only (`template write`) or headers-plus-quoted-
+original-skeleton (`template reply`) output produced without it is
+unaffected. Splice the raw, un-escaped `<#part>...<#/part>` block into the
+template's empty new-body slot yourself, keeping **exactly one blank line
+before and after** the spliced part — getting this wrong (e.g. dropping
+the blank line that separates headers from body) silently breaks MML
+parsing a different way and also produces `has_attachment:false`, with no
+error. Then pipe the whole assembled template into `template send`, the
+same corrected pipe shape every other composition example in this
+reference uses.
+
+Composing a new message with an attachment:
+
+```bash
+HEADERS=$(himalaya template write -H 'To:daneel@aurorafw.com' -H 'Subject:Quarterly report')
+PART='<#part type=application/pdf filename="/home/daneel/Documents/quarterly-report.pdf"><#/part>'
+printf '%s' "$HEADERS"$'\n\n'"$PART"$'\n' | himalaya template send
+```
+
+Observed working transcript (the assembled template, before piping):
+
+```text
+From: Daneel AFW <daneel@aurorafw.com>
+To: daneel@aurorafw.com
+Subject: Quarterly report
+
+<#part type=application/pdf filename="/home/daneel/Documents/quarterly-report.pdf"><#/part>
+```
+
+Delivered message: `envelope list -o json` shows `"has_attachment":true`;
+`himalaya attachment download <id>` downloads a copy that is
+byte-identical (`diff`) to the source file.
+
+Replying with an attachment — this is the working answer to [GitHub issue
+#71](https://github.com/aurora-firmware/the-intern/issues/71) (no
+documented way to send an attachment in a reply). `template reply`'s
+no-`BODY` skeleton includes the quoted original after the empty new-body
+slot, so the part has to land between the header/body separator and the
+blank line before the quote, not just be appended at the end. The empty
+new-body slot in a no-`BODY` reply skeleton is exactly a 4-newline run
+(header/body separator + empty body + separator before the quote);
+replacing it with 2 newlines + the part + 2 newlines keeps exactly one
+blank line on each side:
+
+```bash
+SKELETON=$(himalaya template reply 247 -H 'To:daneel@aurorafw.com')
+PART='<#part type=application/pdf filename="/home/daneel/Documents/quarterly-report.pdf"><#/part>'
+FULL="${SKELETON/$'\n\n\n\n'/$'\n\n'"$PART"$'\n\n'}"
+printf '%s' "$FULL" | himalaya template send
+```
+
+Observed working transcript (the assembled reply template, before
+piping — replying to message 247, subject "Quarterly numbers", body
+"Draft body for the seed message."):
+
+```text
+From: Daneel AFW <daneel@aurorafw.com>
+To: daneel@aurorafw.com
+In-Reply-To: <18d70bf4c36964c4.55de1fe2b2a292f0.22ebeef29a4ed330@auroralab>
+Subject: Re: Quarterly numbers
+
+<#part type=application/pdf filename="/home/daneel/Documents/quarterly-report.pdf"><#/part>
+
+On 20/09/2026 13:55, Daneel AFW wrote:
+> Draft body for the seed message.
+```
+
+Same result: `has_attachment:true`, downloaded attachment byte-identical
+to the source. This `${SKELETON/pattern/replacement}` splice assumes the
+standard single-`<#part>`, single-paragraph-quote reply shape; for a
+one-off reply, splicing the part into the captured skeleton text by hand
+(rather than a shell substitution) works identically, as long as the
+one-blank-line-before-and-after rule above is kept — getting it wrong
+looks exactly like this (Observed, dropping the header/body blank line):
+
+```text
+From: Daneel AFW <daneel@aurorafw.com>
+To: daneel@aurorafw.com
+In-Reply-To: <18d70bf4c36964c4.55de1fe2b2a292f0.22ebeef29a4ed330@auroralab>
+Subject: Re: Quarterly numbers
+<#part type=application/pdf filename="/home/daneel/Documents/quarterly-report.pdf"><#/part>
+
+On 20/09/2026 13:55, Daneel AFW wrote:
+> Draft body for the seed message.
+```
+
+— sends successfully but delivers `"has_attachment":false`, the same
+silent failure as the escaping pitfall above, from a different cause.
+
+`template forward` was Observed to escape its own `BODY` argument the
+same way (see [Forwarding](#forwarding)); the no-`BODY`-argument-plus-
+splice pattern above is expected to apply there too but was not itself
+re-verified for `forward` in this session.
+
+Avoid `type=text/plain` for a genuine text-file attachment: an unrelated
+defect (`B-053`, filed separately — not a B-051 escaping symptom) appends
+a spurious trailing blank line to `text/plain`-typed MML parts
+specifically, corrupting the delivered bytes. A binary or opaque MIME type
+such as `application/octet-stream` — or a real type like
+`application/pdf` as shown above — round-trips byte-identical.
 
 ---
 
@@ -470,6 +640,13 @@ himalaya flag set 42 seen flagged   # replace 42's flags with these two
 ---
 
 ## Handling Attachments
+
+This section covers *downloading* attachments from an existing message.
+To attach a file to an outgoing message (compose, reply, or forward), see
+[Sending an Attachment](#sending-an-attachment-mml-syntax) — do not pass
+an MML `<#part>` block as `BODY` to `template write`/`template
+reply`/`template forward`, it gets silently escaped instead of sent
+(Observed, B-051).
 
 ```bash
 himalaya attachment download [OPTIONS] <ID>...
