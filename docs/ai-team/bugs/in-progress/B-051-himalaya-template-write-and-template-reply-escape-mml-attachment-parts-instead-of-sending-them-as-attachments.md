@@ -238,3 +238,106 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-20
+
+PASS
+
+Both review stages passed.
+
+**Diagnosis→fix evidence chain:** Diagnosis 1 records reproduction status
+(confirmed, live-reproduced twice against the real configured account, for
+both `template write` and the bug's own exact `template reply` repro
+shape), evidence captured (stdout showing the escaping happens inside
+`write`/`reply`/`forward` themselves before any piping, `envelope list -o
+json` / `message read` confirming `has_attachment:false` and literal
+`<#!part...>` text, a working control using the reporter's full-raw-template
+counter-case, and two verified GREEN workarounds), an isolated fault
+(external `himalaya v1.2.0` binary defect, not this repo's source;
+secondarily this repo's undocumented MML attachment-composition path), and
+a root-cause hypothesis (write/reply/forward unconditionally escape any
+`<#...>`-shaped text in their own `BODY` argument before splicing it into
+the template they print, while `template send`'s raw/stdin parser never
+escapes). The fix contract (planned fix + planned verification) is
+complete.
+
+**Stage 1 — Bug criteria:**
+- Fix addresses the isolated fault/root cause: yes — the new "Sending an
+  Attachment (MML Syntax)" section documents the escaping pitfall with a
+  real Observed transcript, then the verified working no-`BODY`-argument
+  splice pattern for both `template write` and `template reply`, matching
+  Diagnosis 1's planned fix exactly.
+- Fix Verification: the bug file's original section is generic/pre-diagnosis
+  as expected; checked against the Diagnosis Log's "Planned verification"
+  and the Work Log's actual narrative instead. Work Log Session 1 re-ran
+  the RED cases live (`template write -- "$BODY" | template send` and the
+  bug's exact `template reply <id> -- "$BODY" | template send` repro shape,
+  both still `has_attachment:false`, escaping visible in each command's own
+  stdout before any pipe) and the GREEN cases (no-`BODY`-argument splice
+  for both `write` and `reply`, both `has_attachment:true`, downloaded
+  attachments byte-identical via `diff` to the source file) — this matches
+  Diagnosis 1's planned verification shape and the same live RED/GREEN
+  style B-050 established as adequate for a doc-only external-binary-defect
+  fix.
+- No unrelated behavior added.
+
+**Stage 2 — Code quality / bug-fix addendum:**
+- Diff scoped correctly: `git diff dev-agent..bug/B-051-himalaya-template-mml-attachment-escaping`
+  touches only `the-intern/bob-skills/skills/himalaya/references/command-reference.md`
+  and `the-intern/bob-skills/.pi/skills/himalaya/references/command-reference.md`
+  (177 insertions each — identical diff text, confirmed by the identical
+  pre/post blob hashes `e2299b1..09a406e` on both files). The branch's diff
+  against `dev-agent` also shows the `B-051`/`B-053` bug files themselves as
+  pure deletions with zero additions (`git diff ... -- docs/ai-team/bugs/`
+  has 0 added lines) — this is expected divergence noise, since the branch
+  was cut before the Diagnosis Log/Work Log entries were committed directly
+  to `dev-agent` (bug files are canonical lifecycle state, not developer
+  branch content), not a change the Developer made. No other files touched.
+- No Rust/TS source touched (confirmed via diffstat — markdown only, both
+  files under `bob-skills/`), consistent with this being a documentation-only
+  fix for an external binary defect the repo cannot patch. The Work Log's
+  reasoning for skipping an automated regression test holds — there is no
+  repo source to unit-test — and the live RED/GREEN re-verification against
+  the real account is an adequate substitute, mirroring B-034/B-050.
+- `B-053` (the out-of-scope `text/plain`-specific trailing-CRLF defect found
+  during verification) exists on `dev-agent` under
+  `docs/ai-team/bugs/open/`, is not fabricated, and is a reasonable,
+  well-scoped, independently-confirmed report (twice-reproduced, isolates
+  the defect to the `text/plain` MIME type specifically via a working
+  `application/octet-stream` control, distinct trigger from B-051's own
+  command-choice defect). B-051's own new section correctly avoids
+  `text/plain` in every worked example (all use `application/pdf`) and adds
+  an explicit one-line pointer to `B-053` at the end of the new section, as
+  the Work Log claims.
+- The "Forwarding" cross-reference is stated honestly, not overclaimed: both
+  the "Forwarding" section's own note and the "Sending an Attachment"
+  section's closing note explicitly say `template forward` was *observed*
+  to share the escaping defect but that the no-`BODY`-argument-plus-splice
+  workaround was *not itself re-verified* for `forward` — matching the Work
+  Log's claim precisely (only `write`/`reply` were verified end-to-end).
+- The new section's cross-references from "Replying", "Forwarding",
+  "Composing and Sending", and "Handling Attachments" all point to the
+  correct `#sending-an-attachment-mml-syntax` anchor, which exists; the
+  "Handling Attachments" note (not explicitly named in Diagnosis 1's planned
+  fix step 2, which named only "Replying"/"Composing and Sending") is a
+  reasonable, narrowly-scoped extension — it prevents a reader from
+  mistaking that download-only section for an attach-on-send how-to — and
+  is exactly the kind of cross-reference addition this review treats as in
+  scope alongside the diagnosed fix.
+- Commit `5272a3e` message `docs(himalaya): document working MML
+  attachment-composition pattern` follows `type(scope): description`
+  (lowercase, imperative, 67 chars, no period, no bug ID repeated in the
+  subject).
+- The new "MML attachment-escaping pitfall (Observed, B-051)" callout and
+  the "Observed working transcript" / "Observed, dropping the header/body
+  blank line" callouts follow the file's own established "Observed"
+  pitfall-callout convention (same pattern B-050 and B-034 used elsewhere in
+  the file); markdown code fences are well-formed and every cross-reference
+  anchor resolves.
+
+No blocking issues found. Minor non-blocking observation: the worked
+examples use this account's real address/name and a live in-reply-to
+message ID rather than fully generic placeholders — acceptable, matching
+B-050's precedent observation, since it keeps the examples runnable and
+Observed-verifiable against the account they were captured on, and the
+surrounding prose already tells the reader to substitute their own values.
