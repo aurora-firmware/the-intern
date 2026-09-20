@@ -137,6 +137,46 @@ Reading a message (without `--preview`) sets its `Seen` flag as a side
 effect — this is how the mailbox itself, not a separate state file, tracks
 what has already been looked at.
 
+**Attachment `filename=` path pitfall (Observed, B-052).** When a message
+has an attachment, `message read` renders its MML part as `<#part
+type=... filename="..."><#/part>`, and that `filename=` value looks like a
+real, already-usable local path — but it isn't one yet. It's synthesized
+by joining the account's configured `downloads-dir` (see [Handling
+Attachments](#handling-attachments)) with the bare basename recovered from
+the message's own `Content-Disposition: filename` header, with no check
+that a file actually exists there. The rendered path is identical whether
+or not `himalaya attachment download` has ever been run for that message:
+
+```text
+$ himalaya message read -f INBOX --preview 254
+From: Daneel AFW <daneel@aurorafw.com>
+To: daneel@aurorafw.com
+Subject: B-052 doc verification attachment
+
+<#part type=application/pdf filename="/home/daneel/Downloads/b5793ba8-3e11-4640-bbf5-fc56ee7f7e02.pdf"><#/part>
+
+$ ls /home/daneel/Downloads/b5793ba8-3e11-4640-bbf5-fc56ee7f7e02.pdf
+ls: cannot access '/home/daneel/Downloads/b5793ba8-3e11-4640-bbf5-fc56ee7f7e02.pdf': No such file or directory
+
+$ himalaya attachment download -f INBOX 254
+1 attachment(s) found for message 254!
+Downloading "/home/daneel/Downloads/b5793ba8-3e11-4640-bbf5-fc56ee7f7e02.pdf"…
+Downloaded 1 attachment!
+
+$ ls -la /home/daneel/Downloads/b5793ba8-3e11-4640-bbf5-fc56ee7f7e02.pdf
+-rw-r--r-- 1 daneel daneel 49 Sep 20 16:07 /home/daneel/Downloads/b5793ba8-3e11-4640-bbf5-fc56ee7f7e02.pdf
+```
+
+Treat a `filename=` value shown by `message read` as a prediction of where
+`attachment download` *would* save the file, never as proof it's already
+there — run `attachment download` (or check the filesystem directly)
+before assuming the rendered path can be opened. The prediction can also
+be wrong: if the attachment's basename collides with a file already
+downloaded from an earlier message, `attachment download` applies its own
+`_N` collision-avoidance renaming, so the file can end up saved somewhere
+other than the path `message read` rendered — the render never accounts
+for this.
+
 ---
 
 ## Embedding message-derived text safely
@@ -647,6 +687,12 @@ To attach a file to an outgoing message (compose, reply, or forward), see
 an MML `<#part>` block as `BODY` to `template write`/`template
 reply`/`template forward`, it gets silently escaped instead of sent
 (Observed, B-051).
+
+Before assuming a message's attachment is already available locally, see
+[Reading a Message](#reading-a-message) for the `filename=` path pitfall
+(Observed, B-052) — the local path `message read` renders for an
+attachment part is a synthesized prediction, not evidence the file
+already exists on disk.
 
 ```bash
 himalaya attachment download [OPTIONS] <ID>...
