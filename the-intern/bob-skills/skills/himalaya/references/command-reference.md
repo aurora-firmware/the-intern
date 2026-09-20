@@ -137,7 +137,7 @@ Reading a message (without `--preview`) sets its `Seen` flag as a side
 effect — this is how the mailbox itself, not a separate state file, tracks
 what has already been looked at.
 
-**Attachment `filename=` path pitfall (Observed, B-052).** When a message
+**Attachment `filename=` path pitfall (Observed).** When a message
 has an attachment, `message read` renders its MML part as `<#part
 type=... filename="..."><#/part>`, and that `filename=` value looks like a
 real, already-usable local path — but it isn't one yet. It's synthesized
@@ -151,7 +151,7 @@ or not `himalaya attachment download` has ever been run for that message:
 $ himalaya message read -f INBOX --preview 254
 From: Daneel AFW <daneel@aurorafw.com>
 To: daneel@aurorafw.com
-Subject: B-052 doc verification attachment
+Subject: Attachment verification
 
 <#part type=application/pdf filename="/home/daneel/Downloads/b5793ba8-3e11-4640-bbf5-fc56ee7f7e02.pdf"><#/part>
 
@@ -272,7 +272,7 @@ himalaya template reply -A 42 -- "$BODY" | himalaya template send
 
 **To attach a real file to a reply, do not use this `-- "$BODY"` shape.**
 `template reply`'s own `BODY` argument silently escapes MML attachment
-syntax instead of sending it (Observed, B-051) — see [Sending an
+syntax instead of sending it (Observed) — see [Sending an
 Attachment](#sending-an-attachment-mml-syntax) for the working,
 no-`BODY`-argument composition pattern.
 
@@ -301,13 +301,13 @@ himalaya template forward 42 -- "$BODY" | himalaya template send
 
 `template forward` was Observed to share `template write`/`template
 reply`'s MML attachment-escaping defect on its own `BODY` argument
-(Observed, B-051) — the same `-- "$BODY"` shape above silently drops any
+(Observed) — the same `-- "$BODY"` shape above silently drops any
 `<#part>` attachment in `BODY` instead of sending it. See [Sending an
 Attachment](#sending-an-attachment-mml-syntax) for the working pattern;
 the no-`BODY`-argument-plus-splice approach documented there for
 `template reply` is expected to apply the same way to `template forward`'s
 own quoted-original skeleton, though this was not itself re-verified for
-`forward` in the B-051 session.
+`forward` in this session.
 
 ---
 
@@ -363,7 +363,7 @@ himalaya template write \
 
 To attach a real file, do not put an MML `<#part>` block in `BODY` this
 way — `template write`'s own `BODY` argument silently escapes it instead
-of sending it (Observed, B-051). See [Sending an
+of sending it (Observed). See [Sending an
 Attachment](#sending-an-attachment-mml-syntax) for the working pattern.
 
 To save a draft instead of sending, pipe the same way into `himalaya
@@ -409,7 +409,7 @@ template text handed to it:
 that already exists on disk. `himalaya template --help` documents MML as
 backed by the [`mml-lib`](https://crates.io/crates/mml-lib) crate.
 
-**MML attachment-escaping pitfall (Observed, B-051).** `template write`,
+**MML attachment-escaping pitfall (Observed).** `template write`,
 `template reply`, and `template forward` (confirmed for all three)
 unconditionally escape any `<#...>`/`<#/...>` MML syntax found in their
 own `BODY` positional argument into inert `<#!...>` text — before the
@@ -454,12 +454,13 @@ reference uses.
 Composing a new message with an attachment:
 
 ```bash
-HEADERS=$(himalaya template write -H 'To:daneel@aurorafw.com' -H 'Subject:Quarterly report')
-PART='<#part type=application/pdf filename="/home/daneel/Documents/quarterly-report.pdf"><#/part>'
+HEADERS=$(himalaya template write -H 'To:person@example.com' -H 'Subject:Quarterly report')
+PART='<#part type=application/pdf filename="/path/to/file.pdf"><#/part>'
 printf '%s' "$HEADERS"$'\n\n'"$PART"$'\n' | himalaya template send
 ```
 
-Observed working transcript (the assembled template, before piping):
+Observed working transcript from a live account (the assembled template,
+before piping):
 
 ```text
 From: Daneel AFW <daneel@aurorafw.com>
@@ -473,10 +474,8 @@ Delivered message: `envelope list -o json` shows `"has_attachment":true`;
 `himalaya attachment download <id>` downloads a copy that is
 byte-identical (`diff`) to the source file.
 
-Replying with an attachment — this is the working answer to [GitHub issue
-#71](https://github.com/aurora-firmware/the-intern/issues/71) (no
-documented way to send an attachment in a reply). `template reply`'s
-no-`BODY` skeleton includes the quoted original after the empty new-body
+Replying with an attachment: `template reply`'s no-`BODY` skeleton
+includes the quoted original after the empty new-body
 slot, so the part has to land between the header/body separator and the
 blank line before the quote, not just be appended at the end. The empty
 new-body slot in a no-`BODY` reply skeleton is exactly a 4-newline run
@@ -485,8 +484,8 @@ replacing it with 2 newlines + the part + 2 newlines keeps exactly one
 blank line on each side:
 
 ```bash
-SKELETON=$(himalaya template reply 247 -H 'To:daneel@aurorafw.com')
-PART='<#part type=application/pdf filename="/home/daneel/Documents/quarterly-report.pdf"><#/part>'
+SKELETON=$(himalaya template reply <id> -H 'To:person@example.com')
+PART='<#part type=application/pdf filename="/path/to/file.pdf"><#/part>'
 FULL="${SKELETON/$'\n\n\n\n'/$'\n\n'"$PART"$'\n\n'}"
 case "$FULL" in
   *"$PART"*) ;;
@@ -495,8 +494,9 @@ esac
 printf '%s' "$FULL" | himalaya template send
 ```
 
-Observed working transcript (the assembled reply template, before
-piping — replying to message 247, subject "Quarterly numbers", body
+Observed working transcript from a live account (the assembled reply
+template, before piping — replying to message 247, subject "Quarterly
+numbers", body
 "Draft body for the seed message."):
 
 ```text
@@ -545,11 +545,11 @@ same way (see [Forwarding](#forwarding)); the no-`BODY`-argument-plus-
 splice pattern above is expected to apply there too but was not itself
 re-verified for `forward` in this session.
 
-**`text/plain` attachment trailing-CRLF pitfall (Observed, B-053).** An
+**`text/plain` attachment trailing-CRLF pitfall (Observed).** An
 MML `<#part>` whose `type` attribute is the exact lowercase string
 `text/plain` can be delivered with a spurious trailing blank line
 appended to the attached file's content — a different, unrelated defect
-from the B-051 escaping pitfall above (this one corrupts real content
+from the escaping pitfall above (this one corrupts real content
 bytes rather than failing to attach at all). The defect is
 **content-shape/size dependent, not universal**: himalaya auto-selects
 the attachment's `Content-Transfer-Encoding` based on the content, and
@@ -562,16 +562,16 @@ result on small test content as proof the pitfall doesn't apply; verify
 with multi-line or otherwise larger content instead.
 
 ```text
-$ cat b053-doc-multi.txt
+$ cat multi-line.txt
 This is line one.
-This is line two of the B-053 doc re-verification file.
+This is line two of the re-verification file.
 Third line here.
 
-$ wc -c b053-doc-multi.txt
-91 b053-doc-multi.txt
+$ wc -c multi-line.txt
+91 multi-line.txt
 
-$ HEADERS=$(himalaya template write -H 'To:daneel@aurorafw.com' -H 'Subject:B-053 doc RED verification')
-$ PART='<#part type=text/plain filename="/path/to/b053-doc-multi.txt"><#/part>'
+$ HEADERS=$(himalaya template write -H 'To:daneel@aurorafw.com' -H 'Subject:RED verification')
+$ PART='<#part type=text/plain filename="/path/to/multi-line.txt"><#/part>'
 $ printf '%s' "$HEADERS"$'\n\n'"$PART"$'\n' | himalaya template send
 Message successfully sent!
 
@@ -580,15 +580,15 @@ $ himalaya envelope list -o json -s 1
 
 $ himalaya attachment download 269
 1 attachment(s) found for message 269!
-Downloading "/home/daneel/Downloads/b053-doc-multi.txt"…
+Downloading "/home/daneel/Downloads/multi-line.txt"…
 Downloaded 1 attachment!
 
-$ diff b053-doc-multi.txt /home/daneel/Downloads/b053-doc-multi.txt
+$ diff multi-line.txt /home/daneel/Downloads/multi-line.txt
 3a4
 >
 
-$ wc -c /home/daneel/Downloads/b053-doc-multi.txt
-93 /home/daneel/Downloads/b053-doc-multi.txt
+$ wc -c /home/daneel/Downloads/multi-line.txt
+93 /home/daneel/Downloads/multi-line.txt
 
 $ himalaya message export -F 269 | grep -i content-t
 Content-Type: text/plain
@@ -608,8 +608,8 @@ as — it only avoids the internal himalaya composition path that has the
 defect, which is keyed on the *exact* lowercase spelling:
 
 ```text
-$ HEADERS=$(himalaya template write -H 'To:daneel@aurorafw.com' -H 'Subject:B-053 doc GREEN verification')
-$ PART='<#part type=TEXT/PLAIN filename="/path/to/b053-doc-multi.txt"><#/part>'
+$ HEADERS=$(himalaya template write -H 'To:daneel@aurorafw.com' -H 'Subject:GREEN verification')
+$ PART='<#part type=TEXT/PLAIN filename="/path/to/multi-line.txt"><#/part>'
 $ printf '%s' "$HEADERS"$'\n\n'"$PART"$'\n' | himalaya template send
 Message successfully sent!
 
@@ -618,15 +618,15 @@ $ himalaya envelope list -o json -s 1
 
 $ himalaya attachment download 270
 1 attachment(s) found for message 270!
-Downloading "/home/daneel/Downloads/b053-doc-multi.txt"…
+Downloading "/home/daneel/Downloads/multi-line.txt"…
 Downloaded 1 attachment!
 
-$ diff b053-doc-multi.txt /home/daneel/Downloads/b053-doc-multi.txt
+$ diff multi-line.txt /home/daneel/Downloads/multi-line.txt
 $ echo $?
 0
 
-$ wc -c /home/daneel/Downloads/b053-doc-multi.txt
-91 /home/daneel/Downloads/b053-doc-multi.txt
+$ wc -c /home/daneel/Downloads/multi-line.txt
+91 /home/daneel/Downloads/multi-line.txt
 
 $ himalaya message export -F 270 | grep -i content-t
 Content-Type: TEXT/PLAIN
@@ -720,7 +720,7 @@ message: if the given folder points to the trash folder, it adds the
 folder. Only the expunge folder command truly deletes messages" — a soft
 delete unless already acting on the trash folder.
 
-**Hardcoded trash-destination pitfall (Observed, B-050).** Despite the
+**Hardcoded trash-destination pitfall (Observed).** Despite the
 `--help` text above, `message delete`'s move-to-trash destination and its
 already-in-trash detection are both hardcoded to the literal folder name
 `Trash`, never consulting the account's configured `folder.alias.trash`.
@@ -739,20 +739,22 @@ resolution, so no `-f` value works around this — confirmed against the
 installed binary: the identical error occurs both for an ordinary INBOX
 message and for a message already sitting in the account's real trash
 folder (`himalaya message delete -f INBOX.Papelera 8` fails the same way).
-Use the two-part replacement below instead; both commands take the
-destination as an explicit argument with no hardcoded fallback, and were
-Observed to work directly against the same account:
+Both commands below take the destination as an explicit argument with no
+hardcoded fallback, and were Observed to work directly against the same
+account. `<trash-folder>` is a placeholder, not a literal value to
+copy — every account (and every provider) can name its trash folder
+differently; resolve the real name first from `folder.alias.trash` in
+the account's config, or by listing folders (see [Moving and
+Copying](#moving-and-copying)). For the account used in this session it
+happens to be `INBOX.Papelera`, per the pitfall transcript above — that
+is this account's own config value, not a general default:
+
+**Replacement for `message delete`:**
 
 ```bash
-himalaya message move INBOX.Papelera 42          # ordinary message -> trash
-himalaya flag add 8 deleted -f INBOX.Papelera     # already-in-trash -> soft delete
+himalaya message move <trash-folder> 42                # ordinary message -> trash
+himalaya flag add 42 deleted -f <trash-folder>          # already-in-trash -> soft delete
 ```
-
-`INBOX.Papelera` above is this account's real trash folder
-(`folder.alias.trash` in its config); substitute the target account's own
-trash folder name — read it from `folder.alias.trash` in the account's
-config, or list folders to find it (see [Moving and
-Copying](#moving-and-copying)).
 
 ---
 
@@ -788,11 +790,11 @@ To attach a file to an outgoing message (compose, reply, or forward), see
 [Sending an Attachment](#sending-an-attachment-mml-syntax) — do not pass
 an MML `<#part>` block as `BODY` to `template write`/`template
 reply`/`template forward`, it gets silently escaped instead of sent
-(Observed, B-051).
+(Observed).
 
 Before assuming a message's attachment is already available locally, see
 [Reading a Message](#reading-a-message) for the `filename=` path pitfall
-(Observed, B-052) — the local path `message read` renders for an
+(Observed) — the local path `message read` renders for an
 attachment part is a synthesized prediction, not evidence the file
 already exists on disk.
 
