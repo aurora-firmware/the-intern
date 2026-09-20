@@ -3,7 +3,7 @@ id: B-053
 title: himalaya MML text/plain attachment part appends a spurious trailing CRLF,
   corrupting the delivered attachment
 severity: medium
-status: in-progress
+status: resolved
 created: '2026-09-20'
 ---
 
