@@ -8,7 +8,7 @@ created: 2026-09-20
 
 ## Summary
 
-Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 213. Blocked tasks: 0. Open bugs: 1. Bugs in progress: 0. Resolved bugs: 52. ADRs: 15. Latest integration result: chore(bugs): merge B-052 himalaya read attachment path nonexistent.
+Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 213. Blocked tasks: 0. Open bugs: 0. Bugs in progress: 0. Resolved bugs: 53. ADRs: 15. Latest integration result: chore(bugs): merge B-053 himalaya text/plain attachment CRLF pitfall.
 
 ## Specifications
 
@@ -31,7 +31,7 @@ Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 213. 
 
 ## Integration Evidence
 
-- Latest integration-test result: chore(bugs): merge B-052 himalaya read attachment path nonexistent
+- Latest integration-test result: chore(bugs): merge B-053 himalaya text/plain attachment CRLF pitfall
 - Source: git log --all --grep=merge|integration|verification|test -n 1
 - Date: 2026-09-20
 
@@ -269,7 +269,6 @@ Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 213. 
 
 | Bug ID | Title | Severity | Status | Diagnosis Status |
 |---|---|---|---|---|
-| B-053 | himalaya MML text/plain attachment part appends a spurious trailing CRLF, corrupting the delivered attachment | medium | open | n/a |
 | B-001 | bob serve does not answer status/sessions over admin socket | high | resolved | complete |
 | B-002 | pi-agent-supervisor terminate test flakes under load because spawn_config sets 50 ms deadline | high | resolved | complete |
 | B-003 | bob extension can grow memory without bound — pendingFrames uncapped and socket.write() return ignored | high | resolved | complete |
@@ -322,6 +321,7 @@ Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 213. 
 | B-050 | himalaya message delete fails on INBOX messages with an IMAP namespace error | high | resolved | complete |
 | B-051 | himalaya template write and template reply escape MML attachment parts instead of sending them as attachments | high | resolved | complete |
 | B-052 | himalaya message read renders attachment parts with nonexistent local file paths | medium | resolved | complete |
+| B-053 | himalaya MML text/plain attachment part appends a spurious trailing CRLF, corrupting the delivered attachment | medium | resolved | complete |
 
 ## Decisions
 
