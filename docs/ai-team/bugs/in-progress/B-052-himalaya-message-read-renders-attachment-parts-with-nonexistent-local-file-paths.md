@@ -219,3 +219,97 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-20
+
+PASS
+
+Both review stages passed.
+
+**Diagnosis→fix evidence chain:** Diagnosis 1 records reproduction status
+(confirmed, live-reproduced against the real configured account with a
+purpose-built message, id 253, plus cross-confirmation against three
+pre-existing messages), evidence captured (rendered `filename=` path vs.
+actual on-disk state before/after `attachment download`, the raw `.eml`'s
+`Content-Disposition` basename isolating the downloads-dir/basename join,
+corroborating collision-renaming evidence on messages 251/252/244,
+`--debug` output showing no internal trace of the join, `--help` review of
+both commands, and a grep sweep of policy/skill files for any dependency
+on the rendered path), an isolated fault (external `himalaya v1.2.0`
+binary, not this repo's source; secondarily this repo's undocumented
+caveat gap in `command-reference.md`), and a root-cause hypothesis
+(explicitly labeled a best-supported hypothesis, consistent with B-051's
+finding that this class of himalaya behavior isn't exposed via
+`--debug`/`--trace`). The fix contract (planned fix, four steps, plus
+planned verification) is complete.
+
+**Stage 1 — Bug criteria:**
+- Fix addresses the isolated fault: yes — the new "Attachment `filename=`
+  path pitfall (Observed, B-052)" callout in "Reading a Message" explains
+  the synthesized-path mechanism and includes a real Observed transcript;
+  a cross-reference note was added to "Handling Attachments"; both match
+  Diagnosis 1's planned fix steps 1–2 exactly. Step 4 (no policy/skill-file
+  change) also matches — verified below.
+- Fix Verification: the bug file's original section is generic/pre-diagnosis
+  as expected; checked against the Diagnosis Log's "Planned verification"
+  and the Work Log's actual narrative instead. Work Log Session 1 describes
+  a fresh live re-verification (new message id 254, not a reuse of message
+  253, specifically to catch drift and avoid relying on already-downloaded
+  state): RED (`message read --preview 254` renders a `Downloads/` path,
+  `ls` on that exact path fails) then GREEN (`attachment download`
+  materializes the file at exactly that rendered path, byte-identical via
+  `diff` to the source file) — this matches Diagnosis 1's planned
+  verification shape and the same live RED/GREEN style B-050/B-051
+  established as adequate for a doc-only external-binary-defect fix.
+- No unrelated behavior added.
+
+**Stage 2 — Code quality / bug-fix addendum:**
+- Diff scoped correctly: `git diff dev-agent..bug/B-052-himalaya-read-attachment-path-nonexistent`
+  touches only `the-intern/bob-skills/skills/himalaya/references/command-reference.md`
+  and `the-intern/bob-skills/.pi/skills/himalaya/references/command-reference.md`
+  (46 insertions each — identical diff text, confirmed by identical
+  pre/post blob hashes `09a406e..a9d0181` on both files, and an empty
+  `diff` between the two post-fix blobs). The branch's diff against
+  `dev-agent` also shows the `B-052` bug file itself as a pure deletion of
+  the Diagnosis Log/Work Log sections with zero additions — expected
+  divergence noise, since the branch was cut before those entries were
+  committed directly to `dev-agent` (bug files are canonical lifecycle
+  state, not developer branch content), matching the exact pattern the
+  B-051 review already accepted, confirmed here by `git show --stat
+  e0a9549` showing the branch's only commit touches solely the two
+  reference files. No other files touched.
+- No Rust/TS/JS source touched anywhere in the diff (confirmed directly —
+  `git diff --name-only` filtered for `.rs`/`.ts`/`.tsx`/`.js` returns
+  nothing), consistent with this being a documentation-only fix for an
+  external binary defect the repo cannot patch. The Work Log's reasoning
+  for skipping an automated regression test holds — these `bob-skills`
+  reference files are outside the mdBook `the-intern/docs` build, so no
+  build/test command applies — and the live RED/GREEN re-verification
+  against the real account is an adequate substitute, mirroring
+  B-034/B-050/B-051.
+- Independently re-checked (not just trusted) the Work Log's claim that no
+  policy/skill-rule file needs changing: re-ran the same grep sweep across
+  `README.md`, `the-intern/docs/src/operator-guide/index.md`, and both
+  `email-triage` skill trees (`bob-skills/skills/` and `.pi/skills/`) for
+  `message read`. Only hit: the pre-existing `{ field_path = "command",
+  pattern = "himalaya*message read*" }` command-allow rule at
+  `operator-guide/index.md:1159`, which permits the command itself and
+  makes no claim about the rendered path being real — the Work Log's claim
+  is credible, confirmed independently.
+- Cross-reference anchors resolve: `#handling-attachments` and
+  `#reading-a-message` both exist as real `##` headings in the file; the
+  new callout and cross-reference note read cleanly in context (verified
+  directly in the branch's blob, not just the diff).
+- Commit `e0a9549` message `docs(himalaya): document message read
+  attachment path pitfall` follows `type(scope): description` (lowercase,
+  imperative, 61 characters, no period, no bug ID repeated in the
+  subject).
+- The new "Attachment `filename=` path pitfall (Observed, B-052)" callout
+  follows the file's own established "Observed" pitfall-callout convention
+  (same pattern B-050/B-051/B-034 used elsewhere in the file); the
+  markdown code fence is well-formed and the transcript is internally
+  consistent (message id, path, and byte size all agree across the three
+  command outputs shown).
+
+No blocking issues found. No minor observations beyond what is noted
+above.
