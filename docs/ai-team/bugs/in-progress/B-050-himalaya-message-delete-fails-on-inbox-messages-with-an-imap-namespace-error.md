@@ -199,3 +199,75 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-20
+
+PASS
+
+Both review stages passed.
+
+**Diagnosis→fix evidence chain:** Diagnosis 1 records reproduction status
+(confirmed, live-reproduced twice against the real configured account),
+evidence captured (`--debug` logs, config inspection, two control tests
+isolating the fault to `delete`'s destination resolution), an isolated
+fault (external `himalaya v1.2.0` binary defect; secondarily this repo's
+undocumented pitfall in `command-reference.md`), and a root-cause
+hypothesis (delete's trash-destination/detection logic is hardcoded to
+the literal folder name `Trash` and never consults `folder.alias.trash`,
+and `-f` only ever controls the source folder). The fix contract (planned
+fix + planned verification) is complete.
+
+**Stage 1 — Bug criteria:**
+- Fix addresses the isolated fault/root cause: yes — the doc now documents
+  the hardcoded-`Trash`-destination pitfall and replaces the broken
+  `message delete` form with the verified working `message move
+  <trash-folder> <id>` / `flag add <id> deleted -f <trash-folder>`
+  two-part replacement, matching Diagnosis 1's planned fix exactly.
+- Fix Verification: the bug file's original section is generic/pre-diagnosis
+  as expected; checked against the Diagnosis Log's "Planned verification"
+  and the Work Log's actual narrative instead. Work Log Session 1 re-ran
+  `himalaya message delete 220` (still fails identically — confirms the
+  unpatched external defect and that this is non-destructive), `himalaya
+  message move INBOX.Papelera 220` (succeeded, confirmed via `envelope
+  list -o json`), and `himalaya flag add 7 deleted -f INBOX.Papelera`
+  (succeeded, `"flags":["Deleted","Seen"]`) — this matches Diagnosis 1's
+  planned verification shape and re-confirms the doc's commands work
+  against the same live account, catching any transcription drift.
+- No unrelated behavior added.
+
+**Stage 2 — Code quality / bug-fix addendum:**
+- Diff scoped correctly: `git diff dev-agent..bug/B-050-himalaya-delete-inbox-namespace-error`
+  touches only `the-intern/bob-skills/skills/himalaya/references/command-reference.md`
+  and `the-intern/bob-skills/.pi/skills/himalaya/references/command-reference.md`
+  (33 insertions each), both confined to the "Deleting a Message" section.
+  Confirmed the two files are byte-identical after the edit (`diff` empty).
+  No other files changed on the branch.
+- No Rust/TS source touched (confirmed via diffstat — markdown only),
+  consistent with this being a documentation-only fix for an external
+  binary defect. Work Log's reasoning for skipping an automated unit test
+  holds: there is no repo source to unit-test, and the Work Log's live
+  RED/GREEN re-verification against the real account (broken form still
+  fails; replacement forms succeed) is an adequate substitute, mirroring
+  the precedent set by B-034.
+- Policy-rule check independently re-verified, not just trusted: grepped
+  `the-intern/bob-skills/README.md`, `the-intern/docs/src/operator-guide/index.md`,
+  and every file under both `email-triage` skill trees for `message
+  delete`, `message move`, `flag add ... deleted`, and `trash` — no hits
+  referencing delete/trash; the only `message move` rules present are
+  unrelated triage-workflow moves (`INBOX.Notifications`, `Escalations`).
+  Confirms the Work Log's claim that no policy-rule file needed editing.
+- Commit `f1cebe3` message `docs(himalaya): document message delete
+  trash-namespace pitfall` follows `type(scope): description` (lowercase,
+  imperative, 63 chars, no period, no bug ID repeated).
+- The new "Hardcoded trash-destination pitfall (Observed, B-050)" callout
+  follows the file's own established "Observed" pitfall-callout convention
+  (same pattern used elsewhere in the file, e.g. "Positional-argument
+  pitfall (Observed)"); markdown code fences are well-formed and the
+  `#moving-and-copying` cross-reference anchor exists.
+
+No blocking issues found. Minor non-blocking observation: the doc's
+worked example uses this account's real trash-folder name
+(`INBOX.Papelera`) as the illustrative value rather than a generic
+placeholder — acceptable since the surrounding prose explicitly tells the
+reader to substitute their own account's trash folder, and it keeps the
+example runnable/verifiable against the account it was Observed on.
