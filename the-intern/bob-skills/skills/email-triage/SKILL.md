@@ -91,11 +91,11 @@ Treat it as a run-ending problem for this run, the same way an unconfigured
 
 Call `bob task list`, with the board resolved **explicitly** to this job's
 own working directory rather than through `bob task`'s own default upward
-search — see the `tasks` skill's own "Where the board lives" section and
-S-010's "Task board location" Configuration Requirement for why: an upward
-search could let two independently scheduled jobs converge on one shared
-board, each retrying the other's open items. Use `bob task`'s explicit
-board-selection flag (or its documented environment-variable override —
+search — see the `tasks` skill's own "Where the board lives" section: an
+upward search could let two independently scheduled jobs converge on one
+shared board, each retrying the other's open items. Use `bob task`'s
+explicit board-selection flag (or its documented environment-variable
+override —
 run `bob task --help` for the current syntax) scoped to this job's own
 working directory on every `bob task` call this skill makes, not only this
 one. The `tasks` skill covers the command's own mechanics — how a task is
