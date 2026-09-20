@@ -534,12 +534,103 @@ same way (see [Forwarding](#forwarding)); the no-`BODY`-argument-plus-
 splice pattern above is expected to apply there too but was not itself
 re-verified for `forward` in this session.
 
-Avoid `type=text/plain` for a genuine text-file attachment: an unrelated
-defect (`B-053`, filed separately — not a B-051 escaping symptom) appends
-a spurious trailing blank line to `text/plain`-typed MML parts
-specifically, corrupting the delivered bytes. A binary or opaque MIME type
-such as `application/octet-stream` — or a real type like
-`application/pdf` as shown above — round-trips byte-identical.
+**`text/plain` attachment trailing-CRLF pitfall (Observed, B-053).** An
+MML `<#part>` whose `type` attribute is the exact lowercase string
+`text/plain` can be delivered with a spurious trailing blank line
+appended to the attached file's content — a different, unrelated defect
+from the B-051 escaping pitfall above (this one corrupts real content
+bytes rather than failing to attach at all). The defect is
+**content-shape/size dependent, not universal**: himalaya auto-selects
+the attachment's `Content-Transfer-Encoding` based on the content, and
+only `7bit`/`quoted-printable` (selected for multi-line content, content
+missing its own trailing newline, or long single-line content) expose the
+appended terminator as real corrupted bytes. Short, single-line,
+already-newline-terminated content happens to select `base64`, which
+absorbs the extra terminator and round-trips clean — do not treat a clean
+result on small test content as proof the pitfall doesn't apply; verify
+with multi-line or otherwise larger content instead.
+
+```text
+$ cat b053-doc-multi.txt
+This is line one.
+This is line two of the B-053 doc re-verification file.
+Third line here.
+
+$ wc -c b053-doc-multi.txt
+91 b053-doc-multi.txt
+
+$ HEADERS=$(himalaya template write -H 'To:daneel@aurorafw.com' -H 'Subject:B-053 doc RED verification')
+$ PART='<#part type=text/plain filename="/path/to/b053-doc-multi.txt"><#/part>'
+$ printf '%s' "$HEADERS"$'\n\n'"$PART"$'\n' | himalaya template send
+Message successfully sent!
+
+$ himalaya envelope list -o json -s 1
+[{"id":"269", ..., "has_attachment":true}]
+
+$ himalaya attachment download 269
+1 attachment(s) found for message 269!
+Downloading "/home/daneel/Downloads/b053-doc-multi.txt"…
+Downloaded 1 attachment!
+
+$ diff b053-doc-multi.txt /home/daneel/Downloads/b053-doc-multi.txt
+3a4
+>
+
+$ wc -c /home/daneel/Downloads/b053-doc-multi.txt
+93 /home/daneel/Downloads/b053-doc-multi.txt
+
+$ himalaya message export -F 269 | grep -i content-t
+Content-Type: text/plain
+Content-Transfer-Encoding: quoted-printable
+```
+
+The downloaded copy is 2 bytes longer than the source — a spurious extra
+blank line — even though `has_attachment` correctly reported `true` and
+nothing in `template send`'s output signalled the corruption.
+
+**Verified working pattern.** Spell the MML part's `type` attribute with
+any casing other than the exact lowercase string `text/plain` — e.g.
+`TEXT/PLAIN`. Per RFC 2045, MIME type/subtype matching is
+case-insensitive, so this is a standards-valid `text/plain` media type
+for the recipient, not a hack that changes what the file is delivered
+as — it only avoids the internal himalaya composition path that has the
+defect, which is keyed on the *exact* lowercase spelling:
+
+```text
+$ HEADERS=$(himalaya template write -H 'To:daneel@aurorafw.com' -H 'Subject:B-053 doc GREEN verification')
+$ PART='<#part type=TEXT/PLAIN filename="/path/to/b053-doc-multi.txt"><#/part>'
+$ printf '%s' "$HEADERS"$'\n\n'"$PART"$'\n' | himalaya template send
+Message successfully sent!
+
+$ himalaya envelope list -o json -s 1
+[{"id":"270", ..., "has_attachment":true}]
+
+$ himalaya attachment download 270
+1 attachment(s) found for message 270!
+Downloading "/home/daneel/Downloads/b053-doc-multi.txt"…
+Downloaded 1 attachment!
+
+$ diff b053-doc-multi.txt /home/daneel/Downloads/b053-doc-multi.txt
+$ echo $?
+0
+
+$ wc -c /home/daneel/Downloads/b053-doc-multi.txt
+91 /home/daneel/Downloads/b053-doc-multi.txt
+
+$ himalaya message export -F 270 | grep -i content-t
+Content-Type: TEXT/PLAIN
+Content-Transfer-Encoding: base64
+```
+
+Byte-identical to the source, same file and same content that reliably
+corrupted above as `type=text/plain`.
+
+A binary or opaque MIME type such as `application/octet-stream` — or a
+real type like `application/pdf` as shown earlier in this section — is
+also always safe: neither one ever enters the text-body-formatting path
+this defect lives in, regardless of content shape or size, so either
+remains a valid alternative to the case-spelling workaround for callers
+that don't need the recipient to see a `text/plain` type specifically.
 
 ---
 
