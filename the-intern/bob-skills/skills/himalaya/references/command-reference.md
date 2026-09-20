@@ -408,10 +408,39 @@ message: if the given folder points to the trash folder, it adds the
 folder. Only the expunge folder command truly deletes messages" — a soft
 delete unless already acting on the trash folder.
 
-```bash
-himalaya message delete 42
-himalaya message delete -f Archive 42 43
+**Hardcoded trash-destination pitfall (Observed, B-050).** Despite the
+`--help` text above, `message delete`'s move-to-trash destination and its
+already-in-trash detection are both hardcoded to the literal folder name
+`Trash`, never consulting the account's configured `folder.alias.trash`.
+On any account whose real trash folder isn't literally named `Trash` (a
+localized name, or one nested under an `INBOX.` namespace, such as this
+account's `folder.alias.trash = "INBOX.Papelera"`), `message delete` fails
+outright:
+
+```text
+$ himalaya message delete 42
+unexpected NO response: Client tried to access nonexistent namespace. (Mailbox name should probably be prefixed with: INBOX.)
 ```
+
+`-f` only selects delete's *source* folder, never its broken destination
+resolution, so no `-f` value works around this — confirmed against the
+installed binary: the identical error occurs both for an ordinary INBOX
+message and for a message already sitting in the account's real trash
+folder (`himalaya message delete -f INBOX.Papelera 8` fails the same way).
+Use the two-part replacement below instead; both commands take the
+destination as an explicit argument with no hardcoded fallback, and were
+Observed to work directly against the same account:
+
+```bash
+himalaya message move INBOX.Papelera 42          # ordinary message -> trash
+himalaya flag add 8 deleted -f INBOX.Papelera     # already-in-trash -> soft delete
+```
+
+`INBOX.Papelera` above is this account's real trash folder
+(`folder.alias.trash` in its config); substitute the target account's own
+trash folder name — read it from `folder.alias.trash` in the account's
+config, or list folders to find it (see [Moving and
+Copying](#moving-and-copying)).
 
 ---
 
