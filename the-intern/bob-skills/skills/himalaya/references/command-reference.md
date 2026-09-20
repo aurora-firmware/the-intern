@@ -488,6 +488,10 @@ blank line on each side:
 SKELETON=$(himalaya template reply 247 -H 'To:daneel@aurorafw.com')
 PART='<#part type=application/pdf filename="/home/daneel/Documents/quarterly-report.pdf"><#/part>'
 FULL="${SKELETON/$'\n\n\n\n'/$'\n\n'"$PART"$'\n\n'}"
+case "$FULL" in
+  *"$PART"*) ;;
+  *) echo 'splice did not apply — skeleton lacked the expected 4-newline run; sending now would silently drop the attachment' >&2; exit 1 ;;
+esac
 printf '%s' "$FULL" | himalaya template send
 ```
 
@@ -509,9 +513,16 @@ On 20/09/2026 13:55, Daneel AFW wrote:
 
 Same result: `has_attachment:true`, downloaded attachment byte-identical
 to the source. This `${SKELETON/pattern/replacement}` splice assumes the
-standard single-`<#part>`, single-paragraph-quote reply shape; for a
-one-off reply, splicing the part into the captured skeleton text by hand
-(rather than a shell substitution) works identically, as long as the
+standard single-`<#part>`, single-paragraph-quote reply shape. If
+`$SKELETON` doesn't contain that exact 4-newline run, bash's
+`${var/pattern/replacement}` returns the string **unchanged, with exit
+status 0** — `$FULL` silently becomes the un-spliced skeleton, and piping
+it into `template send` sends a normal reply with no attachment and no
+error, the same silent-failure class as the two pitfalls above. The `case`
+guard in the snippet above catches this by checking `$FULL` actually
+contains `$PART` before sending; don't drop it. For a one-off reply,
+splicing the part into the captured skeleton text by hand (rather than a
+shell substitution) works identically, as long as the
 one-blank-line-before-and-after rule above is kept — getting it wrong
 looks exactly like this (Observed, dropping the header/body blank line):
 
