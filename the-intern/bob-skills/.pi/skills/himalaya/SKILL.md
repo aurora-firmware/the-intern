@@ -4,14 +4,16 @@ description: >
   CLI reference for himalaya, a command-line email client. Use this skill
   whenever a task needs to list or search envelopes (including finding
   unseen/unread mail), read a message, reply to or forward a message,
-  compose and send a new message, move or copy a message between folders,
-  delete a message, add or remove flags, download attachments, or select a
-  non-default account. Trigger even on generic phrasing like "check my
-  email", "list unread mail", "reply to that message", "send an email",
-  "move this to a folder", or "download the attachment" — these are all
-  himalaya CLI tasks. In Pi, load this skill before giving himalaya command
-  help or using bash to run himalaya. This skill documents the CLI only —
-  it carries no triage policy (no escalation address, category taxonomy, or
+  compose and send a new message, send an attachment, move or copy a
+  message between folders, delete a message, add or remove flags, download
+  attachments, or select a non-default account. Trigger even on generic
+  phrasing like "check my email", "list unread mail", "reply to that
+  message", "send an email", "move this to a folder", "download the
+  attachment", "attach this file to an email", or "email this report to
+  Alice" — these are all himalaya CLI tasks. In Pi, load this skill before
+  giving himalaya command help or using bash to run himalaya. This skill
+  documents the CLI only — it carries no triage policy (no escalation
+  address, category taxonomy, or
   worklog instruction), so it is safe to use standalone in any session that
   shares this package's working directory.
 compatibility: >
@@ -81,9 +83,10 @@ its full detail:
 | Reply to a message | `himalaya template reply <ID> [BODY]...` + `himalaya template send` | [`references/command-reference.md#replying`](references/command-reference.md#replying) |
 | Forward a message | `himalaya template forward <ID> [BODY]...` + `himalaya template send` | [`references/command-reference.md#forwarding`](references/command-reference.md#forwarding) |
 | Compose and send | `himalaya template write [BODY]...` + `himalaya template send` | [`references/command-reference.md#composing-and-sending`](references/command-reference.md#composing-and-sending) |
+| Send an attachment | `template write`/`template reply` (no `BODY`) + spliced `<#part>` + `template send` | [`references/command-reference.md#sending-an-attachment-mml-syntax`](references/command-reference.md#sending-an-attachment-mml-syntax) |
 | Move a message | `himalaya message move <TARGET> <ID>...` | [`references/command-reference.md#moving-and-copying`](references/command-reference.md#moving-and-copying) |
 | Copy a message | `himalaya message copy <TARGET> <ID>...` | [`references/command-reference.md#moving-and-copying`](references/command-reference.md#moving-and-copying) |
-| Delete a message | `himalaya message delete <ID>...` | [`references/command-reference.md#deleting-a-message`](references/command-reference.md#deleting-a-message) |
+| Delete a message | `himalaya message move <trash-folder> <ID>...` — **not** `message delete`, see pitfall | [`references/command-reference.md#deleting-a-message`](references/command-reference.md#deleting-a-message) |
 | Add / remove / set flags | `himalaya flag add\|set\|remove <ID-OR-FLAG>...` | [`references/command-reference.md#managing-flags`](references/command-reference.md#managing-flags) |
 | Download attachments | `himalaya attachment download <ID>...` | [`references/command-reference.md#handling-attachments`](references/command-reference.md#handling-attachments) |
 | Select an account | `-a/--account <NAME>` on any command; `himalaya account list` | [`references/command-reference.md#selecting-an-account`](references/command-reference.md#selecting-an-account) |
