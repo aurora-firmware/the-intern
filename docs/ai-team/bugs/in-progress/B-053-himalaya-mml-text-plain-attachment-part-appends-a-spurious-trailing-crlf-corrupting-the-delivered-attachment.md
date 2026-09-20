@@ -224,6 +224,18 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-09-20
+
+Implemented the documentation-only fix per Diagnosis 1's fix contract. Read the full Diagnosis Log entry and B-051's Work Log stub before starting. Confirmed the live `himalaya v1.2.0` build in this sandbox matches the one the diagnosis was verified against, and confirmed the primary and mirrored `command-reference.md` copies were still byte-identical before editing.
+
+Re-verified both ends of the fix contract live against the real `daneel@aurorafw.com` account before writing any documentation: a RED run (multi-line 91-byte source file, `<#part type=text/plain ...>`) reproduced the defect exactly as diagnosed — downloaded copy 93 bytes, `diff` showing one spurious extra blank line, `Content-Transfer-Encoding: quoted-printable` on the wire — and a GREEN run with the identical source and splice shape but `type=TEXT/PLAIN` came back byte-identical (`diff` empty), with `Content-Transfer-Encoding: base64` and `Content-Type: TEXT/PLAIN` on the wire. Used the multi-line file specifically because the diagnosis's own evidence showed short single-line newline-terminated content incidentally selects `base64` and doesn't reproduce — didn't want to repeat that mistake in the documented example.
+
+Replaced the one-paragraph B-053 stub pointer in `the-intern/bob-skills/skills/himalaya/references/command-reference.md`'s "Sending an Attachment (MML Syntax)" section (the stub B-051 had left there before this bug had a Diagnosis Log) with a full "`text/plain` attachment trailing-CRLF pitfall (Observed, B-053)" callout matching the file's established Observed-transcript convention (same style as the B-051 escaping callout and B-052 path callout already in this file): a real transcript of the RED repro (source content, send command, download, non-empty `diff`, wire `Content-Type`/`Content-Transfer-Encoding`), an explicit note that the defect is content-shape/size dependent and that small clean-looking test content is not proof of safety, then the verified `type=TEXT/PLAIN` working pattern with its own real transcript and a one-line RFC 2045 case-insensitivity note explaining why this isn't a hack. Kept and lightly clarified the existing `application/octet-stream`/real-MIME-type alternative as a second always-safe option. Mirrored the identical edit to `the-intern/bob-skills/.pi/skills/himalaya/references/command-reference.md` by copying the whole file over (confirmed both copies were already byte-identical outside this section) and confirmed `diff` between the two copies is empty after the edit.
+
+Nothing was tried and rejected during this session beyond what Diagnosis 1 itself already ruled out (that work was done in the prior diagnosis session, not repeated here). As a final check, re-ran the exact RED and GREEN command shapes as documented, verbatim, one more time (messages 271 and 272) — both reproduced identically to the first pass, confirming the documented transcripts are stable and not a one-off fluke.
+
+No Rust or TypeScript source was touched, consistent with the Diagnosis Log's determination that the fault is entirely inside the external `himalaya v1.2.0` binary. Committed as a single commit, `docs(himalaya): document text/plain attachment trailing-CRLF pitfall`, on `bug/B-053-himalaya-text-plain-attachment-crlf`. Nothing remains for a next session on this bug from the Developer side; ready for review.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
