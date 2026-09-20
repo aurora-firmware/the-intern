@@ -107,7 +107,7 @@ distinct from the shared task board. Filesystem-only: like `bob init` and
 `bob task` it never opens `admin.sock` and never loads service
 configuration, so it works whether or not `bob serve` is running.
 
-Worklog resolution is **cwd-strict** (ADR-015): both subcommands resolve the
+Worklog resolution is **cwd-strict**: both subcommands resolve the
 file to exactly `<cwd>/worklog/<date>.md`, relative to the invoking
 process's working directory. There is **no upward directory search** and
 **no override** by flag, environment variable, or configuration key — a
