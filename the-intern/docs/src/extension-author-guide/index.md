@@ -102,8 +102,7 @@ socket traffic involved. On `resources_discover`, the handler reads
 
 - If the variable is set, non-empty, and names a path that exists on disk, it
   answers with that path as a contributed `skillPaths` entry, so pi loads
-  skills from it independent of the session's working directory
-  (`S-011` / `ADR-014`).
+  skills from it independent of the session's working directory.
 - If the variable is absent, empty, or names a path that does not exist, the
   handler contributes no skill paths and logs one warning via the same
   `warn()` helper used elsewhere in `bob.ts`.
