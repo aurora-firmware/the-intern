@@ -186,5 +186,7 @@ Hard rules: no `--no-verify`, no `--force` on `dev-agent`/`main`, no amending pu
 
 ### Pointers
 
-- Coding guidelines: `docs/ai-team/docs/coding-guidelines-node.md`, `docs/ai-team/docs/coding-guidelines-rust.md`
+- Coding guidelines: `docs/ai-team/docs/coding-guidelines-node.md`, `docs/ai-team/docs/coding-guidelines-rust.md`,
+  `docs/ai-team/docs/coding-guidelines-skills.md` (shipped skills and user docs — no internal task/bug/spec/ADR
+  IDs, no environment-specific values presented as generic)
 - Local Rust verification details: `the-intern/service/README.md`
