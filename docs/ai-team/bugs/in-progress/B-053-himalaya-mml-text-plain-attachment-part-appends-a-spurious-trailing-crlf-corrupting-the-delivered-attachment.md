@@ -247,3 +247,99 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-20
+
+PASS
+
+Both review stages passed.
+
+**Diagnosis→fix evidence chain:** Diagnosis 1 records reproduction status,
+and is explicit and honest that the bug's own literal worked example
+(`printf 'hello\n' > file.txt`, single line, one trailing newline) does
+**not** reproduce the corruption — this is stated directly, not glossed
+over, with two independent control runs (messages 255, 262) confirming a
+clean byte-identical round-trip on that exact example. Evidence captured
+then isolates the real trigger across five content variants (multi-line,
+2-line, no-trailing-newline, long single-line, and the non-reproducing
+short single-line control) plus a same-content `application/octet-stream`
+control, and pins the mechanism directly to the wire-level
+`Content-Transfer-Encoding` himalaya auto-selects per content shape/size
+(`base64` for short/clean content absorbs the appended terminator
+harmlessly; `7bit`/`quoted-printable` expose it as real corrupted bytes).
+Isolated fault and root-cause hypothesis are both present, the hypothesis
+explicitly labeled best-supported/unconfirmed (no internal trace
+available, consistent with B-051/B-052's precedent that this himalaya
+behavior class isn't exposed via `--debug`/`--trace`). A verified
+workaround (`type=TEXT/PLAIN`, case-varied) is independently confirmed
+twice, including once on the no-trailing-newline variant, with an RFC 2045
+case-insensitivity rationale. The fix contract (planned fix, four steps,
+plus planned verification) is complete.
+
+**Stage 1 — Bug criteria:**
+- Fix addresses the isolated fault: yes — the new "`text/plain` attachment
+  trailing-CRLF pitfall (Observed, B-053)" callout replaces the stale
+  one-paragraph stub with a real RED transcript, an explicit
+  content-shape/size caveat, and the verified `type=TEXT/PLAIN` GREEN
+  workaround with its own transcript; this matches Diagnosis 1's planned
+  fix steps 1–2 exactly. Step 3 (keep/clarify the `application/octet-stream`
+  alternative) and step 4 (mirror to `.pi/skills/`) both verified present
+  below.
+- Fix Verification: the bug file's original section predates diagnosis and
+  reuses the same non-reproducing single-line example, as expected; checked
+  against Diagnosis Log's "Planned verification" and the Work Log's actual
+  narrative instead, per the B-050/B-051/B-052 precedent. Work Log Session
+  1 describes a fresh live re-verification (91-byte multi-line source, not
+  a reuse of diagnosis-session message content): RED (`type=text/plain`,
+  downloaded copy 93 bytes, non-empty `diff`, `Content-Transfer-Encoding:
+  quoted-printable` on the wire) then GREEN (identical source/splice shape,
+  `type=TEXT/PLAIN`, byte-identical `diff`, `Content-Transfer-Encoding:
+  base64`, `Content-Type: TEXT/PLAIN`) — deliberately using multi-line
+  content specifically to avoid repeating the diagnosis's finding that
+  short single-line content incidentally passes. Re-ran the identical RED
+  and GREEN shapes a second time (messages 271, 272) to confirm the
+  documented transcripts are stable, not a one-off. This matches the live
+  RED/GREEN verification style B-050/B-051/B-052 already established as
+  adequate for a doc-only external-binary-defect fix.
+- No unrelated behavior added.
+
+**Stage 2 — Code quality / bug-fix addendum:**
+- Diff scoped correctly: `git diff dev-agent...bug/B-053-himalaya-text-plain-attachment-crlf`
+  touches only `the-intern/bob-skills/skills/himalaya/references/command-reference.md`
+  and `the-intern/bob-skills/.pi/skills/himalaya/references/command-reference.md`
+  (103 insertions / 12 deletions each, matching the Work Log's claim),
+  confirmed byte-identical to each other directly (`diff` between the two
+  post-fix blobs is empty). The pre-image blob hash (`a9d0181`) matches
+  `dev-agent`'s current blob for the primary file, confirming clean
+  continuity from the state B-052's review left it in. No other files
+  touched — the canonical bug file itself shows zero diff between the
+  branch and `dev-agent` (its Diagnosis Log/Work Log entries were already
+  committed to `dev-agent` before the branch diverged).
+- No Rust/TS/JS source touched anywhere in the diff (confirmed directly —
+  `git diff --name-only` filtered for `.rs`/`.ts`/`.js` returns nothing),
+  consistent with the Diagnosis Log's determination that the fault is
+  entirely inside the external `himalaya v1.2.0` binary and this being a
+  documentation-only fix. No automated regression test applies (these
+  `bob-skills` reference files are outside the mdBook build); the live
+  RED/GREEN re-verification against the real account, repeated twice, is
+  an adequate substitute, mirroring B-034/B-050/B-051/B-052.
+- The RED transcript uses genuinely reproducing content (91-byte
+  multi-line file), not the original single-line non-reproducing example —
+  confirmed directly in the diff. A reader copying this example will see
+  the defect, not a false-clean result.
+- The GREEN workaround documentation explains *why* `type=TEXT/PLAIN`
+  works (RFC 2045 MIME type/subtype matching is case-insensitive, so it is
+  a standards-valid `text/plain` media type for the recipient, not a
+  hack), rather than presenting it as an unexplained incantation.
+- Commit `428ad48` message `docs(himalaya): document text/plain attachment
+  trailing-CRLF pitfall` follows `type(scope): description` (lowercase,
+  imperative, 68 characters, no period, no bug ID repeated in the
+  subject).
+- The new callout follows the file's established "Observed, B-NNN"
+  pitfall-callout convention (same pattern as the B-051 escaping callout
+  and B-052 path callout already in this file); code fences are
+  well-formed and the transcript is internally consistent (message ids,
+  byte counts, and wire headers all agree across the shown outputs).
+
+No blocking issues found. No minor observations beyond what is noted
+above.
