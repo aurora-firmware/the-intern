@@ -3,7 +3,7 @@ id: B-051
 title: himalaya template write and template reply escape MML attachment parts 
   instead of sending them as attachments
 severity: high
-status: in-progress
+status: resolved
 created: '2026-09-20'
 ---
 
