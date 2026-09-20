@@ -3,7 +3,7 @@ id: B-050
 title: himalaya message delete fails on INBOX messages with an IMAP namespace 
   error
 severity: high
-status: in-progress
+status: resolved
 created: '2026-09-20'
 ---
 
