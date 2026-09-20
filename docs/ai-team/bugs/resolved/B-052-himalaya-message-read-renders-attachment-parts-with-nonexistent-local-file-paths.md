@@ -3,7 +3,7 @@ id: B-052
 title: himalaya message read renders attachment parts with nonexistent local 
   file paths
 severity: medium
-status: in-progress
+status: resolved
 created: '2026-09-20'
 ---
 
