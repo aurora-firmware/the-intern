@@ -179,7 +179,7 @@ starts a session without its monitoring and authorization extension.
 Skill content — the `himalaya`, `email-triage`, `worklog`, and `tasks` skills
 packaged in `the-intern/bob-skills/.pi/skills/` — is supplied to every session bob
 spawns from a single, service-wide **skill install path**, independent of
-that session's working directory (`S-011`, `ADR-014`). Install it once; every
+that session's working directory. Install it once; every
 RPC-worker, interactive, and scheduled-job session bob spawns afterward
 carries it, regardless of `--cwd`.
 
@@ -193,7 +193,7 @@ When `XDG_DATA_HOME` is unset or empty, bob uses the platform default skill
 directory: `~/.local/share/bob/skills` on Linux or
 `~/Library/Application Support/bob/skills` on macOS. A non-empty absolute
 `XDG_DATA_HOME` override changes the path to `$XDG_DATA_HOME/bob/skills` (a
-sibling of `bob/extensions/` under the same ADR-009 `data` bucket as the
+sibling of `bob/extensions/` under the same XDG `data` bucket as the
 extension). A non-empty relative `XDG_DATA_HOME` value does not fail config
 loading here; `skill_install_path` deliberately falls back to the same platform
 default used for unset or empty values.
@@ -236,7 +236,7 @@ skill_install_path = "/opt/bob/skills"
 
 - **Must be absolute.** A relative value fails configuration loading
   immediately with a clear error naming `skill_install_path`.
-- **Default: the ADR-009 `data` bucket, alongside the extension.** When
+- **Default: the XDG `data` bucket, alongside the extension.** When
   `skill_install_path` is not set, bob resolves it to
   `$XDG_DATA_HOME/bob/skills` only when `XDG_DATA_HOME` is a non-empty
   absolute path. When `XDG_DATA_HOME` is unset, empty, or relative, bob
@@ -984,8 +984,7 @@ behavior, and the skill install path already described in
 [Working directory for pi-agent sessions](#working-directory-for-pi-agent-sessions),
 [Install the skill package](#install-the-skill-package), and
 [Scheduled jobs](#scheduled-jobs); the steps below focus only on the
-package-specific setup that T-139 and T-140 verified end to end, updated for
-the skill install-path deployment model (`S-011`).
+package-specific setup for the skill install-path deployment model.
 
 Skills are installed **once**, service-wide — the steps below no longer
 deploy a per-job copy of `.pi/skills/`. If you have not already installed
@@ -1021,23 +1020,17 @@ the package as described in
    checkout is not the trusted runtime boundary for scheduled jobs, and it
    would mix mutable worklog/config state into source-controlled files.
 
-   > **No pi project-trust step is required for this workspace.** Earlier
-   > revisions of this section (`B-035`) added a step establishing pi
-   > project trust for the deployed workspace in `~/.pi/agent/trust.json`,
-   > because that workspace's own `.pi/skills/` tree was silently ignored by
-   > pi's non-interactive `--mode rpc` workers under the pre-install-path
-   > deployment model. Under the skill install-path model this working
-   > directory no longer contains a `.pi/skills/` tree, or any of the other
+   > **No pi project-trust step is required for this workspace.** This
+   > working directory contains no `.pi/skills/` tree, or any of the other
    > project-local resources pi's project-trust gate covers
    > (`.pi/settings.json`, `.pi/extensions`, `.pi/prompts`, `.pi/themes`,
    > `.pi/SYSTEM.md`/`APPEND_SYSTEM.md`, or `.agents/skills`) — skills reach
    > the session through the bob extension's `resources_discover` answer
-   > instead, which `T-150` confirmed fires and reaches the system prompt
-   > from an untrusted working directory on every spawn path bob uses,
-   > including the scheduled-periodic one this job runs on. If you deployed
-   > this job under the old model and previously added its workspace path to
-   > `~/.pi/agent/trust.json`, that entry is now unnecessary but harmless —
-   > leave it or remove it, either is fine.
+   > instead, which fires and reaches the system prompt from an untrusted
+   > working directory on every spawn path bob uses, including the
+   > scheduled-periodic one this job runs on. If a previous deployment added
+   > this workspace path to `~/.pi/agent/trust.json`, that entry is
+   > unnecessary but harmless — leave it or remove it, either is fine.
 
 3. Set the skill-local `manager_address`.
 
@@ -1053,32 +1046,33 @@ the package as described in
    The shipped `email-triage.example.toml` stays in the repository as a
    template only; the real address belongs only in the job workspace's copy.
 
-4. Replace the bootstrap-wide action rules with the S-004 rules scoped to the skill install path, then reload policy.
+4. Replace the bootstrap-wide action rules with rules scoped to the skill install path, then reload policy.
 
    `bob init` seeds a permissive four-tool bootstrap policy so the workspace is
    immediately runnable. Before relying on the deployment, replace those broad
    rules with the narrower rules below.
 
-   The validated runtime matcher shape is unchanged from the per-workspace
-   deployment model:
+   The runtime matcher shape is unchanged from the per-workspace deployment
+   model:
 
    - `read` rules match `arguments.path`, so use `field_path = "path"`.
    - `bash` rules match `arguments.command`, so use `field_path = "command"`.
 
-   Do not copy older `cmd` examples from parser-only tests. The live T-139/T-140
-   runs only succeeded when the bash rules matched the runtime `command` field.
-   That runtime payload shape does not depend on where the skill content
-   lives, so moving the `read` rules from a per-workspace `.pi/skills/` path
-   to the shared skill install path changes only the `pattern` values below,
-   not the matcher shape itself.
+   Do not copy older `cmd` examples from parser-only tests — only the
+   runtime `command` field is matched; rules written against the older
+   `cmd` field will not match. That runtime payload shape does not depend on
+   where the skill content lives, so moving the `read` rules from a
+   per-workspace `.pi/skills/` path to the shared skill install path changes
+   only the `pattern` values below, not the matcher shape itself.
 
    Replace `/opt/bob/skills` below with your actual `skill_install_path` (the
    default shown in [Install the skill package](#install-the-skill-package),
-   or your configured override). This set is now scoped to that single,
-   stable location — unlike the old per-workspace rules, it does **not**
-   need to be re-derived for every deployment. Scope the mailbox move target
-   to the real folder name from `himalaya folder list` (the validated
-   account used `INBOX.Notifications`, not plain `Notifications`):
+   or your configured override). This set is scoped to that single, stable
+   location, so it does **not** need to be re-derived for every deployment.
+   Scope the mailbox move target to the real folder name from `himalaya
+   folder list` — many IMAP servers require a provider-specific namespace
+   prefix (for example `INBOX.` under a Dovecot-style namespace), so a
+   plain category name without it may not match:
 
    ```toml
    [[policy.action_rules]]
@@ -1208,13 +1202,12 @@ the package as described in
    ]
    ```
 
-   **The `worklog` skill's rules now follow the `bob worklog` command.** The
-   `worklog/SKILL.md` and `worklog/references/*.md` read rules above still
-   admit the reference reads the `worklog` skill (`T-154`/`T-155`, extracted
-   from `email-triage`'s own reference content) makes; the reduced
-   `email-triage` `SKILL.md` delegates diary mechanics to it (S-011
-   Responsibility Separation). Everything else the diary needs now runs
-   through a single `bash` rule, `bob worklog*`. The rewritten skill calls
+   **The `worklog` skill's rules follow the `bob worklog` command.** The
+   `worklog/SKILL.md` and `worklog/references/*.md` read rules above admit
+   the reference reads the `worklog` skill makes; the `email-triage`
+   `SKILL.md` delegates diary mechanics to it. Everything else the diary
+   needs now runs through a single `bash` rule, `bob worklog*`. The rewritten
+   skill calls
    `bob worklog append` once per item handled — `list` is never called on a
    run's behalf; the command itself creates `worklog/` and today's
    file, checks only today's already-written entries for an exact-duplicate
@@ -1234,65 +1227,54 @@ the package as described in
    relative `worklog/*.md` rule that briefly replaced it. The `worklog` skill
    never opens a diary file through `read` now — `bob worklog` performs every
    diary read and write itself — so no `read` rule for `worklog/` is needed
-   at any path. This also retires, for worklog writes, S-011's earlier
-   accepted risk that the admitting rule be "broad enough to cover arbitrary
-   working directories": the working directory never appears in a
-   `bob worklog` command string, so the `bash` matcher above is
-   exact-prefix, not path-broad.
+   at any path. The admitting rule for worklog writes also no longer needs
+   to be broad enough to cover arbitrary working directories: the working
+   directory never appears in a `bob worklog` command string, so the `bash`
+   matcher above is exact-prefix, not path-broad.
 
-   **This rule set covers the live-validated paths** — `automated-notification`
-   (file, no reply), escalation, S-004 block handling, and skipped-tick
-   continuity (T-139, T-140), re-confirmed live under the skill install-path
-   model itself by `T-164` — **plus one additional rule** admitting the
-   `himalaya template reply` -> `himalaya template send` command shape that
-   the `direct-request` and `meeting-scheduling` categories use to send a
-   reply (`B-029`). **It does not include a `message move` rule for
+   **This rule set covers** `automated-notification` (file, no reply),
+   escalation, policy-block handling, and skipped-tick continuity — **plus
+   one additional rule** admitting the `himalaya template reply` ->
+   `himalaya template send` command shape that the `direct-request` and
+   `meeting-scheduling` categories use to send a
+   reply. **It does not include a `message move` rule for
    `Newsletters` or `Spam`** — the destinations `newsletter-bulk` and
-   `suspected-spam` need for a confident match — because those two
-   categories have not gone through the same live-validation pass as the
-   paths above. Add matching `move*Newsletters*` / `move*Spam*` rules
-   (mirroring the `INBOX.Notifications` rule's shape) before relying on
-   autonomous handling of those categories; without them, a message that
-   confidently classifies into either one will be blocked by the action gate
-   and left open in the worklog indefinitely. That rule is built on `B-030`'s hardened heredoc pattern
-   (`references/command-reference.md`'s "Embedding message-derived text
-   safely": `"$BODY"` loaded via a quoted heredoc, `--` before the body
-   argument), and, per `B-034`, admits the pipe form of the composition
-   rather than the `$()` capture-and-splice form it originally shipped
-   with: `himalaya v1.2.0`'s `template send` cannot actually parse a
-   template passed as a positional CLI argument (`Error: 0: cannot parse
-   template`), though stdin-piped input of the identical content works, so
-   the correct shape is `himalaya template reply <ID> [-A] -- "$BODY" |
-   himalaya template send`, not the earlier `himalaya template send
-   "$(himalaya template reply <ID> [-A] -- "$BODY")"` shape. It was checked
-   against the real `wildmatch` crate (the exact library `bob`'s S-004
-   matcher uses): it matches the intended safe plain-reply and reply-all
-   (`-A`) pipe shapes — including when the message-derived body itself
-   contains adversarial shell metacharacters — and correctly rejects an
-   unquoted-heredoc bypass, a bare/unquoted `$BODY` regression, a
-   missing-`--` variant, the pre-`B-030` naive literal-splice shape, and the
-   now-removed `B-029`-era `$()` capture-and-splice shape that `B-034` found
-   himalaya cannot actually parse. This rule has since been re-run against a
-   live mailbox and scheduled `bob` instance the same way T-139/T-140
-   validated the paths above: the job was fed a message that confidently
-   classified as `direct-request`, the reply was sent, the recipient
-   confirmed receipt, and the worklog recorded it correctly (`B-031`). Treat
-   this rule as both statically verified and live-validated for
-   `direct-request` and `meeting-scheduling` replies.
+   `suspected-spam` need for a confident match. Add matching
+   `move*Newsletters*` / `move*Spam*` rules (mirroring the
+   `INBOX.Notifications` rule's shape) before relying on autonomous handling
+   of those categories; without them, a message that confidently classifies
+   into either one will be blocked by the action gate and left open in the
+   worklog indefinitely. That rule is built on the hardened heredoc pattern
+   in `references/command-reference.md`'s "Embedding message-derived text
+   safely" section — `"$BODY"` loaded via a quoted heredoc, `--` before the
+   body argument — and admits the pipe form of the composition, not a
+   `$()` capture-and-splice form: `himalaya v1.2.0`'s `template send` cannot
+   actually parse a template passed as a positional CLI argument (`Error: 0:
+   cannot parse template`), though stdin-piped input of the identical
+   content works, so the correct shape is `himalaya template reply <ID>
+   [-A] -- "$BODY" | himalaya template send`, not `himalaya template send
+   "$(himalaya template reply <ID> [-A] -- "$BODY")"`. This pattern was
+   checked against the real `wildmatch` crate (the exact library bob's
+   policy-rule matcher uses): it matches the intended safe plain-reply and
+   reply-all (`-A`) pipe shapes — including when the message-derived body
+   itself contains adversarial shell metacharacters — and correctly rejects
+   an unquoted-heredoc bypass, a bare/unquoted `$BODY` regression, a
+   missing-`--` variant, and a naive literal-splice shape. Treat this rule
+   as both statically verified and live-validated for `direct-request` and
+   `meeting-scheduling` replies.
 
-   **The escalation rule above matches a hardened command shape, not the
-   originally live-validated one.** The subject/body are now loaded through
-   the heredoc pattern in the `himalaya` skill's "Embedding message-derived
-   text safely" reference (`references/command-reference.md`) rather than
-   typed as literal quoted text, closing a command-injection path from
-   untrusted email content. The pattern was checked against the real
-   `wildmatch` crate (the exact library `bob`'s S-004 matcher uses) for both
-   the intended safe shape and several unsafe variants, but the *command
-   itself* — a multi-line shell script containing heredocs, run via pi's
-   `bash` tool — has since been re-run against a live mailbox and `bob`
-   instance the same way T-139/T-140 validated the original one-liner, and
-   the recipient confirmed receipt of the escalation email (`B-030`). Treat
-   this rule and command shape as both hardened and live-validated.
+   **The escalation rule above matches a hardened command shape.** The
+   subject/body are loaded through the heredoc pattern in the `himalaya`
+   skill's "Embedding message-derived text safely" reference
+   (`references/command-reference.md`) rather than typed as literal quoted
+   text, closing a command-injection path from untrusted email content. The
+   pattern was checked against the real `wildmatch` crate (the exact
+   library bob's policy-rule matcher uses) for both the intended safe shape
+   and several unsafe variants; the command itself — a multi-line shell
+   script containing heredocs, run via pi's `bash` tool — has been re-run
+   against a live mailbox and `bob` instance, and the recipient confirmed
+   receipt of the escalation email. Treat this rule and command shape as
+   both hardened and live-validated.
 
    **Two more rules admit the missing-configuration escalation fallback and
    the self-escalation filing move.** The bare `himalaya template write`
@@ -1344,7 +1326,7 @@ the package as described in
    not something `bob worklog` provides: `bob worklog` never reads or writes
    any day's file but the one an invocation names, so a day's file holds
    only what that day's runs appended. `email-triage`'s own continuity (an
-   escalation awaiting a reply, an action the S-004 gate blocked) now lives
+   escalation awaiting a reply, an action the policy gate blocked) now lives
    on the job's task board instead, which is why the `bob task*` rule
    documented in [The task board (`bob task`)](#the-task-board-bob-task) is
    required for this workflow too, not only for `bob task` users generally.

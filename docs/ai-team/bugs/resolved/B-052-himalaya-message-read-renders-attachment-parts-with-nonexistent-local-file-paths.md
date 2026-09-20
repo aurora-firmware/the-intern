@@ -1,0 +1,315 @@
+---
+id: B-052
+title: himalaya message read renders attachment parts with nonexistent local 
+  file paths
+severity: medium
+status: resolved
+created: '2026-09-20'
+---
+
+# himalaya message read renders attachment parts with nonexistent local file paths
+
+## Summary
+
+Filed from GitHub issue
+[aurora-firmware/the-intern#69](https://github.com/aurora-firmware/the-intern/issues/69).
+`himalaya message read` renders an attachment part with a `filename=`
+value that looks like a real, already-usable local filesystem path (e.g.
+`/home/daneel/Downloads/3e6e...pdf`), but that file does not exist on disk
+— it must still be fetched with `himalaya attachment download`. During
+triage this is misleading: the rendered output reads like the attachment is
+already available locally and can be opened directly.
+
+## Reproduction Status
+
+Status: confirmed
+
+Reported directly by the GitHub issue author against a live account/message
+with a real PDF attachment. Not yet independently re-reproduced by this bug
+filing.
+
+## Evidence
+
+- Logs / stack traces / failing assertions:
+  ```text
+  <#part type=application/pdf filename="/home/daneel/Downloads/3e6e4376-f342-4462-ae3d-272c8d73dcd8.pdf"><#/part>
+  ```
+  The `filename=` path does not exist on the local filesystem at read time.
+- Screenshots or recordings: none.
+- Failing command or test: `himalaya message read <id>` against a message
+  with an attachment, followed by attempting to open the rendered
+  `filename=` path.
+- First diagnostic step if not yet reproduced: read a message with a real
+  attachment via `himalaya message read <id>`, capture the rendered MML
+  part, and confirm the `filename=` path is absent from disk until
+  `himalaya attachment download <id>` is run.
+
+## Reproduction Steps
+
+1. Read a message with a PDF (or other) attachment using `himalaya message
+   read <id>`.
+2. Inspect the rendered attachment part in the output — a `filename=` value
+   pointing at what looks like a local path (e.g. under `~/Downloads/`).
+3. Try to open the path shown in `filename=`.
+4. Observed: the path does not exist locally; the file only appears after
+   separately running `himalaya attachment download <id>`.
+
+## Expected Behavior
+
+`himalaya message read` should either omit a local filesystem path in
+`filename=` unless the file genuinely already exists locally, or otherwise
+make clear that the attachment has not yet been downloaded and must be
+fetched separately via `himalaya attachment download`.
+
+## Actual Behavior
+
+The rendered attachment part's `filename=` value is a plausible-looking
+local path (matching the account's real downloads directory naming
+convention) that does not exist on disk at read time, with nothing in the
+output indicating the file is not actually present yet.
+
+## Environment
+
+- OS / platform: Linux, live configured `himalaya` account (per the source
+  GitHub issue; not yet re-confirmed by this bug file).
+- Language / runtime version: n/a (compiled Rust CLI binary, external
+  dependency).
+- Relevant dependencies: `himalaya v1.2.0` (same version
+  `the-intern/bob-skills/skills/himalaya/references/command-reference.md`
+  is verified against) — `message read`'s MML rendering of attachment
+  parts, versus `attachment download`'s actual downloads-directory
+  resolution (see "Handling Attachments" in `command-reference.md`).
+- Branch / commit: `dev-agent`; discovered live via GitHub issue #69 (filed
+  2026-08-30).
+
+## Related
+
+- Bug: `B-051` (himalaya `template write`/`template reply` escape MML
+  attachment parts instead of sending them — a different attachment-related
+  defect in the same `himalaya` binary, filed alongside this one from the
+  same live-validation pass).
+- GitHub issue: [aurora-firmware/the-intern#69](https://github.com/aurora-firmware/the-intern/issues/69)
+
+## Suspected Area
+
+`himalaya v1.2.0` binary itself (external dependency, not this repo's
+source) — `message read`'s rendering of attachment MML parts, which appears
+to pre-compute or guess a downloads-directory destination path rather than
+reflecting actual on-disk state. Secondarily,
+`the-intern/bob-skills/skills/himalaya/references/command-reference.md`'s
+"Reading a Message" and "Handling Attachments" sections, which currently
+carry no caveat that a `filename=` path shown by `message read` may not
+exist yet — if the rendering itself can't be changed (external binary),
+this is where an explicit warning/workflow note belongs so an operator
+doesn't try to open the path directly.
+
+## Fix Verification
+
+```bash
+# Against a real configured account, on a message with a real attachment:
+himalaya message read <id>
+# Inspect the rendered filename= path and confirm, once a workaround is
+# chosen, that either (a) the path is no longer rendered as a bare local
+# path unless the file exists, or (b) command-reference.md clearly
+# documents that the shown path is not yet on disk and
+# `himalaya attachment download <id>` must be run first.
+```
+
+## Diagnosis Log
+
+<!-- Mandatory before implementation. Append one entry before changing production code. Format:
+### Diagnosis N — YYYY-MM-DD
+Reproduction status:
+Evidence captured:
+Isolated fault:
+Root cause or fault hypothesis:
+Planned verification:
+-->
+
+### Diagnosis 1 — 2026-09-20
+
+**Reproduction status:** Confirmed. Live-reproduced directly against the real configured `himalaya v1.2.0` account (`daneel@aurorafw.com`, account name `daneel`, IMAP host `lin119.loading.es`) available in this sandbox — not just inferred from the GitHub issue report. Reproduced with a clean, purpose-built message (id 253) sent from a source file under `~/Documents` with a UUID basename, so the rendered Downloads-dir path could not be coincidentally correct, and cross-confirmed against three pre-existing messages on the account (ids 251, 252, 244) that independently show the same rendering behavior.
+
+**Evidence captured:**
+- Created `/home/daneel/Documents/e9e44265-77f0-4999-aa2d-d7f27a6bc760.pdf` (75-byte test file). Confirmed no file existed yet at `/home/daneel/Downloads/e9e44265-77f0-4999-aa2d-d7f27a6bc760.pdf`.
+- Sent using the verified B-051 working pattern: `HEADERS=$(himalaya template write -H 'To:daneel@aurorafw.com' -H 'Subject:B-052 repro attachment')`, spliced `<#part type=application/pdf filename="/home/daneel/Documents/e9e44265-77f0-4999-aa2d-d7f27a6bc760.pdf"><#/part>` into the empty body slot, piped into `himalaya template send` → `Message successfully sent!`; `himalaya envelope list -f INBOX -s 3 -o json` shows the new message id 253 with `"has_attachment":true`.
+- `himalaya message read -f INBOX --preview 253` (non-destructive; `--preview` skips the `Seen` flag) rendered:
+  ```
+  <#part type=application/pdf filename="/home/daneel/Downloads/e9e44265-77f0-4999-aa2d-d7f27a6bc760.pdf"><#/part>
+  ```
+  — a `/home/daneel/Downloads/...` path, even though the actual attached file lives under `/home/daneel/Documents/...` and was never in Downloads.
+- `ls -la /home/daneel/Downloads/e9e44265-77f0-4999-aa2d-d7f27a6bc760.pdf` at that point → `No such file or directory` — the exact path `message read` rendered does not exist on disk. This is the bug: confirmed.
+- `himalaya attachment download -f INBOX 253` → `Downloading "/home/daneel/Downloads/e9e44265-77f0-4999-aa2d-d7f27a6bc760.pdf"… Downloaded 1 attachment!`; the file now exists at exactly the path `message read` had already rendered before the download, and `diff` against the original source file is empty (byte-identical).
+- `himalaya message export -F -f INBOX 253` (raw `.eml`) shows `Content-Type: application/pdf` / `Content-Disposition: attachment; filename="e9e44265-77f0-4999-aa2d-d7f27a6bc760.pdf"` — only the bare basename, no directory component, per RFC. This isolates the mechanism: `message read`'s rendering reconstructs a full path by joining this basename with the account's configured `downloads-dir` (`/home/daneel/Downloads`, confirmed from `~/.config/himalaya/config.toml`'s `downloads-dir = "/home/daneel/Downloads"`), independent of whether that file has ever actually been downloaded.
+- Corroborating evidence from pre-existing messages on the same account (ids 251 "Quarterly report", 252 "Re: Quarterly numbers", 244 "Quarterly report", all originally composed from a `/home/daneel/Documents/quarterly-report.pdf` source per `command-reference.md`'s own worked examples): `himalaya message read -f INBOX --preview <id>` for all of them renders the identical static path `/home/daneel/Downloads/quarterly-report.pdf`, regardless of the fact that repeated prior downloads of that same basename had already produced `quarterly-report_1.pdf`, `_2.pdf`, `_3.pdf` in Downloads via himalaya's own collision-avoidance renaming on `attachment download`. This shows the rendered path is not just "not yet downloaded" but a static, unconditional guess that can diverge from where `attachment download` will actually save the file once a naming collision exists.
+- `himalaya --debug message read -f INBOX --preview 253`: debug log shows only IMAP connection/auth/peek steps (`peeking imap messages 253 from folder INBOX`, `select_mailbox`, etc.) — no internal trace step exposes the downloads-dir/basename join. Consistent with B-051's finding that this class of himalaya rendering defect is client-side display formatting on already-fetched content, not visible via `--debug`/`--trace`, so isolation here is by direct black-box behavioral comparison (source path vs. rendered path vs. actual on-disk state), not an internal stack trace.
+- `himalaya --version`: `himalaya v1.2.0 +maildir +smtp +wizard +sendmail +pgp-commands +imap`, the same build `command-reference.md` and precedent bugs B-034/B-050/B-051 were verified against.
+- `himalaya message read --help` and `himalaya attachment download --help` reviewed in full: `message read` has no flag related to attachment-path rendering or existence checking (`-f/--folder`, `-p/--preview`, `--no-headers`, `-H/--header`, `-a/--account` only); `attachment download`'s own `-d, --downloads-dir` override has no equivalent on `message read`, confirming the rendered path can only ever reflect the account's configured `downloads-dir`, never a per-invocation choice.
+- Checked whether any shipped policy/skill file assumes a `message read`-rendered attachment path is real: grepped `README.md`, `the-intern/docs/src/operator-guide/index.md`, and every file under `the-intern/bob-skills/skills/email-triage/` (and its `.pi/skills/` mirror) for `message read`, `filename=`, `downloads-dir`, `attachment`. Only hit: an S-004-style policy allow-rule pattern `{ field_path = "command", pattern = "himalaya*message read*" }` in `operator-guide/index.md:1159`, which permits the *command*, not any claim about the rendered path being real — no change needed there.
+- `the-intern/bob-skills/skills/himalaya/references/command-reference.md`'s "Reading a Message" section (lines 119–140) and "Handling Attachments" section (lines 642–671) currently carry no caveat that a `filename=` path shown by `message read` may not exist on disk yet — confirming the bug's own "Suspected Area" claim. Confirmed byte-identical to the mirrored `the-intern/bob-skills/.pi/skills/himalaya/references/command-reference.md` (`diff` empty).
+
+**Isolated fault:** Not a defect in this repository's source — it is entirely inside the external `himalaya v1.2.0` binary, which this repo cannot patch. Specifically: `message read`'s human-friendly rendering of an attachment MIME part synthesizes the `filename=` attribute of the displayed `<#part ...><#/part>` MML placeholder by joining the account's configured `downloads-dir` with the bare basename recovered from the attachment's `Content-Disposition: filename` header — with no check of whether a file actually exists at that path. Because the MML `<#part filename="...">` syntax normally means "attach this already-existing local file" (its meaning when composing outgoing messages, per the "Sending an Attachment" section), reusing the identical syntax to *display* an already-received attachment reads to an operator as a claim that the file is already present locally, when it is merely a prediction of where `attachment download` would save it if run. Within this repo, the isolated fault is that `command-reference.md` (and its byte-identical `.pi/skills/` mirror) documents no caveat about this in "Reading a Message" or "Handling Attachments" — exactly the gap this bug's own "Suspected Area" section anticipated.
+
+**Root cause or fault hypothesis:** External dependency behavior (best-supported hypothesis; no internal source/trace available to confirm the exact implementation, consistent with B-051's finding that this class of himalaya behavior isn't exposed via `--debug`/`--trace`). `message read`'s attachment-part display formatter appears to reuse the same MML `<#part type=... filename="...">` textual representation used for *composing* outgoing attachments, populating `filename=` with `<downloads-dir>/<Content-Disposition basename>` unconditionally — likely because this is exactly the path `attachment download` would use by default, and the formatter treats "the default future download destination" as interchangeable with "the current file location" without checking the filesystem. This explains every observed detail: the path is under the account's real, configured `downloads-dir` (not a fabricated/random directory, which is why it looks so plausible); it uses only the basename from `Content-Disposition` (matching the GitHub issue's UUID-looking example, since attachment filenames are often UUID-generated by the sending application); it renders identically before and after download (static computation, not a live existence check); and it can even show a path that a subsequent `attachment download` will *not* actually use once a basename collision triggers himalaya's own `_N` collision-avoidance renaming — proof the render is a naive guess, not a resolved real-world path.
+
+**Planned fix** (documentation-only, mirroring B-034/B-050/B-051 — no Rust source change, matching this bug's own "Suspected Area"):
+1. Add an "Attachment `filename=` path pitfall (Observed, B-052)" callout to `the-intern/bob-skills/skills/himalaya/references/command-reference.md`'s "Reading a Message" section, explaining that the `filename=` value shown for an attachment `<#part>` is a synthesized potential local path (`<account's downloads-dir> / <original attachment basename>`), not evidence the file is already on disk — with a real Observed transcript (message read renders the path; `ls` on that exact path fails; `attachment download` then materializes it there, byte-identical) matching this diagnosis's message-253 evidence.
+2. Add a short cross-reference note to "Handling Attachments" pointing back to the new "Reading a Message" callout, so an operator who lands there first also sees the caveat before treating a rendered `filename=` as already-fetched.
+3. Mirror the identical edit to `the-intern/bob-skills/.pi/skills/himalaya/references/command-reference.md`; confirm byte-identical to the primary copy via `diff` both before and after, matching B-050/B-051 precedent.
+4. No policy/skill-file change identified as needed (see evidence above — only an unrelated command-allow pattern references `message read`).
+
+**Planned verification:**
+```bash
+# Against the real configured account (already available in this sandbox), with a fresh
+# attachment message (or reuse message 253 from this diagnosis session):
+himalaya message read -f INBOX --preview 253
+# expected: still renders filename="/home/daneel/Downloads/e9e44265-77f0-4999-aa2d-d7f27a6bc760.pdf"
+# (RED, re-run to catch doc drift — confirms this remains an unpatched external defect)
+
+ls /home/daneel/Downloads/e9e44265-77f0-4999-aa2d-d7f27a6bc760.pdf
+# expected: file already exists in this session (downloaded during diagnosis) — for a
+# genuinely fresh RED check, repeat against a newly sent, not-yet-downloaded message.
+
+# Once the doc caveat is added, confirm command-reference.md (and its mirrored .pi/skills/
+# copy) documents the pitfall with the B-052 "Observed" callout in "Reading a Message",
+# cross-referenced from "Handling Attachments", using the same live RED/GREEN-style
+# verification B-050/B-051 established as adequate for a doc-only external-binary-defect fix.
+```
+
+**Files identified for the implementation cycle:**
+- `the-intern/bob-skills/skills/himalaya/references/command-reference.md`
+- `the-intern/bob-skills/.pi/skills/himalaya/references/command-reference.md`
+
+## Work Log
+
+<!-- Mandatory. Append one entry per session boundary. Format:
+### Session N — YYYY-MM-DD
+Free-prose body: what was done this session, what was tried and
+rejected, decisions made, what remains for next session.
+
+Start every session by reading the entries below.
+The final entry serves as the handoff to the reviewer. -->
+
+### Session 1 — 2026-09-20
+
+Implemented Diagnosis 1's fix contract without needing to revisit reproduction or root cause — both were already fully established in the Diagnosis Log: `message read`'s attachment-part rendering synthesizes `filename=` by joining the account's configured `downloads-dir` with the bare basename from `Content-Disposition`, with no check that the file exists, and this is entirely inside the external `himalaya v1.2.0` binary. This is a documentation-only fix (no Rust/TS source touched), matching this bug's own "Suspected Area" and precedent bugs B-034/B-050/B-051.
+
+Re-verified the diagnosis's own evidence live against the real configured account (`daneel@aurorafw.com`) before writing anything, using a fresh message rather than reusing message 253 from the diagnosis session (to catch drift and avoid relying on already-downloaded state): generated a new UUID basename, wrote a small PDF-stub source file under `/home/daneel/Documents/`, confirmed no file yet existed under `/home/daneel/Downloads/` with that basename, sent it as a real MML attachment using the verified B-051 headers-only-plus-splice pattern (`himalaya template write` with no `BODY` argument, `<#part>` spliced in, piped whole into `himalaya template send`), and confirmed via `envelope list -o json` it landed as message 254 with `has_attachment:true` and no `Seen` flag (fresh, undownloaded). RED: `himalaya message read -f INBOX --preview 254` rendered `filename="/home/daneel/Downloads/<uuid>.pdf"`, and `ls` on that exact path failed with "No such file or directory" — reproducing the diagnosed defect on new evidence, live. Then ran `himalaya attachment download -f INBOX 254`, which materialized the file at exactly that previously-rendered path, byte-identical (`diff`) to the source file — matching the diagnosis's message-253 evidence pattern precisely. Re-ran the final `himalaya message read -f INBOX --preview 254` command exactly as written in the new doc transcript as a last check before finishing; output matched verbatim.
+
+Re-checked the Diagnosis Log's policy/skill-file claim rather than only trusting it: grepped `README.md`, `the-intern/docs/src/operator-guide/index.md`, and both `email-triage` skill trees (`bob-skills/skills/` and `.pi/skills/`) for `message read`. Only hit: the same `{ field_path = "command", pattern = "himalaya*message read*" }` S-004-style command-allow rule the diagnosis already found in `operator-guide/index.md:1159`, which permits the command itself and makes no claim about the rendered path being real — confirmed no change needed there, matching the diagnosis's own conclusion. Did not invent work here.
+
+Documentation added to `the-intern/bob-skills/skills/himalaya/references/command-reference.md`, mirrored byte-identically (confirmed via `diff`, both before and after, empty) to `the-intern/bob-skills/.pi/skills/himalaya/references/command-reference.md`: an "Attachment `filename=` path pitfall (Observed, B-052)" callout added to the end of the "Reading a Message" section, explaining the synthesized-path mechanism (downloads-dir joined with the `Content-Disposition` basename, no existence check) with a real Observed transcript from message 254 — render the path, `ls` on it fails, `attachment download` materializes it there byte-identical — followed by a short guidance sentence to treat the rendered path as a prediction, never proof, and a brief note (drawn from the Diagnosis Log's secondary evidence on messages 251/252/244) that the prediction can itself be wrong once a basename collision triggers himalaya's own `_N` collision-avoidance renaming on download. Added a short cross-reference note to "Handling Attachments" pointing back to the "Reading a Message" pitfall, so an operator who lands there first (about to download) also sees the caveat before assuming a rendered path is already-fetched. Both new cross-reference anchors (`#handling-attachments`, `#reading-a-message`) resolve correctly against the file's existing headings.
+
+Considered whether to give the basename-collision divergence its own separate callout (as the Diagnosis Log's evidence treats it as a related but distinct finding) but folded it into a single closing sentence of the same callout instead, to keep the addition tightly scoped to what the fix contract's "Planned fix" step 1 actually asked for (one pitfall callout plus one cross-reference note) rather than expanding the doc surface beyond the diagnosed fix.
+
+Verified the diff is scoped correctly: `git diff dev-agent -- the-intern/bob-skills/skills/himalaya/references/command-reference.md the-intern/bob-skills/.pi/skills/himalaya/references/command-reference.md` shows exactly 46 insertions in each of the two intended files, nothing else changed, and the two files remain byte-identical after the edit. No Rust or TypeScript source touched — confirmed these `bob-skills` reference files are not part of the mdBook `the-intern/docs` build (no references to `bob-skills` in `book.toml`/`SUMMARY.md`), so no build/test command applies; the live RED-then-materialize re-verification against the real account is the equivalent check, matching the style B-050/B-051 established as adequate for a doc-only external-binary-defect fix.
+
+Committed both mirrored files together in one cycle: `docs(himalaya): document message read attachment path pitfall` (commit `e0a9549` on `bug/B-052-himalaya-read-attachment-path-nonexistent`). `git status --porcelain` is clean after the commit.
+
+What remains: nothing outstanding on this bug's own scope. Live verification side effects (message 254 in the real INBOX, the test PDF-stub file under `~/Documents` and its downloaded copy under `~/Downloads`) were left on the real shared mailbox/filesystem as-is, consistent with the precedent B-050's and B-051's Work Logs set for live control-test artifacts on this account.
+
+## Review
+
+<!-- Reviewer: append verdict here after each review cycle.
+
+### Review Verdict — YYYY-MM-DD
+PASS | FAIL | ESCALATE
+
+- For FAIL: file, location, what is wrong, what should change.
+- For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
+- For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
+-->
+
+### Review Verdict — 2026-09-20
+
+PASS
+
+Both review stages passed.
+
+**Diagnosis→fix evidence chain:** Diagnosis 1 records reproduction status
+(confirmed, live-reproduced against the real configured account with a
+purpose-built message, id 253, plus cross-confirmation against three
+pre-existing messages), evidence captured (rendered `filename=` path vs.
+actual on-disk state before/after `attachment download`, the raw `.eml`'s
+`Content-Disposition` basename isolating the downloads-dir/basename join,
+corroborating collision-renaming evidence on messages 251/252/244,
+`--debug` output showing no internal trace of the join, `--help` review of
+both commands, and a grep sweep of policy/skill files for any dependency
+on the rendered path), an isolated fault (external `himalaya v1.2.0`
+binary, not this repo's source; secondarily this repo's undocumented
+caveat gap in `command-reference.md`), and a root-cause hypothesis
+(explicitly labeled a best-supported hypothesis, consistent with B-051's
+finding that this class of himalaya behavior isn't exposed via
+`--debug`/`--trace`). The fix contract (planned fix, four steps, plus
+planned verification) is complete.
+
+**Stage 1 — Bug criteria:**
+- Fix addresses the isolated fault: yes — the new "Attachment `filename=`
+  path pitfall (Observed, B-052)" callout in "Reading a Message" explains
+  the synthesized-path mechanism and includes a real Observed transcript;
+  a cross-reference note was added to "Handling Attachments"; both match
+  Diagnosis 1's planned fix steps 1–2 exactly. Step 4 (no policy/skill-file
+  change) also matches — verified below.
+- Fix Verification: the bug file's original section is generic/pre-diagnosis
+  as expected; checked against the Diagnosis Log's "Planned verification"
+  and the Work Log's actual narrative instead. Work Log Session 1 describes
+  a fresh live re-verification (new message id 254, not a reuse of message
+  253, specifically to catch drift and avoid relying on already-downloaded
+  state): RED (`message read --preview 254` renders a `Downloads/` path,
+  `ls` on that exact path fails) then GREEN (`attachment download`
+  materializes the file at exactly that rendered path, byte-identical via
+  `diff` to the source file) — this matches Diagnosis 1's planned
+  verification shape and the same live RED/GREEN style B-050/B-051
+  established as adequate for a doc-only external-binary-defect fix.
+- No unrelated behavior added.
+
+**Stage 2 — Code quality / bug-fix addendum:**
+- Diff scoped correctly: `git diff dev-agent..bug/B-052-himalaya-read-attachment-path-nonexistent`
+  touches only `the-intern/bob-skills/skills/himalaya/references/command-reference.md`
+  and `the-intern/bob-skills/.pi/skills/himalaya/references/command-reference.md`
+  (46 insertions each — identical diff text, confirmed by identical
+  pre/post blob hashes `09a406e..a9d0181` on both files, and an empty
+  `diff` between the two post-fix blobs). The branch's diff against
+  `dev-agent` also shows the `B-052` bug file itself as a pure deletion of
+  the Diagnosis Log/Work Log sections with zero additions — expected
+  divergence noise, since the branch was cut before those entries were
+  committed directly to `dev-agent` (bug files are canonical lifecycle
+  state, not developer branch content), matching the exact pattern the
+  B-051 review already accepted, confirmed here by `git show --stat
+  e0a9549` showing the branch's only commit touches solely the two
+  reference files. No other files touched.
+- No Rust/TS/JS source touched anywhere in the diff (confirmed directly —
+  `git diff --name-only` filtered for `.rs`/`.ts`/`.tsx`/`.js` returns
+  nothing), consistent with this being a documentation-only fix for an
+  external binary defect the repo cannot patch. The Work Log's reasoning
+  for skipping an automated regression test holds — these `bob-skills`
+  reference files are outside the mdBook `the-intern/docs` build, so no
+  build/test command applies — and the live RED/GREEN re-verification
+  against the real account is an adequate substitute, mirroring
+  B-034/B-050/B-051.
+- Independently re-checked (not just trusted) the Work Log's claim that no
+  policy/skill-rule file needs changing: re-ran the same grep sweep across
+  `README.md`, `the-intern/docs/src/operator-guide/index.md`, and both
+  `email-triage` skill trees (`bob-skills/skills/` and `.pi/skills/`) for
+  `message read`. Only hit: the pre-existing `{ field_path = "command",
+  pattern = "himalaya*message read*" }` command-allow rule at
+  `operator-guide/index.md:1159`, which permits the command itself and
+  makes no claim about the rendered path being real — the Work Log's claim
+  is credible, confirmed independently.
+- Cross-reference anchors resolve: `#handling-attachments` and
+  `#reading-a-message` both exist as real `##` headings in the file; the
+  new callout and cross-reference note read cleanly in context (verified
+  directly in the branch's blob, not just the diff).
+- Commit `e0a9549` message `docs(himalaya): document message read
+  attachment path pitfall` follows `type(scope): description` (lowercase,
+  imperative, 61 characters, no period, no bug ID repeated in the
+  subject).
+- The new "Attachment `filename=` path pitfall (Observed, B-052)" callout
+  follows the file's own established "Observed" pitfall-callout convention
+  (same pattern B-050/B-051/B-034 used elsewhere in the file); the
+  markdown code fence is well-formed and the transcript is internally
+  consistent (message id, path, and byte size all agree across the three
+  command outputs shown).
+
+No blocking issues found. No minor observations beyond what is noted
+above.

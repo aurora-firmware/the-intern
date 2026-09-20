@@ -173,6 +173,9 @@ Directory *is* the status for tasks and bugs — moving a file is how state tran
 
 Commit format: `<type>(<component>): <description>` — type ∈ `feat|fix|test|docs|chore`,
 imperative, lowercase, no period, ≤72 chars. Do not repeat the task/bug ID (the branch carries it).
+Exception: a bug or task filed directly on `dev-agent` (`docs(bugs): file B-NNN for <title>`) has
+no branch yet to carry the ID, so the ID belongs in the message — but the ≤72-char limit still
+applies to the full rendered subject, not just the title in isolation; shorten the title if needed.
 
 Hard rules: no `--no-verify`, no `--force` on `dev-agent`/`main`, no amending pushed commits.
 
@@ -186,5 +189,7 @@ Hard rules: no `--no-verify`, no `--force` on `dev-agent`/`main`, no amending pu
 
 ### Pointers
 
-- Coding guidelines: `docs/ai-team/docs/coding-guidelines-node.md`, `docs/ai-team/docs/coding-guidelines-rust.md`
+- Coding guidelines: `docs/ai-team/docs/coding-guidelines-node.md`, `docs/ai-team/docs/coding-guidelines-rust.md`,
+  `docs/ai-team/docs/coding-guidelines-skills.md` (shipped skills and user docs — no internal task/bug/spec/ADR
+  IDs, no environment-specific values presented as generic)
 - Local Rust verification details: `the-intern/service/README.md`
