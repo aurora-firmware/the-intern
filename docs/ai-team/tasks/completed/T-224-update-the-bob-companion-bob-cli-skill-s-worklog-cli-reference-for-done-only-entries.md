@@ -2,7 +2,7 @@
 id: T-224
 title: Update the bob-companion bob-cli skill's worklog CLI reference for 
   Done-only entries
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-09-21'
