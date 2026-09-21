@@ -53,9 +53,13 @@ quotations, including its `Next` line, unchanged.
 ## Verification
 
 ```bash
-grep -n "\-\-left\|\-\-next\|Left:\|Next:" the-intern/bob-skills/README.md
+sed '/^## Validation outcomes$/,$d' the-intern/bob-skills/README.md \
+  | grep -nE -- '--left|--next|Left:|Next:'
 # expect no output
 ```
+
+Also inspect the diff to confirm that no content at or below the
+`## Validation outcomes` heading changed.
 
 ## Work Log
 
