@@ -66,6 +66,16 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-09-21
+
+Implemented T-220 in a single TDD cycle. Read the task's Work Log (empty — first session) before starting. Confirmed red first: `grep -n "Message-ID" the-intern/bob-skills/skills/himalaya/references/command-reference.md` returned no matches, verifying the worked example the task describes genuinely didn't exist yet (the file only had an `In-Reply-To` header example elsewhere, which is a different header).
+
+Added the worked example to the "Reading a Message" section, directly after the existing `himalaya message read`/`--preview`/`-f` example block and before the paragraph explaining the `Seen`-flag side effect — this placement keeps it adjacent to the already-verified `-H`/`--preview` flag documentation it builds on. The example shows `himalaya message read --preview -H From -H Subject -H Date -H Message-ID 42`, retrieving all four identity headers `email-triage` (T-218) needs for its `Message-ID`-discriminated item-identifier in one call, combined with `--preview` and an explicit sentence noting it's the same no-`Seen`-side-effect flag documented above. Checked T-218's completed task file for context on the downstream consumer (`email-triage`'s item-identifier convention already references `himalaya message read -H Message-ID <id>`) to keep the wording and the flag consistent with that existing consumer, without editing anything outside this task's own Files to Touch.
+
+One choice worth flagging: did not mark the new example "Observed" the way several other entries in this file do (those carry real command transcripts from a live account run earlier in the file's history). No live himalaya/mail account was available this session, so the example was written in the same unmarked-syntax style as the plain `message read 42` / `--preview 42` examples immediately above it in the same section, rather than fabricating a transcript. This satisfies the task's three ACs (worked example with `-H Message-ID`; `From`/`Subject`/`Date`/`Message-ID` in one command; `--preview` noted for a must-not-set-`\Seen` read) without overclaiming verification status.
+
+Confirmed green after the edit (grep now matches at three lines, including the command itself), confirmed `git diff --stat` touched only the one Files-to-Touch file with no deletions, committed as `f71ad68` (`docs(himalaya): add worked Message-ID header retrieval example`) on the task branch, and left the working tree clean. Nothing remains open for T-220; all three acceptance criteria are met and the task's exact Verification command passes.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
