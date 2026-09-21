@@ -222,10 +222,6 @@ fn worklog_append_creates_todays_file_without_a_worklog_dir_or_admin_socket() {
             "vendor-invoice",
             "--done",
             "Chased the vendor for the missing PDF.",
-            "--left",
-            "awaiting the corrected invoice",
-            "--next",
-            "closes when the corrected invoice arrives",
         ])
         .output()
         .expect("bob binary to run");
@@ -261,12 +257,75 @@ fn worklog_append_creates_todays_file_without_a_worklog_dir_or_admin_socket() {
         "the entry's done field is missing from the day file: {content}"
     );
     assert!(
-        content.contains("- Left: awaiting the corrected invoice"),
-        "the entry's left field is missing from the day file: {content}"
+        !content.contains("- Left:") && !content.contains("- Next:"),
+        "a Done-only entry must not carry a Left or Next bullet: {content}"
     );
+}
+
+/// AC-4: WHEN `bob worklog append` is invoked with the retired `--left` or
+/// `--next` flag THE SYSTEM SHALL exit non-zero with an unknown-argument
+/// error, and no entry is written.
+#[test]
+fn worklog_append_rejects_the_retired_left_and_next_flags_as_unknown_arguments() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let state_home = temp.path().join("state");
+    let home_dir = temp.path().join("home");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+
+    let with_left = bob_command_with_temp_state(&state_home, &home_dir)
+        .current_dir(&workspace)
+        .args([
+            "worklog",
+            "append",
+            "--item",
+            "vendor-invoice",
+            "--done",
+            "Chased the vendor for the missing PDF.",
+            "--left",
+            "awaiting the corrected invoice",
+        ])
+        .output()
+        .expect("bob binary to run");
+    assert_ne!(
+        with_left.status.code(),
+        Some(0),
+        "bob worklog append must reject the retired --left flag"
+    );
+    let with_left_stderr = String::from_utf8(with_left.stderr).expect("utf8 stderr");
     assert!(
-        content.contains("- Next: closes when the corrected invoice arrives"),
-        "the entry's next field is missing from the day file: {content}"
+        with_left_stderr.contains("--left"),
+        "stderr must name the unknown --left argument: {with_left_stderr}"
+    );
+
+    let with_next = bob_command_with_temp_state(&state_home, &home_dir)
+        .current_dir(&workspace)
+        .args([
+            "worklog",
+            "append",
+            "--item",
+            "vendor-invoice",
+            "--done",
+            "Chased the vendor for the missing PDF.",
+            "--next",
+            "closes when the corrected invoice arrives",
+        ])
+        .output()
+        .expect("bob binary to run");
+    assert_ne!(
+        with_next.status.code(),
+        Some(0),
+        "bob worklog append must reject the retired --next flag"
+    );
+    let with_next_stderr = String::from_utf8(with_next.stderr).expect("utf8 stderr");
+    assert!(
+        with_next_stderr.contains("--next"),
+        "stderr must name the unknown --next argument: {with_next_stderr}"
+    );
+
+    assert!(
+        !workspace.join("worklog").exists(),
+        "a rejected call must not create the worklog directory"
     );
 }
 
@@ -292,10 +351,6 @@ fn worklog_list_reads_back_an_entry_a_prior_invocation_appended() {
             "vendor-invoice",
             "--done",
             "Chased the vendor for the missing PDF.",
-            "--left",
-            "awaiting the corrected invoice",
-            "--next",
-            "closes when the corrected invoice arrives",
         ])
         .output()
         .expect("bob binary to run");
@@ -328,12 +383,8 @@ fn worklog_list_reads_back_an_entry_a_prior_invocation_appended() {
         "list must print the appended done field: {stdout}"
     );
     assert!(
-        stdout.contains("- Left: awaiting the corrected invoice"),
-        "list must print the appended left field: {stdout}"
-    );
-    assert!(
-        stdout.contains("- Next: closes when the corrected invoice arrives"),
-        "list must print the appended next field: {stdout}"
+        !stdout.contains("- Left:") && !stdout.contains("- Next:"),
+        "list must not print a Left or Next bullet for a Done-only entry: {stdout}"
     );
 }
 
@@ -374,9 +425,9 @@ fn worklog_list_exits_non_zero_and_names_the_missing_worklog_directory() {
 }
 
 /// AC-1: WHEN `bob worklog append` is invoked twice for the same item the
-/// same day with identical `--done`/`--left`/`--next` values THE SYSTEM
-/// SHALL leave exactly one entry for that item-identifier in today's file,
-/// and the second invocation's output shall report the write as suppressed.
+/// same day with an identical `--done` value THE SYSTEM SHALL leave exactly
+/// one entry for that item-identifier in today's file, and the second
+/// invocation's output shall report the write as suppressed.
 #[test]
 fn worklog_append_twice_the_same_day_with_identical_fields_suppresses_the_second_write() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -391,10 +442,6 @@ fn worklog_append_twice_the_same_day_with_identical_fields_suppresses_the_second
         "vendor-invoice",
         "--done",
         "Chased the vendor for the missing PDF.",
-        "--left",
-        "awaiting the corrected invoice",
-        "--next",
-        "closes when the corrected invoice arrives",
     ];
 
     let first = bob_command_with_temp_state(&state_home, &home_dir)
@@ -441,9 +488,8 @@ fn worklog_append_twice_the_same_day_with_identical_fields_suppresses_the_second
 }
 
 /// AC-2: WHEN `bob worklog append` is invoked twice for the same item the
-/// same day with a different `--done` value (holding `--left`/`--next`
-/// fixed) THE SYSTEM SHALL leave two entries for that item-identifier in
-/// today's file.
+/// same day with a different `--done` value THE SYSTEM SHALL leave two
+/// entries for that item-identifier in today's file.
 #[test]
 fn worklog_append_twice_the_same_day_with_a_different_done_value_keeps_both_entries() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -461,10 +507,6 @@ fn worklog_append_twice_the_same_day_with_a_different_done_value_keeps_both_entr
             "vendor-invoice",
             "--done",
             "Chased the vendor for the missing PDF.",
-            "--left",
-            "awaiting the corrected invoice",
-            "--next",
-            "closes when the corrected invoice arrives",
         ])
         .output()
         .expect("bob binary to run");
@@ -486,10 +528,6 @@ fn worklog_append_twice_the_same_day_with_a_different_done_value_keeps_both_entr
             "vendor-invoice",
             "--done",
             "Received the corrected invoice and closed it out.",
-            "--left",
-            "awaiting the corrected invoice",
-            "--next",
-            "closes when the corrected invoice arrives",
         ])
         .output()
         .expect("bob binary to run");
