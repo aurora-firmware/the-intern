@@ -111,3 +111,29 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-21
+
+PASS
+
+**Stage 1 — Acceptance Criteria** (checked against `task/T-217-rewrite-the-canonical-worklog-skill-for-done-only-entries`, files read in full, not just the diff):
+
+- AC-1: `grep -rn "Left\|Next\|--left\|--next\|three field"` over `SKILL.md`, `references/entry-format.md`, `references/reconciliation.md` produced no output (exit 1). Also ran a broader case-insensitive `left\|next` sweep as a sanity check; the only remaining hits in `SKILL.md` are unrelated prose ("next item", "left to write", "day to the next") — `entry-format.md` and `reconciliation.md` have zero matches of any kind. Met.
+- AC-2: `references/entry-format.md` lines 25-32 show a header line, a blank line, then exactly one `- Done: …` bullet; the removed `Left`/`Next` bullets and their explanatory paragraphs are gone entirely, not just reworded. Met.
+- AC-3: `SKILL.md` line 106-107 narrows the `bob worklog append` call description to `--item <item-identifier>` and `--done <...>` only. Met.
+- AC-4: `references/reconciliation.md` narrows all three of its prior three-field comparison descriptions (the automatic check, the "safe to call twice" note, the "only the most recent entry" note) to a single `Done`-value comparison. Met.
+- AC-5: `SKILL.md`'s item-identifier paragraph (lines 118-126) now states "Distinct items must get distinct identifiers" alongside the pre-existing "same item keeps the same identifier every time it recurs" requirement. Met.
+- `git diff --stat dev-agent...task/T-217-...` touches exactly the three files listed under "Files to Touch" — `SKILL.md`, `references/entry-format.md`, `references/reconciliation.md` — nothing else. No files under `the-intern/bob-skills/.pi/skills/` are touched by this branch's diff, confirmed by the same stat output. Location resolution, tool usage, and the "this skill owns no domain policy" sections of `SKILL.md` are untouched in the diff, as instructed.
+- No unspecified behavior added: the one elaboration beyond the literal AC-5 wording ("without conflating two different items that happen to share a label") is directly explanatory of the same distinct-identifiers requirement, not new functionality.
+- `B-054` exists at `docs/ai-team/bugs/open/B-054-the-pi-skills-worklog-packaged-copy-is-stale-after-done-only-narrowing.md`, correctly describes the `.pi/skills/worklog` staleness this task's diff intentionally left untouched, and carries the coordinator's note that it will be resolved as a side effect of `T-221`. No action needed on it from this review.
+
+**Stage 2 — Code Quality:**
+
+- Correctness: all three files are internally consistent post-edit — `SKILL.md`'s narrated `append` call, `entry-format.md`'s example call and entry shape, and `reconciliation.md`'s duplicate-check description all agree on the single-field `Done` shape.
+- Tests: N/A (markdown skill content, no compiler/test runner); the task's own grep-based Verification section is the applicable check and was run verbatim by this review, not just trusted from the Work Log.
+- Security: N/A, no external input or secrets in these files.
+- Readability: prose style is consistent with the rest of the skill's existing conventions; no dead/commented-out content left behind from the removed `Left`/`Next` material.
+- Performance: N/A.
+- Commit hygiene: three commits (`ed319dd`, `f85fdb2`, `8056f13`) on the task branch, each `docs(worklog): …`, imperative, lowercase, no period, longest subject exactly 72 chars — compliant with `git-conventions`.
+
+Both stages pass. No blocking issues found.
