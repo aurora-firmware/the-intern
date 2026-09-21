@@ -123,11 +123,11 @@ never any other day's file, and neither ever derives its output from any
 other day. `append` additionally performs same-day exact-duplicate
 suppression: before writing, it checks today's file for an entry that
 exactly repeats `--item`'s most recent entry already recorded today (same
-`--done`, `--left`, and `--next`, compared after trimming surrounding
-whitespace), and suppresses the write instead of adding a new entry when it
-finds one. `list` never writes to any file.
+`--done`, compared after trimming surrounding whitespace), and suppresses
+the write instead of adding a new entry when it finds one. `list` never
+writes to any file.
 
-### `bob worklog append --item <ITEM> --done <DONE> --left <LEFT> --next <NEXT>`
+### `bob worklog append --item <ITEM> --done <DONE>`
 
 Appends one entry to today's file (`<cwd>/worklog/<date>.md`), creating
 `<cwd>/worklog/` and the day file if needed — unless the call is suppressed
@@ -142,14 +142,13 @@ duplicate:
 - `--json` output is `{"item", "path", "written", "warnings"}`, where
   `written` is `true` when a new entry was recorded and `false` when the
   call suppressed a duplicate instead.
-- All four flags — `--item`, `--done`, `--left`, `--next` — are **required**
-  and must be non-empty. A wholly missing flag is rejected by clap; an empty
-  or all-whitespace value is validated locally and fails with
+- Both flags — `--item` and `--done` — are **required** and must be
+  non-empty. A wholly missing flag is rejected by clap; an empty or
+  all-whitespace value is validated locally and fails with
   `worklog entry field --<name> must not be empty` before any filesystem
   work happens, leaving an existing day file untouched.
 - `--item` is a short identifier for the thing the entry is about; `--done`
-  is what was done this run; `--left` is what is still outstanding (or
-  `nothing`); `--next` is what happens next, and on what trigger.
+  is the entry's only recorded work description (`Done`).
 
 ### `bob worklog list [--date <YYYY-MM-DD>]`
 
