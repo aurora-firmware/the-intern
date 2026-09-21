@@ -363,7 +363,7 @@ seven raw-shell rules that used to admit the skill's own
 `bob worklog` does that work internally. The `bob worklog*` matcher
 mirrors the `bob task*` rule's shape (prefix-anchored on the subcommand,
 wildcard tail), so it stays stable regardless of the free-text
-`--item`/`--done`/`--left`/`--next` values a call carries. The
+`--item`/`--done` values a call carries. The
 [Validation outcomes](#validation-outcomes) section below records the
 earlier T-139/T-140/T-164 live runs as history; those predate the
 `bob worklog` command and exercised the raw-shell worklog recipe it
