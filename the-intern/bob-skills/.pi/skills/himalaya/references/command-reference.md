@@ -133,6 +133,20 @@ himalaya message read --preview 42       # reads without marking Seen
 himalaya message read -f Archive 42 43   # multiple ids, one command
 ```
 
+**Worked example: retrieving identity headers in one call.** A caller that
+needs a message's identity headers — `From`, `Subject`, `Date`, and
+`Message-ID` — to build a stable item-identifier (for example, `email-triage`'s
+`Message-ID`-discriminated identifier) repeats `-H` once per header, and
+combines it with `--preview` whenever the read must not set `\Seen`:
+
+```bash
+himalaya message read --preview -H From -H Subject -H Date -H Message-ID 42
+```
+
+`--preview` here is the same flag documented above — it reads without
+marking the envelope `Seen` — and applies regardless of how many `-H` flags
+are given alongside it.
+
 Reading a message (without `--preview`) sets its `Seen` flag as a side
 effect — this is how the mailbox itself, not a separate state file, tracks
 what has already been looked at.

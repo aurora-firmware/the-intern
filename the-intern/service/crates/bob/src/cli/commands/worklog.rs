@@ -56,8 +56,6 @@ struct WorklogEntryOutput {
     time: String,
     item: String,
     done: String,
-    left: String,
-    next: String,
 }
 
 impl From<&RecordedEntry> for WorklogEntryOutput {
@@ -66,19 +64,11 @@ impl From<&RecordedEntry> for WorklogEntryOutput {
             time: entry.recorded_time.clone(),
             item: entry.item.clone(),
             done: entry.done.clone(),
-            left: entry.left.clone(),
-            next: entry.next.clone(),
         }
     }
 }
 
-pub(super) fn run_append(
-    json_output: bool,
-    item: &str,
-    done: &str,
-    left: &str,
-    next: &str,
-) -> ServiceResult<()> {
+pub(super) fn run_append(json_output: bool, item: &str, done: &str) -> ServiceResult<()> {
     let current_dir = env::current_dir()
         .map_err(|err| invalid_request_error(format!("current directory unavailable: {err}")))?;
     let mut out = io::stdout();
@@ -86,8 +76,6 @@ pub(super) fn run_append(
         json_output,
         item,
         done,
-        left,
-        next,
         Local::now().naive_local(),
         &current_dir,
         &mut out,
@@ -98,22 +86,16 @@ fn run_append_with_context(
     json_output: bool,
     item: &str,
     done: &str,
-    left: &str,
-    next: &str,
     now: NaiveDateTime,
     working_dir: &Path,
     out: &mut impl Write,
 ) -> ServiceResult<()> {
     reject_entry_field("item", item)?;
     reject_entry_field("done", done)?;
-    reject_entry_field("left", left)?;
-    reject_entry_field("next", next)?;
 
     let entry = WorklogEntry {
         item: item.to_owned(),
         done: done.to_owned(),
-        left: left.to_owned(),
-        next: next.to_owned(),
     };
 
     let store = WorklogStore::new(working_dir);
@@ -235,8 +217,6 @@ fn write_worklog_day_text(out: &mut impl Write, day: &WorklogDayOutput) -> io::R
         writeln!(out)?;
         writeln!(out, "## {} — {}", entry.time, entry.item)?;
         writeln!(out, "- Done: {}", entry.done)?;
-        writeln!(out, "- Left: {}", entry.left)?;
-        writeln!(out, "- Next: {}", entry.next)?;
     }
     Ok(())
 }
@@ -327,8 +307,6 @@ mod tests {
             false,
             "   ",
             "did the thing",
-            "still open",
-            "the trigger",
             at((2026, 8, 30), (9, 5)),
             temp.path(),
             &mut out,
@@ -354,8 +332,6 @@ mod tests {
             false,
             "vendor-invoice",
             "",
-            "still open",
-            "the trigger",
             at((2026, 8, 30), (9, 5)),
             temp.path(),
             &mut out,
@@ -363,52 +339,6 @@ mod tests {
 
         assert!(
             detail.contains("done"),
-            "error must name the field: {detail}"
-        );
-        assert!(!temp.path().join("worklog").exists());
-    }
-
-    #[test]
-    fn worklog_append_rejects_an_empty_left_field_before_touching_the_filesystem() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let mut out = Vec::new();
-
-        let detail = expect_invalid_request(run_append_with_context(
-            false,
-            "vendor-invoice",
-            "did the thing",
-            "   ",
-            "the trigger",
-            at((2026, 8, 30), (9, 5)),
-            temp.path(),
-            &mut out,
-        ));
-
-        assert!(
-            detail.contains("left"),
-            "error must name the field: {detail}"
-        );
-        assert!(!temp.path().join("worklog").exists());
-    }
-
-    #[test]
-    fn worklog_append_rejects_an_empty_next_field_before_touching_the_filesystem() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let mut out = Vec::new();
-
-        let detail = expect_invalid_request(run_append_with_context(
-            false,
-            "vendor-invoice",
-            "did the thing",
-            "still open",
-            "",
-            at((2026, 8, 30), (9, 5)),
-            temp.path(),
-            &mut out,
-        ));
-
-        assert!(
-            detail.contains("next"),
             "error must name the field: {detail}"
         );
         assert!(!temp.path().join("worklog").exists());
@@ -423,8 +353,6 @@ mod tests {
             false,
             "vendor-invoice",
             "line one\nline two",
-            "still open",
-            "the trigger",
             at((2026, 8, 30), (9, 5)),
             temp.path(),
             &mut out,
@@ -442,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn worklog_append_leaves_an_existing_day_file_untouched_when_a_field_is_empty() {
+    fn worklog_append_leaves_an_existing_day_file_untouched_when_the_done_field_is_empty() {
         let temp = tempfile::tempdir().expect("temp dir");
         WorklogStore::new(temp.path())
             .append(
@@ -450,8 +378,6 @@ mod tests {
                 &WorklogEntry {
                     item: "existing".to_owned(),
                     done: "earlier work".to_owned(),
-                    left: "still open".to_owned(),
-                    next: "the trigger".to_owned(),
                 },
             )
             .expect("seed today's file");
@@ -462,15 +388,13 @@ mod tests {
         let detail = expect_invalid_request(run_append_with_context(
             false,
             "new-item",
-            "did the thing",
             "   ",
-            "the trigger",
             at((2026, 8, 30), (9, 5)),
             temp.path(),
             &mut out,
         ));
 
-        assert!(detail.contains("left"));
+        assert!(detail.contains("done"));
         let after = std::fs::read_to_string(&day_path).expect("day file");
         assert_eq!(
             before, after,
@@ -487,8 +411,6 @@ mod tests {
             false,
             "vendor-invoice",
             "Chased the vendor for the missing PDF.",
-            "awaiting the corrected invoice",
-            "closes when the corrected invoice arrives",
             at((2026, 8, 30), (9, 5)),
             temp.path(),
             &mut out,
@@ -501,8 +423,6 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].item, "vendor-invoice");
         assert_eq!(entries[0].done, "Chased the vendor for the missing PDF.");
-        assert_eq!(entries[0].left, "awaiting the corrected invoice");
-        assert_eq!(entries[0].next, "closes when the corrected invoice arrives");
     }
 
     #[test]
@@ -522,8 +442,6 @@ mod tests {
             false,
             "text-item",
             "Did today's work.",
-            "nothing",
-            "nothing further",
             at((2026, 8, 30), (9, 0)),
             temp.path(),
             &mut text_out,
@@ -533,8 +451,6 @@ mod tests {
             true,
             "json-item",
             "Did today's work.",
-            "nothing",
-            "nothing further",
             at((2026, 8, 30), (9, 5)),
             temp.path(),
             &mut json_out,
@@ -571,8 +487,6 @@ mod tests {
             true,
             "todays-item",
             "Handled entirely today.",
-            "nothing",
-            "nothing further",
             at((2026, 8, 30), (9, 0)),
             temp.path(),
             &mut json_out,
@@ -582,8 +496,6 @@ mod tests {
             false,
             "another-item",
             "Also handled today.",
-            "nothing",
-            "nothing further",
             at((2026, 8, 30), (10, 0)),
             temp.path(),
             &mut text_out,
@@ -611,8 +523,6 @@ mod tests {
                 &WorklogEntry {
                     item: "vendor-invoice".to_owned(),
                     done: "Chased the vendor.".to_owned(),
-                    left: "awaiting the corrected invoice".to_owned(),
-                    next: "closes when the corrected invoice arrives".to_owned(),
                 },
             )
             .expect("seed today's entry");
@@ -623,8 +533,6 @@ mod tests {
             true,
             "vendor-invoice",
             "Chased the vendor.",
-            "awaiting the corrected invoice",
-            "closes when the corrected invoice arrives",
             at((2026, 8, 30), (11, 0)),
             temp.path(),
             &mut json_out,
@@ -634,8 +542,6 @@ mod tests {
             false,
             "vendor-invoice",
             "Chased the vendor.",
-            "awaiting the corrected invoice",
-            "closes when the corrected invoice arrives",
             at((2026, 8, 30), (12, 0)),
             temp.path(),
             &mut text_out,
@@ -674,8 +580,6 @@ mod tests {
                     &WorklogEntry {
                         item: item.to_owned(),
                         done: "did some work".to_owned(),
-                        left: "nothing".to_owned(),
-                        next: "nothing further".to_owned(),
                     },
                 )
                 .expect("seed today's entry");
@@ -765,8 +669,6 @@ mod tests {
             false,
             "todays-item",
             "Handled entirely today.",
-            "nothing",
-            "nothing further",
             at((2026, 8, 30), (9, 0)),
             temp.path(),
             &mut text_out,
@@ -776,8 +678,6 @@ mod tests {
             true,
             "another-item",
             "Also handled today.",
-            "nothing",
-            "nothing further",
             at((2026, 8, 30), (10, 0)),
             temp.path(),
             &mut json_out,
@@ -805,8 +705,6 @@ mod tests {
                 &WorklogEntry {
                     item: "todays-item".to_owned(),
                     done: "Handled entirely today.".to_owned(),
-                    left: "nothing".to_owned(),
-                    next: "nothing further".to_owned(),
                 },
             )
             .expect("seed today's own entry");
@@ -852,8 +750,6 @@ mod tests {
                 &WorklogEntry {
                     item: "todays-item".to_owned(),
                     done: "Handled entirely today.".to_owned(),
-                    left: "nothing".to_owned(),
-                    next: "nothing further".to_owned(),
                 },
             )
             .expect("seed today's entry");
@@ -874,6 +770,51 @@ mod tests {
         assert_eq!(
             before, after,
             "list must never write to the requested day's file as a side effect"
+        );
+    }
+
+    #[test]
+    fn worklog_list_output_never_includes_left_or_next_fields_in_text_or_json() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        WorklogStore::new(temp.path())
+            .append(
+                at((2026, 8, 30), (9, 0)),
+                &WorklogEntry {
+                    item: "todays-item".to_owned(),
+                    done: "Handled entirely today.".to_owned(),
+                },
+            )
+            .expect("seed today's own entry");
+        let mut text_out = Vec::new();
+        let mut json_out = Vec::new();
+
+        run_list_with_context(
+            false,
+            None,
+            at((2026, 8, 30), (10, 0)),
+            temp.path(),
+            &mut text_out,
+        )
+        .expect("list should succeed");
+        run_list_with_context(
+            true,
+            None,
+            at((2026, 8, 30), (10, 0)),
+            temp.path(),
+            &mut json_out,
+        )
+        .expect("list should succeed");
+
+        let text = String::from_utf8(text_out).expect("utf8");
+        assert!(
+            !text.contains("- Left:") && !text.contains("- Next:"),
+            "list text output must not render Left/Next bullets: {text}"
+        );
+        let value: Value = serde_json::from_slice(&json_out).expect("json object");
+        let entry = &value["entries"][0];
+        assert!(
+            entry.get("left").is_none() && entry.get("next").is_none(),
+            "list JSON output must not include left/next fields: {value}"
         );
     }
 }

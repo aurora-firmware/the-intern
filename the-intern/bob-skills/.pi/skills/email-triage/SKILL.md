@@ -115,9 +115,9 @@ without retrying it here would keep it stuck indefinitely:
   - If it now succeeds, the item is resolved: move the task to `done` via
     `bob task status`, then call `bob worklog append` once for it — the
     same item-identifier convention step 4 below uses (`<subject> (from
-    <sender>)` of the message the task named) — with `Done` naming the
-    task closed and describing the now-successful action, and `Left`:
-    nothing.
+    <sender>)` of the message the task named, plus the discriminator
+    derived from that message's `Message-ID` header) — with `Done` naming
+    the task closed and describing the now-successful action.
   - If it is still refused, leave the task `blocked`. Record the attempt
     on the task itself (per the `tasks` skill's "Record progress without
     changing status") rather than in the worklog, so the board keeps
@@ -166,22 +166,26 @@ For every envelope the previous step returned, in turn:
    per the `himalaya` skill.
    - If any of those calls is denied by the action-authorization gate: stop
      acting on this message, do not substitute some other action instead,
-     and file a `bob task` for it — status `blocked`, naming the message,
-     the action that was refused, and what would need to change (an
-     admitting allow rule) before it can be retried. Name that task in this
-     message's worklog entry in step 4 below (`Left`: the blocked action;
-     `Next`: retried the next time step 1 lists this job's own board). The
-     message is not treated as handled.
+     and file a `bob task` for it — status `blocked`, including this
+     message's content per `references/escalation.md`'s "Message content
+     requirement" (do not restate that content here), the action that was
+     refused, and what would need to change (an admitting allow rule)
+     before it can be retried. Name that task in this message's worklog
+     entry in step 4 below, with `Done` describing the blocked action and
+     the task filed for it; the retry happens the next time step 1 lists
+     this job's own board. The message is not treated as handled.
 3. **No confident match** (including an ambiguous match between two
    categories, which `references/categories/README.md`'s confidence rubric
    treats as not confident, and a message that does not clearly satisfy any
    one category's signals): escalate per `references/escalation.md` — send
    exactly one escalation email to the configured manager address and take
    no further action on this message this run. When the send succeeds,
-   file a `bob task` for it — status `todo`, naming the message and the
-   question the escalation asked — so a later run can tell this item is
-   still awaiting the manager's reply; name that task in this message's
-   worklog entry in step 4 below. Never fall back to choosing the closest
+   file a `bob task` for it — status `todo`, including this message's
+   content per `references/escalation.md`'s "Message content requirement"
+   (do not restate that content here) and the question the escalation
+   asked — so a later run can tell this item is still awaiting the
+   manager's reply; name that task in this message's worklog entry in
+   step 4 below. Never fall back to choosing the closest
    category and acting on it anyway — "closest" is not "confident"
    (`references/categories/README.md`'s "No confident match" section).
    `references/escalation.md` defines the full escalation policy — the
@@ -211,10 +215,12 @@ For every envelope the previous step returned, in turn:
    If that explicit send command is denied by the action-authorization
    gate, treat this message's outcome as **blocked**, not **escalated**:
    no escalation email was sent, so file a `bob task` for it instead of the
-   `todo` task above — status `blocked`, naming the message and the refused
-   send — and name that task in this message's worklog entry in step 4
-   below (`Left`: the blocked escalation attempt; `Next`: retried the next
-   time step 1 lists this job's own board).
+   `todo` task above — status `blocked`, including this message's content
+   per `references/escalation.md`'s "Message content requirement" (do not
+   restate that content here) and the refused send — and name that task in
+   this message's worklog entry in step 4 below, with `Done` describing
+   the blocked escalation attempt; the retry happens the next time step 1
+   lists this job's own board.
 
 Escalating and acting are mutually exclusive outcomes for a given message
 on a given run — never do both.
@@ -225,13 +231,18 @@ Whatever the outcome above — acted, escalated, or blocked at either
 step — call `bob worklog append` once for this message. The command
 creates the worklog directory and today's file if either is still missing,
 stamps the entry from its own clock, and takes the item-identifier plus the
-`Done`/`Left`/`Next` fields every entry carries — the `worklog` skill
-covers when to make this call and what those fields mean; do not restate
-that here. This skill's own `references/worklog.md` defines the one thing
-specific to email triage: the entry's item identifier is the message's
-`<subject> (from <sender>)`. Do this before moving on to the next unseen
-message, so a run interrupted partway still leaves a complete record for
-every message it did handle before stopping.
+`Done` field every entry carries — the `worklog` skill covers when to make
+this call and what that field means; do not restate that here. This
+skill's own `references/worklog.md` defines the one thing specific to
+email triage: the entry's item identifier is the message's `<subject>
+(from <sender>)`, plus a discriminator derived from that message's
+`Message-ID` header (fetched via `himalaya message read -H Message-ID
+<id>`) — see `references/worklog.md`'s "Item identifier" section for why
+the discriminator is required and what it guarantees, and for the
+shell-variable discipline that identifier's sender-controlled values
+require in the `bob worklog append --item` call. Do this before
+moving on to the next unseen message, so a run interrupted partway still
+leaves a complete record for every message it did handle before stopping.
 
 The entry must describe the actual outcome from step 3, not the intended
 one, and must name the identifier of any `bob task` this message's
@@ -240,17 +251,16 @@ cross-referenced:
 
 - Filed a `blocked` or `todo` task this step (a blocked action, a blocked
   escalation send, or a successfully sent escalation)? Name that task's
-  identifier in whichever of `Done`/`Left` describes the condition the
-  task now tracks.
+  identifier in `Done`, describing the condition the task now tracks.
 - Closed a task this step (this message was the manager's reply an earlier
   task was awaiting)? Name that task's identifier in `Done`, alongside
   moving it to `done` via `bob task status`.
 
 If an escalation send was denied by the action-authorization gate, do
 **not** write that an escalation email was sent. Record the blocked
-attempt instead, with `Done` naming the blocked task filed for it, `Left`
-describing the still-open message, and `Next` pointing to the retry the
-next time step 1 lists this job's own board.
+attempt instead, with `Done` naming the blocked task filed for it and
+describing the still-open message; the retry happens the next time step 1
+lists this job's own board.
 
 A completed run leaves no unseen message from step 2 without exactly one
 of: an action taken, an escalation sent, or a block recorded as a filed

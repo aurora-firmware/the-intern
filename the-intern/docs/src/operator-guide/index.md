@@ -1218,8 +1218,8 @@ the package as described in
    raw-shell rules that used to admit those calls are removed. The
    `bob worklog*` matcher mirrors the `bob task*` rule's shape —
    prefix-anchored on the subcommand with a wildcard tail — so it stays
-   stable regardless of the free-text `--item`/`--done`/`--left`/`--next`
-   values a call carries or how they are quoted.
+   stable regardless of the free-text `--item`/`--done` values a call
+   carries or how they are quoted.
 
    Both worklog `read` rules the earlier deployment models used are dropped:
    the per-workspace absolute-path rule

@@ -12,7 +12,7 @@ and never composes an entry with a shell redirect. For each item it
 handles, it calls:
 
 ```
-bob worklog append --item <item-identifier> --done <...> --left <...> --next <...>
+bob worklog append --item <item-identifier> --done <...>
 ```
 
 and the command creates whatever is missing, stamps the entry with the real
@@ -23,14 +23,12 @@ have kept up with it.
 ## What an entry looks like
 
 Each entry `bob worklog append` writes is a header line, a blank line, then
-three bullets:
+exactly one bullet:
 
 ```
 ## <HH:MM> — <item-identifier>
 
 - Done: <what was done for this item this run>
-- Left: <what is still outstanding, or "nothing" if fully resolved>
-- Next: <what happens next, and on what trigger>
 ```
 
 - **`<HH:MM>`** — the local time the entry was recorded, supplied by the
@@ -48,14 +46,3 @@ three bullets:
   blocked call was itself the action that would have closed the item,
   `Done` must say that attempt was blocked — not that the closing action
   succeeded.
-- **Left** — what remains open, if anything, at the time this entry was
-  written. "Nothing" for a fully-handled item; otherwise a short description
-  of the open condition (for example, "awaiting a reply", or "blocked by
-  the action-authorization gate — no admitting allow rule"). `bob worklog`
-  does not act on this value itself — it does not classify the item as open
-  or closed and does not track it across entries or across days; a
-  consuming skill that needs to know whether an item is still outstanding
-  keeps that record itself.
-- **Next** — what will resolve the item and how it will be noticed (for
-  example, "closes when the expected reply arrives", or "closes once an
-  allow rule admits this call").

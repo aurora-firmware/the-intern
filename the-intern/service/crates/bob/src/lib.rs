@@ -75,14 +75,7 @@ pub trait DispatchRuntime {
     ) -> ServiceResult<()>;
     fn task_note(&self, json: bool, board: Option<&str>, id: &str, text: &str)
         -> ServiceResult<()>;
-    fn worklog_append(
-        &self,
-        json: bool,
-        item: &str,
-        done: &str,
-        left: &str,
-        next: &str,
-    ) -> ServiceResult<()>;
+    fn worklog_append(&self, json: bool, item: &str, done: &str) -> ServiceResult<()>;
     fn worklog_list(&self, json: bool, date: Option<&str>) -> ServiceResult<()>;
 }
 
@@ -210,15 +203,8 @@ impl DispatchRuntime for ProductionRuntime {
         cli::commands::task_note(json, board, id, text)
     }
 
-    fn worklog_append(
-        &self,
-        json: bool,
-        item: &str,
-        done: &str,
-        left: &str,
-        next: &str,
-    ) -> ServiceResult<()> {
-        cli::commands::worklog_append(json, item, done, left, next)
+    fn worklog_append(&self, json: bool, item: &str, done: &str) -> ServiceResult<()> {
+        cli::commands::worklog_append(json, item, done)
     }
 
     fn worklog_list(&self, json: bool, date: Option<&str>) -> ServiceResult<()> {
@@ -267,12 +253,7 @@ pub async fn run_cli_with_runtime(runtime: &impl DispatchRuntime, cli: Cli) -> S
     }
     if let Command::Worklog { command } = command {
         return match command {
-            WorklogCommand::Append {
-                item,
-                done,
-                left,
-                next,
-            } => runtime.worklog_append(json, &item, &done, &left, &next),
+            WorklogCommand::Append { item, done } => runtime.worklog_append(json, &item, &done),
             WorklogCommand::List { date } => runtime.worklog_list(json, date.as_deref()),
         };
     }
@@ -481,14 +462,7 @@ mod tests {
             Ok(())
         }
 
-        fn worklog_append(
-            &self,
-            _json: bool,
-            _item: &str,
-            _done: &str,
-            _left: &str,
-            _next: &str,
-        ) -> ServiceResult<()> {
+        fn worklog_append(&self, _json: bool, _item: &str, _done: &str) -> ServiceResult<()> {
             self.calls.lock().expect("lock").push("worklog_append");
             Ok(())
         }
@@ -571,8 +545,6 @@ mod tests {
                 command: WorklogCommand::Append {
                     item: "vendor-invoice".to_string(),
                     done: "Chased the vendor for the missing PDF.".to_string(),
-                    left: "awaiting the corrected invoice".to_string(),
-                    next: "closes when the corrected invoice arrives".to_string(),
                 },
             },
         };
