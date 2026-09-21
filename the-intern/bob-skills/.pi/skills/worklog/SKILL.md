@@ -104,27 +104,27 @@ is the calendar day the run executes in, from the command's own clock.
 
 Whatever the outcome of the consuming skill's own domain work on an item —
 acted on, escalated, blocked, or any other outcome that skill defines — call
-`bob worklog append` once for that item, giving it the item-identifier and
-the three fields every entry carries (`Done`, `Left`, `Next`). Do this
-before moving on to the next item, so a run interrupted partway still leaves
-a complete record for every item it did finish handling. The command
-creates `worklog/` and today's file if either is still missing, checks
-whether the entry would be an exact repeat of that item-identifier's most
-recent entry already in today's file, and — when it is not — stamps the
-entry with its own clock and writes it; the run supplies only the
-identifier and the three field values, and can tell from the response
-whether the call wrote a new entry or found today's file already recording
-the same thing. `references/entry-format.md` describes what those fields
-mean.
+`bob worklog append` once for that item, passing `--item <item-identifier>`
+and `--done <...>`. Do this before moving on to the next item, so a run
+interrupted partway still leaves a complete record for every item it did
+finish handling. The command creates `worklog/` and today's file if either
+is still missing, checks whether the entry would be an exact repeat of that
+item-identifier's most recent entry already in today's file, and — when it
+is not — stamps the entry with its own clock and writes it; the run
+supplies only the identifier and the `Done` value, and can tell from the
+response whether the call wrote a new entry or found today's file already
+recording the same thing. `references/entry-format.md` describes what that
+field means.
 
 The **item-identifier** is the one part of the entry this skill's convention
 governs: a short, human-readable label for the item, chosen by the consuming
 skill, that is enough on its own to identify which item an entry is about
-when the file is scanned later. Keep the same identifier for the same item
-every time it recurs, the same day or on a later one: that consistency is
-what lets the same-day check recognise a repeat, and what lets a run that
-later reads back an earlier day with `list --date` tell which entries
-belong to which item.
+when the file is scanned later. Distinct items must get distinct
+identifiers, and the same item keeps the same identifier every time it
+recurs, the same day or on a later one: that consistency is what lets the
+same-day check recognise a repeat, and what lets a run that later reads back
+an earlier day with `list --date` tell which entries belong to which item,
+without conflating two different items that happen to share a label.
 
 A completed run leaves no item without exactly one worklog entry recording
 its outcome — never silently skipped, and never silently suppressed unless
