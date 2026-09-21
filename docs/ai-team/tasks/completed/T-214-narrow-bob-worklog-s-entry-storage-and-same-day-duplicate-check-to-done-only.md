@@ -2,7 +2,7 @@
 id: T-214
 title: Narrow bob worklog's entry storage and same-day duplicate check to Done 
   only
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-09-21'
