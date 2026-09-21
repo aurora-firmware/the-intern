@@ -34,6 +34,19 @@ removes the `left`/`next` fields from `WorklogEntryOutput`/
 `WorklogCommand::Append`'s doc comments, which currently describe the
 four-flag shape.
 
+This task is where `bob worklog`'s `Done`-only narrowing becomes
+externally observable — the CLI stops accepting `--left`/`--next` at all
+(`T-214` alone is a pure internal storage change with no observable
+behavior). Per `CR-014`'s Architecture Consistency Review, this must not
+ship ahead of `T-218` (the matching `email-triage` skill-content change
+adding a `Message-ID`-derived discriminator to the item-identifier): a
+caller still using the old non-unique `<subject> (from <sender>)`
+identifier against `Done`-only suppression can silently lose entries for
+two distinct messages sharing a subject and sender. `T-221`, which depends
+on both this chain and `T-218`, mechanically checks that the corrected
+identifier reached the packaged skill before the binary that embeds it is
+rebuilt.
+
 ## Acceptance Criteria
 
 AC-1: WHEN `bob worklog append` is invoked with `--left` or `--next` THE
@@ -63,6 +76,9 @@ THE SYSTEM SHALL describe the `--item`/`--done` shape only.
 - `the-intern/service/crates/bob/src/cli/commands/worklog.rs` — drop
   `left`/`next` from `run_append`'s signature and from
   `WorklogEntryOutput`/`AppendedEntryOutput`; update the module's own tests
+- `the-intern/service/crates/bob/src/cli/commands.rs` — drop `left`/`next`
+  from the `pub fn worklog_append` facade that forwards to
+  `worklog::run_append`
 - `the-intern/service/crates/bob/src/lib.rs` — drop `left`/`next` from
   `DispatchRuntime::worklog_append`, `ProductionRuntime`'s implementation,
   and the test `FakeRuntime`'s implementation; update the module's own

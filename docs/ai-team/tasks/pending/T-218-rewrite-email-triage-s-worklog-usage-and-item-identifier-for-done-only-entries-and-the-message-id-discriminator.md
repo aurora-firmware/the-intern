@@ -29,14 +29,21 @@ their `Done`/`Left`/`Next` fields (for example step 1's "`Done` naming the
 task closed... and `Left`: nothing", step 4's field-by-field guidance) —
 rewrite every one to the `Done`-only shape. (2) `references/worklog.md`'s
 item-identifier convention (`<subject> (from <sender>)`) is not unique
-across messages; add a discriminator derived from the message's
-`Message-ID` header (fetched via `himalaya message read -H Message-ID
-<id>`) to the identifier, for every message, and update the "How an open
-item closes" section to match. This task and `T-214`/`T-215` (the matching
-Rust `Done`-only narrowing) close the same gap together — do not treat
-either as safe to ship without the other, since the old identifier
-convention against `Done`-only suppression can silently drop entries for
-two distinct messages sharing a subject and sender.
+across messages, and `SKILL.md` restates that same bare convention inline
+in two places (step 1's blocked-task-retry note — "the same item-identifier
+convention step 4 below uses (`<subject> (from <sender>)` of the message
+the task named)" — and step 4's entry-identifier note — "the entry's item
+identifier is the message's `<subject> (from <sender>)`"). Add a
+discriminator derived from the message's `Message-ID` header (fetched via
+`himalaya message read -H Message-ID <id>`) to the identifier everywhere it
+is named — `references/worklog.md`'s own definition and both inline
+restatements in `SKILL.md` — for every message, and update
+`references/worklog.md`'s "How an open item closes" section to match. This
+task and `T-214`/`T-215` (the matching Rust `Done`-only narrowing) close
+the same gap together — do not treat either as safe to ship without the
+other, since the old identifier convention against `Done`-only suppression
+can silently drop entries for two distinct messages sharing a subject and
+sender.
 
 ## Acceptance Criteria
 
@@ -46,10 +53,12 @@ flag anywhere in `SKILL.md` or `references/worklog.md`.
 AC-2: WHERE `SKILL.md` instructs a run to call `bob worklog append` THE
 SYSTEM SHALL show only `--item` and `--done` as arguments.
 
-AC-3: WHERE `references/worklog.md` defines the item-identifier convention
-THE SYSTEM SHALL state that it includes a discriminator derived from the
-message's `Message-ID` header, alongside the human-readable `<subject>
-(from <sender>)` label.
+AC-3: WHERE `SKILL.md` or `references/worklog.md` states the
+item-identifier convention THE SYSTEM SHALL state that it includes a
+discriminator derived from the message's `Message-ID` header, alongside
+the human-readable `<subject> (from <sender>)` label — covering
+`references/worklog.md`'s own definition and both of `SKILL.md`'s inline
+restatements (step 1 and step 4), not only one of the three.
 
 AC-4: The system shall state that two distinct messages never share an
 item-identifier, and that one message's item-identifier stays the same
@@ -69,8 +78,8 @@ across days.
 ```bash
 grep -rn "Left\|Next\|--left\|--next" the-intern/bob-skills/skills/email-triage/SKILL.md the-intern/bob-skills/skills/email-triage/references/worklog.md
 # expect no output
-grep -n "Message-ID" the-intern/bob-skills/skills/email-triage/references/worklog.md
-# expect at least one match
+grep -n "Message-ID" the-intern/bob-skills/skills/email-triage/SKILL.md the-intern/bob-skills/skills/email-triage/references/worklog.md
+# expect at least one match in each file
 ```
 
 ## Work Log

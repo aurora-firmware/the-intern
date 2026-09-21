@@ -28,7 +28,10 @@ these invocations and assertions to the `--item`/`--done` shape, and add
 coverage that a call still passing `--left`/`--next` is rejected (S-015
 Contract). Existing coverage this change does not touch (fresh-directory
 creation, missing-`worklog/`-directory error on `list`) is kept as-is, only
-dropping any `Left`/`Next`-specific assertions it happens to make.
+dropping any `Left`/`Next`-specific assertions it happens to make. This
+coverage exercises the same externally-observable narrowing `T-215`
+introduces — see `T-215`'s Description for why that narrowing must not
+ship ahead of `T-218`.
 
 ## Acceptance Criteria
 

@@ -21,20 +21,26 @@ Task Quality Rules (see the new-task skill for full details):
 
 ## Description
 
-`the-intern/bob-skills/README.md` documents `bob worklog append`'s
-four-flag shape and its action-rule listing in `--left`/`--next` terms —
-`T-215` narrows the CLI to `--item`/`--done` only. Rewrite the relevant
-passage(s) to match the two-flag shape; the action-rule matcher itself
-(prefix-anchored on `bob worklog append`/`bob worklog list`) is unaffected
-and stays as-is.
+`the-intern/bob-skills/README.md`'s worklog action-rule passage (the
+`bob worklog*` matcher's stability explanation, ~line 366) enumerates the
+command's flags in free text as `--item`/`--done`/`--left`/`--next` —
+`T-215` narrows the CLI to `--item`/`--done` only. Rewrite that
+enumeration to the two-flag shape; the action-rule matcher itself is
+unaffected. **Do not touch the
+[Validation outcomes](#validation-outcomes) section** (the T-139/T-140/
+T-164 live-run history, ~line 476) — it quotes a fixture worklog entry's
+`Next` line as historical record of what that live run actually observed,
+and `S-015` Component 5 requires historical validation-outcome records to
+stay exactly as written, even where they quote a since-retired field name.
 
 ## Acceptance Criteria
 
-AC-1: The system shall not state that `bob worklog append` takes a
-`--left` or `--next` flag.
+AC-1: The system shall not state that a `bob worklog append` call carries
+a `--left` or `--next` value anywhere outside the Validation outcomes
+section.
 
-AC-2: The system shall not describe `Left` or `Next` as part of a worklog
-entry's output.
+AC-2: The system shall leave the Validation outcomes section's historical
+quotations, including its `Next` line, unchanged.
 
 ## Dependencies
 

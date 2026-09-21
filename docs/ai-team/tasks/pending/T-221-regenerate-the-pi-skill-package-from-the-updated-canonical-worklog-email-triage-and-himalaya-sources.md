@@ -40,7 +40,9 @@ AC-1: WHEN `package-pi-skills.sh` runs THE SYSTEM SHALL produce
 line).
 
 AC-2: The system shall not leave any generated file under these three
-trees containing `Left:`, `Next:`, `--left`, or `--next`.
+trees containing the word `Left` or `Next` (matched at a word boundary, so
+both bullet form — `Left:`/`Next:` — and prose form — "`Done`, `Left`, and
+`Next` values" — are caught), or the flags `--left`/`--next`.
 
 AC-3: The system shall pass the package's own existing verification test
 (`test_package_pi_skills.sh`) unchanged in shape, run against the
@@ -49,6 +51,13 @@ regenerated output.
 AC-4: WHEN `cargo build -p bob` runs against the regenerated package THE
 SYSTEM SHALL succeed and its `init_assets` tests SHALL pass, confirming the
 new content is embedded.
+
+AC-5: WHEN the regenerated `.pi/skills/email-triage/` content is inspected
+THE SYSTEM SHALL state that the item-identifier includes a
+`Message-ID`-derived discriminator — the mechanical check that `T-218`'s
+identifier fix reached the packaged, installable skill before this task's
+build/embed step completes, since neither `T-214`/`T-215`'s `Done`-only
+narrowing nor `T-218`'s discriminator is safe to ship alone.
 
 ## Dependencies
 
@@ -70,8 +79,10 @@ new content is embedded.
 
 ```bash
 cd the-intern/bob-skills && ./package-pi-skills.sh && ./test_package_pi_skills.sh
-grep -rn "Left:\|Next:\|--left\|--next" .pi/skills/worklog .pi/skills/email-triage .pi/skills/himalaya
+grep -rn "\bLeft\b\|\bNext\b\|--left\|--next" .pi/skills/worklog .pi/skills/email-triage .pi/skills/himalaya
 # expect no output from the grep
+grep -n "Message-ID" .pi/skills/email-triage/SKILL.md .pi/skills/email-triage/references/worklog.md
+# expect at least one match
 cd ../service && cargo build -p bob && cargo test -p bob init_assets
 ```
 

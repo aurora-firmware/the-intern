@@ -21,25 +21,23 @@ Task Quality Rules (see the new-task skill for full details):
 
 ## Description
 
-`the-intern/docs/src/operator-guide/index.md` documents `bob worklog
-append`'s four-flag (`--item`/`--done`/`--left`/`--next`) shape and its
-`Done`/`Left`/`Next` output — `T-215` narrows the CLI to `--item`/`--done`
-only. Rewrite the section to match: two required flags, a single `Done`
-value in output, and same-day duplicate suppression comparing `Done`
-alone. Leave the surrounding action-rule matcher guidance (prefix-anchored
-on `bob worklog append`/`bob worklog list`) unaffected, since the rule
-shape itself does not change.
+`the-intern/docs/src/operator-guide/index.md`'s worklog action-rule
+passage (the `bob worklog*` matcher's stability explanation) enumerates
+the command's flags in free text as `--item`/`--done`/`--left`/`--next` —
+`T-215` narrows the CLI to `--item`/`--done` only. Rewrite that
+enumeration to the two-flag shape. Nothing else in this file documents
+worklog entry output or the duplicate-suppression comparison, so no other
+passage needs to change; the action-rule matcher shape itself
+(prefix-anchored on `bob worklog append`/`bob worklog list`) is unaffected.
 
 ## Acceptance Criteria
 
-AC-1: The system shall not state that `bob worklog append` takes a
-`--left` or `--next` flag.
+AC-1: The system shall not state that a `bob worklog append` call carries
+a `--left` or `--next` value anywhere in the file.
 
-AC-2: The system shall not describe `Left` or `Next` as part of a worklog
-entry's output.
-
-AC-3: WHERE same-day duplicate suppression is documented THE SYSTEM SHALL
-state that it compares `Done` alone.
+AC-2: WHERE the worklog action-rule matcher's stability rationale is
+described THE SYSTEM SHALL attribute it to the `--item`/`--done` values
+only.
 
 ## Dependencies
 
