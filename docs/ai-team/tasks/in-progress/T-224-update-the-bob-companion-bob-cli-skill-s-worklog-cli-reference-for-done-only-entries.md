@@ -84,3 +84,23 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-21
+
+PASS
+
+Stage 1 passed. AC-1: the append signature and required-flags text name only
+`--item` and `--done`; the required forbidden-term check against the task
+branch emitted no output. AC-2: the append documentation retains only the
+Done/`done` work description; no `Left`/`Next` value or JSON field is
+documented. The `list` subsection, cwd-strict/ADR-015 content, and
+file/permission behavior are unchanged. The branch diff contains only the
+listed command-reference file.
+
+Stage 2 passed. The focused documentation change matches the local
+implementation: append accepts `item` and `done`, persists a single `Done`
+value, and its status JSON remains `item`, `path`, `written`, and `warnings`.
+No runtime behavior, service connection, security, performance, or test
+isolation changes were introduced.
+
+Next owner: active Development Loop.
