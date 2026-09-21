@@ -87,3 +87,67 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-21
+
+PASS
+
+**Stage 1 — Acceptance Criteria** (checked against
+`the-intern/bob-skills/skills/himalaya/references/command-reference.md` on
+`task/T-220-add-a-worked-message-id-retrieval-example-to-the-himalaya-skill-s-command-reference`,
+diffed against `dev-agent`):
+
+- AC-1 (worked example of `himalaya message read` with `-H Message-ID`
+  among its headers): met. Line 143 of the file:
+  `himalaya message read --preview -H From -H Subject -H Date -H Message-ID 42`.
+- AC-2 (`From`, `Subject`, `Date`, `Message-ID` retrieved in one command):
+  met — all four appear as repeated `-H` flags on that same single command
+  line.
+- AC-3 (WHERE the example is for a read that must not set `\Seen`, note
+  `--preview`): met — the example uses `--preview`, and the following
+  sentence (lines 146–148) explicitly states it reads "without marking the
+  envelope `Seen`," consistent with the file's existing `--preview`
+  documentation two paragraphs above.
+- No unspecified behavior added; no unexpected files modified. `git diff
+  --stat dev-agent...task/T-220-...` shows exactly the one Files-to-Touch
+  file, 14 insertions, 0 deletions.
+- Ran the task's exact Verification command against the branch content:
+  `grep -n "Message-ID" the-intern/bob-skills/skills/himalaya/references/command-reference.md`
+  → 3 matches (two in prose, one in the command itself). Matches the Work
+  Log's claim.
+
+**Stage 2 — Code Quality / content quality:**
+
+- Placement is correct — the new block sits directly after the existing
+  plain `himalaya message read 42` / `--preview 42` / `-f Archive 42 43`
+  examples and before the `Seen`-flag side-effect paragraph, adjacent to
+  the already-verified `-H`/`--preview` flag documentation it builds on.
+- Wording is accurate and grounded: the example's claim that this is the
+  header set `email-triage`'s `Message-ID`-discriminated item-identifier
+  needs is corroborated by
+  `the-intern/bob-skills/skills/email-triage/references/worklog.md` (line
+  21) and `SKILL.md` (line 238), which independently document
+  `himalaya message read -H Message-ID <id>` as the fetch mechanism for
+  that discriminator.
+- No dead prose, no scope creep — only the one described worked example
+  was added; nothing else in the file was touched.
+
+**Judgment point — "Observed" labeling:** confirmed non-misleading and
+consistent with the file's own stated convention. The file's header
+(lines 3–11) defines exactly two categories: everything is checked
+against `--help` output by default (unmarked), and a subset is
+additionally marked `"Observed"` when also run against a live account.
+The new block does not use the word "Observed" anywhere, shows only the
+command itself with no fabricated output or transcript, and sits directly
+beside the unmarked plain `message read` examples immediately above it —
+the same unmarked style, for the same reason (flags individually verified
+via `--help`, not exercised together against a live account this
+session). It cannot be mistaken for an `"Observed"` entry: true `Observed`
+entries in this file are distinguished either by the literal word
+"Observed" in a bold pitfall/pattern header (e.g. lines 22, 102, 154) or
+by showing an actual command transcript with real output (e.g. lines 79,
+335, 476), neither of which this block does. This is an honest
+presentation of unverified-by-execution status, matching the Work Log's
+own explicit disclosure.
+
+Both stages pass. No blocking issues found.
