@@ -171,11 +171,11 @@ pub enum TaskCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum WorklogCommand {
-    /// Append an entry to today's worklog file. When the incoming `--done`,
-    /// `--left`, and `--next` values all exactly match that item's most
-    /// recent entry already in today's file, this is a same-day duplicate
-    /// and nothing is written; any one differing value writes a new entry.
-    /// Never reads or writes any other day's file.
+    /// Append an entry to today's worklog file. When the incoming `--done`
+    /// value exactly matches that item's most recent entry already in
+    /// today's file, this is a same-day duplicate and nothing is written; a
+    /// differing value writes a new entry. Never reads or writes any other
+    /// day's file.
     Append {
         /// Short identifier for the item this entry is about.
         #[arg(long)]
@@ -183,12 +183,6 @@ pub enum WorklogCommand {
         /// What was done for the item this run.
         #[arg(long)]
         done: String,
-        /// What is still outstanding, or `nothing` if fully resolved.
-        #[arg(long)]
-        left: String,
-        /// What happens next, and on what trigger.
-        #[arg(long)]
-        next: String,
     },
     /// Read back a day's worklog entries, ordered by `HH:MM`, exactly as
     /// they physically stand in that day's file. Defaults to today's file.
@@ -228,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn worklog_append_parses_all_four_required_flags() {
+    fn worklog_append_parses_both_required_flags() {
         let cli = Cli::parse_from([
             "bob",
             "worklog",
@@ -237,26 +231,14 @@ mod tests {
             "vendor-invoice",
             "--done",
             "Chased the vendor for the missing PDF.",
-            "--left",
-            "awaiting the corrected invoice",
-            "--next",
-            "closes when the corrected invoice arrives",
         ]);
 
         match cli.command {
             Command::Worklog {
-                command:
-                    WorklogCommand::Append {
-                        item,
-                        done,
-                        left,
-                        next,
-                    },
+                command: WorklogCommand::Append { item, done },
             } => {
                 assert_eq!(item, "vendor-invoice");
                 assert_eq!(done, "Chased the vendor for the missing PDF.");
-                assert_eq!(left, "awaiting the corrected invoice");
-                assert_eq!(next, "closes when the corrected invoice arrives");
             }
             other => panic!("expected worklog append, got {other:?}"),
         }
@@ -264,9 +246,7 @@ mod tests {
 
     #[test]
     fn worklog_append_requires_the_item_flag() {
-        let result = Cli::try_parse_from([
-            "bob", "worklog", "append", "--done", "d", "--left", "l", "--next", "n",
-        ]);
+        let result = Cli::try_parse_from(["bob", "worklog", "append", "--done", "d"]);
 
         assert!(
             result.is_err(),
@@ -276,9 +256,7 @@ mod tests {
 
     #[test]
     fn worklog_append_requires_the_done_flag() {
-        let result = Cli::try_parse_from([
-            "bob", "worklog", "append", "--item", "i", "--left", "l", "--next", "n",
-        ]);
+        let result = Cli::try_parse_from(["bob", "worklog", "append", "--item", "i"]);
 
         assert!(
             result.is_err(),
@@ -287,26 +265,26 @@ mod tests {
     }
 
     #[test]
-    fn worklog_append_requires_the_left_flag() {
-        let result = Cli::try_parse_from([
-            "bob", "worklog", "append", "--item", "i", "--done", "d", "--next", "n",
-        ]);
-
-        assert!(
-            result.is_err(),
-            "clap should reject worklog append without --left"
-        );
-    }
-
-    #[test]
-    fn worklog_append_requires_the_next_flag() {
+    fn worklog_append_rejects_the_left_flag_as_an_unknown_argument() {
         let result = Cli::try_parse_from([
             "bob", "worklog", "append", "--item", "i", "--done", "d", "--left", "l",
         ]);
 
         assert!(
             result.is_err(),
-            "clap should reject worklog append without --next"
+            "clap should reject the retired --left flag as an unknown argument"
+        );
+    }
+
+    #[test]
+    fn worklog_append_rejects_the_next_flag_as_an_unknown_argument() {
+        let result = Cli::try_parse_from([
+            "bob", "worklog", "append", "--item", "i", "--done", "d", "--next", "n",
+        ]);
+
+        assert!(
+            result.is_err(),
+            "clap should reject the retired --next flag as an unknown argument"
         );
     }
 

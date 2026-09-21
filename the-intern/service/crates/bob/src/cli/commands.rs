@@ -110,14 +110,8 @@ pub fn task_note(json: bool, board: Option<&str>, id: &str, text: &str) -> Servi
     task::run_note(json, board, id, text)
 }
 
-pub fn worklog_append(
-    json: bool,
-    item: &str,
-    done: &str,
-    left: &str,
-    next: &str,
-) -> ServiceResult<()> {
-    worklog::run_append(json, item, done, left, next)
+pub fn worklog_append(json: bool, item: &str, done: &str) -> ServiceResult<()> {
+    worklog::run_append(json, item, done)
 }
 
 pub fn worklog_list(json: bool, date: Option<&str>) -> ServiceResult<()> {
