@@ -1,7 +1,7 @@
 ---
 title: 'Email Skills for pi-agent: Himalaya CLI Reference and Classification-Driven
   Triage'
-version: '0.3'
+version: '0.4'
 status: approved  # draft | review | approved | superseded
 created: '2026-08-01'
 author: planner
@@ -151,6 +151,36 @@ What this specification explicitly does NOT cover:
   escalation send — passes through the existing default-deny action gate,
   and an admitting allow rule is a required deployment prerequisite, not
   something this spec grants implicitly.
+- **A task or escalation naming a message must let a cold reader — another
+  session, another day — act on it without reopening the mailbox, and must
+  not smuggle untrusted content in as if it were trusted.** Every task
+  `email-triage` files, and the escalation email itself, must state the
+  message's stable identity (a discriminator derived from its `Message-ID`,
+  not the human-readable subject/sender alone — two distinct messages can
+  share both), a pointer sufficient to re-fetch it (its folder and envelope
+  id, alongside date, sender, and subject), and enough of its own content —
+  a body excerpt or summary — for the outcome to be actioned cold. The
+  `Message-ID`-derived discriminator is also load-bearing for the worklog:
+  `email-triage`'s item-identifier (used both for the worklog and for naming
+  the message inside a filed task) must carry it too, so that two distinct
+  messages never collide under `S-015`'s same-day duplicate suppression,
+  which compares only `Done` (`CR-014`) — the binding property is that two
+  distinct messages never share an identifier and one message's identifier
+  never changes between days. A body excerpt is arbitrary-sender content
+  read back as trusted task-board context by every later run (`ADR-012`
+  §7's trust-relaxation already accepts this exposure class for the working
+  directory as a whole); it must be quoted and attributed as message
+  content, bounded in length, and never treated as authoritative over the
+  mailbox itself — the `Message-ID` pointer exists precisely so a later run
+  can re-fetch the original instead. Like any other message-derived text
+  this package handles, it must be loaded into the `bash` call through a
+  shell variable, never typed as a literal quoted argument (the same
+  pattern the Workflow already requires for the escalation send). This bar
+  is defined once, in `email-triage`'s own content, and referenced
+  consistently from the escalation, `todo`-task, and `blocked`-task
+  instructions alike — not restated three times to drift apart — the same
+  content-locality rule `S-011` and `S-015`'s own skill-content principle
+  already apply.
 
 ### System Diagram
 
@@ -199,7 +229,7 @@ pi-agent session (runs in <workspace>)
 | `himalaya` skill | Teaches pi-agent the himalaya CLI's commands and flags | Generic; carries no email-specific policy; reusable outside this job |
 | `email-triage` skill | Defines new-mail detection, classification, per-category action policy, escalation policy, diary discipline, and when an unfinished item is filed on the task board | The only component that is triage-policy-aware; consumes both the `bob worklog` and `bob task` commands |
 | Category reference workflows | One file per taxonomy category describing what a confident match in that category should do | Referenced by the `email-triage` skill; the taxonomy is fixed per release, not a user extension point |
-| Daily worklog | Record of what each run actually did, what it left, and what it intends next, per calendar day | Written and read through the `bob worklog` command (S-015), which carries nothing across days: a day's file holds only what that day's runs appended, including the identifier of any task filed that day |
+| Daily worklog | Record of what each run actually did, per calendar day | Written and read through the `bob worklog` command (S-015), which carries nothing across days: a day's file holds only what that day's runs appended, including the identifier of any task filed that day |
 | Per-job task board | The sole record of anything left open by an escalation awaiting a reply or by an S-004 block, and the only thing a later run consults to learn what still needs retrying | The job's own `bob task` board (S-014), held in its working directory and resolved explicitly rather than by upward search; this spec adds no board mechanism, it depends on the existing one |
 | Manager escalation channel | The addressable "ask for guidance" path for low-confidence classifications | An email sent via himalaya to an operator-configured address, falling back to the mail account's own address when that configuration is missing or malformed; no synchronous response expected within the run |
 | S-004 action ruleset (existing) | Default-deny allow-list gating every `bash` tool call this package makes | Unmodified by this spec; an allow rule admitting the package's himalaya invocations is a deployment prerequisite |
@@ -228,13 +258,13 @@ pi-agent session (runs in <workspace>)
 
 ### Component 4: Daily worklog
 
-**Purpose:** A per-calendar-day markdown diary recording what each run did, what it left, and what it intends next — including the identifier of any task it filed for work it could not finish — and nothing that did not happen on that day.
+**Purpose:** A per-calendar-day markdown diary recording what each run did — including the identifier of any task it filed for work it could not finish — and nothing that did not happen on that day.
 **Estimated size:** Small.
 **Interfaces:** Appended to and read by the `email-triage` skill via the `bob worklog` command (S-015), which owns the entry format and same-day duplicate suppression and carries nothing across days; the skill neither performs nor expects any cross-day reconciliation here.
 
 ### Component 5: Per-job task board
 
-**Purpose:** Hold the sole record of anything the run could not finish — an escalation awaiting a manager's reply, or an action the S-004 gate blocked — once the underlying message is marked `\Seen`, in terms complete enough for a later run to pick the item up cold without reading any previous day's worklog.
+**Purpose:** Hold the sole record of anything the run could not finish — an escalation awaiting a manager's reply, or an action the S-004 gate blocked — once the underlying message is marked `\Seen`, in terms complete enough for a later run, in a different session, to pick the item up cold without reading any previous day's worklog or reopening the mailbox: the message's stable identity, a retrieval pointer, and a bounded, quoted, attributed body excerpt, per the Design Principle above.
 **Estimated size:** Small — this spec adds no board mechanism; it states when `email-triage` files, discovers, and closes entries on the existing one.
 **Interfaces:** Written and read by the `email-triage` skill via the `bob task` command (S-014), against the board in the job's own working directory resolved explicitly rather than by upward search; consumed by every later run of the same job as its list of what still needs retrying.
 
@@ -287,8 +317,8 @@ For each unseen message, classify against the taxonomy:
       escalation; never fall back to acting on the message autonomously
       because escalation failed
   ↓
-Append a worklog entry for the message: what was done / what's left / next,
-naming the identifier of any task filed for it. Reading the message already
+Append a worklog entry for the message: what was done, naming the
+identifier of any task filed for it. Reading the message already
 set its `\Seen` flag, so an escalated or blocked message will not reappear
 as "unseen" on the next tick — the task board, not the mailbox and not the
 worklog, is what keeps it outstanding until some later run finishes it.
@@ -553,3 +583,4 @@ only that something remains — and the run tries again on the next tick.
 | 2026-08-12 | Corrected the Phase 4 scheduled-validation cwd to the initialized workspace; skills are supplied from S-011's shared install path. | Architecture consistency review found the older package-cwd wording stale against ADR-014 and the shared skill-delivery model. | S-012 tasks TBD |
 | 2026-08-27 | The Design Principle, System Diagram, Workflow branch, Component 4 Interfaces, Daily-worklog Responsibility row, and "How an open item closes" paragraph no longer describe `email-triage` itself detecting a day's first run or walking worklog files backward to reconcile. The `bob worklog` command now performs reconciliation automatically and idempotently on every `append`/`list` call, against the nearest prior worklog file that exists (not the prior file "containing open items" — a whole-file filter corrected because it could wrongly skip a day that closed every item it mentions), and reports today's carried-forward set in its response for the skill to retry against. | S-015 approval. The worklog's entry and reconciliation mechanics move from skill-executed prose into a real command, the same move S-014 made for the task board; the command owns first-run detection and the backward file walk instead of the skill. | S-015 breakdown tasks (Gate 2 pending). |
 | 2026-09-17 | Continuity across firings moves from the worklog to the job's own task board, superseding the 2026-08-27 row above. The `\Seen`-detection and escalation Design Principles now track an escalated or blocked message as an open `bob task` entry; the continuity Design Principle reconciles against the board rather than "the most recent worklog that exists"; the System Diagram gains the task-filing step; the Daily-worklog Responsibility row and Component 4 lose the "sole record of anything left open" role, which moves to a new Component 5 and a new Responsibility row for the per-job task board; the Workflow opens by listing the board instead of reading a carried-forward set, files a task on every escalation and every S-004 block, and names the filed task in the worklog entry; "How an open item closes" is rewritten around moving the task to `done`; Phase 2 and Phase 4's acceptance criteria follow; and the S-004 allow-rule requirement now covers the `bob task` and `bob worklog` invocations as well as himalaya's. A new Configuration Requirement, "Task board location", requires the board to be named explicitly at the job's own working directory rather than found by S-014's upward search. Two rejected alternatives are recorded: keeping open items in the worklog by cross-day carry-forward, and relying on the upward search. | CR-013 removes `bob worklog`'s cross-day carry-forward, which was this spec's only mechanism for retrying an escalation awaiting a reply or an action the S-004 gate blocked. The task board (S-014) already answers "what is still outstanding and why", so this spec gains a real dependency on it rather than a second carry-forward mechanism. S-014 itself is unchanged and uncontradicted: its Exclusion rejected building worklog carry-forward semantics into the board generically, not a single consuming skill choosing the board for its own open items. Explicit board resolution is required because the board now carries the continuity this spec's own isolation principle demands stay inside the job's working directory, a guarantee the upward search cannot make. | Tasks TBD (S-010 skill-content updates follow from the CR-013 breakdown) |
+| 2026-09-21 | Two changes. (1) The Daily-worklog Responsibility row, Component 4 Purpose, and the Workflow's penultimate step drop "what it left, and what it intends next" — the worklog entry now records only what was done, naming any task filed or closed, matching `S-015`'s own narrowing of the entry format to a single `Done` field. (2) A new Design Principle requires every task `email-triage` files, and the escalation email itself, to carry the message's stable identity (a `Message-ID`-derived discriminator alongside subject/sender), a retrieval pointer (folder, envelope id, date, sender, subject), and a bounded, quoted, attributed body excerpt loaded via shell variable rather than a literal argument — defined once in `email-triage`'s own content and referenced from all three call sites rather than restated. The `Message-ID`-derived discriminator also becomes part of `email-triage`'s worklog item-identifier, so two distinct messages sharing a subject and sender never collide under `S-015`'s `Done`-only same-day suppression. Component 5's Purpose is reworded to name these same three elements explicitly, replacing the general "in terms complete enough" phrasing. | CR-014, its Architecture Consistency Review (2026-09-21). Change (1) matches the corresponding `S-015` amendment (same date): the worklog answers what happened, not what remains open, which is `bob task`'s question alone. Change (2) closes a gap the review found in practice — a task today only "names the message" rather than folding in its substance, and the identifier convention it reuses is not unique — and the review found this same identifier fix is what keeps change (1)'s `S-015` narrowing from silently dropping worklog entries for distinct messages that collide on identifier and outcome. Component 5's Purpose was already binding in substance (its Exclusions already rejected `report.submit` for the same inadequacy); this amendment makes the bar auditable at spec level rather than adding a new requirement. | Tasks TBD (breakdown pending) |

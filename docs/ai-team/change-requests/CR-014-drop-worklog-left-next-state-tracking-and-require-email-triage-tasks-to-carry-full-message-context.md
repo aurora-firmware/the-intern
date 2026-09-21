@@ -2,7 +2,7 @@
 id: CR-014
 title: drop worklog left/next state tracking and require email-triage tasks to 
   carry full message context
-status: pending
+status: applied
 created: '2026-09-21'
 ---
 
@@ -425,3 +425,68 @@ future filesystem-only subcommand. It lives only as prose spread across
   applied.
 - **Human** — nothing required. No finding needs a spec change beyond the
   amendments this request already opens.
+
+## Resolution (applied 2026-09-21)
+
+Amendments applied in place to `S-015` (v0.5 → v0.6) and `S-010` (v0.3 →
+v0.4), covering findings A–F in full; each spec carries a new Amendment Log
+entry naming this change-request. `S-011`, `S-014`, `ADR-014`, and `ADR-015`
+were confirmed unaffected during the Architecture Consistency Review and
+left untouched.
+
+- **`S-015`** — the entry format narrows from `Done`/`Left`/`Next` to
+  `Done` alone, with a new Contract clause requiring `append` to reject
+  `--left`/`--next` as unknown arguments rather than silently discard them,
+  and a new clause defining how same-day suppression treats a day's file
+  already holding pre-narrowing three-bullet entries (compares `Done`
+  only; legacy `Left`/`Next` lines are inert but stay in the file). Every
+  passage finding A named — Exclusions, the Responsibility Separation row,
+  the System Diagram, Component 1's Purpose, both Workflow blocks, the
+  action-rule Constraints enumeration, and Implementation Order Phase 2 —
+  is updated to match. No migration of existing on-disk worklog files,
+  matching `CR-013`'s own precedent for this file format.
+- **`S-010`** — finding B's three passages (the Daily-worklog
+  Responsibility row, Component 4's Purpose, and the Workflow's
+  penultimate step) drop the `Left`/`Next`-shaped "what it left, and what
+  it intends next" language. A new Design Principle (findings C, D, E, F
+  combined) requires every task `email-triage` files, and the escalation
+  email itself, to carry the message's stable identity (a
+  `Message-ID`-derived discriminator, folded into the worklog
+  item-identifier too — resolving finding C's collision risk), a
+  retrieval pointer (folder, envelope id, date, sender, subject), and a
+  bounded, quoted, attributed body excerpt loaded via shell variable
+  rather than a literal argument — defined once in `email-triage`'s own
+  content and referenced from the escalation, `todo`-task, and
+  `blocked`-task instructions alike, not restated three times. Component
+  5's Purpose is reworded to name these same three elements explicitly,
+  in place of the general "in terms complete enough" phrasing finding D
+  found was already binding but not auditable.
+
+**The one judgment call absorbed during this pass:** finding C's direction
+(fix `email-triage`'s item-identifier to carry a stable discriminator,
+rather than weaken `S-015`'s `Done`-only narrowing) was the Architect's
+explicit recommendation and is applied as given — no alternative was
+weighed, since the review found no real trade-off between the two: the
+discriminator was already available from item 2's own `Message-ID` fetch.
+
+**Still open for the task breakdown**, none of it touched by this pass:
+
+- The shipped `email-triage` skill content (`SKILL.md` steps 1, 3, and 4;
+  `references/worklog.md`; `references/escalation.md`) and the shipped
+  `worklog` skill content (`SKILL.md`, `references/entry-format.md`) —
+  rewritten to the new one-field call shape and the new task/escalation
+  content bar, per Component 4 of each spec.
+- A worked `Message-ID` example in the `himalaya` skill's
+  `references/command-reference.md` (option already documented, example
+  missing).
+- The Rust implementation in `service/crates/bob/src/worklog/` — flag
+  parsing, entry writer, entry reader/parser — and matching test updates
+  (`cargo test -p bob`, any worklog-related e2e coverage).
+- The stale hand-written passages the Architecture Consistency Review
+  enumerated: `bob-skills/README.md`, `bob-companion/claude/skills/bob-cli/
+  references/command-reference.md`, `the-intern/docs/src/operator-guide/
+  index.md`, and the `.pi/` mirror of the rewritten skills. The generated
+  CLI-reference page needs no manual edit.
+- The recommended ADR ("the worklog records what happened; outstanding
+  state lives on the caller's own record") — Architect's to create,
+  status `accepted`, at the point the above lands.

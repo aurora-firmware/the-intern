@@ -1,7 +1,7 @@
 ---
 title: bob worklog subcommand — append, list, and same-day duplicate
   suppression
-version: '0.5'
+version: '0.6'
 status: approved  # draft | review | approved | superseded
 created: '2026-08-26'
 author: planner
@@ -92,9 +92,10 @@ What this specification explicitly does NOT cover:
   mechanical.
 - **Task assignment, priority, or any second organizing axis beyond
   chronological order and per-item identity.** The worklog answers what
-  happened and what remains open for a given item; anything requiring a
-  second sorting axis is out of scope, mirroring `bob task`'s own exclusion
-  of the same idea.
+  happened, full stop — not what remains open for a given item, which is
+  `bob task`'s question alone (`CR-014` retires the `Left`/`Next` fields
+  that described it here); anything requiring a second sorting axis is out
+  of scope, mirroring `bob task`'s own exclusion of the same idea.
 - **File-locking or an atomic-transaction guard against two truly
   simultaneous appends of the same entry.** Following `S-014`'s own
   precedent of excluding locking/merge/sync mechanisms under `ADR-008`'s
@@ -178,8 +179,8 @@ What this specification explicitly does NOT cover:
                            ▼
               ┌───────────────────────┐
               │  Same-day duplicate   │   append only, before writing:
-              │  check                │   incoming Done/Left/Next identical to
-              │  (today's file only)  │   this item's most recent entry already
+              │  check                │   incoming Done identical to this
+              │  (today's file only)  │   item's most recent entry already
               │                       │   in today's file → write nothing
               └───────────┬───────────┘
                            │
@@ -215,7 +216,7 @@ What this specification explicitly does NOT cover:
 | Component | Responsibility | Notes |
 |---|---|---|
 | `bob worklog` subcommands | Parse arguments, reject invalid input before touching the filesystem, render human-readable or JSON output | Consumes the same-day duplicate check and the entry file store; exposes the `append` and `list` CLI surface |
-| Same-day duplicate check | Compare an incoming entry's `Done`, `Left`, and `Next` against that item-identifier's most recent entry already in today's file, and suppress the write when all three match (see Contract) | Runs inside `append` only, before the write; scoped strictly to the file being appended to; never opens another day's file; not independently callable |
+| Same-day duplicate check | Compare an incoming entry's `Done` against that item-identifier's most recent entry already in today's file, and suppress the write when it matches (see Contract) | Runs inside `append` only, before the write; scoped strictly to the file being appended to; never opens another day's file; not independently callable |
 | Entry file store | Read and write `<cwd>/worklog/<date>.md`; own the entry format (the Contract below); supply the real `HH:MM`/`YYYY-MM-DD` values | Owns the file format; strictly scoped to the invoking working directory; never creates `worklog/` itself on a read |
 | Canonical `worklog` skill, updated | State when and how a session uses `bob worklog`; teach the item-identifier convention | Content lives once in the vendor-neutral skill source (`S-011`); defers to the command for the format, the same way `tasks` already defers to `bob task` |
 | Existing packaging target | Deliver the updated canonical skill | No new packaging mechanism |
@@ -263,14 +264,23 @@ approval** (applied at Gate 1, not deferred):
   run did and the board records what is still outstanding; `S-010`'s
   continuity Design Principle, System Diagram, Workflow, Component 4, and
   "How an open item closes" paragraph are amended to that shape (`CR-013`).
+- `S-010`'s Daily-worklog Responsibility row, Component 4 Purpose, and
+  Workflow step still describe the entry as recording "what each run did,
+  what it left, and what it intends next" — a restatement of the `Left`/
+  `Next` fields this spec now retires (below). Those are amended to
+  describe only what a run did, naming any task filed or closed, and
+  `S-010` separately gains a Design Principle requiring `email-triage`'s
+  item-identifier to carry a stable per-message discriminator, so that
+  narrowing same-day suppression to `Done` alone cannot collide two
+  distinct messages into one entry (`CR-014`).
 
 ## Components
 
 ### Component 1: Same-day duplicate check
 
-**Purpose:** Before `append` writes, compare the incoming entry's `Done`,
-`Left`, and `Next` against that item-identifier's most recent entry already
-in today's file, and suppress the write when all three are identical.
+**Purpose:** Before `append` writes, compare the incoming entry's `Done`
+against that item-identifier's most recent entry already in today's file,
+and suppress the write when it is identical.
 **Estimated size:** Small — one comparison against a single already-parsed
 file, with no cross-day logic of any kind.
 **Interfaces:** Exposes a "would this be a redundant repeat of this item's
@@ -359,18 +369,18 @@ skill or documentation surface, and no change to the packaging mechanism.
 Writing an entry, end to end:
 
 ```
-Session invokes bob worklog append --item ... --done ... --left ... --next ...
+Session invokes bob worklog append --item ... --done ...
   ↓
-Arguments validated locally (all four fields present and non-empty)
+Arguments validated locally (both fields present and non-empty; --left/
+  --next are rejected as unknown arguments, not silently accepted)
   ↓
 worklog/ and today's file created if missing
   ↓
 Same-day duplicate check, against today's file and nothing else
   → this item-identifier's most recent entry in today's file has identical
-    Done, Left and Next → nothing is written
-  → otherwise (no entry for this item today, or any of the three fields
-    differs) → a new entry is appended with a real HH:MM from the command's
-    own time lookup
+    Done → nothing is written
+  → otherwise (no entry for this item today, or Done differs) → a new entry
+    is appended with a real HH:MM from the command's own time lookup
   ↓
 Result reported as human-readable text, or JSON when requested — stating
   whether the call wrote an entry or suppressed a redundant repeat
@@ -452,10 +462,15 @@ has. They are the contract between the command and anything that reads
 a worklog, including a human, `email-triage`, or any future consuming
 skill; the command is what enforces them.
 
-- **Entry shape** is unchanged from today's format: a header line `##
-  <HH:MM> — <item-identifier>`, a blank line, then `- Done: …`, `- Left: …`,
-  `- Next: …` bullets, each exactly as `worklog/references/entry-format.md`
-  already documents.
+- **Entry shape** narrows to a header line `## <HH:MM> — <item-identifier>`,
+  a blank line, then a single `- Done: …` bullet, exactly as
+  `worklog/references/entry-format.md` documents once rewritten (`CR-014`
+  retires the `Left`/`Next` bullets that described the item's outstanding
+  state — that state is `bob task`'s (`S-014`) alone). `append` takes
+  `--item` and `--done` only; a call that still passes `--left` or `--next`
+  fails with an unknown-argument error rather than accepting and silently
+  discarding them, so a caller written against the prior three-field
+  surface breaks visibly instead of writing a silently truncated entry.
 - **A day's file contains exactly the entries appended to it on that day.**
   No entry is ever written to a day's file that a caller did not explicitly
   append that day, and neither subcommand reads, copies from, or writes to
@@ -468,24 +483,30 @@ skill; the command is what enforces them.
   `bob task` board (`S-010`).
 - **A redundant same-day repeat is suppressed, by exact match, within one
   day's file only.** When `append` is called for an item-identifier that
-  already has at least one entry in that day's file, the incoming `Done`,
-  `Left`, and `Next` values are compared against that item-identifier's
-  chronologically last entry in that same file. If all three match, no entry
-  is written — the entry already present records exactly that state, so a
-  second copy would add nothing. If any one of the three differs, the entry
-  is written as its own new entry, however similar it is to an earlier one
-  and however late in the day it arrives; `Left` and `Next` being unchanged
-  does not suppress a changed `Done`, and the same is true of any other
-  single differing field. The comparison is against that one most recent
-  entry only — an earlier entry the same day that happens to match is not
-  consulted — and it never opens another day's file, so an identical entry
-  appended on a later day is always written. Matching is literal on the
-  field values as the command would write them, after the same trimming of
-  surrounding whitespace it applies before writing a field, with no
-  case-folding and no other normalisation. A caller must be able to tell
-  from the response, in both the text and JSON forms, whether the call wrote
-  an entry or suppressed a redundant repeat, so that a suppressed write is
-  never indistinguishable from a failed one.
+  already has at least one entry in that day's file, the incoming `Done`
+  value is compared against that item-identifier's chronologically last
+  entry in that same file. If it matches, no entry is written — the entry
+  already present records exactly that state, so a second copy would add
+  nothing. If it differs, the entry is written as its own new entry, however
+  similar it is to an earlier one and however late in the day it arrives.
+  The comparison is against that one most recent entry only — an earlier
+  entry the same day that happens to match is not consulted — and it never
+  opens another day's file, so an identical entry appended on a later day is
+  always written. Matching is literal on the field value as the command
+  would write it, after the same trimming of surrounding whitespace it
+  applies before writing a field, with no case-folding and no other
+  normalisation. A caller must be able to tell from the response, in both
+  the text and JSON forms, whether the call wrote an entry or suppressed a
+  redundant repeat, so that a suppressed write is never indistinguishable
+  from a failed one. On a day's file that already holds entries written
+  under the prior three-bullet shape (from before this narrowing), the
+  comparison reads only that legacy entry's `Done` value — its `Left`/`Next`
+  lines are neither read nor written by the command and stay in the file
+  exactly as written, readable as plain markdown like any other historical
+  text (per the Design Principles above); a legacy entry can therefore
+  suppress a new `append` whose `Done` repeats it, bounded to files written
+  before this change. No migration of existing on-disk worklog files is
+  performed.
 
 ### Action rules admitting worklog tool calls
 
@@ -502,8 +523,8 @@ skill; the command is what enforces them.
   operator configuration.
 - **Constraints:** `S-004`'s rule model matches a `bash` call's `command`
   field against a glob — it has no per-flag-value matcher, so
-  `--item`/`--done`/`--left`/`--next` values are not separately
-  expressible; the admitting rule is a single matcher on `command`,
+  `--item`/`--done` values are not separately expressible; the admitting
+  rule is a single matcher on `command`,
   prefix-anchored on `bob worklog append` or `bob worklog list` with a
   wildcard tail, which is stable regardless of the free-text argument
   values or how they are quoted (the same shape reasoning that makes `bob
@@ -550,7 +571,7 @@ skill; the command is what enforces them.
 | Phase | What | Depends On |
 |---|---|---|
 | 1 | Entry file store: an entry can be written to and read back from `<cwd>/worklog/<date>.md` per the Contract, with correct permissions and with `list` refusing to invent a missing `worklog/`, and with no duplicate-suppression logic yet. | Nothing |
-| 2 | Same-day duplicate suppression inside `append`: an exact repeat of an item-identifier's most recent entry in that day's file writes nothing, any differing `Done`, `Left`, or `Next` writes a new entry, and no file for another day is opened by either subcommand. | Phase 1 |
+| 2 | Same-day duplicate suppression inside `append`: an exact repeat of an item-identifier's most recent entry's `Done` in that day's file writes nothing, a differing `Done` writes a new entry, and no file for another day is opened by either subcommand. | Phase 1 |
 | 3 | The `bob worklog append` and `bob worklog list` CLI surface, with text and JSON output (including whether an `append` wrote or suppressed) and local validation of invalid input. | Phases 1, 2 |
 | 4 | The canonical `worklog` skill rewritten to call the command instead of prescribing the raw shell recipe; delivered to the pi package by the existing packaging script. | Phase 3 |
 | 5 | Operator-facing documentation updated: the `bob-companion` plugin's `bob-cli` skill, a verification that the self-deriving CLI-reference preprocessor emits a `bob worklog` page, and the worklog action-rule migration across both hand-written listings (the operator guide and `bob-skills/README.md`); #62 and #63 closed, referencing this work. | Phase 3; the documentation half also depends on Phase 4 |
@@ -561,3 +582,4 @@ skill; the command is what enforces them.
 |------|-------------|-----|----------------|
 | 2026-08-30 | Component 5 corrected in three ways while breaking S-015 into tasks: (a) the CLI-reference preprocessor no longer has a hardcoded subcommand list (removed by `B-044`) — it derives the list from `bob --help`, so the work is to verify a `bob worklog` page is generated, not to edit a list; (b) the `bob-companion` `bob-setup` skill is not an affected surface — its only worklog mentions are `bob init` scaffolding, which S-015 preserves; (c) the worklog action-rule listing is duplicated in `bob-skills/README.md` as well as the operator guide, and the operator guide has a later paragraph telling operators to keep the relative `worklog/*.md` matcher — both are inside Component 5's stated Purpose ("every hand-written account … of the worklog's action rules") and are now named explicitly. No requirement changed; the delivered behaviour is identical. | Found by the Gate 2 spec-breakdown review of the S-015 task plan. | T-197, T-198 |
 | 2026-09-17 | Cross-day reconciliation is removed from this specification entirely, and a narrower same-day behaviour replaces it. Gone: the carry-forward idempotency and "ensure the day is reconciled" Design Principles, the reconciliation box in the System Diagram, the reconciliation Responsibility row and Component 1, the cross-day steps in both Workflow blocks, and three Contract clauses (the "an item is still open" test, the carried-forward entry shape, and the carried-forward-set reporting requirement). Added: a Design Principle that a day's file holds only what was appended to it that day, a same-day duplicate check as Component 1, and a Contract clause defining exact-match suppression — an `append` whose `Done`, `Left`, and `Next` all match that item-identifier's most recent entry in the same day's file writes nothing, any differing field writes a new entry, and the caller can tell from the response which happened. The Purpose, Exclusions, forced-amendment notes, Output form, and Phases 1–3 follow. The spec title becomes "…and same-day duplicate suppression"; the filename keeps its original slug so existing references stay valid. | CR-013. A day's worklog is meant to record what that day's runs did, not to be silently mutated into a rolling tracker of what is still outstanding; that question moves to whatever record a consuming skill keeps (`email-triage` keeps it on its own `bob task` board, per the matching S-010 amendment). Same-day duplicate suppression is new behaviour introduced alongside the removal, not a retained part of reconciliation. | Tasks TBD (the S-015 breakdown is revised against this amendment) |
+| 2026-09-21 | The entry format narrows further, from three fields (`Done`/`Left`/`Next`) to one (`Done`): the Exclusions clause "answers what happened and what remains open" becomes "answers what happened, full stop"; the Same-day duplicate check's Responsibility row, System Diagram box, and Component 1 Purpose drop `Left`/`Next` from the comparison; both Workflow blocks, the Contract's entry-shape and duplicate-suppression clauses, the action-rule Constraints enumeration, and Implementation Order Phase 2 are updated to match. Two clauses are added to the Contract rather than merely trimmed: `append` still passed `--left`/`--next` fails with an unknown-argument error instead of silently discarding them, and same-day suppression against a day's file holding pre-narrowing three-bullet entries compares only the legacy entry's `Done` — its `Left`/`Next` lines are inert but remain in the file, readable as plain markdown. No migration of existing on-disk worklog files. A forced-amendment note is added recording the matching `S-010` amendment (below). | CR-014, its Architecture Consistency Review (2026-09-21). `Left`/`Next` restated the item's open/outstanding state in prose even though the command never acted on it, which is exactly the ambiguity `CR-013` moved the authoritative version of that state to `bob task` (`S-014`) to remove; keeping a second, non-authoritative description of it in the worklog invited the two to drift. The Architecture Consistency Review found this narrowing would otherwise let two distinct messages sharing a subject and sender collide into one suppressed entry under `email-triage`'s current identifier convention — resolved by the matching `S-010` amendment requiring a stable per-message discriminator in the item-identifier, not by weakening this narrowing. | Tasks TBD (breakdown pending) |
