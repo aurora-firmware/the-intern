@@ -16,10 +16,21 @@ email triage: the item-identifier convention, and how this skill uses
 ## Item identifier
 
 Each worklog entry's `<item-identifier>` (per the `worklog` skill's entry
-format) is this message's `<subject> (from <sender>)`. Use the same
-identifier when naming the message inside a `bob task` filed for it, so a
-reader can tell at a glance which board entry and which diary entries
-describe the same message.
+format) is this message's `<subject> (from <sender>)`, plus a
+discriminator derived from that message's `Message-ID` header — fetch it
+with `himalaya message read -H Message-ID <id>` and carry it alongside the
+human-readable label. The `<subject> (from <sender>)` label alone is not
+unique: two different messages can share the same subject and sender, and
+without the `Message-ID` discriminator their entries would collide under
+the `worklog` skill's own same-day duplicate-suppression check, silently
+dropping one message's entry. With the discriminator, two distinct
+messages never share an item-identifier, and one message's
+item-identifier — subject, sender, and `Message-ID` together — stays the
+same every time that message is referenced, the same day or on a later
+one. Use the same full identifier, discriminator included, when naming
+the message inside a `bob task` filed for it, so a reader can tell at a
+glance which board entry and which diary entries describe the same
+message.
 
 ## Open items live on the task board, never in mailbox flag state or in the worklog
 
@@ -71,7 +82,12 @@ Either way, the run that resolves the item moves its task to `done` via
 writes for the message that closed it (`SKILL.md` step 1 for a successful
 retry, step 4 for a manager's reply) — the worklog records that the item
 closed and how; the task board is what stopped tracking it as outstanding.
-A retry that is still refused, or an escalation still unanswered, leaves
-its task open, to be listed and retried again the next time `SKILL.md`
-step 1 runs. There is no automatic expiry: an item stays open only for as
-long as its task does.
+For the escalation case, that closing entry is filed under the reply
+message's own item-identifier, not the originally escalated message's:
+the reply is a distinct message with its own `Message-ID` discriminator
+(see "Item identifier" above), so the two never share an identifier even
+when their subjects and senders look alike. A retry that is still
+refused, or an escalation still unanswered, leaves its task open, to be
+listed and retried again the next time `SKILL.md` step 1 runs. There is
+no automatic expiry: an item stays open only for as long as its task
+does.
