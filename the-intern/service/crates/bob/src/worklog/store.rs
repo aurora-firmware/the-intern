@@ -24,10 +24,6 @@ pub struct WorklogEntry {
     pub item: String,
     /// What was done for this item this run.
     pub done: String,
-    /// What is still outstanding, or `nothing` if fully resolved.
-    pub left: String,
-    /// What happens next, and on what trigger.
-    pub next: String,
 }
 
 /// A worklog entry parsed back from a day's file.
@@ -39,10 +35,6 @@ pub struct RecordedEntry {
     pub item: String,
     /// The `- Done:` bullet value.
     pub done: String,
-    /// The `- Left:` bullet value.
-    pub left: String,
-    /// The `- Next:` bullet value.
-    pub next: String,
 }
 
 /// The outcome of a [`WorklogStore::append`] call.
@@ -219,8 +211,6 @@ fn parse_entries(content: &str) -> Vec<RecordedEntry> {
                     recorded_time: time.trim().to_owned(),
                     item: item.trim().to_owned(),
                     done: String::new(),
-                    left: String::new(),
-                    next: String::new(),
                 });
             }
             continue;
@@ -230,12 +220,12 @@ fn parse_entries(content: &str) -> Vec<RecordedEntry> {
             continue;
         };
 
+        // A day file already holding entries written under the prior
+        // three-bullet shape may still carry `- Left:`/`- Next:` lines; they
+        // are neither read into `RecordedEntry` nor rewritten, and are
+        // simply skipped here.
         if let Some(value) = line.strip_prefix("- Done:") {
             entry.done = value.trim().to_owned();
-        } else if let Some(value) = line.strip_prefix("- Left:") {
-            entry.left = value.trim().to_owned();
-        } else if let Some(value) = line.strip_prefix("- Next:") {
-            entry.next = value.trim().to_owned();
         }
     }
 
@@ -255,13 +245,8 @@ fn order_entries(mut entries: Vec<RecordedEntry>) -> Vec<RecordedEntry> {
 }
 
 fn render_entry_block(recorded_time: &str, entry: &WorklogEntry) -> String {
-    let WorklogEntry {
-        item,
-        done,
-        left,
-        next,
-    } = entry;
-    format!("## {recorded_time} — {item}\n\n- Done: {done}\n- Left: {left}\n- Next: {next}\n\n")
+    let WorklogEntry { item, done } = entry;
+    format!("## {recorded_time} — {item}\n\n- Done: {done}\n\n")
 }
 
 fn append_block_to_file(path: &Path, block: &str) -> ServiceResult<()> {
@@ -388,8 +373,6 @@ mod tests {
         WorklogEntry {
             item: item.to_owned(),
             done: "Reviewed the overnight alerts.".to_owned(),
-            left: "awaiting a reply from the vendor".to_owned(),
-            next: "closes when the vendor replies".to_owned(),
         }
     }
 
@@ -417,8 +400,6 @@ mod tests {
                 "## 09:05 — vendor-invoice\n",
                 "\n",
                 "- Done: Reviewed the overnight alerts.\n",
-                "- Left: awaiting a reply from the vendor\n",
-                "- Next: closes when the vendor replies\n",
                 "\n",
             )
         );
@@ -482,8 +463,6 @@ mod tests {
                 &WorklogEntry {
                     item: "vendor-invoice".to_owned(),
                     done: "Chased the vendor for the missing PDF.".to_owned(),
-                    left: "awaiting the corrected invoice".to_owned(),
-                    next: "closes when the corrected invoice arrives".to_owned(),
                 },
             )
             .expect("append should succeed");
@@ -498,9 +477,68 @@ mod tests {
                 recorded_time: "14:30".to_owned(),
                 item: "vendor-invoice".to_owned(),
                 done: "Chased the vendor for the missing PDF.".to_owned(),
-                left: "awaiting the corrected invoice".to_owned(),
-                next: "closes when the corrected invoice arrives".to_owned(),
             }]
+        );
+    }
+
+    #[test]
+    fn read_day_parses_a_legacy_three_bullet_entrys_header_and_done_only() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let worklog_dir = temp.path().join("worklog");
+        std::fs::create_dir(&worklog_dir).expect("pre-create worklog dir");
+        std::fs::write(
+            worklog_dir.join("2026-08-30.md"),
+            concat!(
+                "## 09:05 — vendor-invoice\n",
+                "\n",
+                "- Done: Chased the vendor for the missing PDF.\n",
+                "- Left: awaiting the corrected invoice\n",
+                "- Next: closes when the corrected invoice arrives\n",
+                "\n",
+            ),
+        )
+        .expect("seed a legacy three-bullet day file");
+        let store = WorklogStore::new(temp.path());
+
+        let entries = store
+            .read_day(date(2026, 8, 30))
+            .expect("read_day should succeed");
+
+        assert_eq!(
+            entries,
+            vec![RecordedEntry {
+                recorded_time: "09:05".to_owned(),
+                item: "vendor-invoice".to_owned(),
+                done: "Chased the vendor for the missing PDF.".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn append_does_not_modify_an_existing_legacy_entrys_left_and_next_lines() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let worklog_dir = temp.path().join("worklog");
+        std::fs::create_dir(&worklog_dir).expect("pre-create worklog dir");
+        let day_path = worklog_dir.join("2026-08-30.md");
+        let legacy_content = concat!(
+            "## 09:05 — vendor-invoice\n",
+            "\n",
+            "- Done: Chased the vendor for the missing PDF.\n",
+            "- Left: awaiting the corrected invoice\n",
+            "- Next: closes when the corrected invoice arrives\n",
+            "\n",
+        );
+        std::fs::write(&day_path, legacy_content).expect("seed a legacy three-bullet day file");
+        let store = WorklogStore::new(temp.path());
+
+        store
+            .append(at((2026, 8, 30), (15, 0)), &sample_entry("shipping-label"))
+            .expect("append should succeed");
+
+        let content = std::fs::read_to_string(&day_path).expect("day file");
+        assert!(
+            content.starts_with(legacy_content),
+            "the legacy entry's Left/Next lines must stay untouched: {content}"
         );
     }
 
