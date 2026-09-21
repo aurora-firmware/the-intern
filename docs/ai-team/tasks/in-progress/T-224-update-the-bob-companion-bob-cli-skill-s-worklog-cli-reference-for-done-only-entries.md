@@ -64,6 +64,15 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-09-21
+
+Updated the owned command-reference section to the Done-only contract: append
+requires only `--item` and `--done`, its text and JSON output describe only
+Done, and same-day duplicate suppression compares Done alone. The specified
+forbidden-term check was red before the edit and emitted no output afterward;
+the diff is limited to the append material, leaving list, cwd, and permission
+content unchanged. No deployed service was contacted. Ready for review.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
