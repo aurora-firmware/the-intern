@@ -2,7 +2,7 @@
 id: T-219
 title: Add message-identity, retrieval-pointer, and body-excerpt content 
   requirements to email-triage's task and escalation instructions
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-09-21'
