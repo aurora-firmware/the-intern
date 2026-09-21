@@ -169,3 +169,92 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-21
+
+PASS
+
+Reviewed against the amended (post-escalation) scope: Description, AC-1..AC-5,
+the 7-file Files to Touch list, and the current Verification command — not
+the original two-file scope.
+
+**Stage 1 — Acceptance Criteria**
+
+- AC-1 (identical `Done` on same item-identifier same day suppresses the
+  write): met. `reconcile::is_same_day_duplicate` compares only
+  `latest.done.trim() == candidate.done.trim()`; covered by
+  `is_same_day_duplicate_is_true_when_done_matches_the_items_latest_entry`
+  and the e2e
+  `worklog_append_twice_the_same_day_with_identical_fields_suppresses_the_second_write`.
+- AC-2 (differing `Done`, or no entry yet today, appends a new entry): met.
+  Covered by `is_same_day_duplicate_is_false_when_done_differs`,
+  `is_same_day_duplicate_is_false_when_the_item_has_no_entry_yet_today`, and
+  the e2e `worklog_append_twice_the_same_day_with_a_different_done_value_keeps_both_entries`.
+- AC-3 (header + exactly one `- Done:` bullet; no `left`/`next` in
+  append/list output, text or JSON): met.
+  `render_entry_block`/`write_worklog_day_text` emit only `- Done:`;
+  `WorklogEntryOutput` and `AppendedEntryOutput` carry no `left`/`next`
+  fields; confirmed by
+  `worklog_list_output_never_includes_left_or_next_fields_in_text_or_json`
+  and the non_serve e2e assertions (`content`/`stdout` checked for absence
+  of `- Left:`/`- Next:`).
+- AC-4 (`--left`/`--next` rejected non-zero as unknown arguments; `--item`
+  plus `--done` alone accepted): met. `WorklogCommand::Append`'s clap
+  definition no longer declares those fields, so clap itself rejects them;
+  unit-level (`worklog_append_rejects_the_left_flag_as_an_unknown_argument`,
+  ...`_next_...`) and e2e-level
+  (`worklog_append_rejects_the_retired_left_and_next_flags_as_unknown_arguments`,
+  asserting non-zero exit, stderr naming the flag, and no `worklog/`
+  directory created) coverage both present.
+- AC-5 (a legacy three-bullet day file's `Left`/`Next` lines read as absent,
+  never modified): met. `store::parse_entries` silently skips any line that
+  isn't `- Done:` (no `left`/`next` fields exist on `RecordedEntry` to write
+  into), and `append` only ever appends a new block, never rewrites existing
+  lines. Directly verified by
+  `read_day_parses_a_legacy_three_bullet_entrys_header_and_done_only` and
+  `append_does_not_modify_an_existing_legacy_entrys_left_and_next_lines`
+  (byte-for-byte prefix assertion on the legacy content after an unrelated
+  append).
+
+No unspecified behavior was added. `git diff --stat` against `dev-agent`
+touches exactly the 7 files listed under Files to Touch, no more, no fewer.
+A repo-wide grep for `WorklogEntry`/`RecordedEntry` confirms no eighth
+consumer was missed. The task's own Description/AC/Files-to-Touch/
+Verification content matches `S-015` v0.6 (CR-014) verbatim on the
+`--left`/`--next` unknown-argument behavior and the legacy-entry tolerance
+clause — the amended scope is faithful to the approved spec, not an
+invention of the escalation resolution.
+
+**Stage 2 — Code Quality**
+
+- Correctness: narrowing is consistent across storage, reconciliation, CLI
+  parsing, dispatch, and rendering; legacy-shape tolerance is handled at the
+  single parse site rather than defensively re-implemented per caller.
+- Tests: ran the full amended Verification command from a clean checkout of
+  the task branch:
+  - `cargo build -p bob` — clean, no warnings.
+  - `cargo test -p bob --lib worklog` — 44/44 passed.
+  - `cargo test -p bob --test non_serve worklog` — 7/7 passed.
+  - `cargo fmt --all -- --check` — clean (exit 0).
+  Tests cover both success and failure paths (empty-field rejection,
+  unknown-argument rejection, duplicate-suppression true/false, legacy-shape
+  tolerance) and use per-test `tempdir()`s with no shared mutable state.
+- Security: N/A — no secrets, no external network/DB input; existing
+  `reject_entry_field` validation on `item`/`done` is preserved unchanged.
+- Readability: names and the new `parse_entries` comment clearly state the
+  legacy-line-is-skipped-not-stored design; no dead code or commented-out
+  blocks introduced.
+- Performance: no new loops, blocking calls, or resource leaks; parsing
+  remains a single linear pass.
+
+Not a bug fix, so the Bug Fix Addendum does not apply.
+
+One minor, non-blocking observation, out of scope for this verdict: the
+canonical task file's frontmatter still reads `status: pending` even though
+the file lives under `tasks/in-progress/` (introduced by the `ade3329`
+move-to-in-progress commit, which moved the file but didn't update the
+field) — a lifecycle-tooling nit, not something introduced by this task's
+diff, and the task file itself was correctly left untouched on the task
+branch per the "canonical state lives on dev-agent" rule.
+
+Both stages pass. Ready for integration.
