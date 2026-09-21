@@ -113,3 +113,21 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-21
+
+PASS
+
+Reviewed branch `task/T-218-rewrite-email-triage-s-worklog-usage-and-item-identifier-for-done-only-entries-and-the-message-id-discriminator` against the canonical task file. `git diff --stat dev-agent...task/T-218-...` confirms only the two Files to Touch were modified (`SKILL.md` +43/-24 lines, `references/worklog.md` +32/-15 lines) and the packaged `.pi/skills/email-triage/` copy is untouched (correctly left stale per the already-open `B-054`/`T-221`, not this task's scope).
+
+**Stage 1 — Acceptance criteria** (checked by reading both files' full final content on the task branch, not the Developer's report):
+
+- AC-1 (no `Left`/`Next` field/bullet/flag anywhere): checked out both files from the task branch and ran the task's exact verification grep — `grep -rn "Left\|Next\|--left\|--next" SKILL.md references/worklog.md` — zero matches. Confirmed by reading: all 8 pre-existing `Left`/`Next` occurrences in `SKILL.md` (step 1's blocked-task-retry bullet, step 3.2's blocked-action note, step 3.3's blocked-escalation note, and step 4's three spots) are rewritten to name only `Done`, with the retry/still-open information folded into prose instead of dropped. `references/worklog.md` had no `Left`/`Next` occurrences before or after (the task description's framing was imprecise on this point; the Developer's diff correctly reflects what was actually there).
+- AC-2 (`bob worklog append` calls show only `--item`/`--done`): `SKILL.md` never shows literal CLI flag syntax for `bob worklog append` in either the before or after version (it delegates that mechanic to the canonical `worklog` skill, consistent with this doc's own "do not restate that here" pattern, and with the family precedent in the merged `worklog` skill which is the one place that shows `--item <item-identifier> --done <...>` literally). Post-change, every place `SKILL.md` instructs calling `bob worklog append` now describes carrying only the item-identifier and the `Done` field — no `Left`/`Next` argument is described anywhere, satisfying the AC's substance.
+- AC-3 (Message-ID discriminator stated in all three places): confirmed by reading all three locations — `references/worklog.md`'s "Item identifier" section (new discriminator definition, `himalaya message read -H Message-ID <id>`, and the collision rationale), `SKILL.md` step 1's blocked-task-retry bullet (line ~116-119, "plus the discriminator derived from that message's `Message-ID` header"), and `SKILL.md` step 4's entry-identifier note (line ~230-234, same phrasing, pointing back to `references/worklog.md` as canonical). Also ran `grep -n "Message-ID" SKILL.md references/worklog.md` per the task's Verification block — matches in both files as required.
+- AC-4 (two distinct messages never share an identifier; one message's identifier is stable across days): confirmed in `references/worklog.md`'s "Item identifier" section, stated explicitly and unambiguously.
+- No unspecified behavior added; no unexpected files touched (confirmed above).
+
+**Stage 2 — Code quality** (markdown/skill-content correctness and readability, no compiler/tests applicable): content is internally consistent — the `SKILL.md` step 1 and step 4 restatements correctly point back to `references/worklog.md` as the canonical definition rather than re-deriving it; the "How an open item closes" section update correctly ties the escalation-reply nuance to the new discriminator; no dead prose or dangling cross-references found; commit messages (`170bc93`, `73524b7`) follow `docs(email-triage): ...` convention, imperative, under 72 chars. Confirmed T-214 (the paired Rust `Done`-only narrowing this task's description says must not ship alone) is already in `completed/`, so the two-task pairing concern is resolved.
+
+Minor non-blocking observation: the task file's own frontmatter `status:` field still reads `pending` while the file sits in `tasks/in-progress/`; directory is canonical per project convention so this doesn't affect the verdict, but it's a stale-frontmatter data-hygiene point worth fixing when the file next moves.
