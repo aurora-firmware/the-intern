@@ -53,13 +53,13 @@ pub fn reconcile_today(
 /// `today_entries` is consulted; no other day's file is ever part of this
 /// comparison (AC-1).
 ///
-/// `Done`, `Left`, and `Next` are compared after trimming surrounding
-/// whitespace, matching the store's existing parse-time trim rule, with no
-/// case-folding (AC-2). Any one field differing counts as not a duplicate
-/// (AC-3), as does an item-identifier with no entry yet in `today_entries`
-/// (AC-3). When `today_entries` holds more than one entry for the
-/// item-identifier, only the chronologically last one is consulted — an
-/// earlier entry for the same item is never compared against (AC-4).
+/// `Done` is compared after trimming surrounding whitespace, matching the
+/// store's existing parse-time trim rule, with no case-folding (AC-2). A
+/// `Done` value that differs counts as not a duplicate (AC-3), as does an
+/// item-identifier with no entry yet in `today_entries` (AC-3). When
+/// `today_entries` holds more than one entry for the item-identifier, only
+/// the chronologically last one is consulted — an earlier entry for the
+/// same item is never compared against (AC-4).
 pub fn is_same_day_duplicate(today_entries: &[RecordedEntry], candidate: &WorklogEntry) -> bool {
     let Some(latest) = today_entries
         .iter()
@@ -70,8 +70,6 @@ pub fn is_same_day_duplicate(today_entries: &[RecordedEntry], candidate: &Worklo
     };
 
     latest.done.trim() == candidate.done.trim()
-        && latest.left.trim() == candidate.left.trim()
-        && latest.next.trim() == candidate.next.trim()
 }
 
 #[cfg(test)]
@@ -86,12 +84,10 @@ mod tests {
             .and_time(NaiveTime::from_hms_opt(time.0, time.1, 0).expect("valid time"))
     }
 
-    fn entry(item: &str, done: &str, left: &str, next: &str) -> WorklogEntry {
+    fn entry(item: &str, done: &str) -> WorklogEntry {
         WorklogEntry {
             item: item.to_owned(),
             done: done.to_owned(),
-            left: left.to_owned(),
-            next: next.to_owned(),
         }
     }
 
@@ -108,12 +104,7 @@ mod tests {
         seed(
             &store,
             at((2026, 8, 29), (9, 0)),
-            &entry(
-                "vendor-invoice",
-                "Chased the vendor for the missing PDF.",
-                "awaiting the corrected invoice",
-                "closes when the corrected invoice arrives",
-            ),
+            &entry("vendor-invoice", "Chased the vendor for the missing PDF."),
         );
         let prior_day_path = temp.path().join("worklog").join("2026-08-29.md");
         let prior_day_before = std::fs::read_to_string(&prior_day_path).expect("prior day file");
@@ -138,102 +129,34 @@ mod tests {
         );
     }
 
-    fn recorded(item: &str, done: &str, left: &str, next: &str) -> RecordedEntry {
+    fn recorded(item: &str, done: &str) -> RecordedEntry {
         RecordedEntry {
             recorded_time: "09:00".to_owned(),
             item: item.to_owned(),
             done: done.to_owned(),
-            left: left.to_owned(),
-            next: next.to_owned(),
         }
     }
 
     #[test]
-    fn is_same_day_duplicate_is_true_when_done_left_and_next_all_match_the_items_latest_entry() {
-        let today_entries = [recorded(
-            "vendor-invoice",
-            "Chased the vendor.",
-            "awaiting the corrected invoice",
-            "closes when the corrected invoice arrives",
-        )];
-        let candidate = entry(
-            "vendor-invoice",
-            "Chased the vendor.",
-            "awaiting the corrected invoice",
-            "closes when the corrected invoice arrives",
-        );
+    fn is_same_day_duplicate_is_true_when_done_matches_the_items_latest_entry() {
+        let today_entries = [recorded("vendor-invoice", "Chased the vendor.")];
+        let candidate = entry("vendor-invoice", "Chased the vendor.");
 
         assert!(is_same_day_duplicate(&today_entries, &candidate));
     }
 
     #[test]
     fn is_same_day_duplicate_is_false_when_the_item_has_no_entry_yet_today() {
-        let today_entries = [recorded(
-            "vendor-invoice",
-            "Chased the vendor.",
-            "awaiting the corrected invoice",
-            "closes when the corrected invoice arrives",
-        )];
-        let candidate = entry(
-            "shipping-label",
-            "Requested the label.",
-            "blocked on the carrier portal",
-            "closes when the portal is back",
-        );
+        let today_entries = [recorded("vendor-invoice", "Chased the vendor.")];
+        let candidate = entry("shipping-label", "Requested the label.");
 
         assert!(!is_same_day_duplicate(&today_entries, &candidate));
     }
 
     #[test]
     fn is_same_day_duplicate_is_false_when_done_differs() {
-        let today_entries = [recorded(
-            "vendor-invoice",
-            "Chased the vendor.",
-            "awaiting the corrected invoice",
-            "closes when the corrected invoice arrives",
-        )];
-        let candidate = entry(
-            "vendor-invoice",
-            "Chased the vendor again.",
-            "awaiting the corrected invoice",
-            "closes when the corrected invoice arrives",
-        );
-
-        assert!(!is_same_day_duplicate(&today_entries, &candidate));
-    }
-
-    #[test]
-    fn is_same_day_duplicate_is_false_when_left_differs() {
-        let today_entries = [recorded(
-            "vendor-invoice",
-            "Chased the vendor.",
-            "awaiting the corrected invoice",
-            "closes when the corrected invoice arrives",
-        )];
-        let candidate = entry(
-            "vendor-invoice",
-            "Chased the vendor.",
-            "nothing",
-            "closes when the corrected invoice arrives",
-        );
-
-        assert!(!is_same_day_duplicate(&today_entries, &candidate));
-    }
-
-    #[test]
-    fn is_same_day_duplicate_is_false_when_next_differs() {
-        let today_entries = [recorded(
-            "vendor-invoice",
-            "Chased the vendor.",
-            "awaiting the corrected invoice",
-            "closes when the corrected invoice arrives",
-        )];
-        let candidate = entry(
-            "vendor-invoice",
-            "Chased the vendor.",
-            "awaiting the corrected invoice",
-            "closes when it is filed",
-        );
+        let today_entries = [recorded("vendor-invoice", "Chased the vendor.")];
+        let candidate = entry("vendor-invoice", "Chased the vendor again.");
 
         assert!(!is_same_day_duplicate(&today_entries, &candidate));
     }
@@ -241,31 +164,11 @@ mod tests {
     #[test]
     fn is_same_day_duplicate_compares_only_against_the_chronologically_last_entry_for_the_item() {
         let today_entries = [
-            recorded(
-                "vendor-invoice",
-                "Chased the vendor.",
-                "awaiting the corrected invoice",
-                "closes when the corrected invoice arrives",
-            ),
-            recorded(
-                "vendor-invoice",
-                "Corrected invoice arrived; filed.",
-                "nothing",
-                "nothing further",
-            ),
+            recorded("vendor-invoice", "Chased the vendor."),
+            recorded("vendor-invoice", "Corrected invoice arrived; filed."),
         ];
-        let matches_the_earlier_entry_only = entry(
-            "vendor-invoice",
-            "Chased the vendor.",
-            "awaiting the corrected invoice",
-            "closes when the corrected invoice arrives",
-        );
-        let matches_the_latest_entry = entry(
-            "vendor-invoice",
-            "Corrected invoice arrived; filed.",
-            "nothing",
-            "nothing further",
-        );
+        let matches_the_earlier_entry_only = entry("vendor-invoice", "Chased the vendor.");
+        let matches_the_latest_entry = entry("vendor-invoice", "Corrected invoice arrived; filed.");
 
         assert!(
             !is_same_day_duplicate(&today_entries, &matches_the_earlier_entry_only),
@@ -279,24 +182,9 @@ mod tests {
 
     #[test]
     fn is_same_day_duplicate_ignores_surrounding_whitespace_but_not_case() {
-        let today_entries = [recorded(
-            "vendor-invoice",
-            "Chased the vendor.",
-            "awaiting the corrected invoice",
-            "closes when the corrected invoice arrives",
-        )];
-        let padded_but_equal = entry(
-            "vendor-invoice",
-            "  Chased the vendor.  ",
-            "awaiting the corrected invoice\n",
-            "\tcloses when the corrected invoice arrives",
-        );
-        let different_case_only = entry(
-            "vendor-invoice",
-            "chased the vendor.",
-            "awaiting the corrected invoice",
-            "closes when the corrected invoice arrives",
-        );
+        let today_entries = [recorded("vendor-invoice", "Chased the vendor.")];
+        let padded_but_equal = entry("vendor-invoice", "  Chased the vendor.  ");
+        let different_case_only = entry("vendor-invoice", "chased the vendor.");
 
         assert!(
             is_same_day_duplicate(&today_entries, &padded_but_equal),
