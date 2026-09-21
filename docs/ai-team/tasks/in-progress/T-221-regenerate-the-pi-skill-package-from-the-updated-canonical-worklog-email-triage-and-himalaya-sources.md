@@ -125,3 +125,25 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-21
+
+PASS
+
+Reviewed branch `task/T-221-regenerate-the-pi-skill-package-from-the-updated-canonical-worklog-email-triage-and-himalaya-sources` at `c4a03a3` (1 commit ahead of `dev-agent`) in an isolated `git worktree`, following T-210's Review Verdict as the model for this task class. `git diff dev-agent...c4a03a3 --stat`: exactly 7 files, all under `the-intern/bob-skills/.pi/skills/{worklog,email-triage,himalaya}/` — matches declared Files to Touch; `package-pi-skills.sh` and `test_package_pi_skills.sh` diffs against `dev-agent` are empty (zero lines), confirming the guard scripts were not touched.
+
+**Stage 1 — acceptance (all five ACs independently reproduced from the worktree, not taken on the Developer's report):**
+
+- AC-1: For every file under all three packaged skill trees, independently diffed against canonical `skills/`. File sets match 1:1 in each tree (`diff` of sorted `find` listings, zero output). Every `SKILL.md` (worklog, email-triage, himalaya) is `diff`-identical to its canonical counterpart once the single injected `allowed-tools: Read Bash` line is stripped (three separate `diff <(grep -v ...) canonical`, all exit 0). Every non-`SKILL.md` file in all three trees is `cmp`-byte-identical to canonical (looped comparison, zero differences reported). Confirms the Developer's claim in full, not just for the two trees T-210 covered.
+- AC-2: Ran the task's exact word-boundary grep — `grep -rn "\bLeft\b\|\bNext\b\|--left\|--next" .pi/skills/worklog .pi/skills/email-triage .pi/skills/himalaya` — from a fresh `./package-pi-skills.sh` run: zero matches (grep exit 1).
+- AC-3: Ran `./package-pi-skills.sh && ./test_package_pi_skills.sh` fresh from the checked-out branch — 5 passed / 0 failed, same AC labels as T-210's run (script unmodified, confirmed by the empty diff above). `git status --porcelain` after the run is empty — the regeneration is idempotent, strong evidence the committed diff is genuine, unedited script output.
+- AC-4: Ran `cargo build -p bob` from `the-intern/service/` on the worktree — succeeded (confirmed the `bob` crate itself recompiles by touching `build.rs` and rebuilding: `Compiling bob v0.1.0` then `Finished`). Ran `cargo test -p bob init_assets` — all three `init_assets::tests` passed (`embeds_assets_from_the_canonical_pi_package_path`, `contains_the_four_shipped_skill_roots`, `exposes_a_stable_relative_path_list_and_matching_bytes` — the last positively byte-compares embedded assets against the regenerated on-disk files).
+- AC-5 (given the task's explicit instruction to scrutinize this beyond a grep-passed checkbox): read the actual regenerated content at `.pi/skills/email-triage/references/worklog.md`'s "Item identifier" section and `SKILL.md` lines ~119 and ~239, not just the `Message-ID` match locations. The packaged text states the identifier is `<subject> (from <sender>)` plus a discriminator "derived from that message's `Message-ID` header — fetch it with `himalaya message read -H Message-ID <id>`", and states "two distinct messages never share an item-identifier, and one message's item-identifier ... stays the same every time" — this is verbatim the AC-3/AC-4 language from T-218's own completed task file (cross-checked directly against `docs/ai-team/tasks/completed/T-218-...md`), not an incidental `Message-ID` string match. Confirms T-218's discriminator fix and T-214's Done-only narrowing (independently confirmed via AC-2's clean `Left`/`Next` grep across all three trees, including email-triage) are both present together in the packaged output — the CR-014 convergence point this task exists for.
+
+B-054 Fix Verification (re-run independently against this branch's output, not trusted from the Work Log): `grep -rn "Left\|Next\|--left\|--next\|three field" .pi/skills/worklog/SKILL.md .pi/skills/worklog/references/entry-format.md .pi/skills/worklog/references/reconciliation.md` — zero matches; `diff <(grep -v '^allowed-tools: Read Bash$' .pi/skills/worklog/SKILL.md) skills/worklog/SKILL.md` — no diff. Both of B-054's own Fix Verification checks pass cleanly on this branch, confirming the bug is closeable with a reference to this task's merge commit per its own coordinator note.
+
+**Stage 2 — code quality:** pure regeneration task, no hand-authored logic beyond the packaging output itself, which Stage 1 verified byte-for-byte against canonical source. No unspecified behavior, no unexpected files, no dead code.
+
+Minor non-blocking observation: the branch's commit subject (`chore(bob-skills): regenerate pi skill package from canonical worklog, email-triage, and himalaya sources`) is 105 characters, over the `git-conventions` skill's ≤72-char description limit — same pattern as T-210's own precedent commit (94 chars), which was also not flagged at the time. Not blocking this verdict; worth tightening in future regeneration-task commit messages.
+
+No blocking issues. Next owner: Development Loop.
