@@ -39,7 +39,7 @@ discriminator derived from the message's `Message-ID` header (fetched via
 is named — `references/worklog.md`'s own definition and both inline
 restatements in `SKILL.md` — for every message, and update
 `references/worklog.md`'s "How an open item closes" section to match. This
-task and `T-214`/`T-215` (the matching Rust `Done`-only narrowing) close
+task and `T-214` (the matching Rust `Done`-only narrowing) close
 the same gap together — do not treat either as safe to ship without the
 other, since the old identifier convention against `Done`-only suppression
 can silently drop entries for two distinct messages sharing a subject and

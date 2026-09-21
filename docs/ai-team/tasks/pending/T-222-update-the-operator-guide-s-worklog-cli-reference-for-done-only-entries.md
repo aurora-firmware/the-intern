@@ -24,7 +24,7 @@ Task Quality Rules (see the new-task skill for full details):
 `the-intern/docs/src/operator-guide/index.md`'s worklog action-rule
 passage (the `bob worklog*` matcher's stability explanation) enumerates
 the command's flags in free text as `--item`/`--done`/`--left`/`--next` —
-`T-215` narrows the CLI to `--item`/`--done` only. Rewrite that
+`T-214` narrows the CLI to `--item`/`--done` only. Rewrite that
 enumeration to the two-flag shape. Nothing else in this file documents
 worklog entry output or the duplicate-suppression comparison, so no other
 passage needs to change; the action-rule matcher shape itself
@@ -41,7 +41,7 @@ only.
 
 ## Dependencies
 
-- `T-215` — documents the CLI's actual final flag/output shape
+- `T-214` — documents the CLI's actual final flag/output shape
 
 ## Files to Touch
 

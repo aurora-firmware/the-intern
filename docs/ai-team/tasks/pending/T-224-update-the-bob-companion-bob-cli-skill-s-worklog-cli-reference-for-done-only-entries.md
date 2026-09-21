@@ -24,7 +24,7 @@ Task Quality Rules (see the new-task skill for full details):
 
 `the-intern/bob-companion/claude/skills/bob-cli/references/command-
 reference.md`'s `## bob worklog [append|list]` section documents the
-four-flag shape and `Done`/`Left`/`Next` output — `T-215` narrows the CLI
+four-flag shape and `Done`/`Left`/`Next` output — `T-214` narrows the CLI
 to `--item`/`--done` only. Rewrite the section's `append` subsection to
 the one-field output shape (text and JSON), matching `T-213`'s precedent
 for the equivalent earlier correction. The `list` subsection, cwd-strict/
@@ -41,7 +41,7 @@ text or JSON.
 
 ## Dependencies
 
-- `T-215` — documents the CLI's actual final output shape
+- `T-214` — documents the CLI's actual final output shape
 
 ## Files to Touch
 

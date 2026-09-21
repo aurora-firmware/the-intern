@@ -24,7 +24,7 @@ Task Quality Rules (see the new-task skill for full details):
 `the-intern/bob-skills/README.md`'s worklog action-rule passage (the
 `bob worklog*` matcher's stability explanation, ~line 366) enumerates the
 command's flags in free text as `--item`/`--done`/`--left`/`--next` —
-`T-215` narrows the CLI to `--item`/`--done` only. Rewrite that
+`T-214` narrows the CLI to `--item`/`--done` only. Rewrite that
 enumeration to the two-flag shape; the action-rule matcher itself is
 unaffected. **Do not touch the
 [Validation outcomes](#validation-outcomes) section** (the T-139/T-140/
@@ -44,7 +44,7 @@ quotations, including its `Next` line, unchanged.
 
 ## Dependencies
 
-- `T-215` — documents the CLI's actual final flag/output shape
+- `T-214` — documents the CLI's actual final flag/output shape
 
 ## Files to Touch
 

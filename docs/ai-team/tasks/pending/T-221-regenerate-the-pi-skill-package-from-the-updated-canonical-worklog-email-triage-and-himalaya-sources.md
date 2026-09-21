@@ -56,11 +56,13 @@ AC-5: WHEN the regenerated `.pi/skills/email-triage/` content is inspected
 THE SYSTEM SHALL state that the item-identifier includes a
 `Message-ID`-derived discriminator — the mechanical check that `T-218`'s
 identifier fix reached the packaged, installable skill before this task's
-build/embed step completes, since neither `T-214`/`T-215`'s `Done`-only
+build/embed step completes, since neither `T-214`'s `Done`-only
 narrowing nor `T-218`'s discriminator is safe to ship alone.
 
 ## Dependencies
 
+- `T-214` — the `Done`-only CLI/binary narrowing this task rebuilds and
+  re-embeds against (AC-4, AC-5)
 - `T-217` — rewritten canonical `worklog` skill source
 - `T-218` — rewritten canonical `email-triage` `SKILL.md`/`worklog.md`
 - `T-219` — rewritten canonical `email-triage` `escalation.md`
