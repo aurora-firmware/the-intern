@@ -2,7 +2,7 @@
 id: T-218
 title: Rewrite email-triage's worklog usage and item-identifier for Done-only 
   entries and the Message-ID discriminator
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-09-21'
