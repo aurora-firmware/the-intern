@@ -1,7 +1,7 @@
 ---
 id: T-222
 title: Update the operator guide's worklog CLI reference for Done-only entries
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-09-21'
