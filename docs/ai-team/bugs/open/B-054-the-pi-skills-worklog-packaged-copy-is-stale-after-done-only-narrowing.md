@@ -9,6 +9,19 @@ task: T-217
 
 # the .pi/skills/worklog packaged copy is stale after Done-only narrowing
 
+**Note (coordinator, 2026-09-21):** this is expected to be resolved as a
+side effect of `T-221` ("Regenerate the pi skill package from the updated
+canonical worklog, email-triage, and himalaya sources"), already pending in
+the same `CR-014` task queue this bug was found during. `T-221` was
+deliberately scoped to regenerate `.pi/skills/` once after `T-217`–`T-220`
+all land, rather than once per canonical-content task, mirroring `T-210`'s
+precedent for the equivalent `CR-013` regeneration. Leave this open until
+`T-221` completes; do not start independent bug-fix work on it in the
+meantime — re-running the packaging script before `T-218`/`T-219`/`T-220`
+land would just need re-running again, and `T-221`'s own AC-1–AC-5 already
+cover this bug's Fix Verification exactly. Close with a reference to
+`T-221`'s merge commit once it lands, rather than filing a separate fix.
+
 ## Summary
 
 `the-intern/bob-skills/.pi/skills/worklog/` is a generated packaging copy of
