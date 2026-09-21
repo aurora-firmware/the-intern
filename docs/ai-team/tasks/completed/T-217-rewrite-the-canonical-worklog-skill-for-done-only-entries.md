@@ -1,7 +1,7 @@
 ---
 id: T-217
 title: Rewrite the canonical worklog skill for Done-only entries
-status: pending
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-09-21'
