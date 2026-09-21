@@ -2,7 +2,7 @@
 id: B-054
 title: the .pi/skills/worklog packaged copy is stale after Done-only narrowing
 severity: medium
-status: open
+status: resolved
 created: '2026-09-21'
 task: T-217
 ---
@@ -126,33 +126,45 @@ diff <(grep -v '^allowed-tools: Read Bash$' the-intern/bob-skills/.pi/skills/wor
 
 ## Diagnosis Log
 
-<!-- Mandatory before implementation. Append one entry before changing production code. Format:
-### Diagnosis N — YYYY-MM-DD
-Reproduction status:
-Evidence captured:
-Isolated fault:
-Root cause or fault hypothesis:
-Planned verification:
--->
+### Diagnosis 1 — 2026-09-21
+
+Reproduction status: confirmed (see Reproduction Steps above).
+Evidence captured: `diff`/`grep` showing `.pi/skills/worklog` still carrying
+`Left`/`Next` language after canonical `skills/worklog` was narrowed by
+`T-217`.
+Isolated fault: `the-intern/bob-skills/.pi/skills/` is generated output,
+regenerated only by an explicit run of `package-pi-skills.sh`; no task in
+the `CR-014` series had yet re-run it.
+Root cause: this is expected, planned staleness, not a defect in any
+landed task — `T-221` was deliberately scoped (during spec-breakdown) to
+regenerate `.pi/skills/` exactly once, after all four canonical-content
+tasks (`T-217`–`T-220`) land, rather than once per task, mirroring `T-210`'s
+precedent for the equivalent `CR-013` regeneration.
+Planned verification: `T-221`'s own AC-1–AC-5, which are a superset of this
+bug's Fix Verification block (covering `email-triage` and `himalaya` too,
+not just `worklog`).
 
 ## Work Log
 
-<!-- Mandatory. Append one entry per session boundary. Format:
-### Session N — YYYY-MM-DD
-Free-prose body: what was done this session, what was tried and
-rejected, decisions made, what remains for next session.
+### Session 1 — 2026-09-21
 
-Start every session by reading the entries below.
-The final entry serves as the handoff to the reviewer. -->
+No separate fix implemented for this bug — `T-221` (already queued in the
+same task series this bug was found during) closed it as a direct
+consequence of its own, independently-planned scope. Re-ran this bug's own
+Fix Verification block against `dev-agent` after `T-221`'s merge (`696c3a3`,
+"chore(tasks): merge T-221 regenerate pi skill package"): the banned-word
+grep against the packaged `worklog` tree returns no output, and the
+`SKILL.md`-minus-`allowed-tools` diff against canonical is empty. Both pass.
+Closing without a dedicated bug-fix branch, per this bug's own
+coordinator note recorded when it was filed.
 
 ## Review
 
-<!-- Reviewer: append verdict here after each review cycle.
-
-### Review Verdict — YYYY-MM-DD
-PASS | FAIL | ESCALATE
-
-- For FAIL: file, location, what is wrong, what should change.
-- For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
-- For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
--->
+Not routed through the bug-fix loop — closed administratively by the
+Development Loop coordinator once `T-221` landed and this bug's own Fix
+Verification block was independently re-confirmed passing against
+`dev-agent`. No separate Reviewer verdict; `T-221`'s own Review Verdict
+(in `docs/ai-team/tasks/completed/T-221-...md`) already covers the same
+regenerated content, including this bug's exact concern (its Reviewer was
+explicitly asked to re-run this bug's Fix Verification block and confirmed
+it passing).
