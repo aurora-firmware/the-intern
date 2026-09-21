@@ -64,6 +64,15 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-09-21
+
+Reviewed the canonical task and the existing T-222 implementation commit
+`1e3791a`. The operator-guide rationale now names only `--item` and `--done`,
+so no additional edit was required. The historical parent matched the retired
+flags; the task branch's current file passed the specified absence check with
+no output. No deployed service or default socket was accessed. The task is
+ready for review.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
