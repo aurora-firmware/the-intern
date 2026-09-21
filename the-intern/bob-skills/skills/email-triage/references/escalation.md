@@ -57,6 +57,25 @@ Sending the escalation email is a `himalaya` `bash` call like any other this
 package makes, so it is gated by the action-authorization gate exactly the
 same way — see "If an action is blocked" below.
 
+## Message content requirement
+
+Every task this package files — the `todo` task for an escalation awaiting
+a reply and the `blocked` task for a refused action, both filed from
+`SKILL.md` step 3 — and the escalation email's own "What the message is"
+above must carry the same message content, defined once here and
+referenced by name rather than restated at each call site:
+
+- **Message identity** — the message's stable identity is its RFC
+  `Message-ID:` header value, fetched the same way
+  `references/worklog.md`'s "Item identifier" section does (`himalaya
+  message read -H Message-ID <id>`). This stays valid even if the message
+  is later moved to another folder.
+- **Retrieval pointer** — folder, envelope `id` (from `himalaya envelope
+  list -o json`), date, sender, and subject, so the message can be
+  re-fetched operationally. The envelope `id` is only meaningful within
+  its current folder, so this pointer is a convenience alongside the
+  `Message-ID` above, not a replacement for it.
+
 ## If an action is blocked
 
 Every `bash` call this package makes — a category workflow's own action
