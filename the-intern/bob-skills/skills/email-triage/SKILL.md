@@ -165,23 +165,26 @@ For every envelope the previous step returned, in turn:
    per the `himalaya` skill.
    - If any of those calls is denied by the action-authorization gate: stop
      acting on this message, do not substitute some other action instead,
-     and file a `bob task` for it — status `blocked`, naming the message,
-     the action that was refused, and what would need to change (an
-     admitting allow rule) before it can be retried. Name that task in this
-     message's worklog entry in step 4 below, with `Done` describing the
-     blocked action and the task filed for it; the retry happens the next
-     time step 1 lists this job's own board. The message is not treated as
-     handled.
+     and file a `bob task` for it — status `blocked`, including this
+     message's content per `references/escalation.md`'s "Message content
+     requirement" (do not restate that content here), the action that was
+     refused, and what would need to change (an admitting allow rule)
+     before it can be retried. Name that task in this message's worklog
+     entry in step 4 below, with `Done` describing the blocked action and
+     the task filed for it; the retry happens the next time step 1 lists
+     this job's own board. The message is not treated as handled.
 3. **No confident match** (including an ambiguous match between two
    categories, which `references/categories/README.md`'s confidence rubric
    treats as not confident, and a message that does not clearly satisfy any
    one category's signals): escalate per `references/escalation.md` — send
    exactly one escalation email to the configured manager address and take
    no further action on this message this run. When the send succeeds,
-   file a `bob task` for it — status `todo`, naming the message and the
-   question the escalation asked — so a later run can tell this item is
-   still awaiting the manager's reply; name that task in this message's
-   worklog entry in step 4 below. Never fall back to choosing the closest
+   file a `bob task` for it — status `todo`, including this message's
+   content per `references/escalation.md`'s "Message content requirement"
+   (do not restate that content here) and the question the escalation
+   asked — so a later run can tell this item is still awaiting the
+   manager's reply; name that task in this message's worklog entry in
+   step 4 below. Never fall back to choosing the closest
    category and acting on it anyway — "closest" is not "confident"
    (`references/categories/README.md`'s "No confident match" section).
    `references/escalation.md` defines the full escalation policy — the
@@ -211,10 +214,12 @@ For every envelope the previous step returned, in turn:
    If that explicit send command is denied by the action-authorization
    gate, treat this message's outcome as **blocked**, not **escalated**:
    no escalation email was sent, so file a `bob task` for it instead of the
-   `todo` task above — status `blocked`, naming the message and the refused
-   send — and name that task in this message's worklog entry in step 4
-   below, with `Done` describing the blocked escalation attempt; the retry
-   happens the next time step 1 lists this job's own board.
+   `todo` task above — status `blocked`, including this message's content
+   per `references/escalation.md`'s "Message content requirement" (do not
+   restate that content here) and the refused send — and name that task in
+   this message's worklog entry in step 4 below, with `Done` describing
+   the blocked escalation attempt; the retry happens the next time step 1
+   lists this job's own board.
 
 Escalating and acting are mutually exclusive outcomes for a given message
 on a given run — never do both.
