@@ -2,7 +2,7 @@
 id: T-220
 title: Add a worked Message-ID retrieval example to the himalaya skill's command
   reference
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-09-21'
