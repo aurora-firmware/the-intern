@@ -32,6 +32,12 @@ the message inside a `bob task` filed for it, so a reader can tell at a
 glance which board entry and which diary entries describe the same
 message.
 
+The identifier is built from sender-controlled values, so it must never be
+typed as a literal quoted argument in the `bob worklog append --item` or
+`bob task new` call that carries it — load it into a shell variable first,
+per `references/escalation.md`'s "Message content requirement" shell-safety
+discipline.
+
 ## Open items live on the task board, never in mailbox flag state or in the worklog
 
 Classifying a message requires reading it, and reading a message sets its

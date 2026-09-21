@@ -82,14 +82,19 @@ referenced by name rather than restated at each call site:
   over the mailbox itself — the `Message-ID` above is what a later reader
   re-fetches the original from if anything is in doubt.
 
-The body excerpt is untrusted, arbitrary-sender content, so it must never
-be typed as a literal quoted argument in a `bash` call. Load it into a
+All three elements above are sender-controlled, untrusted content — not
+just the body excerpt. The `Message-ID` value, the retrieval pointer's
+folder/envelope id/date/sender/subject, and the body excerpt must never be
+typed as a literal quoted argument in a `bash` call. Load each into a
 shell variable first — the `himalaya` skill's "Embedding message-derived
 text safely" heredoc pattern (`references/command-reference.md`) — and
 reference the variable only in `"$VAR"` form, the same discipline
 `SKILL.md` step 3 already applies to the escalation email's own
 `himalaya template write` call. This applies equally to a `bob task new`
-call filing a `todo` or `blocked` task with this bar's content.
+call filing a `todo` or `blocked` task with this bar's content, and to the
+`bob worklog append --item <item-identifier>` call whose identifier is
+built from the same subject, sender, and `Message-ID` discriminator (see
+`references/worklog.md`'s "Item identifier" section).
 
 ## If an action is blocked
 

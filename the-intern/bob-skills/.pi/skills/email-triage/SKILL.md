@@ -238,7 +238,9 @@ email triage: the entry's item identifier is the message's `<subject>
 (from <sender>)`, plus a discriminator derived from that message's
 `Message-ID` header (fetched via `himalaya message read -H Message-ID
 <id>`) — see `references/worklog.md`'s "Item identifier" section for why
-the discriminator is required and what it guarantees. Do this before
+the discriminator is required and what it guarantees, and for the
+shell-variable discipline that identifier's sender-controlled values
+require in the `bob worklog append --item` call. Do this before
 moving on to the next unseen message, so a run interrupted partway still
 leaves a complete record for every message it did handle before stopping.
 
