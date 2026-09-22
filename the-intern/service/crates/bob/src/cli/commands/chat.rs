@@ -172,15 +172,20 @@ async fn run_interactive_session(cfg: &BobConfig) -> ServiceResult<()> {
 /// returns which one fired, as a human-readable signal name.
 ///
 /// `SIGKILL` cannot be caught by any process and is out of scope here — a
-/// `SIGKILL`'d `bob chat` cannot run any cleanup regardless. The other three
-/// cover the realistic ways `bob chat` itself (not `bob.service`) gets
-/// terminated out from under an open session: an explicit `kill`, and a
-/// terminal hangup (e.g. an SSH connection dropping while attached to a
-/// persistent pty). A keyboard-typed Ctrl-C during the session itself does
-/// NOT reach this path once pi has put the shared TTY into raw mode — raw
-/// mode clears `ISIG`, so the byte goes straight to pi instead of generating
-/// a kernel-level `SIGINT` — this handler only matters for a `SIGINT` sent by
-/// some other means (e.g. `kill -INT`).
+/// `SIGKILL`'d `bob chat` cannot run any cleanup regardless. `SIGQUIT` is
+/// deliberately not handled either: its default disposition also bypasses
+/// `Drop`, but it exists to request a core dump for diagnosing a hung or
+/// misbehaving process, not to terminate one normally — intercepting it here
+/// would defeat that purpose for the rare case someone actually needs it
+/// against `bob chat` itself. The three signals handled below cover the
+/// realistic ways `bob chat` itself (not `bob.service`) gets terminated out
+/// from under an open session: an explicit `kill`, and a terminal hangup
+/// (e.g. an SSH connection dropping while attached to a persistent pty). A
+/// keyboard-typed Ctrl-C during the session itself does NOT reach this path
+/// once pi has put the shared TTY into raw mode — raw mode clears `ISIG`, so
+/// the byte goes straight to pi instead of generating a kernel-level
+/// `SIGINT` — this handler only matters for a `SIGINT` sent by some other
+/// means (e.g. `kill -INT`).
 async fn wait_for_termination_signal() -> ServiceResult<&'static str> {
     use tokio::signal::unix::{signal, SignalKind};
 
