@@ -150,10 +150,53 @@ async fn run_interactive_session(cfg: &BobConfig) -> ServiceResult<()> {
         ));
     }
 
-    // Step 6: wait for the session.interactive.exited notification (AC-3).
-    wait_for_session_exited_notification(&mut reader).await?;
+    // Step 6: wait for the session.interactive.exited notification (AC-3),
+    // racing it against an external termination signal. A signal terminating
+    // this process via the OS's default disposition would skip _terminal_guard's
+    // Drop entirely — Rust destructors don't run on a signal-killed process —
+    // leaving the terminal stuck in whatever mode pi last set it to (issue
+    // #112). Returning from this select! instead lets the guard restore it
+    // normally, the same as every other exit path from this function.
+    tokio::select! {
+        result = wait_for_session_exited_notification(&mut reader) => result,
+        signal_result = wait_for_termination_signal() => {
+            let signal_name = signal_result?;
+            Err(invalid_request_error(format!(
+                "bob chat interrupted by {signal_name} before the session ended"
+            )))
+        }
+    }
+}
 
-    Ok(())
+/// Waits for the first of `SIGTERM`, `SIGHUP`, or Ctrl-C (`SIGINT`) and
+/// returns which one fired, as a human-readable signal name.
+///
+/// `SIGKILL` cannot be caught by any process and is out of scope here — a
+/// `SIGKILL`'d `bob chat` cannot run any cleanup regardless. The other three
+/// cover the realistic ways `bob chat` itself (not `bob.service`) gets
+/// terminated out from under an open session: an explicit `kill`, and a
+/// terminal hangup (e.g. an SSH connection dropping while attached to a
+/// persistent pty). A keyboard-typed Ctrl-C during the session itself does
+/// NOT reach this path once pi has put the shared TTY into raw mode — raw
+/// mode clears `ISIG`, so the byte goes straight to pi instead of generating
+/// a kernel-level `SIGINT` — this handler only matters for a `SIGINT` sent by
+/// some other means (e.g. `kill -INT`).
+async fn wait_for_termination_signal() -> ServiceResult<&'static str> {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut sigterm = signal(SignalKind::terminate())
+        .map_err(|e| invalid_request_error(format!("failed to install SIGTERM handler: {e}")))?;
+    let mut sighup = signal(SignalKind::hangup())
+        .map_err(|e| invalid_request_error(format!("failed to install SIGHUP handler: {e}")))?;
+
+    tokio::select! {
+        _ = sigterm.recv() => Ok("SIGTERM"),
+        _ = sighup.recv() => Ok("SIGHUP"),
+        result = tokio::signal::ctrl_c() => {
+            result.map_err(|e| invalid_request_error(format!("failed waiting for ctrl-c: {e}")))?;
+            Ok("SIGINT")
+        }
+    }
 }
 
 /// Returns a `ServiceError::InvalidRequest` with a human-readable message
