@@ -341,6 +341,17 @@ impl InteractiveProcess {
             .stdin(Stdio::from(stdin))
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr))
+            // The child otherwise inherits bob serve's own process group —
+            // but its real controlling terminal is the client's TTY (handed
+            // over via SCM_RIGHTS), a *different* terminal from whichever
+            // one bob serve itself happens to be running in. Without its own
+            // process group, a Ctrl-C (or any job-control signal) sent to
+            // bob serve's terminal reaches this child directly at the kernel
+            // level, bypassing bob serve's own graceful-shutdown handling
+            // entirely (issue #112) — `process_group(0)` makes the child its
+            // own group leader so only signals bob serve explicitly sends it
+            // reach it.
+            .process_group(0)
             .env("BOB_SESSION_ID", cfg.session_id.to_string());
 
         if !cfg.extension_sock_path.as_os_str().is_empty() {
@@ -396,17 +407,45 @@ impl InteractiveProcess {
 
     /// Terminates the interactive child process.
     ///
-    /// Sends `SIGTERM` and waits up to `child_termination_deadline`; if the
-    /// child does not exit within that window it is force-killed with `SIGKILL`.
+    /// First gives the child a brief window to exit entirely on its own,
+    /// with no signal sent at all: the caller (`bob serve`'s shutdown
+    /// protocol) tears down the extension-ipc actor — and with it, this
+    /// session's `BOB_EXTENSION_SOCK_PATH` connection — before ever calling
+    /// this method, so a cooperating pi process (via the bob.ts extension)
+    /// detects that closed socket and can shut itself down gracefully,
+    /// printing a clear message to the user, well within that window (issue
+    /// #112). Only once that window elapses without the child exiting does
+    /// this send `SIGTERM` and wait for the remainder of
+    /// `child_termination_deadline`; if the child still hasn't exited by
+    /// then it is force-killed with `SIGKILL`. The self-exit window is
+    /// budgeted out of `child_termination_deadline` itself, so the overall
+    /// worst-case termination time is unchanged from before this self-exit
+    /// check existed.
     ///
     /// # Errors
     ///
     /// Returns `ServiceError::ChildProcess` if the OS rejects the signal or if
     /// waiting for the child fails.
     pub async fn terminate(mut self) -> ServiceResult<TerminationOutcome> {
+        let self_exit_grace_period = self.child_termination_deadline / 3;
+        match time::timeout(self_exit_grace_period, self.child.wait()).await {
+            Ok(Ok(_status)) => return Ok(TerminationOutcome { forced: false }),
+            Ok(Err(error)) => {
+                return Err(ServiceError::ChildProcess {
+                    detail: format!(
+                        "failed while waiting for interactive child self-exit ({error})"
+                    ),
+                })
+            }
+            // Self-exit grace period elapsed without the child exiting on its
+            // own — fall through to SIGTERM below.
+            Err(_) => {}
+        }
+
         self.request_graceful_termination()?;
 
-        let wait_result = time::timeout(self.child_termination_deadline, self.child.wait()).await;
+        let remaining_deadline = self.child_termination_deadline - self_exit_grace_period;
+        let wait_result = time::timeout(remaining_deadline, self.child.wait()).await;
         match wait_result {
             Ok(Ok(_status)) => Ok(TerminationOutcome { forced: false }),
             Ok(Err(error)) => Err(ServiceError::ChildProcess {
@@ -1197,6 +1236,124 @@ mod tests {
             !outcome.forced,
             "cooperative interactive child should terminate without force-kill"
         );
+    }
+
+    // Issue #112: terminate() gives the child a brief window to exit entirely
+    // on its own — with no signal ever sent — before falling back to
+    // SIGTERM. This models bob.ts's own extension-socket-close-driven
+    // self-shutdown: pi exits gracefully once bob serve tears down the
+    // extension-ipc connection (which happens before this is ever called),
+    // well before pi-agent-supervisor would otherwise need to signal it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn interactive_terminate_returns_promptly_without_signaling_a_child_that_self_exits() {
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+        use std::time::Instant;
+
+        let marker_file = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-interactive-self-exit-signaled-{}.txt",
+            SessionId::new()
+        ));
+        let _ = std::fs::remove_file(&marker_file);
+
+        let stdin_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stdout_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stderr_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+
+        // Writes a marker file only if it is ever signaled with TERM;
+        // otherwise it just sleeps briefly and exits on its own.
+        let cfg = InteractiveProcessConfig {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                format!(
+                    "trap 'printf signaled > \"{}\"; exit 0' TERM; sleep 0.05; exit 0",
+                    marker_file.to_string_lossy()
+                ),
+            ],
+            child_termination_deadline: Duration::from_millis(3000),
+            session_id: SessionId::new(),
+            extension_sock_path: PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
+            cwd: None,
+            skill_install_path: None,
+        };
+
+        let process = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
+            .expect("interactive spawn should succeed");
+
+        let started_at = Instant::now();
+        let outcome = process.terminate().await.expect("terminate should succeed");
+        let elapsed = started_at.elapsed();
+
+        assert!(
+            !outcome.forced,
+            "a child that exits on its own must not be reported as force-killed"
+        );
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "terminate must return promptly once the child exits on its own \
+             (well under the 1000ms self-exit grace period, let alone the \
+             3000ms full deadline); took {elapsed:?}"
+        );
+        assert!(
+            !marker_file.exists(),
+            "terminate must not signal a child that already exited on its own"
+        );
+
+        let _ = std::fs::remove_file(&marker_file);
+    }
+
+    // Issue #112: the interactive child must be its own process-group leader
+    // (process_group(0)) so that a job-control signal — e.g. Ctrl-C sent to
+    // whatever terminal bob serve itself happens to be running in — does not
+    // reach it directly at the kernel level. Its real controlling terminal is
+    // the client's TTY (handed over via SCM_RIGHTS), a different terminal
+    // from bob serve's own, so only signals bob serve explicitly sends
+    // (request_graceful_termination's SIGTERM, or SIGKILL) should reach it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn interactive_spawn_puts_child_in_its_own_process_group() {
+        use std::fs::File;
+        use std::os::unix::io::OwnedFd;
+
+        let stdin_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stdout_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+        let stderr_fd: OwnedFd = File::open("/dev/null").expect("open /dev/null").into();
+
+        let cfg = InteractiveProcessConfig {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), "sleep 1".to_string()],
+            child_termination_deadline: Duration::from_millis(2000),
+            session_id: SessionId::new(),
+            extension_sock_path: PathBuf::new(),
+            extension_path: std::env::current_exe().expect("current executable should exist"),
+            cwd: None,
+            skill_install_path: None,
+        };
+
+        let process = InteractiveProcess::spawn(cfg, stdin_fd, stdout_fd, stderr_fd)
+            .expect("interactive spawn should succeed");
+        let child_pid = process.child.id().expect("spawned child should have a pid");
+
+        let stat = std::fs::read_to_string(format!("/proc/{child_pid}/stat"))
+            .expect("child /proc/<pid>/stat should be readable");
+        // Field 2 is `(comm)`, which may itself contain spaces or parens, so
+        // parse forward from the *last* ')' — the remaining whitespace-
+        // separated fields are then state, ppid, pgid in that order.
+        let after_comm = stat.rsplit_once(')').expect("stat should contain (comm)").1;
+        let pgid: i32 = after_comm
+            .split_whitespace()
+            .nth(2)
+            .expect("stat should have a pgid field")
+            .parse()
+            .expect("pgid field should be numeric");
+
+        assert_eq!(
+            pgid, child_pid as i32,
+            "interactive child must be its own process-group leader, not bob serve's"
+        );
+
+        process.terminate().await.expect("terminate should succeed");
     }
 
     // B-021 / CR-005: when cfg.cwd is configured, the interactive child's

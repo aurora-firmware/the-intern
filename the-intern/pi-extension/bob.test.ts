@@ -62,18 +62,25 @@ function makeStubPi(): StubPi {
 }
 
 /**
- * Build a minimal ExtensionContext stub with a spy on ui.notify.
- * The returned object satisfies the shape bob.ts needs: ctx?.ui is truthy and
- * ctx.ui.notify is a callable function.
+ * Build a minimal ExtensionContext stub with a spy on ui.notify and a spy on
+ * shutdown. The returned object satisfies the shape bob.ts needs: ctx?.ui is
+ * truthy and ctx.ui.notify is a callable function, and ctx.shutdown is a
+ * callable function (issue #112: markDead() must call it).
  */
-function makeCtxWithUi(): { ctx: ExtensionContext; notifySpy: ReturnType<typeof vi.fn> } {
+function makeCtxWithUi(): {
+  ctx: ExtensionContext;
+  notifySpy: ReturnType<typeof vi.fn>;
+  shutdownSpy: ReturnType<typeof vi.fn>;
+} {
   const notifySpy = vi.fn();
+  const shutdownSpy = vi.fn();
   const ctx = {
     ui: {
       notify: notifySpy,
     },
+    shutdown: shutdownSpy,
   } as unknown as ExtensionContext;
-  return { ctx, notifySpy };
+  return { ctx, notifySpy, shutdownSpy };
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +161,15 @@ beforeEach(() => {
   sockPath = path.join(tmpDir, "extension.sock");
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Let any socket 'close' event still in flight from this test's own
+  // connections settle before the next test installs a fresh stderr/notify
+  // spy. Since markDead() now reacts to 'close' directly (issue #112), a
+  // server.close() a test issued near the end of its body can otherwise
+  // still be propagating to the client socket's 'close' handler when the
+  // next test starts, and that stray markDead() call would be captured by
+  // the next test's spy instead of (harmlessly) hitting the real stderr here.
+  await new Promise((resolve) => setTimeout(resolve, 100));
   // Clean up temp dir.
   fs.rmSync(tmpDir, { recursive: true, force: true });
   // Restore env vars.
@@ -386,9 +401,12 @@ describe("B-003-A: pendingFrames cap (pre-connect)", () => {
     // Wait for the connection and flush to settle.
     await new Promise((r) => setTimeout(r, 200));
 
-    // Exactly one warn for the cap breach.
+    // Exactly one shutdown notice for the cap breach (issue #112: markDead()
+    // now reports at "error" severity and asks pi to shut down, rather than
+    // the generic "[bob] warn:" line).
     expect(stderrSpy).toHaveBeenCalledTimes(1);
-    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/error/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     // Transport is dead — subsequent events must be silent no-ops.
     const warnCountBefore = stderrSpy.mock.calls.length;
@@ -750,7 +768,7 @@ describe("B-019: authz frame survives a post-connect event backlog that exceeds 
 // ---------------------------------------------------------------------------
 
 describe("AC-4: transport failure handling", () => {
-  it("logs one warning when UDS is not listening and treats subsequent events as no-ops", async () => {
+  it("logs one shutdown notice when UDS is not listening and treats subsequent events as no-ops", async () => {
     process.env.BOB_SESSION_ID = SESSION_ID;
     // Point at a socket path that has no server listening.
     process.env.BOB_EXTENSION_SOCK_PATH = path.join(tmpDir, "nonexistent.sock");
@@ -766,9 +784,13 @@ describe("AC-4: transport failure handling", () => {
     // Allow the async connect error to propagate.
     await new Promise((r) => setTimeout(r, 100));
 
-    // Exactly one warning should have been logged.
+    // Exactly one shutdown notice should have been logged (issue #112:
+    // markDead() reports at "error" severity and names bob.service/`/resume`,
+    // not the generic "[bob] warn:" line).
     expect(stderrSpy).toHaveBeenCalledTimes(1);
-    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/error/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/bob service is no longer available/);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     // Fire a second event — should be a silent no-op (no additional warnings).
     await pi.emit("agent_start", { type: "agent_start" });
@@ -778,7 +800,7 @@ describe("AC-4: transport failure handling", () => {
     stderrSpy.mockRestore();
   });
 
-  it("logs one warning on write failure and treats subsequent events as no-ops", async () => {
+  it("logs one shutdown notice on write failure and treats subsequent events as no-ops", async () => {
     process.env.BOB_SESSION_ID = SESSION_ID;
     process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
 
@@ -791,19 +813,25 @@ describe("AC-4: transport failure handling", () => {
     await pi.emit("session_start", { type: "session_start", reason: "startup" });
     await waitUntil(() => server.lines().length >= 1);
 
-    // Tear down the server to force write failures.
+    // Install the spy BEFORE tearing down the server: issue #112 means the
+    // client socket's own 'close' event now triggers the shutdown notice
+    // directly, without waiting for a further write attempt to discover it —
+    // so the notice can already have fired during the settle wait below.
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    // Tear down the server to force the client socket closed.
     await server.close();
     // Wait briefly for the OS to process the server closure.
     await new Promise((r) => setTimeout(r, 50));
 
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/error/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
-    // Second event — the write should fail.
+    // Second event — transport is already dead; must be a silent no-op.
     await pi.emit("agent_start", { type: "agent_start" });
     await new Promise((r) => setTimeout(r, 100));
-
     expect(stderrSpy).toHaveBeenCalledTimes(1);
-    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
 
     // Third event — should be a silent no-op.
     await pi.emit("agent_end", { type: "agent_end", messages: [] });
@@ -826,63 +854,74 @@ describe("T-044 AC-1: ctx.ui.notify branch — connect failure with ctx.ui prese
     process.env.BOB_EXTENSION_SOCK_PATH = path.join(tmpDir, "nonexistent.sock");
 
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const { ctx, notifySpy } = makeCtxWithUi();
+    const { ctx, notifySpy, shutdownSpy } = makeCtxWithUi();
     const pi = makeStubPi();
 
     bobFactory(pi as any);
 
     // Fire an event with a ctx that has ctx.ui; this ctx propagates through
-    // handleEvent → ensureConnected → markDead → warn.
+    // handleEvent → ensureConnected → markDead.
     await pi.emitWithCtx("session_start", { type: "session_start", reason: "startup" }, ctx);
 
     // Allow the async connect error to propagate.
     await new Promise((r) => setTimeout(r, 100));
 
-    // Exactly one ctx.ui.notify call carrying the warning.
+    // Exactly one ctx.ui.notify call, at "error" severity, naming bob.service
+    // and pointing at /resume (issue #112).
     expect(notifySpy).toHaveBeenCalledTimes(1);
-    expect(notifySpy.mock.calls[0]![1]).toBe("warning");
+    expect(notifySpy.mock.calls[0]![1]).toBe("error");
+    expect(notifySpy.mock.calls[0]![0]).toMatch(/bob service is no longer available/);
+    expect(notifySpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     // Zero writes to process.stderr because ui.notify was used instead.
     expect(stderrSpy).toHaveBeenCalledTimes(0);
+
+    // Issue #112: bob.service is unreachable, so markDead() must request a
+    // graceful pi shutdown instead of leaving the session running as an orphan.
+    expect(shutdownSpy).toHaveBeenCalledTimes(1);
 
     stderrSpy.mockRestore();
   });
 });
 
 describe("T-044 AC-1: ctx.ui.notify branch — genuine transport failure with ctx.ui present", () => {
-  it("calls ctx.ui.notify exactly once and writes nothing to stderr when the socket errors after the server closes", async () => {
+  it("calls ctx.ui.notify exactly once and writes nothing to stderr when the socket closes after the server closes", async () => {
     process.env.BOB_SESSION_ID = SESSION_ID;
     process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
 
     const server = await createTestServer(sockPath);
     const pi = makeStubPi();
+    const { ctx, notifySpy, shutdownSpy } = makeCtxWithUi();
 
     bobFactory(pi as any);
 
-    // First event — establishes the connection via the empty-ctx path.
-    await pi.emit("session_start", { type: "session_start", reason: "startup" });
+    // Establish the connection with the ctx that has ctx.ui — this is the
+    // ctx the socket's 'close' handler reuses (issue #112: the close handler
+    // fires markDead() with the ctx captured when the connection was made,
+    // not with whatever event's ctx happens to be in flight later).
+    await pi.emitWithCtx("session_start", { type: "session_start", reason: "startup" }, ctx);
     await waitUntil(() => server.lines().length >= 1);
 
-    // Tear down the server to force a genuine write failure (EPIPE/ECONNRESET)
-    // — not the ordinary back-pressure signal (write() === false), which no
-    // longer warns or kills the transport (see B-003-B).
-    await server.close();
-    await new Promise((r) => setTimeout(r, 50));
-
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const { ctx, notifySpy } = makeCtxWithUi();
 
-    // Second event — the write fails with a genuine socket error; markDead
-    // fires with the provided ctx.
-    await pi.emitWithCtx("agent_start", { type: "agent_start" }, ctx);
+    // Tear down the server; the client socket's 'close' event fires
+    // markDead() directly, without needing a further write attempt.
+    await server.close();
     await new Promise((r) => setTimeout(r, 100));
 
-    // Exactly one ctx.ui.notify call carrying the warning.
+    // Exactly one ctx.ui.notify call, at "error" severity, naming bob.service
+    // and pointing at /resume (issue #112).
     expect(notifySpy).toHaveBeenCalledTimes(1);
-    expect(notifySpy.mock.calls[0]![1]).toBe("warning");
+    expect(notifySpy.mock.calls[0]![1]).toBe("error");
+    expect(notifySpy.mock.calls[0]![0]).toMatch(/bob service is no longer available/);
+    expect(notifySpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     // Zero writes to process.stderr because ui.notify was used instead.
     expect(stderrSpy).toHaveBeenCalledTimes(0);
+
+    // Issue #112: bob.service is unreachable, so markDead() must request a
+    // graceful pi shutdown instead of leaving the session running as an orphan.
+    expect(shutdownSpy).toHaveBeenCalledTimes(1);
 
     stderrSpy.mockRestore();
   });
@@ -897,7 +936,7 @@ describe("T-044 AC-1: ctx.ui.notify branch — pendingFrames cap breach with ctx
     const pi = makeStubPi();
 
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const { ctx, notifySpy } = makeCtxWithUi();
+    const { ctx, notifySpy, shutdownSpy } = makeCtxWithUi();
 
     bobFactory(pi as any);
 
@@ -911,12 +950,19 @@ describe("T-044 AC-1: ctx.ui.notify branch — pendingFrames cap breach with ctx
     // Allow async connect and flush to settle.
     await new Promise((r) => setTimeout(r, 200));
 
-    // Exactly one ctx.ui.notify call for the cap breach.
+    // Exactly one ctx.ui.notify call for the cap breach, at "error" severity,
+    // naming bob.service and pointing at /resume (issue #112).
     expect(notifySpy).toHaveBeenCalledTimes(1);
-    expect(notifySpy.mock.calls[0]![1]).toBe("warning");
+    expect(notifySpy.mock.calls[0]![1]).toBe("error");
+    expect(notifySpy.mock.calls[0]![0]).toMatch(/bob service is no longer available/);
+    expect(notifySpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     // Zero writes to process.stderr because ui.notify was used instead.
     expect(stderrSpy).toHaveBeenCalledTimes(0);
+
+    // Issue #112: bob.service is unreachable, so markDead() must request a
+    // graceful pi shutdown instead of leaving the session running as an orphan.
+    expect(shutdownSpy).toHaveBeenCalledTimes(1);
 
     stderrSpy.mockRestore();
     await server.close();
@@ -945,14 +991,15 @@ describe("T-044 AC-2: ctx.ui absent — connect failure falls back to stderr", (
     await new Promise((r) => setTimeout(r, 100));
 
     expect(stderrSpy).toHaveBeenCalledTimes(1);
-    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/error/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     stderrSpy.mockRestore();
   });
 });
 
 describe("T-044 AC-2: ctx.ui absent — genuine transport failure falls back to stderr", () => {
-  it("writes exactly one line to stderr and calls no ui.notify when the socket errors after the server closes, without ctx.ui", async () => {
+  it("writes exactly one line to stderr and calls no ui.notify when the socket closes after the server closes, without ctx.ui", async () => {
     process.env.BOB_SESSION_ID = SESSION_ID;
     process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
 
@@ -961,23 +1008,22 @@ describe("T-044 AC-2: ctx.ui absent — genuine transport failure falls back to 
 
     bobFactory(pi as any);
 
+    // emit() passes {} as ExtensionContext — no ui property present. This is
+    // the ctx the socket's 'close' handler reuses (issue #112).
     await pi.emit("session_start", { type: "session_start", reason: "startup" });
     await waitUntil(() => server.lines().length >= 1);
 
-    // Tear down the server to force a genuine write failure (EPIPE/ECONNRESET)
-    // — not the ordinary back-pressure signal (write() === false), which no
-    // longer warns or kills the transport (see B-003-B).
-    await server.close();
-    await new Promise((r) => setTimeout(r, 50));
-
+    // Install the spy BEFORE tearing down the server: the client socket's
+    // 'close' event now fires markDead() directly, without needing a further
+    // write attempt to discover it.
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-    // emit() passes {} as ExtensionContext — no ui property present.
-    await pi.emit("agent_start", { type: "agent_start" });
+    await server.close();
     await new Promise((r) => setTimeout(r, 100));
 
     expect(stderrSpy).toHaveBeenCalledTimes(1);
-    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/error/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     stderrSpy.mockRestore();
   });
@@ -1269,7 +1315,7 @@ describe("T-057 AC-3c: unparseable verdict fails closed", () => {
 // ---------------------------------------------------------------------------
 
 describe("T-057 AC-3d: transport failure fails closed", () => {
-  it("returns block:true and logs one warning when the server closes the connection without a verdict", async () => {
+  it("returns block:true and logs one shutdown notice when the server closes the connection without a verdict", async () => {
     process.env.BOB_SESSION_ID = SESSION_ID;
     process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
     process.env.BOB_AUTHZ_TIMEOUT_MS = "500";
@@ -1297,9 +1343,13 @@ describe("T-057 AC-3d: transport failure fails closed", () => {
 
     const result = await handlerPromise;
 
+    // The close fails the in-flight verdict closed via markDead()'s own
+    // "transport_error_logged" resolution (issue #112) — handleToolCall
+    // maps that straight to a block, with no second, separate warning.
     expect((result as any)?.block).toBe(true);
     expect(stderrSpy).toHaveBeenCalledTimes(1);
-    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/error/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     stderrSpy.mockRestore();
     delete process.env.BOB_AUTHZ_TIMEOUT_MS;
@@ -1490,7 +1540,8 @@ describe("T-057 AC-3e: connect-time failure without verdict", () => {
 
     expect((result as any)?.block).toBe(true);
     expect(stderrSpy).toHaveBeenCalledTimes(1);
-    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/error/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     stderrSpy.mockRestore();
     delete process.env.BOB_AUTHZ_TIMEOUT_MS;

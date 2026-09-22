@@ -21,6 +21,7 @@ use std::os::fd::AsRawFd as _;
 use std::os::unix::io::RawFd;
 
 use bob_core::error::{ServiceError, ServiceResult};
+use nix::sys::termios::{self, SetArg, Termios};
 use serde_json::Value;
 use tokio::{
     io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader},
@@ -29,6 +30,36 @@ use tokio::{
 
 use super::{invalid_request_error, load_config, run_async};
 use crate::config::BobConfig;
+
+/// Restores the terminal to its original mode when dropped.
+///
+/// `pi` sets the shared TTY into raw mode directly (ADR-011) and is not
+/// guaranteed to restore it before exiting — whether it exits normally, is
+/// killed by a signal during `bob serve`'s shutdown, or is torn down because
+/// bob.service became unreachable mid-session (issue #112). `bob chat` is the
+/// terminal's original owner (it never puts the terminal in raw mode itself),
+/// so it restores the terminal on the way out rather than depending on `pi`'s
+/// own cleanup running. Capturing/restoring is a safe no-op when stdin is not
+/// a TTY (e.g. under test or when piped).
+struct TerminalModeGuard {
+    original: Option<Termios>,
+}
+
+impl TerminalModeGuard {
+    fn capture() -> Self {
+        Self {
+            original: termios::tcgetattr(io::stdin()).ok(),
+        }
+    }
+}
+
+impl Drop for TerminalModeGuard {
+    fn drop(&mut self) {
+        if let Some(original) = &self.original {
+            let _ = termios::tcsetattr(io::stdin(), SetArg::TCSANOW, original);
+        }
+    }
+}
 
 pub(super) fn run(_json_output: bool, _session: Option<&str>) -> ServiceResult<()> {
     let cfg = load_config()?;
@@ -43,6 +74,12 @@ pub(super) fn run(_json_output: bool, _session: Option<&str>) -> ServiceResult<(
 ///
 /// Returns a clear error when the socket is not reachable (AC-2).
 async fn run_interactive_session(cfg: &BobConfig) -> ServiceResult<()> {
+    // Captured first (issue #112): dropped last, restoring the terminal on
+    // every exit path from this function — success, an early error before
+    // the fds are ever handed off, or the session-exited/service-down paths
+    // below.
+    let _terminal_guard = TerminalModeGuard::capture();
+
     // CR-005 / B-021: capture the directory bob chat was invoked from so it
     // can be sent as params.cwd below. The interactive pi session must run
     // here, not wherever the long-running bob serve process itself happens
@@ -113,10 +150,58 @@ async fn run_interactive_session(cfg: &BobConfig) -> ServiceResult<()> {
         ));
     }
 
-    // Step 6: wait for the session.interactive.exited notification (AC-3).
-    wait_for_session_exited_notification(&mut reader).await?;
+    // Step 6: wait for the session.interactive.exited notification (AC-3),
+    // racing it against an external termination signal. A signal terminating
+    // this process via the OS's default disposition would skip _terminal_guard's
+    // Drop entirely — Rust destructors don't run on a signal-killed process —
+    // leaving the terminal stuck in whatever mode pi last set it to (issue
+    // #112). Returning from this select! instead lets the guard restore it
+    // normally, the same as every other exit path from this function.
+    tokio::select! {
+        result = wait_for_session_exited_notification(&mut reader) => result,
+        signal_result = wait_for_termination_signal() => {
+            let signal_name = signal_result?;
+            Err(invalid_request_error(format!(
+                "bob chat interrupted by {signal_name} before the session ended"
+            )))
+        }
+    }
+}
 
-    Ok(())
+/// Waits for the first of `SIGTERM`, `SIGHUP`, or Ctrl-C (`SIGINT`) and
+/// returns which one fired, as a human-readable signal name.
+///
+/// `SIGKILL` cannot be caught by any process and is out of scope here — a
+/// `SIGKILL`'d `bob chat` cannot run any cleanup regardless. `SIGQUIT` is
+/// deliberately not handled either: its default disposition also bypasses
+/// `Drop`, but it exists to request a core dump for diagnosing a hung or
+/// misbehaving process, not to terminate one normally — intercepting it here
+/// would defeat that purpose for the rare case someone actually needs it
+/// against `bob chat` itself. The three signals handled below cover the
+/// realistic ways `bob chat` itself (not `bob.service`) gets terminated out
+/// from under an open session: an explicit `kill`, and a terminal hangup
+/// (e.g. an SSH connection dropping while attached to a persistent pty). A
+/// keyboard-typed Ctrl-C during the session itself does NOT reach this path
+/// once pi has put the shared TTY into raw mode — raw mode clears `ISIG`, so
+/// the byte goes straight to pi instead of generating a kernel-level
+/// `SIGINT` — this handler only matters for a `SIGINT` sent by some other
+/// means (e.g. `kill -INT`).
+async fn wait_for_termination_signal() -> ServiceResult<&'static str> {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut sigterm = signal(SignalKind::terminate())
+        .map_err(|e| invalid_request_error(format!("failed to install SIGTERM handler: {e}")))?;
+    let mut sighup = signal(SignalKind::hangup())
+        .map_err(|e| invalid_request_error(format!("failed to install SIGHUP handler: {e}")))?;
+
+    tokio::select! {
+        _ = sigterm.recv() => Ok("SIGTERM"),
+        _ = sighup.recv() => Ok("SIGHUP"),
+        result = tokio::signal::ctrl_c() => {
+            result.map_err(|e| invalid_request_error(format!("failed waiting for ctrl-c: {e}")))?;
+            Ok("SIGINT")
+        }
+    }
 }
 
 /// Returns a `ServiceError::InvalidRequest` with a human-readable message
