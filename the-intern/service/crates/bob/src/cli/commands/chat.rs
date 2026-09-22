@@ -21,6 +21,7 @@ use std::os::fd::AsRawFd as _;
 use std::os::unix::io::RawFd;
 
 use bob_core::error::{ServiceError, ServiceResult};
+use nix::sys::termios::{self, SetArg, Termios};
 use serde_json::Value;
 use tokio::{
     io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader},
@@ -29,6 +30,36 @@ use tokio::{
 
 use super::{invalid_request_error, load_config, run_async};
 use crate::config::BobConfig;
+
+/// Restores the terminal to its original mode when dropped.
+///
+/// `pi` sets the shared TTY into raw mode directly (ADR-011) and is not
+/// guaranteed to restore it before exiting — whether it exits normally, is
+/// killed by a signal during `bob serve`'s shutdown, or is torn down because
+/// bob.service became unreachable mid-session (issue #112). `bob chat` is the
+/// terminal's original owner (it never puts the terminal in raw mode itself),
+/// so it restores the terminal on the way out rather than depending on `pi`'s
+/// own cleanup running. Capturing/restoring is a safe no-op when stdin is not
+/// a TTY (e.g. under test or when piped).
+struct TerminalModeGuard {
+    original: Option<Termios>,
+}
+
+impl TerminalModeGuard {
+    fn capture() -> Self {
+        Self {
+            original: termios::tcgetattr(io::stdin()).ok(),
+        }
+    }
+}
+
+impl Drop for TerminalModeGuard {
+    fn drop(&mut self) {
+        if let Some(original) = &self.original {
+            let _ = termios::tcsetattr(io::stdin(), SetArg::TCSANOW, original);
+        }
+    }
+}
 
 pub(super) fn run(_json_output: bool, _session: Option<&str>) -> ServiceResult<()> {
     let cfg = load_config()?;
@@ -43,6 +74,12 @@ pub(super) fn run(_json_output: bool, _session: Option<&str>) -> ServiceResult<(
 ///
 /// Returns a clear error when the socket is not reachable (AC-2).
 async fn run_interactive_session(cfg: &BobConfig) -> ServiceResult<()> {
+    // Captured first (issue #112): dropped last, restoring the terminal on
+    // every exit path from this function — success, an early error before
+    // the fds are ever handed off, or the session-exited/service-down paths
+    // below.
+    let _terminal_guard = TerminalModeGuard::capture();
+
     // CR-005 / B-021: capture the directory bob chat was invoked from so it
     // can be sent as params.cwd below. The interactive pi session must run
     // here, not wherever the long-running bob serve process itself happens
