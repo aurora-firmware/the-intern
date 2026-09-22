@@ -19,8 +19,12 @@
  *   OutboundFrame::AuthzVerdict:
  *     {"kind":"authz_verdict","session":"<BOB_SESSION_ID>","verdict":{"allow":true|false,"reason":"..."|null}}\n
  *
- * Failure behaviour (one warning, then silent no-op for the session):
- *   - Missing BOB_SESSION_ID or BOB_EXTENSION_SOCK_PATH at load time.
+ * Failure behaviour (one warning, then a graceful pi shutdown via
+ * ctx.shutdown() — bob.service being unreachable means every future tool
+ * call would only fail closed anyway, so the session ends instead of running
+ * on in a degraded state as an orphan; see issue #112):
+ *   - Missing BOB_SESSION_ID or BOB_EXTENSION_SOCK_PATH at load time (no
+ *     ctx.shutdown() here — no transport was ever attempted).
  *   - UDS connect failure on first event.
  *   - Genuine write failure mid-session: a socket 'error' event (e.g.
  *     EPIPE/ECONNRESET), or socket.write() returning false while the socket
@@ -284,6 +288,13 @@ export default function bobFactory(pi: ExtensionAPI): void {
     // emit a second warning in handleToolCall (this warning is the canonical one).
     resolvePendingVerdicts({ kind: "transport_error_logged" });
     warn(`transport error — event forwarding disabled for this session: ${reason}`, ctx);
+    // bob.service is unreachable for the rest of this session — every future
+    // tool call would only fail closed from here on, so end the session
+    // instead of leaving pi running as an orphan holding the user's terminal
+    // (issue #112). ctx.shutdown() is documented as available in all
+    // contexts; optional-chained the same way ctx?.ui already is above, so
+    // call sites that never pass a full context remain safe no-ops.
+    ctx?.shutdown?.();
   }
 
   function flushPending(ctx?: ExtensionContext): void {

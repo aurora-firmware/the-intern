@@ -62,18 +62,25 @@ function makeStubPi(): StubPi {
 }
 
 /**
- * Build a minimal ExtensionContext stub with a spy on ui.notify.
- * The returned object satisfies the shape bob.ts needs: ctx?.ui is truthy and
- * ctx.ui.notify is a callable function.
+ * Build a minimal ExtensionContext stub with a spy on ui.notify and a spy on
+ * shutdown. The returned object satisfies the shape bob.ts needs: ctx?.ui is
+ * truthy and ctx.ui.notify is a callable function, and ctx.shutdown is a
+ * callable function (issue #112: markDead() must call it).
  */
-function makeCtxWithUi(): { ctx: ExtensionContext; notifySpy: ReturnType<typeof vi.fn> } {
+function makeCtxWithUi(): {
+  ctx: ExtensionContext;
+  notifySpy: ReturnType<typeof vi.fn>;
+  shutdownSpy: ReturnType<typeof vi.fn>;
+} {
   const notifySpy = vi.fn();
+  const shutdownSpy = vi.fn();
   const ctx = {
     ui: {
       notify: notifySpy,
     },
+    shutdown: shutdownSpy,
   } as unknown as ExtensionContext;
-  return { ctx, notifySpy };
+  return { ctx, notifySpy, shutdownSpy };
 }
 
 // ---------------------------------------------------------------------------
@@ -826,7 +833,7 @@ describe("T-044 AC-1: ctx.ui.notify branch — connect failure with ctx.ui prese
     process.env.BOB_EXTENSION_SOCK_PATH = path.join(tmpDir, "nonexistent.sock");
 
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const { ctx, notifySpy } = makeCtxWithUi();
+    const { ctx, notifySpy, shutdownSpy } = makeCtxWithUi();
     const pi = makeStubPi();
 
     bobFactory(pi as any);
@@ -844,6 +851,10 @@ describe("T-044 AC-1: ctx.ui.notify branch — connect failure with ctx.ui prese
 
     // Zero writes to process.stderr because ui.notify was used instead.
     expect(stderrSpy).toHaveBeenCalledTimes(0);
+
+    // Issue #112: bob.service is unreachable, so markDead() must request a
+    // graceful pi shutdown instead of leaving the session running as an orphan.
+    expect(shutdownSpy).toHaveBeenCalledTimes(1);
 
     stderrSpy.mockRestore();
   });
@@ -870,7 +881,7 @@ describe("T-044 AC-1: ctx.ui.notify branch — genuine transport failure with ct
     await new Promise((r) => setTimeout(r, 50));
 
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const { ctx, notifySpy } = makeCtxWithUi();
+    const { ctx, notifySpy, shutdownSpy } = makeCtxWithUi();
 
     // Second event — the write fails with a genuine socket error; markDead
     // fires with the provided ctx.
@@ -883,6 +894,10 @@ describe("T-044 AC-1: ctx.ui.notify branch — genuine transport failure with ct
 
     // Zero writes to process.stderr because ui.notify was used instead.
     expect(stderrSpy).toHaveBeenCalledTimes(0);
+
+    // Issue #112: bob.service is unreachable, so markDead() must request a
+    // graceful pi shutdown instead of leaving the session running as an orphan.
+    expect(shutdownSpy).toHaveBeenCalledTimes(1);
 
     stderrSpy.mockRestore();
   });
@@ -897,7 +912,7 @@ describe("T-044 AC-1: ctx.ui.notify branch — pendingFrames cap breach with ctx
     const pi = makeStubPi();
 
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const { ctx, notifySpy } = makeCtxWithUi();
+    const { ctx, notifySpy, shutdownSpy } = makeCtxWithUi();
 
     bobFactory(pi as any);
 
@@ -917,6 +932,10 @@ describe("T-044 AC-1: ctx.ui.notify branch — pendingFrames cap breach with ctx
 
     // Zero writes to process.stderr because ui.notify was used instead.
     expect(stderrSpy).toHaveBeenCalledTimes(0);
+
+    // Issue #112: bob.service is unreachable, so markDead() must request a
+    // graceful pi shutdown instead of leaving the session running as an orphan.
+    expect(shutdownSpy).toHaveBeenCalledTimes(1);
 
     stderrSpy.mockRestore();
     await server.close();
