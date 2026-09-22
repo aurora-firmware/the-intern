@@ -19,12 +19,14 @@
  *   OutboundFrame::AuthzVerdict:
  *     {"kind":"authz_verdict","session":"<BOB_SESSION_ID>","verdict":{"allow":true|false,"reason":"..."|null}}\n
  *
- * Failure behaviour (one warning, then a graceful pi shutdown via
- * ctx.shutdown() — bob.service being unreachable means every future tool
- * call would only fail closed anyway, so the session ends instead of running
- * on in a degraded state as an orphan; see issue #112):
- *   - Missing BOB_SESSION_ID or BOB_EXTENSION_SOCK_PATH at load time (no
- *     ctx.shutdown() here — no transport was ever attempted).
+ * Failure behaviour (one clear "error" notification naming bob.service and
+ * pointing at /resume, then a graceful pi shutdown via ctx.shutdown() —
+ * bob.service being unreachable means every future tool call would only
+ * fail closed anyway, so the session ends instead of running on in a
+ * degraded state as an orphan; see issue #112):
+ *   - Missing BOB_SESSION_ID or BOB_EXTENSION_SOCK_PATH at load time (an
+ *     ordinary "warning" via warn(), and no ctx.shutdown() — no transport
+ *     was ever attempted).
  *   - UDS connect failure on first event.
  *   - Genuine write failure mid-session: a socket 'error' event (e.g.
  *     EPIPE/ECONNRESET), or socket.write() returning false while the socket
@@ -285,15 +287,28 @@ export default function bobFactory(pi: ExtensionAPI): void {
     socket?.destroy();
     socket = null;
     // Any in-flight tool_call authz must fail closed immediately and must not
-    // emit a second warning in handleToolCall (this warning is the canonical one).
+    // emit a second notification in handleToolCall (the shutdown notice
+    // below is the canonical one).
     resolvePendingVerdicts({ kind: "transport_error_logged" });
-    warn(`transport error — event forwarding disabled for this session: ${reason}`, ctx);
     // bob.service is unreachable for the rest of this session — every future
     // tool call would only fail closed from here on, so end the session
     // instead of leaving pi running as an orphan holding the user's terminal
-    // (issue #112). ctx.shutdown() is documented as available in all
-    // contexts; optional-chained the same way ctx?.ui already is above, so
-    // call sites that never pass a full context remain safe no-ops.
+    // (issue #112). pi auto-saves this conversation to disk as it goes
+    // (see pi's own session docs), so /resume from a fresh `bob chat` once
+    // the service is back restores it — tell the user that plainly, at
+    // "error" severity (not the generic "warning" used elsewhere in this
+    // file), before calling ctx.shutdown(). ctx.shutdown() is documented as
+    // available in all contexts; both calls below are optional-chained the
+    // same way ctx?.ui already is, so call sites that never pass a full
+    // context remain safe no-ops.
+    const shutdownMessage =
+      `bob service is no longer available — closing this session (${reason}). ` +
+      "Once bob.service is back up, run bob chat again and use /resume to continue this conversation.";
+    if (ctx?.ui) {
+      ctx.ui.notify(shutdownMessage, "error");
+    } else {
+      process.stderr.write(`[bob] error: ${shutdownMessage}\n`);
+    }
     ctx?.shutdown?.();
   }
 

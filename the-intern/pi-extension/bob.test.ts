@@ -393,9 +393,12 @@ describe("B-003-A: pendingFrames cap (pre-connect)", () => {
     // Wait for the connection and flush to settle.
     await new Promise((r) => setTimeout(r, 200));
 
-    // Exactly one warn for the cap breach.
+    // Exactly one shutdown notice for the cap breach (issue #112: markDead()
+    // now reports at "error" severity and asks pi to shut down, rather than
+    // the generic "[bob] warn:" line).
     expect(stderrSpy).toHaveBeenCalledTimes(1);
-    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/error/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     // Transport is dead — subsequent events must be silent no-ops.
     const warnCountBefore = stderrSpy.mock.calls.length;
@@ -757,7 +760,7 @@ describe("B-019: authz frame survives a post-connect event backlog that exceeds 
 // ---------------------------------------------------------------------------
 
 describe("AC-4: transport failure handling", () => {
-  it("logs one warning when UDS is not listening and treats subsequent events as no-ops", async () => {
+  it("logs one shutdown notice when UDS is not listening and treats subsequent events as no-ops", async () => {
     process.env.BOB_SESSION_ID = SESSION_ID;
     // Point at a socket path that has no server listening.
     process.env.BOB_EXTENSION_SOCK_PATH = path.join(tmpDir, "nonexistent.sock");
@@ -773,9 +776,13 @@ describe("AC-4: transport failure handling", () => {
     // Allow the async connect error to propagate.
     await new Promise((r) => setTimeout(r, 100));
 
-    // Exactly one warning should have been logged.
+    // Exactly one shutdown notice should have been logged (issue #112:
+    // markDead() reports at "error" severity and names bob.service/`/resume`,
+    // not the generic "[bob] warn:" line).
     expect(stderrSpy).toHaveBeenCalledTimes(1);
-    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/error/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/bob service is no longer available/);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     // Fire a second event — should be a silent no-op (no additional warnings).
     await pi.emit("agent_start", { type: "agent_start" });
@@ -785,7 +792,7 @@ describe("AC-4: transport failure handling", () => {
     stderrSpy.mockRestore();
   });
 
-  it("logs one warning on write failure and treats subsequent events as no-ops", async () => {
+  it("logs one shutdown notice on write failure and treats subsequent events as no-ops", async () => {
     process.env.BOB_SESSION_ID = SESSION_ID;
     process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
 
@@ -810,7 +817,8 @@ describe("AC-4: transport failure handling", () => {
     await new Promise((r) => setTimeout(r, 100));
 
     expect(stderrSpy).toHaveBeenCalledTimes(1);
-    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/error/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     // Third event — should be a silent no-op.
     await pi.emit("agent_end", { type: "agent_end", messages: [] });
@@ -839,15 +847,18 @@ describe("T-044 AC-1: ctx.ui.notify branch — connect failure with ctx.ui prese
     bobFactory(pi as any);
 
     // Fire an event with a ctx that has ctx.ui; this ctx propagates through
-    // handleEvent → ensureConnected → markDead → warn.
+    // handleEvent → ensureConnected → markDead.
     await pi.emitWithCtx("session_start", { type: "session_start", reason: "startup" }, ctx);
 
     // Allow the async connect error to propagate.
     await new Promise((r) => setTimeout(r, 100));
 
-    // Exactly one ctx.ui.notify call carrying the warning.
+    // Exactly one ctx.ui.notify call, at "error" severity, naming bob.service
+    // and pointing at /resume (issue #112).
     expect(notifySpy).toHaveBeenCalledTimes(1);
-    expect(notifySpy.mock.calls[0]![1]).toBe("warning");
+    expect(notifySpy.mock.calls[0]![1]).toBe("error");
+    expect(notifySpy.mock.calls[0]![0]).toMatch(/bob service is no longer available/);
+    expect(notifySpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     // Zero writes to process.stderr because ui.notify was used instead.
     expect(stderrSpy).toHaveBeenCalledTimes(0);
@@ -888,9 +899,12 @@ describe("T-044 AC-1: ctx.ui.notify branch — genuine transport failure with ct
     await pi.emitWithCtx("agent_start", { type: "agent_start" }, ctx);
     await new Promise((r) => setTimeout(r, 100));
 
-    // Exactly one ctx.ui.notify call carrying the warning.
+    // Exactly one ctx.ui.notify call, at "error" severity, naming bob.service
+    // and pointing at /resume (issue #112).
     expect(notifySpy).toHaveBeenCalledTimes(1);
-    expect(notifySpy.mock.calls[0]![1]).toBe("warning");
+    expect(notifySpy.mock.calls[0]![1]).toBe("error");
+    expect(notifySpy.mock.calls[0]![0]).toMatch(/bob service is no longer available/);
+    expect(notifySpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     // Zero writes to process.stderr because ui.notify was used instead.
     expect(stderrSpy).toHaveBeenCalledTimes(0);
@@ -926,9 +940,12 @@ describe("T-044 AC-1: ctx.ui.notify branch — pendingFrames cap breach with ctx
     // Allow async connect and flush to settle.
     await new Promise((r) => setTimeout(r, 200));
 
-    // Exactly one ctx.ui.notify call for the cap breach.
+    // Exactly one ctx.ui.notify call for the cap breach, at "error" severity,
+    // naming bob.service and pointing at /resume (issue #112).
     expect(notifySpy).toHaveBeenCalledTimes(1);
-    expect(notifySpy.mock.calls[0]![1]).toBe("warning");
+    expect(notifySpy.mock.calls[0]![1]).toBe("error");
+    expect(notifySpy.mock.calls[0]![0]).toMatch(/bob service is no longer available/);
+    expect(notifySpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     // Zero writes to process.stderr because ui.notify was used instead.
     expect(stderrSpy).toHaveBeenCalledTimes(0);
@@ -964,7 +981,8 @@ describe("T-044 AC-2: ctx.ui absent — connect failure falls back to stderr", (
     await new Promise((r) => setTimeout(r, 100));
 
     expect(stderrSpy).toHaveBeenCalledTimes(1);
-    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/error/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     stderrSpy.mockRestore();
   });
@@ -996,7 +1014,8 @@ describe("T-044 AC-2: ctx.ui absent — genuine transport failure falls back to 
     await new Promise((r) => setTimeout(r, 100));
 
     expect(stderrSpy).toHaveBeenCalledTimes(1);
-    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/error/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     stderrSpy.mockRestore();
   });
@@ -1509,7 +1528,8 @@ describe("T-057 AC-3e: connect-time failure without verdict", () => {
 
     expect((result as any)?.block).toBe(true);
     expect(stderrSpy).toHaveBeenCalledTimes(1);
-    expect(stderrSpy.mock.calls[0]![0]).toMatch(/warn/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/error/i);
+    expect(stderrSpy.mock.calls[0]![0]).toMatch(/\/resume/);
 
     stderrSpy.mockRestore();
     delete process.env.BOB_AUTHZ_TIMEOUT_MS;
