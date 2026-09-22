@@ -28,10 +28,14 @@
  *     ordinary "warning" via warn(), and no ctx.shutdown() — no transport
  *     was ever attempted).
  *   - UDS connect failure on first event.
+ *   - The connected socket's 'close' event, detected directly — this is the
+ *     primary signal for an otherwise-idle session: bob.service dying while
+ *     no new pi event is firing must not sit undetected until some future
+ *     event happens to attempt a write (issue #112).
  *   - Genuine write failure mid-session: a socket 'error' event (e.g.
  *     EPIPE/ECONNRESET), or socket.write() returning false while the socket
- *     is already destroyed/not writable (a clean peer-initiated close can
- *     reach this point without ever raising 'error').
+ *     is already destroyed/not writable (belt-and-suspenders alongside the
+ *     'close' handler above, for any write that races ahead of it).
  *   - The pendingFrames cap being exceeded while still connecting (the peer
  *     is too slow or unreachable before a socket has ever been established).
  *   - socket.write() returning false while the socket is still healthy is
@@ -247,7 +251,7 @@ export default function bobFactory(pi: ExtensionAPI): void {
     }
   }
 
-  function attachVerdictReader(sock: net.Socket): void {
+  function attachVerdictReader(sock: net.Socket, ctx?: ExtensionContext): void {
     sock.setEncoding("utf8");
     sock.on("data", (chunk: string) => {
       inboundBuffer += chunk;
@@ -260,11 +264,22 @@ export default function bobFactory(pi: ExtensionAPI): void {
     });
 
     sock.on("close", () => {
-      // Fail-close all pending verdict waiters with "error".
-      for (const resolve of pendingVerdicts) {
-        resolve({ kind: "error" });
-      }
-      pendingVerdicts.length = 0;
+      // A closed transport unambiguously means bob.service is gone for the
+      // rest of this session — detect it here directly instead of waiting
+      // for some future event's write attempt to discover it lazily. An idle
+      // session (no new pi events firing) must not sit orphaned indefinitely
+      // just because nothing has tried to write since the close (issue #112).
+      //
+      // markDead() itself fails closed any pending verdict waiters (with
+      // "transport_error_logged", which handleToolCall maps straight to a
+      // block without a second warning). Resolving them here too, inline,
+      // would race ahead of markDead()'s own resolution with a differently
+      // shaped "error" outcome and produce a redundant second warning — so
+      // this handler defers entirely to markDead() rather than duplicating
+      // that responsibility. When transportDead is already true, markDead()
+      // already ran via another path and already resolved everything; the
+      // guard makes this a no-op rather than a second notification.
+      if (!transportDead) markDead("extension socket closed by peer", ctx);
     });
   }
 
@@ -411,7 +426,7 @@ export default function bobFactory(pi: ExtensionAPI): void {
       // Connected — set up the inbound reader before flushing outbound frames.
       connecting = false;
       socket = sock;
-      attachVerdictReader(sock);
+      attachVerdictReader(sock, ctx);
       // Re-flush once the kernel send buffer clears after back-pressure.
       // Reuses the ctx captured from the event that triggered this connect,
       // matching how the 'error' handler below reports failures.
