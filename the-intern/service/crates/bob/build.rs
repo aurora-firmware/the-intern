@@ -3,12 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    let version = std::env::var("GITHUB_REF_NAME")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| {
-            std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "unknown".to_string())
-        });
+    let version = resolve_app_version();
     println!("cargo:rustc-env=APP_VERSION={version}");
     println!("cargo:rerun-if-env-changed=GITHUB_REF_NAME");
 
@@ -51,6 +46,56 @@ fn main() {
             output_path.display()
         )
     });
+}
+
+/// Resolves the version string embedded in the binary as `APP_VERSION`.
+///
+/// Order of precedence:
+/// 1. `GITHUB_REF_NAME` — set only inside a GitHub Actions run triggered by
+///    a tag push (`.github/workflows/deploy.yml`), giving CI-built release
+///    binaries the exact tag name.
+/// 2. `git describe --tags --always --dirty` from the crate's own checkout —
+///    covers every local build, reporting the exact tag name when built from
+///    a clean tag checkout, or `<tag>-<n>-g<sha>` when built from a commit
+///    ahead of its last reachable tag.
+/// 3. `CARGO_PKG_VERSION` — the crate manifest's own `version` field, used
+///    only when git itself is unavailable or the source has no `.git`
+///    history (e.g. a source tarball with no commit history to describe).
+fn resolve_app_version() -> String {
+    if let Ok(tag) = std::env::var("GITHUB_REF_NAME") {
+        if !tag.is_empty() {
+            return tag;
+        }
+    }
+
+    git_describe().unwrap_or_else(|| {
+        std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "unknown".to_string())
+    })
+}
+
+/// Runs `git describe` from the crate's manifest directory. Git walks
+/// upward from there to find the enclosing repository on its own, so this
+/// works regardless of how deeply the crate is nested inside it.
+fn git_describe() -> Option<String> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+    let output = std::process::Command::new("git")
+        .args(["describe", "--tags", "--always", "--dirty"])
+        .current_dir(manifest_dir)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let description = String::from_utf8(output.stdout).ok()?;
+    let trimmed = description.trim();
+
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn track_and_collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
