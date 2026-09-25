@@ -32,13 +32,16 @@ pub enum Command {
             conflicts_with = "skills_only"
         )]
         path: Option<String>,
-        /// Overwrite existing generated files: the live config (reverting
-        /// any narrowed policy ruleset back to this allow-everything
-        /// bootstrap default), `AGENTS.md`, `CLAUDE.md`, and the
-        /// skill-local `config/email-triage.toml` are all replaced
-        /// wholesale. The `tasks/` board and the `worklog/` directory are
-        /// left untouched. Without `--force`, `init` refuses to run when
-        /// a live config already exists.
+        /// Without `--skills-only`: overwrite existing generated files —
+        /// the live config (reverting any narrowed policy ruleset back to
+        /// this allow-everything bootstrap default), `AGENTS.md`,
+        /// `CLAUDE.md`, and the skill-local `config/email-triage.toml`
+        /// are all replaced wholesale, and `init` no longer refuses to
+        /// run when a live config already exists. The `tasks/` board and
+        /// the `worklog/` directory are left untouched either way. With
+        /// `--skills-only`, none of the above applies — see
+        /// `--skills-only`'s own description for what `--force` does
+        /// there instead.
         #[arg(long)]
         force: bool,
         /// Install or refresh the shared skill package at `skill_install_path`
