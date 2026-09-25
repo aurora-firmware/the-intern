@@ -60,9 +60,9 @@ same way — see "If an action is blocked" below.
 
 ## Message content requirement
 
-Every task this package files — the `todo` task for an escalation awaiting
-a reply and the `blocked` task for a refused action, both filed from
-`SKILL.md` step 3 — and the escalation email's own "What the message is"
+Every task this package files — whether for an escalation awaiting a
+reply or for a refused action, both filed from `SKILL.md` step 3 with
+status `blocked` — and the escalation email's own "What the message is"
 above must carry the same message content, defined once here and
 referenced by name rather than restated at each call site:
 
@@ -91,7 +91,7 @@ text safely" heredoc pattern (`references/command-reference.md`) — and
 reference the variable only in `"$VAR"` form, the same discipline
 `SKILL.md` step 3 already applies to the escalation email's own
 `himalaya template write` call. This applies equally to a `bob task new`
-call filing a `todo` or `blocked` task with this bar's content, and to the
+call filing a `blocked` task with this bar's content, and to the
 `bob worklog append --item <item-identifier>` call whose identifier is
 built from the same subject, sender, and `Message-ID` discriminator (see
 `references/worklog.md`'s "Item identifier" section).
@@ -165,8 +165,10 @@ response back to — so the escalation email is sent and the run continues
 (or ends) without waiting for anything synchronous.
 
 When the send succeeds, file a `bob task` for the awaited reply — status
-`todo`, naming the message and the question the escalation asked — so a
-later run can tell this item is still outstanding. A later run discovers it
+`blocked`, naming the message, the question the escalation asked, and
+that it is waiting on the manager's own reply to unblock it — so a later
+run can tell this item is still outstanding and board work-selection does
+not treat it as ready, unclaimed work. A later run discovers it
 the same way it discovers any other unfinished item: by listing this job's
 own task board (`bob task list`) at the start of its loop, not by reading a
 previous day's worklog.
