@@ -347,8 +347,22 @@ Verified `template write` options: `-H, --header <KEY:VAL>` (repeatable,
 `KEY:VAL` pattern); `-a, --account <NAME>`.
 
 `himalaya template send [OPTIONS] [TEMPLATE]...` compiles the given raw
-template (headers + MML body) into a MIME message, sends it, and saves a
-copy to the sent folder. Verified options: `-a, --account <NAME>`.
+template (headers + MML body) into a MIME message and sends it. Verified
+options: `-a, --account <NAME>`.
+
+**Sent-copy pitfall (Observed).** A `Message successfully sent!` result is
+not evidence that a copy was saved to a Sent mailbox — whether one is
+saved depends entirely on the account's own `message.send.save-copy`
+Himalaya configuration setting. At least one deployed account is confirmed
+to run with `save-copy = false`, so nothing appears in `INBOX.Sent` or any
+other Sent mailbox for that account even though the send succeeded. A
+no-duplicate-send check that searches Sent mailboxes for a prior
+escalation is only reliable once `save-copy` is confirmed enabled for the
+account in use — check the account's Himalaya config, or send a test
+message and immediately search for it, before relying on a Sent-mailbox
+search. When `save-copy` is disabled or unconfirmed, treat the send
+command's own success output, or another locally recorded record of
+having sent it (e.g. a worklog entry), as the retained evidence instead.
 
 **Positional-argument pitfall (Observed).** Despite `--help`
 advertising `[TEMPLATE]...` as a positional argument, `template send`
