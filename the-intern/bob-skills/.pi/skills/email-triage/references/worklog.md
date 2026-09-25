@@ -52,9 +52,9 @@ The worklog cannot fill that role either: `bob worklog` records only what a
 run explicitly appended on the day it ran, and never carries anything into
 another day's file. Because of this, an escalated or blocked message is
 tracked as an open item exclusively through a `bob task` filed for it —
-status `blocked`, whether the cause is an action the action-authorization
-gate refused or an escalation still awaiting a manager's reply (see
-`SKILL.md` step 3). Never infer that a message still needs attention from its
+status `blocked` for an action the action-authorization gate refused,
+`todo` for an escalation still awaiting a manager's reply (see `SKILL.md`
+step 3). Never infer that a message still needs attention from its
 `Seen`/unseen state, and never rely on toggling `Seen` back off as a way to
 mark something open; the filed task is the sole record of what is still
 outstanding, and the worklog is the record of what each run did about it.
@@ -71,18 +71,17 @@ Neither the `worklog` skill nor `bob worklog` owns any closing condition of
 its own, and `bob task` does not decide on a run's behalf when an item it
 holds is resolved — a consuming skill supplies that domain judgment and
 moves the task itself. For email triage, an open item has exactly two
-causes — both filed with status `blocked`, per "Open items live on the
-task board" above — and each closes differently:
+causes, and each closes differently:
 
-- **Escalation awaiting a reply.** Closes when the manager's reply
-  arrives — see `references/escalation.md`'s "No synchronous reply is
-  expected" section. It arrives as ordinary unseen mail and re-enters
-  triage like any other message on some later run (`SKILL.md` step 2);
-  handling it (`SKILL.md` step 3) is what resolves the item.
-- **Blocked by the action-authorization gate.** Closes once an admitting
-  allow rule is added to bob's action ruleset and the retried action
-  succeeds. `SKILL.md` step 1 is the point at which a still-blocked action
-  is retried on every run.
+- **Escalation (`todo`).** Closes when the manager's reply arrives — see
+  `references/escalation.md`'s "No synchronous reply is expected" section.
+  It arrives as ordinary unseen mail and re-enters triage like any other
+  message on some later run (`SKILL.md` step 2); handling it (`SKILL.md`
+  step 3) is what resolves the item.
+- **Blocked by the action-authorization gate (`blocked`).** Closes once an
+  admitting allow rule is added to bob's action ruleset and the retried
+  action succeeds. `SKILL.md` step 1 is the point at which a still-blocked
+  action is retried on every run.
 
 Either way, the run that resolves the item moves its task to `done` via
 `bob task status` and names that task's identifier in the worklog entry it

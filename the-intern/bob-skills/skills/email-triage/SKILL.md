@@ -3,16 +3,16 @@ name: email-triage
 description: >
   Runs the scheduled email-triage workflow: on a "Check email" (or an
   equivalent scheduled triage) prompt fired from this package's own working
-  directory, retry this job's own still-open `blocked` tasks, detect unseen
-  mail, and, for each unseen message, either act on it or escalate it to the
-  configured manager address — filing a `bob task` for anything the run
-  cannot finish this pass and recording a worklog entry for every message
-  handled. This is the triage-policy skill: it delegates diary mechanics to
-  the `bob worklog` command and task-board mechanics to the `bob task`
-  command (see the `worklog`/`tasks` skills for when to call them, and
-  `himalaya` for mail commands) — see this skill's own body and
-  `references/` files for the triage-specific rules rather than restating
-  them here.
+  directory, retry this job's own still-open `blocked`/`todo` tasks,
+  detect unseen mail, and, for each unseen message, either act on it or
+  escalate it to the configured manager address — filing a `bob task` for
+  anything the run cannot finish this pass and recording a worklog entry
+  for every message handled. This is the triage-policy skill: it delegates
+  diary mechanics to the `bob worklog` command and task-board mechanics to
+  the `bob task` command (see the `worklog`/`tasks` skills for when to
+  call them, and `himalaya` for mail commands) — see this skill's own body
+  and `references/` files for the triage-specific rules rather than
+  restating them here.
 ---
 
 # Email Triage
@@ -20,8 +20,8 @@ description: >
 This is the triage-policy skill: it decides what to do with a mailbox — not
 how to drive `himalaya`, not how to keep a diary, and not how the task
 board itself works. Every run of this loop follows the same four steps —
-list this job's own task board and retry every task still `blocked`,
-detect unseen mail, act on or escalate each unseen message (filing
+list this job's own task board and retry every task still `blocked` or
+`todo`, detect unseen mail, act on or escalate each unseen message (filing
 a task for anything this run cannot finish), and record a worklog entry
 for it, naming any task filed or closed — and delegates the CLI mechanics
 to the `himalaya` skill, the diary mechanics to the `bob worklog` command
@@ -94,11 +94,10 @@ working directory on every `bob task` call this skill makes, not only this
 one. The `tasks` skill covers the command's own mechanics — how a task is
 filed, listed, moved, and read back; do not re-derive or restate them here.
 
-For this skill, every task still `blocked` on that board is something an
-earlier run could not finish: a pending manager escalation awaiting a
-reply, or an action the action-authorization gate refused — both status
-`blocked`, but awaiting different things (a manager's reply for the
-former, an admitting allow rule for the latter). Retry each of them
+For this skill, every task still `blocked` or `todo` on that board is
+something an earlier run could not finish: a pending manager escalation
+(`todo`, awaiting a reply) or an action the action-authorization gate
+refused (`blocked`, awaiting an admitting allow rule). Retry each of them
 this run, before or alongside the new unseen mail below — no other point
 in this loop revisits an unfinished item, so leaving one open on the board
 without retrying it here would keep it stuck indefinitely:
@@ -115,8 +114,8 @@ without retrying it here would keep it stuck indefinitely:
     on the task itself (per the `tasks` skill's "Record progress without
     changing status") rather than in the worklog, so the board keeps
     showing what has already been tried.
-- For a `blocked` task naming an escalation still awaiting a manager's
-  reply, there is nothing to actively resend this step: the reply, once it
+- For a `todo` task naming an escalation still awaiting a manager's reply,
+  there is nothing to actively resend this step: the reply, once it
   arrives, surfaces as ordinary unseen mail in step 2 below and is
   classified and handled like any other message. Closing that reply
   message's outcome — moving the task to `done` and naming it in that
@@ -173,7 +172,7 @@ For every envelope the previous step returned, in turn:
    one category's signals): escalate per `references/escalation.md` — send
    exactly one escalation email to the configured manager address and take
    no further action on this message this run. When the send succeeds,
-   file a `bob task` for it — status `blocked`, including this message's
+   file a `bob task` for it — status `todo`, including this message's
    content per `references/escalation.md`'s "Message content requirement"
    (do not restate that content here) and the question the escalation
    asked — so a later run can tell this item is still awaiting the
@@ -207,11 +206,9 @@ For every envelope the previous step returned, in turn:
    draft workflow.
    If that explicit send command is denied by the action-authorization
    gate, treat this message's outcome as **blocked**, not **escalated**:
-   no escalation email was sent, so file a `bob task` for it — status
-   `blocked`, distinct from the escalation-awaiting-reply task above (this
-   one is awaiting an admitting allow rule for the escalation send itself,
-   not a manager's reply), including this message's content per
-   `references/escalation.md`'s "Message content requirement" (do not
+   no escalation email was sent, so file a `bob task` for it instead of the
+   `todo` task above — status `blocked`, including this message's content
+   per `references/escalation.md`'s "Message content requirement" (do not
    restate that content here) and the refused send — and name that task in
    this message's worklog entry in step 4 below, with `Done` describing
    the blocked escalation attempt; the retry happens the next time step 1
@@ -244,10 +241,9 @@ one, and must name the identifier of any `bob task` this message's
 handling filed or closed, so the diary and the board stay
 cross-referenced:
 
-- Filed a `blocked` task this step (a blocked action, a blocked escalation
-  send, or a successfully sent escalation awaiting reply)? Name that
-  task's identifier in `Done`, describing the condition the task now
-  tracks.
+- Filed a `blocked` or `todo` task this step (a blocked action, a blocked
+  escalation send, or a successfully sent escalation)? Name that task's
+  identifier in `Done`, describing the condition the task now tracks.
 - Closed a task this step (this message was the manager's reply an earlier
   task was awaiting)? Name that task's identifier in `Done`, alongside
   moving it to `done` via `bob task status`.
