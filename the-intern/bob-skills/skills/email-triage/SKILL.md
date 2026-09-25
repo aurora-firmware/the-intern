@@ -7,11 +7,12 @@ description: >
   mail, and, for each unseen message, either act on it or escalate it to the
   configured manager address — filing a `bob task` for anything the run
   cannot finish this pass and recording a worklog entry for every message
-  handled. This is the triage-policy skill: it delegates the diary
-  mechanics to the `worklog` skill, the task-board mechanics to the `tasks`
-  skill, and the mail commands to `himalaya` — see this skill's own body
-  and `references/` files for the triage-specific rules rather than
-  restating them here.
+  handled. This is the triage-policy skill: it delegates diary mechanics to
+  the `bob worklog` command and task-board mechanics to the `bob task`
+  command (see the `worklog`/`tasks` skills for when to call them, and
+  `himalaya` for mail commands) — see this skill's own body and
+  `references/` files for the triage-specific rules rather than restating
+  them here.
 ---
 
 # Email Triage
