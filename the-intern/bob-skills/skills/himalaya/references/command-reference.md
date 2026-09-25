@@ -354,8 +354,11 @@ options: `-a, --account <NAME>`.
 not evidence that a copy was saved to a Sent mailbox — whether one is
 saved depends entirely on the account's own `message.send.save-copy`
 Himalaya configuration setting. At least one deployed account is confirmed
-to run with `save-copy = false`, so nothing appears in `INBOX.Sent` or any
-other Sent mailbox for that account even though the send succeeded. A
+to run with `save-copy = false`, so nothing appears in that account's Sent
+mailbox even though the send succeeded — for the account this was
+Observed against, its Sent mailbox happens to be named `INBOX.Sent`, which
+is that account's own config value, not a general default; another
+account's Sent mailbox may be named or namespaced differently. A
 no-duplicate-send check that searches Sent mailboxes for a prior
 escalation is only reliable once `save-copy` is confirmed enabled for the
 account in use — check the account's Himalaya config, or send a test
