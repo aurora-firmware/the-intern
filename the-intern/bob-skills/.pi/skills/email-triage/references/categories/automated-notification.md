@@ -11,8 +11,22 @@ File the message the same way `references/categories/newsletter-bulk.md` files a
 `himalaya` skill's move operation (Operation Index → "Move a message"). This file does not
 restate that operation's command shape or flags — see the `himalaya` skill for the exact
 syntax. `Notifications` is a starter default, the same kind of adjustable-sketch starting
-point `references/categories/README.md` describes for the taxonomy itself; rename it to
-match the deployed account's own folder layout if needed.
+point `references/categories/README.md` describes for the taxonomy itself.
+
+**Namespaced-account pitfall (Observed).** A bare folder name fails outright on any
+account whose folders live under a namespace prefix (for example `INBOX.`) rather than
+sitting at the top level:
+
+```text
+$ himalaya message move Notifications 211
+unexpected NO response: Client tried to access nonexistent namespace. (Mailbox name should probably be prefixed with: INBOX.)
+```
+
+Resolve the real folder name first — `himalaya folder list` (`himalaya` skill, Moving and
+Copying) — rather than assuming the bare default works. For the account used when this
+pitfall was observed, the real folder turned out to be `INBOX.Notifications`; that is this
+account's own folder layout, not a general default — a different account may need a
+different prefix, or none at all.
 
 Do not compose, generate, or send a reply, and do not forward the message. An automated
 notification states a fact or a status — it does not ask a question this skill answers.
