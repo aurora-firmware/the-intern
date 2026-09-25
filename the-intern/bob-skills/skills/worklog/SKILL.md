@@ -4,22 +4,14 @@ description: >
   Domain-free diary discipline that gives an independent, possibly-scheduled
   run a way to record what it did on a given day, using nothing but files in
   its own working directory — no service-side session, queue, or other
-  external state may be relied on to remember what a previous run did. It
-  says WHEN a run records that continuity: call `bob worklog append` once
-  for each item handled. It also teaches the item-identifier convention
-  those calls use, and how a run reads a day's entries back with
-  `bob worklog list` whenever it explicitly needs to — today's file by
-  default, or an earlier day's file by naming it with `--date`; no other
-  day's file is ever read or written automatically. It does not define the
-  entry format, decide where a day's file is created, or decide whether an
-  incoming entry duplicates one already recorded today — the `bob worklog`
-  command owns all of that. This skill owns no domain policy either: it does
-  not decide what counts as an item, how items are discovered, what action
-  is taken on one, what condition closes one, or whether something is still
-  outstanding across days — a consuming skill supplies all of that and calls
-  into this discipline only to know when to journal. Load this skill
-  whenever a task needs a per-day record of what it did, regardless of what
-  kind of work is being tracked.
+  external state may be relied on to remember what a previous run did. Says
+  WHEN to call `bob worklog append`/`bob worklog list`, and the
+  item-identifier convention those calls use; the entry format, file
+  location, and duplicate-check logic belong to the `bob worklog` command
+  itself, and all domain policy (what counts as an item, when it's
+  resolved) belongs to the consuming skill. Load this skill whenever a task
+  needs a per-day record of what it did, regardless of what kind of work is
+  being tracked.
 ---
 
 # Worklog
