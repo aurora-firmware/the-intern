@@ -6,6 +6,8 @@ pub mod commands;
 #[derive(Debug, Parser)]
 #[command(name = "bob", version = env!("APP_VERSION"), about = "Bob service CLI")]
 pub struct Cli {
+    /// Print machine-readable JSON instead of human-readable text, for
+    /// commands that support it.
     #[arg(long, global = true)]
     pub json: bool,
 
@@ -15,6 +17,12 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Scaffold a new bob workspace, or refresh the shared skill package
+    /// with `--skills-only`.
+    ///
+    /// Creates `AGENTS.md`, `CLAUDE.md`, `config/email-triage.toml`,
+    /// `worklog/`, and `tasks/` in the workspace at `<PATH>`, plus the
+    /// live config and the shared skill package at `skill_install_path`.
     Init {
         /// Workspace directory to scaffold. Required unless `--skills-only`
         /// is given, since a skills-only refresh touches no workspace.
@@ -24,6 +32,13 @@ pub enum Command {
             conflicts_with = "skills_only"
         )]
         path: Option<String>,
+        /// Overwrite existing generated files: the live config (reverting
+        /// any narrowed policy ruleset back to this allow-everything
+        /// bootstrap default), `AGENTS.md`, `CLAUDE.md`, and the
+        /// skill-local `config/email-triage.toml` are all replaced
+        /// wholesale. The `tasks/` board and the `worklog/` directory are
+        /// left untouched. Without `--force`, `init` refuses to run when
+        /// a live config already exists.
         #[arg(long)]
         force: bool,
         /// Install or refresh the shared skill package at `skill_install_path`
