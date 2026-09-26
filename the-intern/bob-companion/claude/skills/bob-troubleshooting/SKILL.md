@@ -62,8 +62,11 @@ bob audit tail --filter events --json
 ```
 Fix: remove any `bob.ts`-pointing entry from `~/.pi/agent/settings.json`'s
 `packages` list, if present. Bob never edits that file itself, so this has
-to be done by hand. If the list is already clean, find and terminate the
-other live connection still holding the session instead.
+to be done by hand. If the list is already clean, first confirm which `pi`
+process is the stale one — bob's own logs only carry an internal
+`connection_id`, not an OS process id, so check for more than one running
+`pi` instance yourself (e.g. `ps aux | grep pi`) and rule out the one you're
+actively using — before terminating the other one.
 
 ## When to stop and escalate instead of continuing to debug
 
