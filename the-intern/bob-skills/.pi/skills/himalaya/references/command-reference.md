@@ -151,6 +151,16 @@ Reading a message (without `--preview`) sets its `Seen` flag as a side
 effect — this is how the mailbox itself, not a separate state file, tracks
 what has already been looked at.
 
+**`Seen` is mailbox-wide, not scoped to why you're reading.** Whenever a
+read's purpose is to inspect a message's content — checking it for evidence,
+deciding whether it answers a question, confirming whether some other piece
+of work can proceed — rather than to process or act on the message itself,
+use `--preview`. Marking a message `Seen` for one caller's purposes removes
+it from *every* other purpose that depends on the mailbox's unseen state,
+including a separate scheduled workflow (such as `email-triage`) that scans
+for unseen mail: a plain `message read` done to check one message can
+silently cause that other workflow to never discover it.
+
 **Attachment `filename=` path pitfall (Observed).** When a message
 has an attachment, `message read` renders its MML part as `<#part
 type=... filename="..."><#/part>`, and that `filename=` value looks like a
