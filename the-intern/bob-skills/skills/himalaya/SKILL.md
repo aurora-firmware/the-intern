@@ -93,7 +93,11 @@ its full detail:
 
 All commands above accept `-o json` (in place of the default `plain`
 table/text output) for machine-parseable results — verified as a global
-`himalaya` option present on every subcommand's own `--help`.
+`himalaya` option present on every subcommand's own `--help`. Like any
+option, `-o json` must precede a free-form query or body, not follow it
+(see the Argument-order pitfall in `references/command-reference.md`) — for
+the unseen-mail row above, that's `himalaya envelope list -o json not flag
+seen`, never `... not flag seen -o json`.
 
 → Full per-operation commands, every verified flag, and CLI pitfalls found
 while checking this against the installed binary: [`references/command-reference.md`](references/command-reference.md)
