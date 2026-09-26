@@ -54,6 +54,7 @@ struct TaskSummary {
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 struct ListedTasksOutput {
+    board_path: String,
     tasks: Vec<TaskSummary>,
 }
 
@@ -284,7 +285,7 @@ fn run_list_with_context(
     let tasks = store.list_tasks()?;
 
     let groups = group_tasks_by_status(&tasks, &filter);
-    write_listed_tasks(out, json_output, &groups)
+    write_listed_tasks(out, json_output, &board_path, &groups)
 }
 
 fn run_status_with_context(
@@ -513,6 +514,7 @@ fn write_shown_task(
 fn write_listed_tasks(
     out: &mut impl Write,
     json_output: bool,
+    board_path: &Path,
     groups: &[(TaskStatus, Vec<&TaskFile>)],
 ) -> ServiceResult<()> {
     if json_output {
@@ -527,11 +529,17 @@ fn write_listed_tasks(
                 })
             })
             .collect();
-        return write_json_line(out, &json!(ListedTasksOutput { tasks }));
+        return write_json_line(
+            out,
+            &json!(ListedTasksOutput {
+                board_path: board_path.display().to_string(),
+                tasks
+            }),
+        );
     }
 
     if groups.is_empty() {
-        return write_output_line(out, "no tasks found");
+        return write_output_line(out, format!("no tasks found in {}", board_path.display()));
     }
 
     for (status, tasks) in groups {
@@ -1142,6 +1150,38 @@ mod tests {
         assert_eq!(tasks[0]["title"], task.title);
         assert_eq!(tasks[0]["status"], "todo");
         assert_eq!(tasks[0]["path"], task.path.display().to_string());
+    }
+
+    #[test]
+    fn task_list_json_output_includes_resolved_board_path_when_empty() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        let mut out = Vec::new();
+
+        run_list_with_context(true, None, &[], &cwd, None, &mut out).expect("list succeeds");
+
+        let output = serde_json::from_slice::<Value>(&out).expect("json");
+        assert_eq!(output["board_path"], board.display().to_string());
+        assert_eq!(output["tasks"].as_array().expect("tasks array").len(), 0);
+    }
+
+    #[test]
+    fn task_list_human_output_names_board_path_when_empty() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        let cwd = temp.path().to_path_buf();
+        fs::create_dir_all(&board).expect("board");
+        let mut out = Vec::new();
+
+        run_list_with_context(false, None, &[], &cwd, None, &mut out).expect("list succeeds");
+
+        let text = String::from_utf8(out).expect("utf8");
+        assert!(
+            text.contains(&board.display().to_string()),
+            "empty-board message should name the resolved board path: {text}"
+        );
     }
 
     #[test]
