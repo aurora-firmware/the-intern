@@ -42,12 +42,18 @@ re-derives the exact same env the server script used, over hand-setting
 
 ## False alarm #2: extension "not working" is actually a duplicate connection
 
-If pi's own `~/.pi/agent/settings.json` `packages` list still references an
-old, manually-installed copy of `bob.ts` *in addition to* the one bob
-resolves and passes via `--extension`, pi loads **two** extension
-instances into one session. The stale one can't parse the current verdict
-frame shape and fails closed — which looks exactly like "the policy engine
-is denying everything" even when the current instance + policy allow it.
+This fires whenever *any* second, still-live connection registers the same
+session id as an existing one — bob's extension-ipc layer does not inspect
+`~/.pi/agent/settings.json` at all when deciding this. The most common way
+to hit it: pi's own `packages` list still references an old,
+manually-installed copy of `bob.ts` *in addition to* the one bob resolves
+and passes via `--extension`, so pi loads **two** extension instances into
+one session. The stale one can't parse the current verdict frame shape and
+fails closed — which looks exactly like "the policy engine is denying
+everything" even when the current instance + policy allow it. If the
+`packages` list is already clean, look instead for another still-live
+connection holding the same session — for example, an earlier `pi` process
+or extension-socket connection that never exited.
 
 Detection: a `WARN` log line plus a `duplicate_extension_connection` audit
 event — check with:
@@ -55,8 +61,9 @@ event — check with:
 bob audit tail --filter events --json
 ```
 Fix: remove any `bob.ts`-pointing entry from `~/.pi/agent/settings.json`'s
-`packages` list. Bob never edits that file itself, so this has to be done
-by hand.
+`packages` list, if present. Bob never edits that file itself, so this has
+to be done by hand. If the list is already clean, find and terminate the
+other live connection still holding the session instead.
 
 ## When to stop and escalate instead of continuing to debug
 
