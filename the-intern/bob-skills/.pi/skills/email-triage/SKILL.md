@@ -3,23 +3,16 @@ name: email-triage
 description: >
   Runs the scheduled email-triage workflow: on a "Check email" (or an
   equivalent scheduled triage) prompt fired from this package's own working
-  directory, retry this job's own still-open tasks, detect unseen mail, and,
-  for each unseen message, either act on it or escalate it to the
-  configured manager address — filing a `bob task` for anything the run
-  cannot finish this pass and recording a worklog entry for every message
-  handled. This is the triage-policy skill: it carries the confidence-gated
-  act-or-escalate decision and the retry, on every run, of every task still
-  `blocked` or `todo` on this job's own task board. It delegates the diary
-  mechanics — where the worklog lives, how today's file is created, and its
-  entry format — to the `bob worklog` command, and the task-board
-  mechanics — where the board lives, how a task is filed, moved, and read
-  back — to the `bob task` command: load the `worklog` skill for when a run
-  journals and the item-identifier convention, load the `tasks` skill for
-  when work belongs on the board and what each status commits to, load
-  `himalaya` for the mail commands, and see `references/worklog.md` (this
-  skill's own email-specific diary notes) and `references/escalation.md`
-  for the triage-specific rules this loop follows rather than restating
-  them here.
+  directory, retry this job's own still-open `blocked`/`todo` tasks,
+  detect unseen mail, and, for each unseen message, either act on it or
+  escalate it to the configured manager address — filing a `bob task` for
+  anything the run cannot finish this pass and recording a worklog entry
+  for every message handled. This is the triage-policy skill: it delegates
+  diary mechanics to the `bob worklog` command and task-board mechanics to
+  the `bob task` command (see the `worklog`/`tasks` skills for when to
+  call them, and `himalaya` for mail commands) — see this skill's own body
+  and `references/` files for the triage-specific rules rather than
+  restating them here.
 allowed-tools: Read Bash
 ---
 

@@ -156,6 +156,9 @@ impl TaskStore {
             if path.extension().and_then(|value| value.to_str()) != Some("md") {
                 continue;
             }
+            if !has_task_frontmatter(&path)? {
+                continue;
+            }
             tasks.push(self.read_task(&path)?);
         }
 
@@ -295,6 +298,17 @@ fn slugify_title(title: &str) -> String {
     } else {
         slug
     }
+}
+
+/// Reports whether `path` opens with a YAML frontmatter delimiter, the
+/// minimal shape shared by every task file. Used to skip foreign Markdown
+/// files (e.g. `AGENTS.md`) during a board listing instead of hard-failing
+/// on them.
+fn has_task_frontmatter(path: &Path) -> ServiceResult<bool> {
+    let content = fs::read_to_string(path).map_err(|err| ServiceError::Persistence {
+        detail: format!("failed to read task file {}: {err}", path.display()),
+    })?;
+    Ok(content.lines().next() == Some("---"))
 }
 
 fn parse_frontmatter_fields(content: &str, path: &Path) -> ServiceResult<(String, TaskStatus)> {
@@ -805,6 +819,33 @@ mod tests {
         assert_eq!(tasks[0].title, "Review logs: capture edge cases");
         assert_eq!(tasks[0].status, TaskStatus::Blocked);
         assert_eq!(tasks[1].status, TaskStatus::Todo);
+    }
+
+    #[test]
+    fn list_tasks_skips_markdown_files_without_frontmatter() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let board = temp.path().join("tasks");
+        fs::create_dir_all(&board).expect("create board");
+        let store = TaskStore::new(&board);
+
+        store
+            .create_task(&task_request("Prepare release notes", "todo"))
+            .expect("created task");
+        fs::write(
+            board.join("AGENTS.md"),
+            "# Agents\n\nThis file documents how agents should behave here.\n",
+        )
+        .expect("write non-task markdown file");
+
+        let tasks = store.list_tasks().expect("list should skip non-task files");
+
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|task| task.identity.as_str())
+                .collect::<Vec<_>>(),
+            vec!["2026-08-23-prepare-release-notes"]
+        );
     }
 
     #[test]

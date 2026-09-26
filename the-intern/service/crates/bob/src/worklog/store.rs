@@ -246,7 +246,7 @@ fn order_entries(mut entries: Vec<RecordedEntry>) -> Vec<RecordedEntry> {
 
 fn render_entry_block(recorded_time: &str, entry: &WorklogEntry) -> String {
     let WorklogEntry { item, done } = entry;
-    format!("## {recorded_time} — {item}\n\n- Done: {done}\n\n")
+    format!("## {recorded_time} — {item}\n\n- Done: {done}\n")
 }
 
 fn append_block_to_file(path: &Path, block: &str) -> ServiceResult<()> {
@@ -400,7 +400,6 @@ mod tests {
                 "## 09:05 — vendor-invoice\n",
                 "\n",
                 "- Done: Reviewed the overnight alerts.\n",
-                "\n",
             )
         );
     }
