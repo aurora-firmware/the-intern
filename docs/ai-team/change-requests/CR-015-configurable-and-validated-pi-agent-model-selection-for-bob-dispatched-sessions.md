@@ -12,8 +12,9 @@ created: '2026-09-27'
 
 Stop letting the pi-agent model bob dispatches with be whatever pi's own
 persisted settings last selected, and make an invalid/removed model an
-explicit, audit-visible failure instead of a silent no-op. Two parts, mirroring
-the service-wide + per-entry shape CR-005 established for `pi_agent_cwd`/`cwd`:
+explicit, audit-visible failure instead of a silent no-op — reactively, not
+via a proactive check. Config mirrors the service-wide + per-entry shape
+CR-005 established for `pi_agent_cwd`/`cwd`:
 
 1. **Service-wide model pin** — a config option (proposed `pi_agent_model`)
    that bob always passes as `--model <pattern>` on every `pi` invocation it
@@ -27,21 +28,22 @@ the service-wide + per-entry shape CR-005 established for `pi_agent_cwd`/`cwd`:
    the service-wide pin for that one job — same precedence shape as `cwd`
    (per-entry → service-wide → today's behaviour, i.e. no `--model` passed
    at all, unset by default for backward compatibility).
-3. **Pre-dispatch validation** — before a periodic (scheduled) job fires,
-   resolve its effective model (per-entry → service-wide → none) and, when
-   set, run `pi auth check --model <pattern> --json` (confirmed real command;
-   see Context). A `status` other than `"ready"` skips the fire — reusing the
-   same fail-gracefully-with-a-warning pattern S-009 already uses for a
-   missing/invalid `cwd` — and records a structured, audit-visible failure
-   (see Possible Spec Amendments — S-005) instead of silently no-op'ing.
-   `bob chat` (interactive) hits the same validation synchronously and
-   surfaces the failure directly as a CLI error, since there is a caller to
-   report it to and no fire-and-forget audit path is needed there.
-
-**Open scope question:** should pre-dispatch validation run on every periodic
-fire (adds one `pi auth check` subprocess per fire — latency/cost scales with
-cron frequency), or be cached/rate-limited? Flagging for the Architect/human
-rather than deciding here.
+3. **No preflight check.** Deliberately excluded (human decision, 2026-09-27):
+   no `pi auth check` or other proactive validation call before a periodic
+   fire. It's enough that bob is *able to pass* `--model` — if the resolved
+   model is invalid, `pi` itself already fails fast and loud on it (confirmed
+   live: `pi --model <invalid> --print "..."` exits 1 with `Error: Model
+   "..." not found` before any provider request — no credentials needed to
+   hit this path). Detection is reactive, off the resulting spawn/handshake
+   failure, not a separate proactive check — see Context and Potential
+   Impact for why this already has almost nowhere new to go: bob's periodic
+   dispatcher already warns (and, for one of its two acquisition paths,
+   already persists to the audit stream) on a session-acquisition failure
+   today, for unrelated reasons (missing cwd, pool exhaustion). An invalid
+   `--model` goes through the same `acquire_session` failure path — this CR
+   only needs to make sure that path's existing warning is consistently
+   audit-visible (see Possible Spec Amendments — S-005), not invent a new
+   detection or audit mechanism.
 
 **Interim mitigation (no code change):** `pi_agent_args` (`crates/bob/src/
 config.rs:37`) is already a free-form `Vec<String>` passed straight to the
@@ -107,31 +109,35 @@ provider-level failures") turned out to be the wrong shape for a fix:
   (ADR-013, `crates/scheduler-adapter/src/lib.rs` — `context_id: Some(job_id
   .clone())`); per-entry `model` resolution reuses this exact mechanism, no
   new ADR expected for data flow.
-- **`pi-agent-supervisor` — pre-dispatch validation:** a new step (likely in
-  or alongside `start_periodic_dispatcher`, `crates/bob/src/serve.rs:827`)
-  that runs `pi auth check --model <pattern> --json` before acquiring a
-  session for a fire whose resolved model is set, and skips + warns on a
-  non-`"ready"` status — mirroring the existing missing/invalid-`cwd`
-  skip+warn pattern.
 - **`admin-rpc` (S-009):** `schedule.add` accepts an optional `model` param;
   `schedule.list` emits it — same shape as the existing `cwd` param.
 - **`bob` CLI (S-009):** `--model` flag on `schedule add`; a config surface
   for the service-wide pin.
-- **`bob-core` / `monitoring` (S-005):** a structured, audit-visible record
-  of a pre-dispatch validation failure. **Open question (Architect):**
-  `ExtensionEventAuditPayload` (`crates/bob-core/src/types/records.rs:54-64`)
-  represents a *forwarded extension event* — a validation failure happens
-  entirely inside pi-agent-supervisor/scheduler-adapter, before any pi
-  process or extension exists, so it doesn't naturally fit that payload
-  shape. Candidates: (a) a new `AuditRecordKind` variant with its own
-  structured payload (`job_id`, `provider`, `model`, `status`, `reason` —
-  matching `pi auth check --json`'s own output shape, confirmed live:
-  `{"status":"invalid","provider":"...","reason":"invalid_state"}`), which
-  S-005's Component 1 currently says is *not* introduced ("the record-kind
-  set stays `event`/`report`/`verdict`") — this CR would change that; or
-  (b) reuse `report`, which is semantically for *external* tool reports, not
-  scheduler-internal state. Leaving the exact shape as `[TODO]` for the
-  Architect/Planner rather than inventing it here.
+- **`bob` periodic dispatcher — reuse existing failure handling, no new
+  mechanism (S-005):** `crates/bob/src/serve.rs` already has two
+  session-acquisition failure paths for a periodic fire:
+  - `acquire_default_session_or_warn` (serve.rs:703-716, the plain
+    `acquire_session` path a service-wide-only `--model` pin would use) logs
+    `tracing::warn!` on failure today, but does **not** call
+    `record_periodic_fire_skipped` — so it isn't visible in `bob audit tail`,
+    only in raw service logs.
+  - the per-entry-cwd path (`acquire_session_with_cwd` failure, serve.rs
+    ~856-925) already calls **both** `tracing::warn!` *and*
+    `record_periodic_fire_skipped` (serve.rs:627-655) — a generic function,
+    already explicitly designed to avoid a new `AuditRecordKind` ("reuses the
+    existing `Report`/`ExternalReportAuditPayload` shape... rather than
+    introducing a new `AuditRecordKind`", serve.rs:622-624), keyed by
+    `job_id` and a free-text `summary`.
+
+  An invalid `--model` causes `RpcWorkerProcess::spawn`/the RPC handshake to
+  fail the same way any other unusable worker does (pi exits immediately
+  after printing its "Model not found" error and closing its pipes), which
+  surfaces as a `ServiceError` from `acquire_session()` — the exact same
+  failure shape `acquire_default_session_or_warn` already handles. **The only
+  actual gap to close**, not a new design: call `record_periodic_fire_skipped`
+  from `acquire_default_session_or_warn`'s failure arm too, so a bad model
+  pin is as audit-visible as a bad cwd already is. No schema change, no new
+  `AuditRecordKind`, no new function.
 
 **Risks / migration:**
 
@@ -140,25 +146,25 @@ provider-level failures") turned out to be the wrong shape for a fix:
   pi's own persisted selection). Silently defaulting to a specific model
   would be a bigger behaviour change than this CR intends. `[TODO]` —
   requested human decision, same as CR-005's cwd default.
-- **`pi auth check` cost/latency per fire.** See the open scope question in
-  Desired Changes — every periodic fire with a resolved model would spawn an
-  extra `pi` subprocess before dispatch unless this is rate-limited/cached.
-- **Unverified failure-mode coverage.** This CR's validation step confirms
-  the model is *currently* auth-ready; it's still unconfirmed whether the
-  originally reported failure mode (persisted-but-now-invalid model) would
-  have produced a `pi auth check` failure specifically, versus some other
-  status. No live repro was possible here (no real provider credentials in
-  this environment). This CR should still resolve the *category* of failure
-  (stale model reference surviving an upgrade) even if the exact reported
-  incident's `pi auth check` output can't be confirmed in advance.
-- **Interactive `bob chat` validation failure UX.** Needs a clear, synchronous
-  CLI error message shape — `[TODO]`, not designed here.
-- **New `AuditRecordKind` variant (if chosen)** touches `AuditFilterKind`,
-  `bob audit tail`'s renderer, and S-005 Component 1's explicit "no new kind"
-  language — larger than a typical CR-005-style field addition. Flagging for
-  the Architect to size/scope, possibly recommending a split (config+pin as
-  one CR, validation+audit as a second) the way CR-005 itself was offered a
-  split and the human chose to combine.
+- **No preflight means the failure surfaces at the first real fire, not
+  before.** A bad model pin isn't caught until a scheduled job actually tries
+  to run (or an operator runs `bob chat`) — this is the explicit tradeoff of
+  the "just log a warning, the operator fixes the config" decision above,
+  not an oversight. Reactive, not proactive, by design.
+- **Warm-pool workers spawned with a bad model die almost immediately.** Since
+  `RpcWorkerProcess::spawn` doesn't wait for any readiness handshake (it
+  returns `Ok` as soon as the OS starts the process), a warm-pool worker
+  spawned with an invalid `--model` becomes unusable within moments of
+  spawning, and the failure is only discovered on the next attempt to use it
+  (send it a prompt). Whether the existing pool/reaper logic already notices
+  and respawns a dead warm worker, or needs a small addition to do so, is
+  `[TODO]` — worth a quick look during task breakdown, not a new design
+  question.
+- **Interactive `bob chat` validation failure UX.** `pi` itself already prints
+  a clear, immediate error and exits nonzero for a bad `--model` (confirmed
+  live) — whether bob's interactive spawn path already surfaces that
+  cleanly to the `bob chat` caller or needs a small adjustment is `[TODO]`,
+  to confirm during implementation rather than assumed here.
 
 ## Possible Spec Amendments
 
@@ -168,14 +174,15 @@ provider-level failures") turned out to be the wrong shape for a fix:
   existing `pi_agent_cwd` section.
 - **S-009 (scheduler channel adapter and bob schedule CLI):** add the
   per-entry `model` field to the schedule-store schema, the `--model` CLI
-  flag, `schedule.list` output, and fire-time behaviour: resolve the
-  effective model, run `pi auth check`, skip + warn on failure (mirroring
-  the existing missing/invalid-`cwd` fire-time handling).
-- **S-005 (monitoring/audit):** record a structured pre-dispatch validation
-  outcome. Exact shape (new `AuditRecordKind` vs. reusing an existing kind)
-  is `[TODO]` — see Potential Impact above; this is the amendment most
-  likely to need Architect judgment rather than being a mechanical follow of
-  the CR-005 precedent.
+  flag, and `schedule.list` output — same shape as the existing `cwd` field.
+  No new fire-time validation step; a bad model is discovered the same way a
+  bad cwd already is, by the acquisition/dispatch attempt itself failing.
+- **S-005 (monitoring/audit):** no schema change. The only amendment is
+  behavioural: `acquire_default_session_or_warn`'s existing failure path
+  should also call the existing `record_periodic_fire_skipped` (today only
+  the per-entry-cwd failure path does), so a session-acquisition failure —
+  including a bad model pin — is as audit-visible as a bad cwd already is.
+  Purely mechanical, no Architect design judgment expected here.
 - **ADR-013 (inbound queue carries job id, dispatcher resolves live state):**
   no amendment expected — per-entry `model` resolution reuses the exact
   mechanism this ADR already established for `cwd`.
