@@ -426,6 +426,20 @@ export default function bobFactory(pi: ExtensionAPI): void {
       // Connected — set up the inbound reader before flushing outbound frames.
       connecting = false;
       socket = sock;
+      // Never let this forwarding socket, by itself, keep the host process
+      // alive: pi owns session/process lifetime, this transport is auxiliary
+      // infrastructure riding along with it. A ref'd handle here holds
+      // Node's/Bun's event loop open for as long as the socket stays
+      // connected — for an interactive session that's harmless (other ref'd
+      // work, like stdin or an in-flight provider request, already keeps the
+      // process alive), but for `pi --print` (expected to exit once its
+      // requested work completes) it silently blocks natural event-loop
+      // drain and hangs the process indefinitely even after a successful,
+      // fully-completed run (issue #103). unref() does not stop the socket
+      // from sending/receiving — a pending authz verdict wait still has its
+      // own ref'd BOB_AUTHZ_TIMEOUT_MS timer keeping the loop alive — it only
+      // stops the socket alone from being a reason the process can't exit.
+      sock.unref();
       attachVerdictReader(sock, ctx);
       // Re-flush once the kernel send buffer clears after back-pressure.
       // Reuses the ctx captured from the event that triggered this connect,
