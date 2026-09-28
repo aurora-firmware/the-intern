@@ -1062,6 +1062,32 @@ mod tests {
         );
     }
 
+    // AC-3 (T-227): a worker writing more than 64 KiB to stderr does not
+    // block on a full OS pipe buffer, because the background reader keeps
+    // draining it — a worker writing 200 KiB then exiting must finish within
+    // the test timeout.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_stderr_reader_drains_large_writes_without_blocking_worker() {
+        let mut cfg = spawn_config(
+            "sh",
+            &["-c", "head -c 204800 /dev/zero | tr '\\0' 'a' >&2; exit 0"],
+        );
+        cfg.child_termination_deadline = Duration::from_secs(5);
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+
+        let wait_result = timeout(TokioDuration::from_secs(5), worker.child.wait()).await;
+
+        assert!(
+            wait_result.is_ok(),
+            "worker writing 200 KiB to stderr should exit on its own within the test \
+             timeout instead of blocking on a full pipe buffer"
+        );
+        wait_result
+            .expect("timeout")
+            .expect("child wait should succeed");
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn spawn_failure_returns_child_process_error_with_safe_detail() {
         let config = spawn_config(
