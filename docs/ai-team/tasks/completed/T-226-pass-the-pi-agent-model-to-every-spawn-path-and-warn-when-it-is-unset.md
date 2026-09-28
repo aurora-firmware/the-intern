@@ -1,7 +1,7 @@
 ---
 id: T-226
 title: Pass the pi-agent model to every spawn path and warn when it is unset
-status: in-progress
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-09-29'
