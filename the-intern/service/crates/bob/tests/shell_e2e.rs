@@ -738,6 +738,7 @@ fn client_cfg(admin_sock_path: PathBuf) -> BobConfig {
         shutdown_reap_deadline: Duration::from_secs(10),
         pi_agent_command: "pi".to_string(),
         pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+        pi_agent_model: None,
         pi_agent_warm_pool_size: 1,
         pi_agent_max_processes: 8,
         pi_agent_idle_reap_timeout: Duration::from_secs(300),
