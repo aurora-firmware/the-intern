@@ -190,9 +190,13 @@ async fn admit_periodic_event(
 }
 
 fn build_interactive_session_config(cfg: &BobConfig) -> admin_rpc::InteractiveSessionConfig {
+    // CR-015 (S-002 "pi-agent process settings"): interactive sessions get
+    // exactly the shared arguments (`--model <value>` when pi_agent_model is
+    // set, empty otherwise) — never pi_agent_args, which is pool-worker-only
+    // (e.g. `--mode rpc`) and would be wrong for an interactive pi process.
     admin_rpc::InteractiveSessionConfig {
         command: cfg.pi_agent_command.clone(),
-        args: Vec::new(),
+        args: cfg.pi_agent_shared_args(),
         child_termination_deadline: cfg.shutdown_reap_deadline,
         extension_sock_path: cfg.extension_sock_path.clone(),
         extension_path: cfg.extension_path.clone(),
@@ -1293,6 +1297,27 @@ pub mod tests {
         );
         assert_eq!(interactive_cfg.extension_sock_path, extension_sock_path);
         assert_eq!(interactive_cfg.extension_path, extension_path);
+    }
+
+    // AC-2 (T-226): interactive sessions must get exactly the shared
+    // --model flag when pi_agent_model is set, and pi_agent_args must never
+    // reach them even when it is also set to something else.
+    #[test]
+    fn interactive_session_config_gives_shared_args_not_pi_agent_args_when_pi_agent_model_set() {
+        let cfg = BobConfig {
+            pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+            pi_agent_model: Some("anthropic/claude-opus-4".to_string()),
+            ..BobConfig::test_base()
+        };
+
+        let interactive_cfg = build_interactive_session_config(&cfg);
+
+        assert_eq!(
+            interactive_cfg.args,
+            vec!["--model".to_string(), "anthropic/claude-opus-4".to_string()],
+            "interactive sessions must receive exactly the shared --model flag, \
+             never pi_agent_args"
+        );
     }
 
     // AC-2 (T-039): extension_sock_path from BobConfig is plumbed into the supervisor config.
