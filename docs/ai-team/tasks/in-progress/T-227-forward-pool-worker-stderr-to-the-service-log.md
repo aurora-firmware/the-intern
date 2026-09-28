@@ -231,3 +231,101 @@ succeeds.
 Next: address the detached-task-lifecycle finding above (mirroring
 `spawn_stdout_drain`/`drain_handle`) and resubmit; everything else in this
 task is ready.
+
+### Review Verdict — 2026-09-29
+
+FAIL (review cycle 2)
+
+**Stage 2 detached-task finding from cycle 1: resolved.** `spawn_stderr_forwarder`
+now returns its `JoinHandle<()>`, stored as `stderr_forwarder` on
+`RpcWorkerProcess` (`process.rs:37-52`), and `terminate()` aborts it
+(`process.rs:213`). Confirmed by direct inspection of `pool.rs` that
+`kill_session` (`pool.rs:286`), `reap_idle_and_surplus`
+(`pool.rs:484`/`495`), and `shutdown_all` (`pool.rs:511`/`522`) all remove a
+worker exclusively via `worker.worker.terminate()` / `warm.worker.terminate()`
+— there is no other path that drops an `RpcWorkerProcess` without going
+through `terminate()` — so this one funnel point genuinely covers all three
+teardown paths named in the cycle-1 finding, as claimed in the Session 2 work
+log. The new regression test,
+`terminate_aborts_stderr_forwarder_even_when_a_grandchild_keeps_the_pipe_open`,
+has real teeth: reran it 8x with no flakiness, and confirmed it fails
+deterministically when `.abort()` is commented out (verifying the developer's
+own claimed mutation-test result independently). `cargo fmt --all -- --check`
+is clean and `cargo build -p bob` succeeds on the branch.
+
+**New Stage 1/2 finding this cycle: the specific placement of `.abort()`
+reintroduces loss of the task's primary motivating message class.**
+
+- File/location: `the-intern/service/crates/pi-agent-supervisor/src/process.rs`,
+  `RpcWorkerProcess::terminate()` (lines 208-215) —
+  `self.stderr_forwarder.abort();` is the first statement in the function,
+  executed *before* `self.request_graceful_termination()?;` sends `SIGTERM`
+  to the child.
+- What is wrong: because the forwarder is cancelled before the child is even
+  signaled, any stderr the worker writes specifically in reaction to
+  receiving that `SIGTERM` is guaranteed to be lost — including exactly the
+  case this task's own Description calls out as core motivation: "the bob
+  extension writes its warning or transport-lost error there when it has no
+  UI ... today all of that is lost." That message is precisely the kind of
+  output a well-behaved worker writes while shutting down in response to the
+  signal `terminate()` itself sends. I verified this is a deterministic
+  regression, not a scheduling race: using a disposable worker script that
+  traps `TERM` (`trap 'echo transport-lost-on-shutdown >&2; exit 0' TERM`)
+  with a generous `child_termination_deadline` (so `terminate()` returns
+  `TerminationOutcome { forced: false }`, i.e. the graceful path actually
+  completed, not a force-kill timing artifact), the shutdown-triggered stderr
+  line is never captured with the submitted abort-first placement. Moving the
+  same `.abort()` call to fire only after `terminate()`'s existing
+  wait/kill sequence resolves (immediately before returning) reliably
+  captures the line instead, and the existing grandchild-holds-pipe-open
+  regression test from this session still passes unmodified with that later
+  placement — so this is not a reversion to the cycle-1 detached-task
+  problem, only a placement fix. (This experimental test and the
+  abort-placement variants used to isolate the behavior were written in a
+  disposable worktree for review verification only; they are not part of the
+  submitted diff and were not committed.) AC-1 ("WHEN a pool worker writes a
+  line to stderr THE SYSTEM SHALL log that line ... with the worker's session
+  id") is unconditional and does not carve out an exception for stderr
+  written during termination, so this is an AC-1 regression as well as a
+  Stage 2 correctness gap, introduced by this session's fix (the cycle-1
+  implementation, before any `.abort()` existed, did not have this problem —
+  the forwarder simply ran until real EOF and so would have captured this
+  case).
+  The cycle-1 review's own suggested fix location was to abort "at the same
+  teardown points used for `drain_handle` ... plus wherever
+  `RpcWorkerProcess::terminate()` finalizes a worker" — "finalizes" was
+  intended as "once teardown of the worker's own process is complete," not
+  "as the first line before signaling it."
+- What should change: move `self.stderr_forwarder.abort()` to fire only
+  after the worker's own process is confirmed terminated — i.e., after the
+  existing timeout-wait/kill/wait sequence in `terminate()` resolves,
+  immediately before the function returns — instead of before
+  `request_graceful_termination()`. `.abort()` remains synchronous and
+  non-blocking wherever it is called, so this still does not delay
+  `terminate()`'s return and still bounds the forwarder to end no later than
+  the worker's own teardown (satisfying
+  `docs/ai-team/docs/coding-guidelines-rust.md` §4 and the existing
+  grandchild regression test unchanged). Please also add a regression test
+  alongside `terminate_aborts_stderr_forwarder_even_when_a_grandchild_keeps_the_pipe_open`
+  covering this scenario (a worker that traps `TERM`, writes a line to
+  stderr, then exits; assert the line is logged after `terminate()`
+  returns), so this class of regression is caught going forward.
+
+Verification performed this cycle (all on `task/T-227-pool-worker-stderr-logging`
+via a disposable git worktree, not on `dev-agent`): `cargo test -p
+pi-agent-supervisor` (82 passed, 0 failed, repeated 3x) and `cargo fmt --all
+-- --check` (clean), matching the task's Verification command; `cargo build
+-p bob` succeeds; grep-confirmed every `pool.rs` teardown path funnels through
+`RpcWorkerProcess::terminate()`; mutation-tested
+`terminate_aborts_stderr_forwarder_even_when_a_grandchild_keeps_the_pipe_open`
+by commenting out `.abort()` (fails deterministically as claimed); wrote and
+ran a disposable experimental test (not committed) to isolate and confirm
+the abort-placement regression described above, and confirmed a
+later-placement variant resolves it without breaking the committed
+regression test.
+
+Next: move the `.abort()` call to fire after `terminate()`'s wait/kill
+sequence resolves rather than before `request_graceful_termination()`, add a
+regression test for the shutdown-triggered-stderr scenario, and resubmit.
+Everything else in this task (AC-1 through AC-5's core logic, the detached-
+task-lifecycle fix's structure and teardown-path coverage) is ready.
