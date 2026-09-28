@@ -119,3 +119,103 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-29
+
+FAIL
+
+**Stage 1 — Acceptance Criteria: all five ACs met, evidence below.**
+
+- AC-1 (log stderr line at warn with session id): met. `spawn_stderr_forwarder`
+  (`process.rs:285-314`) emits `tracing::warn!(session = %session_id, "pool
+  worker stderr: {line}")` per line; test
+  `spawn_logs_worker_stderr_line_at_warn_with_session_id` passes and asserts
+  the `WARN` level, the session id, and the content together.
+- AC-2 (EOF ends the reader without error log/panic): met. `Ok(0) => break`
+  with no log call; test
+  `spawn_stderr_reader_ends_cleanly_at_eof_without_error_log` passes.
+- AC-3 (drains >64 KiB without blocking the worker): met. Confirmed by
+  running the test as written (passes) and by mutation: temporarily replacing
+  the `spawn_stderr_forwarder` call with `std::mem::forget(stderr)` (leaving
+  the pipe genuinely unread, matching the original bug) makes
+  `spawn_stderr_reader_drains_large_writes_without_blocking_worker` fail
+  deterministically inside its 5s timeout — the test has real teeth, not just
+  a passing coincidence.
+- AC-4 (lossy UTF-8, later valid line still logged): met. Confirmed by
+  mutation: replacing `String::from_utf8_lossy` with strict `String::from_utf8`
+  (`Err(_) => break`) makes
+  `spawn_stderr_reader_keeps_reading_after_invalid_utf8_line` fail with
+  `got: []`.
+- AC-5 (interactive-session stderr unchanged): met. The diff hunk touching
+  `InteractiveProcess` (`process.rs` diff around line 561) adds only new test
+  helper code above it; `InteractiveProcess::spawn`/`terminate` and
+  `InteractiveProcessConfig` are byte-for-byte identical to `dev-agent`, and
+  their existing test suite is untouched and passing.
+
+No unspecified behavior was added, and the diff is scoped to exactly the
+three Files to Touch (`process.rs`, `pi-agent-supervisor/Cargo.toml`,
+`Cargo.lock`).
+
+**Stage 2 — Code Quality: one blocking issue.**
+
+- File: `the-intern/service/crates/pi-agent-supervisor/src/process.rs`
+- Location: `spawn_stderr_forwarder` (lines 285-314) and its call site in
+  `RpcWorkerProcess::spawn` (line 113).
+- What is wrong: `spawn_stderr_forwarder` calls `tokio::spawn(...)` and
+  discards the returned `JoinHandle` entirely — the forwarder task is fully
+  detached, with no field on `RpcWorkerProcess` or anywhere in the pool
+  holding a handle to it. This violates
+  `docs/ai-team/docs/coding-guidelines-rust.md` §4 ("Every spawned task is
+  owned by a supervisor or task tracker. Do not spawn detached work whose
+  lifecycle cannot be cancelled, awaited, and observed during shutdown.").
+  The same crate already has the correct pattern for the sibling problem one
+  file over: `pool.rs`'s `spawn_stdout_drain` (`pool.rs:119`) returns a
+  `JoinHandle<()>`, which `ActiveSessionWorker` stores as `drain_handle`
+  (`pool.rs:52`, documented "Aborted when the worker is removed (killed,
+  reaped, or shut down)"), explicitly `.abort()`'d in `kill_session`
+  (`pool.rs:283`), `reap_idle_and_surplus` (`pool.rs:481`), and
+  `shutdown_all` (`pool.rs:508`). The new stderr forwarder has no equivalent:
+  those same three teardown paths now terminate a worker's child process
+  with zero visibility into or control over its still-running
+  stderr-forwarding task. Because the forwarder starts immediately in
+  `RpcWorkerProcess::spawn` — including for warm-pool workers that can sit
+  idle for the whole life of the pool — every worker the service ever spawns
+  now carries an untrackable, unabortable background task for its entire
+  lifetime. This is not just a style gap: the messages this task exists to
+  preserve (pi's start-up failure, the bob extension's transport-lost/
+  shutdown error per S-002/S-003) are exactly the kind of stderr output
+  likely to appear right around worker teardown or service shutdown, and
+  none of `kill_session`, idle/surplus reaping, or `shutdown_all` can wait
+  for or even observe whether the forwarder drained and logged a worker's
+  last buffered line before that worker (or the whole service) goes away.
+- What should change: give `spawn_stderr_forwarder` the same shape as
+  `spawn_stdout_drain` — return the `JoinHandle<()>`, store it (e.g. as a
+  field on `RpcWorkerProcess` alongside `child`/`stdin`/`stdout`, or threaded
+  into the pool's per-worker bookkeeping the way `drain_handle` is), and
+  `.abort()` it at the same teardown points used for `drain_handle`
+  (`kill_session`, `reap_idle_and_surplus`, `shutdown_all`) plus wherever
+  `RpcWorkerProcess::terminate()` finalizes a worker. `.abort()` is
+  synchronous and non-blocking (as the existing `drain_handle.abort()` calls
+  already demonstrate), so this can be done without delaying `terminate()`,
+  matching the task's own "must not ... delay terminate()" constraint.
+
+All other Stage 2 checks passed: tests are independent (stable across 5
+repeated `cargo test -p pi-agent-supervisor` runs, no shared mutable state —
+each test gets its own thread-local tracing subscriber, matching the
+established `extension-ipc::multiplex` pattern), no hardcoded secrets, no
+dead code or commented-out blocks, naming is descriptive, and
+`cargo fmt --all -- --check` is clean. `cargo clippy -p pi-agent-supervisor
+--all-targets` surfaces one pre-existing `missing_errors_doc`/
+`result_unit_err` error in `pool.rs` (unrelated to this diff — confirmed
+present on `dev-agent` before this branch too); per CLAUDE.md, clippy is not
+a clean gate for this workspace and this finding is not attributable to this
+task.
+
+Verification command run: `cargo test -p pi-agent-supervisor && cargo fmt
+--all -- --check` on `task/T-227-pool-worker-stderr-logging` — 81 passed, 0
+failed (5 repeated runs, no flakiness); fmt clean. `cargo build -p bob` also
+succeeds.
+
+Next: address the detached-task-lifecycle finding above (mirroring
+`spawn_stdout_drain`/`drain_handle`) and resubmit; everything else in this
+task is ready.
