@@ -120,10 +120,40 @@ fn warn_if_skill_install_path_missing(cfg: &BobConfig) {
     }
 }
 
+/// CR-015 (S-002 v0.2 "pi-agent process settings"): bob starts and
+/// `pi_agent_model` is unset → log a warning and continue (fail-open,
+/// mirroring `warn_if_skill_install_path_missing`).
+///
+/// Unlike the skill install path check, there is nothing to resolve or test
+/// for existence here — `pi_agent_model: None` is itself the condition.
+/// This is the one place the unset-model condition surfaces to the
+/// operator: pi still starts, but silently chooses (and may later change
+/// or fall back) its own model from its own saved settings.
+fn warn_if_pi_agent_model_unset(cfg: &BobConfig) {
+    if cfg.pi_agent_model.is_none() {
+        tracing::warn!(
+            "pi_agent_model is not set; pi will choose the model from its own \
+             saved settings, which can change or fall back to a different \
+             model without notice; set pi_agent_model in the service \
+             configuration to pin it"
+        );
+    }
+}
+
 fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Config {
+    // CR-015 (S-002 "pi-agent process settings"): worker_args is pi_agent_args
+    // followed by the arguments shared across every spawn path
+    // (pi_agent_shared_args — `--model <value>` when pi_agent_model is set,
+    // empty otherwise). Warm, overflow, and dedicated per-entry-cwd workers
+    // all build their process config from this same worker_args field
+    // (pool.rs worker_process_config_for_session, and
+    // worker_process_config_for_cwd_session via struct update), so no
+    // per-worker-kind change is needed.
+    let mut worker_args = cfg.pi_agent_args.clone();
+    worker_args.extend(cfg.pi_agent_shared_args());
     pi_agent_supervisor::Config {
         worker_command: cfg.pi_agent_command.clone(),
-        worker_args: cfg.pi_agent_args.clone(),
+        worker_args,
         warm_pool_size: cfg.pi_agent_warm_pool_size,
         max_processes: cfg.pi_agent_max_processes,
         idle_reap_timeout: cfg.pi_agent_idle_reap_timeout,
@@ -180,9 +210,13 @@ async fn admit_periodic_event(
 }
 
 fn build_interactive_session_config(cfg: &BobConfig) -> admin_rpc::InteractiveSessionConfig {
+    // CR-015 (S-002 "pi-agent process settings"): interactive sessions get
+    // exactly the shared arguments (`--model <value>` when pi_agent_model is
+    // set, empty otherwise) — never pi_agent_args, which is pool-worker-only
+    // (e.g. `--mode rpc`) and would be wrong for an interactive pi process.
     admin_rpc::InteractiveSessionConfig {
         command: cfg.pi_agent_command.clone(),
-        args: Vec::new(),
+        args: cfg.pi_agent_shared_args(),
         child_termination_deadline: cfg.shutdown_reap_deadline,
         extension_sock_path: cfg.extension_sock_path.clone(),
         extension_path: cfg.extension_path.clone(),
@@ -227,6 +261,10 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     // warn_if_skill_install_path_missing's doc comment for the S-011
     // Workflow step this implements.
     warn_if_skill_install_path_missing(cfg);
+    // AC-4 (T-226): fail-open startup warning, not a startup failure — see
+    // warn_if_pi_agent_model_unset's doc comment (CR-015, S-002 "pi-agent
+    // process settings").
+    warn_if_pi_agent_model_unset(cfg);
     let pi_agent_supervisor_cfg = build_pi_agent_supervisor_config(cfg);
     let (pi_agent_supervisor_handle, pi_agent_supervisor_join) =
         pi_agent_supervisor::start(pi_agent_supervisor_cfg)?;
@@ -1099,6 +1137,50 @@ pub mod tests {
         assert_eq!(supervisor_cfg.extension_path, extension_path);
     }
 
+    // AC-1 (T-226): worker_args must be pi_agent_args followed by the shared
+    // arguments (S-002 "pi-agent process settings") when pi_agent_model is
+    // set, so warm-pool, overflow, and dedicated workers alike select it.
+    #[test]
+    fn pi_agent_supervisor_config_worker_args_appends_shared_args_when_pi_agent_model_set() {
+        let cfg = BobConfig {
+            pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+            pi_agent_model: Some("anthropic/claude-opus-4".to_string()),
+            ..BobConfig::test_base()
+        };
+
+        let supervisor_cfg = build_pi_agent_supervisor_config(&cfg);
+
+        assert_eq!(
+            supervisor_cfg.worker_args,
+            vec![
+                "--mode".to_string(),
+                "rpc".to_string(),
+                "--model".to_string(),
+                "anthropic/claude-opus-4".to_string(),
+            ],
+            "worker_args must be pi_agent_args followed by the shared --model flag"
+        );
+    }
+
+    // AC-3 (T-226): with pi_agent_model unset, worker_args must equal
+    // pi_agent_args unchanged (the shared arguments are empty).
+    #[test]
+    fn pi_agent_supervisor_config_worker_args_unchanged_when_pi_agent_model_unset() {
+        let cfg = BobConfig {
+            pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+            pi_agent_model: None,
+            ..BobConfig::test_base()
+        };
+
+        let supervisor_cfg = build_pi_agent_supervisor_config(&cfg);
+
+        assert_eq!(
+            supervisor_cfg.worker_args,
+            vec!["--mode".to_string(), "rpc".to_string()],
+            "worker_args must equal pi_agent_args unchanged when pi_agent_model is unset"
+        );
+    }
+
     // AC-1 (T-126): pi_agent_cwd set on BobConfig must be mapped into the
     // supervisor Config's worker_cwd so warm-pool workers run there.
     #[test]
@@ -1241,6 +1323,27 @@ pub mod tests {
         assert_eq!(interactive_cfg.extension_path, extension_path);
     }
 
+    // AC-2 (T-226): interactive sessions must get exactly the shared
+    // --model flag when pi_agent_model is set, and pi_agent_args must never
+    // reach them even when it is also set to something else.
+    #[test]
+    fn interactive_session_config_gives_shared_args_not_pi_agent_args_when_pi_agent_model_set() {
+        let cfg = BobConfig {
+            pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+            pi_agent_model: Some("anthropic/claude-opus-4".to_string()),
+            ..BobConfig::test_base()
+        };
+
+        let interactive_cfg = build_interactive_session_config(&cfg);
+
+        assert_eq!(
+            interactive_cfg.args,
+            vec!["--model".to_string(), "anthropic/claude-opus-4".to_string()],
+            "interactive sessions must receive exactly the shared --model flag, \
+             never pi_agent_args"
+        );
+    }
+
     // AC-2 (T-039): extension_sock_path from BobConfig is plumbed into the supervisor config.
     #[test]
     fn pi_agent_supervisor_config_maps_extension_sock_path_from_bob_config() {
@@ -1376,6 +1479,73 @@ pub mod tests {
         assert!(
             logs.is_empty(),
             "an existing skill install path directory must not log a warning; got: {logs}"
+        );
+    }
+
+    // AC-4 (T-226): an unset pi_agent_model must log exactly one warning
+    // naming the key, explaining that pi will choose the model from its own
+    // saved settings (which can change or fall back without notice), and
+    // telling the operator to set pi_agent_model (CR-015, S-002 "pi-agent
+    // process settings"). Fail-open, mirroring
+    // warn_if_skill_install_path_missing.
+    #[test]
+    fn warns_when_pi_agent_model_is_unset() {
+        let cfg = BobConfig {
+            pi_agent_model: None,
+            ..BobConfig::test_base()
+        };
+
+        let writer = CaptureWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .without_time()
+            .with_writer(writer.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            warn_if_pi_agent_model_unset(&cfg);
+        });
+
+        let logs = writer.contents();
+        assert!(
+            logs.contains("pi_agent_model"),
+            "warning must name pi_agent_model; got: {logs}"
+        );
+        assert!(
+            logs.to_lowercase().contains("warn"),
+            "log line must be a warning, not another level; got: {logs}"
+        );
+        assert_eq!(
+            logs.lines().filter(|line| !line.is_empty()).count(),
+            1,
+            "exactly one warning must be logged at startup; got: {logs}"
+        );
+    }
+
+    // AC-4 (T-226) counter-case: a set pi_agent_model must not produce a
+    // warning, so the log stays quiet on the common path.
+    #[test]
+    fn does_not_warn_when_pi_agent_model_is_set() {
+        let cfg = BobConfig {
+            pi_agent_model: Some("anthropic/claude-opus-4".to_string()),
+            ..BobConfig::test_base()
+        };
+
+        let writer = CaptureWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .without_time()
+            .with_writer(writer.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            warn_if_pi_agent_model_unset(&cfg);
+        });
+
+        let logs = writer.contents();
+        assert!(
+            logs.is_empty(),
+            "a set pi_agent_model must not log a warning; got: {logs}"
         );
     }
 

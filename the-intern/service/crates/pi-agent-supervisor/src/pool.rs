@@ -658,6 +658,37 @@ mod tests {
         assert_eq!(process_cfg.skill_install_path, Some(skill_install_path));
     }
 
+    // AC-5 (T-226): a dedicated per-entry-cwd worker's process config must
+    // carry the same arguments (pi_agent_args plus the shared --model flag,
+    // built into worker_args by bob::serve::build_pi_agent_supervisor_config)
+    // as a service-wide worker's — worker_process_config_for_cwd_session only
+    // overrides worker_cwd via struct update, so args flow through
+    // unchanged from worker_process_config_for_session.
+    #[test]
+    fn worker_process_config_for_cwd_session_inherits_same_args_as_service_wide_worker() {
+        let mut cfg = test_config("pi", &[], 0, 1);
+        cfg.worker_args = vec![
+            "--mode".to_string(),
+            "rpc".to_string(),
+            "--model".to_string(),
+            "anthropic/claude-opus-4".to_string(),
+        ];
+
+        let service_wide_cfg =
+            SessionPool::worker_process_config_for_session(&cfg, SessionId::new());
+        let dedicated_cfg = SessionPool::worker_process_config_for_cwd_session(
+            &cfg,
+            SessionId::new(),
+            PathBuf::from("/opt/bob/entry-cwd"),
+        );
+
+        assert_eq!(
+            dedicated_cfg.args, service_wide_cfg.args,
+            "a dedicated per-entry-cwd worker must inherit the same worker_args \
+             as a service-wide worker"
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn pool_new_spawns_warm_workers_up_to_min_of_warm_pool_and_max_processes() {
         let cfg = test_config("sh", &["-c", "exit 0"], 3, 2);
