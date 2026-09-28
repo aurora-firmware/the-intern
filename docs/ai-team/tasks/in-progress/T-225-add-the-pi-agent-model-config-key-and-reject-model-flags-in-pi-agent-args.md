@@ -93,6 +93,22 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-09-29
+
+Implemented T-225 in three TDD cycles, each committed on `task/T-225-pi-agent-model-config-key`.
+
+Cycle 1 (AC-1, AC-5) added the optional `pi_agent_model: Option<String>` field to `BobConfig` and `RawBobConfig`, wired it through `test_base()`, `defaults_with_runtime_root()`, and `load_with_sources()`, and updated `shell_e2e.rs`'s `client_cfg()` (the one other call site that builds `BobConfig` field-by-field rather than through `..BobConfig::test_base()`) so the integration test binary keeps compiling. Every other `BobConfig { .. }` literal in the crate (admin_rpc.rs, chat.rs, serve.rs, telemetry.rs) uses struct-update syntax against `test_base()` and needed no change. Tests cover parsing from `config.toml`, from `BOB_PI_AGENT_MODEL`, and the unset default.
+
+Cycle 2 (AC-2, AC-3) added two `validate()` checks: a blank/whitespace-only `pi_agent_model` fails with an error naming the key (comment explains why: `--model ""` could look like "no model" to pi and silently fall back, defeating the point of setting it explicitly); and a new `model_selecting_flag_in()` helper scans `pi_agent_args` for `--model`, `--models`, or `--provider` in either bare or `--flag=value` form, failing config load with an error that names the offending flag and tells the operator to use `pi_agent_model` instead. Tests cover both value forms across all three flags, plus a control test confirming `pi_agent_args` without any model flag still loads.
+
+Cycle 3 (AC-4) added `BobConfig::pi_agent_shared_args()` — the single shared-argument builder S-002 calls for: returns `["--model", <value>]` when `pi_agent_model` is set, empty otherwise. This is deliberately unwired in this task; T-226 (pending, depends on T-225) consumes it in both `build_pi_agent_supervisor_config`'s `worker_args` and `build_interactive_session_config`'s `args`, and adds the unset-model startup warning.
+
+Considered and rejected: returning the exact matched argument text (e.g. `--model=gpt-4`) instead of just the flag name (`--model`) in the AC-3 error — the AC only requires naming "the offending flag," and returning the bare flag name from a `&'static str` table kept the helper simple and avoided formatting/allocation for a value that could itself carry another operator's model string as noise in the error.
+
+Verification: `cargo test -p bob config` (task's exact command) and the full `cargo test -p bob --lib` (312 passed, 1 pre-existing ignore, 0 failed) both green; `cargo fmt --all -- --check` clean. The `loads_schedule_entries_from_json_store_when_store_exists` test that CLAUDE.md documents as sandbox-flaky actually passed here, so no skip was needed this session — worth re-checking if it flips in a future session, but out of scope for T-225.
+
+Nothing remains for T-225's own scope. Next: T-226 wires `pi_agent_shared_args()` into the supervisor/interactive spawn paths and adds the startup warning; T-227–T-230 (stderr forwarding, invalid-model verification, docs) follow.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
