@@ -1033,6 +1033,35 @@ mod tests {
         );
     }
 
+    // AC-2 (T-227): reaching EOF on a worker's stderr (no output, clean exit)
+    // ends the reader without an error log or panic.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_stderr_reader_ends_cleanly_at_eof_without_error_log() {
+        let capture = TracingCapture::new();
+        let session_id = SessionId::new();
+        let mut cfg = spawn_config("sh", &["-c", "exit 0"]);
+        cfg.session_id = session_id;
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+        worker
+            .child
+            .wait()
+            .await
+            .expect("child should exit on its own");
+
+        // Give the background reader task a moment to observe EOF and
+        // (incorrectly, if this test fails) log something about it.
+        tokio::time::sleep(TokioDuration::from_millis(200)).await;
+
+        let lines = capture.captured();
+        let session_str = session_id.to_string();
+        assert!(
+            lines.iter().all(|line| !line.contains(&session_str)),
+            "reaching EOF with no stderr output must not emit any log line for the \
+             worker's session id, got: {lines:?}"
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn spawn_failure_returns_child_process_error_with_safe_detail() {
         let config = spawn_config(
