@@ -1,7 +1,7 @@
 ---
 title: 'Email Skills for pi-agent: Himalaya CLI Reference and Classification-Driven
   Triage'
-version: '0.4'
+version: '0.5'
 status: approved  # draft | review | approved | superseded
 created: '2026-08-01'
 author: planner
@@ -124,10 +124,11 @@ What this specification explicitly does NOT cover:
 - **Continuity across independent firings must be reconstructable entirely
   from the job's own working directory, and must tolerate skipped ticks.**
   No bob-side session or queue state may be relied upon to persist between
-  scheduler ticks. Bob being stopped at a tick (ADR-006), a missing per-entry
-  `cwd` (S-009), or `max_processes` exhaustion preventing the dedicated
-  worker a per-entry-`cwd` job requires (S-002) can all eliminate any given
-  day's runs entirely, so the design must never assume the last run was
+  scheduler ticks. Bob being stopped at a tick (ADR-006), or any skip S-009's
+  cron-tick workflow lists — a missing per-entry `cwd`, `max_processes`
+  exhaustion preventing the dedicated worker a per-entry-`cwd` job requires
+  (S-002), or a pi worker that never accepts the prompt — can eliminate any
+  given day's runs entirely, so the design must never assume the last run was
   yesterday, or that any particular day's worklog exists at all. What is
   still outstanding is therefore reconstructed from the job's own task board
   (`bob task`, S-014) rather than from any worklog file: the board states
@@ -276,11 +277,14 @@ Wall clock reaches the configured cron tick (bob scheduler, S-009, unchanged)
 bob fires the periodic pi-agent session in the configured workspace cwd
   → tick missed while bob was stopped (ADR-006): skipped silently — no
     process, no warning, no monitoring record
-  → cwd missing (S-009) or max_processes exhausted (S-002): skipped with a
-    warning and a monitoring failure record
+  → any skip S-009's cron-tick workflow lists — per-entry cwd missing, pool
+    full at max_processes, or a pi worker that never accepts the prompt (for
+    example an unrecognized pi_agent_model): skipped with a warning, and
+    recorded as S-009 states for that case
   → either way: no session runs, nothing below happens this tick
   ↓
-pi-agent discovers the himalaya and email-triage skills from that cwd
+pi-agent loads the himalaya and email-triage skills from bob's shared skill
+install path (S-011, ADR-014) and runs in that cwd
   ↓
 email-triage skill lists the job's own task board (bob task list, S-014,
 board resolved explicitly at the job's cwd, not by upward search)
@@ -584,3 +588,4 @@ only that something remains — and the run tries again on the next tick.
 | 2026-08-27 | The Design Principle, System Diagram, Workflow branch, Component 4 Interfaces, Daily-worklog Responsibility row, and "How an open item closes" paragraph no longer describe `email-triage` itself detecting a day's first run or walking worklog files backward to reconcile. The `bob worklog` command now performs reconciliation automatically and idempotently on every `append`/`list` call, against the nearest prior worklog file that exists (not the prior file "containing open items" — a whole-file filter corrected because it could wrongly skip a day that closed every item it mentions), and reports today's carried-forward set in its response for the skill to retry against. | S-015 approval. The worklog's entry and reconciliation mechanics move from skill-executed prose into a real command, the same move S-014 made for the task board; the command owns first-run detection and the backward file walk instead of the skill. | S-015 breakdown tasks (Gate 2 pending). |
 | 2026-09-17 | Continuity across firings moves from the worklog to the job's own task board, superseding the 2026-08-27 row above. The `\Seen`-detection and escalation Design Principles now track an escalated or blocked message as an open `bob task` entry; the continuity Design Principle reconciles against the board rather than "the most recent worklog that exists"; the System Diagram gains the task-filing step; the Daily-worklog Responsibility row and Component 4 lose the "sole record of anything left open" role, which moves to a new Component 5 and a new Responsibility row for the per-job task board; the Workflow opens by listing the board instead of reading a carried-forward set, files a task on every escalation and every S-004 block, and names the filed task in the worklog entry; "How an open item closes" is rewritten around moving the task to `done`; Phase 2 and Phase 4's acceptance criteria follow; and the S-004 allow-rule requirement now covers the `bob task` and `bob worklog` invocations as well as himalaya's. A new Configuration Requirement, "Task board location", requires the board to be named explicitly at the job's own working directory rather than found by S-014's upward search. Two rejected alternatives are recorded: keeping open items in the worklog by cross-day carry-forward, and relying on the upward search. | CR-013 removes `bob worklog`'s cross-day carry-forward, which was this spec's only mechanism for retrying an escalation awaiting a reply or an action the S-004 gate blocked. The task board (S-014) already answers "what is still outstanding and why", so this spec gains a real dependency on it rather than a second carry-forward mechanism. S-014 itself is unchanged and uncontradicted: its Exclusion rejected building worklog carry-forward semantics into the board generically, not a single consuming skill choosing the board for its own open items. Explicit board resolution is required because the board now carries the continuity this spec's own isolation principle demands stay inside the job's working directory, a guarantee the upward search cannot make. | Tasks TBD (S-010 skill-content updates follow from the CR-013 breakdown) |
 | 2026-09-21 | Two changes. (1) The Daily-worklog Responsibility row, Component 4 Purpose, and the Workflow's penultimate step drop "what it left, and what it intends next" — the worklog entry now records only what was done, naming any task filed or closed, matching `S-015`'s own narrowing of the entry format to a single `Done` field. (2) A new Design Principle requires every task `email-triage` files, and the escalation email itself, to carry the message's stable identity (a `Message-ID`-derived discriminator alongside subject/sender), a retrieval pointer (folder, envelope id, date, sender, subject), and a bounded, quoted, attributed body excerpt loaded via shell variable rather than a literal argument — defined once in `email-triage`'s own content and referenced from all three call sites rather than restated. The `Message-ID`-derived discriminator also becomes part of `email-triage`'s worklog item-identifier, so two distinct messages sharing a subject and sender never collide under `S-015`'s `Done`-only same-day suppression. Component 5's Purpose is reworded to name these same three elements explicitly, replacing the general "in terms complete enough" phrasing. | CR-014, its Architecture Consistency Review (2026-09-21). Change (1) matches the corresponding `S-015` amendment (same date): the worklog answers what happened, not what remains open, which is `bob task`'s question alone. Change (2) closes a gap the review found in practice — a task today only "names the message" rather than folding in its substance, and the identifier convention it reuses is not unique — and the review found this same identifier fix is what keeps change (1)'s `S-015` narrowing from silently dropping worklog entries for distinct messages that collide on identifier and outcome. Component 5's Purpose was already binding in substance (its Exclusions already rejected `report.submit` for the same inadequacy); this amendment makes the bar auditable at spec level rather than adding a new requirement. | Tasks TBD (breakdown pending) |
+| 2026-09-28 | Two changes. (1) The Workflow's periodic-fire step and the continuity Design Principle no longer keep their own partial list of how a fire can be skipped; they refer to S-009's cron-tick workflow, now the complete list, and name the newly listed case of a pi worker that never accepts the prompt (for example an unrecognized `pi_agent_model`). (2) The Workflow step "pi-agent discovers the himalaya and email-triage skills from that cwd" now says the skills load from bob's shared skill install path (S-011, ADR-014) and the session runs in that cwd. | (1) CR-015 and its Architecture Consistency Review (2026-09-28): the old list claimed every skip carries a monitoring failure record, which no longer holds for the new case (logged only, by human decision). Referring to S-009 instead of restating it keeps the two from drifting again. (2) Documentation reconciliation: stale since ADR-014 (2026-08-06); the 2026-08-12 amendment corrected Phase 4 but missed this step. | Tasks TBD (CR-015 breakdown pending); (2) none |

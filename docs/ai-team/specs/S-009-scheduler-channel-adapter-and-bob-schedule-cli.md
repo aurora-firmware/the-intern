@@ -1,6 +1,6 @@
 ---
 title: Scheduler Channel Adapter and bob schedule CLI
-version: '0.1'
+version: '0.2'
 status: approved  # draft | review | approved | superseded
 created: '2026-06-11'
 author: planner
@@ -192,7 +192,21 @@ trusted schedule store (ADR-012)
   → if queue/admission infrastructure fails: monitoring records failure; no pi-agent dispatch
   → admitted: monitoring records admission
   ↓
-pi-agent receives request, executes prompt verbatim
+Periodic dispatcher obtains a pi worker in the resolved cwd — a warm worker,
+or a dedicated one for a per-entry cwd (S-002 Component 6) — started with
+S-002's pi-agent process settings, including pi_agent_model, and sends it the
+prompt
+  → pool full at max_processes: skip this fire with a warning and a
+    monitoring failure record
+  → prompt not accepted because the worker's pi already exited (for example
+    an unrecognized pi_agent_model): skip this fire with a warning; the
+    session is killed; no monitoring record — pi's own error is already in
+    the service log (S-002 Component 6)
+  → after any skip: the entry fires again next tick
+  → accepted: monitoring records the dispatched fire with its resolved
+    working directory (S-005)
+  ↓
+pi-agent executes the prompt verbatim
   → any resulting tool_call is evaluated by the S-004 action gate
   → blocked tool_call: pi-agent session continues, but that side effect does not run
   ↓
@@ -285,3 +299,4 @@ admin-RPC handler reads and validates the whole schedule store
 | 2026-06-30 | Schedule source of truth moved from `[schedule]` in `bob.toml` to `$XDG_STATE_HOME/bob/schedules.json`; scheduler UUID admission removed in favor of trusted schedule-store membership under the Unix trust boundary. | ADR-012 / CR-004 fix the hidden scheduler UUID allow-list failure and separate mutable schedule state from static config. | Scheduler amendment tasks TBD |
 | 2026-06-30 | Clarified schedule-store validation and runtime policy boundaries: `schedule.add`, startup, and `schedule.reload` reject malformed jobs as a whole; valid scheduled prompts may still have later tool calls blocked by S-004 action authorization. | Architecture-consistency review found contradictory startup behavior, and human clarification confirmed bob must not accept bad jobs while tool policy remains a later per-action gate. | Scheduler amendment tasks TBD |
 | 2026-07-05 | Reconciled the schedule-entry schema with the already-merged `prompt`/`file` split (exactly-one-of, absolute `file`) and added an optional absolute per-entry `cwd` field, the `--cwd` CLI flag, `schedule.list` cwd output, absolute-only add/load validation, and fire-time cwd resolution with a missing-directory skip+warn (resolved cwd carried to the dispatcher via the job id per ADR-013). | CR-005 (with F6 schema reconciliation). | T-118, T-124, T-125, T-126, T-127, T-129, T-130 |
+| 2026-09-28 | The cron-tick workflow gains the dispatch step it previously skipped (admission led straight to "pi-agent receives request"): the periodic dispatcher obtains a warm or dedicated pi worker started with S-002's pi-agent process settings, including `pi_agent_model`, and sends the prompt. The step lists its outcomes — pool full at `max_processes` (skip, warning, monitoring failure record, as S-002 Component 6 already required), prompt not accepted because the worker's pi exited (skip, warning, session killed, no monitoring record), and accepted (dispatched fire recorded with its resolved cwd, S-005). This workflow is now the one complete list of how a fire ends; S-010 refers to it. No schedule-store, admin-RPC, or CLI change: the model is service-wide only. | CR-015 (from GitHub issue #104) and its Architecture Consistency Review (2026-09-28), which found the fire outcomes incomplete once a worker can refuse the prompt; human decision that this case is logged, not audited. The pool-full branch only restates S-002's existing rule here; that the code does not yet write its record is tracked separately as B-055. | Tasks TBD (breakdown pending) |
