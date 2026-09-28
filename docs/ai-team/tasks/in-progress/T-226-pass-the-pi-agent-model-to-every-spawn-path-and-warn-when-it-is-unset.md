@@ -87,6 +87,12 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-09-29
+
+Implemented T-226 in four TDD cycles on `task/T-226-pi-agent-model-spawn-paths`, each committed separately. Cycle 1 (AC-1/AC-3, commit `f59faff`): changed `build_pi_agent_supervisor_config` in `serve.rs` so `worker_args` is `pi_agent_args.clone()` extended with `cfg.pi_agent_shared_args()`; added a test asserting the appended `--model <value>` when `pi_agent_model` is set, and a second test asserting `worker_args` stays exactly `pi_agent_args` when it is unset (the latter already passed before the code change, confirming the unset-case default was already correct via `pi_agent_shared_args()` returning `Vec::new()`). Cycle 2 (AC-2, commit `b2d3e9f`): changed `build_interactive_session_config` so `args: Vec::new()` became `args: cfg.pi_agent_shared_args()`, with a test proving interactive sessions get exactly the `--model` flag and never `pi_agent_args`. Cycle 3 (AC-4, commit `7de8e52`): added `warn_if_pi_agent_model_unset(cfg)` beside `warn_if_skill_install_path_missing`, wired into `try_start_subsystems` right after the skill-path warning call; added a warn/no-warn test pair using the existing `CaptureWriter`/tracing-subscriber harness. Had to fix the first "exactly one warning" assertion — it counted substring occurrences of `"pi_agent_model"`, which appears twice in the single warning message's text, so it wrongly failed on a correctly-single-logged warning; switched to counting non-empty log lines. Cycle 4 (AC-5, commit `5744da8`): per the task's own note that `worker_process_config_for_cwd_session`'s struct-update pattern already inherits `worker_args` from `worker_process_config_for_session`, added a pool.rs-only test (`worker_process_config_for_cwd_session_inherits_same_args_as_service_wide_worker`) that passed immediately with no production change, confirming AC-5 by construction rather than driving new behavior.
+
+Verification: `cargo test -p bob serve::tests` (63 passed, 1 pre-existing unrelated ignore — B-028), `cargo test -p pi-agent-supervisor` (77 passed), `cargo fmt --all -- --check` (clean) — all run per the task's exact Verification command. Only `crates/bob/src/serve.rs` and `crates/pi-agent-supervisor/src/pool.rs` were touched, matching "Files to Touch." Nothing remains outstanding for this task; ready for review.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
