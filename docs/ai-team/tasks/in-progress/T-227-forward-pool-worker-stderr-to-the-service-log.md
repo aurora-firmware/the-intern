@@ -39,7 +39,9 @@ one log line and never a panic. Every line is logged at warning level: no rate
 limiting, filtering, or level change (S-002). The existing test
 `spawn_starts_configured_command_with_piped_stdio` (`process.rs` ~853)
 references `worker._stderr` and must be updated.
-It must not keep a terminated worker alive or delay `terminate()`.
+It must not keep a terminated worker alive, and after the worker exits
+`terminate()` may wait only a short fixed bound for the reader to drain
+before cancelling it.
 `spawn` is synchronous but always called inside the Tokio runtime (actor and
 `#[tokio::test]`); confirm this for every call site. Interactive sessions are
 out of scope: their stderr is the user's terminal fd and stays untouched.
