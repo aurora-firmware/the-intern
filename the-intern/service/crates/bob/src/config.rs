@@ -170,6 +170,19 @@ impl BobConfig {
         Self::load_with_sources(sources)
     }
 
+    /// Returns the pi arguments shared by every process bob starts — pool
+    /// workers and interactive sessions alike (S-002 "pi-agent process
+    /// settings"): `["--model", <value>]` when `pi_agent_model` is set, empty
+    /// when it is unset. Callers combine this with any process-kind-specific
+    /// arguments (`pi_agent_args` is pool-worker-only and must not be mixed
+    /// in for interactive sessions).
+    pub fn pi_agent_shared_args(&self) -> Vec<String> {
+        match &self.pi_agent_model {
+            Some(model) => vec!["--model".to_string(), model.clone()],
+            None => Vec::new(),
+        }
+    }
+
     fn load_with_sources(sources: ConfigSources) -> ServiceResult<Self> {
         let (runtime_root, runtime_dir_unresolved) = resolve_runtime_root(&sources)?;
         let fallback_admin_sock_path = runtime_root.join("admin.sock");
@@ -1399,6 +1412,31 @@ mod tests {
             .expect("BOB_PI_AGENT_MODEL override should load");
 
         assert_eq!(config.pi_agent_model, Some("openai/gpt-5:high".to_string()));
+    }
+
+    // ── AC-4 (T-225): the shared pi-arguments builder ─────────────────────────
+
+    #[test]
+    fn pi_agent_shared_args_returns_model_flag_when_pi_agent_model_is_set() {
+        let config = BobConfig {
+            pi_agent_model: Some("anthropic/claude-opus-4".to_string()),
+            ..BobConfig::test_base()
+        };
+
+        assert_eq!(
+            config.pi_agent_shared_args(),
+            vec!["--model".to_string(), "anthropic/claude-opus-4".to_string()]
+        );
+    }
+
+    #[test]
+    fn pi_agent_shared_args_is_empty_when_pi_agent_model_is_unset() {
+        let config = BobConfig {
+            pi_agent_model: None,
+            ..BobConfig::test_base()
+        };
+
+        assert!(config.pi_agent_shared_args().is_empty());
     }
 
     #[test]
