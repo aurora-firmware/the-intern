@@ -9,6 +9,7 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::task::JoinHandle;
 use tokio::time;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +43,11 @@ pub struct RpcWorkerProcess {
     /// detaching, [`read_next_stdout_json`] errors because the worker no longer
     /// owns the stream.
     stdout: Option<BufReader<ChildStdout>>,
+    /// Background task forwarding this worker's stderr to the service log
+    /// (see [`spawn_stderr_forwarder`]). Aborted in [`Self::terminate`] so it
+    /// never outlives the worker it belongs to, mirroring how `pool.rs`'s
+    /// `drain_handle` is aborted at every teardown path.
+    stderr_forwarder: JoinHandle<()>,
     child_termination_deadline: Duration,
 }
 
@@ -110,12 +116,13 @@ impl RpcWorkerProcess {
                 detail: "failed to create piped child stderr".to_string(),
             })?;
 
-        spawn_stderr_forwarder(stderr, cfg.session_id);
+        let stderr_forwarder = spawn_stderr_forwarder(stderr, cfg.session_id);
 
         Ok(Self {
             child,
             stdin: Some(stdin),
             stdout: Some(BufReader::new(stdout)),
+            stderr_forwarder,
             child_termination_deadline: cfg.child_termination_deadline,
         })
     }
@@ -199,6 +206,12 @@ impl RpcWorkerProcess {
     }
 
     pub async fn terminate(mut self) -> ServiceResult<TerminationOutcome> {
+        // `abort()` is synchronous and non-blocking (it only marks the task
+        // for cancellation at its next await point); calling it first, before
+        // any of the `await`s below, ensures the stderr forwarder never
+        // outlives this worker without delaying termination itself.
+        self.stderr_forwarder.abort();
+
         self.request_graceful_termination()?;
 
         let wait_result = time::timeout(self.child_termination_deadline, self.child.wait()).await;
@@ -282,7 +295,11 @@ impl RpcWorkerProcess {
 /// `spawn` is a synchronous function, but every call site runs inside an
 /// active Tokio runtime (the pi-agent-supervisor actor and `#[tokio::test]`
 /// functions), so `tokio::spawn` here always has a runtime to schedule onto.
-fn spawn_stderr_forwarder(stderr: ChildStderr, session_id: SessionId) {
+///
+/// Returns the task's `JoinHandle` so the caller can track and abort it at
+/// worker teardown (mirroring `pool.rs`'s `spawn_stdout_drain`/`drain_handle`)
+/// instead of leaving it detached for the life of the process.
+fn spawn_stderr_forwarder(stderr: ChildStderr, session_id: SessionId) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut reader = BufReader::new(stderr);
         let mut buf: Vec<u8> = Vec::new();
@@ -310,7 +327,7 @@ fn spawn_stderr_forwarder(stderr: ChildStderr, session_id: SessionId) {
                 }
             }
         }
-    });
+    })
 }
 
 /// Configuration for spawning an interactive pi session.
@@ -1232,6 +1249,47 @@ mod tests {
         assert!(
             !outcome.forced,
             "cooperative child should terminate without force-kill"
+        );
+    }
+
+    // Review fix (T-227): terminate() must abort the stderr-forwarder task
+    // rather than leave it detached. A worker's own process exiting also
+    // closes its stderr pipe and would end the forwarder via ordinary EOF,
+    // so that alone can't distinguish "aborted" from "ended naturally" — this
+    // test spawns a grandchild that inherits and keeps the pipe's write end
+    // open well past the worker's own exit, so the forwarder can only stop
+    // promptly here if terminate() actually aborts it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn terminate_aborts_stderr_forwarder_even_when_a_grandchild_keeps_the_pipe_open() {
+        let mut cfg = spawn_config(
+            "sh",
+            &[
+                "-c",
+                "sleep 5 >&2 & trap 'exit 0' TERM; while :; do sleep 1; done",
+            ],
+        );
+        cfg.child_termination_deadline = Duration::from_millis(200);
+
+        let worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+        let stderr_forwarder_abort_handle = worker.stderr_forwarder.abort_handle();
+
+        // Give the background grandchild time to fork and inherit the stderr
+        // pipe before signaling the worker; otherwise a race could kill it
+        // (still forking) along with the main child.
+        tokio::time::sleep(TokioDuration::from_millis(50)).await;
+
+        worker.terminate().await.expect("terminate should succeed");
+
+        // The grandchild still holds the pipe's write end open well past
+        // terminate() returning, so if the forwarder task were still merely
+        // blocked waiting for EOF (i.e. not aborted), it would still be
+        // running here.
+        tokio::time::sleep(TokioDuration::from_millis(50)).await;
+
+        assert!(
+            stderr_forwarder_abort_handle.is_finished(),
+            "terminate() must abort the stderr forwarder task instead of leaving it \
+             to wait indefinitely for EOF on a pipe a grandchild process still holds open"
         );
     }
 
