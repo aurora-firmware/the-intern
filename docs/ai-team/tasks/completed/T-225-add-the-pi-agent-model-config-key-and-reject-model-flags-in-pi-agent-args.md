@@ -1,7 +1,7 @@
 ---
 id: T-225
 title: Add the pi_agent_model config key and reject model flags in pi_agent_args
-status: in-progress
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-09-29'
