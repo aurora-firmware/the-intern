@@ -42,7 +42,6 @@ pub struct RpcWorkerProcess {
     /// detaching, [`read_next_stdout_json`] errors because the worker no longer
     /// owns the stream.
     stdout: Option<BufReader<ChildStdout>>,
-    _stderr: ChildStderr,
     child_termination_deadline: Duration,
 }
 
@@ -111,11 +110,12 @@ impl RpcWorkerProcess {
                 detail: "failed to create piped child stderr".to_string(),
             })?;
 
+        spawn_stderr_forwarder(stderr, cfg.session_id);
+
         Ok(Self {
             child,
             stdin: Some(stdin),
             stdout: Some(BufReader::new(stdout)),
-            _stderr: stderr,
             child_termination_deadline: cfg.child_termination_deadline,
         })
     }
@@ -262,6 +262,55 @@ impl RpcWorkerProcess {
 
         Ok(())
     }
+}
+
+/// Spawns a background task that drains a pool worker's stderr and forwards
+/// every line to the service log (CR-015; S-002 v0.2 Component 6 "Worker
+/// stderr").
+///
+/// pi reports its own start-up failures on stderr (e.g. an unrecognized
+/// `--model` value), and the bob extension writes warnings and transport-lost
+/// errors there when it has no UI — an unread pipe loses all of that, and
+/// also blocks the child once the OS pipe buffer fills. This task reads raw
+/// bytes up to each newline and decodes them with `String::from_utf8_lossy`,
+/// so invalid UTF-8 never stops the reader. Every line is logged at warning
+/// level with no rate limiting, filtering, or level change (S-002), tagged
+/// with the worker's `session_id`. Only EOF (the worker exited or was
+/// terminated) or a genuine I/O error ends the task; an I/O error is logged
+/// once and the task returns without panicking.
+///
+/// `spawn` is a synchronous function, but every call site runs inside an
+/// active Tokio runtime (the pi-agent-supervisor actor and `#[tokio::test]`
+/// functions), so `tokio::spawn` here always has a runtime to schedule onto.
+fn spawn_stderr_forwarder(stderr: ChildStderr, session_id: SessionId) {
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr);
+        let mut buf: Vec<u8> = Vec::new();
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf).await {
+                Ok(0) => break,
+                Ok(_) => {
+                    let mut line = String::from_utf8_lossy(&buf).into_owned();
+                    if line.ends_with('\n') {
+                        line.pop();
+                        if line.ends_with('\r') {
+                            line.pop();
+                        }
+                    }
+                    tracing::warn!(session = %session_id, "pool worker stderr: {line}");
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        session = %session_id,
+                        error = %error,
+                        "pool worker stderr reader failed"
+                    );
+                    break;
+                }
+            }
+        }
+    });
 }
 
 /// Configuration for spawning an interactive pi session.
@@ -512,8 +561,99 @@ impl InteractiveProcess {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::{Arc, Mutex};
     use std::time::Instant;
     use tokio::time::{timeout, Duration as TokioDuration};
+
+    // ---- Stderr-forwarding tracing capture (T-227) ----
+    //
+    // Mirrors the tracing-capture approach in
+    // `crates/extension-ipc/src/multiplex.rs`'s test module: install one
+    // permissive global default subscriber for the whole test binary so no
+    // `tracing` callsite gets permanently cached "not interested" by a racing
+    // thread with no subscriber at all, then layer a thread-local capturing
+    // subscriber over it for the duration of each test that needs to observe
+    // emitted lines.
+
+    fn ensure_global_test_subscriber() {
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(std::io::sink)
+                .finish();
+            let _ = tracing::subscriber::set_global_default(subscriber);
+        });
+    }
+
+    /// Captures formatted tracing lines emitted while the guard is alive.
+    struct TracingCapture {
+        lines: Arc<Mutex<Vec<String>>>,
+        _guard: tracing::subscriber::DefaultGuard,
+    }
+
+    impl TracingCapture {
+        fn new() -> Self {
+            ensure_global_test_subscriber();
+
+            let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let lines_clone = Arc::clone(&lines);
+
+            let make_writer = move || {
+                let l = Arc::clone(&lines_clone);
+                LineWriter { lines: l }
+            };
+
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_ansi(false)
+                .with_writer(make_writer)
+                .finish();
+
+            let guard = tracing::subscriber::set_default(subscriber);
+            Self {
+                lines,
+                _guard: guard,
+            }
+        }
+
+        fn captured(&self) -> Vec<String> {
+            self.lines.lock().expect("lines lock").clone()
+        }
+    }
+
+    struct LineWriter {
+        lines: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl std::io::Write for LineWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let s = String::from_utf8_lossy(buf).into_owned();
+            self.lines.lock().expect("lines lock").push(s);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Polls `check` until it returns `true` or `deadline` elapses, sleeping
+    /// briefly between attempts. The background stderr-forwarding task runs
+    /// concurrently with the test task, so assertions on captured tracing
+    /// output must not assume a specific scheduling order.
+    async fn wait_for(deadline: TokioDuration, check: impl Fn() -> bool) {
+        let start = Instant::now();
+        loop {
+            if check() {
+                return;
+            }
+            if start.elapsed() >= deadline {
+                return;
+            }
+            tokio::time::sleep(TokioDuration::from_millis(5)).await;
+        }
+    }
 
     fn spawn_config(command: &str, args: &[&str]) -> WorkerProcessConfig {
         WorkerProcessConfig {
@@ -850,7 +990,47 @@ mod tests {
         );
         let _ = &worker.stdin;
         let _ = &worker.stdout;
-        let _ = &worker._stderr;
+    }
+
+    // AC-1 (T-227): a line written to a pool worker's stderr is forwarded to
+    // the service log at warning level, tagged with the worker's session id.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_logs_worker_stderr_line_at_warn_with_session_id() {
+        let capture = TracingCapture::new();
+        let session_id = SessionId::new();
+        let mut cfg = spawn_config("sh", &["-c", "echo 'boom: something failed' >&2"]);
+        cfg.session_id = session_id;
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+        // Wait for the child to exit on its own rather than calling
+        // terminate(): sending SIGTERM immediately after spawn races the
+        // freshly-forked shell's startup and can kill it before it ever
+        // runs `echo`, which would make this test flaky rather than exercise
+        // the stderr-forwarding behavior under test.
+        worker
+            .child
+            .wait()
+            .await
+            .expect("child should exit on its own");
+
+        wait_for(TokioDuration::from_millis(500), || {
+            capture
+                .captured()
+                .iter()
+                .any(|line| line.contains("boom: something failed"))
+        })
+        .await;
+
+        let lines = capture.captured();
+        assert!(
+            lines.iter().any(|line| {
+                line.contains(" WARN ")
+                    && line.contains(&session_id.to_string())
+                    && line.contains("boom: something failed")
+            }),
+            "expected a WARN line tagged with the worker's session id containing the \
+             stderr text, got: {lines:?}"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
