@@ -120,6 +120,26 @@ fn warn_if_skill_install_path_missing(cfg: &BobConfig) {
     }
 }
 
+/// CR-015 (S-002 v0.2 "pi-agent process settings"): bob starts and
+/// `pi_agent_model` is unset → log a warning and continue (fail-open,
+/// mirroring `warn_if_skill_install_path_missing`).
+///
+/// Unlike the skill install path check, there is nothing to resolve or test
+/// for existence here — `pi_agent_model: None` is itself the condition.
+/// This is the one place the unset-model condition surfaces to the
+/// operator: pi still starts, but silently chooses (and may later change
+/// or fall back) its own model from its own saved settings.
+fn warn_if_pi_agent_model_unset(cfg: &BobConfig) {
+    if cfg.pi_agent_model.is_none() {
+        tracing::warn!(
+            "pi_agent_model is not set; pi will choose the model from its own \
+             saved settings, which can change or fall back to a different \
+             model without notice; set pi_agent_model in the service \
+             configuration to pin it"
+        );
+    }
+}
+
 fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Config {
     // CR-015 (S-002 "pi-agent process settings"): worker_args is pi_agent_args
     // followed by the arguments shared across every spawn path
@@ -241,6 +261,10 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     // warn_if_skill_install_path_missing's doc comment for the S-011
     // Workflow step this implements.
     warn_if_skill_install_path_missing(cfg);
+    // AC-4 (T-226): fail-open startup warning, not a startup failure — see
+    // warn_if_pi_agent_model_unset's doc comment (CR-015, S-002 "pi-agent
+    // process settings").
+    warn_if_pi_agent_model_unset(cfg);
     let pi_agent_supervisor_cfg = build_pi_agent_supervisor_config(cfg);
     let (pi_agent_supervisor_handle, pi_agent_supervisor_join) =
         pi_agent_supervisor::start(pi_agent_supervisor_cfg)?;
@@ -1455,6 +1479,73 @@ pub mod tests {
         assert!(
             logs.is_empty(),
             "an existing skill install path directory must not log a warning; got: {logs}"
+        );
+    }
+
+    // AC-4 (T-226): an unset pi_agent_model must log exactly one warning
+    // naming the key, explaining that pi will choose the model from its own
+    // saved settings (which can change or fall back without notice), and
+    // telling the operator to set pi_agent_model (CR-015, S-002 "pi-agent
+    // process settings"). Fail-open, mirroring
+    // warn_if_skill_install_path_missing.
+    #[test]
+    fn warns_when_pi_agent_model_is_unset() {
+        let cfg = BobConfig {
+            pi_agent_model: None,
+            ..BobConfig::test_base()
+        };
+
+        let writer = CaptureWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .without_time()
+            .with_writer(writer.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            warn_if_pi_agent_model_unset(&cfg);
+        });
+
+        let logs = writer.contents();
+        assert!(
+            logs.contains("pi_agent_model"),
+            "warning must name pi_agent_model; got: {logs}"
+        );
+        assert!(
+            logs.to_lowercase().contains("warn"),
+            "log line must be a warning, not another level; got: {logs}"
+        );
+        assert_eq!(
+            logs.lines().filter(|line| !line.is_empty()).count(),
+            1,
+            "exactly one warning must be logged at startup; got: {logs}"
+        );
+    }
+
+    // AC-4 (T-226) counter-case: a set pi_agent_model must not produce a
+    // warning, so the log stays quiet on the common path.
+    #[test]
+    fn does_not_warn_when_pi_agent_model_is_set() {
+        let cfg = BobConfig {
+            pi_agent_model: Some("anthropic/claude-opus-4".to_string()),
+            ..BobConfig::test_base()
+        };
+
+        let writer = CaptureWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .without_time()
+            .with_writer(writer.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            warn_if_pi_agent_model_unset(&cfg);
+        });
+
+        let logs = writer.contents();
+        assert!(
+            logs.is_empty(),
+            "a set pi_agent_model must not log a warning; got: {logs}"
         );
     }
 
