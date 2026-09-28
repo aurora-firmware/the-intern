@@ -120,3 +120,25 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-29
+PASS
+
+Stage 1 (acceptance criteria), checked against `the-intern/service/crates/bob/src/config.rs` and `tests/shell_e2e.rs` on `task/T-225-pi-agent-model-config-key`:
+- AC-1: `RawBobConfig` gains `#[serde(default)] pi_agent_model: Option<String>` and it is copied verbatim into `BobConfig`; `env_overrides()` strips `BOB_` and lowercases, so `BOB_PI_AGENT_MODEL` maps to the key automatically with no extra wiring, as the task description asserts. Covered by `loads_pi_agent_model_from_config_file` and `loads_pi_agent_model_from_env_override`. Met.
+- AC-2: `validate()` rejects `pi_agent_model.trim().is_empty()` with an error containing `"pi_agent_model"`, comment explains the `--model ""` rationale as required. Covered by `returns_configuration_error_when_pi_agent_model_is_empty` and `..._is_whitespace_only`. Met.
+- AC-3: new `model_selecting_flag_in()` scans `pi_agent_args` for `--model`, `--models`, `--provider` as an exact token or `--flag=value` prefix; verified the matcher does not false-positive `--model` against `--models` (exact-match plus `"{flag}="` prefix check). Error names the offending flag and points to `pi_agent_model`. Covered for both argument forms across all three flags, plus a control test with no model flag present. Met.
+- AC-4: `BobConfig::pi_agent_shared_args()` returns `["--model", value]` when set, empty otherwise; confirmed by grep it is intentionally unwired anywhere else in the crate (T-226's job per the task description). Covered by both branches. Met.
+- AC-5: unset `pi_agent_model` loads successfully as `None`, covered by `pi_agent_model_is_none_when_unset`. Met.
+- No unspecified behavior added; only `config.rs` and `shell_e2e.rs` touched, matching Files to Touch. `client_cfg()` in `shell_e2e.rs` gained `pi_agent_model: None` as required so the integration binary keeps compiling.
+
+Stage 2 (code quality): logic is correct and handles the separate-argument and `--flag=value` forms without false-positiving `--models`/`--provider`-prefixed strings; tests cover both success and failure paths and are independent (each builds its own env/config); no hardcoded secrets or unvalidated external-input risk beyond the existing config-parsing pattern; names and doc comments are clear, no dead code; the new validation runs once at config load, not a hot path, so the per-flag `format!` allocation in `model_selecting_flag_in` is immaterial.
+
+Verification run on `task/T-225-pi-agent-model-config-key`:
+- `cargo test -p bob config` from `the-intern/service`: 79 passed, 0 failed (includes the `shell_e2e`, `non_serve`, `queue_load`, `scheduler_execution_e2e`, `session_state_roundtrip` integration binaries compiling with 0 tests run each — expected, per the known sandbox socket-test limitation).
+- `cargo test -p bob --lib`: 312 passed, 1 ignored, 0 failed (matches the Developer's Work Log figures).
+- `cargo fmt --all -- --check`: clean.
+
+Commits (`e94135b`, `9ac8b5d`, `61e31ea`) follow `git-conventions`: `feat(bob): ...`, imperative, lowercase, no period, ≤72 chars, no task ID repeated (branch carries it).
+
+Both stages pass. No blocking or non-blocking observations beyond the above.
