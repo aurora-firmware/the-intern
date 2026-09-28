@@ -343,3 +343,119 @@ sequence resolves rather than before `request_graceful_termination()`, add a
 regression test for the shutdown-triggered-stderr scenario, and resubmit.
 Everything else in this task (AC-1 through AC-5's core logic, the detached-
 task-lifecycle fix's structure and teardown-path coverage) is ready.
+
+### Review Verdict — 2026-09-29
+
+FAIL (review cycle 3)
+
+**Cycle-2 finding (abort-before-signal placement): resolved as a placement
+change, but the underlying race it was meant to close is not actually closed
+— see the new finding below.** `terminate()`'s wait/kill sequence was
+extracted verbatim into a new private `terminate_child(&mut self)`
+(`process.rs:233-274`); `terminate()` (`process.rs:210-231`) now does
+`let outcome = self.terminate_child().await;` then unconditionally calls
+`self.stderr_forwarder.abort();`, then returns `outcome`. Confirmed by
+inspection that the abort is unconditional across every `terminate_child`
+outcome: the graceful-exit `Ok(Ok(_status))` path, the force-kill path
+(`Err(_)` timeout branch, both the `try_wait`-already-exited-during-timeout
+sub-case and the actual `kill().await` + `wait().await` sub-case), and the
+error path where signaling or waiting on the child itself fails
+(`Ok(Err(error))`, or `request_graceful_termination()?`'s early return) — in
+every case `terminate_child()` returns before `terminate()`'s single
+`abort()` call, so the forwarder is never left running past `terminate()`'s
+return in any outcome, and the cycle-1 detached-task bound is preserved.
+Re-ran `terminate_aborts_stderr_forwarder_even_when_a_grandchild_keeps_the_pipe_open`
+(the cycle-1 regression test) unmodified against this diff — passes,
+confirming this reordering does not regress the grandchild-holds-pipe-open
+guarantee. `cargo test -p pi-agent-supervisor` (83 passed, 0 failed, reran 3x)
+and `cargo fmt --all -- --check` are clean on
+`task/T-227-pool-worker-stderr-logging` at `7d4e7a2`.
+
+**New Stage 1/2 finding this cycle: the reordering narrows the cycle-2 race
+window but does not close it — `terminate()` can still lose a worker's final
+stderr line, including the exact "written in direct response to its own
+termination signal" case this session's fix targets, roughly 1 in 6 times in
+the common (no built-in delay) case.**
+
+- File/location: `the-intern/service/crates/pi-agent-supervisor/src/process.rs`,
+  `RpcWorkerProcess::terminate()` (`process.rs:210-231`), specifically the
+  unconditional `self.stderr_forwarder.abort();` immediately after
+  `let outcome = self.terminate_child().await;` resolves.
+- What is wrong: `.abort()` only cancels the forwarder task "at its next
+  await point" (Tokio's own semantics) — if the forwarder has not yet been
+  polled even once since new data became available on the pipe, aborting it
+  means that data is never read at all, not just cut off mid-line. Because
+  `terminate_child()`'s `child.wait()` resolving and the forwarder task's
+  wakeup for newly-readable stderr data are driven by two independent
+  notification paths (process-exit/SIGCHLD reaping vs. epoll readiness on
+  the stderr pipe fd), there is no ordering guarantee between them, and
+  `terminate()` does not give the forwarder any explicit opportunity to run
+  between `terminate_child()` resolving and the `abort()` call. This is not
+  theoretical: I reproduced it directly. In a disposable worktree, I took the
+  new regression test (`terminate_logs_stderr_written_in_response_to_its_own_termination_signal`,
+  `process.rs:1330-1381`) and removed only its worker script's `sleep 0.1`
+  between `echo shutdown-stderr-message >&2` and `exit 0` (i.e., a worker
+  that writes to stderr and exits immediately in its TERM trap, with no
+  built-in delay — an entirely ordinary and arguably more common shutdown
+  pattern than one with a deliberate post-write sleep). Run 100x back to
+  back: 83 passed, 17 failed with the assertion that the shutdown line was
+  never captured, confirming the message is lost on a substantial fraction
+  of runs, not a one-in-a-million edge case. Restoring the committed
+  `sleep 0.1` makes it pass reliably (0 failures in 100 runs) — but that
+  sleep is not a fact about the production code path; it exists only in the
+  test's synthetic worker script, specifically to give the executor time to
+  poll the stderr pipe before the child exits. In other words, the committed
+  regression test passes only because it was constructed to avoid exercising
+  the tight race it is nominally meant to catch, so it does not actually
+  prove `terminate()` preserves shutdown-triggered stderr in the general
+  case — it proves only that a sufficiently slow shutdown does. AC-1 ("WHEN a
+  pool worker writes a line to stderr THE SYSTEM SHALL log that line ... with
+  the worker's session id") has no such carve-out, and `kill_session`,
+  `reap_idle_and_surplus`, and `shutdown_all` in `pool.rs` all reach this
+  exact code path on every ordinary worker teardown (not a rare corner), so
+  this is a real, high-frequency AC-1 gap in the everyday graceful-shutdown
+  case — the same class of regression cycle 2 flagged, only reduced in
+  probability rather than eliminated.
+- What should change: give the forwarder a bounded opportunity to actually
+  run and observe EOF before cancelling it, instead of aborting unconditionally
+  the instant `terminate_child()` resolves — e.g.
+  `let _ = time::timeout(short_grace, &mut self.stderr_forwarder).await;`
+  followed by the existing unconditional `self.stderr_forwarder.abort()` (a
+  no-op if the forwarder already finished during the grace period). A short,
+  fixed grace period (on the order of tens of milliseconds) is enough to let
+  the executor poll the now-readable/EOF pipe in the common case, while still
+  bounding the forwarder's total lifetime after `terminate()` is called —
+  preserving the cycle-1 detached-task guarantee and not meaningfully
+  violating the task's "must not ... delay terminate()" constraint (that
+  constraint was about not hanging indefinitely on a stuck pipe, which a
+  bounded timeout still guarantees against). Please also strengthen
+  `terminate_logs_stderr_written_in_response_to_its_own_termination_signal`
+  (or add a sibling test) that removes the worker script's post-write
+  `sleep` — i.e. exercises the immediate write-then-exit case directly —
+  and confirm it passes reliably (not just occasionally) against the fixed
+  code, since that is the scenario this cycle's fix needs to actually cover.
+
+No other new issues found. Diff scope, the detached-task fix's structure,
+`cargo fmt`, and AC-2 through AC-5 remain as confirmed in prior cycles.
+
+Verification performed this cycle (disposable git worktree off
+`task/T-227-pool-worker-stderr-logging` at `7d4e7a2`, not on `dev-agent`):
+`cargo test -p pi-agent-supervisor` (83 passed, 0 failed, reran 3x) and
+`cargo fmt --all -- --check` (clean), matching the task's Verification
+command; re-ran `terminate_aborts_stderr_forwarder_even_when_a_grandchild_keeps_the_pipe_open`
+unmodified (passes, cycle-1 fix not regressed); reproduced the new
+finding by editing the committed test's worker script to drop its
+post-write `sleep 0.1` and running the resulting binary 100x directly
+(83 passed / 17 failed), then reverted that edit before removing the
+worktree — no changes from this review were committed to the task branch.
+
+Next: give the stderr-forwarder task a bounded chance to drain before
+`terminate()` aborts it (e.g. a short `time::timeout` await on the handle
+before the existing unconditional `.abort()`), strengthen the new regression
+test to exercise the immediate write-then-exit case without a synthetic
+delay, and resubmit. Per the code-review skill, this is an ordinary,
+addressable correctness gap (not a spec contradiction or an unmeetable
+acceptance criterion) — a bounded-wait-then-abort pattern resolves it within
+the existing task scope and constraints — so the verdict is FAIL, not
+ESCALATE; per the active loop's rules this is the third consecutive FAIL and
+routes to Architect consultation.
