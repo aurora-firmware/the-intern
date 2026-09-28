@@ -121,9 +121,19 @@ fn warn_if_skill_install_path_missing(cfg: &BobConfig) {
 }
 
 fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Config {
+    // CR-015 (S-002 "pi-agent process settings"): worker_args is pi_agent_args
+    // followed by the arguments shared across every spawn path
+    // (pi_agent_shared_args — `--model <value>` when pi_agent_model is set,
+    // empty otherwise). Warm, overflow, and dedicated per-entry-cwd workers
+    // all build their process config from this same worker_args field
+    // (pool.rs worker_process_config_for_session, and
+    // worker_process_config_for_cwd_session via struct update), so no
+    // per-worker-kind change is needed.
+    let mut worker_args = cfg.pi_agent_args.clone();
+    worker_args.extend(cfg.pi_agent_shared_args());
     pi_agent_supervisor::Config {
         worker_command: cfg.pi_agent_command.clone(),
-        worker_args: cfg.pi_agent_args.clone(),
+        worker_args,
         warm_pool_size: cfg.pi_agent_warm_pool_size,
         max_processes: cfg.pi_agent_max_processes,
         idle_reap_timeout: cfg.pi_agent_idle_reap_timeout,
@@ -1097,6 +1107,50 @@ pub mod tests {
             Duration::from_secs(11)
         );
         assert_eq!(supervisor_cfg.extension_path, extension_path);
+    }
+
+    // AC-1 (T-226): worker_args must be pi_agent_args followed by the shared
+    // arguments (S-002 "pi-agent process settings") when pi_agent_model is
+    // set, so warm-pool, overflow, and dedicated workers alike select it.
+    #[test]
+    fn pi_agent_supervisor_config_worker_args_appends_shared_args_when_pi_agent_model_set() {
+        let cfg = BobConfig {
+            pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+            pi_agent_model: Some("anthropic/claude-opus-4".to_string()),
+            ..BobConfig::test_base()
+        };
+
+        let supervisor_cfg = build_pi_agent_supervisor_config(&cfg);
+
+        assert_eq!(
+            supervisor_cfg.worker_args,
+            vec![
+                "--mode".to_string(),
+                "rpc".to_string(),
+                "--model".to_string(),
+                "anthropic/claude-opus-4".to_string(),
+            ],
+            "worker_args must be pi_agent_args followed by the shared --model flag"
+        );
+    }
+
+    // AC-3 (T-226): with pi_agent_model unset, worker_args must equal
+    // pi_agent_args unchanged (the shared arguments are empty).
+    #[test]
+    fn pi_agent_supervisor_config_worker_args_unchanged_when_pi_agent_model_unset() {
+        let cfg = BobConfig {
+            pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+            pi_agent_model: None,
+            ..BobConfig::test_base()
+        };
+
+        let supervisor_cfg = build_pi_agent_supervisor_config(&cfg);
+
+        assert_eq!(
+            supervisor_cfg.worker_args,
+            vec!["--mode".to_string(), "rpc".to_string()],
+            "worker_args must equal pi_agent_args unchanged when pi_agent_model is unset"
+        );
     }
 
     // AC-1 (T-126): pi_agent_cwd set on BobConfig must be mapped into the
