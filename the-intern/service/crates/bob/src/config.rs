@@ -303,6 +303,24 @@ impl BobConfig {
             ));
         }
 
+        if let Some(pi_agent_model) = &self.pi_agent_model {
+            // Reject a blank value explicitly: pi could treat `--model ""` as
+            // no model at all and silently fall back to its own saved choice,
+            // which is exactly the failure mode an explicit pi_agent_model is
+            // meant to prevent.
+            if pi_agent_model.trim().is_empty() {
+                return Err(configuration_error(
+                    "pi_agent_model must not be empty or whitespace-only",
+                ));
+            }
+        }
+
+        if let Some(flag) = model_selecting_flag_in(&self.pi_agent_args) {
+            return Err(configuration_error(format!(
+                "pi_agent_args must not select a model ({flag} found); set the model with pi_agent_model instead"
+            )));
+        }
+
         ensure_monitoring_audit_log_path(&self.monitoring.audit_log_path)?;
 
         if let Some(pi_agent_cwd) = &self.pi_agent_cwd {
@@ -546,6 +564,21 @@ fn parse_csv(value: &str) -> Vec<String> {
         .filter(|item| !item.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+/// pi flags that select a model, which `pi_agent_args` must not carry — the
+/// model is settable in exactly one place, `pi_agent_model` (CR-015).
+const MODEL_SELECTING_FLAGS: [&str; 3] = ["--model", "--models", "--provider"];
+
+/// Returns the first model-selecting flag found in `args`, matched either as
+/// a separate argument (`--model`) or in `--flag=value` form (`--model=x`).
+fn model_selecting_flag_in(args: &[String]) -> Option<&'static str> {
+    args.iter().find_map(|arg| {
+        MODEL_SELECTING_FLAGS
+            .iter()
+            .copied()
+            .find(|flag| arg == flag || arg.starts_with(&format!("{flag}=")))
+    })
 }
 
 fn ensure_monitoring_audit_log_path(path: &Path) -> ServiceResult<()> {
@@ -1500,6 +1533,75 @@ tracing_level = "warn"
         assert!(
             matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("pi_agent_warm_pool_size cannot exceed pi_agent_max_processes")),
             "expected configuration error, got {result:?}"
+        );
+    }
+
+    // ── AC-2 (T-225): a blank pi_agent_model fails config load ───────────────
+
+    #[test]
+    fn returns_configuration_error_when_pi_agent_model_is_empty() {
+        let result = load_with_env_overrides([("BOB_PI_AGENT_MODEL", "")]);
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("pi_agent_model")),
+            "expected Configuration error naming pi_agent_model, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn returns_configuration_error_when_pi_agent_model_is_whitespace_only() {
+        let result = load_with_env_overrides([("BOB_PI_AGENT_MODEL", "   ")]);
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("pi_agent_model")),
+            "expected Configuration error naming pi_agent_model, got {result:?}"
+        );
+    }
+
+    // ── AC-3 (T-225): pi_agent_args must not select a model ──────────────────
+
+    #[test]
+    fn returns_configuration_error_when_pi_agent_args_contains_a_model_selecting_flag() {
+        for flag in ["--model", "--models", "--provider"] {
+            let result = load_with_env_overrides([(
+                "BOB_PI_AGENT_ARGS",
+                &format!("--mode,rpc,{flag},value"),
+            )]);
+
+            assert!(
+                matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains(flag) && detail.contains("pi_agent_model")),
+                "expected Configuration error naming {flag} and pi_agent_model, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn returns_configuration_error_when_pi_agent_args_contains_a_model_selecting_flag_value_pair() {
+        for flag in ["--model", "--models", "--provider"] {
+            let result = load_with_env_overrides([(
+                "BOB_PI_AGENT_ARGS",
+                &format!("--mode,rpc,{flag}=value"),
+            )]);
+
+            assert!(
+                matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains(flag) && detail.contains("pi_agent_model")),
+                "expected Configuration error naming {flag} and pi_agent_model, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn loads_successfully_when_pi_agent_args_contains_no_model_selecting_flag() {
+        let config = load_with_env_overrides([("BOB_PI_AGENT_ARGS", "--mode,rpc,--trace")])
+            .expect("pi_agent_args without a model-selecting flag should load");
+
+        assert_eq!(
+            config.pi_agent_args,
+            vec![
+                "--mode".to_string(),
+                "rpc".to_string(),
+                "--trace".to_string()
+            ]
         );
     }
 
