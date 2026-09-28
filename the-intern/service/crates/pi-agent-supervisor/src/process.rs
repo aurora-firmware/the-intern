@@ -44,9 +44,11 @@ pub struct RpcWorkerProcess {
     /// owns the stream.
     stdout: Option<BufReader<ChildStdout>>,
     /// Background task forwarding this worker's stderr to the service log
-    /// (see [`spawn_stderr_forwarder`]). Aborted in [`Self::terminate`] so it
-    /// never outlives the worker it belongs to, mirroring how `pool.rs`'s
-    /// `drain_handle` is aborted at every teardown path.
+    /// (see [`spawn_stderr_forwarder`]). Aborted in [`Self::terminate`],
+    /// after the worker's own termination sequence resolves, so it can still
+    /// capture stderr written in direct response to the termination signal
+    /// while never outliving the worker it belongs to — mirroring how
+    /// `pool.rs`'s `drain_handle` is aborted at every teardown path.
     stderr_forwarder: JoinHandle<()>,
     child_termination_deadline: Duration,
 }
@@ -206,12 +208,29 @@ impl RpcWorkerProcess {
     }
 
     pub async fn terminate(mut self) -> ServiceResult<TerminationOutcome> {
+        let outcome = self.terminate_child().await;
+
         // `abort()` is synchronous and non-blocking (it only marks the task
-        // for cancellation at its next await point); calling it first, before
-        // any of the `await`s below, ensures the stderr forwarder never
-        // outlives this worker without delaying termination itself.
+        // for cancellation at its next await point). Aborting only after the
+        // worker's own termination sequence above has resolved — rather than
+        // before it is even signaled — lets the stderr forwarder capture and
+        // log any line the worker writes in direct response to receiving its
+        // own termination signal (e.g. a transport-lost message written
+        // during graceful shutdown), while still guaranteeing the forwarder
+        // never outlives this worker. Calling it unconditionally here (not
+        // just on the `Ok` path) also covers the rare case where signaling
+        // or waiting on the child itself fails.
         self.stderr_forwarder.abort();
 
+        outcome
+    }
+
+    /// Signals the child to terminate gracefully and waits up to
+    /// `child_termination_deadline` before force-killing it. Split out of
+    /// [`Self::terminate`] so the stderr forwarder can be aborted only once
+    /// this whole sequence has resolved, instead of before the child is even
+    /// signaled.
+    async fn terminate_child(&mut self) -> ServiceResult<TerminationOutcome> {
         self.request_graceful_termination()?;
 
         let wait_result = time::timeout(self.child_termination_deadline, self.child.wait()).await;
@@ -1290,6 +1309,75 @@ mod tests {
             stderr_forwarder_abort_handle.is_finished(),
             "terminate() must abort the stderr forwarder task instead of leaving it \
              to wait indefinitely for EOF on a pipe a grandchild process still holds open"
+        );
+    }
+
+    // Review fix (T-227, review cycle 2): terminate() must abort the
+    // stderr-forwarder task only after the worker's own termination sequence
+    // has resolved, not before signaling it. A worker's most interesting
+    // stderr output is often written in direct response to receiving the
+    // termination signal itself (e.g. the bob extension's transport-lost
+    // message written during graceful shutdown) — aborting the forwarder
+    // before sending SIGTERM would deterministically lose exactly that
+    // message. This worker traps TERM, writes a line to stderr, then exits
+    // on its own well within a generous deadline, so terminate() takes the
+    // graceful (non-forced) path; asserting on the captured log right after
+    // terminate() returns confirms the forwarder was still alive long enough
+    // to read and log that line before being aborted.
+    //
+    // The trap sleeps briefly after writing to stderr before exiting, rather
+    // than exiting immediately. Without that gap, this `current_thread` test
+    // runtime's process-exit wakeup (driven by a SIGCHLD-based signal path
+    // independent of the I/O reactor) can resolve `child.wait()` before the
+    // single executor thread ever polls the stderr pipe for readability,
+    // starving the forwarder task of a chance to run at all before it is
+    // aborted — a scheduling artifact of single-threaded cooperative
+    // execution, not something this test intends to exercise. The brief
+    // sleep leaves the executor idle waiting on I/O, so it reliably services
+    // the now-readable stderr pipe (and lets the forwarder log the line)
+    // well before the child actually exits and wakes `child.wait()`.
+    #[tokio::test(flavor = "current_thread")]
+    async fn terminate_logs_stderr_written_in_response_to_its_own_termination_signal() {
+        let capture = TracingCapture::new();
+        let session_id = SessionId::new();
+        let mut cfg = spawn_config(
+            "sh",
+            &[
+                "-c",
+                "trap 'echo shutdown-stderr-message >&2; sleep 0.1; exit 0' TERM; \
+                 while :; do sleep 0.05; done",
+            ],
+        );
+        cfg.session_id = session_id;
+        cfg.child_termination_deadline = Duration::from_secs(2);
+
+        let worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+
+        // Give the freshly-forked shell time to install its `trap` before
+        // signaling it; sending SIGTERM immediately after spawn races the
+        // shell's own startup and can kill it via default disposition before
+        // the trap is ever installed (same rationale as the sibling
+        // grandchild regression test above).
+        tokio::time::sleep(TokioDuration::from_millis(50)).await;
+
+        let outcome = worker.terminate().await.expect("terminate should succeed");
+
+        assert!(
+            !outcome.forced,
+            "cooperative child should terminate gracefully, not via force-kill, so this \
+             test actually exercises the graceful-shutdown stderr path"
+        );
+
+        let lines = capture.captured();
+        assert!(
+            lines.iter().any(|line| {
+                line.contains(" WARN ")
+                    && line.contains(&session_id.to_string())
+                    && line.contains("shutdown-stderr-message")
+            }),
+            "a line the worker writes to stderr in direct response to receiving its own \
+             termination signal must still be logged by the time terminate() returns, \
+             got: {lines:?}"
         );
     }
 
