@@ -35,6 +35,14 @@ pub struct BobConfig {
     pub shutdown_reap_deadline: Duration,
     pub pi_agent_command: String,
     pub pi_agent_args: Vec<String>,
+    /// Model pi should use, passed verbatim as `--model <value>` to every pi
+    /// process bob starts — pool workers and interactive sessions alike
+    /// (CR-015; S-002 "pi-agent process settings"). bob does not interpret,
+    /// list, default, or validate this value against pi.
+    ///
+    /// `None` (the unset default) leaves pi to choose from its own saved
+    /// settings; `serve.rs` logs a startup warning in that case (T-226).
+    pub pi_agent_model: Option<String>,
     pub pi_agent_warm_pool_size: usize,
     pub pi_agent_max_processes: usize,
     pub pi_agent_idle_reap_timeout: Duration,
@@ -134,6 +142,7 @@ impl BobConfig {
             shutdown_reap_deadline: Duration::from_secs(10),
             pi_agent_command: "pi".to_string(),
             pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+            pi_agent_model: None,
             pi_agent_warm_pool_size: 1,
             pi_agent_max_processes: 8,
             pi_agent_idle_reap_timeout: Duration::from_secs(300),
@@ -228,6 +237,7 @@ impl BobConfig {
             shutdown_reap_deadline: raw.shutdown_reap_deadline,
             pi_agent_command: raw.pi_agent_command,
             pi_agent_args: raw.pi_agent_args,
+            pi_agent_model: raw.pi_agent_model,
             pi_agent_warm_pool_size: raw.pi_agent_warm_pool_size,
             pi_agent_max_processes: raw.pi_agent_max_processes,
             pi_agent_idle_reap_timeout: raw.pi_agent_idle_reap_timeout,
@@ -356,6 +366,8 @@ struct RawBobConfig {
     pi_agent_command: String,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pi_agent_args: Vec<String>,
+    #[serde(default)]
+    pi_agent_model: Option<String>,
     #[serde(deserialize_with = "deserialize_usize")]
     pi_agent_warm_pool_size: usize,
     #[serde(deserialize_with = "deserialize_usize")]
@@ -653,6 +665,7 @@ fn defaults_with_runtime_root(
         shutdown_reap_deadline: Duration::from_secs(10),
         pi_agent_command: "pi".to_string(),
         pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+        pi_agent_model: None,
         pi_agent_warm_pool_size: 1,
         pi_agent_max_processes: 8,
         pi_agent_idle_reap_timeout: Duration::from_secs(300),
@@ -1308,6 +1321,51 @@ mod tests {
         assert!(config.pi_agent_warm_pool_size > 0);
         assert!(config.pi_agent_max_processes > 0);
         assert!(config.pi_agent_idle_reap_timeout > Duration::from_secs(0));
+    }
+
+    // ── AC-5 (T-225): pi_agent_model is unset by default ─────────────────────
+
+    #[test]
+    fn pi_agent_model_is_none_when_unset() {
+        let config =
+            load_with_env_overrides([]).expect("config without pi_agent_model should load");
+
+        assert_eq!(
+            config.pi_agent_model, None,
+            "unset pi_agent_model must leave the model unset so pi uses its own saved choice"
+        );
+    }
+
+    // ── AC-1 (T-225): pi_agent_model parses verbatim from config.toml ────────
+
+    #[test]
+    fn loads_pi_agent_model_from_config_file() {
+        let config_file = write_temp_config(r#"pi_agent_model = "anthropic/claude-opus-4""#);
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env: BTreeMap::new(),
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("pi_agent_model override should load");
+
+        assert_eq!(
+            config.pi_agent_model,
+            Some("anthropic/claude-opus-4".to_string())
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    // ── AC-1 (T-225): pi_agent_model parses verbatim from BOB_PI_AGENT_MODEL ──
+
+    #[test]
+    fn loads_pi_agent_model_from_env_override() {
+        let config = load_with_env_overrides([("BOB_PI_AGENT_MODEL", "openai/gpt-5:high")])
+            .expect("BOB_PI_AGENT_MODEL override should load");
+
+        assert_eq!(config.pi_agent_model, Some("openai/gpt-5:high".to_string()));
     }
 
     #[test]
