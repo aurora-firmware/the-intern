@@ -1088,6 +1088,49 @@ mod tests {
             .expect("child wait should succeed");
     }
 
+    // AC-4 (T-227): invalid UTF-8 written to stderr is logged lossily
+    // decoded rather than stopping the reader, and a later valid line is
+    // still logged.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_stderr_reader_keeps_reading_after_invalid_utf8_line() {
+        let capture = TracingCapture::new();
+        let session_id = SessionId::new();
+        let mut cfg = spawn_config(
+            "sh",
+            &[
+                "-c",
+                "printf '\\377\\376\\n' >&2; printf 'valid-line-after-invalid-utf8\\n' >&2",
+            ],
+        );
+        cfg.session_id = session_id;
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+        worker
+            .child
+            .wait()
+            .await
+            .expect("child should exit on its own");
+
+        wait_for(TokioDuration::from_millis(500), || {
+            capture
+                .captured()
+                .iter()
+                .any(|line| line.contains("valid-line-after-invalid-utf8"))
+        })
+        .await;
+
+        let lines = capture.captured();
+        assert!(
+            lines.iter().any(|line| {
+                line.contains(" WARN ")
+                    && line.contains(&session_id.to_string())
+                    && line.contains("valid-line-after-invalid-utf8")
+            }),
+            "a valid line written after an invalid-UTF-8 line must still be logged at \
+             warn level, got: {lines:?}"
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn spawn_failure_returns_child_process_error_with_safe_detail() {
         let config = spawn_config(
