@@ -104,3 +104,32 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-29
+
+PASS
+
+**Stage 1 — Acceptance Criteria:**
+- AC-1 (worker_args = pi_agent_args + shared args when set): met. `build_pi_agent_supervisor_config` in `serve.rs` appends `cfg.pi_agent_shared_args()` to `cfg.pi_agent_args.clone()`; test `pi_agent_supervisor_config_worker_args_appends_shared_args_when_pi_agent_model_set` verifies the exact `["--mode","rpc","--model","<value>"]` ordering.
+- AC-2 (interactive sessions get exactly `--model <value>`, never `pi_agent_args`): met. `build_interactive_session_config`'s `args` field is now `cfg.pi_agent_shared_args()`; test `interactive_session_config_gives_shared_args_not_pi_agent_args_when_pi_agent_model_set` confirms `pi_agent_args` does not leak through even when both are set.
+- AC-3 (unset model leaves worker_args = pi_agent_args, interactive args empty): met. `pi_agent_supervisor_config_worker_args_unchanged_when_pi_agent_model_unset` covers the pool side; the pre-existing `interactive_session_config_maps_bob_spawn_settings_without_rpc_args` test (`interactive_cfg.args.is_empty()`, `pi_agent_model` unset via `BobConfig::test_base()`) still passes and covers the interactive side.
+- AC-4 (exactly one startup warning naming `pi_agent_model`, silent when set): met. `warn_if_pi_agent_model_unset` is wired into `try_start_subsystems` right after `warn_if_skill_install_path_missing`; wording matches S-002 verbatim (names the key, says pi falls back to its own saved model which can change/fall back without notice, tells the operator to set `pi_agent_model`). `warns_when_pi_agent_model_is_unset` and `does_not_warn_when_pi_agent_model_is_set` follow the existing `CaptureWriter` pattern used for the skill-install-path warning and both pass.
+- AC-5 (dedicated per-entry-cwd worker inherits the same args as a service-wide worker): met. New `pool.rs` test `worker_process_config_for_cwd_session_inherits_same_args_as_service_wide_worker` confirms the struct-update pattern in `worker_process_config_for_cwd_session` flows `worker_args` through unchanged; no production code needed, matching the task's own note.
+- No unspecified behavior added; only `crates/bob/src/serve.rs` and `crates/pi-agent-supervisor/src/pool.rs` were touched, matching "Files to Touch" exactly.
+
+**Stage 2 — Code Quality:**
+- Correctness: verified against `S-002-bob-service-shell-architecture.md` "pi-agent process settings" section — the warning wording and the pool/interactive argument split match the spec exactly, including that `pi_agent_args` is pool-only and must never reach interactive sessions.
+- Tests: each new test is independent (fresh `BobConfig`/`Config` per test, no shared mutable state), covers both the set and unset paths per AC, and asserts the exact expected values rather than loose substring checks (the "exactly one warning" assertion correctly counts non-empty log lines, not substring occurrences, avoiding a false pass/fail on a message that happens to repeat the key name).
+- Security: no external input handled in this diff (all config comes through the already-validated `BobConfig`); no secrets.
+- Readability: doc comments on both new/changed functions cite CR-015/S-002 and explain *why* (e.g., why `pi_agent_args` must not reach interactive sessions), consistent with the file's existing style.
+- Performance: no new loops, blocking calls, or resource leaks; argument building is a single `Vec::extend`.
+- Grep across `crates/bob`, `crates/pi-agent-supervisor`, and `crates/admin-rpc` confirms `build_pi_agent_supervisor_config` and `build_interactive_session_config` are the only two production sites that construct these configs — no other spawn path was missed.
+
+**Verification run on `task/T-226-pi-agent-model-spawn-paths` (commit `5744da8`):**
+- `cargo test -p bob serve::tests`: 63 passed, 1 ignored (pre-existing B-028, unrelated), 0 failed.
+- `cargo test -p pi-agent-supervisor`: 77 passed, 0 failed.
+- `cargo fmt --all -- --check`: clean.
+
+All matches the Work Log's reported results. Both stages pass.
+
+Next owner: Development Loop.
