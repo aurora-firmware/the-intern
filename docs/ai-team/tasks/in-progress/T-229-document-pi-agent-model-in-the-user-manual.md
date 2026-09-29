@@ -101,6 +101,18 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-09-29
+
+Documented `pi_agent_model` (and its two under-documented siblings, `pi_agent_command` and `pi_agent_args`) in the user manual, per the task description and CR-015/S-002 "pi-agent process settings". Read the actual T-226/T-227 implementation (`serve.rs`'s `warn_if_pi_agent_model_unset`, `config.rs`'s `validate()` and `pi_agent_shared_args()`, `pi-agent-supervisor/src/process.rs`'s `spawn_stderr_forwarder`) and quoted their exact wording verbatim rather than paraphrasing, cross-checked against the T-228 Work Log's live transcripts and CR-015's "How pi chooses a model" section (which held the exact `pi --list-models`/`pi auth check` observed-limits wording the task asked for — fuzzy matching, exit 0 on no match, JSON-only auth check, provider-credentials-only scope — since T-228 itself never exercised those two commands).
+
+`the-intern/docs/src/operator-guide/index.md`: added a new "## pi-agent process settings" section right before the existing "## Working directory for pi-agent sessions", with a compact table mirroring S-002's (which keys reach pool workers vs. `bob chat`), then `pi_agent_command`/`pi_agent_args` (neither documented before), then `pi_agent_model` in full — why to set it, unset/invalid behaviour with the exact log wording, and the two hand-check commands with their observed limits. Added the `pi_agent_args` migration note under "Upgrading a running install" with the exact config-load error string. Added the audit-trail-blind-spot note under "Observability for scheduled jobs".
+
+`the-intern/docs/src/quickstart/index.md` (~line 167): recommend `pi_agent_model` alongside `pi_agent_cwd`, and added a note that unlike the policy edits described nearby, `bob policy reload` does not apply a `pi_agent_model` change — verified against `policy-control`'s `reload_snapshot`, which only re-reads and swaps the `[policy]` table, and against `serve.rs`'s `try_start_subsystems`, which builds the pi-agent supervisor config once at startup — so a restart is genuinely required.
+
+What was tried and rejected: initially considered inlining a full `pi_agent_cwd`/`extension_path`/`skill_install_path` explanation in the new table's surrounding prose to fully "mirror" S-002, but that would duplicate detail already covered in this guide's own dedicated sections for those three keys, so the new section only explains the two keys not documented elsewhere plus `pi_agent_model`, and links to the existing sections for the rest. Considered a realistic-looking model name for the TOML examples, but the task's hard placeholder constraint (AC-5) made an explicit `<provider>/<model-id>` angle-bracket placeholder the safer, unambiguous choice, consistent with `coding-guidelines-skills.md` §2's placeholder convention.
+
+Verification: built `mdbook build the-intern/docs` clean; confirmed every new cross-reference anchor resolves against the actual generated HTML `id` attributes, not just assumed slugification; ran the task's exact three verification commands, including the ID/version grep gate, which produced no output as required. Nothing remains outstanding for this task.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
