@@ -177,12 +177,14 @@ After editing the file, apply it without restarting the service:
 bob policy reload
 ```
 
-**`pi_agent_model` is the exception.** `bob policy reload` only re-reads and
-swaps the `[policy]` ruleset — it does not touch `pi_agent_model`. bob reads
-the whole config once at `bob serve` startup and starts its pi-agent workers
-from that snapshot, so a `pi_agent_model` edit has no effect until you
-restart `bob serve` (see [Shutdown](../operator-guide/index.md#shutdown) for
-how to stop it cleanly).
+**`bob policy reload` only applies the policy-rule bullet above.** It
+re-reads and swaps the `[policy]` ruleset — nothing else. Like
+[`pi_agent_cwd`](../operator-guide/index.md#pi_agent_cwd-service-wide) and
+[`skill_install_path`](../operator-guide/index.md#install-the-skill-package),
+`pi_agent_model` is mapped into the supervisor's configuration once, at `bob
+serve` startup, so an edit to it has no effect until you restart `bob serve`
+(see [Shutdown](../operator-guide/index.md#shutdown) for how to stop it
+cleanly).
 
 See [Policy basics](../operator-guide/index.md#policy-basics), [Working
 directory for pi-agent
