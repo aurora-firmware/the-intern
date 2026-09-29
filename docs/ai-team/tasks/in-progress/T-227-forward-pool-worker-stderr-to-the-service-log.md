@@ -477,3 +477,128 @@ acceptance criterion) — a bounded-wait-then-abort pattern resolves it within
 the existing task scope and constraints — so the verdict is FAIL, not
 ESCALATE; per the active loop's rules this is the third consecutive FAIL and
 routes to Architect consultation.
+
+### Review Verdict — 2026-09-29
+
+PASS
+
+Re-review following the Architect's cycle-3 escalation resolution (directive:
+give the forwarder a bounded grace period to reach EOF before the existing
+unconditional `.abort()`, "on the order of tens of milliseconds"; the task
+Description was amended accordingly). Reviewed commit `64ea437` on
+`task/T-227-pool-worker-stderr-logging` (on top of `7d4e7a2`/`85bf236`), in a
+disposable git worktree — no changes from this review were committed to the
+task branch.
+
+**Stage 1 — Acceptance Criteria: all five ACs remain met.**
+
+- AC-1 through AC-4: unchanged by this session's diff (`spawn_stderr_forwarder`
+  and the four AC-1–AC-4 tests at `process.rs:1071-1210` are byte-for-byte
+  identical to cycle 3); re-ran them, still pass.
+- AC-5: confirmed no `InteractiveProcess` code is touched anywhere in the
+  full `dev-agent..64ea437` diff (`git diff --stat` shows only `process.rs`,
+  `pi-agent-supervisor/Cargo.toml`, `Cargo.lock`; grepping the diff for
+  `InteractiveProcess` returns nothing).
+- The cycle-3 finding itself: **resolved and independently verified — see
+  below**, not just re-inspected.
+
+**Stage 2 — the bounded-drain-wait fix, verified by direct experiment, not
+just by reading the diff or trusting the reported numbers.**
+
+- File/location: `the-intern/service/crates/pi-agent-supervisor/src/process.rs`,
+  `RpcWorkerProcess::terminate()` (`process.rs:223-266`). `let outcome =
+  self.terminate_child().await;` is now followed by
+  `match time::timeout(STDERR_DRAIN_GRACE, &mut self.stderr_forwarder).await`
+  (`STDERR_DRAIN_GRACE = Duration::from_millis(100)`, `process.rs:71`) with a
+  three-way match (`Ok(Ok(()))` no-op, `Ok(Err(join_error))` warn-logged,
+  `Err(_elapsed)` debug-logged), then the pre-existing unconditional
+  `self.stderr_forwarder.abort()` runs regardless of which arm fired.
+- This is a genuine bounded-poll pattern, not a disguised sleep: awaiting
+  `&mut self.stderr_forwarder` (a `JoinHandle<()>`, `Future`-via-blanket-impl
+  over `&mut`) inside `time::timeout` is a real await point that yields
+  control back to the Tokio executor, giving the independently-scheduled
+  forwarder task an actual opportunity to be polled and observe pipe
+  readiness/EOF before cancellation — it races the join future against a
+  timer and returns as soon as either resolves, it does not unconditionally
+  block for the full 100ms. The final `.abort()` remains a no-op once the
+  forwarder already finished, exactly as documented.
+- Independent stability check (not just trusting the Developer's reported
+  100/100): built the test binary and ran
+  `terminate_logs_stderr_written_in_response_to_its_own_termination_signal`
+  (the strengthened, no-post-write-sleep regression test) directly 200 times
+  back to back — **200/200 passed, 0 failures**.
+- Independently reproduced the cycle-3 race this fix closes, to confirm my
+  test method has power to detect it and isn't just confirming a tautology:
+  patched `terminate()` in a scratch copy of the file to restore the
+  cycle-3 unconditional-abort-with-no-grace-window behavior (removing the
+  `time::timeout` wait entirely) and ran the same test 100x —
+  **87 passed, 13 failed** with the "shutdown line was never captured"
+  assertion, the same failure mode cycle 3 reported (their number was 17/100;
+  13/100 is consistent sampling noise for a real, inherently nondeterministic
+  scheduling race, not a different phenomenon). Reverted the scratch file
+  before continuing (confirmed via `git status`/`git diff` showing no
+  changes to the worktree).
+- Independently ran the Developer's other two claimed mutation checks myself,
+  both reproduced exactly:
+  - Commenting out the final `self.stderr_forwarder.abort()` (leaving only
+    the bounded wait) makes
+    `terminate_aborts_stderr_forwarder_even_when_a_grandchild_keeps_the_pipe_open`
+    fail deterministically with "terminate() must abort the stderr forwarder
+    task instead of leaving it to wait indefinitely for EOF on a pipe a
+    grandchild process still holds open" — confirming the grace window alone
+    does not regress the cycle-1 detached-task guarantee only because the
+    unconditional abort is still there to catch the grandchild-holds-pipe-open
+    case.
+  - Replacing `time::timeout(STDERR_DRAIN_GRACE, &mut self.stderr_forwarder)`
+    with an unbounded `(&mut self.stderr_forwarder).await` makes the same
+    test's elapsed-time assertion fail with "terminate() took 4.952972982s,
+    expected under 800ms" — confirming the wait is actually bounded in the
+    committed code, not accidentally unbounded, and that the new elapsed-time
+    assertion has real teeth.
+- Re-ran `cargo test -p pi-agent-supervisor` 10 consecutive times after
+  restoring the file to the committed state (`git status`/`git diff` clean
+  throughout): 83 passed, 0 failed every time, no flakiness, matching the
+  Developer's reported count. `cargo fmt --all -- --check` is clean;
+  `cargo build -p bob` succeeds.
+- Teardown-latency check (explicitly asked for in this review's scope):
+  `kill_session`, `reap_idle_and_surplus`, and `shutdown_all` in `pool.rs`
+  all still funnel exclusively through `RpcWorkerProcess::terminate()` /
+  `InteractiveProcess::terminate()` (grep-confirmed, unchanged from cycle 2's
+  finding), and `shutdown_all`/`reap_idle_and_surplus` await each worker's
+  `terminate()` sequentially in a loop, so the new grace window adds up to
+  `STDERR_DRAIN_GRACE` (100ms) per worker to the worst case, compounding
+  linearly with active/warm worker count on a full shutdown. This is a
+  non-blocking observation, not a defect: the default and every configured
+  `warm_pool_size` in this codebase is small (1–2), the task's own amended
+  Description explicitly authorizes "a short fixed bound... before
+  cancelling it" for exactly this call path, and the wait is bounded and
+  short (typically resolving far sooner than 100ms per the 200/200 stability
+  run above) rather than open-ended. No change requested.
+- Tests remain independent (own thread-local tracing-capture subscriber per
+  test, matching the established `extension-ipc::multiplex` pattern); no
+  hardcoded secrets; no dead code; naming is descriptive.
+  `cargo clippy -p pi-agent-supervisor --all-targets` still surfaces the same
+  pre-existing `missing_errors_doc`/`result_unit_err` finding in `pool.rs`
+  confirmed present on unmodified `dev-agent` too — unrelated to this diff,
+  and per CLAUDE.md clippy is not a clean gate for this workspace.
+
+Verification performed this cycle (disposable git worktree off
+`task/T-227-pool-worker-stderr-logging` at `64ea437`, removed after review;
+no commits made to the task branch): `cargo test -p pi-agent-supervisor`
+(83 passed, 0 failed, 10 consecutive full-suite runs) and
+`cargo fmt --all -- --check` (clean), matching the task's exact Verification
+command; `cargo build -p bob` succeeds; direct 200x rerun of the
+write-then-exit-immediately regression test (200/200 pass); mutation
+reproduction of the pre-fix race (87/100 pass, 13/100 fail, restored before
+continuing); independent reproduction of both of the Developer's other two
+claimed mutation results (grandchild test fails without the final `.abort()`;
+elapsed-time assertion fails with an unbounded await, "took 4.95s"); grep
+confirmation that all three `pool.rs` teardown paths still funnel through
+`terminate()`; full `cargo test --workspace` not run — this sandbox's
+socket-based suites hang per the repo's known limitation, unrelated to this
+change.
+
+Both stages pass. The cycle-3 race is genuinely closed (not just narrowed
+further), independently verified by direct experiment rather than by
+inspection or trust in reported numbers. No new issues found. Ready to move
+to `completed/` per the active loop.
