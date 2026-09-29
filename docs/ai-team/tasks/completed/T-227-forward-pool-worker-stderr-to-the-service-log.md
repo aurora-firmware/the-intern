@@ -1,7 +1,7 @@
 ---
 id: T-227
 title: Forward pool-worker stderr to the service log
-status: in-progress
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-09-29'
