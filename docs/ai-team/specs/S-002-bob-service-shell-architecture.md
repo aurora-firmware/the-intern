@@ -1,6 +1,6 @@
 ---
 title: Bob Service Shell Architecture
-version: '0.1'
+version: '0.2'
 status: approved  # draft | review | approved | superseded
 created: '2026-05-16'
 author: planner
@@ -146,7 +146,7 @@ admin actor never sees extension traffic and vice versa.
 | Requests Handler actor | Scaffold for S-001 Phase 1 work — owns the inbound internal-event queue and pre-flight identity attachment | Empty implementation in this spec |
 | Policy Control actor | Scaffold for S-001 Phase 4 work — accepts verdict requests over its handle, returns allow/block | Empty implementation; pre-loaded with a deny-by-default stub |
 | Monitoring actor | Scaffold for S-001 Phase 5 work — accepts events and report records, exposes a subscription stream for admin-RPC | Empty implementation; uses an in-memory ring buffer for early development |
-| Pi-agent Supervisor actor | Scaffold for S-001 Phase 2 work — owns the warm pool, spawn/reap, and prompt routing; spawns each worker with an explicit working directory resolved from `pi_agent_cwd` (inheriting the launch cwd when unset), and supports acquiring a session under a caller-supplied cwd for per-entry scheduled jobs | Warm workers carry the service-wide cwd; a per-entry-cwd request needs a dedicated worker (see Component 6) |
+| Pi-agent Supervisor actor | Scaffold for S-001 Phase 2 work — owns the warm pool, spawn/reap, and prompt routing; starts every pi process — pool workers and interactive `bob chat` sessions — with the settings defined in Configuration → pi-agent process settings, building the arguments both kinds share in one place; forwards pool workers' stderr to the service log; supports acquiring a session under a caller-supplied cwd for per-entry scheduled jobs | Warm workers carry the service-wide settings; a per-entry-cwd request needs a dedicated worker (see Component 6) |
 | Persistence actor | Scaffold for the inbound queue, audit log, and session state stores | Empty implementation; trait-only |
 | `bob` client subcommands | Thin clients over the local control plane; resolve socket path from config, open `admin.sock`, perform one call (or one subscription, for `audit tail`), render results, exit. `bob chat` is the exception in shape but not ownership: it requires the running service and requests a supervised interactive `pi` session rather than feeding the request-intake path. Filesystem-only subcommands, which contact no service at all, are a separate category owned by their own specifications. | No business logic |
 
@@ -262,15 +262,36 @@ construction).
   method that returns an empty list, so `bob sessions list` works end-to-end
   from day one.
 
-**Worker working directory and the warm-pool contract.** The supervisor spawns
-every pool worker with an explicit working directory: `pi_agent_cwd` when set,
-otherwise the inherited launch cwd. Warm-pool workers are pre-spawned with that
-single service-wide cwd, so they can only be reused by requests that want that
-cwd. A request that supplies its own working directory (a per-entry scheduled
-job with an explicit `cwd`, per S-009) therefore **cannot** reuse a warm
-worker: the supervisor must spawn a **dedicated** worker in the requested
-directory. That dedicated worker forgoes warm-pool latency and consumes one
-`max_processes` slot for the duration of the run.
+**The warm-pool contract.** The supervisor starts every pool worker with the
+service-wide pi-agent process settings (see Configuration), including an
+explicit working directory: `pi_agent_cwd` when set, otherwise the inherited
+launch cwd. Warm-pool workers are pre-spawned at service start with those
+settings, so they can only be reused by requests that want them. A request
+that supplies its own working directory (a per-entry scheduled job with an
+explicit `cwd`, per S-009) therefore **cannot** reuse a warm worker: the
+supervisor must spawn a **dedicated** worker in the requested directory, with
+every other service-wide setting unchanged. That dedicated worker forgoes
+warm-pool latency and consumes one `max_processes` slot for the duration of
+the run.
+
+**Worker stderr.** The supervisor reads every pool worker's stderr and writes
+each line to the service log at warning level, tagged with the worker's
+session. pi reports start-up failures there — for example a `pi_agent_model`
+it does not recognize — and the bob extension uses stderr for its warning or
+shutdown error when it has no UI to report through (S-003). An
+interactive session's stderr is the user's own terminal and is not captured.
+
+**When a worker never accepts the prompt.** Starting a worker does not wait
+for pi to become ready, and handing out a warm worker does not check that it
+is still running. A worker whose pi exited at start — for example because
+`pi_agent_model` names a model pi does not recognize — is therefore only
+discovered when a prompt is sent to it. For a scheduled fire, the dispatcher
+then logs a warning, kills the session, and skips the fire; the entry fires
+again on its next tick. No monitoring record is written: no session ran, and
+the cause is already in the service log through the worker's stderr. A dead
+warm worker stays in the pool until a fire picks it up and meets this
+outcome, so at most the warm-pool size of them exist at once and none leak.
+bob does not probe workers or validate the model ahead of time.
 
 **When `max_processes` is exhausted.** Acquisition of a per-entry-cwd worker is
 bound by `max_processes` exactly like any other spawn: when active plus warm
@@ -299,10 +320,11 @@ filesystem-only and never opens the socket.
 - *Interactive chat:* `bob chat` requires the running service, asks it to open a
   supervised interactive pi session, and brokers the caller's terminal to that
   service-owned child. It is gated by socket access and the `tool_call` authz
-  membrane, not by pre-flight request admission (ADR-010). `bob chat` runs the
-  interactive `pi` session in the current working directory where the `bob chat`
-  command is invoked; it does **not** consult `pi_agent_cwd`, which governs only
-  the `bob serve` RPC worker pool. CR-005 leaves interactive behaviour unchanged.
+  membrane, not by pre-flight request admission (ADR-010). The interactive `pi`
+  session runs in the working directory where `bob chat` is invoked, and is
+  otherwise started with the pi-agent process settings that apply to
+  interactive sessions (see Configuration) — `pi_agent_model` among them, but
+  not the pool-only `pi_agent_cwd` or `pi_agent_args`.
 - *Rendering:* human-readable by default; `--json` for machine consumption
   on every subcommand.
 
@@ -315,8 +337,11 @@ Service start
   bob serve
     ↓
   load configuration; init tracing
+    → invalid configuration (e.g. a model flag in pi_agent_args): exit with a
+      configuration error
+    → pi_agent_model unset: log one warning naming the missing key
     ↓
-  construct subsystem actors; obtain handles
+  construct subsystem actors; obtain handles; pre-spawn warm workers
     ↓
   bind admin.sock and extension.sock (perms 0660, dir 0700)
     ↓
@@ -358,9 +383,12 @@ Interactive chat
   request session.interactive.open
     ↓
   bob serve starts a supervised pi child with:
-    - BOB_SESSION_ID
-    - BOB_EXTENSION_SOCK_PATH
-    - --extension <resolved bob.ts path>
+    - the pi-agent process settings for interactive sessions (Configuration),
+      including --model <pi_agent_model> when set
+    - the extension wiring S-003 defines: --extension <resolved bob.ts path>,
+      BOB_SESSION_ID, BOB_EXTENSION_SOCK_PATH (and BOB_SKILL_INSTALL_PATH
+      when a skill path is resolved)
+    - the invocation cwd of bob chat
     - caller terminal fds brokered via SCM_RIGHTS (ADR-011)
     ↓
   pi owns the interactive UI; bob supervises, monitors, and reaps the child
@@ -390,7 +418,10 @@ Graceful shutdown
 
 ## Configuration
 
-Behavioural — concrete keys are defined when each subsystem lands.
+Configuration lives in `config.toml`. Service-wide settings are flat top-level
+`snake_case` keys (ADR-002); a subsystem that needs more reserves its own table
+(see Subsystem placeholders). Keys belonging to a later subsystem are defined
+when that subsystem lands.
 
 - **Socket paths.** `admin_sock_path` and `extension_sock_path` default to
   `$XDG_RUNTIME_DIR/bob/admin.sock` and `…/extension.sock` on Linux, and to
@@ -407,37 +438,100 @@ Behavioural — concrete keys are defined when each subsystem lands.
   can tune backpressure per subsystem.
 - **Shutdown deadlines.** The drain, child-reap, and forced-kill deadlines
   from §8 of the Rust coding guidelines are configurable, with safe defaults.
-- **pi-agent worker working directory (`pi_agent_cwd`).** The service-wide
-  working directory the supervisor gives every pi-agent RPC worker it spawns
-  for the `bob serve` pool. *What must exist:* an optional key naming the
-  directory workers run in. *Where it lives:* `config.toml` as a top-level
-  `snake_case` key (ADR-002), not a per-subsystem table. *Constraints:* when
-  set it must be an **absolute** path; a relative value is rejected at config
-  load with a clear configuration error. *Missing-value behaviour:* unset →
-  workers inherit the launch cwd of the `bob serve` process (the pre-CR-005
-  behaviour, backward compatible and the v1 default). *Existence handling
-  (lazy / spawn-time):* directory existence is **not** gated at config load and
-  does **not** fast-fail service startup; a set-but-missing `pi_agent_cwd`
-  surfaces at worker spawn time as a logged (warned) worker-spawn failure
-  through the supervisor's existing child-process error path (and, for a
-  scheduled firing, is skipped with a warning like any other spawn failure).
-  Operators are advised to set an explicit workspace so pi's context-file
-  (`AGENTS.md`/`CLAUDE.md`) and relative-path resolution are predictable.
-  Skills are **not** affected by this key: bob supplies them independently of
-  the working directory (ADR-014, S-011).
-- **Skill install path.** The directory bob supplies to pi as the source of
-  agent skills. *Shape:* a service-wide flat `snake_case` key (ADR-002), like
-  `pi_agent_cwd` and `extension_path`. *Constraints:* absolute when set;
-  security-relevant, since its content reaches every session bob spawns
-  (ADR-014 §7). *Missing-value behaviour:* unset resolves to the ADR-009
-  `data` default alongside the extension; set-but-missing or empty is
-  **fail-open** — the session starts without skills and a warning is logged.
-  This differs deliberately from `extension_path`, which is fail-closed.
 - **Tracing.** Log level, formatter (development vs. JSON), and span sample
   rate. Audit log destinations are configured separately when Monitoring lands.
 - **Subsystem placeholders.** Each subsystem reserves its own configuration
   table (`[policy]`, `[monitoring]`, `[supervisor]`, …) so that later phases
   add keys without restructuring the file.
+
+### pi-agent process settings
+
+bob starts pi in two ways: as an RPC **pool worker** — warm or dedicated —
+for queued requests and scheduled fires, and as an **interactive session** for
+`bob chat`. Every setting that shapes a pi process is one flat key, and each
+applies to exactly the kinds of process the table below marks. Each concern is
+settable through exactly one key: no two keys may supply the same pi setting.
+
+| Key | Pool workers | Interactive sessions |
+|---|---|---|
+| `pi_agent_command` | yes | yes |
+| `pi_agent_args` | yes | no |
+| `pi_agent_model` | yes | yes |
+| `pi_agent_cwd` | yes | no — the session runs in the `bob chat` invocation cwd |
+| `extension_path` (S-003) | yes | yes |
+| `skill_install_path` | yes | yes |
+| `pi_agent_warm_pool_size`, `pi_agent_max_processes`, `pi_agent_idle_reap_timeout` | pool sizing and reaping | no |
+
+Every pi process also receives the extension wiring S-003 defines
+(`--extension` and the `BOB_*` environment variables). The supervisor builds
+the arguments shared by both kinds of process in one place, so a setting that
+applies to both cannot reach one and silently miss the other — the same drift
+ADR-014 guards against for skill delivery.
+
+- **pi executable (`pi_agent_command`).** The command bob runs to start pi.
+  *Default:* `pi`, resolved on `PATH`.
+- **Pool-worker arguments (`pi_agent_args`).** Extra arguments passed
+  verbatim to every pool worker, and only to pool workers. *Default:*
+  `--mode rpc`, which pool workers require. *Constraints:* must not contain a
+  model-selecting pi flag — `--model`, `--models`, or `--provider`. Config load
+  rejects such a value with a configuration error that names `pi_agent_model`
+  as the place to set the model.
+- **pi-agent model (`pi_agent_model`).** *What:* an optional pi model
+  pattern — anything pi accepts for its `--model` flag, such as
+  `provider/id`, optionally with a thinking-level suffix. bob passes it
+  verbatim as `--model <value>` to every pi process it starts, pool workers
+  and interactive sessions alike, and does not interpret, list, default, or
+  validate it. *Why bob sets it:* without `--model`, pi chooses the model from
+  its own saved settings. pi rewrites that saved choice whenever a model is
+  selected in any session, and when the saved model no longer resolves it
+  silently falls back to another model. Given an explicit `--model` it does
+  not recognize, pi instead reports the error and exits before any provider
+  request. *Missing-value behaviour:* unset → no `--model` is passed and pi
+  uses its own saved choice (backward compatible). bob then logs one warning
+  at startup that names the missing `pi_agent_model` key, says that pi will
+  choose the model from its own saved settings, which can change or fall back
+  to a different model without notice, and says to set `pi_agent_model` in the
+  service configuration. *Invalid value:* bob runs no startup or pre-fire
+  check. A pool worker started with a model pi does not recognize logs pi's
+  error through its stderr and exits (see Component 6 for what happens to
+  the fire); an interactive session shows the error in the user's terminal.
+- **pi-agent worker working directory (`pi_agent_cwd`).** The service-wide
+  working directory the supervisor gives every pi-agent RPC worker it spawns
+  for the `bob serve` pool. *What must exist:* an optional key naming the
+  directory workers run in. *Constraints:* when set it must be an **absolute**
+  path; a relative value is rejected at config load with a clear
+  configuration error. *Missing-value behaviour:* unset → workers inherit the
+  launch cwd of the `bob serve` process (backward compatible and the v1
+  default). *Existence handling (lazy / spawn-time):* directory existence is
+  **not** gated at config load and does **not** fast-fail service startup; a
+  set-but-missing `pi_agent_cwd` surfaces at worker spawn time as a logged
+  (warned) worker-spawn failure through the supervisor's existing
+  child-process error path (and, for a scheduled firing, is skipped with a
+  warning like any other spawn failure). Operators are advised to set an
+  explicit workspace so pi's context-file (`AGENTS.md`/`CLAUDE.md`) and
+  relative-path resolution are predictable. Skills are **not** affected by
+  this key: bob supplies them independently of the working directory
+  (ADR-014, S-011).
+- **Skill install path (`skill_install_path`).** The directory bob supplies to
+  pi as the source of agent skills. *Constraints:* absolute when set;
+  security-relevant, since its content reaches every session bob spawns
+  (ADR-014 §7). *Missing-value behaviour:* unset resolves to the ADR-009
+  `data` default alongside the extension; set-but-missing or empty is
+  **fail-open** — the session starts without skills and a warning is logged.
+  This differs deliberately from `extension_path`, which is fail-closed.
+
+**Operator documentation.** The user manual's configuration reference and
+quickstart, and the bob-companion plugin's `bob-setup` skill, document these
+keys, including that `pi_agent_model` is the one place to set the model and
+how to confirm a chosen value by hand (`pi --list-models <search>` for the
+model's exact name, `pi auth check --provider <p> --json` for the provider's
+credentials — checks that confirm a value but do not guarantee it). The
+operator guide carries a migration note for configurations that set the
+model through `pi_agent_args`, and the `bob-troubleshooting` skill maps the
+failure symptoms — the startup warning, a "model not found" line in the
+service log, a scheduled job that ran but did nothing — to the same checks.
+`README.md` records the pi version this behaviour was verified against; this
+spec does not.
 
 ## Implementation Order
 
@@ -490,3 +584,5 @@ present.
 | 2026-08-06 | Added the service-wide skill install path config key (absolute-only; default = the ADR-009 `data` location alongside the extension; set-but-missing is fail-open with a warning, unlike the fail-closed `extension_path`). Removed skills from the `pi_agent_cwd` guidance, since skills no longer resolve from the working directory. | ADR-014 accepted 2026-08-06 / S-011. | S-011 breakdown tasks (Gate 2 pending). |
 | 2026-08-23 | Component 7, the Responsibility table, and the Component 1 subcommand catalogue no longer claim that every non-`serve` subcommand is a thin JSON-RPC client. A subcommand needing the service uses `admin.sock` and only `admin.sock`; a filesystem-only subcommand contacts nothing. | The claim has been false since S-012's `bob init` shipped, which is filesystem-only and never opens the socket; ADR-007 was amended the same day. Found by the architecture consistency review of the S-014 draft. | None (documentation reconciliation only). |
 | 2026-08-27 | Component 7's filesystem-only-subcommand example list generalized from `bob init` (S-012) alone to also name `bob task` (S-014) and `bob worklog` (S-015), so the passage reads as an example set rather than an exhaustive enumeration of one. | Found by the architecture consistency review of the S-015 draft: the same drift Component 7 already had once (see the 2026-08-23 entry) recurred because the passage names an example rather than stating the rule generically. | None (documentation reconciliation only). |
+| 2026-09-28 | Configuration restructured: the keys that shape a pi process (`pi_agent_command`, `pi_agent_args`, `pi_agent_model`, `pi_agent_cwd`, `extension_path`, `skill_install_path`, and the pool-sizing keys) are gathered under a new "pi-agent process settings" subsection with one table stating which apply to pool workers and which to interactive `bob chat` sessions, and a rule that each pi setting is settable through exactly one key. `pi_agent_command` and `pi_agent_args` are specified for the first time (they existed only in code); `pi_agent_args` is pool-only and must not contain `--model`, `--models`, or `--provider`. New key `pi_agent_model`, passed as `--model` to every pi process bob starts; unset keeps pi's own saved choice and logs one startup warning naming the missing key. The supervisor forwards pool workers' stderr to the service log (Component 6, Responsibility table). Component 6 gains the outcome of a worker that never accepts the prompt (warning, session killed, fire skipped, no monitoring record) and the precise dead-warm-worker behaviour. Component 7 and the interactive-chat workflow now defer to the settings table instead of restating per-key rules; the service-start workflow gains the config-validation and unset-model warning steps. Operator-documentation deliverables recorded. | CR-015 (from GitHub issue #104), its Architecture Consistency Review (2026-09-28), and human decisions: no pre-fire model check and no new audit record (the service log is sufficient); the model is set in one place only. Restructuring rather than appending: the settings-to-process mapping previously lived in scattered one-off sentences, which is how `bob chat` came to receive none of `pi_agent_args` without any spec saying so. | Tasks TBD (breakdown pending) |
+| 2026-09-29 | Component 6's "Worker stderr" now says the bob extension's warning *or shutdown error* reaches the service log, instead of "its single degradation warning". | S-003's 2026-09-29 reconciliation: since GitHub issue #112 the extension reports one error and shuts the pi session down when its transport to bob is lost, rather than only warning. Found by that reconciliation's Architecture Consistency Review. | None (documentation reconciliation) |

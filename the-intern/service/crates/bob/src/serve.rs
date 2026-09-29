@@ -120,10 +120,40 @@ fn warn_if_skill_install_path_missing(cfg: &BobConfig) {
     }
 }
 
+/// CR-015 (S-002 v0.2 "pi-agent process settings"): bob starts and
+/// `pi_agent_model` is unset → log a warning and continue (fail-open,
+/// mirroring `warn_if_skill_install_path_missing`).
+///
+/// Unlike the skill install path check, there is nothing to resolve or test
+/// for existence here — `pi_agent_model: None` is itself the condition.
+/// This is the one place the unset-model condition surfaces to the
+/// operator: pi still starts, but silently chooses (and may later change
+/// or fall back) its own model from its own saved settings.
+fn warn_if_pi_agent_model_unset(cfg: &BobConfig) {
+    if cfg.pi_agent_model.is_none() {
+        tracing::warn!(
+            "pi_agent_model is not set; pi will choose the model from its own \
+             saved settings, which can change or fall back to a different \
+             model without notice; set pi_agent_model in the service \
+             configuration to pin it"
+        );
+    }
+}
+
 fn build_pi_agent_supervisor_config(cfg: &BobConfig) -> pi_agent_supervisor::Config {
+    // CR-015 (S-002 "pi-agent process settings"): worker_args is pi_agent_args
+    // followed by the arguments shared across every spawn path
+    // (pi_agent_shared_args — `--model <value>` when pi_agent_model is set,
+    // empty otherwise). Warm, overflow, and dedicated per-entry-cwd workers
+    // all build their process config from this same worker_args field
+    // (pool.rs worker_process_config_for_session, and
+    // worker_process_config_for_cwd_session via struct update), so no
+    // per-worker-kind change is needed.
+    let mut worker_args = cfg.pi_agent_args.clone();
+    worker_args.extend(cfg.pi_agent_shared_args());
     pi_agent_supervisor::Config {
         worker_command: cfg.pi_agent_command.clone(),
-        worker_args: cfg.pi_agent_args.clone(),
+        worker_args,
         warm_pool_size: cfg.pi_agent_warm_pool_size,
         max_processes: cfg.pi_agent_max_processes,
         idle_reap_timeout: cfg.pi_agent_idle_reap_timeout,
@@ -180,9 +210,13 @@ async fn admit_periodic_event(
 }
 
 fn build_interactive_session_config(cfg: &BobConfig) -> admin_rpc::InteractiveSessionConfig {
+    // CR-015 (S-002 "pi-agent process settings"): interactive sessions get
+    // exactly the shared arguments (`--model <value>` when pi_agent_model is
+    // set, empty otherwise) — never pi_agent_args, which is pool-worker-only
+    // (e.g. `--mode rpc`) and would be wrong for an interactive pi process.
     admin_rpc::InteractiveSessionConfig {
         command: cfg.pi_agent_command.clone(),
-        args: Vec::new(),
+        args: cfg.pi_agent_shared_args(),
         child_termination_deadline: cfg.shutdown_reap_deadline,
         extension_sock_path: cfg.extension_sock_path.clone(),
         extension_path: cfg.extension_path.clone(),
@@ -227,6 +261,10 @@ fn try_start_subsystems(cfg: &BobConfig) -> Result<Runtime, Box<dyn std::error::
     // warn_if_skill_install_path_missing's doc comment for the S-011
     // Workflow step this implements.
     warn_if_skill_install_path_missing(cfg);
+    // AC-4 (T-226): fail-open startup warning, not a startup failure — see
+    // warn_if_pi_agent_model_unset's doc comment (CR-015, S-002 "pi-agent
+    // process settings").
+    warn_if_pi_agent_model_unset(cfg);
     let pi_agent_supervisor_cfg = build_pi_agent_supervisor_config(cfg);
     let (pi_agent_supervisor_handle, pi_agent_supervisor_join) =
         pi_agent_supervisor::start(pi_agent_supervisor_cfg)?;
@@ -1099,6 +1137,50 @@ pub mod tests {
         assert_eq!(supervisor_cfg.extension_path, extension_path);
     }
 
+    // AC-1 (T-226): worker_args must be pi_agent_args followed by the shared
+    // arguments (S-002 "pi-agent process settings") when pi_agent_model is
+    // set, so warm-pool, overflow, and dedicated workers alike select it.
+    #[test]
+    fn pi_agent_supervisor_config_worker_args_appends_shared_args_when_pi_agent_model_set() {
+        let cfg = BobConfig {
+            pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+            pi_agent_model: Some("anthropic/claude-opus-4".to_string()),
+            ..BobConfig::test_base()
+        };
+
+        let supervisor_cfg = build_pi_agent_supervisor_config(&cfg);
+
+        assert_eq!(
+            supervisor_cfg.worker_args,
+            vec![
+                "--mode".to_string(),
+                "rpc".to_string(),
+                "--model".to_string(),
+                "anthropic/claude-opus-4".to_string(),
+            ],
+            "worker_args must be pi_agent_args followed by the shared --model flag"
+        );
+    }
+
+    // AC-3 (T-226): with pi_agent_model unset, worker_args must equal
+    // pi_agent_args unchanged (the shared arguments are empty).
+    #[test]
+    fn pi_agent_supervisor_config_worker_args_unchanged_when_pi_agent_model_unset() {
+        let cfg = BobConfig {
+            pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+            pi_agent_model: None,
+            ..BobConfig::test_base()
+        };
+
+        let supervisor_cfg = build_pi_agent_supervisor_config(&cfg);
+
+        assert_eq!(
+            supervisor_cfg.worker_args,
+            vec!["--mode".to_string(), "rpc".to_string()],
+            "worker_args must equal pi_agent_args unchanged when pi_agent_model is unset"
+        );
+    }
+
     // AC-1 (T-126): pi_agent_cwd set on BobConfig must be mapped into the
     // supervisor Config's worker_cwd so warm-pool workers run there.
     #[test]
@@ -1241,6 +1323,27 @@ pub mod tests {
         assert_eq!(interactive_cfg.extension_path, extension_path);
     }
 
+    // AC-2 (T-226): interactive sessions must get exactly the shared
+    // --model flag when pi_agent_model is set, and pi_agent_args must never
+    // reach them even when it is also set to something else.
+    #[test]
+    fn interactive_session_config_gives_shared_args_not_pi_agent_args_when_pi_agent_model_set() {
+        let cfg = BobConfig {
+            pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+            pi_agent_model: Some("anthropic/claude-opus-4".to_string()),
+            ..BobConfig::test_base()
+        };
+
+        let interactive_cfg = build_interactive_session_config(&cfg);
+
+        assert_eq!(
+            interactive_cfg.args,
+            vec!["--model".to_string(), "anthropic/claude-opus-4".to_string()],
+            "interactive sessions must receive exactly the shared --model flag, \
+             never pi_agent_args"
+        );
+    }
+
     // AC-2 (T-039): extension_sock_path from BobConfig is plumbed into the supervisor config.
     #[test]
     fn pi_agent_supervisor_config_maps_extension_sock_path_from_bob_config() {
@@ -1376,6 +1479,73 @@ pub mod tests {
         assert!(
             logs.is_empty(),
             "an existing skill install path directory must not log a warning; got: {logs}"
+        );
+    }
+
+    // AC-4 (T-226): an unset pi_agent_model must log exactly one warning
+    // naming the key, explaining that pi will choose the model from its own
+    // saved settings (which can change or fall back without notice), and
+    // telling the operator to set pi_agent_model (CR-015, S-002 "pi-agent
+    // process settings"). Fail-open, mirroring
+    // warn_if_skill_install_path_missing.
+    #[test]
+    fn warns_when_pi_agent_model_is_unset() {
+        let cfg = BobConfig {
+            pi_agent_model: None,
+            ..BobConfig::test_base()
+        };
+
+        let writer = CaptureWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .without_time()
+            .with_writer(writer.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            warn_if_pi_agent_model_unset(&cfg);
+        });
+
+        let logs = writer.contents();
+        assert!(
+            logs.contains("pi_agent_model"),
+            "warning must name pi_agent_model; got: {logs}"
+        );
+        assert!(
+            logs.to_lowercase().contains("warn"),
+            "log line must be a warning, not another level; got: {logs}"
+        );
+        assert_eq!(
+            logs.lines().filter(|line| !line.is_empty()).count(),
+            1,
+            "exactly one warning must be logged at startup; got: {logs}"
+        );
+    }
+
+    // AC-4 (T-226) counter-case: a set pi_agent_model must not produce a
+    // warning, so the log stays quiet on the common path.
+    #[test]
+    fn does_not_warn_when_pi_agent_model_is_set() {
+        let cfg = BobConfig {
+            pi_agent_model: Some("anthropic/claude-opus-4".to_string()),
+            ..BobConfig::test_base()
+        };
+
+        let writer = CaptureWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .without_time()
+            .with_writer(writer.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            warn_if_pi_agent_model_unset(&cfg);
+        });
+
+        let logs = writer.contents();
+        assert!(
+            logs.is_empty(),
+            "a set pi_agent_model must not log a warning; got: {logs}"
         );
     }
 
@@ -3250,6 +3420,146 @@ pub mod tests {
             drop(supervisor_handle);
             let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
             let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+        }
+
+        // T-228 AC-1: a **warm** worker (`warm_pool_size >= 1`) whose process
+        // has already exited before the fire is handed to it is skipped with
+        // a warning, its session is killed (no live session remains), and —
+        // unlike the missing-per-entry-cwd skip (which appends a `Report`-kind
+        // record via `record_periodic_fire_skipped`) — no audit record of any
+        // kind is appended. The test above covers only an overflow worker
+        // (`warm_pool_size: 0`) and only asserts the absence of an `Event`
+        // record; this one is a warm worker and asserts the absence of any
+        // audit record kind.
+        //
+        // The warm worker's script writes its own pid to a file just before
+        // exiting so the test can poll `/proc/<pid>` and confirm the process
+        // has actually exited *before* the fire is triggered — a fixed sleep
+        // here would race the warm worker's own exit and make the test flaky.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_skips_fire_and_appends_no_audit_record_when_warm_worker_already_exited(
+        ) {
+            let pid_file = std::env::temp_dir().join(format!(
+                "bob-serve-t228-warm-worker-pid-{}",
+                bob_core::types::SessionId::new()
+            ));
+            let _ = std::fs::remove_file(&pid_file);
+            let pid_file_path = pid_file.to_string_lossy().into_owned();
+
+            // Mirrors the #104 failure mode: an unrecognized `--model` makes
+            // pi exit immediately with a "not found" error on stderr.
+            let worker_script = format!(
+                "printf '%s\\n' $$ > \"{pid_file_path}\"; \
+                 echo 'Error: Model \"x\" not found.' >&2; exit 1"
+            );
+
+            let (supervisor_handle, supervisor_join) =
+                pi_agent_supervisor::start(pi_agent_supervisor::Config {
+                    worker_command: "sh".to_string(),
+                    worker_args: vec!["-c".to_string(), worker_script],
+                    warm_pool_size: 1,
+                    max_processes: 1,
+                    extension_path: existing_extension_path(),
+                    ..pi_agent_supervisor::Config::default()
+                })
+                .expect("supervisor must start");
+
+            // Poll for the warm worker to record its pid, then poll for that
+            // pid to disappear from /proc — confirming the warm worker's
+            // process has fully exited before the periodic fire is triggered.
+            let warm_worker_pid = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Ok(contents) = std::fs::read_to_string(&pid_file) {
+                        if let Ok(pid) = contents.trim().parse::<i32>() {
+                            break pid;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("warm worker must write its pid before exiting");
+
+            // A child that has exited but not yet been reaped by its parent
+            // is a zombie (`/proc/<pid>` still exists, but the process's own
+            // file descriptors — including the read end of its stdin pipe —
+            // are already released by the kernel at exit time, regardless of
+            // reaping). So "no longer running" here means either the pid is
+            // gone from /proc entirely, or its `/proc/<pid>/stat` state field
+            // reads `Z`, not that `/proc/<pid>` itself has disappeared.
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let still_running =
+                        std::fs::read_to_string(format!("/proc/{warm_worker_pid}/stat"))
+                            .ok()
+                            .and_then(|stat| {
+                                let after_comm = stat.rsplit_once(')')?.1.to_owned();
+                                let state = after_comm.split_whitespace().next()?.to_owned();
+                                Some(state != "Z")
+                            })
+                            .unwrap_or(false);
+                    if !still_running {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("warm worker process must exit before the periodic fire is triggered");
+
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+            persistence_handle
+                .enqueue_periodic_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "warm-worker-already-exited-test".to_owned(),
+                    },
+                    None,
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            // No per-entry cwd — resolves to the ServiceDefault tier, which
+            // acquires via the plain `acquire_session` (the warm-pool path).
+            let schedule_rx = schedule_rx_with_entries(Vec::new());
+
+            let audit_sink = Arc::new(SpyAuditSink::default());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx,
+                None,
+                Arc::clone(&audit_sink) as Arc<dyn AuditSink>,
+                cancel_rx,
+            );
+
+            // Give the dispatcher time to dequeue the fire, acquire the
+            // already-dead warm worker, fail to send the prompt, and clean up
+            // the session.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+
+            let sessions_after = supervisor_handle
+                .list_sessions()
+                .await
+                .expect("list sessions should succeed");
+            assert!(
+                sessions_after.is_empty(),
+                "the dead warm worker's session must be killed, leaving no live session: {sessions_after:?}"
+            );
+
+            let records = audit_sink.records();
+            assert!(
+                records.is_empty(),
+                "a skipped fire against an already-exited warm worker must append no audit record of any kind: {records:?}"
+            );
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+            std::fs::remove_file(&pid_file).ok();
         }
 
         // AC-2: a resolved per-entry `cwd` that does not exist at fire time is

@@ -366,6 +366,44 @@ describe("AC-2: NDJSON frame shape", () => {
 });
 
 // ---------------------------------------------------------------------------
+// #103 regression: the forwarding socket must not, by itself, keep the host
+// process alive. A ref'd socket handle holds Node's/Bun's event loop open for
+// as long as it stays connected, which for `pi --print` (expected to exit
+// once its requested work completes) silently blocks natural event-loop
+// drain and hangs the process indefinitely even after a fully successful
+// run.
+// ---------------------------------------------------------------------------
+
+describe("#103 regression: forwarding socket does not keep the process alive", () => {
+  it("calls unref() on the socket once connected", async () => {
+    process.env.BOB_SESSION_ID = SESSION_ID;
+    process.env.BOB_EXTENSION_SOCK_PATH = sockPath;
+
+    const server = await createTestServer(sockPath);
+    const pi = makeStubPi();
+
+    const originalUnref = net.Socket.prototype.unref;
+    const unrefSpy = vi.fn();
+    net.Socket.prototype.unref = function (this: net.Socket) {
+      unrefSpy();
+      return originalUnref.call(this);
+    };
+
+    try {
+      bobFactory(pi as any);
+      await pi.emit("session_start", { type: "session_start", reason: "startup" });
+      await waitUntil(() => server.lines().length >= 1);
+    } finally {
+      net.Socket.prototype.unref = originalUnref; // safety restore
+    }
+
+    expect(unrefSpy).toHaveBeenCalledTimes(1);
+
+    await server.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // B-003-A: pendingFrames cap — queue > CAP events pre-connect → one warn,
 // transportDead, ≤ CAP frames delivered.
 // ---------------------------------------------------------------------------

@@ -68,6 +68,53 @@ process is the stale one — bob's own logs only carry an internal
 `pi` instance yourself (e.g. `ps aux | grep pi`) and rule out the one you're
 actively using — before terminating the other one.
 
+## `pi_agent_model` symptoms
+
+Five distinct symptoms trace back to `pi_agent_model` — don't conflate them.
+Exact-message rows are in `references/symptom-table.md`; here's how to tell
+them apart quickly:
+
+1. **Startup warning that `pi_agent_model` is not set.** Logged once when
+   `bob serve` starts. This is not an error — pi still starts, it just picks
+   its own model from its own saved settings, which can change or fall back
+   without notice. Fix: set `pi_agent_model` in `config.toml` (see
+   `bob-setup`) and restart `bob serve`.
+2. **A `Model "<value>" not found` line in the service log.** This is pi's
+   own spawn-time rejection of a `pi_agent_model` value it doesn't
+   recognize, forwarded from the failing pool worker's stderr — bob runs no
+   check of the value itself before starting the process. Fix: confirm the
+   intended value with `pi --list-models <search>` (looking for the exact
+   `<provider>/<model-id>` form) before setting `pi_agent_model` again, then
+   restart `bob serve`.
+3. **A scheduled job fired but appears to have done nothing.** If the fire
+   landed on a worker already broken by an invalid `pi_agent_model`, no
+   audit record of any kind is written for it — not a `verdict`, not an
+   `event`, not a `report`. `bob audit tail` (with or without `--filter`)
+   shows nothing for that fire. Check the service log for the symptom-2 line
+   before assuming `bob audit tail` would have shown a failure.
+4. **A config-load error naming a model flag inside `pi_agent_args`.**
+   `bob serve` refuses to start when `pi_agent_args` contains `--model`,
+   `--models`, or `--provider` — the model is settable in exactly one place.
+   Fix: move the value to `pi_agent_model` and remove the flag — and its
+   value, if it was a separate argument — from `pi_agent_args`.
+5. **A config-load error that `pi_agent_model` must not be empty or
+   whitespace-only.** `bob serve` refuses to start when `pi_agent_model` is
+   set but blank — e.g. an env var expansion (`BOB_PI_AGENT_MODEL`) that
+   evaluates to an empty string, or a stray `pi_agent_model = ""` in
+   `config.toml`. Unlike symptom 2, this is caught by bob itself at config
+   load, before any process spawns. Fix: set a real `<provider>/<model-id>`
+   value or remove the key entirely to fall back to symptom-1 behaviour.
+
+`pi --list-models <search>` and `pi auth check --provider <p> --json` are
+useful checks before trusting a `pi_agent_model` value, but neither is
+conclusive proof it works, and both reflect observed pi behavior rather than
+a documented guarantee: `--list-models` fuzzy-matches and exits `0` even
+when nothing matches the search term, and `auth check` validates provider
+credentials only — an unknown model under an otherwise correctly-configured
+provider still reports `ready`, so the model must be passed as `provider/id`
+with `--provider` set. The only fully reliable check remains starting a
+session and watching for pi's own refusal, described in symptom 2 above.
+
 ## When to stop and escalate instead of continuing to debug
 
 - `pi` is not on `PATH` at all — per project rule, stop and escalate; do

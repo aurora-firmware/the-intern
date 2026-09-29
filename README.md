@@ -97,6 +97,21 @@ deliberately do not pin pi-agent versions).
   same non-interactive project-trust gate that `B-035` found blocks
   `.pi/skills/`-based auto-discovery. No gap is recorded and no blocker is
   raised for T-157–T-160.
+- **Runtime `pi` binary, `pi_agent_model` pinning (CR-015)** — revalidated at
+  **pi 0.87.1** (T-228), scoped to what this task checked, not a re-run of
+  the `resources_discover`/skill-delivery checks recorded above against pi
+  0.80.3: `--model <value>` is present on the spawned command line on all
+  three bob spawn paths (pooled RPC worker, `bob chat` interactive session,
+  and the periodic dispatcher's per-fire session) whenever `pi_agent_model`
+  is set; an unrecognized `pi_agent_model` makes pi fail fast with a
+  `Model "..." not found` error on stderr — tagged with the worker's
+  session in the service log — instead of silently falling back to a
+  different model, and a scheduled fire handed such a worker is skipped
+  with a warning instead of running against the wrong model; and
+  `pi_agent_args` is rejected at config-load time if it also tries to
+  select a model (`--model`/`--models`/`--provider`), so there is exactly
+  one place to pin it (`pi_agent_model`). This pi version has no short
+  aliases for `--model`, `--models`, or `--provider`.
 
 If a different version of `@earendil-works/pi-coding-agent` is installed,
 `npm test` in `the-intern/pi-extension` will fail with a clear incompatibility

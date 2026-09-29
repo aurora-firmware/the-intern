@@ -1,7 +1,7 @@
 ---
 title: 'Policy Control: pre-flight admission and the blocking tool_call authorization
   path'
-version: '0.1'
+version: '0.2'
 status: approved  # draft | review | approved | superseded
 created: '2026-05-20'
 author: planner
@@ -184,9 +184,11 @@ runs.
 was one-way in Phase 3, including request/verdict correlation and the timeout.
 **Interfaces:** *Hosts* pi-agent's blocking `tool_call` hook. *Produces* an
 `Authz` request frame on `extension.sock`. *Consumes* the matching
-`AuthzVerdict` frame. *Lifecycle:* on transport failure, an unparable verdict,
-or a verdict that does not arrive within the bounded timeout, it returns a
-block to pi and logs one warning.
+`AuthzVerdict` frame. *Lifecycle:* on an unparsable verdict or a verdict
+that does not arrive within the bounded timeout, it returns a block to pi and
+logs one warning for that call. On transport loss it also returns a block,
+but reports nothing of its own: the extension's single transport-lost error
+covers it, and the extension then shuts the pi session down (S-003).
 
 ### Component 6: `policy.reload` admin-RPC method
 
@@ -217,7 +219,9 @@ bob.ts receives the verdict within the bounded timeout
   → allow: hook returns allow, the tool runs
   → block: hook returns block, the tool call is denied, session continues
   ↓
-(transport failure or timeout at any point → hook returns block, warns once)
+(timeout or unparsable verdict → hook returns block, warns once for that call)
+(transport lost at any point → hook returns block; the extension reports one
+ transport-lost error and shuts the session down, S-003)
 ```
 
 Pre-flight admission gate:
@@ -376,3 +380,4 @@ The deliverable rests on a policy section in bob's existing TOML configuration
 | 2026-08-01 | Exclusions' "Agent skills" bullet corrected: skills were never bundled with Phase 4/the authorization hook; they reach pi-agent via cwd-relative auto-discovery (ADR-012 §7), delivered concretely by S-010, whose `bash` calls remain subject to this spec's action gate. | Architecture Consistency Review of S-010 found this bullet stale against ADR-012 §7 and against S-001's corrected Component 3 (2026-08-01 amendment). | None (documentation reconciliation). |
 | 2026-08-06 | Exclusions' "Agent skills" bullet rewritten: skill delivery is bob's (ADR-014 / S-011), skill content is S-010's, and neither grants authority. Noted that rules admitting reads of skill reference content are now scoped to the install path rather than to each job's working directory. | ADR-014 accepted 2026-08-06. The accepted risk that always-active journaling requires a rule broad enough to cover arbitrary working directories, departing from this spec's narrowly-matched rule shape, is recorded in S-011's Configuration Requirements, not here. | S-011 breakdown tasks (Gate 2 pending). |
 | 2026-08-12 | Added the fixed four-tool no-matcher bootstrap-profile exception for `bob init`, including its warning and operator-review obligation. | CR-007 accepts broad first-run usability while retaining explicit named-tool allow rules and default-deny for every other tool. | S-012 tasks TBD |
+| 2026-09-29 | Component 5's Lifecycle and the action-gate Workflow separate transport loss from timeout and unparsable verdicts. Timeout and unparsable verdicts still block and warn once per call. Transport loss still blocks, but reports nothing of its own; the extension's single transport-lost error covers it, and the pi session is shut down (S-003). Fail-closed semantics and the verdict timeout are unchanged. | S-003's 2026-09-29 reconciliation with the shipped behaviour of GitHub issue #112 (PR #113), found by its Architecture Consistency Review: this spec still said transport failure warns once and implied the session continues. | None (documentation reconciliation) |

@@ -35,6 +35,14 @@ pub struct BobConfig {
     pub shutdown_reap_deadline: Duration,
     pub pi_agent_command: String,
     pub pi_agent_args: Vec<String>,
+    /// Model pi should use, passed verbatim as `--model <value>` to every pi
+    /// process bob starts — pool workers and interactive sessions alike
+    /// (CR-015; S-002 "pi-agent process settings"). bob does not interpret,
+    /// list, default, or validate this value against pi.
+    ///
+    /// `None` (the unset default) leaves pi to choose from its own saved
+    /// settings; `serve.rs` logs a startup warning in that case (T-226).
+    pub pi_agent_model: Option<String>,
     pub pi_agent_warm_pool_size: usize,
     pub pi_agent_max_processes: usize,
     pub pi_agent_idle_reap_timeout: Duration,
@@ -134,6 +142,7 @@ impl BobConfig {
             shutdown_reap_deadline: Duration::from_secs(10),
             pi_agent_command: "pi".to_string(),
             pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+            pi_agent_model: None,
             pi_agent_warm_pool_size: 1,
             pi_agent_max_processes: 8,
             pi_agent_idle_reap_timeout: Duration::from_secs(300),
@@ -159,6 +168,19 @@ impl BobConfig {
     pub fn load() -> ServiceResult<Self> {
         let sources = ConfigSources::from_process()?;
         Self::load_with_sources(sources)
+    }
+
+    /// Returns the pi arguments shared by every process bob starts — pool
+    /// workers and interactive sessions alike (S-002 "pi-agent process
+    /// settings"): `["--model", <value>]` when `pi_agent_model` is set, empty
+    /// when it is unset. Callers combine this with any process-kind-specific
+    /// arguments (`pi_agent_args` is pool-worker-only and must not be mixed
+    /// in for interactive sessions).
+    pub fn pi_agent_shared_args(&self) -> Vec<String> {
+        match &self.pi_agent_model {
+            Some(model) => vec!["--model".to_string(), model.clone()],
+            None => Vec::new(),
+        }
     }
 
     fn load_with_sources(sources: ConfigSources) -> ServiceResult<Self> {
@@ -228,6 +250,7 @@ impl BobConfig {
             shutdown_reap_deadline: raw.shutdown_reap_deadline,
             pi_agent_command: raw.pi_agent_command,
             pi_agent_args: raw.pi_agent_args,
+            pi_agent_model: raw.pi_agent_model,
             pi_agent_warm_pool_size: raw.pi_agent_warm_pool_size,
             pi_agent_max_processes: raw.pi_agent_max_processes,
             pi_agent_idle_reap_timeout: raw.pi_agent_idle_reap_timeout,
@@ -293,6 +316,24 @@ impl BobConfig {
             ));
         }
 
+        if let Some(pi_agent_model) = &self.pi_agent_model {
+            // Reject a blank value explicitly: pi could treat `--model ""` as
+            // no model at all and silently fall back to its own saved choice,
+            // which is exactly the failure mode an explicit pi_agent_model is
+            // meant to prevent.
+            if pi_agent_model.trim().is_empty() {
+                return Err(configuration_error(
+                    "pi_agent_model must not be empty or whitespace-only",
+                ));
+            }
+        }
+
+        if let Some(flag) = model_selecting_flag_in(&self.pi_agent_args) {
+            return Err(configuration_error(format!(
+                "pi_agent_args must not select a model ({flag} found); set the model with pi_agent_model instead"
+            )));
+        }
+
         ensure_monitoring_audit_log_path(&self.monitoring.audit_log_path)?;
 
         if let Some(pi_agent_cwd) = &self.pi_agent_cwd {
@@ -356,6 +397,8 @@ struct RawBobConfig {
     pi_agent_command: String,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pi_agent_args: Vec<String>,
+    #[serde(default)]
+    pi_agent_model: Option<String>,
     #[serde(deserialize_with = "deserialize_usize")]
     pi_agent_warm_pool_size: usize,
     #[serde(deserialize_with = "deserialize_usize")]
@@ -536,6 +579,21 @@ fn parse_csv(value: &str) -> Vec<String> {
         .collect()
 }
 
+/// pi flags that select a model, which `pi_agent_args` must not carry — the
+/// model is settable in exactly one place, `pi_agent_model` (CR-015).
+const MODEL_SELECTING_FLAGS: [&str; 3] = ["--model", "--models", "--provider"];
+
+/// Returns the first model-selecting flag found in `args`, matched either as
+/// a separate argument (`--model`) or in `--flag=value` form (`--model=x`).
+fn model_selecting_flag_in(args: &[String]) -> Option<&'static str> {
+    args.iter().find_map(|arg| {
+        MODEL_SELECTING_FLAGS
+            .iter()
+            .copied()
+            .find(|flag| arg == flag || arg.starts_with(&format!("{flag}=")))
+    })
+}
+
 fn ensure_monitoring_audit_log_path(path: &Path) -> ServiceResult<()> {
     if path.as_os_str().is_empty() {
         return Err(configuration_error(
@@ -653,6 +711,7 @@ fn defaults_with_runtime_root(
         shutdown_reap_deadline: Duration::from_secs(10),
         pi_agent_command: "pi".to_string(),
         pi_agent_args: vec!["--mode".to_string(), "rpc".to_string()],
+        pi_agent_model: None,
         pi_agent_warm_pool_size: 1,
         pi_agent_max_processes: 8,
         pi_agent_idle_reap_timeout: Duration::from_secs(300),
@@ -1310,6 +1369,76 @@ mod tests {
         assert!(config.pi_agent_idle_reap_timeout > Duration::from_secs(0));
     }
 
+    // ── AC-5 (T-225): pi_agent_model is unset by default ─────────────────────
+
+    #[test]
+    fn pi_agent_model_is_none_when_unset() {
+        let config =
+            load_with_env_overrides([]).expect("config without pi_agent_model should load");
+
+        assert_eq!(
+            config.pi_agent_model, None,
+            "unset pi_agent_model must leave the model unset so pi uses its own saved choice"
+        );
+    }
+
+    // ── AC-1 (T-225): pi_agent_model parses verbatim from config.toml ────────
+
+    #[test]
+    fn loads_pi_agent_model_from_config_file() {
+        let config_file = write_temp_config(r#"pi_agent_model = "anthropic/claude-opus-4""#);
+
+        let config = BobConfig::load_with_sources(ConfigSources {
+            env: BTreeMap::new(),
+            config_path: Some(config_file.clone()),
+            cli_overrides: BTreeMap::new(),
+            uid: 4242,
+        })
+        .expect("pi_agent_model override should load");
+
+        assert_eq!(
+            config.pi_agent_model,
+            Some("anthropic/claude-opus-4".to_string())
+        );
+
+        fs::remove_file(config_file).expect("temp config file should be removable");
+    }
+
+    // ── AC-1 (T-225): pi_agent_model parses verbatim from BOB_PI_AGENT_MODEL ──
+
+    #[test]
+    fn loads_pi_agent_model_from_env_override() {
+        let config = load_with_env_overrides([("BOB_PI_AGENT_MODEL", "openai/gpt-5:high")])
+            .expect("BOB_PI_AGENT_MODEL override should load");
+
+        assert_eq!(config.pi_agent_model, Some("openai/gpt-5:high".to_string()));
+    }
+
+    // ── AC-4 (T-225): the shared pi-arguments builder ─────────────────────────
+
+    #[test]
+    fn pi_agent_shared_args_returns_model_flag_when_pi_agent_model_is_set() {
+        let config = BobConfig {
+            pi_agent_model: Some("anthropic/claude-opus-4".to_string()),
+            ..BobConfig::test_base()
+        };
+
+        assert_eq!(
+            config.pi_agent_shared_args(),
+            vec!["--model".to_string(), "anthropic/claude-opus-4".to_string()]
+        );
+    }
+
+    #[test]
+    fn pi_agent_shared_args_is_empty_when_pi_agent_model_is_unset() {
+        let config = BobConfig {
+            pi_agent_model: None,
+            ..BobConfig::test_base()
+        };
+
+        assert!(config.pi_agent_shared_args().is_empty());
+    }
+
     #[test]
     fn loads_pi_agent_supervisor_settings_from_config_file() {
         let mut env = BTreeMap::new();
@@ -1442,6 +1571,75 @@ tracing_level = "warn"
         assert!(
             matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("pi_agent_warm_pool_size cannot exceed pi_agent_max_processes")),
             "expected configuration error, got {result:?}"
+        );
+    }
+
+    // ── AC-2 (T-225): a blank pi_agent_model fails config load ───────────────
+
+    #[test]
+    fn returns_configuration_error_when_pi_agent_model_is_empty() {
+        let result = load_with_env_overrides([("BOB_PI_AGENT_MODEL", "")]);
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("pi_agent_model")),
+            "expected Configuration error naming pi_agent_model, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn returns_configuration_error_when_pi_agent_model_is_whitespace_only() {
+        let result = load_with_env_overrides([("BOB_PI_AGENT_MODEL", "   ")]);
+
+        assert!(
+            matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains("pi_agent_model")),
+            "expected Configuration error naming pi_agent_model, got {result:?}"
+        );
+    }
+
+    // ── AC-3 (T-225): pi_agent_args must not select a model ──────────────────
+
+    #[test]
+    fn returns_configuration_error_when_pi_agent_args_contains_a_model_selecting_flag() {
+        for flag in ["--model", "--models", "--provider"] {
+            let result = load_with_env_overrides([(
+                "BOB_PI_AGENT_ARGS",
+                &format!("--mode,rpc,{flag},value"),
+            )]);
+
+            assert!(
+                matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains(flag) && detail.contains("pi_agent_model")),
+                "expected Configuration error naming {flag} and pi_agent_model, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn returns_configuration_error_when_pi_agent_args_contains_a_model_selecting_flag_value_pair() {
+        for flag in ["--model", "--models", "--provider"] {
+            let result = load_with_env_overrides([(
+                "BOB_PI_AGENT_ARGS",
+                &format!("--mode,rpc,{flag}=value"),
+            )]);
+
+            assert!(
+                matches!(result, Err(ServiceError::Configuration { ref detail }) if detail.contains(flag) && detail.contains("pi_agent_model")),
+                "expected Configuration error naming {flag} and pi_agent_model, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn loads_successfully_when_pi_agent_args_contains_no_model_selecting_flag() {
+        let config = load_with_env_overrides([("BOB_PI_AGENT_ARGS", "--mode,rpc,--trace")])
+            .expect("pi_agent_args without a model-selecting flag should load");
+
+        assert_eq!(
+            config.pi_agent_args,
+            vec![
+                "--mode".to_string(),
+                "rpc".to_string(),
+                "--trace".to_string()
+            ]
         );
     }
 

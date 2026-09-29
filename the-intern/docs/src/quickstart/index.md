@@ -165,7 +165,9 @@ edit what it generated rather than start from a blank file.
 - Keep `skill_install_path` unless you intentionally want the shared skills
   somewhere else.
 - Set `pi_agent_cwd` if you want every non-interactive session to start in a
-  predictable directory.
+  predictable directory, and set `pi_agent_model` alongside it so pi runs a
+  model you chose rather than whatever it has saved from a previous session
+  — see [`pi_agent_model`](../operator-guide/index.md#pi_agent_model).
 - Replace the bootstrap-wide `bash`/`read`/`write`/`edit` rules with the
   narrower rules your deployment actually needs.
 
@@ -174,6 +176,15 @@ After editing the file, apply it without restarting the service:
 ```bash
 bob policy reload
 ```
+
+**`bob policy reload` only applies the policy-rule bullet above.** It
+re-reads and swaps the `[policy]` ruleset — nothing else. Like
+[`pi_agent_cwd`](../operator-guide/index.md#pi_agent_cwd-service-wide) and
+[`skill_install_path`](../operator-guide/index.md#install-the-skill-package),
+`pi_agent_model` is mapped into the supervisor's configuration once, at `bob
+serve` startup, so an edit to it has no effect until you restart `bob serve`
+(see [Shutdown](../operator-guide/index.md#shutdown) for how to stop it
+cleanly).
 
 See [Policy basics](../operator-guide/index.md#policy-basics), [Working
 directory for pi-agent
