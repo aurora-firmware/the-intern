@@ -32,7 +32,7 @@ Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 228. 
 ## Integration Evidence
 
 - Latest integration-test result: chore(bugs): merge B-055 periodic fire refused at max_processes audit
-- Source: git log --all --grep=merge|integration|verification|test -n 1
+- Source: git log --all --grep='merge|integration|verification|test' -E -n 1
 - Date: 2026-09-29
 
 ## Completed

@@ -654,8 +654,9 @@ fn resolve_periodic_cwd(
     }
 }
 
-/// Appends a monitoring failure record for a skipped periodic fire (AC-2:
-/// the resolved per-entry `cwd` does not exist at fire time).
+/// Appends a monitoring failure record for a skipped periodic fire: the
+/// resolved per-entry `cwd` does not exist at fire time (AC-2), or session
+/// acquisition was refused because the pool is at `max_processes`.
 ///
 /// Mirrors the existing preflight-denied audit pattern (`requests_handler::run_preflight`):
 /// reuses the existing `Report`/`ExternalReportAuditPayload` shape with
