@@ -8,7 +8,7 @@ created: 2026-09-29
 
 ## Summary
 
-Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 228. Blocked tasks: 0. Open bugs: 1. Bugs in progress: 0. Resolved bugs: 54. ADRs: 16. Latest integration result: chore(tasks): merge T-230 teach bob-companion skills pi_agent_model.
+Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 228. Blocked tasks: 0. Open bugs: 0. Bugs in progress: 0. Resolved bugs: 55. ADRs: 16. Latest integration result: chore(bugs): merge B-055 periodic fire refused at max_processes audit.
 
 ## Specifications
 
@@ -31,8 +31,8 @@ Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 228. 
 
 ## Integration Evidence
 
-- Latest integration-test result: chore(tasks): merge T-230 teach bob-companion skills pi_agent_model
-- Source: git log --all --grep='merge|integration|verification|test' -E -n 1
+- Latest integration-test result: chore(bugs): merge B-055 periodic fire refused at max_processes audit
+- Source: git log --all --grep=merge|integration|verification|test -n 1
 - Date: 2026-09-29
 
 ## Completed
@@ -284,7 +284,6 @@ Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 228. 
 
 | Bug ID | Title | Severity | Status | Diagnosis Status |
 |---|---|---|---|---|
-| B-055 | Periodic fire refused at max_processes is logged but not audited | medium | open | n/a |
 | B-001 | bob serve does not answer status/sessions over admin socket | high | resolved | complete |
 | B-002 | pi-agent-supervisor terminate test flakes under load because spawn_config sets 50 ms deadline | high | resolved | complete |
 | B-003 | bob extension can grow memory without bound — pendingFrames uncapped and socket.write() return ignored | high | resolved | complete |
@@ -339,6 +338,7 @@ Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 228. 
 | B-052 | himalaya message read renders attachment parts with nonexistent local file paths | medium | resolved | complete |
 | B-053 | himalaya MML text/plain attachment part appends a spurious trailing CRLF, corrupting the delivered attachment | medium | resolved | complete |
 | B-054 | the .pi/skills/worklog packaged copy is stale after Done-only narrowing | medium | resolved | complete |
+| B-055 | Periodic fire refused at max_processes is logged but not audited | medium | resolved | complete |
 
 ## Decisions
 
