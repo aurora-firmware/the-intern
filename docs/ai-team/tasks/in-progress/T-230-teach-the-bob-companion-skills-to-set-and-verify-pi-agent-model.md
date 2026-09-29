@@ -94,6 +94,22 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-09-29
+
+Implemented T-230 in a single session. Read the canonical task file, the already-reviewed `pi_agent_model` section of the operator guide (`the-intern/docs/src/operator-guide/index.md`), and the ground-truth Rust sources (`serve.rs`'s `warn_if_pi_agent_model_unset`, `config.rs`'s `validate()`/`model_selecting_flag_in`, and `pi-agent-supervisor/src/process.rs`'s stderr forwarding) to get exact runtime strings rather than re-deriving them. Also found a completed task file that recorded pi's real `Model "<x>" not found. Use --list-models to see available models.` error text from a live run, which was placeholder-ized as `Model "<value>" not found...` for the skill content.
+
+Edited `bob-setup/SKILL.md` §6: added `pi_agent_model` to the notable-keys list, then a new block stating it's the only place to set the model, that model flags in `pi_agent_args` are rejected at load, the two confirmation commands (`pi --list-models <search>`, `pi auth check --provider <p> --json`) with their observed-behavior limits, and the restart-required caveat (a `ps` check right after editing won't show `--model` yet).
+
+Edited `bob-troubleshooting/SKILL.md`: added a new `pi_agent_model symptoms` section listing all four symptoms from the task (unset-model startup warning, `Model "<value>" not found` log line, a scheduled job that fired but left no audit trace, and the `pi_agent_args` config-load rejection), each with its check and fix, plus the same list-models/auth-check limits paragraph.
+
+Edited `references/symptom-table.md`: appended four rows mapping the same four symptoms to cause and fix, reusing the exact warning/error strings from the Rust source rather than paraphrasing them.
+
+Considered folding the symptom list into the existing "False alarm" sections in `bob-troubleshooting/SKILL.md` but rejected that — these aren't false alarms (the underlying config problem is real), so a dedicated section reads more accurately.
+
+Ran all three verification commands from the task file exactly as written, including the ID/version-leak scan, which produced no output — confirming no internal task/bug/spec/ADR IDs, GitHub issue numbers, or pi version numbers were introduced. Confirmed only the three files in "Files to Touch" were modified. Committed the change as a single cycle (`edab123`) on `task/T-230-bob-companion-pi-agent-model-skills`.
+
+Nothing remains for this task — all five acceptance criteria are covered and the verification block passes clean.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
