@@ -2,7 +2,7 @@
 id: T-228
 title: Verify an invalid pi_agent_model fails loudly and record the tested pi 
   version
-status: in-progress
+status: completed
 priority: high
 assigned-role: developer
 created: '2026-09-29'
