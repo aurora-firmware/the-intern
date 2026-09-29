@@ -156,6 +156,22 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-09-29
+
+I followed the Diagnosis 1 fix contract. I read the empty Work Log and the Diagnosis Log first.
+
+**Tests.** I added a shared helper, `report_records_after_refused_fire_at_full_pool`, and two regression tests. The helper starts a supervisor with `max_processes = 1` and `warm_pool_size = 0`. It fires a default-cwd job to hold the slot, then enqueues a second fire. It collects the `Report`-kind audit records once the dispatcher has refused that second fire. One test uses a per-entry cwd and the other uses the default cwd. Each asserts exactly one Report with `action == "scheduler.periodic_fire"`, `outcome == Error`, and the job id in the summary. Both failed before the fix with an empty record list. The first fire's `Event` record is filtered out by kind. I left the existing no-eviction test (AC-4) unchanged.
+
+**Fix.**
+- The per-entry-cwd refusal arm now calls `record_periodic_fire_skipped` with a summary that includes the cwd and the error.
+- `acquire_default_session_or_warn` gained `audit` and `job_id` parameters and calls the same helper. This covers both the `ServiceDefault` and `EntryNotFound` branches. An `EntryNotFound` pool refusal now yields both the fallback record and the skip record, as the diagnosis anticipated.
+- The warn message in the default path was changed to say "skipping this fire" and to include the job id.
+- I did not touch the T-228 "warm worker already exited" test, which asserts no audit record.
+
+**Tried and rejected.** I did not extend the existing full-pool test in place. A separate helper plus two tests keeps each test to one behavior, and the existing test's assertions are untouched.
+
+**Remaining.** Nothing. Format is clean and the full workspace suite passes (commits 9ba090b test, 3599051 fix). Reviewer attention: the `record_periodic_fire_skipped` doc comment still says "AC-2 … missing cwd". The function is now shared, and I left that wording as is to keep the diff minimal.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
