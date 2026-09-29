@@ -218,3 +218,99 @@ Stage 2 (code quality, applied to docs — accuracy, clarity,
 
 Everything else reviewed is accurate and well-written; this is a single,
 narrow, actionable wording fix — no other Stage 1 or Stage 2 issues found.
+
+### Review Verdict — 2026-09-29
+
+PASS
+
+Re-review (cycle 2), full Stage 1 + Stage 2 pass on
+`task/T-229-document-pi-agent-model-manual` at `2b9578c` (on top of
+`23e526f`; merge-base `d5d7afd`), using an isolated `git worktree` so this
+`dev-agent` checkout stayed clean throughout.
+
+**Fix scope.** `git diff 23e526f..2b9578c` touches only
+`the-intern/docs/src/quickstart/index.md` (8 insertions, 6 deletions, one
+paragraph) — exactly the cycle-1 finding's scope, no drive-by changes.
+`git diff "$(git merge-base dev-agent HEAD)" HEAD --stat` for the whole
+branch still touches only the two files listed under "Files to Touch."
+
+**The reworded paragraph (cycle-1 finding).** Read the new paragraph in
+context (the "Review the generated config" bullet list plus the `bob policy
+reload` block, `the-intern/docs/src/quickstart/index.md` ~167-186). It now
+reads: "`bob policy reload` only applies the policy-rule bullet above" (the
+third bullet, "Replace the bootstrap-wide ... rules"), then explains that
+`pi_agent_model` is mapped into the supervisor config once at `bob serve`
+startup "like `pi_agent_cwd` ... and `skill_install_path`," so it also needs
+a restart. This matches the reviewer's requested rewording exactly and
+removes the false-uniqueness claim without introducing a new one. Verified
+independently against the actual mechanism, not just re-trusting the Work
+Log:
+- `crates/policy-control/src/lib.rs`'s `reload_snapshot` reads the config
+  file, extracts only the `[policy]` section via
+  `load_policy_config_from_toml_str`, and swaps the `RulesetSnapshot` — it
+  never touches `pi_agent_model`, `pi_agent_cwd`, or any other top-level key.
+- `crates/admin-rpc/src/dispatch.rs` confirms `policy.reload` dispatches to
+  `policy_control::Handle::reload`, i.e. `reload_snapshot` above — no other
+  handler runs on that command.
+- `crates/bob/src/serve.rs`'s `try_start_subsystems` calls
+  `build_pi_agent_supervisor_config(cfg)` once, at startup, which is where
+  `pi_agent_model` is mapped into the supervisor config (`pi_agent_shared_args`)
+  — there is no re-invocation of this path from the policy-reload command.
+  This corroborates "mapped ... once, at `bob serve` startup" precisely.
+- The paragraph no longer singles out `pi_agent_model` as exceptional; it
+  correctly groups it with `pi_agent_cwd` and `skill_install_path`, both of
+  which share the identical startup-only behavior per the operator guide's
+  own (unchanged) sections for those keys.
+
+**Cross-reference links (verified by build, not by inspection).** Built the
+book with `mdbook build the-intern/docs` (using the repo's existing debug
+`bob` binary via `BOB_BIN` for the `cli-reference` preprocessor — same clean
+build modulo the pre-existing, environment-level `mdbook-mermaid` version
+warning that also reproduces on unmodified `dev-agent`, so it is unrelated to
+this diff) and grepped the generated HTML directly:
+- `the-intern/docs/book/operator-guide/index.html` contains
+  `<h3 id="pi_agent_cwd-service-wide">` and
+  `<h3 id="install-the-skill-package">` — exact matches for the two new
+  anchors.
+- `the-intern/docs/book/quickstart/index.html` renders the two links as
+  `<a href="../operator-guide/index.html#pi_agent_cwd-service-wide">` and
+  `<a href="../operator-guide/index.html#install-the-skill-package">` —
+  both resolve to the anchors above. Neither link is dangling.
+
+**Stage 1 (acceptance criteria), full pass:**
+- AC-1 (process-settings table + unset/invalid behaviour): met, unchanged
+  since cycle 1. Re-spot-checked the exact warning string in
+  `warn_if_pi_agent_model_unset` (`crates/bob/src/serve.rs`) and the
+  `model_selecting_flag_in` rejection string (`crates/bob/src/config.rs`)
+  against the operator-guide prose — both quoted verbatim.
+- AC-2 (migration note): met, unchanged since cycle 1. Confirmed the note
+  under "Upgrading a running install" still carries the exact `validate()`
+  error string and references `pi_agent_model`.
+- AC-3 (confirming a model by hand): met, unchanged since cycle 1 — the
+  `pi --list-models`/`pi auth check` observed-limits prose is untouched by
+  this cycle's fix.
+- AC-4 (quickstart recommendation + restart note): **now met.** The
+  recommendation to set `pi_agent_model` alongside `pi_agent_cwd` is
+  unchanged; the restart-required claim is intact; the false-uniqueness
+  framing flagged in cycle 1 is gone and the replacement text is verified
+  accurate against the actual code paths above.
+- AC-5 (placeholders, no internal IDs/pi version): met. Reran the task's own
+  ID/version grep gate against the actual `git merge-base dev-agent HEAD`
+  (`d5d7afd`) on the branch tip (`2b9578c`) — no output (grep exit 1, so the
+  `!`-negated gate passes). Also reran a
+  `claude|anthropic|openai|gpt-|opus|sonnet|gemini|llama` sweep over every
+  added line in both files — no output; only the `<provider>/<model-id>`
+  placeholder appears.
+
+**Stage 2 (code quality, applied to docs):** the new wording is accurate,
+unambiguous, and consistent with the rest of the guide's terminology
+(`[policy]` table, "reads the whole config once at startup"). No new
+readability, correctness, or guideline issues found. No unrelated changes
+bundled with the fix.
+
+**Full Verification section, rerun from scratch on the branch tip:**
+- `mdbook build the-intern/docs` — clean (see build note above).
+- `grep -n "pi_agent_model" the-intern/docs/src/operator-guide/index.md the-intern/docs/src/quickstart/index.md` — all expected lines present in both files.
+- `! git diff -U0 "$(git merge-base dev-agent HEAD)" -- the-intern/docs/src/operator-guide/index.md the-intern/docs/src/quickstart/index.md | grep '^+[^+]' | grep -nE "\b(T|B|S|CR)-[0-9]{3}\b|ADR-[0-9]{3}|#[0-9]{2,}|\b[0-9]+\.[0-9]+\.[0-9]+\b"` — no output, gate passes.
+
+No further issues found. This task is complete.
