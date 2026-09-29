@@ -2,7 +2,7 @@
 id: B-055
 title: Periodic fire refused at max_processes is logged but not audited
 severity: medium
-status: open
+status: in-progress
 created: '2026-09-28'
 ---
 
