@@ -3941,6 +3941,166 @@ pub mod tests {
             std::fs::remove_dir_all(&cwd_dir).ok();
         }
 
+        /// Fills the sole `max_processes` slot with a first (default-cwd) fire,
+        /// then enqueues a second fire for `second_fire_job_id` against a
+        /// schedule table holding `entries`. Returns the `Report`-kind audit
+        /// records produced once the dispatcher has refused the second fire.
+        async fn report_records_after_refused_fire_at_full_pool(
+            entries: Vec<ScheduleEntry>,
+            second_fire_job_id: Option<String>,
+        ) -> Vec<bob_core::types::AuditRecord> {
+            let worker_script = "while IFS= read -r line; do \
+                 id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p'); \
+                 printf '{\"id\":\"%s\",\"type\":\"response\",\"success\":true}\\n' \"$id\"; \
+                 done"
+                .to_string();
+
+            let (supervisor_handle, supervisor_join) =
+                pi_agent_supervisor::start(pi_agent_supervisor::Config {
+                    worker_command: "sh".to_string(),
+                    worker_args: vec!["-c".to_string(), worker_script],
+                    warm_pool_size: 0,
+                    max_processes: 1,
+                    extension_path: existing_extension_path(),
+                    ..pi_agent_supervisor::Config::default()
+                })
+                .expect("supervisor must start");
+
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+
+            persistence_handle
+                .enqueue_periodic_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "first-fire".to_owned(),
+                    },
+                    None,
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            let audit_sink = Arc::new(SpyAuditSink::default());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx_with_entries(entries),
+                None,
+                audit_sink.clone(),
+                cancel_rx,
+            );
+
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while supervisor_handle
+                    .list_sessions()
+                    .await
+                    .expect("list sessions should succeed")
+                    .is_empty()
+                {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("first fire must acquire the sole max_processes slot");
+
+            persistence_handle
+                .enqueue_periodic_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "second-fire-should-be-refused".to_owned(),
+                    },
+                    second_fire_job_id,
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            // Wait for the refusal record; if none ever arrives, fall through
+            // and let the caller's assertion report the empty result.
+            let _ = tokio::time::timeout(Duration::from_secs(2), async {
+                while !audit_sink
+                    .records()
+                    .iter()
+                    .any(|r| r.kind == AuditRecordKind::Report)
+                {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await;
+
+            let report_records = audit_sink
+                .records()
+                .into_iter()
+                .filter(|r| r.kind == AuditRecordKind::Report)
+                .collect();
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+            report_records
+        }
+
+        fn assert_single_periodic_fire_error_report(
+            report_records: &[bob_core::types::AuditRecord],
+            job_id: &str,
+        ) {
+            assert_eq!(
+                report_records.len(),
+                1,
+                "expected exactly one monitoring failure record, got {report_records:?}"
+            );
+            match &report_records[0].payload {
+                AuditRecordPayload::Report(payload) => {
+                    assert_eq!(payload.action, "scheduler.periodic_fire");
+                    assert_eq!(payload.outcome, ReportOutcome::Error);
+                    let summary = payload.summary.as_deref().unwrap_or("");
+                    assert!(
+                        summary.contains(job_id),
+                        "summary should reference the job id: {summary:?}"
+                    );
+                }
+                other => panic!("expected a Report payload, got {other:?}"),
+            }
+        }
+
+        // S-002 Component 6 / S-009: a per-entry-cwd fire refused because the
+        // pool is at `max_processes` is skipped with a monitoring failure record.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_audits_per_entry_cwd_fire_refused_when_pool_is_full() {
+            let cwd_dir = std::env::temp_dir().join(format!(
+                "bob-serve-b055-per-entry-cwd-{}",
+                bob_core::types::SessionId::new()
+            ));
+            std::fs::create_dir_all(&cwd_dir).expect("create dedicated cwd should succeed");
+            let mut entry = ScheduleEntry::with_prompt("b055-cwd-job", "0 9 * * *", "unused");
+            entry.cwd = Some(cwd_dir.to_string_lossy().into_owned());
+
+            let records = report_records_after_refused_fire_at_full_pool(
+                vec![entry],
+                Some("b055-cwd-job".to_owned()),
+            )
+            .await;
+
+            std::fs::remove_dir_all(&cwd_dir).ok();
+            assert_single_periodic_fire_error_report(&records, "b055-cwd-job");
+        }
+
+        // S-002 Component 6 / S-009: a default-cwd fire refused because the
+        // pool is at `max_processes` is skipped with a monitoring failure record.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_audits_default_cwd_fire_refused_when_pool_is_full() {
+            let entry = ScheduleEntry::with_prompt("b055-default-job", "0 9 * * *", "unused");
+
+            let records = report_records_after_refused_fire_at_full_pool(
+                vec![entry],
+                Some("b055-default-job".to_owned()),
+            )
+            .await;
+
+            assert_single_periodic_fire_error_report(&records, "b055-default-job");
+        }
+
         // ── T-127: periodic-fire cwd precedence resolution ─────────────────
 
         // AC-1: a job id that resolves to a live entry with a per-entry `cwd`
