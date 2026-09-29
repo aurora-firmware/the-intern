@@ -124,3 +124,89 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-29
+
+FAIL
+
+Stage 1 (acceptance criteria) — checked the diff on
+`task/T-229-document-pi-agent-model-manual` against `the-intern/docs/src/operator-guide/index.md`
+and `the-intern/docs/src/quickstart/index.md`, cross-checked against
+`crates/bob/src/serve.rs` (`warn_if_pi_agent_model_unset`, `try_start_subsystems`),
+`crates/bob/src/config.rs` (`validate()`, `pi_agent_shared_args()`,
+`model_selecting_flag_in`), `crates/pi-agent-supervisor/src/process.rs`
+(`spawn_stderr_forwarder`, interactive-session cwd handling), and
+`crates/policy-control/src/lib.rs` (`reload_snapshot`):
+
+- AC-1 (process-settings table + unset/invalid behaviour): met. The new
+  "pi-agent process settings" table's per-key pool-worker/interactive-session
+  columns match `build_pi_agent_supervisor_config`/`build_interactive_session_config`
+  exactly (`pi_agent_command` and `pi_agent_model` reach both; `pi_agent_args`
+  reaches pool workers only; `pi_agent_cwd` reaches pool workers only, matching
+  the pre-existing "Interactive `bob chat` uses the caller's working directory"
+  section). The unset warning and the `pi_agent_args` rejection error are
+  quoted verbatim from `warn_if_pi_agent_model_unset` and `validate()`. The
+  invalid-value section's stderr-forwarding and audit-blind-spot claims match
+  `spawn_stderr_forwarder` (warn-level, session-id-tagged, pool-worker-only)
+  and the periodic dispatcher's `send_prompt_and_drain` error branch (no
+  `record_periodic_fire_dispatched` or any other audit call on failure) — also
+  consistent with T-228's live verification transcript.
+- AC-2 (migration note): met. Placed under "Upgrading a running install",
+  matches `model_selecting_flag_in`'s three flags and the exact
+  `validate()` error string, with correct `{flag}` placeholder framing.
+- AC-3 (confirming a model by hand): met. `pi --list-models`/`pi auth check`
+  observed limits (fuzzy matching, no JSON mode, exit 0 on no match; provider
+  credentials only, unknown model under a valid provider still reports ready,
+  provider-less value misread as a provider name) match CR-015's "Verification
+  commands" section verbatim in substance.
+- AC-4 (quickstart recommendation + restart note) — **not met as written.**
+  See Stage 2 finding below; the restart requirement itself is correct, but
+  the surrounding claim overstates `pi_agent_model`'s uniqueness in a way that
+  is inaccurate against this same guide's own documented behavior for the
+  other two settings on that page.
+- AC-5 (placeholders, no internal IDs/pi version): met. Reran the task's own
+  verification commands (not just trusted the Work Log's "no output" claim):
+  `mdbook build the-intern/docs` is clean, both `grep -n "pi_agent_model"`
+  invocations show only the expected new lines, and the ID/version grep gate
+  (`git diff -U0 "$(git merge-base dev-agent ...)" ... | grep '^+[^+]' | grep -nE
+  "..."`) produced no output (exit 1) against the actual merge-base
+  (`d5d7afd`). No real provider/model name leaked into any added line
+  (checked separately with a `claude|anthropic|openai|gpt|opus|sonnet|gemini|llama`
+  grep over the added lines).
+
+Stage 2 (code quality, applied to docs — accuracy, clarity,
+`coding-guidelines-skills.md` §1–2):
+
+- **File and location:** `the-intern/docs/src/quickstart/index.md`, the new
+  "**`pi_agent_model` is the exception.**" sentence (added right after the
+  `bob policy reload` code block, ~line 180).
+- **What is wrong:** This claims `pi_agent_model` is uniquely exceptional in
+  not being covered by `bob policy reload`. It is not unique. The same
+  quickstart bullet list recommends editing `pi_agent_cwd` immediately above
+  it, and `skill_install_path` above that — and the operator guide's own
+  `skill_install_path` section (pre-existing, unchanged by this diff) states
+  "**Fixed at startup, like `pi_agent_cwd`.** ... Changing the
+  `skill_install_path` config value itself requires restarting `bob serve`."
+  I confirmed directly against `policy_control::reload_snapshot` (`the-intern/service/crates/policy-control/src/lib.rs`)
+  that `bob policy reload` re-reads and swaps only the `[policy]` table —
+  nothing else, for any key. So among the three settings this quickstart
+  section tells the reader to edit before running `bob policy reload`
+  (`skill_install_path`, `pi_agent_cwd`, `pi_agent_model`), *none* actually
+  takes effect via that command; only a `[[policy.action_rules]]` edit does.
+  Framing `pi_agent_model` as "the exception" strongly implies, to a reader
+  who just set `pi_agent_cwd` per the bullet directly above, that their
+  `pi_agent_cwd` edit *was* applied by the `bob policy reload` they just ran
+  — which contradicts the operator guide's own documented behavior for that
+  key.
+- **What should change:** Rephrase to avoid the false-uniqueness implication.
+  For example, note that `bob policy reload` only touches the `[policy]`
+  table, so — like `pi_agent_cwd` and `skill_install_path` (cross-reference
+  their existing operator-guide sections) — a `pi_agent_model` edit also
+  needs a `bob serve` restart to take effect; reserve "applies without a
+  restart" specifically for the policy-rule bullet in that list. The rest of
+  the paragraph (the `[policy]`-table-only mechanism, the "reads the whole
+  config once at startup" explanation, the restart requirement itself) is
+  accurate and can stay as-is.
+
+Everything else reviewed is accurate and well-written; this is a single,
+narrow, actionable wording fix — no other Stage 1 or Stage 2 issues found.
