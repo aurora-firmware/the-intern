@@ -1,7 +1,7 @@
 ---
 id: T-230
 title: Teach the bob-companion skills to set and verify pi_agent_model
-status: pending
+status: in-progress
 priority: medium
 assigned-role: developer
 created: '2026-09-29'
