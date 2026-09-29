@@ -732,22 +732,32 @@ async fn record_periodic_fire_fallback(audit: &dyn AuditSink, job_id: Option<&st
 }
 
 /// Acquires a session via the plain `acquire_session` (the `pi_agent_cwd` /
-/// inherited-launch-cwd tiers of the precedence), logging a warning and
-/// returning `None` on failure.
+/// inherited-launch-cwd tiers of the precedence). On failure (for example the
+/// pool is at `max_processes`) it logs a warning, appends a monitoring failure
+/// record via [`record_periodic_fire_skipped`], and returns `None`.
 ///
 /// Shared by the [`PeriodicCwdResolution::ServiceDefault`] and
 /// [`PeriodicCwdResolution::EntryNotFound`] branches of the periodic
 /// dispatcher, which both fall back to this same acquisition.
 async fn acquire_default_session_or_warn(
     supervisor: &pi_agent_supervisor::Handle,
+    audit: &dyn AuditSink,
+    job_id: Option<&str>,
 ) -> Option<SessionId> {
     match supervisor.acquire_session().await {
         Ok(id) => Some(id),
         Err(e) => {
             tracing::warn!(
                 error = %e,
-                "periodic dispatcher: session acquisition failed; continuing"
+                job_id = job_id.unwrap_or("<none>"),
+                "periodic dispatcher: session acquisition failed; skipping this fire"
             );
+            record_periodic_fire_skipped(
+                audit,
+                job_id,
+                format!("session acquisition was refused; skipping this fire: {e}"),
+            )
+            .await;
             None
         }
     }
@@ -953,14 +963,23 @@ fn start_periodic_dispatcher(
                                     // AC-4: a per-entry-cwd fire when the pool is at
                                     // max_processes is refused (not blocked or
                                     // evicted) by acquire_session_with_cwd (T-122).
-                                    // Skip this fire with a warning; it fires again
-                                    // next tick.
+                                    // Skip this fire with a warning and a monitoring
+                                    // failure record; it fires again next tick.
                                     tracing::warn!(
                                         error = %e,
                                         job_id = job_id.as_deref().unwrap_or("<none>"),
                                         cwd = %cwd.display(),
                                         "periodic dispatcher: cwd-scoped session acquisition failed; skipping this fire"
                                     );
+                                    record_periodic_fire_skipped(
+                                        audit_sink.as_ref(),
+                                        job_id.as_deref(),
+                                        format!(
+                                            "session acquisition for cwd {} was refused; skipping this fire: {e}",
+                                            cwd.display()
+                                        ),
+                                    )
+                                    .await;
                                     continue;
                                 }
                             }
@@ -977,14 +996,24 @@ fn start_periodic_dispatcher(
                             );
                             record_periodic_fire_fallback(audit_sink.as_ref(), job_id.as_deref())
                                 .await;
-                            let Some(id) = acquire_default_session_or_warn(&supervisor).await
+                            let Some(id) = acquire_default_session_or_warn(
+                                &supervisor,
+                                audit_sink.as_ref(),
+                                job_id.as_deref(),
+                            )
+                            .await
                             else {
                                 continue;
                             };
                             (id, resolved_service_default_cwd.clone())
                         }
                         PeriodicCwdResolution::ServiceDefault => {
-                            let Some(id) = acquire_default_session_or_warn(&supervisor).await
+                            let Some(id) = acquire_default_session_or_warn(
+                                &supervisor,
+                                audit_sink.as_ref(),
+                                job_id.as_deref(),
+                            )
+                            .await
                             else {
                                 continue;
                             };
