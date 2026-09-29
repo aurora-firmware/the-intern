@@ -1,7 +1,7 @@
 ---
 id: T-229
 title: Document pi_agent_model in the user manual
-status: pending
+status: in-progress
 priority: medium
 assigned-role: developer
 created: '2026-09-29'
