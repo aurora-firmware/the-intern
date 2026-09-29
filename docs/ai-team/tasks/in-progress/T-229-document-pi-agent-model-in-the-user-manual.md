@@ -113,6 +113,14 @@ What was tried and rejected: initially considered inlining a full `pi_agent_cwd`
 
 Verification: built `mdbook build the-intern/docs` clean; confirmed every new cross-reference anchor resolves against the actual generated HTML `id` attributes, not just assumed slugification; ran the task's exact three verification commands, including the ID/version grep gate, which produced no output as required. Nothing remains outstanding for this task.
 
+### Session 2 — 2026-09-29
+
+Addressed the Reviewer's FAIL finding (Stage 2, `quickstart/index.md`, ~line 180): the "`pi_agent_model` is the exception" sentence falsely implied `pi_agent_model` was uniquely exempt from `bob policy reload`'s restart-not-required framing, when in fact `pi_agent_cwd` (recommended in the bullet directly above) and `skill_install_path` (documented in the operator guide's pre-existing, unchanged "Fixed at startup, like `pi_agent_cwd`" text) share the exact same startup-only, restart-required behavior — confirmed against `policy_control::reload_snapshot`, which only ever re-reads and swaps the `[policy]` table for any key.
+
+Reworded the paragraph to: state that `bob policy reload` only applies the policy-rule bullet above it in that list; keep the `[policy]`-table-only mechanism and the "bob reads the whole config once at `bob serve` startup" explanation exactly as the reviewer confirmed accurate; and explicitly cross-reference the existing `pi_agent_cwd` (`#pi_agent_cwd-service-wide`) and `skill_install_path` (`#install-the-skill-package`) operator-guide sections so the reader sees `pi_agent_model` shares this behavior rather than standing alone. Single-paragraph wording change, nothing else touched this session.
+
+Verified both new cross-reference anchors resolve by building the book and grepping the generated HTML `id` attributes directly, rather than assuming slugification. Reran all three of the task's Verification commands from scratch: `mdbook build the-intern/docs` clean, both `grep -n "pi_agent_model"` invocations showing the expected lines in both files, and the ID/version grep gate producing no output against the actual `git merge-base dev-agent HEAD`. Nothing remains outstanding for this task.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
