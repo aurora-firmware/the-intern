@@ -183,3 +183,24 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-29
+PASS
+
+Evidence chain: Diagnosis 1 records reproduction status (confirmed, deterministic), captured evidence, both isolated fault sites, root cause (omission), planned fix and planned verification. The implementation matches that contract.
+
+Stage 1 (bug criteria):
+- The per-entry-cwd `acquire_session_with_cwd` error arm and `acquire_default_session_or_warn` (serving both the `ServiceDefault` and `EntryNotFound` branches) now call the existing `record_periodic_fire_skipped`. That writes the `Report`, `scheduler.periodic_fire`, `ReportOutcome::Error` record. No new audit record kind was added.
+- This matches S-002 Component 6, the S-009 cron-tick pool-full outcome ("skip with a warning and a monitoring failure record") and the S-010 periodic-fire wording. The worker-exited skip, which the specs say has no monitoring record, is untouched, and its T-228 test still passes.
+- Fix Verification was followed. `cargo test -p bob --lib serve::tests::periodic` gave 26 passed and 1 ignored (the pre-existing B-028 ignore). `cargo fmt --all -- --check` is clean. `cargo test --workspace` passed with no failures.
+
+Stage 2 (quality):
+- Regression tests: two new tests, one per-entry cwd and one default cwd, share a helper. Each asserts exactly one `Report` with the right action, outcome and job id. At the test-only commit 9ba090b both tests FAIL. At the fix commit 3599051 both PASS.
+- The fix is minimal and confined to `serve.rs`. Nothing unrelated is bundled. The warn message change in the default path (adds the job id and "skipping this fire") is in scope.
+
+Non-blocking observations:
+- The doc comment on `record_periodic_fire_skipped` (serve.rs ~654) still says "AC-2: the resolved per-entry `cwd` does not exist at fire time". The function is now shared by three skip paths, so this is stale. It should be reworded in a follow-up, or by the integrator, to say it covers any skipped periodic fire (missing cwd or refused acquisition). It does not affect behavior, so it does not block.
+- The test helper swallows the wait-timeout result, which is intentional and documented, so a missing record still fails on the length assertion.
+
+Next owner: Bug-Fix Loop.
+
