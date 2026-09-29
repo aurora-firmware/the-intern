@@ -100,8 +100,35 @@ Location: `$XDG_CONFIG_HOME/bob/config.toml` (fallback
 `~/.config/bob/config.toml`) on Linux, `~/Library/Application
 Support/bob/config.toml` on macOS. Not required — bob runs on defaults.
 Notable keys: `extension_path`, `pi_agent_cwd` (must be absolute),
-`schedule_store_path`, `shutdown_drain_deadline`/`shutdown_reap_deadline`,
-`[policy]`, `[monitoring]`.
+`pi_agent_model`, `schedule_store_path`,
+`shutdown_drain_deadline`/`shutdown_reap_deadline`, `[policy]`,
+`[monitoring]`.
+
+`pi_agent_model` is the **only** place to set which model every pi process
+bob starts uses — pool workers and `bob chat` sessions alike. Its value is
+passed verbatim as `--model <value>`. A `--model`, `--models`, or
+`--provider` entry in `pi_agent_args` is rejected at config load instead of
+being allowed alongside `pi_agent_model`; move the value to `pi_agent_model`
+and drop the flag — and its value, if it was a separate argument — from
+`pi_agent_args`.
+
+Whenever you set or change `pi_agent_model`, confirm the value against the
+installed `pi` before relying on it — don't guess:
+- `pi --list-models <search>` lists models matching `<search>`, showing each
+  match's exact `<provider>/<model-id>` form. **Observed limits:** matching
+  is fuzzy and the command exits `0` even when nothing matches — a clean
+  exit is not proof the model exists.
+- `pi auth check --provider <p> --json` reports whether `<p>`'s credentials
+  are `ready`, as machine-readable JSON. **Observed limits:** this checks
+  provider credentials only — an unknown model under an otherwise
+  correctly-configured provider still reports `ready` — so always pass the
+  model as `provider/id` and set `--provider` explicitly rather than relying
+  on this check to validate the model itself.
+
+A changed `pi_agent_model` only takes effect after the next `bob serve`
+restart. Checking an already-spawned pi process's command line (e.g.
+`ps aux | grep pi`) right after editing `config.toml` will still show the
+old value — or no `--model` flag at all — until you restart the service.
 
 One landmine: a `[[schedule]]` table in `config.toml` is parsed but
 **silently ignored** — `schedules.json` (managed via `bob schedule`) is the
