@@ -98,6 +98,20 @@ of the same run, immediately after replacing the binary — see
 [Install the skill package](#install-the-skill-package) for what that
 refresh does and does not touch.
 
+**Migrating a model flag out of `pi_agent_args`.** If your existing
+`config.toml` selects the pi model through `pi_agent_args` — a `--model`,
+`--models`, or `--provider` entry in that list — `bob serve` now refuses to
+load that config:
+
+```
+pi_agent_args must not select a model (--model found); set the model with pi_agent_model instead
+```
+
+(the flag named in the error is whichever of the three was actually found).
+Move the value to the top-level `pi_agent_model` key instead, and remove the
+flag — and its value, if it was a separate argument — from `pi_agent_args`.
+See [`pi_agent_model`](#pi_agent_model) for the key's full behavior.
+
 If no release zip exists for your target platform, or you are working from a
 source checkout on purpose, use the manual source-build path below.
 
@@ -471,6 +485,126 @@ Bob's TOML configuration file is located at:
 
 - Linux: `$XDG_CONFIG_HOME/bob/config.toml` (falls back to `~/.config/bob/config.toml`)
 - macOS: `~/Library/Application Support/bob/config.toml`
+
+---
+
+## pi-agent process settings
+
+`bob` starts `pi` in two ways: as an RPC **pool worker** — warm or dedicated
+per scheduled entry — for queued requests and scheduled fires, and as an
+**interactive session** for `bob chat`. The keys below are flat top-level
+`config.toml` keys that shape those pi processes. Each key applies to exactly
+the process kinds this table marks — no two keys ever set the same thing:
+
+| Key | Pool workers | Interactive sessions (`bob chat`) |
+|---|---|---|
+| `pi_agent_command` | yes | yes |
+| `pi_agent_args` | yes | no |
+| `pi_agent_model` | yes | yes |
+| `pi_agent_cwd` | yes | no — the session runs in the `bob chat` invocation cwd |
+| `extension_path` | yes | yes |
+| `skill_install_path` | yes | yes |
+| `pi_agent_warm_pool_size`, `pi_agent_max_processes`, `pi_agent_idle_reap_timeout` | pool sizing and reaping | no |
+
+`pi_agent_cwd`, `extension_path`, and `skill_install_path` each already have
+their own section in this guide — see
+[Working directory for pi-agent sessions](#working-directory-for-pi-agent-sessions),
+[Install the bob extension](#install-the-bob-extension), and
+[Install the skill package](#install-the-skill-package). The rest of this
+section covers the two keys not documented elsewhere in this guide
+(`pi_agent_command`, `pi_agent_args`), then `pi_agent_model` in full.
+
+### `pi_agent_command` and `pi_agent_args`
+
+`pi_agent_command` is the command `bob` runs to start `pi`. *Default:* `pi`,
+resolved on `PATH`.
+
+```toml
+pi_agent_command = "pi"
+```
+
+`pi_agent_args` is a list of extra arguments passed verbatim to every **pool
+worker**, and only to pool workers — never to an interactive `bob chat`
+session. *Default:* `["--mode", "rpc"]`, which pool workers require to run in
+RPC mode.
+
+```toml
+pi_agent_args = ["--mode", "rpc"]
+```
+
+`pi_agent_args` must not contain a model-selecting pi flag: `--model`,
+`--models`, or `--provider`. Config load rejects a value that does — see
+[`pi_agent_model`](#pi_agent_model) below and the migration note under
+[Upgrading a running install](#upgrading-a-running-install).
+
+### `pi_agent_model`
+
+`pi_agent_model` is an optional top-level key naming the pi model bob should
+use. Its value is passed verbatim as `--model <value>` to **every** pi
+process bob starts — pool workers and `bob chat` sessions alike, unlike
+`pi_agent_cwd`, which applies to pool workers only. bob does not interpret,
+list, default, or validate the value against pi; use whatever value pi
+itself accepts for its own `--model` flag, typically a `<provider>/<model-id>`
+pattern, optionally with a thinking-level suffix:
+
+```toml
+pi_agent_model = "<provider>/<model-id>"
+```
+
+**Why set it.** Leaving the model unset means pi chooses one from its own
+saved settings instead. Those saved settings are shared, mutable state: pi
+rewrites them whenever a model is selected or cycled in *any* session,
+including an interactive `bob chat` session, so switching models once can
+silently change what every later scheduled job runs on next. Worse, when the
+saved model no longer resolves — for example after a pi upgrade removes or
+renames it — pi falls back to a different model with no warning at all.
+Setting `pi_agent_model` explicitly avoids both failure modes: bob pins one
+model, and an unrecognized value fails loudly (see below) instead of
+silently.
+
+**Unset behaviour.** Leaving `pi_agent_model` unset is allowed and keeps
+pi's historical behaviour (no `--model` is passed; pi picks its own saved
+model). `bob serve` logs exactly one warning at startup:
+
+```
+pi_agent_model is not set; pi will choose the model from its own saved
+settings, which can change or fall back to a different model without
+notice; set pi_agent_model in the service configuration to pin it
+```
+
+**Invalid-value behaviour.** bob runs no check of `pi_agent_model` before
+starting a process or before a fire — an invalid value is caught only by pi
+itself, at spawn time. A pool worker started with a model pi does not
+recognize prints pi's own error to stderr and exits immediately; bob
+forwards every pool-worker stderr line into the service log at warning
+level, tagged with the worker's session id, so the error is visible there.
+An interactive `bob chat` session shows the same error directly in the
+terminal instead, since `bob chat` inherits the caller's own stdio. Either
+way, the job does not run with an invalid model until an operator fixes
+`pi_agent_model` — bob does not retry with a fallback model and the setting
+does not self-heal. For a scheduled job specifically, the fire that meets
+the broken worker is skipped with a warning and the session is killed; see
+[Observability for scheduled jobs](#observability-for-scheduled-jobs) for
+what that failure does and does not leave behind.
+
+**Confirming a value by hand.** Before relying on a chosen `pi_agent_model`
+value, confirm it directly against the installed `pi` rather than guessing:
+
+- `pi --list-models <search>` lists models matching `<search>`, showing each
+  match's exact name in the `<provider>/<model-id>` form `pi_agent_model`
+  expects. **Observed limits:** matching is fuzzy, there is no JSON output
+  mode, and the command exits `0` even when nothing matches the search term
+  — a clean exit is not proof that the model exists.
+- `pi auth check --provider <p> --json` reports whether `<p>`'s provider
+  credentials are ready, as machine-readable JSON. **Observed limits:** this
+  checks provider credentials only, not whether a specific model exists — an
+  unknown model under an otherwise correctly configured provider still
+  reports ready, and a model value given without its provider prefix is
+  misread as a provider name.
+
+Neither command is a substitute for actually starting a session: the
+reliable check remains pi's own refusal of an unrecognized `--model` value,
+described above.
 
 ---
 
@@ -947,6 +1081,16 @@ is registered at startup and on reload. Warnings are logged when a cron
 expression cannot be parsed (the job is skipped and does not fire), when a
 periodic event cannot be submitted to the queue, and when session acquisition or
 prompt delivery fails inside the periodic dispatcher.
+
+**A fire whose worker never accepts the prompt — for example a worker started
+with an invalid `pi_agent_model` (see [`pi_agent_model`](#pi_agent_model)) —
+is visible in the service log only.** Delivery failure at this point does not
+write any audit record of any kind: not a `verdict`, not an `event`, and not
+a `report`. `bob audit tail` (with or without `--filter`) shows nothing for
+that fire; the only trace is the service-log warning, and, for a pool worker
+specifically, its forwarded stderr line naming pi's own error. If a
+scheduled job appears to have simply done nothing on a given tick, check the
+service log before assuming `bob audit tail` would have shown a failure.
 
 **Policy verdict audit records** — scheduled jobs bypass pre-flight admission,
 so no pre-flight `verdict` record is written for periodic prompts. Tool-call
