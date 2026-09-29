@@ -9,6 +9,7 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::task::JoinHandle;
 use tokio::time;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +43,18 @@ pub struct RpcWorkerProcess {
     /// detaching, [`read_next_stdout_json`] errors because the worker no longer
     /// owns the stream.
     stdout: Option<BufReader<ChildStdout>>,
-    _stderr: ChildStderr,
+    /// Background task forwarding this worker's stderr to the service log
+    /// (see [`spawn_stderr_forwarder`]). In [`Self::terminate`], after the
+    /// worker's own termination sequence resolves, this is given up to
+    /// [`STDERR_DRAIN_GRACE`] to reach EOF on its own before being aborted —
+    /// so it can still capture stderr written in direct response to the
+    /// termination signal, while never outliving the worker it belongs to by
+    /// more than that bounded grace period — mirroring how `pool.rs`'s
+    /// `drain_handle` is aborted at every teardown path.
+    stderr_forwarder: JoinHandle<()>,
+    /// Kept for diagnostic logging when the stderr forwarder does not reach
+    /// EOF within [`STDERR_DRAIN_GRACE`] (see [`Self::terminate`]).
+    session_id: SessionId,
     child_termination_deadline: Duration,
 }
 
@@ -50,6 +62,13 @@ pub struct RpcWorkerProcess {
 pub struct TerminationOutcome {
     pub forced: bool,
 }
+
+/// Bounds how long [`RpcWorkerProcess::terminate`] waits, after the child has
+/// exited, for the stderr forwarder to reach EOF on its own before aborting
+/// it. This wait is only actually reached when a descendant process still
+/// holds the stderr pipe open, in which case output written after the grace
+/// window elapses is not logged.
+const STDERR_DRAIN_GRACE: Duration = Duration::from_millis(100);
 
 impl RpcWorkerProcess {
     pub fn spawn(cfg: &WorkerProcessConfig) -> ServiceResult<Self> {
@@ -111,11 +130,14 @@ impl RpcWorkerProcess {
                 detail: "failed to create piped child stderr".to_string(),
             })?;
 
+        let stderr_forwarder = spawn_stderr_forwarder(stderr, cfg.session_id);
+
         Ok(Self {
             child,
             stdin: Some(stdin),
             stdout: Some(BufReader::new(stdout)),
-            _stderr: stderr,
+            stderr_forwarder,
+            session_id: cfg.session_id,
             child_termination_deadline: cfg.child_termination_deadline,
         })
     }
@@ -199,6 +221,56 @@ impl RpcWorkerProcess {
     }
 
     pub async fn terminate(mut self) -> ServiceResult<TerminationOutcome> {
+        let outcome = self.terminate_child().await;
+
+        // `.abort()` alone gives the forwarder no guaranteed opportunity to
+        // be polled again before cancellation takes effect, so a worker that
+        // writes to stderr and exits immediately in its TERM handler (no
+        // artificial delay) could still lose that line to its own
+        // cancellation even when aborting only after the worker's own
+        // termination sequence resolves. Waiting here, bounded by
+        // `STDERR_DRAIN_GRACE`, gives the forwarder a real chance to reach
+        // EOF and log the worker's final output first. This wait only
+        // actually elapses in full when a descendant process still holds the
+        // stderr pipe open (the ordinary EOF case resolves well within it).
+        match time::timeout(STDERR_DRAIN_GRACE, &mut self.stderr_forwarder).await {
+            Ok(Ok(())) => {}
+            Ok(Err(join_error)) => {
+                tracing::warn!(
+                    session = %self.session_id,
+                    error = %join_error,
+                    "pool worker stderr forwarder task panicked"
+                );
+            }
+            Err(_elapsed) => {
+                // Debug, not warn: a backgrounded tool process legitimately
+                // holding the worker's stderr pipe open would otherwise spam
+                // a warning on every ordinary teardown.
+                tracing::debug!(
+                    session = %self.session_id,
+                    "pool worker stderr forwarder had not reached EOF within the drain \
+                     grace window; aborting (a descendant process may still hold the \
+                     stderr pipe open)"
+                );
+            }
+        }
+
+        // `abort()` is synchronous and non-blocking, and a no-op if the
+        // forwarder already finished above. It remains the guarantee that
+        // covers the case where a descendant process still holds the stderr
+        // pipe open past the grace window, ensuring the forwarder never
+        // outlives this worker by more than `STDERR_DRAIN_GRACE`.
+        self.stderr_forwarder.abort();
+
+        outcome
+    }
+
+    /// Signals the child to terminate gracefully and waits up to
+    /// `child_termination_deadline` before force-killing it. Split out of
+    /// [`Self::terminate`] so the stderr forwarder can be aborted only once
+    /// this whole sequence has resolved, instead of before the child is even
+    /// signaled.
+    async fn terminate_child(&mut self) -> ServiceResult<TerminationOutcome> {
         self.request_graceful_termination()?;
 
         let wait_result = time::timeout(self.child_termination_deadline, self.child.wait()).await;
@@ -262,6 +334,59 @@ impl RpcWorkerProcess {
 
         Ok(())
     }
+}
+
+/// Spawns a background task that drains a pool worker's stderr and forwards
+/// every line to the service log (CR-015; S-002 v0.2 Component 6 "Worker
+/// stderr").
+///
+/// pi reports its own start-up failures on stderr (e.g. an unrecognized
+/// `--model` value), and the bob extension writes warnings and transport-lost
+/// errors there when it has no UI — an unread pipe loses all of that, and
+/// also blocks the child once the OS pipe buffer fills. This task reads raw
+/// bytes up to each newline and decodes them with `String::from_utf8_lossy`,
+/// so invalid UTF-8 never stops the reader. Every line is logged at warning
+/// level with no rate limiting, filtering, or level change (S-002), tagged
+/// with the worker's `session_id`. Only EOF (the worker exited or was
+/// terminated) or a genuine I/O error ends the task; an I/O error is logged
+/// once and the task returns without panicking.
+///
+/// `spawn` is a synchronous function, but every call site runs inside an
+/// active Tokio runtime (the pi-agent-supervisor actor and `#[tokio::test]`
+/// functions), so `tokio::spawn` here always has a runtime to schedule onto.
+///
+/// Returns the task's `JoinHandle` so the caller can track and abort it at
+/// worker teardown (mirroring `pool.rs`'s `spawn_stdout_drain`/`drain_handle`)
+/// instead of leaving it detached for the life of the process.
+fn spawn_stderr_forwarder(stderr: ChildStderr, session_id: SessionId) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr);
+        let mut buf: Vec<u8> = Vec::new();
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf).await {
+                Ok(0) => break,
+                Ok(_) => {
+                    let mut line = String::from_utf8_lossy(&buf).into_owned();
+                    if line.ends_with('\n') {
+                        line.pop();
+                        if line.ends_with('\r') {
+                            line.pop();
+                        }
+                    }
+                    tracing::warn!(session = %session_id, "pool worker stderr: {line}");
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        session = %session_id,
+                        error = %error,
+                        "pool worker stderr reader failed"
+                    );
+                    break;
+                }
+            }
+        }
+    })
 }
 
 /// Configuration for spawning an interactive pi session.
@@ -512,8 +637,99 @@ impl InteractiveProcess {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::{Arc, Mutex};
     use std::time::Instant;
     use tokio::time::{timeout, Duration as TokioDuration};
+
+    // ---- Stderr-forwarding tracing capture (T-227) ----
+    //
+    // Mirrors the tracing-capture approach in
+    // `crates/extension-ipc/src/multiplex.rs`'s test module: install one
+    // permissive global default subscriber for the whole test binary so no
+    // `tracing` callsite gets permanently cached "not interested" by a racing
+    // thread with no subscriber at all, then layer a thread-local capturing
+    // subscriber over it for the duration of each test that needs to observe
+    // emitted lines.
+
+    fn ensure_global_test_subscriber() {
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(std::io::sink)
+                .finish();
+            let _ = tracing::subscriber::set_global_default(subscriber);
+        });
+    }
+
+    /// Captures formatted tracing lines emitted while the guard is alive.
+    struct TracingCapture {
+        lines: Arc<Mutex<Vec<String>>>,
+        _guard: tracing::subscriber::DefaultGuard,
+    }
+
+    impl TracingCapture {
+        fn new() -> Self {
+            ensure_global_test_subscriber();
+
+            let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let lines_clone = Arc::clone(&lines);
+
+            let make_writer = move || {
+                let l = Arc::clone(&lines_clone);
+                LineWriter { lines: l }
+            };
+
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_ansi(false)
+                .with_writer(make_writer)
+                .finish();
+
+            let guard = tracing::subscriber::set_default(subscriber);
+            Self {
+                lines,
+                _guard: guard,
+            }
+        }
+
+        fn captured(&self) -> Vec<String> {
+            self.lines.lock().expect("lines lock").clone()
+        }
+    }
+
+    struct LineWriter {
+        lines: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl std::io::Write for LineWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let s = String::from_utf8_lossy(buf).into_owned();
+            self.lines.lock().expect("lines lock").push(s);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Polls `check` until it returns `true` or `deadline` elapses, sleeping
+    /// briefly between attempts. The background stderr-forwarding task runs
+    /// concurrently with the test task, so assertions on captured tracing
+    /// output must not assume a specific scheduling order.
+    async fn wait_for(deadline: TokioDuration, check: impl Fn() -> bool) {
+        let start = Instant::now();
+        loop {
+            if check() {
+                return;
+            }
+            if start.elapsed() >= deadline {
+                return;
+            }
+            tokio::time::sleep(TokioDuration::from_millis(5)).await;
+        }
+    }
 
     fn spawn_config(command: &str, args: &[&str]) -> WorkerProcessConfig {
         WorkerProcessConfig {
@@ -850,7 +1066,145 @@ mod tests {
         );
         let _ = &worker.stdin;
         let _ = &worker.stdout;
-        let _ = &worker._stderr;
+    }
+
+    // AC-1 (T-227): a line written to a pool worker's stderr is forwarded to
+    // the service log at warning level, tagged with the worker's session id.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_logs_worker_stderr_line_at_warn_with_session_id() {
+        let capture = TracingCapture::new();
+        let session_id = SessionId::new();
+        let mut cfg = spawn_config("sh", &["-c", "echo 'boom: something failed' >&2"]);
+        cfg.session_id = session_id;
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+        // Wait for the child to exit on its own rather than calling
+        // terminate(): sending SIGTERM immediately after spawn races the
+        // freshly-forked shell's startup and can kill it before it ever
+        // runs `echo`, which would make this test flaky rather than exercise
+        // the stderr-forwarding behavior under test.
+        worker
+            .child
+            .wait()
+            .await
+            .expect("child should exit on its own");
+
+        wait_for(TokioDuration::from_millis(500), || {
+            capture
+                .captured()
+                .iter()
+                .any(|line| line.contains("boom: something failed"))
+        })
+        .await;
+
+        let lines = capture.captured();
+        assert!(
+            lines.iter().any(|line| {
+                line.contains(" WARN ")
+                    && line.contains(&session_id.to_string())
+                    && line.contains("boom: something failed")
+            }),
+            "expected a WARN line tagged with the worker's session id containing the \
+             stderr text, got: {lines:?}"
+        );
+    }
+
+    // AC-2 (T-227): reaching EOF on a worker's stderr (no output, clean exit)
+    // ends the reader without an error log or panic.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_stderr_reader_ends_cleanly_at_eof_without_error_log() {
+        let capture = TracingCapture::new();
+        let session_id = SessionId::new();
+        let mut cfg = spawn_config("sh", &["-c", "exit 0"]);
+        cfg.session_id = session_id;
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+        worker
+            .child
+            .wait()
+            .await
+            .expect("child should exit on its own");
+
+        // Give the background reader task a moment to observe EOF and
+        // (incorrectly, if this test fails) log something about it.
+        tokio::time::sleep(TokioDuration::from_millis(200)).await;
+
+        let lines = capture.captured();
+        let session_str = session_id.to_string();
+        assert!(
+            lines.iter().all(|line| !line.contains(&session_str)),
+            "reaching EOF with no stderr output must not emit any log line for the \
+             worker's session id, got: {lines:?}"
+        );
+    }
+
+    // AC-3 (T-227): a worker writing more than 64 KiB to stderr does not
+    // block on a full OS pipe buffer, because the background reader keeps
+    // draining it — a worker writing 200 KiB then exiting must finish within
+    // the test timeout.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_stderr_reader_drains_large_writes_without_blocking_worker() {
+        let mut cfg = spawn_config(
+            "sh",
+            &["-c", "head -c 204800 /dev/zero | tr '\\0' 'a' >&2; exit 0"],
+        );
+        cfg.child_termination_deadline = Duration::from_secs(5);
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+
+        let wait_result = timeout(TokioDuration::from_secs(5), worker.child.wait()).await;
+
+        assert!(
+            wait_result.is_ok(),
+            "worker writing 200 KiB to stderr should exit on its own within the test \
+             timeout instead of blocking on a full pipe buffer"
+        );
+        wait_result
+            .expect("timeout")
+            .expect("child wait should succeed");
+    }
+
+    // AC-4 (T-227): invalid UTF-8 written to stderr is logged lossily
+    // decoded rather than stopping the reader, and a later valid line is
+    // still logged.
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_stderr_reader_keeps_reading_after_invalid_utf8_line() {
+        let capture = TracingCapture::new();
+        let session_id = SessionId::new();
+        let mut cfg = spawn_config(
+            "sh",
+            &[
+                "-c",
+                "printf '\\377\\376\\n' >&2; printf 'valid-line-after-invalid-utf8\\n' >&2",
+            ],
+        );
+        cfg.session_id = session_id;
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+        worker
+            .child
+            .wait()
+            .await
+            .expect("child should exit on its own");
+
+        wait_for(TokioDuration::from_millis(500), || {
+            capture
+                .captured()
+                .iter()
+                .any(|line| line.contains("valid-line-after-invalid-utf8"))
+        })
+        .await;
+
+        let lines = capture.captured();
+        assert!(
+            lines.iter().any(|line| {
+                line.contains(" WARN ")
+                    && line.contains(&session_id.to_string())
+                    && line.contains("valid-line-after-invalid-utf8")
+            }),
+            "a valid line written after an invalid-UTF-8 line must still be logged at \
+             warn level, got: {lines:?}"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -954,6 +1308,162 @@ mod tests {
         assert!(
             !outcome.forced,
             "cooperative child should terminate without force-kill"
+        );
+    }
+
+    // Review fix (T-227): terminate() must abort the stderr-forwarder task
+    // rather than leave it detached. A worker's own process exiting also
+    // closes its stderr pipe and would end the forwarder via ordinary EOF,
+    // so that alone can't distinguish "aborted" from "ended naturally" — this
+    // test spawns a grandchild that inherits and keeps the pipe's write end
+    // open well past the worker's own exit, so the forwarder can only stop
+    // promptly here if terminate() actually aborts it.
+    //
+    // Extended per the Architect's cycle-3 escalation resolution: also
+    // asserts terminate() returns within a bound well below the grandchild's
+    // 5s hold on the pipe (proving STDERR_DRAIN_GRACE is a bounded wait, not
+    // an unbounded one), and that the worker's own stderr line -- written in
+    // its own TERM trap -- is still logged even though the forwarder never
+    // reaches EOF within the grace window, because a grandchild keeps the
+    // pipe open indefinitely.
+    #[tokio::test(flavor = "current_thread")]
+    async fn terminate_aborts_stderr_forwarder_even_when_a_grandchild_keeps_the_pipe_open() {
+        let capture = TracingCapture::new();
+        let session_id = SessionId::new();
+        let mut cfg = spawn_config(
+            "sh",
+            &[
+                "-c",
+                // A short main-loop sleep (rather than 1s) matters here: dash
+                // defers running a trap until its current foreground command
+                // returns, so with a 1s sleep the trap (and this worker's own
+                // stderr write) could be delayed past `child_termination_deadline`
+                // below, forcing a SIGKILL that never runs the trap at all.
+                "sleep 5 >&2 & trap 'echo grandchild-test-worker-goodbye >&2; exit 0' TERM; \
+                 while :; do sleep 0.05; done",
+            ],
+        );
+        cfg.session_id = session_id;
+        cfg.child_termination_deadline = Duration::from_millis(200);
+
+        let worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+        let stderr_forwarder_abort_handle = worker.stderr_forwarder.abort_handle();
+
+        // Give the background grandchild time to fork and inherit the stderr
+        // pipe before signaling the worker; otherwise a race could kill it
+        // (still forking) along with the main child.
+        tokio::time::sleep(TokioDuration::from_millis(50)).await;
+
+        let terminate_started = Instant::now();
+        let outcome = worker.terminate().await.expect("terminate should succeed");
+        let elapsed = terminate_started.elapsed();
+
+        assert!(
+            !outcome.forced,
+            "the worker's TERM trap should run and exit it gracefully well within \
+             child_termination_deadline; a force-kill here would mean the trap (and its \
+             stderr write) never ran at all"
+        );
+
+        // The grandchild still holds the pipe's write end open well past
+        // terminate() returning, so if the forwarder task were still merely
+        // blocked waiting for EOF (i.e. not aborted), it would still be
+        // running here.
+        tokio::time::sleep(TokioDuration::from_millis(50)).await;
+
+        assert!(
+            stderr_forwarder_abort_handle.is_finished(),
+            "terminate() must abort the stderr forwarder task instead of leaving it \
+             to wait indefinitely for EOF on a pipe a grandchild process still holds open"
+        );
+
+        let bound =
+            cfg.child_termination_deadline + STDERR_DRAIN_GRACE + Duration::from_millis(500);
+        assert!(
+            elapsed < bound,
+            "terminate() took {elapsed:?}, expected under {bound:?} -- the stderr drain \
+             grace period must stay bounded and not degrade into waiting for the \
+             grandchild's 5s hold on the pipe"
+        );
+
+        let lines = capture.captured();
+        assert!(
+            lines.iter().any(|line| {
+                line.contains(" WARN ")
+                    && line.contains(&session_id.to_string())
+                    && line.contains("grandchild-test-worker-goodbye")
+            }),
+            "the worker's own stderr line, written in its TERM trap, must still be logged \
+             within the drain grace period even though the forwarder never reaches EOF \
+             because a grandchild keeps the pipe open, got: {lines:?}"
+        );
+    }
+
+    // Review fix (T-227, review cycle 2 & the Architect's cycle-3 escalation
+    // resolution): terminate() must give the stderr-forwarder task a bounded
+    // chance to actually reach EOF -- not just avoid aborting it before the
+    // worker's own termination sequence resolves -- before cancelling it. A
+    // worker's most interesting stderr output is often written in direct
+    // response to receiving the termination signal itself (e.g. the bob
+    // extension's transport-lost message written during graceful shutdown).
+    // This worker traps TERM, writes a line to stderr, and exits immediately
+    // with no post-write delay -- this is exactly the timing the cycle-3
+    // escalation reproduced losing the message in ~17% of runs when
+    // terminate() only aborted the forwarder unconditionally right after the
+    // child exited, with no bounded wait for the forwarder to be polled
+    // again first.
+    //
+    // The readiness handshake below (read a line the worker writes to stdout
+    // right after installing its trap) replaces a fixed pre-terminate sleep:
+    // it deterministically guarantees the trap is installed before
+    // terminate() sends SIGTERM, without racing a fixed delay against the
+    // shell's own startup time.
+    #[tokio::test(flavor = "current_thread")]
+    async fn terminate_logs_stderr_written_in_response_to_its_own_termination_signal() {
+        let capture = TracingCapture::new();
+        let session_id = SessionId::new();
+        let mut cfg = spawn_config(
+            "sh",
+            &[
+                "-c",
+                "trap 'echo shutdown-stderr-message >&2; exit 0' TERM; echo true; \
+                 while :; do sleep 0.05; done",
+            ],
+        );
+        cfg.session_id = session_id;
+        cfg.child_termination_deadline = Duration::from_secs(2);
+
+        let mut worker = RpcWorkerProcess::spawn(&cfg).expect("spawn should succeed");
+
+        let ready = worker
+            .read_next_stdout_json()
+            .await
+            .expect("reading the readiness handshake from stdout should succeed")
+            .expect("worker should write a readiness line to stdout after installing its trap");
+        assert_eq!(
+            ready,
+            Value::Bool(true),
+            "readiness handshake should be the literal JSON boolean the worker echoes"
+        );
+
+        let outcome = worker.terminate().await.expect("terminate should succeed");
+
+        assert!(
+            !outcome.forced,
+            "cooperative child should terminate gracefully, not via force-kill, so this \
+             test actually exercises the graceful-shutdown stderr path"
+        );
+
+        let lines = capture.captured();
+        assert!(
+            lines.iter().any(|line| {
+                line.contains(" WARN ")
+                    && line.contains(&session_id.to_string())
+                    && line.contains("shutdown-stderr-message")
+            }),
+            "a line the worker writes to stderr in direct response to receiving its own \
+             termination signal, with no post-write delay before exiting, must still be \
+             logged by the time terminate() returns, got: {lines:?}"
         );
     }
 
