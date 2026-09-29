@@ -121,3 +121,92 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-29
+
+PASS
+
+Reviewed `task/T-230-bob-companion-pi-agent-model-skills` at `edab123` (merge-base
+`dca70ac`) via an isolated `git worktree`, against the diff in
+`the-intern/bob-companion/claude/skills/bob-setup/SKILL.md`,
+`the-intern/bob-companion/claude/skills/bob-troubleshooting/SKILL.md`, and
+`the-intern/bob-companion/claude/skills/bob-troubleshooting/references/symptom-table.md`,
+cross-checked against `the-intern/service/crates/bob/src/serve.rs`
+(`warn_if_pi_agent_model_unset`, the periodic dispatcher's `send_prompt_and_drain`
+error branch), `crates/bob/src/config.rs` (`validate()`, `model_selecting_flag_in`,
+`pi_agent_shared_args`), and `crates/pi-agent-supervisor/src/process.rs`
+(`spawn_stderr_forwarder`).
+
+**T-229 pitfall check (restart-required framing).** T-229 cycle-1 FAILed for
+falsely implying `pi_agent_model` was uniquely exempt from `bob policy reload`,
+when `pi_agent_cwd`/`skill_install_path` share the same startup-only, restart-required
+behavior. This diff does not repeat that pattern: `bob-setup/SKILL.md`'s new
+restart paragraph ("A changed `pi_agent_model` only takes effect after the next
+`bob serve` restart...") states the requirement for this key alone and makes no
+comparison to, or exemption from, any other key or command — `bob policy reload`
+is never mentioned anywhere in this diff, and neither skill file has pre-existing
+restart-behavior claims for `pi_agent_cwd`/`skill_install_path` that this text
+could contradict. No false-uniqueness claim present.
+
+**Stage 1 (acceptance criteria):**
+- AC-1 (notable keys + rejected flags): met. `pi_agent_model` added to the
+  `bob-setup` notable-keys list; new block states it is the "**only**" place to
+  set the model and that `--model`/`--models`/`--provider` in `pi_agent_args`
+  are rejected at load — matches `config.rs`'s `MODEL_SELECTING_FLAGS` and
+  `model_selecting_flag_in`.
+- AC-2 (confirm before relying, restart requirement): met. New `bob-setup` text
+  instructs confirming with `pi --list-models <search>` and
+  `pi auth check --provider <p> --json` before relying on the value, and states
+  the restart requirement clearly (see pitfall check above).
+- AC-3 (four symptoms mapped): met in both `bob-troubleshooting/SKILL.md`'s new
+  "`pi_agent_model` symptoms" section and the four new `symptom-table.md` rows —
+  unset-model startup warning, `Model "<value>" not found` log line, a scheduled
+  job that fired but left no trace, and the `pi_agent_args` config-load
+  rejection. Runtime strings verified verbatim against source:
+  - Warning text matches `warn_if_pi_agent_model_unset` exactly, character for
+    character.
+  - Config-load error matches `config.rs`'s
+    `"pi_agent_args must not select a model ({flag} found); set the model with
+    pi_agent_model instead"` exactly.
+  - `Error: Model "<value>" not found. Use --list-models to see available
+    models.` is pi's own error (not bob's), correctly forwarded per
+    `spawn_stderr_forwarder`'s "pool worker stderr: {line}" behavior and
+    placeholder-ized from the real transcript recorded in T-228's Work Log
+    (`Error: Model "definitely-not-a-real-model-t228" not found. ...`).
+  - The "scheduled job ran but did nothing" claim (no `verdict`/`event`/`report`
+    audit record, `bob audit tail` shows nothing) matches `serve.rs`'s
+    `send_prompt_and_drain` error branch, which only logs
+    `"periodic dispatcher: prompt send failed; continuing"` and never calls
+    `record_periodic_fire_dispatched` or any other audit-recording function on
+    that path.
+- AC-4 (limits stated as observed behavior, not contract): met in both files —
+  `bob-setup` uses explicit "**Observed limits:**" labels for both commands;
+  `bob-troubleshooting` states both "reflect observed pi behavior rather than a
+  documented guarantee."
+- AC-5 (placeholders, no internal IDs/version): met. Reran the task's own
+  verification block from scratch in the worktree (not just trusting the
+  reported "no output"):
+  - `grep -n "pi_agent_model" ...` across all three files — all expected new
+    lines present.
+  - `grep -n "list-models\|auth check" ...` across both `SKILL.md` files — all
+    expected new lines present.
+  - The ID/version grep gate (`git diff -U0 "$(git merge-base dev-agent HEAD)"
+    ... | grep '^+[^+]' | grep -nE "..."`) against the actual merge-base
+    (`dca70ac`) on branch tip (`edab123`) — no output, grep exit 1, gate
+    passes.
+  - Additional sweep for real provider/model names
+    (`claude|anthropic|openai|gpt-|opus|sonnet|gemini|llama`) over the added
+    lines — no output; only `<provider>/<model-id>`/`<p>`/`<value>`/`<search>`
+    placeholders appear.
+
+**Stage 2 (code quality, applied to docs):** accurate against the real
+implementation (see runtime-string checks above), clearly written, and
+consistent with each file's existing structure and tone — the new
+`bob-troubleshooting` section sits appropriately between the two existing
+false-alarm sections and "When to stop and escalate" (correctly *not* filed as
+a third false alarm, since the underlying config problem is real), and the new
+`symptom-table.md` rows match the table's existing column format exactly. Diff
+scope confirmed tight: `git diff --stat` against the merge-base touches only
+the three files in "Files to Touch," no unrelated or drive-by changes.
+
+No issues found. This task is complete.
