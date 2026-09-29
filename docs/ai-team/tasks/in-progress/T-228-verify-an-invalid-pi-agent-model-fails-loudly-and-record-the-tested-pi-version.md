@@ -140,3 +140,86 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-09-29
+
+PASS
+
+**Stage 1 — Acceptance criteria.** All five ACs are met, checked against the
+actual diff (`git diff dev-agent...task/T-228-verify-invalid-pi-agent-model`,
+touching only `the-intern/service/crates/bob/src/serve.rs` and `README.md`,
+matching "Files to Touch" exactly).
+
+- AC-1: `periodic_dispatcher_skips_fire_and_appends_no_audit_record_when_warm_worker_already_exited`
+  genuinely exercises the warm-worker path, not overflow: `warm_pool_size: 1,
+  max_processes: 1` means `SessionPool::new` pre-spawns the fake worker into
+  `warm_workers`, and `acquire_session` always pops from `warm_workers` first
+  (`pool.rs:203`) — the overflow branch (spawn-on-demand) is unreachable here
+  since `total_process_count()` already equals `max_processes`. Confirmed via
+  `PeriodicCwdResolution::ServiceDefault` → `acquire_default_session_or_warn`
+  → `send_prompt_and_drain` fails (broken pipe against the dead worker) →
+  `serve.rs`'s `Err` branch only warns and calls `kill_session`, with no
+  `record_periodic_fire_*` call on that path — matches "no audit record of
+  any kind." The test waits deterministically (pid-file write, then
+  `/proc/<pid>/stat` state-field poll for `Z` or disappearance) rather than
+  sleeping, correctly distinguishing zombie-but-exited from still-running.
+  The final assertion checks the unfiltered `audit_sink.records()`, not just
+  `Event`-kind, unlike the sibling `warm_pool_size: 0` overflow test it sits
+  beside without duplicating. Ran the test 10/10 in an isolated worktree
+  checkout of the exact committed code (`a4f0151`) — no flakes, ~0.31s each
+  — and `cargo test -p bob serve::tests` reproduced the Developer's reported
+  64 passed / 1 ignored / 0 failed. `cargo fmt --all -- --check` is clean.
+- AC-2/AC-3/AC-5: the Work Log's Session 1, Part 2 entries are specific and
+  independently corroborated against the real `pi` 0.87.1 on PATH and the
+  code: `pi --help </dev/null` confirms no short aliases for `--model`,
+  `--models`, or `--provider` (spot-checked directly — other flags like
+  `--name`/`-n` do have short forms, these three do not); `pi --model
+  <bogus> --print ... </dev/null` reproduces the exact error string quoted
+  in the Work Log ("Error: Model \"...\" not found. Use --list-models to see
+  available models."), which matches the `pool worker stderr: {line}
+  session=%session_id` format at `process.rs:377` verbatim (AC-2). Both the
+  pool-worker path (`build_pi_agent_supervisor_config` /
+  `pi_agent_shared_args()`) and the interactive `bob chat` path
+  (`build_interactive_session_config`) append `--model <value>` from the
+  same shared-args helper when `pi_agent_model` is set, consistent with the
+  "all three spawn paths" claim in AC-3. The config-load rejection message
+  quoted for step (d) matches `config.rs:333` verbatim. The live dev
+  environment's `.tmp/bob-dev/config/bob/config.toml` has no
+  `pi_agent_model` set (matches "already had no pi_agent_model set") and
+  `.tmp/bob-dev/state/bob/schedules.json` still has exactly the two
+  pre-existing cron entries the Work Log names, confirming the claimed
+  backup/restore. AC-5's "zero stderr matches across three fires" claim is
+  plausible and consistent with the code (pi only writes to stderr on
+  genuine errors, per the process.rs forwarder) and is properly treated as
+  primary evidence in the Work Log rather than inferred.
+- AC-4: `README.md` diff adds one new bullet under "pi-agent Version
+  Compatibility" recording pi 0.87.1, explicitly scoped to what T-228
+  checked (model pinning on all three spawn paths, fail-fast on an unknown
+  model, and the `pi_agent_args` model-flag rejection), and explicitly
+  disclaims re-running the `resources_discover`/skill-delivery checks. The
+  existing 0.80.3 bullet immediately above is untouched (`git diff` shows
+  only additions, 0 deletions in `README.md`).
+
+No unspecified behavior or functionality was added; no files outside scope
+were touched.
+
+**Stage 2 — Code quality.** The new test is focused, uses a bounded
+`Duration::from_secs(5)` timeout for both polling loops (no possibility of
+an unbounded hang), and cleans up its own pid file, dispatcher, and
+supervisor at the end — verified this cleanup fires reliably across 10
+consecutive runs of the exact committed code. Naming
+(`periodic_dispatcher_skips_fire_and_appends_no_audit_record_when_warm_worker_already_exited`)
+is descriptive and consistent with sibling test names in this file. No dead
+code, no unrelated refactoring, no secrets. The README addition is prose,
+correctly scoped, and consistent with existing entries in that section's
+style.
+
+**Minor, non-blocking observation.** Found one stray 7-byte temp file
+(`/tmp/bob-serve-t228-warm-worker-pid-<uuid>`) with a timestamp preceding
+commit `a4f0151`, almost certainly left over from an earlier/interrupted
+manual run during the Developer's own iterative testing (not reproduced in
+10/10 clean runs of the final committed code from an isolated worktree, so
+this is not a defect in the shipped test's cleanup logic). Removed it during
+this review; no action needed from the Developer.
+
+Both stages pass. Verdict: PASS.
