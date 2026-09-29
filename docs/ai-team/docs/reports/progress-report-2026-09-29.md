@@ -32,7 +32,7 @@ Active specs: 14. Pending tasks: 0. In progress tasks: 0. Completed tasks: 228. 
 ## Integration Evidence
 
 - Latest integration-test result: chore(tasks): merge T-230 teach bob-companion skills pi_agent_model
-- Source: git log --all --grep=merge|integration|verification|test -n 1
+- Source: git log --all --grep=merge|integration|verification|test -E -n 1
 - Date: 2026-09-29
 
 ## Completed

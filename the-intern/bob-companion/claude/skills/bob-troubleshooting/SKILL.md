@@ -70,7 +70,7 @@ actively using — before terminating the other one.
 
 ## `pi_agent_model` symptoms
 
-Four distinct symptoms trace back to `pi_agent_model` — don't conflate them.
+Five distinct symptoms trace back to `pi_agent_model` — don't conflate them.
 Exact-message rows are in `references/symptom-table.md`; here's how to tell
 them apart quickly:
 
@@ -97,6 +97,13 @@ them apart quickly:
    `--models`, or `--provider` — the model is settable in exactly one place.
    Fix: move the value to `pi_agent_model` and remove the flag — and its
    value, if it was a separate argument — from `pi_agent_args`.
+5. **A config-load error that `pi_agent_model` must not be empty or
+   whitespace-only.** `bob serve` refuses to start when `pi_agent_model` is
+   set but blank — e.g. an env var expansion (`BOB_PI_AGENT_MODEL`) that
+   evaluates to an empty string, or a stray `pi_agent_model = ""` in
+   `config.toml`. Unlike symptom 2, this is caught by bob itself at config
+   load, before any process spawns. Fix: set a real `<provider>/<model-id>`
+   value or remove the key entirely to fall back to symptom-1 behaviour.
 
 `pi --list-models <search>` and `pi auth check --provider <p> --json` are
 useful checks before trusting a `pi_agent_model` value, but neither is

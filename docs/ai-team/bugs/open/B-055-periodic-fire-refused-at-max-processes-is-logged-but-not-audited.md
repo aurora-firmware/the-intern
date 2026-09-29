@@ -82,8 +82,10 @@ Each refused fire is skipped with a logged warning only. Nothing appears in
 
 - Task: none
 - Specification: `S-002-bob-service-shell-architecture.md` (Component 6,
-  "When `max_processes` is exhausted"); `S-010-email-skills-for-pi-agent-himalaya-cli-reference-and-classification-driven-triage.md`
-  (Workflow, periodic-fire outcomes)
+  "When `max_processes` is exhausted"); `S-009-scheduler-channel-adapter-and-bob-schedule-cli.md`
+  (cron-tick workflow, 2026-09-28 amendment — the one complete list of fire
+  outcomes, which names this bug directly); `S-010-email-skills-for-pi-agent-himalaya-cli-reference-and-classification-driven-triage.md`
+  (Workflow, periodic-fire outcomes, now deferring to S-009)
 - Found during: `CR-015` architecture consistency review (finding 10)
 
 ## Suspected Area

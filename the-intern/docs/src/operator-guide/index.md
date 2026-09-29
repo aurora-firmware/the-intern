@@ -572,10 +572,12 @@ settings, which can change or fall back to a different model without
 notice; set pi_agent_model in the service configuration to pin it
 ```
 
-**Invalid-value behaviour.** bob runs no check of `pi_agent_model` before
-starting a process or before a fire — an invalid value is caught only by pi
-itself, at spawn time. A pool worker started with a model pi does not
-recognize prints pi's own error to stderr and exits immediately; bob
+**Invalid-value behaviour.** bob rejects an empty or whitespace-only
+`pi_agent_model` at config load — `bob serve` refuses to start in that case.
+Any other invalid value — one pi itself fails to recognize or resolve — is
+caught only by pi, at spawn time, not by bob. A pool worker started with a
+model pi does not recognize prints pi's own error to stderr and exits
+immediately; bob
 forwards every pool-worker stderr line into the service log at warning
 level, tagged with the worker's session id, so the error is visible there.
 An interactive `bob chat` session shows the same error directly in the
