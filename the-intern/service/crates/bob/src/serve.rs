@@ -3422,6 +3422,146 @@ pub mod tests {
             let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
         }
 
+        // T-228 AC-1: a **warm** worker (`warm_pool_size >= 1`) whose process
+        // has already exited before the fire is handed to it is skipped with
+        // a warning, its session is killed (no live session remains), and —
+        // unlike the missing-per-entry-cwd skip (which appends a `Report`-kind
+        // record via `record_periodic_fire_skipped`) — no audit record of any
+        // kind is appended. The test above covers only an overflow worker
+        // (`warm_pool_size: 0`) and only asserts the absence of an `Event`
+        // record; this one is a warm worker and asserts the absence of any
+        // audit record kind.
+        //
+        // The warm worker's script writes its own pid to a file just before
+        // exiting so the test can poll `/proc/<pid>` and confirm the process
+        // has actually exited *before* the fire is triggered — a fixed sleep
+        // here would race the warm worker's own exit and make the test flaky.
+        #[tokio::test(flavor = "current_thread")]
+        async fn periodic_dispatcher_skips_fire_and_appends_no_audit_record_when_warm_worker_already_exited(
+        ) {
+            let pid_file = std::env::temp_dir().join(format!(
+                "bob-serve-t228-warm-worker-pid-{}",
+                bob_core::types::SessionId::new()
+            ));
+            let _ = std::fs::remove_file(&pid_file);
+            let pid_file_path = pid_file.to_string_lossy().into_owned();
+
+            // Mirrors the #104 failure mode: an unrecognized `--model` makes
+            // pi exit immediately with a "not found" error on stderr.
+            let worker_script = format!(
+                "printf '%s\\n' $$ > \"{pid_file_path}\"; \
+                 echo 'Error: Model \"x\" not found.' >&2; exit 1"
+            );
+
+            let (supervisor_handle, supervisor_join) =
+                pi_agent_supervisor::start(pi_agent_supervisor::Config {
+                    worker_command: "sh".to_string(),
+                    worker_args: vec!["-c".to_string(), worker_script],
+                    warm_pool_size: 1,
+                    max_processes: 1,
+                    extension_path: existing_extension_path(),
+                    ..pi_agent_supervisor::Config::default()
+                })
+                .expect("supervisor must start");
+
+            // Poll for the warm worker to record its pid, then poll for that
+            // pid to disappear from /proc — confirming the warm worker's
+            // process has fully exited before the periodic fire is triggered.
+            let warm_worker_pid = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Ok(contents) = std::fs::read_to_string(&pid_file) {
+                        if let Ok(pid) = contents.trim().parse::<i32>() {
+                            break pid;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("warm worker must write its pid before exiting");
+
+            // A child that has exited but not yet been reaped by its parent
+            // is a zombie (`/proc/<pid>` still exists, but the process's own
+            // file descriptors — including the read end of its stdin pipe —
+            // are already released by the kernel at exit time, regardless of
+            // reaping). So "no longer running" here means either the pid is
+            // gone from /proc entirely, or its `/proc/<pid>/stat` state field
+            // reads `Z`, not that `/proc/<pid>` itself has disappeared.
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let still_running =
+                        std::fs::read_to_string(format!("/proc/{warm_worker_pid}/stat"))
+                            .ok()
+                            .and_then(|stat| {
+                                let after_comm = stat.rsplit_once(')')?.1.to_owned();
+                                let state = after_comm.split_whitespace().next()?.to_owned();
+                                Some(state != "Z")
+                            })
+                            .unwrap_or(false);
+                    if !still_running {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("warm worker process must exit before the periodic fire is triggered");
+
+            let (persistence_handle, _persistence_join) =
+                persistence::start(persistence::Config::default());
+            persistence_handle
+                .enqueue_periodic_with_job_id(
+                    InternalEvent {
+                        kind: DeliveryKind::Periodic,
+                        payload: "warm-worker-already-exited-test".to_owned(),
+                    },
+                    None,
+                )
+                .await
+                .expect("enqueue must succeed");
+
+            // No per-entry cwd — resolves to the ServiceDefault tier, which
+            // acquires via the plain `acquire_session` (the warm-pool path).
+            let schedule_rx = schedule_rx_with_entries(Vec::new());
+
+            let audit_sink = Arc::new(SpyAuditSink::default());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let dispatcher_join = start_periodic_dispatcher(
+                Arc::new(persistence_handle.clone()),
+                supervisor_handle.clone(),
+                schedule_rx,
+                None,
+                Arc::clone(&audit_sink) as Arc<dyn AuditSink>,
+                cancel_rx,
+            );
+
+            // Give the dispatcher time to dequeue the fire, acquire the
+            // already-dead warm worker, fail to send the prompt, and clean up
+            // the session.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+
+            let sessions_after = supervisor_handle
+                .list_sessions()
+                .await
+                .expect("list sessions should succeed");
+            assert!(
+                sessions_after.is_empty(),
+                "the dead warm worker's session must be killed, leaving no live session: {sessions_after:?}"
+            );
+
+            let records = audit_sink.records();
+            assert!(
+                records.is_empty(),
+                "a skipped fire against an already-exited warm worker must append no audit record of any kind: {records:?}"
+            );
+
+            let _ = cancel_tx.send(true);
+            drop(supervisor_handle);
+            let _ = tokio::time::timeout(Duration::from_secs(1), dispatcher_join).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), supervisor_join).await;
+            std::fs::remove_file(&pid_file).ok();
+        }
+
         // AC-2: a resolved per-entry `cwd` that does not exist at fire time is
         // skipped with a warning and a monitoring failure record. No worker is
         // ever acquired for the missing directory — proven here by pairing the
