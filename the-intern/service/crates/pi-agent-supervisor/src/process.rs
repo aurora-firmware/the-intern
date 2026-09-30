@@ -88,6 +88,9 @@ impl RpcWorkerProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // Dropping the handle without a graceful shutdown (e.g. an
+            // aborted actor task) must not orphan the worker.
+            .kill_on_drop(true)
             .env("BOB_SESSION_ID", cfg.session_id.to_string());
 
         if !cfg.extension_sock_path.as_os_str().is_empty() {
@@ -477,6 +480,10 @@ impl InteractiveProcess {
             // own group leader so only signals bob serve explicitly sends it
             // reach it.
             .process_group(0)
+            // The own process group keeps it alive across the parent's
+            // Ctrl-C, so without this an aborted or dropped actor would
+            // orphan it; only an explicit drop/terminate may end it.
+            .kill_on_drop(true)
             .env("BOB_SESSION_ID", cfg.session_id.to_string());
 
         if !cfg.extension_sock_path.as_os_str().is_empty() {
