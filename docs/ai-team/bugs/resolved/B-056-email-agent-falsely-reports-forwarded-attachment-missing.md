@@ -2,7 +2,7 @@
 id: B-056
 title: Email agent falsely reports forwarded attachment missing
 severity: medium
-status: in-progress
+status: resolved
 created: '2026-10-02'
 ---
 
