@@ -118,6 +118,15 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-10-02
+Read Diagnosis 1 as the contract and added a shell content test, `test_attachment_discovery_guidance.sh`, first. It asserts three things in the himalaya reference: the non-authoritative wording for `has_attachment:false` and a missing `<#part>` line, `attachment download -d <scratch-dir> <id>` named as the authoritative check, and the nested inline part case. It also asserts that email-triage `SKILL.md` and `direct-request.md` require `attachment download` into a scratch directory, that no internal IDs appear in the shipped files, and that the `.pi/skills` mirror matches regenerated output. It failed 5 of 7 before any edits, as expected.
+
+The edits are markdown only. The himalaya reference has a new absence pitfall paragraph with a transcript, and the "Handling Attachments" pointer to `message read` now notes that it can miss nested parts. `email-triage/SKILL.md` step 3.1 has a paragraph that requires the download before concluding an attachment is missing. `direct-request.md` has a new "If the request involves an attachment" section placed before the "needs information this run doesn't have" escalation path, so a missing attachment is a valid escalation reason only after the download finds nothing.
+
+I checked the transcript against INBOX 278 with a read-only scratch-directory download; it found the 10245-byte PDF, so the filename in the transcript is the real one. I regenerated the mirror with `package-pi-skills.sh`. All three bob-skills shell tests pass. `cargo test -p bob init_assets` matched no tests. The orphan check was clean.
+
+Rejected: a Rust test for the embedded assets, because the fix is guidance text and a shell content assertion covers it. Nothing remains. A reviewer should read the wording of the new email-triage and direct-request paragraphs, since the test only asserts keywords.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
