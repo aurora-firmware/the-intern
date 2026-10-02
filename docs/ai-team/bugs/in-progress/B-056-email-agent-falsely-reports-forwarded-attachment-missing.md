@@ -138,3 +138,18 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-10-02
+PASS
+
+Diagnosis chain: Diagnosis 1 records confirmed reproduction, captured evidence (envelope flag, preview output, download result, raw MIME tree), isolated fault, root cause, planned fix and planned verification. The implementation matches that contract.
+
+Stage 1: The himalaya reference now states that `has_attachment:false` and an absent `<#part>` line do not prove absence, and names `attachment download -d <scratch-dir> <id>` as the authoritative check. The email-triage SKILL.md step 3.1 and `direct-request.md` both require the download into a scratch directory before concluding an attachment is missing. The Fix Verification greps match. Nothing unrelated was added. The only extra file is the regression test script.
+
+Stage 2: I read the wording of all three passages. It is clear and correct, and the new guidance sits before the "needs information this run doesn't have" escalation path, so a missing attachment is a valid reason to escalate only after the download finds nothing. There are no internal IDs. Recipes use `<scratch-dir>` and `<id>`. The real filename and `INBOX 278` values appear only in the Observed transcript, which the guidelines allow. The `.pi/skills` mirror differs from the canonical copy by exactly the same hunks, and the regeneration check in the test confirms it is in sync. The mirror is not hand-edited. Spec S-010 requires attachments to be covered in the himalaya skill and does not conflict with the change. I ran the three bob-skills shell tests in a temporary worktree of the branch: `test_attachment_discovery_guidance.sh` passed 7 of 7, `test_package_pi_skills.sh` 5 of 5 and `test_worklog_entry_format_timestamp.sh` 4 of 4. The new test is a keyword-level content assertion, which is acceptable here because this is guidance text. The Work Log reports that the test failed 5 of 7 before the edits.
+
+Non-blocking observations:
+- The transcript line `0 attachment(s) found` (and the "treat it as the only evidence of absence" sentence) rests on an assumed himalaya message that the Work Log does not record observing. Consider confirming the exact no-attachment output on a later pass.
+- The test's ID regex `\b(B|T|S|ADR)-[0-9]{2,3}\b` is adequate for this change.
+
+Next owner: Bug-Fix Loop.
