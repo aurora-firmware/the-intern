@@ -1,0 +1,106 @@
+---
+id: B-056
+title: Email agent falsely reports forwarded attachment missing
+severity: medium
+status: open
+created: '2026-10-02'
+---
+
+# Email agent falsely reports forwarded attachment missing
+
+## Summary
+
+The email-triage agent escalated INBOX message 278 ("Fwd: INFESA - FRA ALQUILER", a direct request to "save the invoice") claiming the message had no attachment. The message does carry a PDF (`_7KO0S3XY4.pdf`, 10,245 bytes). The agent relied on `himalaya message read` alone, which showed no attachment signal. Neither the `email-triage` nor the `himalaya` shipped skill instructs the agent to run an explicit attachment-discovery step, and the himalaya skill implies that a missing `<#part>` line / `has_attachment:false` means no attachment. Result: a false escalation to the manager instead of completing the request.
+
+## Reproduction Status
+
+Status: confirmed
+
+Reproduced against the live mailbox (account `daneel`, INBOX 278) on 2026-10-02 with read-only commands. The raw message was exported and its MIME structure inspected.
+
+## Evidence
+
+- Logs / stack traces / failing assertions: `himalaya envelope list -a daneel -f INBOX -o json` reports `"has_attachment":false` for id 278; `himalaya message read --preview 278` renders only the text/plain body with no `<#part ...>` line. `himalaya attachment download -a daneel -d <dir> 278` finds and saves `_7KO0S3XY4.pdf` (10,245 bytes).
+- Raw MIME structure of 278 (Apple Mail forward):
+  `multipart/alternative` -> [`text/plain`, `multipart/mixed` -> [`text/html`, `application/pdf` (`Content-Disposition: inline; filename=_7KO0S3XY4.pdf`), `text/html`]]. The PDF is nested inside the HTML alternative with `inline` disposition.
+- Screenshots or recordings: none
+- Failing command or test: none automated; this is a skill-guidance defect.
+- First diagnostic step if not yet reproduced: n/a
+
+## Reproduction Steps
+
+1. Receive a forward from Apple Mail whose attachment is an inline PDF nested in the HTML alternative (as INBOX 278), with body text asking the agent to file/save the invoice.
+2. Run the `email-triage` loop; the agent reads the message with `himalaya message read`.
+3. Observe the agent concludes no attachment exists and sends an escalation saying so.
+4. Run `himalaya attachment download` on the same message and observe the PDF is found.
+
+## Expected Behavior
+
+When a message refers to an attachment (or asks to file/save/forward a document), the agent explicitly runs attachment discovery/download (into a scratch directory) before concluding the attachment is missing, and only escalates for a missing attachment if that finds nothing. The himalaya skill states that `has_attachment:false` and an absent `<#part>` line are not authoritative.
+
+## Actual Behavior
+
+The agent trusts the body-only read, concludes the attachment is missing, and sends a false escalation to the manager.
+
+## Environment
+
+- OS / platform: Linux
+- Language / runtime version: n/a (skill markdown)
+- Relevant dependencies: himalaya CLI (`/usr/local/bin/himalaya`)
+- Branch / commit: dev-agent @ 11cb2e9
+
+## Related
+
+- Task: n/a
+- Specification: `S-010-email-skills-for-pi-agent-himalaya-cli-reference-and-classification-driven-triage.md`
+- Source report: `~/bob-the-intern/bob-issues-report.md`, entry "2026-10-02 — Bob email agent falsely reports forwarded attachments missing"
+
+## Suspected Area
+
+- `the-intern/bob-skills/skills/himalaya/SKILL.md` and `references/command-reference.md` (attachment-signal guidance, "Attachment `filename=` path pitfall" and "Handling Attachments")
+- `the-intern/bob-skills/skills/email-triage/SKILL.md` step 3.1 and `references/categories/direct-request.md` (no attachment-discovery step)
+- Skills are shipped content: follow `docs/ai-team/docs/coding-guidelines-skills.md` (no internal IDs, no environment-specific values presented as generic).
+
+## Fix Verification
+
+```bash
+# Skills are markdown; verify by inspection plus the packaging test
+grep -n -i "has_attachment" the-intern/bob-skills/skills/himalaya/references/command-reference.md
+grep -n -i "attachment download" the-intern/bob-skills/skills/email-triage/SKILL.md the-intern/bob-skills/skills/email-triage/references/categories/direct-request.md
+the-intern/bob-skills/test_package_pi_skills.sh
+```
+
+Expected: the himalaya reference states that `has_attachment:false` and a missing `<#part>` line do not prove absence (nested inline parts are invisible to both); email-triage's direct-request workflow requires running `attachment download` into a scratch directory before concluding an attachment is missing.
+
+## Diagnosis Log
+
+<!-- Mandatory before implementation. Append one entry before changing production code. Format:
+### Diagnosis N — YYYY-MM-DD
+Reproduction status:
+Evidence captured:
+Isolated fault:
+Root cause or fault hypothesis:
+Planned verification:
+-->
+
+## Work Log
+
+<!-- Mandatory. Append one entry per session boundary. Format:
+### Session N — YYYY-MM-DD
+Free-prose body: what was done this session, what was tried and
+rejected, decisions made, what remains for next session.
+
+Start every session by reading the entries below.
+The final entry serves as the handoff to the reviewer. -->
+
+## Review
+
+<!-- Reviewer: append verdict here after each review cycle.
+
+### Review Verdict — YYYY-MM-DD
+PASS | FAIL | ESCALATE
+
+- For FAIL: file, location, what is wrong, what should change.
+- For PASS: brief confirmation that diagnosis, fix, verification, and code quality passed.
+- For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
+-->
