@@ -83,6 +83,31 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+### Diagnosis 1 — 2026-10-02
+Reproduction status: confirmed. Reproduced on the live mailbox (INBOX 278) with read-only commands, on 2026-10-02.
+
+Evidence captured:
+- `envelope list` gives `has_attachment:false` for 278.
+- `message read --preview 278` has zero `<#part` lines.
+- `attachment download -d <scratch> 278` finds and saves `_7KO0S3XY4.pdf` (10245 bytes).
+- Raw MIME structure: `multipart/alternative` -> [`text/plain`, `multipart/mixed` -> [`text/html`, `application/pdf` (inline; filename=_7KO0S3XY4.pdf), `text/html`]]. The PDF is an inline part inside a `multipart/mixed` nested in the HTML alternative. Both `has_attachment` and the MML `<#part>` rendering miss it.
+
+Isolated fault:
+- `the-intern/bob-skills/skills/himalaya/references/command-reference.md`: the "Reading a Message" `filename=` pitfall paragraph (~164-200) and "Handling Attachments" (~827) treat `<#part>` as the attachment indicator and never say its absence, or `has_attachment:false`, is not proof of absence.
+- `the-intern/bob-skills/skills/email-triage/SKILL.md` step 3.1 and `references/categories/direct-request.md` have no attachment-discovery step, so the agent reaches the generic "answer needs information this run doesn't have" path and escalates falsely.
+
+Root cause: a guidance gap in shipped skill content. Neither skill defines an authoritative way to determine whether a message has an attachment, so the agent trusts the body-only read, and the himalaya text reinforces that.
+
+Planned fix (markdown only, per `coding-guidelines-skills.md`: no internal IDs, no environment-specific values in recipes; use placeholders such as `<id>` and `<scratch-dir>`):
+- himalaya `command-reference.md`: note that `has_attachment:false` and an absent `<#part>` do not prove there is no attachment (parts nested in an alternative or inline in the HTML branch are invisible to both); state that `himalaya attachment download -d <scratch-dir> <id>` is the authoritative check; add an "Observed" transcript.
+- email-triage `SKILL.md` step 3.1 and `direct-request.md`: when the message mentions or implies an attachment or document, run `attachment download` into a scratch directory before concluding it is missing; escalate for a missing attachment only if that finds nothing.
+- Regenerate the `.pi/skills` mirror with `the-intern/bob-skills/package-pi-skills.sh`; never hand-edit it (`init_assets.rs` embeds it).
+
+Planned verification:
+- Add a shell content-assertion test (new function in `test_package_pi_skills.sh` or a sibling script like `test_worklog_entry_format_timestamp.sh`): grep the himalaya reference for `has_attachment` with the non-authoritative wording; grep email-triage `SKILL.md` and `direct-request.md` for `attachment download`; assert no `B-056`/`S-010`-style IDs in shipped files; assert the `.pi/skills` mirror is in sync after regeneration. Red first, green after the edits.
+- Run the bug's Fix Verification commands and `the-intern/bob-skills/test_package_pi_skills.sh`; optionally `cargo test -p bob`.
+- Manual check against INBOX 278 using `--preview` and a scratch `-d` directory.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
