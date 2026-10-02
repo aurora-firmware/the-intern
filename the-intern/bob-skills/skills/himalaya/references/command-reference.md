@@ -201,6 +201,32 @@ downloaded from an earlier message, `attachment download` applies its own
 other than the path `message read` rendered — the render never accounts
 for this.
 
+**Absence pitfall (Observed).** The inverse also holds: `envelope list`'s
+`"has_attachment":false` and an absent `<#part>` line do not prove a message
+has no attachment. Both signals miss a part nested inside another
+alternative — for example an Apple Mail forward whose body is
+`multipart/alternative` with a `text/plain` branch and a `multipart/mixed`
+branch holding the HTML and an `application/pdf` part with `Content-Disposition:
+inline`. `himalaya attachment download -d <scratch-dir> <id>` is the
+authoritative check: it walks the whole MIME tree.
+
+```text
+$ himalaya envelope list -f INBOX -o json
+[{"id":"278", ..., "has_attachment":false}]
+
+$ himalaya message read -f INBOX --preview 278
+(text/plain body only; no <#part ...> line)
+
+$ himalaya attachment download -f INBOX -d <scratch-dir> 278
+1 attachment(s) found for message 278!
+Downloading "<scratch-dir>/_7KO0S3XY4.pdf"…
+Downloaded 1 attachment!
+```
+
+Never conclude an attachment is missing from `has_attachment` or from the
+body-only read; run `attachment download` into a scratch directory first,
+and treat "0 attachment(s) found" as the only evidence of absence.
+
 ---
 
 ## Embedding message-derived text safely
@@ -856,8 +882,10 @@ himalaya attachment download -d /tmp/downloads 42 43
 
 `attachment` has only this one subcommand (`download`) per its own
 `--help` — there is no separate "list attachments" command; use
-`himalaya message read 42` to see which parts a message has before
-downloading.
+`himalaya message read 42` to see which parts a message has, but remember
+that it can miss nested inline parts (see the absence pitfall under
+[Reading a Message](#reading-a-message)); `attachment download -d
+<scratch-dir> <id>` is the authoritative check.
 
 ---
 
