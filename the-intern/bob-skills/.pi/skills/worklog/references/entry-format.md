@@ -46,3 +46,19 @@ exactly one bullet:
   blocked call was itself the action that would have closed the item,
   `Done` must say that attempt was blocked — not that the closing action
   succeeded.
+
+## File order is append order, not time order
+
+A day's file is ordered by when each entry was written, not by the
+`<HH:MM>` in its header. Several runs can append to the same day's file
+concurrently, and a run that started earlier but finished later appends
+later, so headers in the file can read out of sequence (for example `13:34`
+followed by `08:01`). Each `<HH:MM>` is accurate for its own entry; it just
+does not order the file.
+
+`bob worklog list` already accounts for this: it returns a day's entries
+sorted by `<HH:MM>`, with entries that share a time kept in file order. Read
+a day back through that command whenever the entries will be presented as a
+narrative. A consumer that reads the file directly must sort the entries by
+`<HH:MM>` first, keeping file order for ties, before presenting them in
+sequence.
