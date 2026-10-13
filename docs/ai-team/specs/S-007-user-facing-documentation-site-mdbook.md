@@ -1,6 +1,6 @@
 ---
 title: User-facing documentation site (mdBook)
-version: '0.1'
+version: '0.2'
 status: approved  # draft | review | approved | superseded
 created: '2026-05-25'
 author: planner
@@ -44,8 +44,10 @@ What this specification explicitly does NOT cover:
   Local-only hosting makes a version dropdown meaningless in v1.
 - **Migration of `project/docs/`.** The existing development-lifecycle
   material (`system_overview.md`, `the-intern-architecture.md`, `roadmap.md`,
-  coding guidelines, ADRs, specs) stays where it is. The book may link to
-  selected pieces but does not absorb or replace them.
+  coding guidelines, ADRs, specs) stays where it is. The book does not
+  absorb or replace it, and does not link to it: the manual pages also ship
+  as skill content (Component 2), which must not reference this project's
+  internal artifacts.
 - **Doc-tests beyond mdBook's defaults.** No new test infrastructure is added
   to verify code samples; mdBook's built-in Rust code-block handling is the
   ceiling.
@@ -79,6 +81,14 @@ What this specification explicitly does NOT cover:
   generating the CLI reference is missing (no `bob` binary on the expected
   path), the build must fail loudly with a clear remediation message rather
   than ship an empty or stale reference.
+- **The manual source has two consumers.** Besides the mdBook build, the
+  hand-written pages under `the-intern/docs/src/` are copied into bob's
+  `the-intern-docs` skill when bob is built (S-011, S-012), so an agent reads
+  them as plain markdown. That copy is a plain file copy, not an mdBook or
+  CLI-reference build: it does not count against the release asset
+  contract's one docs build per release, and S-013's macOS job, which builds
+  bob, still does not build docs. The CLI-reference stub page and
+  `SUMMARY.md` are not copied.
 
 ### System Diagram
 
@@ -115,7 +125,7 @@ What this specification explicitly does NOT cover:
 
 | Component | Responsibility | Notes |
 |---|---|---|
-| Docs sources (`the-intern/docs/src/`) | Hand-written markdown for all four audience parts, plus `SUMMARY.md` defining the table of contents and any static assets (images, diagrams as code). | Committed to the repository. |
+| Docs sources (`the-intern/docs/src/`) | Hand-written markdown for all four audience parts, plus `SUMMARY.md` defining the table of contents and any static assets (images, diagrams as code). | Committed to the repository. Also the single canonical source of the `the-intern-docs` skill's reference pages, copied into the bob binary at bob build time (S-011, S-012). |
 | Book configuration (`the-intern/docs/book.toml`) | Declares the site title, source/output paths, theme settings, enabled preprocessors (mermaid, CLI-reference generator) and their order. | Committed. Concrete schema is mdBook's; structure is decided in task breakdown. |
 | CLI-reference preprocessor | At build time, invokes the local `bob` binary to capture `--help` output for `bob` and every subcommand, formats it into the reference pages of the CLI part, and inserts it into the rendered book. Fails the build with a clear error if `bob` is not available. | New component, lives in-repo under `the-intern/docs/`. Implementation form (mdBook preprocessor binary vs. pre-build script that writes generated markdown) is a task-level decision. |
 | Mermaid preprocessor (`mdbook-mermaid`) | Renders mermaid-fenced diagrams in the Architecture and Extension parts. | Off-the-shelf; installed via `cargo install`. |
@@ -146,9 +156,15 @@ adapters, policy gate, monitoring), and Extension & channel-adapter author
 guide (JS extension protocol, channel-adapter contract, pi-agent
 compatibility, public surfaces).
 **Estimated size:** Large; the content itself is the bulk of the work.
-**Interfaces:** Pure markdown under `the-intern/docs/src/`. May link out to
-`project/docs/` for deep dives, but must not require those links to be
-followed to make sense.
+**Interfaces:** Pure markdown under `the-intern/docs/src/`. Pages are also
+copied into bob's `the-intern-docs` skill and read by an agent as plain
+markdown, so they become shipped skill content: they must not link to or
+reference this project's internal development material (specifications,
+decision records, tasks, bugs, `project/docs/`), and they must make sense
+read as raw markdown without the rendered book. Mermaid blocks are
+acceptable. Links to the CLI-reference stub page, which is not copied, must
+still make sense in the copy — for example by pointing the reader at
+`bob --help`; the exact handling is a breakdown decision.
 
 ### Component 3: CLI reference generator
 
@@ -284,14 +300,17 @@ and the normal task review gates apply to the work that produces the book.
     GitHub Release must include exactly one docs archive whose contents,
     when extracted, expose an `index.html` that opens the rendered book.
     The archive is produced from the same build that generated the CLI
-    reference against the `bob` binary attached to that same release.
+    reference against the `bob` binary attached to that same release. Copying
+    the manual's markdown into the bob binary at bob build time (Design
+    Principles) is not a docs build and does not produce a second archive or
+    CLI-reference build.
 
 ## Implementation Order
 
 | Phase | What | Depends On |
 |---|---|---|
 | 1 | Scaffold the mdBook project under `the-intern/docs/`: `book.toml`, empty `SUMMARY.md` with the four parts, `.gitignore` for `book/`, `mdbook-mermaid` wired in. `mdbook build` succeeds on the empty tree. | Nothing |
-| 2 | Hand-written content for the four audience parts (User CLI guide with examples, Operator/deployer guide, Architecture overview, Extension/channel-adapter author guide). Cross-links between parts where natural; outward links to `project/docs/` where deep dives exist. | Phase 1 |
+| 2 | Hand-written content for the four audience parts (User CLI guide with examples, Operator/deployer guide, Architecture overview, Extension/channel-adapter author guide). Cross-links between parts where natural; no links to `project/docs/` or other internal development material (Component 2). | Phase 1 |
 | 3 | CLI-reference generator integrated into the single-command build, with the failure-mode contract from Configuration Requirements. CLI reference pages populated from the live `bob` binary. | Phase 1; usable in parallel with Phase 2 but reference pages depend on it |
 | 4 | Release workflow integration: extend `.github/workflows/deploy.yml` to install the docs toolchain, run the single-command build against the just-built `bob`, archive `the-intern/docs/book/`, and add the archive to the `files:` of the existing `softprops/action-gh-release` step. Release job fails if the docs build fails. | Phases 1 and 3 |
 | 5 | Discoverability glue: README update pointing at `the-intern/docs/`, clarifying the split from `project/docs/`, and noting that each GitHub Release ships a docs archive. | Phase 1 (content) and Phase 4 (release-asset claim) |
@@ -302,3 +321,4 @@ and the normal task review gates apply to the work that produces the book.
 |------|-------------|-----|----------------|
 | 2026-05-25 | Added CI integration: docs built in `deploy.yml` on tagged releases and attached as a release asset alongside the `bob` binary. Narrowed the "no hosted deployment" exclusion to "no live hosted site"; added Component 5 (release workflow integration), CI runner and release-asset configuration requirements, and Phase 4 in the implementation order. | Human requested that each GitHub Release ship the rendered docs as a downloadable asset so consumers get docs matched to the binary version. | T-083, T-084 |
 | 2026-06-23 | Noted that the User CLI guide (`bob chat`), the Operator/deployer guide (runtime layout / paths), and the Extension-author guide (install path) must reflect the XDG layout (ADR-009), the interactive-pi `bob chat` behaviour (CR-002, service-required), and the extension-by-path install (CR-003, `pi --extension`, default `~/.local/share/bob/extensions/bob.ts`) when authored. | Content reconciliation for CR-002 / CR-003 / ADR-009. | T-108 |
+| 2026-10-13 | The manual source gains a second consumer: its hand-written pages (not the CLI-reference stub or `SUMMARY.md`) are copied into bob's `the-intern-docs` skill at bob build time — a plain markdown copy, not an mdBook or CLI-reference build, so the one-docs-build-per-release contract and S-013's "the macOS job does not build docs" hold (new Design Principle, docs-sources row, release asset contract note). The allowance to link out to `project/docs/` is withdrawn (Exclusions, Component 2, Phase 2); Component 2 records that pages must read as plain markdown, that mermaid blocks are acceptable, and that links to the excluded CLI-reference stub must still make sense in the copy, with exact handling left to the breakdown. | CR-016 (issue #138) / ADR-017 (CR-016): copied pages become shipped skill content, which S-011 forbids from referencing this project's internal artifacts. | Tasks TBD (CR-016 breakdown) |
