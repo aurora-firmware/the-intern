@@ -1,7 +1,7 @@
 ---
 id: T-232
 title: Embed the manual pages into the the-intern-docs skill at build time
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-10-13'
