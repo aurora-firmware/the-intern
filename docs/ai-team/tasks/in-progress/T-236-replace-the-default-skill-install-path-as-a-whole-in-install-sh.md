@@ -134,3 +134,20 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-10-14
+PASS
+
+Stage 1 (acceptance):
+- AC-1: met. `install.sh` removes the resolved default skill path (`rm -rf --`, dotfiles included) and then runs `$install_binary_path init --skills-only` (the just-installed binary, not a PATH `bob`). This runs on every install, same-version reinstall included. Tests assert that stale files, a stale skill and a hidden entry are gone.
+- AC-2: met. `is_safe_skill_path` requires an absolute path ending in `/bob/skills`. Empty and relative paths are refused, and a relative-HOME test confirms the existing skill survives.
+- AC-3: met. `rm -rf` removes a `bob/skills` link, or an inner link, without following it. The outer and inner (including hidden) symlink tests confirm the target is untouched.
+- AC-4: met. A refused guard, a failed removal or a failed `init` all print the missing-skills warning (sessions start without skills, email triage does nothing useful, rerun install.sh), and the script exits 0 with the binary and extension kept. A failure test covers this.
+- AC-5: met. README.txt describes the prompt and when it appears, both warnings, `-y`, replacement on every install with local edits not kept, and that a `skill_install_path` override is never touched. The ID grep finds nothing.
+- The ADR-017 section 3 and 6 rules are honoured. `skill_install_path` from config.toml is never read. The old "never --force" comment is removed and the test is renamed. Only the three listed files changed.
+
+Stage 2 (quality): the guard is small and clear, and the tests are isolated through XDG_DATA_HOME and cover success and failure paths. I reran `bash the-intern/install-bundle/test-install.sh` (exit 0) and the README ID grep (no matches).
+
+Non-blocking observations:
+- A removal failure (for example an unwritable parent directory) is untested. The Developer noted this, and the code path is simple.
+
