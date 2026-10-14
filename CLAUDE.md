@@ -62,7 +62,9 @@ overwrites the XDG and socket variables so nothing reaches an installed bob
 running on the same machine. Put personal overrides (`BOB_DEV_HOME`,
 `RUST_LOG`, a `PATH` entry for a specific `pi`) in a gitignored `.env.local`
 at the repo root; `dev-env.sh` sources it first. To get the same environment
-in an interactive shell, `source scripts/dev-env.sh`.
+in an interactive shell, `source scripts/dev-env.sh` — but still run tests
+through `cargo-dev.sh`, which also clears every `BOB_*` variable (tests that
+spawn workers fail when they inherit the dev socket paths).
 
 ```bash
 # Terminal A — start the service

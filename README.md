@@ -183,7 +183,9 @@ Cargo from `the-intern/service/`. They share `scripts/dev-env.sh`, which always
 overwrites those variables, so a dev bob never reaches an installed one.
 Personal overrides (`BOB_DEV_HOME`, `RUST_LOG`, a `PATH` entry for a specific
 `pi`) go in a gitignored `.env.local` at the repo root. Run
-`source scripts/dev-env.sh` to get the same environment in your own shell.
+`source scripts/dev-env.sh` to get the same environment in your own shell;
+keep running tests through `scripts/cargo-dev.sh` there, since it also clears
+the `BOB_*` variables that test-spawned workers would otherwise inherit.
 
 **Terminal A — start the service with the dev helper:**
 
