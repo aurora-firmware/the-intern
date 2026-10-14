@@ -16,7 +16,19 @@
 # a specific `pi` build, `BOB_*` service knobs). It cannot override the
 # directory and socket variables below; move `BOB_DEV_HOME` instead.
 
-_bob_dev_repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# The path of this file while it is being sourced: `BASH_SOURCE` in bash; zsh
+# does not set it, so use its `%x` prompt expansion there (inside `eval`, which
+# bash never parses on this branch). Any other shell cannot locate the file.
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  _bob_dev_env_file="${BASH_SOURCE[0]}"
+elif [[ -n "${ZSH_VERSION:-}" ]]; then
+  eval '_bob_dev_env_file="${(%):-%x}"'
+else
+  echo "dev-env: source this file from bash or zsh" >&2
+  return 1 2>/dev/null || exit 1
+fi
+_bob_dev_repo_root="$(cd -- "$(dirname -- "$_bob_dev_env_file")/.." && pwd)"
+unset _bob_dev_env_file
 
 if [[ -f "$_bob_dev_repo_root/.env.local" ]]; then
   set -a
