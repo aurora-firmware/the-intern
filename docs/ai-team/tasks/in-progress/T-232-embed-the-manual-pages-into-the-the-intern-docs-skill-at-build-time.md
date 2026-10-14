@@ -119,6 +119,47 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-10-14
+
+I added the failing tests to `init_assets.rs` first. They cover the expected path
+list, a five-root set (renamed `contains_the_five_shipped_skill_roots`), a
+byte-drift test against `the-intern/docs/src`, an index/embedded agreement test,
+and a negative test for `SUMMARY.md`, the CLI-reference stub and any copied
+`SKILL.md`. I confirmed they were red.
+
+In `build.rs`, the required page set comes from the backticked
+`references/...md` paths in the pi-package docs `SKILL.md`, not from scanning
+`docs/src`. Each named page is resolved against `docs/src` and canonicalized. The
+build panics naming the missing source path if a page is absent, if no pages are
+named, or if a named path is `SKILL.md`, `SUMMARY.md`, under `cli-reference/`, or
+contains `..`.
+
+The manual files are included directly with `include_bytes!` from their source
+path, so nothing is copied into a tracked directory. `cargo:rerun-if-changed` is
+emitted for each page. I changed the asset list to (relative path, absolute path)
+pairs sorted by relative path, so manual pages and package files form one sorted
+table.
+
+I ran `package-pi-skills.sh` and committed the generated
+`.pi/skills/the-intern-docs/SKILL.md`. I checked the missing-page failure by
+temporarily moving `quickstart/index.md`, then restored it.
+
+I rejected scanning `docs/src`, because it would hide removed or renamed pages. I
+also rejected writing a copy under `OUT_DIR`, because direct inclusion is
+simpler.
+
+The existing byte-comparison test read every expected path from the pi package
+tree, which cannot contain the manual pages, so it now skips
+`the-intern-docs/references/` paths; the new drift test covers them against
+`docs/src`.
+
+Verification: `init_assets` 6/6, full workspace suite green
+(`./scripts/cargo-dev.sh test --workspace --no-fail-fast`), `cargo fmt --check`
+clean, no orphaned fixtures. The `bob init` tests that T-233 will update did not
+fail, so I left them alone. For the reviewer: the SKILL.md path parser is
+duplicated between `build.rs` and the test helper, because a build script cannot
+share code with the crate's tests.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
