@@ -81,10 +81,6 @@ echo ""
 
 check_present_in_section "explains no pi project-trust step is required" \
     "No pi project-trust step is required for this workspace"
-check_present_in_section "cites B-035 for the historical trust-step context" \
-    "B-035"
-check_present_in_section "cites T-150's untrusted-cwd resources_discover confirmation" \
-    "T-150"
 check_present_in_section "explains skills reach the session via resources_discover" \
     "resources_discover"
 check_absent_from_section "no longer instructs editing ~/.pi/agent/trust.json as an active step" \

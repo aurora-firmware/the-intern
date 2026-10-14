@@ -93,8 +93,8 @@ bob init "$WORKSPACE"
 
 It also writes bob's live config file at the platform default location
 (`$XDG_CONFIG_HOME/bob/config.toml` on Linux, `~/Library/Application Support/bob/config.toml`
-on macOS) and installs the shared `himalaya`, `email-triage`, `worklog`, and
-`tasks` skills once at bob's shared data path. It does **not** create a
+on macOS) and installs the shared `himalaya`, `email-triage`, `worklog`, `tasks`,
+and `the-intern-docs` skills once at bob's shared data path. It does **not** create a
 workspace `.pi/skills` copy.
 
 Before you serve or schedule that workspace, set the required manager escalation
@@ -246,4 +246,5 @@ bob sessions kill <session-id>
   building from source —
   [Operator & Deployer Guide](../operator-guide/index.md)
 - Why the service is shaped this way — [Architecture Overview](../architecture-overview/index.md)
-- Every flag, exhaustively — [CLI Reference](../cli-reference/index.md)
+- Every flag, exhaustively — [CLI Reference](../cli-reference/index.md), or run
+  `bob --help` / `bob <command> --help`

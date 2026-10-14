@@ -8,7 +8,8 @@ New to `bob`? Start with the [Quickstart](../quickstart/index.md) for the
 shortest path to a working `bob chat` session. If you need to install `bob`
 or configure the runtime directory, see the
 [Operator & Deployer Guide](../operator-guide/index.md). If you want a full
-listing of every flag and option, see the [CLI Reference](../cli-reference/index.md).
+listing of every flag and option, see the [CLI Reference](../cli-reference/index.md)
+(or run `bob --help` / `bob <command> --help`).
 
 ---
 
