@@ -121,6 +121,25 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-10-14
+
+I read the task, CR-016-related install behaviour in `install.sh` and `README.txt`, and the existing guide and `bob-skills` README sections. First I wrote a throwaway grep script in the scratchpad that encoded AC-1 to AC-4 and confirmed it failed everywhere. Then I rewrote the operator guide in two steps.
+
+Install and upgrade prose, committed first:
+- The `--skills-only` paragraph now says the default path is resolved from the environment alone, and that `config.toml` and `skill_install_path` overrides are never read or followed.
+- "Upgrading a running install" gained a bullet list covering the overwrite prompt, the two warnings, `-y`, whole-folder replacement with nothing else kept in that folder, the failed-skill-step state with the rerun-`install.sh` recovery, and the unrefreshed override.
+- I replaced the "zip install already does this for you" paragraph with the new replace-and-rerun contract.
+- I added a `mise`/Cargo/source-build paragraph telling those users to run `bob init --skills-only --force`, with the note that dropped pages linger until the next `install.sh` run.
+
+Rule listings and README, committed second:
+- Both narrowed rule listings now carry the two docs-skill read rules and exact `bob --help` plus ten `bob <subcommand> --help` bash rules. I took the subcommand list from `bob --help` output and skipped the built-in `help` subcommand.
+- Each listing has a note explaining why the patterns are exact and wildcard-free. The guide's note adds that `bob task*` and `bob worklog*` already admit two of them and that the first-run ruleset admits all of them.
+- The README now says five skills and lists `the-intern-docs` in the layout and the `.pi/skills` tree, with a note that its canonical source has no `references/` because the pages are copied at build time. I put the `the-intern-docs` tree entry before `tasks` so existing ID-bearing lines stayed unchanged.
+
+Tried and rejected: I first re-wrapped the README intro sentence and tree lines, which dragged existing IDs into the diff's added lines and failed the AC-5 check. I redid those edits so the old lines stay byte-identical.
+
+I did not touch the generated `.pi/skills` mirror or any lifecycle file. Remaining: only the reviewer's pass over the diff. Existing internal IDs elsewhere in the README remain, since they were outside this task's added text.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
