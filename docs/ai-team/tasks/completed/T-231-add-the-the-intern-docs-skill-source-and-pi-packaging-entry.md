@@ -1,7 +1,7 @@
 ---
 id: T-231
 title: Add the the-intern-docs skill source and pi packaging entry
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-10-13'
