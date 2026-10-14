@@ -133,6 +133,15 @@ skill_path_has_entries() {
   return 1
 }
 
+# Guard for the one destructive step: only a non-empty absolute path whose
+# last two components are bob/skills may be removed. `rm -rf` on a symbolic
+# link removes the link itself and never follows it, here or below it.
+is_safe_skill_path() {
+  local path="$1"
+
+  [[ "$path" = /* ]] && [[ "$path" = */bob/skills ]]
+}
+
 platform="$(uname -s | tr '[:upper:]' '[:lower:]')"
 arch="$(uname -m | tr '[:upper:]' '[:lower:]')"
 
@@ -216,19 +225,28 @@ trap - EXIT
 
 cp "$bundle_extension_path" "$install_extension_path"
 
-# Refresh the shared skill package via the binary this script just wrote —
-# not a PATH-resolved `bob`, which could be a different install entirely
-# (see the PATH-shadow warning below). Never pass --force here: this must
-# stay non-destructive to any skill file an operator has already edited.
-# Failure here is informational only, mirroring the `pi`-on-PATH check
-# below: it must never fail an otherwise-successful binary/extension
-# install.
-if "$install_binary_path" init --skills-only; then
-  :
-else
-  skills_only_status=$?
-  printf 'Warning: `%s init --skills-only` exited %s; skill package refresh was skipped.\n' \
-    "$install_binary_path" "$skills_only_status" >&2
+# Replace the default skill install path as a whole, using the binary this
+# script just wrote -- not a PATH-resolved `bob`, which could be a different
+# install entirely (see the PATH-shadow warning below). The folder belongs to
+# bob alone, so it is removed outright (dotfiles included) and refilled by
+# `init --skills-only`, which recreates it owner-only. The binary and
+# extension are already installed, so any failure here is a warning, never a
+# failed install.
+skill_step_ok=true
+if ! is_safe_skill_path "$install_skill_path"; then
+  printf 'Refusing to empty %s: it is not an absolute path ending in bob/skills.\n' \
+    "$install_skill_path" >&2
+  skill_step_ok=false
+elif ! rm -rf -- "$install_skill_path"; then
+  printf 'Could not remove the existing skills at %s.\n' "$install_skill_path" >&2
+  skill_step_ok=false
+elif ! "$install_binary_path" init --skills-only; then
+  printf '`%s init --skills-only` failed.\n' "$install_binary_path" >&2
+  skill_step_ok=false
+fi
+
+if [ "$skill_step_ok" = false ]; then
+  printf 'Warning: bob skills may be missing. Sessions start without them, and scheduled jobs that depend on them (such as email triage) do nothing useful until they are repaired. Rerun install.sh to fix this.\n' >&2
 fi
 
 if ! command -v pi >/dev/null 2>&1; then
