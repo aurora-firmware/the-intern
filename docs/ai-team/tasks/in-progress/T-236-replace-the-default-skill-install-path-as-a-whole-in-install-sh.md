@@ -1,7 +1,7 @@
 ---
 id: T-236
 title: Replace the default skill install path as a whole in install.sh
-status: pending
+status: in-progress
 priority: medium
 assigned-role: developer
 created: '2026-10-13'
