@@ -101,6 +101,56 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-10-14
+
+I read the task and found which tests pinned the skill set.
+
+Already non-strict (the "red" step could not be a real failure):
+- `init_materializer.rs` `materializes_new_workspace_and_shared_assets_...`
+  checked only `email-triage/SKILL.md`.
+- The skills-only tests seeded `himalaya` and `tasks`, and never asserted the
+  full set on an empty path.
+- `init_e2e.rs` `init_materializes_shared_skills_...` enumerated four skills
+  (`email-triage`, `himalaya`, `worklog`, `tasks`) and had no check for the docs
+  skill or its pages.
+- The chat-banner test looped over the same four names.
+- The `init.rs` tests build synthetic `MaterializationReport`s with arbitrary
+  paths (`email-triage`, `tasks`, `himalaya`), so they pin no set.
+- `non_serve.rs` has no init or skill-set expectations; its "AC-4" matches are
+  unrelated.
+- No test said "four skills". The only "four" strings are about bootstrap policy
+  rules, which are unrelated and untouched.
+
+What I changed:
+- In `init_materializer.rs` I added an expected-names constant, an
+  expected-reference-dirs constant, and a helper
+  `assert_five_skill_trees_installed`. The helper checks that each `SKILL.md`
+  exists, that each docs `references/<dir>/index.md` exists, and that the
+  install path contains exactly those five skill directories (catching both a
+  missing and an extra skill).
+- Two new tests use that helper:
+  `materialize_workspace_installs_all_five_skill_trees_with_docs_reference_pages`
+  (AC-1) and
+  `install_skills_only_creates_all_five_skill_trees_on_an_empty_install_path`
+  (AC-2). Both passed on first run because T-232 already provides the
+  behaviour; I proved they can fail by temporarily renaming one expected page
+  directory (both went red), then reverted the rename.
+- In `init_e2e.rs` the init test now also asserts `the-intern-docs/SKILL.md` and
+  the five reference index pages, and the chat-banner list has five entries,
+  including `the-intern-docs`.
+- AC-3: the existing per-file tests (no-force skips, `--force` replaces, newly
+  shipped skill installed without disturbing others) are untouched and pass.
+- No `bob init` behaviour or production code changed.
+
+Tried and rejected: adding tests to `init.rs` and `non_serve.rs` (nothing there
+pins the set, so it would be scope creep), and a separate e2e test for
+`--skills-only` (the materializer unit test covers it more cheaply with
+isolated paths).
+
+Verification: `init_materializer` (`--lib`) 16 passed, `init_e2e` 4 passed,
+`fmt --check` clean, full workspace suite green via `./scripts/cargo-dev.sh`,
+no orphaned fixtures. Remaining: nothing.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
