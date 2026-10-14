@@ -12,8 +12,9 @@ first. `<path>` is a required positional argument — the workspace
 directory to create/populate (`AGENTS.md`, `CLAUDE.md`,
 `config/email-triage.toml`, `worklog/`, and an empty `tasks/` task board
 directory). Also installs the five shared bob skills (`himalaya`,
-`email-triage`, `tasks`, `worklog`, and `the-intern-docs`) at
-`skill_install_path`.
+`email-triage`, `tasks`, `worklog`, and `the-intern-docs`) at the
+default skill install path resolved from the environment; a
+`skill_install_path` override in `config.toml` is not followed.
 
 `--force` is optional. Without it, if the resolved live `config.toml` path
 already exists, the command fails locally with `"live config already

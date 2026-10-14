@@ -283,7 +283,10 @@ a page or skill a release drops lingers on disk until the next `install.sh`
 run empties the folder.
 
 To use another location, set the top-level `skill_install_path` key in
-`config.toml`:
+`config.toml`. bob reads skills from that location but never fills or
+refreshes it — neither `install.sh` nor `bob init` writes there — so you must
+populate it yourself and keep it current by hand after every upgrade, for
+example by copying the default skill folder into it after each install:
 
 ```toml
 skill_install_path = "/opt/bob/skills"
@@ -338,15 +341,17 @@ bob init /srv/workspaces/email-triage
 - `tasks/` (empty task board directory)
 
 It also writes the live bob config file at the platform default config path and
-installs the shared skill package at `skill_install_path`. It does **not**
-create a workspace-local `.pi/skills/` tree.
+installs the shared skill package at the default skill install path, resolved
+from the environment; a `skill_install_path` override is not followed. It does
+**not** create a workspace-local `.pi/skills/` tree.
 
 Re-running plain `bob init` on an already-initialized workspace refuses
 unless `--force` is given, and `--force` replaces the live config, `AGENTS.md`,
 `CLAUDE.md`, and `config/email-triage.toml` wholesale. To pick up a skill a
 newer `bob` release adds — without touching any of those — use
-`bob init --skills-only` instead; see
-[Install the skill package](#install-the-skill-package).
+`bob init --skills-only --force` instead (without `--force`, skill files
+already on disk, including the manual pages, keep the previous release's
+content); see [Install the skill package](#install-the-skill-package).
 
 The generated live config is a permissive bootstrap: it allows any arguments
 for `bash`, `read`, `write`, and `edit`, keeps every other tool default-denied,

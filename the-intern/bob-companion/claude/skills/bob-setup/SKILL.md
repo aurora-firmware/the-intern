@@ -86,7 +86,9 @@ task board directory. It also writes bob's live `config.toml` at the
 platform default config path (see the config file section below) and
 installs the five shared bob skills — `himalaya`, `email-triage`, `tasks`,
 `worklog`, and `the-intern-docs` (which answers questions about bob from the
-installed manual) — at `skill_install_path`. It does **not** create a
+installed manual) — at the default skill install path resolved from the
+environment (a `skill_install_path` override is not followed). It does
+**not** create a
 workspace-local `.pi/skills/` copy.
 
 Installing from the release zip with `install.sh` asks "Overwrite? [y/N]"
