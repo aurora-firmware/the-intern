@@ -190,7 +190,8 @@ starts a session without its monitoring and authorization extension.
 
 ### Install the skill package
 
-Skill content — the `himalaya`, `email-triage`, `worklog`, and `tasks` skills
+Skill content — the `himalaya`, `email-triage`, `worklog`, `tasks`, and
+`the-intern-docs` skills
 packaged in `the-intern/bob-skills/.pi/skills/` — is supplied to every session bob
 spawns from a single, service-wide **skill install path**, independent of
 that session's working directory. Install it once; every
@@ -324,7 +325,8 @@ manager_address = "manager@example.com"
 
 `bob init` creates the empty `tasks/` board directory listed above, and the
 shipped `tasks` skill drives it by running `bob task` subcommands — see the
-[CLI Reference](../cli-reference/index.md) for the exact `new`/`list`/`show`/
+[CLI Reference](../cli-reference/index.md) (or run `bob task --help` and
+`bob task <subcommand> --help`) for the exact `new`/`list`/`show`/
 `status`/`note` syntax; this guide covers only the deployment-relevant
 properties.
 
