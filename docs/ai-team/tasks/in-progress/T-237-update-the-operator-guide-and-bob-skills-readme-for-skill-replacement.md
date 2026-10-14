@@ -1,7 +1,7 @@
 ---
 id: T-237
 title: Update the operator guide and bob-skills README for skill replacement
-status: pending
+status: in-progress
 priority: medium
 assigned-role: developer
 created: '2026-10-13'
