@@ -169,3 +169,24 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-10-14
+PASS
+
+Both stages passed (diff of `task/T-235-install-sh-skill-overwrite-prompt` against `dev-agent`; commits 019742c, c4dddf2; only `install.sh` and `test-install.sh` touched).
+
+Stage 1 (acceptance criteria):
+- AC-1: prompt when binary exists (`-e || -L`) or the resolved skill path holds any entry (`skill_path_has_entries`: symlink, dotfiles via `.[!.]*` and `..?*`, dangling symlinks). Met.
+- AC-2: non-yes answer or EOF without `-y` exits 1 before any write. Met.
+- AC-3: `cmp -s` failure (different or unreadable) prints the different-version warning; skills without binary prints the skills-replaced warning; identical binaries print no warning. Met.
+- AC-4: `-y` skips only the prompt; warnings still print. Met.
+- AC-5: fresh install or empty/absent skill path does not prompt; every `install.sh` run in `test-install.sh` sets `XDG_DATA_HOME` explicitly (checked all invocation sites). Met.
+- `env -u XDG_DATA_HOME bash the-intern/install-bundle/test-install.sh` exits 0; `bash -n install.sh` clean.
+
+Judgement calls:
+- Unknown arguments exit 1 with usage: acceptable. S-013 Component 3 defines `-y` as the only argument ("an optional `-y` argument") and ADR-017 §5 makes `-y` the only unattended route. Rejecting other arguments conflicts with neither, and it prevents a typo such as `-Y` from falling through to an interactive prompt or, in a script with no input, an abort. It runs before any write. Non-blocking: it is unrequested, so it should be mentioned in the T-236/README work only if the usage line is documented.
+- Skills exist and binary differs prints only the different-version warning: matches the spec. That warning already states that the installed skills and extension will be replaced, and the skills-replaced warning is specified only for "skills installed but no binary".
+
+Stage 2 (quality): logic is correct and mirrors `resolve_extension_path`. The bash 3.2 and BSD portability is fine: no `shopt`, `mapfile`, associative arrays or `find`; globs are tested with `-e || -L`; `cmp -s` is POSIX; `[[ ... = /* ]]` is already used in the script. Tests cover the success and failure paths and are isolated through per-scenario `HOME` and `XDG_DATA_HOME`.
+
+Minor observations (non-blocking): the unreadable-binary test returns early as root (documented); macOS not run.
