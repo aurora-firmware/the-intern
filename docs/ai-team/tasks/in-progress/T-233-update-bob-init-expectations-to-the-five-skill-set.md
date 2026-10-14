@@ -162,3 +162,12 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-10-14
+PASS
+
+Stage 1: AC-1 met (init_e2e asserts `the-intern-docs/SKILL.md`, the five `references/<dir>/index.md` pages, and the chat-banner list has five names; materializer test covers fresh `materialize_workspace`). AC-2 met (new skills-only test on an empty path asserts all five trees and exactly five directories). AC-3 met (existing per-file tests untouched). AC-4 met (no remaining four-skill pin; `init.rs` and `non_serve.rs` use synthetic data or have no skill-set expectations). Only test files changed; no production behaviour changed.
+
+Stage 2: Helper and constants are clear, tests are independent (own tempdirs), and the exact-set assertion catches both missing and extra skills. Verified on the task branch via `./scripts/cargo-dev.sh`: `--lib init_materializer` 16 passed, `--test init_e2e` 4 passed, `fmt --check` clean.
+
+Non-blocking: the `EXPECTED_SKILL_NAMES` and reference-dir lists are duplicated between the unit tests and `init_e2e.rs`; acceptable given the integration test's separate crate boundary.
