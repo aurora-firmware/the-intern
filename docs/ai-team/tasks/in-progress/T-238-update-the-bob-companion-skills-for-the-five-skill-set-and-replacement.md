@@ -127,3 +127,20 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-10-14
+PASS
+
+Stage 1 (acceptance), reviewed at commit 8fce306 (only the two named files changed):
+- AC-1: met. `bob-setup/SKILL.md` and the `bob init` entry in `command-reference.md` each name the five skills (`himalaya`, `email-triage`, `tasks`, `worklog`, `the-intern-docs`).
+- AC-2: met. `SKILL.md` covers the "Overwrite? [y/N]" prompt, `-y`, whole-folder replacement on every install (local edits lost), and `bob init --skills-only --force` for non-zip upgrades.
+- AC-3: met. New `bob init --skills-only [--force]` entry states the environment-resolved default path, that a `skill_install_path` override is not followed, and per-file semantics.
+- AC-4: met. The ID grep returns nothing. The first Verification grep lists the expected matches in both files.
+
+Claim check against code and specs: `install_skills_only` (`init_materializer.rs`) calls `resolve_init_paths_for_env(&env, uid)`, which returns `default_skill_install_path_for_env(env, uid)` and reads no `config.toml`. So `--skills-only` ignores a `skill_install_path` override, as the docs say. Force handling goes through `write_generated_file` per file, which matches the per-file semantics. S-013 v0.4 (Paths and permissions) and ADR-017 agree. The wording is also consistent with `install-bundle/README.txt` and the operator guide. It adds no unverified claims; the developer's dropped "files not removed" sentence is covered by the operator guide.
+
+Stage 2 (quality): content is accurate and concise. It follows `coding-guidelines-skills.md`: no internal IDs and no environment-specific values presented as generic. No dead text. No code or tests apply to this change.
+
+Non-blocking observations (outside this task's files):
+1. The `--help` text for `--skills-only` in `the-intern/service/crates/bob/src/cli/mod.rs` (and the `Init` doc comment and `install_skills_only` doc comment in `init_materializer.rs`) says the skills go "at `skill_install_path`". The code installs at the environment-resolved default path and never follows the override. The docs are right and the help text is misleading. A small bug or doc fix is worth filing.
+2. Pre-existing: the plain `bob init <path>` text in both files still says skills go "at `skill_install_path`". Not changed by this task.
