@@ -1,7 +1,7 @@
 ---
 id: T-234
 title: Make the manual pages readable as skill references
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-10-13'
