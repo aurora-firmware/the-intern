@@ -29,7 +29,9 @@ Paths are relative to this skill's directory.
 | Building on bob's public surfaces: the extension protocol and channel adapters | `references/extension-author-guide/index.md` |
 
 The pages link to each other with relative links of the form
-`../<directory>/index.md`; follow those links to reach related pages.
+`../<directory>/index.md`; follow those links to reach related pages. Links
+to the CLI Reference (`../cli-reference/index.md`) are not included; run
+`bob --help` instead.
 
 ## Questions about the CLI
 
