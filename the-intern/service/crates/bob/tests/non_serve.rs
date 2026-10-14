@@ -595,10 +595,23 @@ fn worklog_list_does_not_show_a_prior_days_item_for_a_later_day() {
     );
 }
 
+/// A `bob` command isolated from the caller's environment. These tests assert
+/// behaviour with no service running, so the binary must not resolve a socket
+/// from the developer's shell: an inherited `XDG_RUNTIME_DIR` finds an
+/// installed `bob serve`, and any inherited `BOB_*` config override (such as
+/// `BOB_ADMIN_SOCK_PATH`) replaces the default socket path.
 fn bob_command_with_temp_state(state_home: &Path, home_dir: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bob"));
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("BOB_") {
+            command.env_remove(key);
+        }
+    }
     command
         .env("XDG_STATE_HOME", state_home)
+        .env("XDG_CONFIG_HOME", home_dir.join(".config"))
+        .env("XDG_DATA_HOME", home_dir.join(".local/share"))
+        .env("XDG_RUNTIME_DIR", home_dir.join("runtime"))
         .env("HOME", home_dir);
     command
 }
