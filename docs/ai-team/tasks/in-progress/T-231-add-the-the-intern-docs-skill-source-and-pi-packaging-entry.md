@@ -111,6 +111,39 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-10-14
+
+I added the fifth bob-supplied skill, `the-intern-docs`. First I extended
+`test_package_pi_skills.sh`. A new test expects `the-intern-docs/SKILL.md` to be
+generated in the isolated WORK_DIR with no `references/` directory, and the
+existing allowed-tools/body-identical check now includes the new skill. That run
+failed (4 passed, 2 failed). I then wrote the canonical
+`skills/the-intern-docs/SKILL.md` and added `the-intern-docs` to `skill_names`
+in `package-pi-skills.sh`, after which all 6 tests pass.
+
+The SKILL.md has three parts:
+- A description that triggers only on questions about bob or the Intern itself
+  and explicitly excludes unrelated work such as email, worklog and tasks.
+- A topic table pointing at exactly the five fixed paths
+  `references/{quickstart,end-user-guide,operator-guide,architecture-overview,extension-author-guide}/index.md`.
+  It notes that the pages cross-link as `../<dir>/index.md`.
+- An instruction to answer CLI questions from `bob --help` and
+  `bob <subcommand> --help`, not from the prose pages.
+
+It contains no operating policy, never tells the agent to act on bob, and has no
+internal IDs. The no-IDs grep, the `git ls-files` check for the `.pi` tree and
+the no-`references/` check from the task's Verification section all pass.
+
+I did not regenerate or commit `.pi/skills/the-intern-docs/`. The test only
+generates into a temp directory, so the repo tree is untouched. I wrote no
+`references/` directory and no manual page copies. Nothing was tried and
+rejected.
+
+Remaining: T-232 must add the build-time page embedding and commit the generated
+`.pi/skills/the-intern-docs/` tree together with it. Committing the tree earlier
+would embed an index with no pages and break the `init_assets` tests. Reviewer
+note: the AC-1 test label still says "three skills", which I left unchanged.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
