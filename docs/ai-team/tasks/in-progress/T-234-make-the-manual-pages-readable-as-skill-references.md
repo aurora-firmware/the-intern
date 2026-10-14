@@ -107,6 +107,35 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-10-14
+
+I started with the failing `test_operator_guide_email_triage_trust.sh` (7 passed,
+2 failed). The two failures were the "B-035" and "T-150" assertions, which
+S-007 v0.2 now forbids. I removed them and the test went green (7 passed,
+0 failed), and I committed that on its own.
+
+Next I reworded the three links to the CLI-reference page. The end-user guide
+and quickstart now add "or run `bob --help` / `bob <command> --help`". The
+operator guide now also says to run `bob task --help` and
+`bob task <subcommand> --help`, since its sentence is about the task board. I
+kept the mdBook links so the site still works. I also updated the two
+hand-written skill lists, in the quickstart and the operator guide, to name
+`himalaya`, `email-triage`, `worklog`, `tasks`, and `the-intern-docs`. I did not
+touch the operator guide's upgrade, `--skills-only` or action-rule sections.
+
+The forbidden-pattern grep over the pages was already clean, and I found no
+links to specs, ADRs or other internal material. The GitHub links in the
+quickstart and operator guide are public product and `pi` links, so I left
+them. I did not add a new test for the doc wording, because the task's
+verification commands (grep and the shell test) already cover it. The test
+script's own messages still say "S-004"; it is a test file, not shipped
+content, so I left it.
+
+Verification: `mdbook build the-intern/docs` clean (only the existing
+mdbook-mermaid version-mismatch warning); forbidden-pattern grep empty;
+`init_assets` 6/6 including the byte-identical drift test; full workspace suite
+green via `./scripts/cargo-dev.sh`; no orphaned fixtures. Nothing is left to do.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
