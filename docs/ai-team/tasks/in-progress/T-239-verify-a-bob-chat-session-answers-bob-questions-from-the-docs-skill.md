@@ -1,7 +1,7 @@
 ---
 id: T-239
 title: Verify a bob chat session answers bob questions from the docs skill
-status: pending
+status: in-progress
 priority: medium
 assigned-role: developer
 created: '2026-10-13'
