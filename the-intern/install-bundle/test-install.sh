@@ -85,7 +85,7 @@ test_replaces_a_running_binary_atomically() {
 
   if ! printf 'y\n' | (
     cd "$bundle_dir"
-    PATH="/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+    PATH="/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" ./install.sh >"$stdout_file" 2>"$stderr_file"
   ); then
     printf 'expected install.sh to succeed while overwriting a running binary\n' >&2
     printf 'stdout:\n' >&2
@@ -131,7 +131,7 @@ test_abort_when_overwrite_prompt_hits_eof() {
   status=0
   if (
     cd "$bundle_dir"
-    PATH="/usr/bin:/bin" HOME="$home_dir" ./install.sh </dev/null >"$stdout_file" 2>"$stderr_file"
+    PATH="/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" ./install.sh </dev/null >"$stdout_file" 2>"$stderr_file"
   ); then
     printf 'expected install.sh to fail when overwrite confirmation reads EOF\n' >&2
     exit 1
@@ -176,7 +176,7 @@ test_trailing_slash_path_entry_counts_as_present() {
 
   (
     cd "$bundle_dir"
-    PATH="$home_dir/.local/bin/:/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+    PATH="$home_dir/.local/bin/:/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" ./install.sh >"$stdout_file" 2>"$stderr_file"
   )
 
   assert_not_contains "$stdout_file" "Warning: $home_dir/.local/bin is not on PATH."
@@ -201,7 +201,7 @@ test_empty_path_entry_uses_current_directory() {
 
   (
     cd "$home_dir/.local/bin"
-    PATH=":/usr/bin:/bin" HOME="$home_dir" "$bundle_dir/install.sh" >"$stdout_file" 2>"$stderr_file"
+    PATH=":/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" "$bundle_dir/install.sh" >"$stdout_file" 2>"$stderr_file"
   )
 
   assert_not_contains "$stdout_file" "Warning: $home_dir/.local/bin is not on PATH."
@@ -233,7 +233,7 @@ test_warns_when_another_bob_shadows_the_install() {
 
   (
     cd "$bundle_dir"
-    PATH="$other_dir:/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+    PATH="$other_dir:/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" ./install.sh >"$stdout_file" 2>"$stderr_file"
   )
 
   assert_contains "$stdout_file" "Warning: another \`bob\` is on PATH at $other_dir/bob"
@@ -259,7 +259,7 @@ test_no_shadow_warning_when_path_agrees_with_the_install() {
 
   (
     cd "$bundle_dir"
-    PATH="$home_dir/.local/bin:/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+    PATH="$home_dir/.local/bin:/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" ./install.sh >"$stdout_file" 2>"$stderr_file"
   )
 
   assert_not_contains "$stdout_file" "is on PATH at"
@@ -284,7 +284,7 @@ test_no_shadow_warning_when_no_other_bob_on_path() {
 
   (
     cd "$bundle_dir"
-    PATH="/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+    PATH="/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" ./install.sh >"$stdout_file" 2>"$stderr_file"
   )
 
   assert_not_contains "$stdout_file" "is on PATH at"
@@ -322,7 +322,7 @@ test_invokes_installed_binary_directly_for_skills_only_refresh() {
 
   (
     cd "$bundle_dir"
-    PATH="$other_dir:/usr/bin:/bin" HOME="$home_dir" \
+    PATH="$other_dir:/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" \
       BOB_STUB_INVOCATION_LOG="$invocation_log" \
       BOB_STUB_SHADOW_LOG="$shadow_log" \
       ./install.sh >"$stdout_file" 2>"$stderr_file"
@@ -365,7 +365,7 @@ test_never_passes_force_to_skills_only_invocation() {
 
   (
     cd "$bundle_dir"
-    PATH="/usr/bin:/bin" HOME="$home_dir" \
+    PATH="/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" \
       BOB_STUB_INVOCATION_LOG="$invocation_log" \
       ./install.sh >"$stdout_file" 2>"$stderr_file"
   )
@@ -397,7 +397,7 @@ test_skills_only_success_output_is_not_suppressed() {
 
   (
     cd "$bundle_dir"
-    PATH="/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+    PATH="/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" ./install.sh >"$stdout_file" 2>"$stderr_file"
   )
 
   assert_contains "$stdout_file" "created skill: example"
@@ -423,7 +423,7 @@ test_skills_only_failure_warns_and_does_not_block_install() {
 
   if (
     cd "$bundle_dir"
-    PATH="/usr/bin:/bin" HOME="$home_dir" \
+    PATH="/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" \
       BOB_STUB_SKILLS_ONLY_EXIT=7 \
       ./install.sh >"$stdout_file" 2>"$stderr_file"
   ); then
@@ -455,6 +455,274 @@ test_skills_only_failure_warns_and_does_not_block_install() {
   fi
 }
 
+# Runs the bundle's install.sh in an isolated HOME with an explicit
+# XDG_DATA_HOME. Expects scenario_* globals; stdin comes from
+# $scenario_input (empty means no input at all) and any arguments are passed
+# to install.sh. Sets $install_status.
+setup_scenario() {
+  scenario_tmp="$(mktemp -d)"
+  scenario_home="$scenario_tmp/home"
+  scenario_bundle="$scenario_tmp/bundle"
+  scenario_stdout="$scenario_tmp/stdout"
+  scenario_stderr="$scenario_tmp/stderr"
+  scenario_skills="$scenario_home/.local/share/bob/skills"
+  mkdir -p "$scenario_home"
+  make_bundle "$scenario_bundle"
+}
+
+run_scenario_install() {
+  local input="$1"
+  shift
+
+  install_status=0
+  if [ -n "$input" ]; then
+    (
+      cd "$scenario_bundle"
+      printf '%s\n' "$input" | PATH="/usr/bin:/bin" HOME="$scenario_home" \
+        XDG_DATA_HOME="$scenario_home/.local/share" ./install.sh "$@" \
+        >"$scenario_stdout" 2>"$scenario_stderr"
+    ) || install_status=$?
+  else
+    (
+      cd "$scenario_bundle"
+      PATH="/usr/bin:/bin" HOME="$scenario_home" \
+        XDG_DATA_HOME="$scenario_home/.local/share" ./install.sh "$@" \
+        </dev/null >"$scenario_stdout" 2>"$scenario_stderr"
+    ) || install_status=$?
+  fi
+}
+
+assert_install_failed() {
+  if [ "$install_status" -eq 0 ]; then
+    printf 'expected install.sh to exit non-zero\n' >&2
+    cat "$scenario_stdout" >&2
+    exit 1
+  fi
+}
+
+assert_install_succeeded() {
+  if [ "$install_status" -ne 0 ]; then
+    printf 'expected install.sh to succeed, got %s\n' "$install_status" >&2
+    cat "$scenario_stdout" "$scenario_stderr" >&2
+    exit 1
+  fi
+}
+
+assert_nothing_installed() {
+  if [ -e "$scenario_home/.local/bin/bob" ]; then
+    printf 'expected no binary to be written\n' >&2
+    exit 1
+  fi
+  if [ -e "$scenario_home/.local/share/bob/extensions/bob.ts" ]; then
+    printf 'expected no extension to be written\n' >&2
+    exit 1
+  fi
+}
+
+test_prompts_and_aborts_when_only_skills_exist_and_answer_is_no() {
+  setup_scenario
+  trap 'rm -rf "$scenario_tmp"' RETURN
+  mkdir -p "$scenario_skills/example"
+  printf 'edited\n' >"$scenario_skills/example/SKILL.md"
+
+  run_scenario_install n
+
+  assert_install_failed
+  assert_contains "$scenario_stdout" "Overwrite? [y/N]"
+  assert_contains "$scenario_stdout" "The existing skills will be replaced"
+  assert_nothing_installed
+  assert_contains "$scenario_skills/example/SKILL.md" "edited"
+}
+
+test_aborts_when_only_skills_exist_and_no_input_is_available() {
+  setup_scenario
+  trap 'rm -rf "$scenario_tmp"' RETURN
+  mkdir -p "$scenario_skills/example"
+
+  run_scenario_install ""
+
+  assert_install_failed
+  assert_contains "$scenario_stderr" "no input available for overwrite confirmation"
+  assert_nothing_installed
+}
+
+test_installs_when_only_skills_exist_and_answer_is_yes() {
+  setup_scenario
+  trap 'rm -rf "$scenario_tmp"' RETURN
+  mkdir -p "$scenario_skills/example"
+
+  run_scenario_install y
+
+  assert_install_succeeded
+  assert_contains "$scenario_stdout" "The existing skills will be replaced"
+  [ -f "$scenario_home/.local/bin/bob" ] || { printf 'expected binary installed\n' >&2; exit 1; }
+}
+
+test_dotfile_alone_in_skill_path_triggers_the_prompt() {
+  setup_scenario
+  trap 'rm -rf "$scenario_tmp"' RETURN
+  mkdir -p "$scenario_skills"
+  : >"$scenario_skills/.hidden"
+
+  run_scenario_install n
+
+  assert_install_failed
+  assert_contains "$scenario_stdout" "Overwrite? [y/N]"
+  assert_nothing_installed
+}
+
+test_dangling_symlink_at_skill_path_triggers_the_prompt() {
+  setup_scenario
+  trap 'rm -rf "$scenario_tmp"' RETURN
+  mkdir -p "$(dirname "$scenario_skills")"
+  ln -s "$scenario_tmp/does-not-exist" "$scenario_skills"
+
+  run_scenario_install n
+
+  assert_install_failed
+  assert_contains "$scenario_stdout" "Overwrite? [y/N]"
+  assert_nothing_installed
+}
+
+test_empty_skill_directory_installs_without_prompting() {
+  setup_scenario
+  trap 'rm -rf "$scenario_tmp"' RETURN
+  mkdir -p "$scenario_skills"
+
+  run_scenario_install ""
+
+  assert_install_succeeded
+  assert_not_contains "$scenario_stdout" "Overwrite?"
+  assert_not_contains "$scenario_stdout" "Warning: a different bob"
+}
+
+test_fresh_install_does_not_prompt() {
+  setup_scenario
+  trap 'rm -rf "$scenario_tmp"' RETURN
+
+  run_scenario_install ""
+
+  assert_install_succeeded
+  assert_not_contains "$scenario_stdout" "Overwrite?"
+}
+
+test_different_installed_binary_prints_version_warning_before_prompt() {
+  setup_scenario
+  trap 'rm -rf "$scenario_tmp"' RETURN
+  mkdir -p "$scenario_home/.local/bin"
+  printf 'older bob\n' >"$scenario_home/.local/bin/bob"
+
+  run_scenario_install n
+
+  assert_install_failed
+  assert_contains "$scenario_stdout" "a different bob version is installed"
+  assert_contains "$scenario_stdout" "documentation skill"
+  assert_contains "$scenario_stdout" "local edits"
+  local warning_line prompt_line
+  warning_line="$(grep -n 'a different bob version is installed' "$scenario_stdout" | head -1 | cut -d: -f1)"
+  prompt_line="$(grep -n 'Overwrite? \[y/N\]' "$scenario_stdout" | head -1 | cut -d: -f1)"
+  if [ "$warning_line" -gt "$prompt_line" ]; then
+    printf 'expected the warning before the prompt\n' >&2
+    exit 1
+  fi
+  assert_contains "$scenario_home/.local/bin/bob" "older bob"
+}
+
+test_unreadable_installed_binary_counts_as_different() {
+  setup_scenario
+  trap 'chmod 600 "$scenario_home/.local/bin/bob" 2>/dev/null; rm -rf "$scenario_tmp"' RETURN
+  if [ "$(id -u)" -eq 0 ]; then
+    return 0
+  fi
+  mkdir -p "$scenario_home/.local/bin"
+  cp "$scenario_bundle/bob" "$scenario_home/.local/bin/bob"
+  chmod 000 "$scenario_home/.local/bin/bob"
+
+  run_scenario_install n
+
+  assert_install_failed
+  assert_contains "$scenario_stdout" "a different bob version is installed"
+}
+
+test_identical_binaries_prompt_without_a_warning() {
+  setup_scenario
+  trap 'rm -rf "$scenario_tmp"' RETURN
+  mkdir -p "$scenario_home/.local/bin"
+  cp "$scenario_bundle/bob" "$scenario_home/.local/bin/bob"
+
+  run_scenario_install n
+
+  assert_install_failed
+  assert_contains "$scenario_stdout" "Overwrite? [y/N]"
+  assert_not_contains "$scenario_stdout" "Warning:"
+}
+
+test_dash_y_proceeds_without_prompting_and_still_warns() {
+  setup_scenario
+  trap 'rm -rf "$scenario_tmp"' RETURN
+  mkdir -p "$scenario_home/.local/bin" "$scenario_skills/example"
+  printf 'older bob\n' >"$scenario_home/.local/bin/bob"
+
+  run_scenario_install "" -y
+
+  assert_install_succeeded
+  assert_not_contains "$scenario_stdout" "Overwrite?"
+  assert_contains "$scenario_stdout" "a different bob version is installed"
+  if ! cmp -s "$scenario_bundle/bob" "$scenario_home/.local/bin/bob"; then
+    printf 'expected the bundled binary to be installed\n' >&2
+    exit 1
+  fi
+}
+
+test_dash_y_with_only_skills_prints_skills_warning() {
+  setup_scenario
+  trap 'rm -rf "$scenario_tmp"' RETURN
+  mkdir -p "$scenario_skills/example"
+
+  run_scenario_install "" -y
+
+  assert_install_succeeded
+  assert_contains "$scenario_stdout" "The existing skills will be replaced"
+  assert_not_contains "$scenario_stdout" "Overwrite?"
+}
+
+test_default_skill_path_is_used_when_xdg_data_home_is_unset() {
+  setup_scenario
+  trap 'rm -rf "$scenario_tmp"' RETURN
+  local default_skills
+  case "$(uname -s)" in
+    Darwin) default_skills="$scenario_home/Library/Application Support/bob/skills" ;;
+    *) default_skills="$scenario_home/.local/share/bob/skills" ;;
+  esac
+  mkdir -p "$default_skills/example"
+
+  install_status=0
+  (
+    cd "$scenario_bundle"
+    env -u XDG_DATA_HOME PATH="/usr/bin:/bin" HOME="$scenario_home" ./install.sh \
+      </dev/null >"$scenario_stdout" 2>"$scenario_stderr"
+  ) || install_status=$?
+
+  assert_install_failed
+  assert_contains "$scenario_stderr" "no input available for overwrite confirmation"
+}
+
+test_xdg_data_home_skill_path_is_checked() {
+  setup_scenario
+  trap 'rm -rf "$scenario_tmp"' RETURN
+  mkdir -p "$scenario_tmp/xdg/bob/skills/example"
+
+  install_status=0
+  (
+    cd "$scenario_bundle"
+    PATH="/usr/bin:/bin" HOME="$scenario_home" XDG_DATA_HOME="$scenario_tmp/xdg" ./install.sh \
+      </dev/null >"$scenario_stdout" 2>"$scenario_stderr"
+  ) || install_status=$?
+
+  assert_install_failed
+  assert_contains "$scenario_stderr" "no input available for overwrite confirmation"
+}
+
 test_replaces_a_running_binary_atomically
 test_abort_when_overwrite_prompt_hits_eof
 test_trailing_slash_path_entry_counts_as_present
@@ -466,3 +734,17 @@ test_invokes_installed_binary_directly_for_skills_only_refresh
 test_never_passes_force_to_skills_only_invocation
 test_skills_only_success_output_is_not_suppressed
 test_skills_only_failure_warns_and_does_not_block_install
+test_prompts_and_aborts_when_only_skills_exist_and_answer_is_no
+test_aborts_when_only_skills_exist_and_no_input_is_available
+test_installs_when_only_skills_exist_and_answer_is_yes
+test_dotfile_alone_in_skill_path_triggers_the_prompt
+test_dangling_symlink_at_skill_path_triggers_the_prompt
+test_empty_skill_directory_installs_without_prompting
+test_fresh_install_does_not_prompt
+test_different_installed_binary_prints_version_warning_before_prompt
+test_unreadable_installed_binary_counts_as_different
+test_identical_binaries_prompt_without_a_warning
+test_dash_y_proceeds_without_prompting_and_still_warns
+test_dash_y_with_only_skills_prints_skills_warning
+test_default_skill_path_is_used_when_xdg_data_home_is_unset
+test_xdg_data_home_skill_path_is_checked

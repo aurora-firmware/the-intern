@@ -15,6 +15,19 @@ require_bundle_file() {
   fi
 }
 
+assume_yes=false
+for argument in "$@"; do
+  case "$argument" in
+    -y)
+      assume_yes=true
+      ;;
+    *)
+      printf 'Unknown argument: %s\nUsage: install.sh [-y]\n' "$argument" >&2
+      exit 1
+      ;;
+  esac
+done
+
 path_contains_dir() {
   local target="$1"
   local entry=""
@@ -76,6 +89,50 @@ resolve_extension_path() {
   fi
 }
 
+# Mirrors resolve_extension_path: the skill folder lives beside the extension
+# folder under the same data root.
+resolve_skill_path() {
+  if [ "${XDG_DATA_HOME+x}" = x ]; then
+    if [ -z "$XDG_DATA_HOME" ]; then
+      :
+    elif [[ "$XDG_DATA_HOME" = /* ]]; then
+      printf '%s/bob/skills\n' "$XDG_DATA_HOME"
+      return 0
+    else
+      printf 'Error: XDG_DATA_HOME must be an absolute path when set: %s\n' "$XDG_DATA_HOME" >&2
+      exit 1
+    fi
+  fi
+
+  if [ "$platform" = "darwin" ]; then
+    printf '%s/Library/Application Support/bob/skills\n' "$HOME"
+  else
+    printf '%s/.local/share/bob/skills\n' "$HOME"
+  fi
+}
+
+# True when the skill path holds any entry at all: dotfiles and dangling
+# symlinks count, so a half-removed install is still treated as an install.
+skill_path_has_entries() {
+  local path="$1"
+  local entry=""
+
+  if [ -L "$path" ]; then
+    return 0
+  fi
+  if [ ! -d "$path" ]; then
+    [ -e "$path" ]
+    return
+  fi
+
+  for entry in "$path"/* "$path"/.[!.]* "$path"/..?*; do
+    if [ -e "$entry" ] || [ -L "$entry" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 platform="$(uname -s | tr '[:upper:]' '[:lower:]')"
 arch="$(uname -m | tr '[:upper:]' '[:lower:]')"
 
@@ -95,22 +152,49 @@ require_bundle_file "$bundle_extension_path"
 
 install_binary_path="${HOME}/.local/bin/bob"
 install_extension_path="$(resolve_extension_path)"
+install_skill_path="$(resolve_skill_path)"
 pi_install_guide="https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/quickstart.md"
 
-if [ -e "$install_binary_path" ]; then
-  printf 'A bob binary already exists at %s. Overwrite? [y/N] ' "$install_binary_path"
-  if ! read -r overwrite_response; then
-    printf 'Install aborted: no input available for overwrite confirmation.\n' >&2
-    exit 1
+binary_installed=false
+skills_installed=false
+if [ -e "$install_binary_path" ] || [ -L "$install_binary_path" ]; then
+  binary_installed=true
+fi
+if skill_path_has_entries "$install_skill_path"; then
+  skills_installed=true
+fi
+
+if [ "$binary_installed" = true ] || [ "$skills_installed" = true ]; then
+  # cmp failing for any reason (different bytes, unreadable file) counts as
+  # different, so an uncertain comparison still warns.
+  if [ "$binary_installed" = true ]; then
+    if ! cmp -s "$install_binary_path" "$bundle_binary_path"; then
+      printf 'Warning: a different bob version is installed at %s. The installed skills (the documentation skill included) and the extension will be replaced and may differ from what is there now, including any local edits.\n' \
+        "$install_binary_path"
+    fi
+  else
+    printf 'Warning: bob skills are already installed at %s. The existing skills will be replaced.\n' \
+      "$install_skill_path"
   fi
-  case "$overwrite_response" in
-    y | Y)
-      ;;
-    *)
-      printf 'Install aborted. No changes were made.\n'
+
+  if [ "$assume_yes" = true ]; then
+    :
+  else
+    printf 'bob is already installed (binary: %s, skills: %s). Overwrite? [y/N] ' \
+      "$install_binary_path" "$install_skill_path"
+    if ! read -r overwrite_response; then
+      printf 'Install aborted: no input available for overwrite confirmation.\n' >&2
       exit 1
-      ;;
-  esac
+    fi
+    case "$overwrite_response" in
+      y | Y)
+        ;;
+      *)
+        printf 'Install aborted. No changes were made.\n'
+        exit 1
+        ;;
+    esac
+  fi
 fi
 
 mkdir -p "$(dirname "$install_binary_path")"
