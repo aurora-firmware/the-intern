@@ -283,10 +283,7 @@ a page or skill a release drops lingers on disk until the next `install.sh`
 run empties the folder.
 
 To use another location, set the top-level `skill_install_path` key in
-`config.toml`. bob reads skills from that location but never fills or
-refreshes it — neither `install.sh` nor `bob init` writes there — so you must
-populate it yourself and keep it current by hand after every upgrade, for
-example by copying the default skill folder into it after each install:
+`config.toml`:
 
 ```toml
 skill_install_path = "/opt/bob/skills"
@@ -322,6 +319,17 @@ skill_install_path = "/opt/bob/skills"
 - Skills are supplied through this path regardless of `pi_agent_cwd` or any
   per-entry scheduled-job `cwd` — see
   [Working directory for pi-agent sessions](#working-directory-for-pi-agent-sessions).
+
+bob reads skills from a configured `skill_install_path` but never fills or
+refreshes that folder — neither `install.sh` nor `bob init` writes there — so
+you must populate it yourself and keep it current by hand after every upgrade, for example by copying the
+default skill folder into it after each install (here with `XDG_DATA_HOME`
+unset on Linux, so the default is `~/.local/share/bob/skills`):
+
+```bash
+rm -rf /opt/bob/skills
+cp -R ~/.local/share/bob/skills /opt/bob/skills
+```
 
 ### Initialize a workspace with `bob init`
 
