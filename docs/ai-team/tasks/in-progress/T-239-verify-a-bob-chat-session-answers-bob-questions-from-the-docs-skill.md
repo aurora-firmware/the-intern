@@ -110,6 +110,50 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-10-14
+
+**Policy used.** I kept the existing `.tmp/bob-dev` live config and ran no `bob init --force`, so nothing of the user's was overwritten. Its `[policy]` is `admitted_users = []` with four unconstrained `[[policy.action_rules]]` for the `bash`, `read`, `write` and `edit` tools. That admits the skill's `read` and `bob ... --help` `bash` calls, so no scratch dev home was needed. `pi_agent_idle_reap_timeout = "30s"` was also set.
+
+**Setup.**
+- `cargo build -p bob` was already up to date.
+- `./scripts/bob-dev.sh init --skills-only --force` installed `the-intern-docs/SKILL.md` and all five `references/<dir>/index.md` pages (architecture-overview, end-user-guide, extension-author-guide, operator-guide, quickstart).
+- I started the service with `./scripts/run-bob-dev.sh` (`bob status` returned ok, version 0.14.0-71-g5c9ceb0).
+- pi version: **0.87.1** (`/home/daneel/.npm-global/bin/pi`), the same as README's installed-CLI entry.
+
+**Spawn path.**
+- `bob chat` needs a TTY, and there was none. I rejected faking a pty.
+- Instead I used one-off scheduled jobs. Each was added with `bob schedule add --cron "* * * * *" --cwd <fresh empty dir> --prompt ...`, in its own empty directory under the scratchpad (confirmed empty with `ls -A`). I removed each job after its first firing.
+- The jobs were `t239-q1`, `t239-q2` and `t239-q3`. The service spawned pi for each, which received skills via the shared skill path (S-011).
+- Transcripts: `~/.pi/agent/sessions/--tmp-claude-1000--home-daneel-projects-the-intern-1f520645-a6c6-4f30-978b-41c8f6ea6f0f-scratchpad-empty{1,2,3}--/` (first-fired session in each).
+
+**Questions and observed behavior** (first-fired session of each job):
+
+1. Q1: "How do I add a scheduled job in bob? Answer briefly."
+   - pi called `read` on `.tmp/bob-dev/data/bob/skills/the-intern-docs/SKILL.md`.
+   - It then read `references/operator-guide/index.md`, and ran `bob --help && bob schedule --help` and `bob schedule add --help`.
+   - Answer: "Use `bob schedule add` with an ID and cron expression: `bob schedule add --id daily-check --cron "0 9 * * *" --prompt "Check email" --cwd /absolute/workspace/path`. Use `--file prompt.txt` instead of `--prompt` to read the prompt from a file."
+   - The flags match the real `bob schedule add --help`, so the answer is correct.
+2. Q2: "What does `bob init --skills-only` do? Answer briefly."
+   - pi read the same `SKILL.md`, then ran `bob init --help`.
+   - Answer: "`bob init --skills-only` installs or refreshes only the shared skill package, without creating or modifying a workspace or live config. Existing skill files are preserved unless you also pass `--force`."
+   - This matches the `bob init --help` text.
+3. Q3 (unrelated): "Write a Python function that reverses a string. Answer briefly, do not create files."
+   - pi made **no tool calls**, so no skill was read.
+   - Answer: `def reverse_string(s: str) -> str: return s[::-1]`.
+
+**Outcome.**
+- AC-1 met: both bob questions were answered from the `the-intern-docs` skill (SKILL.md plus a reference page and/or `bob ... --help`), and the answers are correct.
+- AC-2 met: the unrelated coding question was answered with zero tool calls, and the skill was not loaded.
+- AC-3: this entry records the policy, spawn path, questions, excerpts, pi version and outcome.
+- AC-4 not triggered: `pi` was on `PATH`, and nothing was mocked or substituted.
+
+**Housekeeping.**
+- I changed no README (the tested pi 0.87.1 equals the recorded installed-CLI version) and committed nothing on the task branch.
+- I stopped the dev service and `./scripts/check-test-orphans.sh` reported no orphans.
+- The user's own pre-existing scheduled jobs in the dev home (`funny-log-every-minute`, `try_files`) also fired during the run; I left them untouched and removed only my three jobs.
+
+**Remaining.** Nothing. A human could still run an interactive `./scripts/bob-dev.sh chat` check, but the task treats this path as equivalent evidence.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
