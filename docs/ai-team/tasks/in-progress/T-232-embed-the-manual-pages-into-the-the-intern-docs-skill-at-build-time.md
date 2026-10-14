@@ -171,3 +171,22 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-10-14
+PASS
+
+Stage 1 (acceptance): all five criteria met.
+- AC-1: `build.rs` takes the page set from the backticked `references/...md` paths in the pi-package docs SKILL.md and embeds each as `the-intern-docs/references/<dir>/index.md`. The drift test confirms byte identity with `docs/src`. The regenerated `.pi/skills/the-intern-docs/SKILL.md` is committed, and re-running `package-pi-skills.sh` leaves the tree clean.
+- AC-2: `build.rs` panics if a named page is `SKILL.md`, `SUMMARY.md`, under `cli-reference/`, or contains `..`. Pages are included with `include_bytes!` from their source path, so nothing is written to a tracked directory. `git status` on `the-intern` is clean after build and test.
+- AC-3: a missing page makes `canonicalize` panic with "manual page named by the docs skill is missing: <path>". An empty page set also panics.
+- AC-4: `cargo:rerun-if-changed` is emitted for each page.
+- AC-5: the drift test and the index/embedded agreement test cover this. The path list and the five-root set are updated.
+- Only the three listed files changed.
+
+Stage 2 (quality): no blocking issues. `cargo build -p bob` succeeds, `cargo test -p bob init_assets` passes 6/6, and `cargo fmt --check` is clean.
+
+Non-blocking observations:
+- The SKILL.md path parser is duplicated between `build.rs` and the test helper. The Developer noted this, and it is unavoidable because a build script cannot share code with the crate's tests.
+- The `..` guard checks substrings, which is stricter than needed but harmless.
+
+Next owner: Development Loop.
