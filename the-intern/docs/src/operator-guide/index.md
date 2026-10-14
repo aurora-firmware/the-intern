@@ -1312,6 +1312,18 @@ the package as described in
    ]
 
    [[policy.action_rules]]
+   tool = "read"
+   arg_matchers = [
+     { field_path = "path", pattern = "/opt/bob/skills/the-intern-docs/SKILL.md" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "read"
+   arg_matchers = [
+     { field_path = "path", pattern = "/opt/bob/skills/the-intern-docs/references/*.md" },
+   ]
+
+   [[policy.action_rules]]
    tool = "bash"
    arg_matchers = [
      { field_path = "command", pattern = "himalaya --version*" },
@@ -1388,7 +1400,85 @@ the package as described in
    arg_matchers = [
      { field_path = "command", pattern = "bob worklog*" },
    ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "bob --help" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "bob init --help" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "bob task --help" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "bob serve --help" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "bob status --help" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "bob sessions --help" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "bob audit --help" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "bob policy --help" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "bob schedule --help" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "bob chat --help" },
+   ]
+
+   [[policy.action_rules]]
+   tool = "bash"
+   arg_matchers = [
+     { field_path = "command", pattern = "bob worklog --help" },
+   ]
    ```
+
+   **The documentation skill and `--help` rules.** The two `the-intern-docs`
+   read rules admit the docs skill's `SKILL.md` and the manual pages it carries
+   in its `references/` folder at the skill install path. The `bob --help` and
+   `bob <subcommand> --help` rules let a session look up command usage. Each is
+   an exact pattern with no trailing wildcard, one per subcommand, following
+   the convention used for the bare `himalaya template write` rule below: a
+   pattern such as `bob *--help` would also admit a chained command like
+   `bob status --help; <anything>`. The `bob task --help` and `bob worklog
+   --help` calls are already admitted by the `bob task*` and `bob worklog*`
+   rules, and the broad first-run ruleset already admits all of these, so
+   the narrowed set needs them only once you have replaced that ruleset.
 
    **The `worklog` skill's rules follow the `bob worklog` command.** The
    `worklog/SKILL.md` and `worklog/references/*.md` read rules above admit
