@@ -1,6 +1,6 @@
 ---
 title: Vendor-neutral skills package and bob-side skill loading
-version: '0.2'
+version: '0.3'
 status: approved  # draft | review | approved | superseded
 created: '2026-08-06'
 author: planner
@@ -80,7 +80,13 @@ What this specification explicitly does NOT cover:
   same skills.
 - **Skill content must exist exactly once in the repository.** Any per-vendor
   packaging must carry manifests and layout only, never a second copy of the
-  content, so a correction applies everywhere by construction.
+  content, so a correction applies everywhere by construction. The
+  `the-intern-docs` skill's reference pages are the hand-written user manual
+  pages under `the-intern/docs/src/` (S-007), which are their single canonical
+  copy; that skill's own canonical source holds only its `SKILL.md` and topic
+  index. The skill carries a copy of the manual pages generated when bob is
+  built, which is never committed, never written into a tracked directory, and
+  never hand-edited.
 - **Continuity must remain reconstructable from the job's own working
   directory.** No service-side session or queue state may be relied on to
   remember what a previous scheduled firing did.
@@ -94,25 +100,34 @@ What this specification explicitly does NOT cover:
   not perform (`ADR-014` §7).
 - **Skill content must not reference this project's internal artifacts.**
   Consumers have no access to its specifications, decision records, tasks, or
-  bugs, so skill text must be intelligible without them.
+  bugs, so skill text must be intelligible without them. This applies equally
+  to the manual pages copied into the `the-intern-docs` skill, which become
+  shipped skill content read by an agent as plain markdown (S-007).
 - **Every tool call a skill makes remains subject to the existing action gate.**
 
 ### System Diagram
 
 ```
        repository (single source of truth)
-       skills/  ──┬── himalaya      (CLI reference)
-                  ├── email-triage  (triage policy)
-                  ├── worklog       (diary discipline, domain-free)
-                  └── tasks         (task board discipline, domain-free)
+       skills/  ──┬── himalaya         (CLI reference)
+                  ├── email-triage     (triage policy)
+                  ├── worklog          (diary discipline, domain-free)
+                  ├── tasks            (task board discipline, domain-free)
+                  └── the-intern-docs  (SKILL.md + topic index only)
                         │
          ┌──────────────┴──────────────┐
          │ packaging (manifests only)  │
          │          pi target          │
          └──────────────┬──────────────┘
-                        │ install
+                        │ bob build: embed     user manual (docs/src/)
+                        │  ←────────────────── pages copied into the docs
+                        │                      skill; untracked, never
+                        v                      committed
+              bob binary (embedded skill set)
+                        │ install (bob init; install.sh empties the
+                        │  default path and refills it via bob init)
                         v
-            skill install path (XDG data bucket)
+            skill install path (XDG data bucket, bob-owned)
                         │
                         │ bob resolves path → environment
                         v
@@ -143,15 +158,17 @@ What this specification explicitly does NOT cover:
 
 | Component | Responsibility | Notes |
 |---|---|---|
-| Canonical skill source | Holds every skill's content exactly once, vendor-neutral | Consumed by all packaging targets; carries no vendor-specific layout |
+| Canonical skill source | Holds every skill's content exactly once, vendor-neutral — except the `the-intern-docs` reference pages, whose canonical copy is the user manual | Consumed by all packaging targets; carries no vendor-specific layout |
+| User manual (`the-intern/docs/src/`, S-007) | Second canonical input: the single hand-edited copy of the `the-intern-docs` skill's reference pages | Copied into the docs skill when bob is built; the copy is never committed and never placed in the canonical source or the packaging target. The CLI-reference stub page and the book's table of contents are not copied |
 | Packaging target | Present the canonical content in the supported vendor's expected layout | Manifests and layout only; must contain no content of its own. One target exists today; the requirement applies to any target added later |
-| Skill install path | The deployed, read-only location bob resolves and makes available to its extension | A trusted, un-checked input; operator-protected by filesystem permissions |
+| Skill install path | The deployed, read-only location bob resolves and makes available to its extension | A trusted, un-checked input; operator-protected by filesystem permissions. The default location belongs to bob alone and holds only the skills a bob release installs; `install.sh` empties and refills it as a whole on every install (S-013, ADR-017). A configured override location is never emptied or refilled by an install |
 | bob service | Resolve the install path and make it available to the extension on every session spawned | Uses the existing per-session environment contract; bob never reads skill content |
 | bob extension | Answer pi's resource-discovery event with the resolved skill path | Already supplied on all three spawn paths and already subscribed to the event; governed by `ADR-014` |
 | `worklog` skill | Owns when and how a session uses the diary, and the item-identifier convention | Domain-free; defers to the `bob worklog` command for the entry format and same-day duplicate suppression rather than restating them (S-015). A day's diary holds only what that day's runs recorded, so a session that needs to track something as still outstanding keeps that record elsewhere |
 | `email-triage` skill | Owns detection, classification, and the act-or-escalate decision | Delegates all diary mechanics to `worklog` and all open-item tracking to `tasks`: anything it cannot finish in one run — an escalation awaiting a reply, an action the gate refused — is filed as a task, and a later run picks it up from there |
 | `himalaya` skill | Owns CLI reference knowledge | Carries no triage policy; unchanged in role |
 | `tasks` skill | Owns the task-board discipline: when work belongs on a board, how to describe it so a later run can pick it up cold, and what each status commits to | Domain-free; defers to the `bob task` command for the file format rather than restating it (S-014) |
+| `the-intern-docs` skill | Read-only reference answering questions about bob and the Intern itself from the user manual of the installed bob version, with CLI answers taken from `bob --help` / `bob <subcommand> --help` rather than from prose | A narrowly-triggering description and a topic index over the bundled manual pages; the pages are copied from the manual at build time (Components 2 and 6). Carries no operating policy and never acts on bob or tells the agent to |
 | Action-authorization gate (existing) | Gates every tool call a skill makes | Unmodified; admitting rules are an operator deployment concern |
 
 ## Components
@@ -164,7 +181,12 @@ that belongs to no particular agent vendor.
 removal of the one frontmatter field whose format differs between vendors.
 **Interfaces:** Exposes skill content as instruction documents with relative
 references; consumed by every packaging target and, once installed, by the
-sessions bob spawns.
+sessions bob spawns. The user manual under `the-intern/docs/src/` is a second
+canonical input, supplying the `the-intern-docs` skill's reference pages. That
+skill's topic index therefore refers to pages that exist only in the build
+output, not in its canonical source; a test that compares the embedded pages
+with the manual source, not reference resolution within the source tree,
+guarantees those references hold.
 
 ### Component 2: Packaging target
 
@@ -175,7 +197,16 @@ source, per target.
 **Interfaces:** Exposes a vendor-installable package; consumes the canonical
 skill source. Must be verifiable as containing no independent copy of the
 content. One target exists; the canonical source stays free of vendor-specific
-layout so a second can be added when a consumer for one exists.
+layout so a second can be added when a consumer for one exists. The
+`the-intern-docs` skill's `SKILL.md` and topic index pass through this target
+like any other skill's. Its manual pages are added when bob is built, never
+written into the target's tracked output or any other tracked directory. A
+clean build of bob from a fresh checkout either embeds the pages or fails with
+a clear error; it never silently embeds a `SKILL.md` whose index points at
+missing pages. A change to the manual changes the built binary, and a test
+fails if the embedded pages drift from the manual source. The copy is a plain file
+copy, not a docs build (S-007); no copied page is named `SKILL.md`. Which build
+step produces the copy is a breakdown decision within these constraints.
 
 ### Component 3: bob-side skill supply
 
@@ -212,6 +243,30 @@ what it could not finish this run to the `tasks` skill.
 board discipline, the `himalaya` skill's CLI knowledge, and its own skill-local
 configuration.
 
+### Component 6: `the-intern-docs` skill
+
+**Purpose:** Let every session bob spawns — interactive chat, pooled RPC
+workers, and scheduled jobs — answer questions about bob and the Intern (what
+it is, how to configure, operate, schedule, and troubleshoot it, and how its
+CLI works) from the user manual of the installed bob version, whatever its
+working directory. Its `SKILL.md` carries only a description that triggers
+when the user asks about bob or the Intern itself and not otherwise, a short
+topic index over the bundled manual pages (quickstart, end-user guide,
+operator guide, architecture overview, extension-author guide), and the
+instruction to answer CLI questions from `bob --help` and
+`bob <subcommand> --help` rather than from prose, because the manual's CLI
+reference is generated from `--help` at docs build time and is a stub in the
+manual source. It contains no operating policy and does not tell the agent to
+act on bob (no setup, no service control).
+**Estimated size:** Small — one `SKILL.md` and index, plus the build-time page
+copy described in Component 2.
+**Interfaces:** Consumes the manual pages copied in at build time and the
+`bob --help` output; exposes read-only reference guidance. Delivered exactly
+like the other skills — embedded in the binary, installed by every `bob init`
+mode that installs skills, and supplied through Component 3 — with no new
+environment variable, extension hook, system-prompt section, or install
+location.
+
 ## Workflow
 
 ```
@@ -233,8 +288,8 @@ pi fires resource discovery; the extension answers with the skill path
   ↓
 pi extends its resources and rebuilds the system prompt before the first turn
   ↓
-Session has himalaya, email-triage, worklog, and tasks available regardless of
-  cwd
+Session has himalaya, email-triage, worklog, tasks, and the-intern-docs
+  available regardless of cwd
   ↓
 Work is performed; every tool call passes the action-authorization gate
   → a call is denied: the outcome is recorded, never worked around
@@ -268,7 +323,13 @@ A later session discovers what is still outstanding from that board, in that
   every session the service spawns, so it is security-relevant: it must be
   under the same owner-only protection the working directory already requires,
   enforced by filesystem permissions rather than a service-side check
-  (`ADR-014` §7).
+  (`ADR-014` §7). The default location belongs to bob alone: it holds only the
+  skills a bob release installs, nothing else is expected there, and
+  `install.sh` empties and refills it on every install so it holds exactly the
+  installed release's skills (S-013, ADR-017). Installed skills are
+  release-owned content; local edits to them are not a supported
+  customisation point. `install.sh` reads no configuration, so a configured
+  override location is never emptied or refilled by an install.
 - **Missing-value behaviour:** unset falls back to a default location in the
   read-only application-asset area of the service's filesystem layout
   (`ADR-009`), alongside the extension. A set-but-missing or empty path is
@@ -282,10 +343,13 @@ A later session discovers what is still outstanding from that board, in that
   reads of skill reference content at the install path, the worklog's
   `bob worklog append`/`list` invocations (S-015), and the `bob task`
   invocations the `tasks` skill teaches and `email-triage` now makes for the
-  items it cannot finish in one run (S-014, S-010). A deployment that admits
-  the diary calls but not the board calls leaves a session able to record what
-  it did but unable to record what it left, which is a silent loss of
-  continuity rather than a visible failure.
+  items it cannot finish in one run (S-014, S-010), and, for the
+  `the-intern-docs` skill, reads of its `SKILL.md` and bundled manual pages
+  wherever they sit inside that skill's installed folder, plus the
+  `bob --help` and `bob <subcommand> --help` invocations it teaches. A
+  deployment that admits the diary calls but not the board calls leaves a
+  session able to record what it did but unable to record what it left, which
+  is a silent loss of continuity rather than a visible failure.
 - **Where it lives:** the existing action ruleset, as ordinary operator
   configuration.
 - **Constraints:** rules admitting reads of skill reference content are scoped
@@ -305,7 +369,12 @@ A later session discovers what is still outstanding from that board, in that
   deliberately broad first-run profile. This is an operator-usability
   exception, not a replacement for the normal install-path-scoped reference
   reads and worklog guidance above; the generated config must disclose the
-  authority and direct later narrowing.
+  authority and direct later narrowing. That broad profile already admits the
+  `the-intern-docs` page reads and `--help` invocations. A deployment that
+  followed the documented narrowed, per-skill rules denies them until rules
+  are added, so the hand-written narrowed rule listings (the operator guide's
+  and the skill package README's) must carry a `read` rule for the docs
+  skill's `SKILL.md` and pages and a `bash` rule for the `--help` calls.
 - **Missing-value behaviour:** absent rules deny, as the action model already
   requires. A denied call is recorded by the skill and never worked around.
 
@@ -352,6 +421,7 @@ A later session discovers what is still outstanding from that board, in that
 | 3 | Extract the `worklog` skill as a domain-free skill and reduce `email-triage` to delegate its diary mechanics to it and its tracking of unfinished work to the `tasks` skill. | Phase 2 |
 | 4 | Add the service-side skill install path setting with its resolution and fail-open absence behaviour, extend the per-session environment contract with the resolved path, and answer the resource-discovery event in the extension. | Phase 1 |
 | 5 | Update the operator-facing deployment procedure and the action-rule guidance to the install-path model, and re-validate the previously live-validated paths against the new deployment shape. | Phases 3, 4 |
+| 6 | (CR-016) Add the `the-intern-docs` skill's `SKILL.md` and topic index to the canonical source and the pi packaging target, and add its page-read and `--help` rules to the hand-written narrowed action-rule listings. Embedding its manual pages at build time is S-012 Phase 5. | Phases 2, 5 |
 
 ## Amendment Log
 
@@ -362,3 +432,4 @@ A later session discovers what is still outstanding from that board, in that
 | 2026-08-23 | The Claude packaging target is removed, leaving the pi target as the only one. The Purpose's success criterion no longer requires the content to be loadable by two vendors, and now requires the canonical source to stay free of vendor-specific layout so a second target can be added when a consumer exists. Diagram, Component 2, and the packaging responsibility row follow. | CR-011. The Claude target demonstrated the two-vendor principle rather than serving a consumer, and carrying it through CR-010's rename and S-014's fourth skill would cost work on output nobody installs. The canonical-source layer is deliberately kept so re-adding a vendor stays cheap. | Tasks TBD |
 | 2026-08-27 | The `worklog` skill row and Component 4 no longer claim the skill itself owns entry format, first-run detection, or reconciliation — it now defers to the `bob worklog` command for those, the same way this table already describes `tasks` deferring to `bob task`. The "Action rules admitting skill tool calls" section's worklog line now names `bob worklog append`/`list` invocations instead of raw "directory checks, reads, and appends", and its accepted risk that the admitting rule "must be broad enough to cover arbitrary working directories" is marked retired for worklog writes, since the command's invocation text never carries the working directory. | S-015 approval. The worklog mechanics move from skill prose into a real command, mirroring S-014's earlier move for the task board; the working directory dropping out of the command's own text is what lets the admitting rule narrow. | S-015 breakdown tasks (Gate 2 pending). |
 | 2026-09-17 | `email-triage` now consumes the `tasks` skill as well as `worklog` and `himalaya`: its Responsibility Separation row and Component 5 drop the "retains retry of a carried-forward blocked action" language and state that anything it cannot finish in one run is filed as a task and picked up from the board by a later run. The `worklog` skill row and Component 4 say the command owns the entry format and same-day duplicate suppression, and that a day's diary holds only what that day's runs recorded. The Workflow's closing line becomes task discovery instead of reconciling carried-forward items; the System Diagram's per-cwd state, the action-rule requirement, the per-job storage requirement, and Phase 3 follow. | CR-013 removes cross-day carry-forward from `bob worklog`, so the retry mechanism the `email-triage` row described no longer exists; S-010 moves that continuity onto the job's own `bob task` board. This specification's own principle that continuity stay reconstructable from the job's working directory now applies to that board, which is why the per-job storage requirement names it explicitly. | Tasks TBD (skill-content updates follow from the CR-013 breakdown) |
+| 2026-10-13 | The skill set gains a fifth skill, `the-intern-docs`, a read-only self-documentation skill answering questions about bob from the installed version's user manual (System Diagram, Responsibility Separation rows for the new `the-intern-docs` skill and the user manual, new Component 6, Workflow end state, new Phase 6). The "content exactly once" principle and Components 1–2 now name the user manual (`the-intern/docs/src/`, S-007) as the single canonical copy of that skill's reference pages: the skill's own source holds only `SKILL.md` and its topic index, and the pages are copied in when bob is built — never committed, never into a tracked directory, with a clean build embedding them or failing loudly and a drift test against the manual source. The no-internal-artifacts principle extends to the copied pages. The skill install path row and its Configuration Requirement state that the default location belongs to bob alone and is emptied and refilled by `install.sh` on every install, while a configured override is never touched. The action-rule requirement adds the docs skill's page reads and its `bob --help` invocations, admitted by the CR-007 profile but needing entries in the hand-written narrowed listings. Delivery to pi (Component 3, `ADR-014`) is unchanged. | CR-016 (issue #138) / ADR-017 (CR-016). A pi session could answer questions about bob only if the companion skills sat in its working directory; shipping the manual as a skill through the existing delivery route makes it available on every spawn path and matched to the installed version. | T-231, T-232, T-234, T-237, T-239 |

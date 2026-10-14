@@ -1,6 +1,6 @@
 ---
 title: bob init workspace-scaffolding subcommand
-version: '0.3'
+version: '0.4'
 status: approved
 created: '2026-08-09'
 author: planner
@@ -51,7 +51,12 @@ anything or accepting `--force`'s workspace/config-file replacement.
 
 - The canonical skills source remains `the-intern/bob-skills/skills`; the
   released binary embeds the generated pi package only as a delivery asset and
-  materializes it once into the shared install path.
+  materializes it once into the shared install path. The embedded set has five
+  skills. One of them, `the-intern-docs` (S-011), sources its reference pages
+  from the user manual under `the-intern/docs/src/` at build time — never from
+  a tracked copy. A clean build from a fresh checkout either embeds those
+  pages or fails with a clear error; it never silently embeds a skill index
+  that points at missing pages.
 - The shared install path is the same XDG-data default `BobConfig` resolves
   for S-011, and generated `config.toml` explicitly selects it so the first
   run is deterministic.
@@ -68,7 +73,7 @@ anything or accepting `--force`'s workspace/config-file replacement.
 
 | Component | Responsibility |
 |---|---|
-| Embedded pi-package assets | Compile the generated `bob-skills/.pi/skills` output into the binary and expose its fixed files to installation code. |
+| Embedded pi-package assets | Compile two inputs into the binary and expose their fixed files to installation code: the generated `bob-skills/.pi/skills` output, and the user manual pages copied from `the-intern/docs/src/` into the `the-intern-docs` skill at build time (excluding the CLI-reference stub page and the book's table of contents). The page copy is never written into a tracked directory; a change to the manual changes the binary, and a test fails if the embedded pages drift from the manual source. |
 | Shared-skill installer | Materialize the assets at the resolved shared install path, with owner-only permissions and non-destructive/force semantics. |
 | Workspace materializer | Create `AGENTS.md`, `CLAUDE.md`, `config/email-triage.toml`, `worklog/`, and `tasks/`; all are owner-only. |
 | Config generator | Write the complete live config at the same path used by bob's loader, including its shared install path and CR-007 policy profile. |
@@ -85,8 +90,9 @@ bob init <workspace> [--force]
   → print broad-policy warning and next steps
 
 bob init --skills-only [--force]
-  → resolve the shared skill install path
-  → install the embedded pi skill package once at the shared install path
+  → resolve the default skill install path from the environment alone
+    (config.toml is never read; a skill_install_path override is not followed)
+  → install the embedded pi skill package once at that path
   → print the installed/refreshed/skipped skill file report
 ```
 
@@ -111,16 +117,27 @@ by it, with or without `--force`.
   files; its absence skips workspace conflicts and refuses a live config
   conflict.
 - `--skills-only` is optional and mutually exclusive with `<path>`. It
-  installs or refreshes the shared skill package at the resolved
-  `skill_install_path` only, and is not subject to the live-config-exists
-  guard: it creates or writes no workspace file and no live config, so there
+  installs or refreshes the shared skill package only at the default skill
+  install path, which it resolves from the environment alone
+  (`XDG_DATA_HOME`, or the platform default for bob's data bucket); it never
+  reads `config.toml` and so never follows a configured
+  `skill_install_path` override. This is what lets `install.sh` refill
+  exactly the path it emptied (S-013, ADR-017). It is not subject to the
+  live-config-exists guard: it creates or writes no workspace file and no live config, so there
   is nothing for that guard to protect. Per-file semantics match the
   Shared-skill installer's existing non-destructive/force behavior: each
   embedded skill file is created if missing and left untouched unless
   `--force` is also given, which then replaces every packaged skill file
   with the version embedded in the running binary. `--skills-only` remains
   filesystem-only and contacts no running service, consistent with `bob
-  init`'s existing classification (S-002, ADR-007).
+  init`'s existing classification (S-002, ADR-007). When `install.sh`
+  invokes `--skills-only` (S-013), it has first emptied the default skill
+  install path, so the call installs every embedded skill into an empty
+  folder; CR-012's non-destructive "existing files are left untouched"
+  outcome therefore no longer applies to installs through `install.sh`. A
+  hand-run `bob init --skills-only [--force]` and plain
+  `bob init <path> [--force]` keep the per-file semantics above. No new flag
+  or mode is added for this.
 
 ### Files created
 
@@ -136,8 +153,10 @@ by it, with or without `--force`.
   and agent work product rather than files this command owns, `--force` never
   removes or replaces anything inside it; an existing directory at that path is
   skipped and named in the warnings.
-- The shared install path receives the embedded `himalaya`, `email-triage`,
-  `worklog`, and `tasks` pi-package trees, never a workspace copy.
+- The shared install path receives the five embedded pi-package trees —
+  `himalaya`, `email-triage`, `worklog`, `tasks`, and `the-intern-docs` (its
+  `SKILL.md`, topic index, and the manual pages copied in at build time) —
+  never a workspace copy.
 - Directories are mode `0700`; generated files, including live `config.toml`,
   are mode `0600` on Unix platforms.
 
@@ -157,8 +176,9 @@ operator MUST review and narrow it before relying on it as a security control.
 
 ## Verification
 
-Automated coverage must prove a fresh init creates the shared skills,
-workspace files, mode bits, and a loader-valid config with precisely the four
+Automated coverage must prove a fresh init creates all five shared skill
+trees (including the `the-intern-docs` manual pages), workspace files, mode
+bits, and a loader-valid config with precisely the four
 no-matcher rules; an unsupported tool remains denied. It must also prove
 relative-path resolution, no-force conflicts, force replacement, `.git`
 preservation, live-config refusal, and that no admin socket is opened.
@@ -166,7 +186,10 @@ It must additionally prove that `--skills-only` installs a missing skill
 file and leaves an existing one untouched without `--force`, replaces it
 with `--force`, and behaves identically whether or not a live config
 already exists — and that plain `bob init`'s live-config refusal is
-unaffected by `--skills-only`'s existence.
+unaffected by `--skills-only`'s existence. Expectations that pin the
+embedded or installed skill set must name the five skills. A test must fail
+when the embedded `the-intern-docs` pages differ from the manual source, and
+no manual page copied into that skill may be named `SKILL.md`.
 
 An end-to-end command test must use isolated XDG paths, run `bob init`, then
 start `bob serve` and verify a `bob chat` or scheduled session can discover
@@ -181,6 +204,7 @@ the shared skills from the initialized workspace without a workspace
 | 2 | Implement workspace and live-config generation, permissions, and conflict/force safety rules. | Phase 1 |
 | 3 | Add the clap command and runtime dispatch, with filesystem-only command tests. | Phase 2 |
 | 4 | Document the one-command procedure and the broad bootstrap-policy warning. | Phase 3 |
+| 5 | (CR-016) Embed the five-skill set: copy the manual pages into the `the-intern-docs` skill at build time under the never-tracked and fail-loudly constraints, add the drift test, and update every expectation that pins the embedded or installed skill set to four. | Phase 1; S-011 Phase 6 (the docs skill's `SKILL.md` and topic index exist in the packaged skill set) |
 
 ## Amendment Log
 
@@ -190,3 +214,4 @@ the shared skills from the initialized workspace without a workspace
 | 2026-08-23 | `bob init` also creates an empty `<workspace>/tasks/` board directory and installs a fourth `tasks` pi-package tree at the shared install path. `--force` never removes or replaces board content. | CR-009, driven by S-014: the task board resolves from the working directory, so scaffolding it fixes the resolution point at the workspace root, and the skill that teaches the command reaches sessions only through the shared install path this command populates. | Tasks TBD |
 | 2026-08-23 | The canonical skills source and the embedded pi-package output are named under `the-intern/bob-skills/` instead of `the-intern/email-skills/`. | CR-010. The package holds domain-free skills — `worklog` by S-011's design and `tasks` by S-014 — so its email-oriented directory name no longer describes it. Rename only; no behaviour, layout, or install-path change. | Tasks TBD |
 | 2026-09-14 | Added `bob init --skills-only`: installs/refreshes the shared skill package at `skill_install_path` independent of the live-config-exists guard, mutually exclusive with `<path>`. The guard's "all-or-nothing" language is scoped explicitly to the workspace-scaffolding mode. | CR-012, driven by issue #55: an operator upgrading bob had no way to pick up a skill a newer release adds without `bob init --force`, which is destructive to operator-authored workspace/config files (issue #56, kept out of this change's scope). | T-201 (install.sh side; the `--skills-only` flag itself shipped pre-amendment via PR #88) |
+| 2026-10-13 | The embedded and installed skill set grows to five with `the-intern-docs` (Principles, "Embedded pi-package assets" row, Files created, Verification). That skill's reference pages are copied from the user manual under `the-intern/docs/src/` at build time — never from a tracked copy — and a clean build either embeds them or fails with a clear error; a drift test compares them with the manual source. The `--skills-only` CLI entry records that `install.sh` now empties the default skill install path before invoking it, so CR-012's non-destructive outcome no longer applies to installs through `install.sh`; hand-run `--skills-only` and plain `bob init` keep their per-file semantics. No new flag or mode. The `--skills-only` CLI entry and Workflow line now state that it resolves the default skill install path from the environment alone, never reads `config.toml`, and never follows a `skill_install_path` override (correcting the earlier "resolved `skill_install_path`" wording to match the implementation, S-013 and ADR-017, so the path `install.sh` empties is the path refilled). New Phase 5 orders the CR-016 embedding work. | CR-016 (issue #138) / ADR-017 (CR-016): the manual ships as a skill delivered exactly like the others, and every `install.sh` install leaves the default skill install path holding exactly the release's skills. | T-232, T-233, T-237, T-238 |

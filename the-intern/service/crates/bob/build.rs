@@ -19,14 +19,19 @@ fn main() {
                 manifest_dir.display()
             )
         });
-    let mut asset_files = Vec::new();
+    let mut package_files = Vec::new();
 
-    track_and_collect_files(&package_root, &mut asset_files).unwrap_or_else(|err| {
+    track_and_collect_files(&package_root, &mut package_files).unwrap_or_else(|err| {
         panic!(
             "failed to collect embedded pi skill assets from {}: {err}",
             package_root.display()
         )
     });
+    let mut asset_files = package_files
+        .into_iter()
+        .map(|file| (relative_path_literal(&package_root, &file), file))
+        .collect::<Vec<_>>();
+    asset_files.extend(collect_manual_pages(&manifest_dir, &package_root));
     asset_files.sort();
 
     let generated_assets =
@@ -122,7 +127,70 @@ fn track_and_collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Res
     Ok(())
 }
 
-fn render_embedded_assets(source_dir: &Path, files: &[PathBuf]) -> Result<String, std::fmt::Error> {
+const DOCS_SKILL_NAME: &str = "the-intern-docs";
+const MANUAL_SOURCE_DIR: &str = "../../../docs/src";
+
+/// Returns the manual pages the docs SKILL.md index names, as
+/// (embedded relative path, absolute manual source path) pairs.
+///
+/// The page set comes from the `references/...` paths named in the docs
+/// SKILL.md rather than from scanning the manual, so a removed or renamed
+/// page fails the build instead of silently not being embedded. The copy is
+/// never written to disk: the manual file is included directly.
+fn collect_manual_pages(manifest_dir: &Path, package_root: &Path) -> Vec<(String, PathBuf)> {
+    let skill_path = package_root.join(DOCS_SKILL_NAME).join("SKILL.md");
+    let skill_text = fs::read_to_string(&skill_path)
+        .unwrap_or_else(|err| panic!("failed to read docs skill {}: {err}", skill_path.display()));
+    let pages = named_reference_pages(&skill_text);
+    assert!(
+        !pages.is_empty(),
+        "docs skill {} names no references/ pages to embed",
+        skill_path.display()
+    );
+
+    let manual_dir = manifest_dir.join(MANUAL_SOURCE_DIR);
+    pages
+        .into_iter()
+        .map(|page| {
+            let manual_relative = page
+                .strip_prefix("references/")
+                .expect("named pages start with references/");
+            assert!(
+                !manual_relative.ends_with("SKILL.md")
+                    && !manual_relative.ends_with("SUMMARY.md")
+                    && !manual_relative.starts_with("cli-reference/")
+                    && !manual_relative.contains(".."),
+                "docs skill names a page that must never be embedded: {page}"
+            );
+            let source = manual_dir.join(manual_relative);
+            let source = source.canonicalize().unwrap_or_else(|err| {
+                panic!(
+                    "manual page named by the docs skill is missing: {} ({err})",
+                    source.display()
+                )
+            });
+            println!("cargo:rerun-if-changed={}", source.display());
+            (format!("{DOCS_SKILL_NAME}/{page}"), source)
+        })
+        .collect()
+}
+
+/// Extracts every backticked `references/....md` path from the skill text.
+fn named_reference_pages(skill_text: &str) -> Vec<String> {
+    let mut pages = skill_text
+        .split('`')
+        .filter(|segment| segment.starts_with("references/") && segment.ends_with(".md"))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    pages.sort();
+    pages.dedup();
+    pages
+}
+
+fn render_embedded_assets(
+    source_dir: &Path,
+    files: &[(String, PathBuf)],
+) -> Result<String, std::fmt::Error> {
     let mut generated = String::new();
     let source_dir_literal = source_dir.display().to_string();
 
@@ -135,8 +203,7 @@ fn render_embedded_assets(source_dir: &Path, files: &[PathBuf]) -> Result<String
         "pub(crate) static EMBEDDED_PI_SKILL_ASSETS: &[EmbeddedAsset] = &["
     )?;
 
-    for file in files {
-        let relative_path = relative_path_literal(source_dir, file);
+    for (relative_path, file) in files {
         let absolute_path = file.display().to_string();
 
         writeln!(

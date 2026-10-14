@@ -142,9 +142,11 @@ fn materialize_workspace_files(
     Ok(())
 }
 
-/// Installs (or tops up) the shared skill package at the configured
-/// `skill_install_path`, independent of the workspace-scaffold and
-/// live-config machinery `materialize_workspace_with_paths` owns. Unlike a
+/// Installs (or tops up) the shared skill package at the default skill
+/// install path resolved from the environment alone — `config.toml` is not
+/// read, so a configured `skill_install_path` override is never followed —
+/// independent of the workspace-scaffold and live-config machinery
+/// `materialize_workspace_with_paths` owns. Unlike a
 /// plain `bob init`, this never refuses to run just because a live config
 /// already exists — that guard protects the destructive workspace-scaffold
 /// replace (`--force`), which this path never touches. It reuses
@@ -469,6 +471,61 @@ mod tests {
         ])
     }
 
+    const EXPECTED_SKILL_NAMES: [&str; 5] = [
+        "email-triage",
+        "himalaya",
+        "tasks",
+        "the-intern-docs",
+        "worklog",
+    ];
+
+    const EXPECTED_DOCS_REFERENCE_DIRS: [&str; 5] = [
+        "architecture-overview",
+        "end-user-guide",
+        "extension-author-guide",
+        "operator-guide",
+        "quickstart",
+    ];
+
+    fn assert_five_skill_trees_installed(skill_install_path: &Path) {
+        for skill in EXPECTED_SKILL_NAMES {
+            let skill_file = skill_install_path.join(skill).join("SKILL.md");
+            assert!(
+                skill_file.is_file(),
+                "skill {skill} should be installed at {}",
+                skill_file.display()
+            );
+        }
+        for dir in EXPECTED_DOCS_REFERENCE_DIRS {
+            let page = skill_install_path
+                .join("the-intern-docs")
+                .join("references")
+                .join(dir)
+                .join("index.md");
+            assert!(
+                page.is_file(),
+                "docs reference page should be installed at {}",
+                page.display()
+            );
+        }
+        let mut installed: Vec<String> = fs::read_dir(skill_install_path)
+            .expect("skill install path should be readable")
+            .map(|entry| {
+                entry
+                    .expect("skill dir entry should be readable")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        installed.sort();
+        assert_eq!(
+            installed,
+            EXPECTED_SKILL_NAMES.to_vec(),
+            "exactly the five shipped skill trees should be installed"
+        );
+    }
+
     fn assert_mode(path: &Path, expected_mode: u32) {
         let actual = fs::metadata(path)
             .unwrap_or_else(|err| panic!("stat {}: {err}", path.display()))
@@ -553,6 +610,35 @@ mod tests {
         assert_mode(&workspace_config, 0o600);
         assert_mode(&shared_skill, 0o600);
         assert_mode(&live_config, 0o600);
+    }
+
+    #[test]
+    fn materialize_workspace_installs_all_five_skill_trees_with_docs_reference_pages() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+
+        materialize_workspace_with_paths(
+            Path::new("workspace"),
+            temp.path(),
+            &resolved_paths,
+            false,
+        )
+        .expect("fresh materialization should succeed");
+
+        assert_five_skill_trees_installed(&resolved_paths.skill_install_path);
+    }
+
+    #[test]
+    fn install_skills_only_creates_all_five_skill_trees_on_an_empty_install_path() {
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let env = init_env(&temp);
+        let resolved_paths = crate::config::resolve_init_paths_for_env(&env, 4242);
+
+        install_skills_only_with_paths(&resolved_paths, false)
+            .expect("skills-only install on an empty path should succeed");
+
+        assert_five_skill_trees_installed(&resolved_paths.skill_install_path);
     }
 
     #[test]
