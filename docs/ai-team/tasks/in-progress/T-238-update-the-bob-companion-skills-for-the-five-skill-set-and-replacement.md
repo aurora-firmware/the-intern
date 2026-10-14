@@ -1,7 +1,7 @@
 ---
 id: T-238
 title: Update the bob-companion skills for the five-skill set and replacement
-status: pending
+status: in-progress
 priority: medium
 assigned-role: developer
 created: '2026-10-13'
