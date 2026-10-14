@@ -2,7 +2,7 @@
 id: B-057
 title: non_serve tests inherit XDG_RUNTIME_DIR and BOB_* env
 severity: medium
-status: open
+status: resolved
 created: '2026-10-14'
 ---
 
@@ -104,6 +104,21 @@ Root cause or fault hypothesis:
 Planned verification:
 -->
 
+
+### Diagnosis 1 — 2026-10-14
+Reproduction status: confirmed (see Reproduction Status).
+Evidence captured: assertion failures at `non_serve.rs:16` (live service) and
+`non_serve.rs:48` (dev env), plus `audit tail` children of the `non_serve`
+binary streaming from the live service.
+Isolated fault: `bob_command_with_temp_state` sets only `XDG_STATE_HOME` and
+`HOME`; the spawned binary inherits `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`,
+`XDG_DATA_HOME`, and all `BOB_*` variables.
+Root cause or fault hypothesis: socket resolution in the binary is correct;
+the test fixture is not hermetic.
+Planned verification: `non_serve` passes both through `scripts/cargo-dev.sh`
+(dev env exported) and via plain `cargo test` with an installed `bob serve`
+running.
+
 ## Work Log
 
 <!-- Mandatory. Append one entry per session boundary. Format:
@@ -113,6 +128,18 @@ rejected, decisions made, what remains for next session.
 
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
+
+
+### Session 1 — 2026-10-14
+Fixed at the human's direct request outside the bug-loop (no Reviewer
+cycle). `bob_command_with_temp_state` now removes every inherited `BOB_*`
+variable and sets `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_RUNTIME_DIR`
+under the test's temp home alongside the existing `XDG_STATE_HOME`/`HOME`.
+Tests that need a different value (`missing_socket_error_flags_unresolved_runtime_dir`
+removes `XDG_RUNTIME_DIR`) still override it afterwards. Verified: 13/13 pass
+in both environments listed under Fix Verification; `cargo fmt --check`
+clean; no orphaned fixtures. `shell_e2e` and `init_e2e` already pass explicit
+socket paths and were left unchanged.
 
 ## Review
 
