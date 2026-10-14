@@ -203,6 +203,33 @@ fn init_materializes_shared_skills_and_bootstrap_policy_in_isolated_xdg_dirs() {
         env.skill_install_path.display()
     );
     assert!(
+        env.skill_install_path
+            .join("the-intern-docs")
+            .join("SKILL.md")
+            .is_file(),
+        "the-intern-docs skill should be installed under {}",
+        env.skill_install_path.display()
+    );
+    for reference_dir in [
+        "architecture-overview",
+        "end-user-guide",
+        "extension-author-guide",
+        "operator-guide",
+        "quickstart",
+    ] {
+        let page = env
+            .skill_install_path
+            .join("the-intern-docs")
+            .join("references")
+            .join(reference_dir)
+            .join("index.md");
+        assert!(
+            page.is_file(),
+            "the-intern-docs reference page should be installed at {}",
+            page.display()
+        );
+    }
+    assert!(
         !env.workspace_path.join(".pi").join("skills").exists(),
         "initialized workspace must not contain a workspace-local .pi/skills tree"
     );
@@ -321,7 +348,13 @@ fn initialized_workspace_chat_banner_lists_the_shared_skill_names() {
         transcript
     );
 
-    for skill in ["email-triage", "himalaya", "worklog", "tasks"] {
+    for skill in [
+        "email-triage",
+        "himalaya",
+        "worklog",
+        "tasks",
+        "the-intern-docs",
+    ] {
         assert!(
             transcript.contains(skill),
             "chat banner should advertise {skill} in [Skills]; status={:?}\nstdout={}\nstderr={}\ntranscript={}",
