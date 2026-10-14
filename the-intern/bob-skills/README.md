@@ -1,12 +1,13 @@
 # Bob Runtime Skills Package
 
 This package is the core runtime skill set bob supplies to every session it
-spawns. It ships four pi-agent skills as a versioned, reviewable product
+spawns. It ships five pi-agent skills as a versioned, reviewable product
 artifact: `himalaya` (a generic CLI-reference skill) and `email-triage` (the
 triage policy skill), both defined by S-010, plus `worklog` (the domain-free
 diary-discipline skill S-011/T-154/T-155 extracted out of `email-triage`) and
 `tasks` (the task-board discipline skill S-014/T-186 that drives the `bob
-task` board).
+task` board). A fifth skill, `the-intern-docs`, is the reference-documentation
+skill that answers questions about bob and the Intern themselves.
 The package is separate from `the-intern/bob-companion/claude` (Claude Code
 dev-tooling for operating `bob`) and from this repository's own
 `.claude/skills` (this repository's AI-team process tooling). Neither of
@@ -78,6 +79,9 @@ the-intern/bob-skills/
 │   ├── worklog/                     # domain-free diary-discipline skill (S-011/T-154/T-155):
 │   │   ├── SKILL.md                 #   location, entry format, first-run detection,
 │   │   └── references/              #   reconciliation, and how an open item closes
+│   ├── the-intern-docs/             # docs skill: reference documentation about bob itself
+│   │   └── SKILL.md                 #   canonical source has no `references/`: the
+│   │                                #   pages are copied from the manual at build time
 │   └── tasks/                       # task-board discipline skill (S-014/T-186): when work
 │       └── SKILL.md                 #   belongs on the `bob task` board, how to describe it
 │                                    #   for a cold reader, and what each status commits to
@@ -86,8 +90,8 @@ the-intern/bob-skills/
 │       ├── himalaya/                #   solely by running package-pi-skills.sh against skills/
 │       ├── email-triage/            #   above; never hand-edited. Committed tracked output (no
 │       ├── worklog/                 #   CI or install-time build step regenerates it), so it
-│       └── tasks/                   #   must stay in sync with skills/ by re-running the
-│                                     #   script and committing the result whenever skills/
+│       ├── tasks/                   #   must stay in sync with skills/ by re-running the
+│       └── the-intern-docs/         #   script and committing the result whenever skills/
 │                                     #   changes.
 ├── config/
 │   └── email-triage.example.toml    # T-134: shipped template (manager_address documented,
@@ -270,6 +274,18 @@ arg_matchers = [
 ]
 
 [[policy.action_rules]]
+tool = "read"
+arg_matchers = [
+  { field_path = "path", pattern = "/abs/skill-install-path/the-intern-docs/SKILL.md" },
+]
+
+[[policy.action_rules]]
+tool = "read"
+arg_matchers = [
+  { field_path = "path", pattern = "/abs/skill-install-path/the-intern-docs/references/*.md" },
+]
+
+[[policy.action_rules]]
 tool = "bash"
 arg_matchers = [
   { field_path = "command", pattern = "himalaya --version*" },
@@ -346,7 +362,81 @@ tool = "bash"
 arg_matchers = [
   { field_path = "command", pattern = "bob task*" },
 ]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "bob --help" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "bob init --help" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "bob task --help" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "bob serve --help" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "bob status --help" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "bob sessions --help" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "bob audit --help" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "bob policy --help" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "bob schedule --help" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "bob chat --help" },
+]
+
+[[policy.action_rules]]
+tool = "bash"
+arg_matchers = [
+  { field_path = "command", pattern = "bob worklog --help" },
+]
 ```
+
+**The documentation skill and `--help` rules.** The two `the-intern-docs` read
+rules admit the docs skill's `SKILL.md` and the manual pages it carries in its
+`references/` folder at the skill install path. The `bob --help` and
+`bob <subcommand> --help` rules let a session look up command usage. Each is an
+exact pattern with no trailing wildcard, one per subcommand: a pattern such as
+`bob *--help` would also admit a chained command like
+`bob status --help; <anything>`.
 
 **The `worklog` skill's rules now follow the `bob worklog` command.** The
 `worklog/SKILL.md` and `worklog/references/*.md` read rules above still admit
