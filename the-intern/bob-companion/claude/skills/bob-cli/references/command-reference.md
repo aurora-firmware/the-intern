@@ -11,14 +11,26 @@ the platform default config path, without needing `bob serve` running
 first. `<path>` is a required positional argument — the workspace
 directory to create/populate (`AGENTS.md`, `CLAUDE.md`,
 `config/email-triage.toml`, `worklog/`, and an empty `tasks/` task board
-directory). Also installs the shared `himalaya`/`email-triage`/`tasks`/
-`worklog` skill package at `skill_install_path`.
+directory). Also installs the five shared bob skills (`himalaya`,
+`email-triage`, `tasks`, `worklog`, and `the-intern-docs`) at
+`skill_install_path`.
 
 `--force` is optional. Without it, if the resolved live `config.toml` path
 already exists, the command fails locally with `"live config already
 exists at <path>; rerun with --force to replace it"` and writes nothing.
 With `--force`, existing generated files (workspace files, the live config,
 the shared skill package) are overwritten.
+
+## `bob init --skills-only [--force]`
+
+Installs or refreshes the five shared bob skills only: no workspace is
+scaffolded, no live `config.toml` is written, and no `<path>` is accepted
+(it is mutually exclusive with `--skills-only`). The skills go to the
+default skill install path resolved from the environment; a
+`skill_install_path` override in `config.toml` is never followed.
+
+Per-file semantics apply: existing skill files are left untouched unless
+`--force` is given, in which case existing files are replaced.
 
 ## `bob task [--board <PATH>] <subcommand>`
 
