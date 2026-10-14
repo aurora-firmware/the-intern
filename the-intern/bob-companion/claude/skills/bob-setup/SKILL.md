@@ -84,9 +84,19 @@ This creates an owner-only workspace directory containing `AGENTS.md`,
 `CLAUDE.md`, `config/email-triage.toml`, `worklog/`, and an empty `tasks/`
 task board directory. It also writes bob's live `config.toml` at the
 platform default config path (see the config file section below) and
-installs the shared `himalaya`/`email-triage`/`tasks`/`worklog` skill
-package at `skill_install_path` — it does **not** create a workspace-local
-`.pi/skills/` copy.
+installs the five shared bob skills — `himalaya`, `email-triage`, `tasks`,
+`worklog`, and `the-intern-docs` (which answers questions about bob from the
+installed manual) — at `skill_install_path`. It does **not** create a
+workspace-local `.pi/skills/` copy.
+
+Installing from the release zip with `install.sh` asks "Overwrite? [y/N]"
+before writing anything when a bob binary or any file in the default skill
+folder already exists; `./install.sh -y` skips the prompt. The default skill
+folder is replaced as a whole on every install, a reinstall of the same
+version included, so local edits to files in it are not kept. A folder
+configured through `skill_install_path` is never touched by `install.sh`.
+When upgrading without the zip, refresh the skills with
+`bob init --skills-only --force`.
 
 The generated `config.toml` is a permissive bootstrap policy — it allows any
 arguments for `bash`, `read`, `write`, and `edit`, and keeps every other
