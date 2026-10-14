@@ -60,6 +60,16 @@ STUB
   chmod +x "$dir/install.sh" "$dir/bob"
 }
 
+test_readme_describes_prompt_warnings_dash_y_and_skill_replacement() {
+  local readme="${repo_root}/the-intern/install-bundle/README.txt"
+
+  assert_contains "$readme" "Overwrite? [y/N]"
+  assert_contains "$readme" "different bob version"
+  assert_contains "$readme" "-y"
+  assert_contains "$readme" "replaced on every install"
+  assert_contains "$readme" "local edits are not kept"
+}
+
 test_replaces_a_running_binary_atomically() {
   local tmp_dir
   local home_dir
@@ -869,3 +879,4 @@ test_skill_path_symlink_is_replaced_without_touching_its_target
 test_symlink_inside_skill_path_is_removed_without_following_it
 test_relative_skill_path_is_never_emptied
 test_skill_step_failure_warns_about_missing_skills_and_keeps_the_rest
+test_readme_describes_prompt_warnings_dash_y_and_skill_replacement
