@@ -115,6 +115,49 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-10-14
+
+First cycle isolated the test suite. I appended
+`XDG_DATA_HOME="$home_dir/.local/share"` to all 11 `HOME="$home_dir"`
+invocations in `test-install.sh`. I confirmed red by running with a foreign
+scratch `XDG_DATA_HOME`, then green both with it set and with it unset. The
+platform-default path has its own test that uses `env -u XDG_DATA_HOME`.
+
+Second cycle wrote 14 new cases and a `setup_scenario` / `run_scenario_install`
+helper. The cases cover: only skills present, with answers n and y, and with no
+input; a dotfile alone; a dangling symlink; an empty skill directory (no
+prompt); a fresh install; a different binary, with the warning printed before
+the prompt; an unreadable binary, counted as different; identical binaries
+(prompt, no warning); `-y` with both warning kinds; and the default path versus
+an `XDG_DATA_HOME` path. They failed against the old `install.sh` and pass now.
+
+Implementation in `install.sh`:
+- `resolve_skill_path` mirrors the extension resolver (absolute
+  `XDG_DATA_HOME` only, else the Linux or macOS default; a relative value is an
+  error).
+- `skill_path_has_entries` treats a symlink at the path as an entry, then globs
+  `*`, `.[!.]*` and `..?*` and tests each with `-e || -L`. This is bash
+  3.2-safe and does not use `shopt`.
+- Binary comparison uses `cmp -s`; any non-zero result counts as different.
+- The prompt text is extended and keeps the existing EOF abort message.
+- `-y` skips only the prompt; the warnings still print.
+- Unknown arguments now exit 1 with a usage message. This was not requested; I
+  added it so a typo such as `-Y` can't silently fall through to the prompt.
+  The reviewer can drop it if they consider it out of scope.
+
+Rejected: a `find`-based emptiness check, because BSD and GNU differ. Not done,
+per scope: replacing or removing the skill folder, which is T-236.
+
+Notes for the reviewer: the "skills exist, binary differs" case prints only the
+different-version warning, not also the skills-replaced warning, which is how
+the task text reads. The unreadable-binary test returns early when run as root,
+since `chmod 000` has no effect there. Not run on macOS.
+
+Verification: `env -u XDG_DATA_HOME bash the-intern/install-bundle/test-install.sh`
+exits 0; `bash -n install.sh` clean. The suite only ran through
+`test-install.sh`'s isolated `HOME`; the developer machine's real
+`~/.local/bin/bob` and skill folder were checked unchanged afterwards.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
