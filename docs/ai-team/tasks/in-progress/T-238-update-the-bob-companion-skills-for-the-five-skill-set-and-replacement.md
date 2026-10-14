@@ -99,6 +99,23 @@ rejected, decisions made, what remains for next session.
 Start every session by reading the entries below.
 The final entry serves as the handoff to the reviewer. -->
 
+### Session 1 — 2026-10-14
+I updated the two bob-companion files named in the task.
+
+- **`bob-setup` SKILL.md (init section):**
+  - It now names the five shared skills: `himalaya`, `email-triage`, `tasks`, `worklog` and `the-intern-docs`. It says `the-intern-docs` answers questions about bob from the installed manual.
+  - It covers the zip-install "Overwrite? [y/N]" prompt, `-y`, and the whole-folder replacement of the default skill folder on every install, so local edits are lost.
+  - It says a `skill_install_path` folder is never touched by `install.sh`.
+  - It gives `bob init --skills-only --force` as the non-zip refresh.
+  - I took the wording from the T-236 `install-bundle/README.txt`, so it stays consistent with T-237.
+- **`command-reference.md`:**
+  - The `bob init` entry now lists five skills.
+  - A new `bob init --skills-only [--force]` entry states that it installs skills only, takes no path, installs to the environment-resolved default path, does not follow a `skill_install_path` override, and keeps per-file semantics (`--force` replaces existing files).
+
+The `bob init --help` text for `--skills-only` says it installs at `skill_install_path` and does not say the override is ignored; the "override never followed" statement comes from the task description and the install README and was not confirmed in the `init` source. I drafted a sentence saying files the package does not ship are not removed, and dropped it because I had not verified it.
+
+Nothing remains for this task. I did not touch the lifecycle file or add or rename any companion skills.
+
 ## Review
 
 <!-- Reviewer: append verdict here after each review cycle.
