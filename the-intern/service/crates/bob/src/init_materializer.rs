@@ -142,9 +142,11 @@ fn materialize_workspace_files(
     Ok(())
 }
 
-/// Installs (or tops up) the shared skill package at the configured
-/// `skill_install_path`, independent of the workspace-scaffold and
-/// live-config machinery `materialize_workspace_with_paths` owns. Unlike a
+/// Installs (or tops up) the shared skill package at the default skill
+/// install path resolved from the environment alone — `config.toml` is not
+/// read, so a configured `skill_install_path` override is never followed —
+/// independent of the workspace-scaffold and live-config machinery
+/// `materialize_workspace_with_paths` owns. Unlike a
 /// plain `bob init`, this never refuses to run just because a live config
 /// already exists — that guard protects the destructive workspace-scaffold
 /// replace (`--force`), which this path never touches. It reuses

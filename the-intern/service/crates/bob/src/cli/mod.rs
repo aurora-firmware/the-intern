@@ -22,7 +22,9 @@ pub enum Command {
     ///
     /// Creates `AGENTS.md`, `CLAUDE.md`, `config/email-triage.toml`,
     /// `worklog/`, and `tasks/` in the workspace at `<PATH>`, plus the
-    /// live config and the shared skill package at `skill_install_path`.
+    /// live config and the shared skill package at the default skill
+    /// install path (resolved from the environment; a `skill_install_path`
+    /// override in `config.toml` is not followed).
     Init {
         /// Workspace directory to scaffold. Required unless `--skills-only`
         /// is given, since a skills-only refresh touches no workspace.
@@ -44,9 +46,12 @@ pub enum Command {
         /// there instead.
         #[arg(long)]
         force: bool,
-        /// Install or refresh the shared skill package at `skill_install_path`
-        /// only, without scaffolding a workspace, writing the live config, or
-        /// requiring `--force`. Existing skill files are left untouched
+        /// Install or refresh the shared skill package only, without
+        /// scaffolding a workspace, writing the live config, or requiring
+        /// `--force`. The skills go to the default skill install path,
+        /// resolved from the environment (`$XDG_DATA_HOME/bob/skills` or the
+        /// platform default); `config.toml` is not read, so a
+        /// `skill_install_path` override is not followed. Existing skill files are left untouched
         /// unless `--force` is also given. Mutually exclusive with a
         /// workspace path.
         #[arg(long)]
