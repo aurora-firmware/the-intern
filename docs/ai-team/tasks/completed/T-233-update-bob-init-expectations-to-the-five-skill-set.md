@@ -1,7 +1,7 @@
 ---
 id: T-233
 title: Update bob init expectations to the five-skill set
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-10-13'
