@@ -85,7 +85,7 @@ test_replaces_a_running_binary_atomically() {
 
   if ! printf 'y\n' | (
     cd "$bundle_dir"
-    PATH="/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+    PATH="/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" ./install.sh >"$stdout_file" 2>"$stderr_file"
   ); then
     printf 'expected install.sh to succeed while overwriting a running binary\n' >&2
     printf 'stdout:\n' >&2
@@ -131,7 +131,7 @@ test_abort_when_overwrite_prompt_hits_eof() {
   status=0
   if (
     cd "$bundle_dir"
-    PATH="/usr/bin:/bin" HOME="$home_dir" ./install.sh </dev/null >"$stdout_file" 2>"$stderr_file"
+    PATH="/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" ./install.sh </dev/null >"$stdout_file" 2>"$stderr_file"
   ); then
     printf 'expected install.sh to fail when overwrite confirmation reads EOF\n' >&2
     exit 1
@@ -176,7 +176,7 @@ test_trailing_slash_path_entry_counts_as_present() {
 
   (
     cd "$bundle_dir"
-    PATH="$home_dir/.local/bin/:/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+    PATH="$home_dir/.local/bin/:/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" ./install.sh >"$stdout_file" 2>"$stderr_file"
   )
 
   assert_not_contains "$stdout_file" "Warning: $home_dir/.local/bin is not on PATH."
@@ -201,7 +201,7 @@ test_empty_path_entry_uses_current_directory() {
 
   (
     cd "$home_dir/.local/bin"
-    PATH=":/usr/bin:/bin" HOME="$home_dir" "$bundle_dir/install.sh" >"$stdout_file" 2>"$stderr_file"
+    PATH=":/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" "$bundle_dir/install.sh" >"$stdout_file" 2>"$stderr_file"
   )
 
   assert_not_contains "$stdout_file" "Warning: $home_dir/.local/bin is not on PATH."
@@ -233,7 +233,7 @@ test_warns_when_another_bob_shadows_the_install() {
 
   (
     cd "$bundle_dir"
-    PATH="$other_dir:/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+    PATH="$other_dir:/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" ./install.sh >"$stdout_file" 2>"$stderr_file"
   )
 
   assert_contains "$stdout_file" "Warning: another \`bob\` is on PATH at $other_dir/bob"
@@ -259,7 +259,7 @@ test_no_shadow_warning_when_path_agrees_with_the_install() {
 
   (
     cd "$bundle_dir"
-    PATH="$home_dir/.local/bin:/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+    PATH="$home_dir/.local/bin:/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" ./install.sh >"$stdout_file" 2>"$stderr_file"
   )
 
   assert_not_contains "$stdout_file" "is on PATH at"
@@ -284,7 +284,7 @@ test_no_shadow_warning_when_no_other_bob_on_path() {
 
   (
     cd "$bundle_dir"
-    PATH="/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+    PATH="/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" ./install.sh >"$stdout_file" 2>"$stderr_file"
   )
 
   assert_not_contains "$stdout_file" "is on PATH at"
@@ -322,7 +322,7 @@ test_invokes_installed_binary_directly_for_skills_only_refresh() {
 
   (
     cd "$bundle_dir"
-    PATH="$other_dir:/usr/bin:/bin" HOME="$home_dir" \
+    PATH="$other_dir:/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" \
       BOB_STUB_INVOCATION_LOG="$invocation_log" \
       BOB_STUB_SHADOW_LOG="$shadow_log" \
       ./install.sh >"$stdout_file" 2>"$stderr_file"
@@ -365,7 +365,7 @@ test_never_passes_force_to_skills_only_invocation() {
 
   (
     cd "$bundle_dir"
-    PATH="/usr/bin:/bin" HOME="$home_dir" \
+    PATH="/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" \
       BOB_STUB_INVOCATION_LOG="$invocation_log" \
       ./install.sh >"$stdout_file" 2>"$stderr_file"
   )
@@ -397,7 +397,7 @@ test_skills_only_success_output_is_not_suppressed() {
 
   (
     cd "$bundle_dir"
-    PATH="/usr/bin:/bin" HOME="$home_dir" ./install.sh >"$stdout_file" 2>"$stderr_file"
+    PATH="/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" ./install.sh >"$stdout_file" 2>"$stderr_file"
   )
 
   assert_contains "$stdout_file" "created skill: example"
@@ -423,7 +423,7 @@ test_skills_only_failure_warns_and_does_not_block_install() {
 
   if (
     cd "$bundle_dir"
-    PATH="/usr/bin:/bin" HOME="$home_dir" \
+    PATH="/usr/bin:/bin" HOME="$home_dir" XDG_DATA_HOME="$home_dir/.local/share" \
       BOB_STUB_SKILLS_ONLY_EXIT=7 \
       ./install.sh >"$stdout_file" 2>"$stderr_file"
   ); then
