@@ -45,6 +45,18 @@ test_ac1_generates_expected_tree() {
 
 test_ac1_generates_expected_tree
 
+# The fifth skill, the-intern-docs, is packaged from its canonical SKILL.md
+# alone: its reference pages are added at build time, never by this script.
+test_packages_the_intern_docs_without_references() {
+  local ok=0
+  ( cd "$WORK_DIR" && ./package-pi-skills.sh ) || ok=1
+  [ -f "$WORK_DIR/.pi/skills/the-intern-docs/SKILL.md" ] || ok=1
+  [ ! -e "$WORK_DIR/.pi/skills/the-intern-docs/references" ] || ok=1
+  run_test "the-intern-docs: SKILL.md is generated with no references/ directory" "$ok"
+}
+
+test_packages_the_intern_docs_without_references
+
 # AC-2: generated SKILL.md body is byte-for-byte identical to the canonical
 # source, and its frontmatter additionally contains allowed-tools: Read Bash.
 # Stripping that one added line from the generated frontmatter must
@@ -52,7 +64,7 @@ test_ac1_generates_expected_tree
 # the worklog skill added in T-156 alongside the two pre-existing skills.
 test_ac2_frontmatter_gains_allowed_tools_body_unchanged() {
   local ok=0
-  for name in himalaya email-triage worklog; do
+  for name in himalaya email-triage worklog the-intern-docs; do
     local canonical="$WORK_DIR/skills/$name/SKILL.md"
     local generated="$WORK_DIR/.pi/skills/$name/SKILL.md"
     grep -q '^allowed-tools: Read Bash$' "$generated" || ok=1
