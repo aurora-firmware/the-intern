@@ -93,10 +93,38 @@ along with the service before the upgrade commands can finish, leaving the
 old binary in place and the service down until someone stops and restarts
 it from outside.
 
-`install.sh` also refreshes the shared skill package automatically as part
-of the same run, immediately after replacing the binary — see
-[Install the skill package](#install-the-skill-package) for what that
-refresh does and does not touch.
+`install.sh` also replaces the shared skill package as part of the same run,
+immediately after replacing the binary. Its behaviour around existing installs:
+
+- **It asks before overwriting.** Whenever a `bob` binary is already installed
+  or the default skill folder holds anything at all, `install.sh` asks
+  `Overwrite? [y/N]` before writing anything, a reinstall of the same version
+  included. Any answer other than `y`, or no input at all, stops the install
+  with nothing changed.
+- **It warns first.** Before the prompt it warns when the installed binary is a
+  different version (the installed skills, the documentation skill included,
+  and the extension will be replaced and may differ from what is there now,
+  local edits included), and when skills are installed but no binary is (the
+  existing skills will be replaced).
+- **`-y` skips the prompt.** `./install.sh -y` installs without asking, which
+  suits unattended upgrades; the warnings are still printed.
+- **The whole default skill folder is replaced on every install.**
+  `install.sh` empties the default skill folder and refills it with the skills
+  shipped in the bundle. Local edits are not kept, and a file the bundle does
+  not ship is removed, so do not keep anything else in that folder.
+- **A failed skill step can leave skills missing.** If emptying or refilling
+  the folder fails, `install.sh` prints a warning, the binary and extension
+  stay installed, and sessions start without skills until you rerun
+  `./install.sh`.
+- **A configured override is not refreshed.** `install.sh` works on the
+  default skill folder only. A skill folder you configured with
+  `skill_install_path` is never touched by it; see
+  [Install the skill package](#install-the-skill-package).
+
+For installs that did not come from the zip bundle (`mise`, Cargo, a source
+build), `install.sh` never runs; see
+[Install the skill package](#install-the-skill-package) for how to refresh
+the skills yourself.
 
 **Migrating a model flag out of `pi_agent_args`.** If your existing
 `config.toml` selects the pi model through `pi_agent_args` — a `--model`,
@@ -221,26 +249,38 @@ itself, so this works from a release install with no source checkout:
 bob init --skills-only
 ```
 
-`--skills-only` writes only the skill package at `skill_install_path`: it
-does not scaffold a workspace, does not write the live config, and — unlike a
-plain `bob init` — never refuses to run just because a live config already
-exists. Run it again after upgrading `bob` to pick up any skill a new release
-adds; existing skill files already on disk are left untouched unless you also
-pass `--force`, which replaces every packaged skill file with the version
-embedded in the running `bob` binary. See
+`--skills-only` writes only the skill package at the default skill install
+path, resolved from the environment alone (the platform default, or
+`$XDG_DATA_HOME/bob/skills` as described above). It never reads `config.toml`
+and never follows a `skill_install_path` override, so a configured override is
+not refreshed by it. It does not scaffold a workspace, does not write the live
+config, and — unlike a plain `bob init` — never refuses to run just because a
+live config already exists. Existing skill files already on disk are left
+untouched unless you also pass `--force`, which replaces every packaged skill
+file with the version embedded in the running `bob` binary. See
 [Initialize a workspace with `bob init`](#initialize-a-workspace-with-bob-init)
 for the equivalent full-workspace bootstrap.
 
 **A zip-based install or upgrade already does this for you.** `install.sh`
-(see [Upgrading a running install](#upgrading-a-running-install)) invokes
-`bob init --skills-only` itself — against the binary it just installed, never
-passing `--force` — immediately after every run, so running `./install.sh`
-refreshes the skill package as part of the same step that replaces the
-binary. You only need to run `bob init --skills-only` by hand for a non-zip
-upgrade path, such as `mise` or a source build, where `install.sh` never
-runs. If the automatic refresh fails, `install.sh` prints a warning and
-still reports the binary and extension install as successful; rerun `bob
-init --skills-only` yourself to retry it.
+(see [Upgrading a running install](#upgrading-a-running-install)) empties the
+default skill folder and then runs `bob init --skills-only` against the binary
+it just installed, so running `./install.sh` replaces the whole skill folder in
+the same step that replaces the binary. If that step fails, `install.sh` prints
+a warning and still reports the binary and extension install as successful;
+rerun `./install.sh` to repair the skills.
+
+**Upgrading with `mise`, Cargo, or a source build.** `install.sh` never runs on
+these paths, so refresh the installed skills — the manual included — yourself
+after upgrading `bob`:
+
+```bash
+bob init --skills-only --force
+```
+
+`--force` is needed because existing skill files are otherwise left untouched.
+This overwrites the files the new release ships but does not remove anything:
+a page or skill a release drops lingers on disk until the next `install.sh`
+run empties the folder.
 
 To use another location, set the top-level `skill_install_path` key in
 `config.toml`:
