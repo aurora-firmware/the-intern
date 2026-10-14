@@ -147,3 +147,11 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-10-14
+PASS
+
+Stage 1: AC-1 met (all three CLI-reference links now also point to `bob --help` / `bob <command> --help`). AC-2 met (forbidden-pattern grep over all of `the-intern/docs/src` is empty; remaining links are public GitHub/pi.dev). AC-3 met (quickstart and operator guide name all five skills; upgrade/--skills-only/action-rule sections untouched). AC-4 met (`mdbook build` clean apart from the pre-existing mermaid version warning). AC-5 met (test script: 7 passed, 0 failed; B-035/T-150 assertions removed). Only the four listed files changed.
+Stage 2: wording is clear, edits minimal, no dead code. `init_assets` drift test passes 6/6.
+
+Non-blocking: the test script's own messages still mention "S-004" (not shipped content).
