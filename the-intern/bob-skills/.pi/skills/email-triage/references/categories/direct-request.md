@@ -21,6 +21,15 @@ only information the run actually has: the message itself, and anything already 
 without needing to invent or guess at a detail the run cannot verify. Do not pad the reply
 with anything beyond what answers the ask, and do not leave the ask unaddressed.
 
+## If the request involves an attachment
+
+If the message asks to save, file, or forward a document, or refers to an
+attachment, first run `himalaya attachment download` into a scratch directory
+(see the `himalaya` skill). The envelope's `has_attachment` flag and the
+body-only read can both miss nested inline parts, so neither is evidence that
+the attachment is missing. Only if the download finds nothing is the
+attachment missing, and only then may that be the reason for escalating.
+
 ## If the answer needs information this run doesn't have
 
 A confident `direct-request` classification is a judgment about which category the message

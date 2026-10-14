@@ -1314,6 +1314,61 @@ mod tests {
         let _ = fs::remove_file(pid_file);
     }
 
+    // Aborting the actor task drops it without running the graceful shutdown
+    // path; the warm and active workers must still not outlive it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn aborting_actor_task_does_not_leave_worker_processes_running() {
+        let pid_file = std::env::temp_dir().join(format!(
+            "pi-agent-supervisor-abort-pids-{}.log",
+            SessionId::new()
+        ));
+        let _ = fs::remove_file(&pid_file);
+        let worker_script = format!(
+            "printf '%s\\n' $$ >> \"{}\"; trap 'exit 0' TERM; while :; do sleep 0.1; done",
+            pid_file.to_string_lossy()
+        );
+
+        let (handle, task) = start(test_config("sh", &["-c", &worker_script], 2, 2))
+            .expect("startup should succeed");
+        handle
+            .acquire_session()
+            .await
+            .expect("session acquire should succeed");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        task.abort();
+        let _ = task.await;
+
+        let pids: Vec<i32> = fs::read_to_string(&pid_file)
+            .expect("pid file should exist")
+            .lines()
+            .map(|line| line.parse().expect("pid file should contain numeric pids"))
+            .collect();
+        assert_eq!(pids.len(), 2, "one active and one warm worker expected");
+
+        for pid in pids {
+            let proc_path = std::path::PathBuf::from(format!("/proc/{pid}"));
+            let mut gone = false;
+            for _ in 0..40 {
+                if !proc_path.exists() {
+                    gone = true;
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            if !gone {
+                // Don't leak the very process the assertion is about.
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(pid),
+                    nix::sys::signal::Signal::SIGKILL,
+                );
+            }
+            assert!(gone, "worker pid {pid} outlived the aborted actor task");
+        }
+
+        let _ = fs::remove_file(pid_file);
+    }
+
     // AC-4: sessions.list reports the same id that is set as BOB_SESSION_ID on the
     // worker process.  The sh child writes its BOB_SESSION_ID to a temp file on
     // startup; we compare that against the id returned by list_sessions.

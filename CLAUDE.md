@@ -32,6 +32,11 @@ cargo test --test queue_load
 cargo test --test session_state_roundtrip
 ```
 
+After running tests locally, check that no fixture processes were leaked
+(orphaned `sh -c '... while :; do ...'` workers keep spinning and heat the
+machine): `./scripts/check-test-orphans.sh` warns about them, and
+`./scripts/check-test-orphans.sh --kill` terminates them.
+
 Some tests use Unix domain sockets and peer credentials. In a restricted
 sandbox they may fail with `Operation not permitted`; run them in a normal
 local development shell.

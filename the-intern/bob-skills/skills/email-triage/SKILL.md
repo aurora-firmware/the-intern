@@ -149,6 +149,12 @@ For every envelope the previous step returned, in turn:
    for exactly one category. The gate below is always confidence in that
    judgment for this message — never the action's reversibility, and never
    a sender allowlist.
+   Whenever the message mentions or implies an attachment or document
+   (asks to save, file, or forward one, says "attached", and so on), do not
+   rely on the envelope's `has_attachment` flag or on the body-only read —
+   both can miss nested inline parts. Run `himalaya attachment download`
+   into a scratch directory (see the `himalaya` skill) before concluding
+   the attachment is missing.
 2. **Confident match:** follow the matched category's own workflow file,
    `references/categories/<category>.md` (for example
    `references/categories/newsletter-bulk.md`), for what to do with this
