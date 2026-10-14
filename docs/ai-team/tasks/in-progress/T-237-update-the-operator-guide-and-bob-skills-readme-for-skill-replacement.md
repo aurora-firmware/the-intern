@@ -151,3 +151,23 @@ PASS | FAIL | ESCALATE
 - For PASS: brief confirmation that both stages passed.
 - For ESCALATE: design issue and why normal Developer fixes cannot resolve it.
 -->
+
+### Review Verdict — 2026-10-14
+PASS
+
+Stage 1 (acceptance): all five criteria met, verified on the task branch.
+- AC-1: the `--skills-only` text now says the default path is resolved from the environment alone and that `config.toml` / `skill_install_path` are never read or followed.
+- AC-2: the prompt, both warnings, `-y`, whole-folder replacement, "keep nothing else there", and the rerun-`install.sh` recovery are described. Checked against `the-intern/install-bundle/install.sh`: prompt on binary or any skill-folder entry (same version included), warning wording, `-y` still prints warnings, `rm -rf` then `init --skills-only`, failed step is a warning only, override never touched. All match.
+- AC-3: the `mise`/Cargo/source-build paragraph gives `bob init --skills-only --force` and says dropped pages linger until the next `install.sh` run.
+- AC-4: both listings carry the two `the-intern-docs` read rules and exact, wildcard-free `bob --help` plus ten `bob <subcommand> --help` rules. These match `bob --help` (init, task, serve, status, sessions, audit, policy, schedule, chat, worklog; built-in `help` skipped) and the guide's exact-pattern convention for `himalaya template write`. The README lists five skills and says the canonical source has no `references/`.
+- AC-5: the added-lines ID check finds nothing.
+- Only the two listed files changed.
+
+Verification rerun: `mdbook build` succeeds; the grep matches in both files; the ID check is clean; `test_operator_guide_email_triage_trust.sh` passes 7/7.
+
+Stage 2 (quality): coding-guidelines-skills.md §1 (no internal IDs in added text) and §2 (no environment-specific values; placeholder paths) are respected. The prose is accurate and consistent between the guide and the README.
+
+Non-blocking observations:
+- The guide says "any answer other than `y`" stops the install, but `install.sh` also accepts `Y`.
+- The guide says "different version", but `install.sh` compares binary bytes with `cmp`. Behaviour is equivalent in practice.
+- Pre-existing internal IDs elsewhere in the README are outside this task's scope.
