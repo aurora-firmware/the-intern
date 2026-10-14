@@ -1,7 +1,7 @@
 ---
 id: T-235
 title: Extend install.sh's overwrite prompt to installed skills and add -y
-status: pending
+status: completed
 priority: medium
 assigned-role: developer
 created: '2026-10-13'
