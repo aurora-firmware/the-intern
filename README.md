@@ -132,12 +132,18 @@ This produces the `bob` binary at `the-intern/service/target/debug/bob`.
 
 ## Test
 
-The full workspace suite:
+The full workspace suite, run from the repo root:
 
 ```bash
-cd the-intern/service
-cargo test --workspace
+./scripts/cargo-dev.sh test --workspace
 ```
+
+`scripts/cargo-dev.sh` runs cargo in `the-intern/service/` with the isolated
+dev environment from `scripts/dev-env.sh` (see **Run and use**). Use it for
+every test run on a machine where an installed `bob serve` is running: a plain
+`cargo test` inherits the real `XDG_RUNTIME_DIR`, so tests that expect no
+service find the live one and fail or hang. The commands below work the same
+way through `./scripts/cargo-dev.sh` in place of `cargo`.
 
 Focused subsets that exercise specific subsystems:
 
@@ -172,8 +178,12 @@ yet a clean gate — the `bob` crate carries existing lint/doc debt.
 (or the default runtime dir). Override the paths to keep a session isolated.
 
 For source-checkout development, the repo includes helper scripts that keep bob
-config, state, data, and sockets under `.tmp/bob-dev` and run Cargo from
-`the-intern/service/`:
+config, state, data, runtime dir, and sockets under `.tmp/bob-dev` and run
+Cargo from `the-intern/service/`. They share `scripts/dev-env.sh`, which always
+overwrites those variables, so a dev bob never reaches an installed one.
+Personal overrides (`BOB_DEV_HOME`, `RUST_LOG`, a `PATH` entry for a specific
+`pi`) go in a gitignored `.env.local` at the repo root. Run
+`source scripts/dev-env.sh` to get the same environment in your own shell.
 
 **Terminal A — start the service with the dev helper:**
 

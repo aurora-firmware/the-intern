@@ -38,6 +38,13 @@ Run the full Rust workspace test suite:
 cargo test --workspace
 ```
 
+On a machine where an installed `bob serve` is running, run tests through
+`../../scripts/cargo-dev.sh` instead of `cargo` (for example
+`../../scripts/cargo-dev.sh test --workspace`). It isolates the XDG
+directories and sockets under the repo's `.tmp/bob-dev`; a plain `cargo test`
+inherits the real `XDG_RUNTIME_DIR`, and tests that expect no service then
+reach the live one.
+
 Focused subsystem checks:
 
 ```bash

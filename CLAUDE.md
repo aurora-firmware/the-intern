@@ -15,21 +15,26 @@ cargo build -p bob
 
 ## Test
 
-Run the full Rust workspace test suite from `the-intern/service/`:
+Run tests through `./scripts/cargo-dev.sh` from the repo root. It loads the
+isolated dev environment (`scripts/dev-env.sh`, see **Run**) and runs cargo in
+`the-intern/service/`. A plain `cargo test` inherits the desktop's real
+`XDG_RUNTIME_DIR`, and on a machine with an installed `bob serve` running, the
+"no service" tests reach the live service: they fail or hang. Full suite
+(this is the baseline):
 
 ```bash
-cargo test --workspace
+./scripts/cargo-dev.sh test --workspace
 ```
 
 Focused subsystem checks:
 
 ```bash
-cargo test -p bob serve::tests
-cargo test -p admin-rpc
-cargo test -p chat-adapter
-cargo test --test shell_e2e -- --nocapture
-cargo test --test queue_load
-cargo test --test session_state_roundtrip
+./scripts/cargo-dev.sh test -p bob serve::tests
+./scripts/cargo-dev.sh test -p admin-rpc
+./scripts/cargo-dev.sh test -p chat-adapter
+./scripts/cargo-dev.sh test --test shell_e2e -- --nocapture
+./scripts/cargo-dev.sh test --test queue_load
+./scripts/cargo-dev.sh test --test session_state_roundtrip
 ```
 
 After running tests locally, check that no fixture processes were leaked
@@ -50,8 +55,14 @@ mdBook docs to the GitHub Release.
 
 ## Run
 
-For local development, the helper scripts keep all bob config, state, data, and
-sockets under `.tmp/bob-dev` and run Cargo from `the-intern/service/`:
+For local development, the helper scripts keep all bob config, state, data,
+runtime dir, and sockets under `.tmp/bob-dev` (gitignored) and run Cargo from
+`the-intern/service/`. They all source `scripts/dev-env.sh`, which always
+overwrites the XDG and socket variables so nothing reaches an installed bob
+running on the same machine. Put personal overrides (`BOB_DEV_HOME`,
+`RUST_LOG`, a `PATH` entry for a specific `pi`) in a gitignored `.env.local`
+at the repo root; `dev-env.sh` sources it first. To get the same environment
+in an interactive shell, `source scripts/dev-env.sh`.
 
 ```bash
 # Terminal A — start the service

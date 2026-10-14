@@ -13,6 +13,7 @@ pr-*-review.md
 # Tooling
 mise.toml
 .tmp/
+.env.local
 
 # mdBook rendered output
 the-intern/docs/book/
