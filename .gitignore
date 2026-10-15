@@ -12,3 +12,6 @@ pr-*-review.md
 mise.toml
 .tmp/
 .env.local
+
+# ai-team local work-item tracker (tasks, bugs, change-requests)
+/.ai-team/
