@@ -1,7 +1,7 @@
 ---
 title: Agent roles and conversations
 version: '0.1'
-status: draft  # draft | review | approved | superseded
+status: review  # draft | review | approved | superseded
 created: '2026-10-15'
 author: planner
 id: S-001
