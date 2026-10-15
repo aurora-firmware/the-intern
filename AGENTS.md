@@ -19,12 +19,45 @@ Read these before designing anything:
 - `docs/pi-durable-knowledge.md`: pi-durable, the pi coding-agent SDK, proof-of-concept results, API footguns.
 - `docs/feature-review.md`: verdicts per feature of the previous bob and the open design decisions.
 
-## Build, test, lint
+## Development environment
+
+Work inside the devcontainer (`.devcontainer.json`): user `ubuntu`, passwordless `sudo`, `~/.pi` shared
+with the host, reference sources read-only under `/refs`. Details in `docs/ai-team/docs/coding_guidelines.md`.
+
+## Build and Install
 
 Not defined yet. The CI workflows in `.github/workflows/` are placeholders with the job names kept; fill them in when
-the package exists, and add the commands here.
+the package exists, and add the commands in this section and the three below.
 
-## Key conventions
+```
+# Replace with the command agents should run to install or build the project.
+# Example: npm install / npm run build
+```
+
+## Test
+
+```
+# Replace with the command agents should run to execute the test suite.
+# Example: npm test
+```
+
+## Run
+
+```
+# Replace with the command agents should use to start the application locally.
+# Example: npm start
+```
+
+## Lint and Format
+
+```
+# Replace with the command agents should run to check code style.
+# Example: npm run lint
+```
+
+## Key Conventions
+
+- Reference `docs/ai-team/docs/coding_guidelines.md` for detailed rules.
 
 ### Folder structure
 
@@ -32,6 +65,7 @@ the package exists, and add the commands here.
 .
 ├── AGENTS.md                    # This file
 ├── README.md
+├── .devcontainer.json           # Development container (all work happens inside it)
 ├── .github/workflows/
 │   ├── build.yml                # CI placeholder: format, build, documentation, user-docs, tests
 │   └── deploy.yml               # Release placeholder (tag pushes)

@@ -7,16 +7,6 @@ clean-slate commit.
 
 Nothing is implemented yet.
 
-## Repository structure
-
-```
-.
-├── AGENTS.md                # Instructions for coding agents
-├── README.md
-├── .github/workflows/       # CI and release workflows (placeholders for now)
-└── docs/                    # Knowledge base and feature review
-```
-
 ## Start here
 
 - [pi-durable and pi SDK knowledge base](docs/pi-durable-knowledge.md): what pi-durable and the
