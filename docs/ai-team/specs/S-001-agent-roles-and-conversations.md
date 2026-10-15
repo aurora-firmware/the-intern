@@ -216,6 +216,18 @@ Each requirement is checked as described in **Verification** below.
     or to **continue**, in which case the result is delivered into the spawning conversation as a new input when
     the subagent finishes.
   - Aborting a conversation aborts all of its subagents, recursively.
+- **R-8a Nesting cap.** Subagents may nest only to a maximum depth. A conversation started by an entry point has
+  depth 0, and a subagent has its parent's depth plus one.
+  - A spawn that would exceed the cap is refused. The spawning agent gets an error result that names the cap, and
+    its run continues.
+  - Handoffs don't change depth: a fresh conversation created by a handoff inherits the depth of the conversation
+    it came from.
+- **R-8b Concurrency cap.** At most a fixed number of conversations run agent work (model turns and tool calls) at
+  the same time. This covers every origin: root, schedule fires and subagents.
+  - Work beyond the cap waits for a free slot, in arrival order, and starts when one frees. It is not dropped.
+  - A conversation whose only activity is waiting for its own subagents does not hold a slot. This means the cap
+    can never deadlock a parent against its children.
+  - Monitoring shows waiting conversations as "waiting for a slot".
 - **R-9 Steering.** The user, and any agent, can steer a running conversation by injecting a message that the
   running turn picks up after its current tool round. The message can be queued as a follow-up instead. An agent
   steers through a coordination capability that names the target conversation. The transcript records who
@@ -300,6 +312,19 @@ Seated agent may hand off or spawn subagents exactly as in the scheduled flow
   - **Where:** the operator's schedule store.
   - **Constraints:** `bob` or `gp`.
   - **Missing:** `bob`. An unknown name rejects the entry (R-11).
+- **Subagent nesting cap.**
+  - **What:** the maximum subagent depth (R-8a). It bounds runaway delegation chains that no human is watching.
+  - **Where:** bob's operator configuration.
+  - **Constraints:** a positive integer.
+  - **Missing:** a built-in default. The exact default value is decided later, before the task breakdown of
+    Phase 3, and recorded in this spec through an amendment. An invalid value stops the daemon at startup.
+- **Concurrency cap.**
+  - **What:** the maximum number of conversations running agent work at once (R-8b). It bounds model spend and
+    local load.
+  - **Where:** bob's operator configuration.
+  - **Constraints:** a positive integer.
+  - **Missing:** a built-in default, decided at the same point as the nesting cap. An invalid value stops the daemon
+    at startup.
 - **Live test model.**
   - **What:** the model used by the live acceptance tests.
   - **Where:** a test-only setting.
@@ -312,6 +337,8 @@ Seated agent may hand off or spawn subagents exactly as in the scheduled flow
 - **Deterministic tests** use a fake model whose replies are a pure function of the transcript. They cover:
   - R-4 to R-9 mechanics: seat effects on model, tools, prompt and workspace; each handoff mode; records and links;
     wait and continue subagents; recursive abort; steering
+  - R-8a and R-8b: a spawn at the nesting cap is refused while the parent continues; with the concurrency cap set
+    to 1, a parent waiting on its subagent doesn't deadlock; queued work starts in arrival order
   - R-10 and R-11: the root is seated by bob, and schedule fires create seated conversations with their origin
   - R-13: the list, tree and transcript content
   - R-14: a test kills the daemon during a handoff and during a subagent spawn, then checks the invariants after
@@ -335,7 +362,7 @@ until those exist.
 |---|---|---|
 | 1 | Role catalog, seating and role prompt: root conversation seated by bob; user switches the seat; model and workspace per role; role attribution in transcripts | Daemon and host runtime |
 | 2 | Handoff by agents in all three modes, with records and links | Phase 1 |
-| 3 | Subagents (wait and continue), recursive abort, steering by agents | Phase 1 |
+| 3 | Subagents (wait and continue), recursive abort, steering by agents, nesting and concurrency caps | Phase 1 |
 | 4 | Entry points: chat as a window onto root; schedule entries name a role. Monitoring: list, tree, live transcript | Phases 1–3, control endpoint |
 
 ## Amendment Log
