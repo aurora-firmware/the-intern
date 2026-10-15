@@ -6,149 +6,17 @@ on:
       - '*'
 
 permissions:
-  contents: write
+  contents: read
 
-env:
-  SERVICE_DIR: the-intern/service
-  DOCS_DIR: the-intern/docs
-  EXTENSIONS_DIR: the-intern/pi-extension
-  BOB_COMPANION_DIR: the-intern/bob-companion
-  INSTALL_BUNDLE_DIR: the-intern/install-bundle
-  MDBOOK_VERSION: 0.4.52
-  MDBOOK_MERMAID_VERSION: 0.14.0
-
+# Placeholder: there is nothing to package yet. Replace with the build,
+# packaging and GitHub Release steps once the TypeScript package exists.
 jobs:
-  build-macos:
-    runs-on: macos-14
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Build release binary
-        working-directory: ${{ env.SERVICE_DIR }}
-        run: cargo build --release -p bob
-
-      - name: Package macOS install bundle
-        run: |
-          stage_dir="$RUNNER_TEMP/bob-install-macos"
-          mkdir -p "$stage_dir"
-          cp "${{ env.SERVICE_DIR }}/target/release/bob" "$stage_dir/bob"
-          cp "${{ env.EXTENSIONS_DIR }}/bob.ts" "$stage_dir/bob.ts"
-          cp "${{ env.INSTALL_BUNDLE_DIR }}/install.sh" "$stage_dir/install.sh"
-          cp "${{ env.INSTALL_BUNDLE_DIR }}/README.txt" "$stage_dir/README.txt"
-          (
-            cd "$stage_dir"
-            zip -r "${{ github.workspace }}/the-intern-bob-install-${{ github.ref_name }}-macos-arm64.zip" \
-              bob bob.ts install.sh README.txt
-          )
-
-      - name: Upload macOS install bundle
-        uses: actions/upload-artifact@v6
-        with:
-          name: bob-install-macos-arm64
-          path: the-intern-bob-install-${{ github.ref_name }}-macos-arm64.zip
-          if-no-files-found: error
-
   release:
-    needs: build-macos
+    name: Release
     runs-on: self-hosted
-    container:
-      image: localhost:5000/rust-dev:1.0.2
-    env:
-      RUSTUP_TOOLCHAIN: stable-x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Install zip
-        run: |
-          apt-get update
-          apt-get install -y zip
-
-      - name: Build release binary
-        working-directory: ${{ env.SERVICE_DIR }}
-        run: cargo build --release -p bob
-
-      - name: Cache cargo registry for mdbook tools
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.cargo/bin/mdbook
-            ~/.cargo/bin/mdbook-mermaid
-          key: mdbook-tools-${{ runner.os }}-mdbook-${{ env.MDBOOK_VERSION }}-mermaid-${{ env.MDBOOK_MERMAID_VERSION }}
-
-      - name: Install mdbook and mdbook-mermaid
-        run: |
-          if ! mdbook --version 2>/dev/null | grep -q "mdbook v${MDBOOK_VERSION}"; then
-            cargo install mdbook --version "${MDBOOK_VERSION}" --locked --force
-          fi
-          if ! mdbook-mermaid --version 2>/dev/null | grep -q "${MDBOOK_MERMAID_VERSION}"; then
-            cargo install mdbook-mermaid --version "${MDBOOK_MERMAID_VERSION}" --locked --force
-          fi
-
-      - name: Build docs
-        working-directory: ${{ env.DOCS_DIR }}
-        run: |
-          export BOB_BIN="$GITHUB_WORKSPACE/${{ env.SERVICE_DIR }}/target/release/bob"
-          mdbook build
-
-      - name: Archive docs
-        run: |
-          tar -czf the-intern-docs-${{ github.ref_name }}.tar.gz \
-            -C ${{ env.DOCS_DIR }} book
-
-      - name: Archive bob extension
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          # Escape sed replacement metacharacters (& expands to the whole match,
-          # / is the delimiter) so a tag like v1&beta cannot corrupt package.json.
-          escaped_tag=$(printf '%s' "$RELEASE_TAG" | sed -e 's/[&/\]/\\&/g')
-          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${escaped_tag}\"/" \
-            "${{ env.EXTENSIONS_DIR }}/package.json"
-          tar -czf the-intern-bob-extension-${{ github.ref_name }}.tar.gz \
-            -C ${{ env.EXTENSIONS_DIR }} \
-            bob.ts README.md package.json package-lock.json
-
-      - name: Archive bob-companion plugin
-        run: |
-          tar -czf the-intern-bob-companion-claude-${{ github.ref_name }}.tar.gz \
-            -C ${{ env.BOB_COMPANION_DIR }} \
-            claude
-
-      - name: Package Linux install bundle
-        run: |
-          stage_dir="$RUNNER_TEMP/bob-install-linux"
-          mkdir -p "$stage_dir"
-          cp "${{ env.SERVICE_DIR }}/target/release/bob" "$stage_dir/bob"
-          cp "${{ env.EXTENSIONS_DIR }}/bob.ts" "$stage_dir/bob.ts"
-          cp "${{ env.INSTALL_BUNDLE_DIR }}/install.sh" "$stage_dir/install.sh"
-          cp "${{ env.INSTALL_BUNDLE_DIR }}/README.txt" "$stage_dir/README.txt"
-          (
-            cd "$stage_dir"
-            zip -r "$GITHUB_WORKSPACE/the-intern-bob-install-${{ github.ref_name }}-linux-x86_64.zip" \
-              bob bob.ts install.sh README.txt
-          )
-
-      - name: Download macOS install bundle
-        uses: actions/download-artifact@v6
-        with:
-          name: bob-install-macos-arm64
-          path: .
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: ${{ github.ref_name }}
-          generate_release_notes: true
-          files: |
-            ${{ env.SERVICE_DIR }}/target/release/bob
-            the-intern-docs-${{ github.ref_name }}.tar.gz
-            the-intern-bob-extension-${{ github.ref_name }}.tar.gz
-            the-intern-bob-companion-claude-${{ github.ref_name }}.tar.gz
-            the-intern-bob-install-${{ github.ref_name }}-linux-x86_64.zip
-            the-intern-bob-install-${{ github.ref_name }}-macos-arm64.zip
+      - name: Build and publish release (placeholder)
+        run: echo "No release pipeline defined yet"

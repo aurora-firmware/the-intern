@@ -14,206 +14,55 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-  SERVICE_DIR: the-intern/service
-  DOCS_DIR: the-intern/docs
-  CARGO_CACHE_DIR: .cargo-ci
-  RUSTUP_TOOLCHAIN: 1.96.0-x86_64-unknown-linux-gnu
-  MDBOOK_VERSION: 0.4.52
-  MDBOOK_MERMAID_VERSION: 0.14.0
-
+# Placeholders: the TypeScript package doesn't exist yet. Each job keeps its
+# name so required checks stay stable; replace the step when the package lands.
 jobs:
   format:
     name: Format
     runs-on: self-hosted
-    # env context isn't available under jobs.<job_id>.container, so the image
-    # tag and cache dir are hardcoded in every job's container block below
-    # rather than pulled from workflow env.
-    #
-    # The cache dir is mounted one level above github.workspace (a sibling of
-    # the checkout, not inside it) because container volumes attach before
-    # actions/checkout runs, and checkout's default `clean` step deletes
-    # untracked dirs in the repo root — which would rip out this mount from
-    # under itself if it lived inside the workspace, breaking every later
-    # step that touches CARGO_HOME with ENOENT.
-    container:
-      image: localhost:5000/rust-dev:1.0.2
-      volumes:
-        - ${{ github.workspace }}/../.cargo-ci:/ci-cargo
-      env:
-        CARGO_HOME: /ci-cargo
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Check Rust formatting
-        working-directory: ${{ env.SERVICE_DIR }}
-        run: |
-          export PATH="/ci-cargo/bin:$PATH"
-          cargo fmt --all -- --check
+      - name: Check formatting (placeholder)
+        run: echo "No format check defined yet"
 
   build:
     name: Build
     runs-on: self-hosted
-    container:
-      image: localhost:5000/rust-dev:1.0.2
-      volumes:
-        - ${{ github.workspace }}/../.cargo-ci:/ci-cargo
-      env:
-        CARGO_HOME: /ci-cargo
-    env:
-      RUSTUP_TOOLCHAIN: 1.96.0-x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Build bob
-        working-directory: ${{ env.SERVICE_DIR }}
-        run: |
-          export PATH="/ci-cargo/bin:$PATH"
-          cargo build -p bob
+      - name: Build bob (placeholder)
+        run: echo "No build defined yet"
 
   documentation:
     name: Documentation
     runs-on: self-hosted
-    container:
-      image: localhost:5000/rust-dev:1.0.2
-      volumes:
-        - ${{ github.workspace }}/../.cargo-ci:/ci-cargo
-      env:
-        CARGO_HOME: /ci-cargo
-    env:
-      RUSTUP_TOOLCHAIN: 1.96.0-x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Generate Rust documentation
-        working-directory: ${{ env.SERVICE_DIR }}
-        run: |
-          export PATH="/ci-cargo/bin:$PATH"
-          cargo doc --workspace --no-deps
-
-      - name: Remove rendered source from documentation artifact
-        run: rm -rf "${{ env.SERVICE_DIR }}/target/doc/src"
-
-      - name: Upload generated documentation
-        uses: actions/upload-artifact@v6
-        with:
-          name: rust-docs
-          path: ${{ env.SERVICE_DIR }}/target/doc
-          if-no-files-found: error
+      - name: Generate API documentation (placeholder)
+        run: echo "No API documentation defined yet"
 
   user-docs:
     name: User Documentation
     runs-on: self-hosted
-    container:
-      image: localhost:5000/rust-dev:1.0.2
-      volumes:
-        - ${{ github.workspace }}/../.cargo-ci:/ci-cargo
-      env:
-        CARGO_HOME: /ci-cargo
-    env:
-      RUSTUP_TOOLCHAIN: 1.96.0-x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Reject internal project doc links
-        run: |
-          if grep -RInE 'project/(decisions|docs|specs)' "${{ env.DOCS_DIR }}/src"; then
-            echo "user docs must not link into internal project documents"
-            exit 1
-          fi
-
-      - name: Build bob (for CLI reference preprocessor)
-        working-directory: ${{ env.SERVICE_DIR }}
-        run: |
-          export PATH="/ci-cargo/bin:$PATH"
-          cargo build -p bob
-
-      - name: Cache cargo registry for mdbook tools
-        uses: actions/cache@v5
-        with:
-          path: |
-            ${{ env.CARGO_CACHE_DIR }}/registry
-            ${{ env.CARGO_CACHE_DIR }}/git
-            ${{ env.CARGO_CACHE_DIR }}/bin/mdbook
-            ${{ env.CARGO_CACHE_DIR }}/bin/mdbook-mermaid
-          key: mdbook-tools-${{ runner.os }}-mdbook-${{ env.MDBOOK_VERSION }}-mermaid-${{ env.MDBOOK_MERMAID_VERSION }}
-
-      - name: Install mdbook and mdbook-mermaid
-        run: |
-          export PATH="/ci-cargo/bin:$PATH"
-          if ! mdbook --version 2>/dev/null | grep -q "mdbook v${MDBOOK_VERSION}"; then
-            cargo install mdbook --version "${MDBOOK_VERSION}" --locked --force
-          fi
-          if ! mdbook-mermaid --version 2>/dev/null | grep -q "${MDBOOK_MERMAID_VERSION}"; then
-            cargo install mdbook-mermaid --version "${MDBOOK_MERMAID_VERSION}" --locked --force
-          fi
-
-      - name: Build docs
-        working-directory: ${{ env.DOCS_DIR }}
-        env:
-          BOB_BIN: ${{ github.workspace }}/${{ env.SERVICE_DIR }}/target/debug/bob
-        run: |
-          export PATH="/ci-cargo/bin:$PATH"
-          mdbook build
-
-      - name: Upload user documentation
-        uses: actions/upload-artifact@v6
-        with:
-          name: user-docs
-          path: ${{ env.DOCS_DIR }}/book
-          if-no-files-found: error
+      - name: Build user documentation (placeholder)
+        run: echo "No user documentation defined yet"
 
   tests:
     name: Tests
     runs-on: self-hosted
-    container:
-      image: localhost:5000/rust-dev:1.0.2
-      volumes:
-        - ${{ github.workspace }}/../.cargo-ci:/ci-cargo
-      env:
-        CARGO_HOME: /ci-cargo
-    env:
-      RUSTUP_TOOLCHAIN: 1.96.0-x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Run Rust tests
-        id: cargo-test
-        shell: bash
-        working-directory: ${{ env.SERVICE_DIR }}
-        run: |
-          set +e
-          export PATH="/ci-cargo/bin:$PATH"
-          cargo test --workspace > "$RUNNER_TEMP/cargo-test.raw.log" 2>&1
-          test_status=$?
-
-          sed \
-            -e "s#${HOME}#\$HOME#g" \
-            -e 's/[A-Za-z0-9_]*\(TOKEN\|SECRET\|PASSWORD\|PASSWD\|API_KEY\|PRIVATE_KEY\)[A-Za-z0-9_]*=[^[:space:]]*/REDACTED_SECRET_ENV/gI' \
-            "$RUNNER_TEMP/cargo-test.raw.log" > "$RUNNER_TEMP/cargo-test.log"
-
-          cat "$RUNNER_TEMP/cargo-test.log"
-
-          {
-            echo "## Rust test report"
-            echo
-            echo '```text'
-            tail -n 80 "$RUNNER_TEMP/cargo-test.log"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          exit "$test_status"
-
-      - name: Upload Rust test report
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: rust-test-report
-          path: ${{ runner.temp }}/cargo-test.log
-          if-no-files-found: error
+      - name: Run tests (placeholder)
+        run: echo "No tests defined yet"
