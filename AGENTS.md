@@ -2,6 +2,12 @@
 
 This file gives coding agents the commands and conventions they need to work in this repository.
 
+## the-intern rework with pi durable is under development
+
+- The main dev branch for this version is dev-pi-durable.
+- As we develop it, feature branches should merge into dev-pi-durable.
+- Don't open PRs into main but into dev-pi-durable.
+
 ## Status
 
 The repository was reset to a clean slate for the new version of the Intern (`bob`): one TypeScript/Node package
@@ -41,9 +47,12 @@ the package exists, and add the commands here.
 - `README.md` is the canonical record of the pi versions in use (no backwards compatibility guaranteed). Whenever the
   version changes, update the README's compatibility section.
 
-### Git
+### ai-team dev version
 
-- `main` is human only: never commit to it.
-- Commit format: `<type>(<component>): <description>`, type ∈ `feat|fix|test|docs|chore`, imperative, lowercase, no
-  period, ≤72 chars.
-- Hard rules: no `--no-verify`, no `--force` on shared branches, no amending pushed commits.
+`ai-team` in this folder is a development build, not the released version. The git-ignored `mise.toml` puts
+`~/.local/share/ai-team-dev/bin` first on `PATH`. Report errors on the open PR:
+https://github.com/aurora-firmware/The-AI-team-definition/pull/32.
+
+- Rebuild after changes, from `~/projects/the-ai-team-definition/cli`:
+  `python scripts/sync_init_scaffolds.py && uv build && uv pip install --python ~/.local/share/ai-team-dev/bin/python --reinstall dist/<newest wheel>`.
+- Revert to the released version: delete `mise.toml` and `~/.local/share/ai-team-dev`.
