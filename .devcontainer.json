@@ -1,35 +1,35 @@
 {
-	"name": "the-intern",
-	// Pinned tag: the image carries the pi CLI that matches the pi SDK versions in package.json.
-	"image": "localhost:5000/nodejs-dev:1.3.0",
-	// The container starts as root; VS Code, terminals and lifecycle commands run as `ubuntu`,
-	// whose UID/GID are remapped to the host user's so files on bind mounts stay yours.
-	// Use `sudo` (passwordless) for root tasks.
-	"containerUser": "root",
-	"remoteUser": "ubuntu",
-	"updateRemoteUserUID": true,
-	"workspaceFolder": "/workspaces/the-intern",
-	"mounts": [
-		// pi login, settings and models (shared with the host's pi)
-		"source=${localEnv:HOME}/.pi,target=/home/ubuntu/.pi,type=bind",
-		"source=${localEnv:HOME}/.claude,target=/home/ubuntu/.claude,type=bind",
-		"source=${localEnv:HOME}/.claude.json,target=/home/ubuntu/.claude.json,type=bind",
-		// Shell aliases (sourced by the image's ~/.bashrc)
-		"source=${localEnv:HOME}/.bash_aliases,target=/home/ubuntu/.bash_aliases,type=bind,readonly",
-		// Read-only reference sources
-		"source=${localEnv:HOME}/projects/pi-mono,target=/refs/pi-mono,type=bind,readonly",
-		"source=${localEnv:HOME}/Downloads/durable-pi,target=/refs/durable-pi,type=bind,readonly"
-	],
-	// No package yet: install only once the lockfile exists.
-	"postCreateCommand": "if [ -f package-lock.json ]; then npm ci; fi",
-	"customizations": {
-		"vscode": {
-			"extensions": ["biomejs.biome"],
-			"settings": {
-				"editor.defaultFormatter": "biomejs.biome",
-				"editor.formatOnSave": true,
-				"typescript.tsdk": "node_modules/typescript/lib"
-			}
-		}
-	}
+    "name": "the-intern",
+    // Pinned tag: the image carries the pi CLI that matches the pi SDK versions in package.json.
+    "image": "localhost:5000/nodejs-dev:1.3.0",
+    // The container starts as root; VS Code, terminals and lifecycle commands run as `ubuntu`,
+    // whose UID/GID are remapped to the host user's so files on bind mounts stay yours.
+    // Use `sudo` (passwordless) for root tasks.
+    "containerUser": "root",
+    "remoteUser": "ubuntu",
+    "updateRemoteUserUID": true,
+    "workspaceFolder": "/workspaces/the-intern",
+    "mounts": [
+        // pi login, settings and models (shared with the host's pi)
+        "source=${localEnv:HOME}/.pi,target=/home/ubuntu/.pi,type=bind",
+        "source=${localEnv:HOME}/.claude,target=/home/ubuntu/.claude,type=bind",
+        "source=${localEnv:HOME}/.claude.json,target=/home/ubuntu/.claude.json,type=bind",
+        // Shell aliases (sourced by the image's ~/.bashrc)
+        "source=${localEnv:HOME}/.bash_aliases,target=/home/ubuntu/.bash_aliases,type=bind,readonly",
+        // Read-only reference sources
+        "source=${localEnv:HOME}/projects/pi-mono,target=/refs/pi-mono,type=bind,readonly",
+        "source=${localEnv:HOME}/Downloads/durable-pi,target=/refs/durable-pi,type=bind,readonly"
+    ],
+    // No package yet: install only once the lockfile exists.
+    "postCreateCommand": "if [ -f package-lock.json ]; then npm ci; fi",
+    "customizations": {
+        "vscode": {
+            "extensions": ["biomejs.biome"],
+            "settings": {
+                "editor.defaultFormatter": "biomejs.biome",
+                "editor.formatOnSave": true,
+                "typescript.tsdk": "node_modules/typescript/lib"
+            }
+        }
+    }
 }

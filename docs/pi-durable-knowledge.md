@@ -286,7 +286,7 @@ re-scan and install **before** `harness.resume()`.
 
 1. Discovery is separate from loading: the agent may only propose (path plus content hash recorded in a document).
 2. A human approves and pins the hash. The daemon imports only approved hashes, from a folder the agent can't write
-   (policy denies writes there), and re-checks the hash on every load and restart.
+  (policy denies writes there), and re-checks the hash on every load and restart.
 3. Opt in per conversation: explicit `settings.extensions`; new extensions are selected nowhere until configured.
 4. Policy denies new tool names by default.
 
@@ -374,21 +374,21 @@ starvation, run end inferred from `agent_end`, orphaned sessions when bob died).
 ### 5.4 Lessons
 
 1. **Durability belongs to the runtime.** Resume, `requestId` dedup, the follow-up queue and the approval wait are
-   library features. No intake table, retry loop or process supervision.
+  library features. No intake table, retry loop or process supervision.
 2. **A session is data, not a process.** Don't model sessions as workers.
 3. **The agent is a stored configuration.** "Which agent runs this" becomes a per-conversation choice; named
-   profiles are cheap.
+  profiles are cheap.
 4. **Chat can live in the daemon from the start.** No terminal passing; what's missing is presentation.
 5. **An in-process policy gate is simpler and safer.** A throw blocks, so fail-closed is free. Under single-user,
-   same-uid scope the old separate process was never a real boundary, because `bash` runs as the same uid.
+  same-uid scope the old separate process was never a real boundary, because `bash` runs as the same uid.
 6. **Conversations, not databases, separate context.** Named sessions with labels (topic, agent) on one database per
-   instance.
+  instance.
 7. **Long-lived conversations need a memory policy**, chosen per job: keep memory (one conversation plus compaction)
-   or start fresh each fire (new conversation or fork of a set-up one), plus retention for old conversations and
-   decided approvals.
+  or start fresh each fire (new conversation or fork of a set-up one), plus retention for old conversations and
+  decided approvals.
 8. **pi's settings don't reach the harness by themselves.** One settings module, tests per mapping.
 9. **The public SDK surface is almost enough.** Own the system prompt; document the parent-directory `AGENTS.md`
-   behaviour.
+  behaviour.
 10. **The API is powerful but young.** Keep pi-durable behind a narrow host module and the extensions, pin exact
     versions, upgrade deliberately, keep restart tests on a deterministic fake model that kills the process.
 
@@ -410,18 +410,18 @@ starvation, run end inferred from `agent_end`, orphaned sessions when bob died).
 Read spec §12 before writing commits and hooks. Found in practice:
 
 1. **Values read from a draft must not leave the commit.** Returning `{ ...existing }` from `commit()` leaked a nested
-   draft proxy that later threw `Cannot use a settled overlay`. Return a JSON copy made inside the callback; mutate
-   drafts in place.
+  draft proxy that later threw `Cannot use a settled overlay`. Return a JSON copy made inside the callback; mutate
+  drafts in place.
 2. **Close and abort look the same to a hook.** Read the tool task record afterwards: `abortRequested` with
-   `abortReason !== "restart"` means the operator aborted.
+  `abortReason !== "restart"` means the operator aborted.
 3. **`HookApi` is read-only plus memos.** A hook that writes needs a host-side `Harness` handle attached after
-   `Harness.open()`.
+  `Harness.open()`.
 4. **pi-ai and pi-durable have different JSON types;** a JSON round trip converts a `ToolCall`'s arguments.
 5. **Restart tests need a deterministic fake model** whose reply is a pure function of the transcript (a
-   self-re-appending `FauxResponseFactory`); the default faux provider is queue-based.
+  self-re-appending `FauxResponseFactory`); the default faux provider is queue-based.
 6. **Guard extensions omitted from an array selection simply don't run.** Select them explicitly.
 7. **`configure({ extensions: { add, remove } })` edits the host default,** not the conversation's current list;
-   compute a child's array from the resolved agent.
+  compute a child's array from the resolved agent.
 8. **Never await models or the network inside a commit callback.**
 9. **Unstable prompt sections defeat provider caching.** Keep section text byte-stable.
 10. **Effects are checkpointed, not exactly-once.** Never mark an effectful tool `replay: "safe"`.
