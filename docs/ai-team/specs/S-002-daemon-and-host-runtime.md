@@ -19,7 +19,7 @@ LAN. When this spec is done:
 
 - One daemon process owns the-intern's single pi-durable database and runs every conversation in it.
 - A kill at any moment loses no committed work. On restart the daemon resumes every unfinished run.
-- At most a configured number of agent runs are active at once. Further work waits in arrival order, across
+- At most a fixed number of agent runs are active at once. Further work waits in arrival order, across
   restarts.
 - Every capability the daemon offers is a service operation that clients, entry points and agent tools all call.
   The service layer knows nothing about transports, so new listeners can be added without changing it.
@@ -71,8 +71,11 @@ What this specification explicitly does NOT cover:
 - **Discovering and loading extensions at runtime.** Only the-intern's own pi-durable extensions, shipped in the
   package, are installed. pi agent extensions, the user's extensions and workspace extensions are never loaded
   (S-001; knowledge base §4.3).
-- **Reloading configuration while running.** Configuration is read at startup. A change takes effect at the next
-  restart, which is cheap because every run resumes. Policy reload belongs to S-004.
+- **Picking up hand edits of the configuration file while running.** The daemon reads the file at startup. A hand
+  edit takes effect at the next restart, which is cheap because every run resumes. Settings changed through service
+  operations apply at once (R-22). Policy reload belongs to S-004.
+- **Configurable capacity limits.** The worker-thread count and the invocation depth cap are built-in constants
+  (R-9), not settings.
 - **Policy, approvals, the role prompt and skills, the scheduler, chat, audit and packaging.** Each has its own spec.
   This spec gives them the host, the service layer and the observation feed they build on. Packaging ships the
   supervisor unit files that R-4 requires.
@@ -140,7 +143,7 @@ What this specification explicitly does NOT cover:
 | Component | Responsibility | Notes |
 |---|---|---|
 | Lifecycle | Startup sequence, single-owner lock, readiness, signals, shutdown, exit on a storage failure | Runs in the foreground. The supervisor handles daemonizing and restarts |
-| Configuration | Loads, layers and validates configuration; refuses to start when it is invalid | Read once at startup |
+| Configuration | Loads, layers and validates configuration; refuses to start when it is invalid; persists settings changed through service operations | The file is read at startup and written only by settings operations |
 | State layout | Creates and checks the config, state, data and runtime directories and their permissions | Owner-only |
 | Model runtime | Resolves models and thinking levels through the pi agent login and model registry; maps pi agent settings into the harness explicitly; closes model connections on shutdown | The fake model replaces it in tests |
 | Harness host | Opens the database, installs the-intern's extensions, builds the execution environment per seat workspace, ensures the root conversation, then resumes | The only user of pi-durable outside the-intern's extensions |
@@ -161,10 +164,11 @@ before the harness closes. Consumes every other component.
 
 ### Component 2: Configuration
 
-**Purpose:** Produce one validated, read-only configuration from built-in defaults, the user's configuration file and
-command-line overrides.
-**Estimated size:** Small.
-**Interfaces:** Exposes the configuration to every component. Consumes the configuration file and the command line.
+**Purpose:** Produce one validated configuration from built-in defaults, the user's configuration file, command-line
+flags and the environment, and persist the settings that service operations change.
+**Estimated size:** Small to medium.
+**Interfaces:** Exposes the current configuration and a validated change-and-persist path to the service layer.
+Consumes the configuration file, the command line and the environment.
 
 ### Component 3: State layout
 
@@ -255,8 +259,9 @@ host.
   4. exits with status 0
   
   Work running at that moment is not recorded as a user abort. It resumes on the next start, where calls that aren't
-  replay-safe come back as interrupted results (pi-durable). If shutdown hasn't finished within 10 seconds, the daemon
-  exits with a non-zero status. No queued input, waiting work or parked conversation is lost either way.
+  replay-safe come back as interrupted results (pi-durable). The stop bound is 10 seconds: if shutdown hasn't finished
+  by then, because some code doesn't honour its abort signal, the daemon exits with a non-zero status. No queued
+  input, waiting work or parked conversation is lost either way.
 - **R-6 Instance directories.** The daemon uses four directories, resolved from the XDG base directories, each in a
   folder named `the-intern`:
   - config (configuration file)
@@ -268,7 +273,7 @@ host.
   one that isn't a directory, isn't owned by the user, or is accessible to the group or others stops startup with an
   error naming the path and the reason. The database file is owner-only.
 - **R-7 Storage failure.** When the harness closes because of a storage error, the daemon logs the error, stops
-  accepting calls and exits with a non-zero status within 5 seconds. It doesn't try to reopen the database itself.
+  accepting calls and exits with a non-zero status within the stop bound (R-5). It doesn't try to reopen the database itself.
   After the supervisor restarts it, unfinished work resumes from its last checkpoint.
 - **R-8 Crash recovery.** After a kill at any point, including `kill -9` during a model request, a tool call, an
   admission decision or a service operation, the next start:
@@ -282,12 +287,15 @@ host.
 - **R-9 Process model.** The daemon is one operating-system process with one event loop. A worker thread is a slot in
   that process, not an operating-system thread. CPU-heavy work runs outside the daemon process: tools run commands as
   child processes.
+  - The number of worker threads is a built-in constant: **32**, the most concurrent agent runs the daemon is
+    tested with. It changes only with a release, after load tests, and the user can't configure it.
+  - The invocation depth cap (S-001 R-9) is a built-in constant: **10**. The user can't configure it.
 - **R-10 Admission.** S-001 R-10 holds, with these additions:
   - An agent run takes a worker thread before its first model request, and gives it back when the conversation
     becomes idle, parked or aborted.
   - The waiting order is stored in the database. After a restart, runs that held a worker thread at the kill resume
     first, up to the worker-thread count. Waiting runs then start in their stored order.
-  - If more runs held a worker thread than the current configuration allows (the count was lowered), the extra runs
+  - If more runs held a worker thread than the running release allows (a release lowered the count), the extra runs
     wait at the head of the queue in their original order.
   - Admission never starves a waiting run: a run waits only for runs ahead of it in the queue or already active.
 - **R-11 Visible capacity.** The status operation and the instance feed report how many worker threads exist, how
@@ -300,12 +308,14 @@ host.
   **control**.
   - Read: daemon status; list conversations; get one conversation (seat, origin, status, depth, invocation links);
     read a conversation's stored entries, paged, including entries from before resets and compactions; read its
-    current context; read a submission's state; wait for a submission to settle, with a bound of at most 5 minutes;
-    list roles and registered workspaces; list available models and thinking levels; read usage per conversation
-    and in total; inspect live pi-durable tasks per conversation; subscribe to the observation feed (R-14).
+    current context; read a submission's state; wait for a submission to settle, for a time the caller chooses, at
+    most 5 minutes; list roles with their defaults; list registered workspaces; list available models and thinking
+    levels; read usage per conversation and in total; inspect live pi-durable tasks per conversation; subscribe to
+    the observation feed (R-14).
   - Control: create a conversation (S-001 R-11); submit input with a request id and a busy mode (follow-up, steer or
     reject); withdraw a queued input; abort a conversation (with S-001's cascade); reset a conversation; compact a
-    conversation; change a conversation's seat (S-001 R-4); register a workspace (S-001 R-3a).
+    conversation; change a conversation's seat (S-001 R-4); set a role's default model, thinking level or workspace
+    (S-001 R-3); register a workspace and unregister one (S-001 R-3a). The settings operations follow R-22.
 
   S-001's agent coordination capabilities (handoff, invoke, steer) are control operations of the same service layer.
   Later specs add theirs the same way (for example approvals in S-004 and firing a schedule now in S-006).
@@ -356,11 +366,28 @@ host.
 
 ### Configuration
 
-- **R-21 Configuration loading.** Configuration comes from built-in defaults, then the user's configuration file in
-  the config directory, then command-line overrides for the instance directories. Later sources win. The file is
-  optional. A missing file means built-in defaults. A file that exists but can't be parsed, contains unknown keys or
-  holds invalid values stops startup with an error naming the file, the key and the reason. Configuration is read
-  once at startup (Exclusions).
+- **R-21 Configuration loading.** Each setting has one source:
+  - the configuration file in the config directory holds the user settings of S-001: each role's default model,
+    thinking level and workspace, and the registered workspaces
+  - command-line flags set the instance directories (R-6)
+  - the environment sets the pi agent folder, as for pi agent itself
+
+  Built-in defaults apply where a source gives nothing. The file is optional, and a missing one means built-in
+  defaults. A file that exists but can't be parsed, contains unknown keys or holds invalid values stops startup with
+  an error naming the file, the key and the reason. The daemon reads the file at startup only; hand edits take effect
+  at the next restart.
+- **R-22 Settings changed at runtime.** The settings in the configuration file can also be changed through control
+  operations (R-12), from any client.
+  - The daemon validates the change as at startup (S-001 R-3a, Configuration Requirements). An invalid change is
+    refused with a message naming the setting and the reason, and nothing changes.
+  - A valid change is written to the configuration file first, atomically and owner-only, and applies at once. The
+    file stays the single source of truth, so the change survives a restart.
+  - A change applies as S-001 states: a role's new defaults affect only agents seated after it, and a newly
+    registered workspace can be used at once.
+  - If the file was changed on disk since the daemon last read it, the change is refused as a conflict naming the
+    file, so a hand edit is never overwritten. A restart picks up the hand edit.
+  - If the file can't be written, the change is refused and nothing applies.
+  - Each change appears in the instance feed.
 
 ## Workflow
 
@@ -413,30 +440,17 @@ Supervisor restarts it → normal start → unfinished runs resume from their ch
 ## Configuration Requirements
 
 - **Configuration file.**
-  - **What:** the user's settings for the daemon and for S-001 (role defaults, registered workspaces, depth cap,
-    worker threads). Later specs add their sections.
-  - **Where:** a TOML file in the config directory (R-6).
+  - **What:** the S-001 user settings: each role's default model, thinking level and workspace, and the registered
+    workspaces. Later specs add their sections and say which of their settings change at runtime.
+  - **Where:** a TOML file in the config directory (R-6). Written by hand, or by the settings operations (R-22).
   - **Constraints:** a trusted, owner-only input. Unknown keys are refused.
   - **Missing:** built-in defaults for every setting. An invalid file stops startup (R-21).
 - **Instance directories.**
   - **What:** the config, state, data and runtime directories (R-6), so several instances or tests can run side by
     side.
-  - **Where:** the XDG base directories by default, overridable by command-line flags.
+  - **Where:** the XDG base directories by default, overridable by command-line flags only.
   - **Constraints:** absolute paths. Owner-only directories owned by the user.
   - **Missing:** the XDG defaults, created owner-only. An unsafe existing directory stops startup.
-- **Worker threads.**
-  - **What:** the number of worker threads (S-001 R-10). It bounds model spend and local load.
-  - **Where:** the configuration file.
-  - **Constraints:** an integer from 1 to 32.
-  - **Missing:** 4. An invalid value stops startup. S-001 records this default by amendment once this spec is
-    approved.
-- **Invocation depth cap.**
-  - **What:** S-001 R-9's maximum invocation depth. S-001 owns the setting. This spec proposes its default together
-    with the process model.
-  - **Where:** the configuration file.
-  - **Constraints:** an integer from 1 to 10.
-  - **Missing:** 3. An invalid value stops startup. S-001 records this default by amendment once this spec is
-    approved.
 - **pi agent folder.**
   - **What:** where the pi agent login, settings and models are read.
   - **Where:** pi agent's own default, including its `PI_CODING_AGENT_DIR` override (**Contract**: pi agent's
@@ -446,13 +460,15 @@ Supervisor restarts it → normal start → unfinished runs resume from their ch
   - **Missing:** a missing login doesn't stop the daemon unless a configured model needs it (S-001). Model requests
     fail with an error the agent run shows.
 - **Fake model (test only).**
-  - **What:** runs the daemon on the fake model with no network, for deterministic tests.
-  - **Where:** a test-only switch. It is not in the user documentation and not in the configuration file.
+  - **What:** runs the daemon on the fake model with no network, for deterministic tests. A second test-only switch
+    sets a smaller worker-thread count, so tests can fill every worker thread.
+  - **Where:** test-only switches. They are not in the user documentation and not in the configuration file.
   - **Constraints:** never enabled by default.
   - **Missing:** the real model runtime.
 
-Built-in timing bounds are not configurable: shutdown within 10 seconds (R-5), exit within 5 seconds of a storage
-failure (R-7), and a submission wait of at most 5 minutes (R-12).
+Built-in constants, not configurable: 32 worker threads and an invocation depth cap of 10 (R-9), the 10-second stop
+bound for shutdown and storage failures (R-5, R-7), and a submission wait of at most 5 minutes (R-12). S-001 records
+the two capacity constants by amendment.
 
 ## Verification
 
@@ -468,12 +484,12 @@ failure (R-7), and a submission wait of at most 5 minutes (R-12).
     interrupted result.
   - R-6: created directories are 0700 and the database file is owner-only. A group-readable existing directory stops
     startup.
-  - R-7: a simulated storage failure exits non-zero within 5 seconds, and a restart resumes the run.
+  - R-7: a simulated storage failure exits non-zero within 10 seconds, and a restart resumes the run.
   - R-8: `kill -9` during a model request, a tool call, an admission change and a create operation, then a restart;
     the invariants hold (resumed runs, no lost input, no half-applied operation).
-  - R-10, R-11: with one worker thread, three submissions run one after another in arrival order; a kill while two
-    wait restores the same order; lowering the count between restarts makes the extra runs wait; status and the feed
-    report active and waiting work.
+  - R-10, R-11 (with the test-only count of one): three submissions run one after another in arrival order; a kill
+    while two wait restores the same order; restarting with a lower count makes the extra runs wait; status and the
+    feed report active and waiting work. Without the test switch, status reports 32 worker threads.
   - R-12, R-13: every operation in the catalogue is called in-process with no listener; invalid input changes
     nothing; each error outcome is produced; a repeated create with the same idempotency key creates one
     conversation; read operations leave the database unchanged.
@@ -484,6 +500,9 @@ failure (R-7), and a submission wait of at most 5 minutes (R-12).
     file, and no credential appears in the instance directories or the database.
   - R-19: one test per mapped setting.
   - R-20: status reports the versions, and a changed version is logged at startup.
+  - R-21, R-22: a role default changed through the service is in the file and survives a restart; an invalid change
+    and a change after a hand edit are refused and leave the file as it was; an unwritable file refuses the change;
+    agents seated before a change keep their seat.
 - **Live acceptance tests** use the user's pi agent login with the low-cost model from S-001:
   1. The daemon starts under the user's login, answers a prompt in the root conversation, and leaves `~/.pi`
      unchanged apart from a token refresh.
