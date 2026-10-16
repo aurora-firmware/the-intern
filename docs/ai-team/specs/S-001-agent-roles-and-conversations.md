@@ -321,7 +321,10 @@ Each requirement is checked as described in **Verification** below.
     1. **Steerable.** It keeps running on its worker thread and can steer the agents it invoked (R-10a).
     2. **Parked.** Its conversation is parked: pi-durable keeps the state of the conversation and its agent, and the
        worker thread is freed. A parked agent can't steer. It continues as R-8a describes.
-  - Aborting a conversation aborts every conversation it invoked, recursively.
+  - Aborting a conversation also aborts the invoked conversations whose report it is still waiting for, whether it
+    is steerable or parked. Each of those aborts the conversations it waits for in turn. An invoked agent whose
+    clean-up step doesn't report back to the aborted conversation keeps running. Which invocation types report back
+    is defined with the clean-up steps in the later job spec (R-8a).
 - **R-8a Clean-up step and reports.** When an agent decides its job is done, a clean-up step runs. Which steps run
   (report back, do nothing, release the worker thread) depends on the type of job or conversation, defined in the
   later job spec. This spec requires the report-back step:
@@ -491,7 +494,8 @@ The agent may hand off or invoke agents exactly as in the scheduled flow
     stored transcript keeps every entry; the new agent runs on the same worker thread
   - seat records (R-7)
   - agent invocation (R-8): each context mode; several invoked agents running in parallel; steerable with steering
-    of an invoked agent; parked, with the worker thread freed; recursive abort
+    of an invoked agent; parked, with the worker thread freed; an abort reaches the invoked agents whose report is
+    awaited, recursively, and not the ones that won't report back
   - reports (R-8a): a report arrives as new input in a running, an idle and a parked invoking conversation; a
     parked conversation continues on each report, and in the other behaviour only after the last report
   - steering (R-10a), including a message sent to a parked conversation
@@ -527,7 +531,7 @@ minimal host until those exist.
 |---|---|---|
 | 1 | Role catalog, workspace registration, seating with overrides and role prompt: root conversation with the `bob` role; user changes the seat; user creates and resets conversations; seat records and attribution | Daemon and host runtime |
 | 2 | Handoff by agents in all three context modes | Phase 1 |
-| 3 | Agent invocation (context modes, steerable and parked), report-back step, recursive abort, steering by agents, depth cap | Phase 1 |
+| 3 | Agent invocation (context modes, steerable and parked), report-back step, abort of awaited invoked agents, steering by agents, depth cap | Phase 1 |
 | 4 | Worker threads, and parked conversations freeing them | Phase 3, daemon spec's process model |
 | 5 | Entry points: chat as a window onto root; schedule entries name a role, with the missing-workspace skip. Monitoring: list, statuses, invocations, live transcript | Phases 1–3, control endpoint |
 
