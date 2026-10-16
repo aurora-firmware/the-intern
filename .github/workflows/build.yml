@@ -16,10 +16,14 @@ permissions:
 
 # Placeholders: the TypeScript package doesn't exist yet. Each job keeps its
 # name so required checks stay stable; replace the step when the package lands.
+# Jobs run in the devcontainer image as root, like main's Rust container jobs,
+# so files left in the shared runner workspace always have the same owner.
 jobs:
   format:
     name: Format
     runs-on: self-hosted
+    container:
+      image: localhost:5000/nodejs-dev:1.3.0
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -30,6 +34,8 @@ jobs:
   build:
     name: Build
     runs-on: self-hosted
+    container:
+      image: localhost:5000/nodejs-dev:1.3.0
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -40,6 +46,8 @@ jobs:
   documentation:
     name: Documentation
     runs-on: self-hosted
+    container:
+      image: localhost:5000/nodejs-dev:1.3.0
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -50,6 +58,8 @@ jobs:
   user-docs:
     name: User Documentation
     runs-on: self-hosted
+    container:
+      image: localhost:5000/nodejs-dev:1.3.0
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -60,6 +70,8 @@ jobs:
   tests:
     name: Tests
     runs-on: self-hosted
+    container:
+      image: localhost:5000/nodejs-dev:1.3.0
     steps:
       - name: Checkout
         uses: actions/checkout@v6
