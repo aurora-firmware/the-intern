@@ -1,7 +1,7 @@
 ---
 title: Daemon and host runtime
 version: '0.1'
-status: draft  # draft | review | approved | superseded
+status: approved  # draft | review | approved | superseded
 created: '2026-10-16'
 author: planner
 id: S-002
