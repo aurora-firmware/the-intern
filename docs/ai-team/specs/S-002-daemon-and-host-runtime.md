@@ -382,8 +382,9 @@ host.
     refused with a message naming the setting and the reason, and nothing changes.
   - A valid change is written to the configuration file first, atomically and owner-only, and applies at once. The
     file stays the single source of truth, so the change survives a restart.
-  - A change applies as S-001 states: a role's new defaults affect only agents seated after it, and a newly
-    registered workspace can be used at once.
+  - A change applies as S-001 states: a role's new defaults affect only agents seated after it, a newly
+    registered workspace can be used at once, and unregistering follows S-001 R-3a (refused while a role's default
+    workspace is that workspace; seated agents keep it until their seat changes; new seats can't name it).
   - If the file was changed on disk since the daemon last read it, the change is refused as a conflict naming the
     file, so a hand edit is never overwritten. A restart picks up the hand edit.
   - If the file can't be written, the change is refused and nothing applies.
@@ -502,7 +503,8 @@ the two capacity constants by amendment.
   - R-20: status reports the versions, and a changed version is logged at startup.
   - R-21, R-22: a role default changed through the service is in the file and survives a restart; an invalid change
     and a change after a hand edit are refused and leave the file as it was; an unwritable file refuses the change;
-    agents seated before a change keep their seat.
+    agents seated before a change keep their seat; an unregistration is removed from the file and survives a
+    restart, and one refused under S-001 R-3a leaves the file as it was.
 - **Live acceptance tests** use the user's pi agent login with the low-cost model from S-001:
   1. The daemon starts under the user's login, answers a prompt in the root conversation, and leaves `~/.pi`
      unchanged apart from a token refresh.

@@ -177,7 +177,7 @@ What this specification explicitly does NOT cover:
 
 | Component | Responsibility | Notes |
 |---|---|---|
-| Role catalog | Defines the predefined roles and their defaults, and holds the registered workspaces | Read-only in v1, apart from defaults and workspace registration |
+| Role catalog | Defines the predefined roles and their defaults, and holds the registered workspaces | Read-only in v1, apart from defaults and workspace registration and unregistration |
 | Seating | Seats an agent of a role in a conversation, with optional model, thinking level and workspace overrides, and records who seated it | The only path that changes a conversation's seat |
 | Role prompt | Builds what the model sees: the-intern's preamble, role instructions, role skills, workspace instructions and workspace skills | Must stay byte-stable while the seat is unchanged |
 | Agent coordination | Agent-callable handoff, agent invocation and steer capabilities; parking; the report-back clean-up step; the depth cap and the worker threads | Every role is offered the same coordination capabilities |
@@ -253,7 +253,8 @@ Each requirement is checked as described in **Verification** below.
     lists and `gp`'s skill content are set during implementation and may change in later versions without amending
     this spec. They must satisfy the descriptions above.
 - **R-3 User settings.** The user can set each role's default model, thinking level and workspace, and register
-  workspaces. Nothing else about a role can be set.
+  and unregister workspaces, in the-intern's configuration or while the daemon runs (daemon spec, S-002 R-22).
+  Nothing else about a role can be set.
   - A role without a configured default model uses pi agent's default model, and one without a configured default
     thinking level uses pi agent's default thinking level.
   - A role without a configured default workspace uses a default workspace that the-intern creates and registers for
@@ -267,6 +268,11 @@ Each requirement is checked as described in **Verification** below.
   - A registration that fails the check is refused with an error naming the path and the reason. If the failure
     comes from configuration loaded at startup, the daemon doesn't start.
   - A role's default workspace must be a registered workspace.
+  - **Unregistering** a workspace is refused while a role's default workspace is that workspace, with an error
+    naming the role. The per-role default workspaces the-intern creates can't be unregistered.
+  - After unregistering, agents already seated in the workspace keep working there until their seat changes. New
+    seats, whether set by the user, a handoff or an agent invocation, can't name it, and a seat change that names it
+    is refused, leaving the seat unchanged.
 
 ### Seating, overrides and handoff
 
@@ -448,7 +454,8 @@ The agent may hand off or invoke agents exactly as in the scheduled flow
     thinking-level override at seat time that isn't valid is refused, and the seat stays unchanged.
 - **Registered workspaces.**
   - **What:** the folders that may be used as workspaces.
-  - **Where:** the-intern's configuration, plus the per-role default workspaces the-intern creates.
+  - **Where:** the-intern's configuration, plus the per-role default workspaces the-intern creates. Registrations
+    and unregistrations can also be made while the daemon runs (R-3a, S-002 R-22).
   - **Constraints:** an absolute, existing, owner-only directory (trusted input), checked at registration (R-3a).
     The user is responsible for what parent directories contribute, because `AGENTS.md` files are also read from
     parent directories.
@@ -467,17 +474,17 @@ The agent may hand off or invoke agents exactly as in the scheduled flow
   - **Missing:** `bob`. An unknown name rejects the entry (R-13).
 - **Invocation depth cap.**
   - **What:** the maximum invocation depth (R-9). It bounds runaway invocation chains that no human is watching.
-  - **Where:** the-intern's configuration.
-  - **Constraints:** a positive integer.
-  - **Missing:** a built-in default. The exact default value is decided later, before Phase 3 is planned in detail,
-    and recorded in this spec through an amendment. An invalid value stops the daemon at startup.
+  - **Where:** a built-in constant of the daemon (S-002 R-9), not a user setting.
+  - **Constraints:** **10**. It changes only with a release.
+  - **Missing:** not applicable; the constant always applies.
 - **Worker threads.**
-  - **What:** the number of worker threads, which is the maximum number of active agent runs (R-10). It bounds model
-    spend and local load.
-  - **Where:** the-intern's configuration.
-  - **Constraints:** a positive integer.
-  - **Missing:** a built-in default, decided at the same point as the depth cap and together with the daemon
-    spec's process model. An invalid value stops the daemon at startup.
+  - **What:** the number of worker threads, which is the maximum number of active agent runs (R-10). It bounds
+    local load.
+  - **Where:** a built-in constant of the daemon (S-002 R-9), not a user setting. Tests may set a smaller count
+    through a test-only switch.
+  - **Constraints:** **32**, the most concurrent agent runs the daemon is tested with. It changes only with a
+    release, after load tests.
+  - **Missing:** not applicable; the constant always applies.
 - **Live test model.**
   - **What:** the model used by the live acceptance tests.
   - **Where:** a test-only setting.
@@ -503,7 +510,9 @@ The agent may hand off or invoke agents exactly as in the scheduled flow
     thread, a parked agent's invoked agent runs and the parked agent then continues; waiting work starts in arrival
     order
   - R-3a: registration accepts a valid folder and refuses a relative, missing, non-directory or group- or
-    world-accessible path
+    world-accessible path; unregistering is refused for a role's default workspace and for a per-role default
+    workspace the-intern created; after unregistering, a seated agent keeps working there and a new seat naming it
+    is refused
   - R-11 to R-13: create and reset; the root's first agent has the `bob` role; fires create conversations with their
     role and origin; a fire whose workspace is missing is skipped and recorded
   - R-15: a removed workspace produces a tool error and the daemon keeps running
@@ -536,3 +545,7 @@ minimal host until those exist.
 | 5 | Entry points: chat as a window onto root; schedule entries name a role, with the missing-workspace skip. Monitoring: list, statuses, invocations, live transcript | Phases 1–3, control endpoint |
 
 ## Amendment Log
+
+| Date | What changed | Why | Affected tasks |
+|------|-------------|-----|----------------|
+| 2026-10-17 | The invocation depth cap (10) and the worker-thread count (32) became built-in constants instead of user settings. Role defaults and workspace registration can change while the daemon runs, and workspaces can be unregistered (R-3, R-3a, Configuration Requirements, Verification). | Decided with the daemon spec (S-002 R-9, R-22): the counts follow load tests, not user tuning; settings changed from clients apply without a restart. | None; S-001 isn't broken down yet |
