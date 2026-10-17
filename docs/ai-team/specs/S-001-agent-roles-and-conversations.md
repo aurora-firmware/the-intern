@@ -441,14 +441,15 @@ The agent may hand off or invoke agents exactly as in the scheduled flow
 - **Default model per role.**
   - **What:** an optional default model for `bob` and one for `gp`, so a cheaper or stronger model can be the
     starting point per role.
-  - **Where:** the-intern's configuration (described in the daemon spec).
+  - **Where:** the-intern's configuration (described in the daemon spec), also changeable while the daemon runs
+    (R-3).
   - **Constraints:** must name a model that the pi agent login and model registry can resolve.
   - **Missing:** falls back to pi agent's default model. A configured model that can't be resolved stops the daemon
     at startup with an error naming the role and the model. A model override at seat time that can't be resolved is
     refused, and the seat stays unchanged.
 - **Default thinking level per role.**
   - **What:** an optional default thinking level for `bob` and one for `gp`.
-  - **Where:** the-intern's configuration.
+  - **Where:** the-intern's configuration, also changeable while the daemon runs (R-3).
   - **Constraints:** a thinking level that pi-durable accepts.
   - **Missing:** falls back to pi agent's default thinking level. An invalid value stops the daemon at startup. A
     thinking-level override at seat time that isn't valid is refused, and the seat stays unchanged.
@@ -463,10 +464,15 @@ The agent may hand off or invoke agents exactly as in the scheduled flow
     at startup.
 - **Default workspace per role.**
   - **What:** an optional registered workspace for `bob` and one for `gp`.
-  - **Where:** the-intern's configuration.
+  - **Where:** the-intern's configuration, also changeable while the daemon runs (R-3).
   - **Constraints:** must be a registered workspace.
   - **Missing:** the per-role default workspace the-intern creates. A reference to an unregistered workspace stops
     the daemon at startup.
+
+A change to one of the four settings above made while the daemon runs is checked as at startup. Where an invalid
+value in the file stops the daemon at startup, an invalid runtime change is refused with the reason and nothing
+changes (S-002 R-22).
+
 - **Role in a schedule entry.**
   - **What:** an optional role name per schedule entry.
   - **Where:** the user's schedule store.
@@ -548,4 +554,4 @@ minimal host until those exist.
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| 2026-10-17 | The invocation depth cap (10) and the worker-thread count (32) became built-in constants instead of user settings. Role defaults and workspace registration can change while the daemon runs, and workspaces can be unregistered (R-3, R-3a, Configuration Requirements, Verification). | Decided with the daemon spec (S-002 R-9, R-22): the counts follow load tests, not user tuning; settings changed from clients apply without a restart. | None; S-001 isn't broken down yet |
+| 2026-10-17 | The invocation depth cap (10) and the worker-thread count (32) became built-in constants instead of user settings. Role defaults and workspace registration can change while the daemon runs, and workspaces can be unregistered (R-3, R-3a, Configuration Requirements, Verification). Consistency review: the per-role settings entries name the runtime path too. | Decided with the daemon spec (S-002 R-9, R-22): the counts follow load tests, not user tuning; settings changed from clients apply without a restart. | None; S-001 isn't broken down yet |

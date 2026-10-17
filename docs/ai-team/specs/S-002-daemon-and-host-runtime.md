@@ -269,11 +269,12 @@ host.
   - data (per-role default workspaces, S-001 R-3)
   - runtime (the socket's directory, S-003)
 
-  Each can be overridden by configuration (R-21). A missing directory is created owner-only (mode 0700). An existing
-  one that isn't a directory, isn't owned by the user, or is accessible to the group or others stops startup with an
-  error naming the path and the reason. The database file is owner-only.
+  Each can be overridden by a command-line flag (R-21). A missing directory is created owner-only (mode 0700). An
+  existing one that isn't a directory, isn't owned by the user, or is accessible to the group or others stops startup
+  with an error naming the path and the reason. The database file is owner-only.
 - **R-7 Storage failure.** When the harness closes because of a storage error, the daemon logs the error, stops
-  accepting calls and exits with a non-zero status within the stop bound (R-5). It doesn't try to reopen the database itself.
+  accepting calls and exits with a non-zero status within the stop bound (R-5). It doesn't try to reopen the database
+  itself.
   After the supervisor restarts it, unfinished work resumes from its last checkpoint.
 - **R-8 Crash recovery.** After a kill at any point, including `kill -9` during a model request, a tool call, an
   admission decision or a service operation, the next start:
