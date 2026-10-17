@@ -8,6 +8,25 @@ This file gives coding agents the commands and conventions they need to work in 
 - As we develop it, feature branches should merge into dev-pi-durable.
 - Don't open PRs into main but into dev-pi-durable.
 
+## Working philosophy (cornerstone)
+
+Applies to every design and implementation decision in this project. Original wording, kept verbatim:
+
+> **Lo determinista se encarga de lo repetible y exacto; el LLM, de lo contextual y variado.**
+> - Código para: filtrar, agrupar y compactar, alarmas con criterios conocidos, validaciones (que la carpeta exista,
+>   que el cron se pueda interpretar), etiquetas que ya conocemos (canal, hilo, remitente, fecha).
+> - LLM para: decisiones que requerirían un `switch` inmanejable, como a quién delegar, si algo es preocupante o si
+>   un hecho sustituye a otro.
+> - Sin purismos: si llamar al modelo es más simple y fiable que el código, se llama al modelo.
+
+English: **deterministic code handles what is repeatable and exact; the LLM handles what is contextual and varied.**
+Code for filtering, grouping and compacting, alarms with known criteria, validations (the folder exists, the cron
+parses) and labels we already know (channel, thread, sender, date). The LLM for decisions that would need an
+unmanageable `switch`: who to delegate to, whether something is worrying, whether one fact replaces another. No
+purism: if calling the model is simpler and more reliable than code, call the model.
+
+For each new piece, ask first: can code do this well? If yes, code; if not, the LLM.
+
 ## Status
 
 The repository was reset to a clean slate for the new version of the Intern (`bob`): one TypeScript/Node package
@@ -70,6 +89,7 @@ the package exists, and add the commands in this section and the three below.
 │   ├── build.yml                # CI placeholder: format, build, documentation, user-docs, tests
 │   └── deploy.yml               # Release placeholder (tag pushes)
 └── docs/                        # Project docs: knowledge base, feature review
+    └── proposals/               # Design proposals under discussion (not specs)
 ```
 
 ### Runtime prerequisites
