@@ -84,4 +84,4 @@ the package exists, and add the commands in this section and the three below.
 
 `ai-team` is installed per project by `mise run setup:ai-team`, into the git-ignored `.tmp/tools`, at the released
 version pinned as `AI_TEAM_REF` in `mise.toml`. Bump that pin to move to a new release. Report errors at
-https://github.com/aurora-firmware/The-AI-team-definition/issues.
+https://github.com/aurora-firmware/the-ai-team/issues.
