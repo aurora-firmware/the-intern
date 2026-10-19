@@ -2,7 +2,7 @@
 
 This file gives coding agents the commands and conventions they need to work in this repository.
 
-## the-intern rework with pi durable is under development
+## Branches
 
 - The main dev branch for this version is dev-pi-durable.
 - As we develop it, feature branches should merge into dev-pi-durable.
@@ -10,14 +10,13 @@ This file gives coding agents the commands and conventions they need to work in 
 
 ## Status
 
-The repository was reset to a clean slate for the new version of the Intern (`bob`): one TypeScript/Node package
-that embeds pi as a library on `@earendil-works/pi-durable`. There is no source code, test suite or build yet. The
-previous Rust implementation, its specs and its ADRs are in git history only; don't restore them.
+The Intern (`bob`) is one TypeScript/Node package that embeds pi as a library on `@earendil-works/pi-durable`.
+There is no source code, test suite or build yet.
 
 Read these before designing anything:
 
-- `docs/pi-durable-knowledge.md`: pi-durable, the pi coding-agent SDK, proof-of-concept results, API footguns.
-- `docs/feature-review.md`: verdicts per feature of the previous bob and the open design decisions.
+- `docs/reports/pi-durable-knowledge.md`: pi-durable, the pi coding-agent SDK, prototype results, API footguns.
+- `docs/reports/feature-review.md`: per-feature directions and the open design decisions.
 
 ## Development environment
 

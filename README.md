@@ -1,18 +1,15 @@
 # the-intern
 
-The Intern is an AI office-assistant project. Its service, `bob`, is being rebuilt from a clean slate as one
-TypeScript package that embeds pi as a library on `@earendil-works/pi-durable`, in place of the previous Rust service
-that supervised `pi` child processes. The previous implementation, specs and ADRs are in git history before the
-clean-slate commit.
+The Intern is an AI office-assistant project. Its service, `bob`, is one TypeScript package that embeds pi as a
+library on `@earendil-works/pi-durable`.
 
 Nothing is implemented yet.
 
 ## Start here
 
-- [pi-durable and pi SDK knowledge base](docs/pi-durable-knowledge.md): what pi-durable and the
-  coding-agent SDK provide, how they fit together, the proof-of-concept results and the API footguns.
-- [Feature review](docs/feature-review.md): every feature of the previous bob with its verdict for the
-  new version, and the open design decisions.
+- [pi-durable and pi SDK knowledge base](docs/reports/pi-durable-knowledge.md): what pi-durable and the
+  coding-agent SDK provide, how they fit together, prototype results and the API footguns.
+- [Feature review](docs/reports/feature-review.md): the direction for each feature and the open design decisions.
 
 ## Development environment
 
@@ -48,5 +45,5 @@ This README is the canonical record of the pi versions the project is tested aga
 guaranteed. When the pi version in use changes, update this section; specs and ADRs don't pin pi versions.
 
 - Target: `@earendil-works/pi-durable`, `pi-ai`, `chord` and `pi-coding-agent` 1.3.0 (exact pins, released
-  2026-10-15) with Node 24. Nothing is built or pinned in a lockfile yet. The proof of concept ran on 1.2.0; the
-  differences are analysed in `docs/pi-durable-knowledge.md` §7.
+  2026-10-15) with Node 24. Nothing is built or pinned in a lockfile yet. The changes between
+  pi versions are analysed in `docs/reports/pi-durable-knowledge.md` §7.

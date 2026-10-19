@@ -1,12 +1,12 @@
 # Coding guidelines
 
-Project-specific rules for writing code in `bob`, the TypeScript rework of the Intern on
+Project-specific rules for writing code in `bob`, the Intern's TypeScript service on
 `@earendil-works/pi-durable`. General TypeScript practice (types, narrowing, imports, async and cancellation, error
 handling, test style, review checklist) comes from the `pi-agent-dev:typescript-best-practices` skill and is not
 repeated here; this document adds only what is specific to this project, and wins where the two differ.
 
-The background for most rules is in [pi-durable-knowledge.md](../../pi-durable-knowledge.md) (sections 5 and 6) and
-[feature-review.md](../../feature-review.md). Approved specs and accepted ADRs win over this document; when they
+The background for most rules is in [pi-durable-knowledge.md](../../reports/pi-durable-knowledge.md) (sections 5 and 6) and
+[feature-review.md](../../reports/feature-review.md). Approved specs and accepted ADRs win over this document; when they
 disagree, fix this document.
 
 ## Runtime and tooling

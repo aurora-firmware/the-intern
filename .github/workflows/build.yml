@@ -16,8 +16,8 @@ permissions:
 
 # Placeholders: the TypeScript package doesn't exist yet. Each job keeps its
 # name so required checks stay stable; replace the step when the package lands.
-# Jobs run in the devcontainer image as root, like main's Rust container jobs,
-# so files left in the shared runner workspace always have the same owner.
+# Jobs run in the nodejs-dev container image as root, so files left in the shared
+# runner workspace always have the same owner.
 jobs:
   format:
     name: Format
