@@ -1,6 +1,6 @@
 # pi-durable and the pi SDK: knowledge base for the rework
 
-*Consolidated 2026-10-15. Input for the new version of the Intern (`bob`) built as one TypeScript package on
+*Consolidated 2026-10-15; updated for 1.3.0 on 2026-10-19. Input for the new version of the Intern (`bob`) built as one TypeScript package on
 `@earendil-works/pi-durable`. Product decisions per feature are in [feature-review.md](feature-review.md). This
 document replaces the research reports written against the old Rust service; everything still relevant from them is
 here.*
@@ -9,11 +9,11 @@ here.*
 
 | Source | Where |
 |---|---|
-| pi-durable package (1.2.0, 2026-10-12): README, `CHANGELOG.md`, normative `docs/spec.md` (5.3k lines; §12 "API footguns", §13 non-goals), 32 runnable examples in `test/examples` | Local clone `~/projects/pi-mono/packages/durable`; upstream `earendil-works/pi` (`badlogic/pi-mono` redirects there). Analysed at `main` `9fe3f37` |
+| pi-durable package (1.3.0, 2026-10-15; analysed at 1.2.0, then diffed to 1.3.0, section 7): README, `CHANGELOG.md`, normative `docs/spec.md` (5.3k lines; §12 "API footguns", §13 non-goals), 32 runnable examples in `test/examples` | Local clone `~/projects/pi-mono/packages/durable`, checked out at tag `v1.3.0` (detached; `main` is already ahead with unreleased commits); upstream `earendil-works/pi` (`badlogic/pi-mono` redirects there) |
 | Announcement | <https://earendil.com/posts/pi-durable/> (2026-10-01) |
 | Upstream durable demos (durable coding agent, vacation planner), on pi-durable 1.0.0 | Tag `v1.0.0`, `packages/coding-agent/src/experimental/{durable,vacation}/`. Removed from `main` in `7472cda0` (2026-10-12) together with the experimental client/server packages. Read with `git -C ~/projects/pi-mono show v1.0.0:<path>` |
 | Third-party host `disler/durable-pi` (pinned to pi-durable 1.0.3) | `~/Downloads/durable-pi`, mainly `apps/dpi-backend/src/{store,jobs,addons,streams}.ts` and `API.md` |
-| Proof of concept: bob on pi-durable 1.2.0 | `~/projects/the-intern-ts-poc` (`docs/findings.md`, `docs/handoff.md`, `src/`, `test/`) |
+| Proof of concept: bob on pi-durable 1.2.0 (not rerun on 1.3.0) | `~/projects/the-intern-ts-poc` (`docs/findings.md`, `docs/handoff.md`, `src/`, `test/`) |
 | Lessons page (sessions, conversations and context; PoC lessons) | <https://claude.ai/artifact/5XHhUR8hrigAUXaDdLB4nf> |
 | Feature review with verdicts | <https://claude.ai/artifact/4x9Pbk3pVhQuGrNcppKoU6>, transcribed in [feature-review.md](feature-review.md) |
 | The old Rust implementation, specs S-001…S-015, ADR-001…017, CR-001…016 | git history of this repository before the clean-slate commit (`main` at `ae34631`) |
@@ -29,7 +29,7 @@ hooks or commits.
   LLM conversations, their tool calls and the host's own state as checkpointed, crash-recoverable tasks over pluggable
   storage (memory, SQLite, JSONL, Cloudflare Durable Object). About 25k lines in `src/`. MIT. Node ≥ 22.19 (the PoC
   uses Node 24).
-- **What it is not.** Not a replacement for the pi coding agent and not wired into the `pi` TUI (pi 1.2.0 doesn't
+- **What it is not.** Not a replacement for the pi coding agent and not wired into the `pi` TUI (pi 1.2.0 and 1.3.0 don't
   depend on it). No CLI, no server, no HTTP API, no clients, no file-based extension loader. Every surface is the
   host's to build.
 - **Core guarantee.** Conversations, model turns, tool calls and host state are committed to storage before anything
@@ -41,7 +41,7 @@ hooks or commits.
 - **Dependencies.** `pi-ai` (models, providers), `chord` (reactive documents and the cancellation `Context`),
   `pi-codemode` (QuickJS sandbox), TypeBox.
 - **Stability.** "The API changes without notice between releases." 1.0.0 → 1.2.0 took under two weeks and broke
-  several contracts (section 8).
+  several contracts (section 7).
 
 ### 1.1 Concepts
 
@@ -309,8 +309,8 @@ starvation, run end inferred from `agent_end`, orphaned sessions when bob died).
 
 ### 5.1 Setup that worked
 
-- Exact pins, with a lockfile: `@earendil-works/pi-durable`, `pi-ai`, `chord`, `pi-coding-agent` all `1.2.0` (they
-  ship in lockstep); `croner` 10.0.1 (cron); `smol-toml` 1.9.1 (TOML); dev: TypeScript 5.9.3, Biome 2.3.8,
+- Exact pins, with a lockfile: `@earendil-works/pi-durable`, `pi-ai`, `chord`, `pi-coding-agent` all `1.2.0` in the PoC; the project targets `1.3.0` (they
+  ship in lockstep, and 1.3.0 pins them to each other exactly); `croner` 10.0.1 (cron); `smol-toml` 1.9.1 (TOML); dev: TypeScript 5.9.3, Biome 2.3.8,
   `@types/node` 24.
 - Node 24 runs `.ts` directly (type stripping): no build step, `tsc --noEmit` plus Biome for checks, `node:test` for
   tests. Formatting follows pi-mono (tabs, width 3, 120 columns).
@@ -405,7 +405,7 @@ starvation, run end inferred from `agent_end`, orphaned sessions when bob died).
 
 ---
 
-## 6. API footguns (pi-durable 1.2.0)
+## 6. API footguns (found on pi-durable 1.2.0, unchanged in 1.3.0)
 
 Read spec §12 before writing commits and hooks. Found in practice:
 
@@ -436,6 +436,38 @@ Breaking changes 1.0 → 1.2 (full list in `packages/durable/CHANGELOG.md`):
 - 1.2.0: `ToolExecutionResult.content` → `output` (plus `structuredOutput`); tool task inputs are a tagged union
   (`kind: "model" | "nested"`); a nonzero `bash` exit is an error result instead of a throw; any storage error fails
   and closes the whole Session; nested tool calls via `api.executeTool`.
+
+### 7.1 1.2.0 → 1.3.0 (2026-10-15)
+
+Checked by diffing the tags (63 commits): changelogs of pi-durable, chord, pi-ai and pi-coding-agent, the pi-durable
+source and spec, and the chord imports the PoC uses. The PoC itself was not rerun. **Every assumption in this document
+holds**; the spec's §12 footguns are untouched. Pin 1.3.0.
+
+- **pi-durable has no breaking change.** Added: `SqliteStorage.open(db, { prefix })` (and the Node and Cloudflare
+  openers) to namespace tables in a shared database; bob doesn't need it. The default SQLite schema and its version are
+  unchanged, so a 1.2.0 database opens as is. `OutputBuffer`/`Progress` moved to `@earendil-works/chord/output`; they
+  were never public in pi-durable.
+- **Compaction fix (#10904).** After a compaction the system baseline now leads the model context when the kept
+  history includes an assistant message; in 1.2.0 Anthropic and OpenAI Codex requests carried it as a mid-conversation
+  system message. Matters for long-lived job conversations (section 3.2) and the prompt cache. Spec §2 (context derivation, step 10) was
+  rewritten accordingly.
+- **chord has large breaking changes** (`Handle` → `Ref`, `kind` → `variant`, typed principals, link protocol
+  versions up to 4, declarations by name). They concern chord's own host and remote-object framework, which
+  pi-durable doesn't use: it imports only `Context`, `JsonValue`, `Draft`, `copyJson` and the delta ops, and
+  `chord/context` is unchanged. The PoC imports `Context`, `BACKGROUND_CONTEXT` and `withoutAbortSignal` only.
+- **pi-ai fixes that touch bob:** a tool call whose final arguments are malformed JSON now fails validation with the
+  raw text instead of running with the fields parsed so far (policy tests that feed bad calls become stricter);
+  "service temporarily unavailable" and "Unable to forward upstream stream" errors now retry (compaction no longer
+  fails on the first attempt for the former); switching models drops the earlier model's thinking blocks instead of
+  sending them as text; `toBase64` no longer needs ~140 MB of heap for a 3 MiB image. Also: new `kimi-coding` Chat
+  Completions endpoint (`models.json` overrides need `/v1`), cache-preserving thinking-level changes on GPT-6,
+  `off` level on Claude Haiku 5.5 and Opus 5, and `AssistantMessageFrame` removed (unused by us).
+- **pi-coding-agent:** exact internal pins; resumed sessions restore their active tools; `--model` prefers the
+  provider with credentials; new `sessionShareDestination`. None affects the embedded use.
+- **Not reviewed:** `main` is past 1.3.0 with unreleased work (telemetry, `Context.telemetry`, a crash-loop guard,
+  typed `ReportInfo` reasons in pi-durable). Revisit at the next release.
+
+### 7.2 History and templates
 
 The upstream demo targets 1.0.0 and durable-pi 1.0.3; both need these adjustments when used as templates. The demo is
 also a single process with a lock file; bob's daemon is the single owner instead.
