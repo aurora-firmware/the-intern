@@ -21,8 +21,8 @@ Read these before designing anything:
 
 ## Development environment
 
-Work inside the devcontainer (`.devcontainer.json`): user `ubuntu`, passwordless `sudo`, `~/.pi` shared
-with the host, reference sources read-only under `/refs`. Details in `docs/ai-team/docs/coding_guidelines.md`.
+See the "Development environment" and "Building from scratch" sections of `README.md`. Code conventions are in
+`docs/ai-team/docs/coding_guidelines.md`.
 
 ## Build and Install
 
@@ -65,7 +65,6 @@ the package exists, and add the commands in this section and the three below.
 .
 ├── AGENTS.md                    # This file
 ├── README.md
-├── .devcontainer.json           # Development container (all work happens inside it)
 ├── .github/workflows/
 │   ├── build.yml                # CI placeholder: format, build, documentation, user-docs, tests
 │   └── deploy.yml               # Release placeholder (tag pushes)
@@ -81,12 +80,8 @@ the package exists, and add the commands in this section and the three below.
 - `README.md` is the canonical record of the pi versions in use (no backwards compatibility guaranteed). Whenever the
   version changes, update the README's compatibility section.
 
-### ai-team dev version
+### ai-team version
 
-`ai-team` in this folder is a development build, not the released version. The git-ignored `mise.toml` puts
-`~/.local/share/ai-team-dev/bin` first on `PATH`. Report errors on the open PR:
-https://github.com/aurora-firmware/The-AI-team-definition/pull/32.
-
-- Rebuild after changes, from `~/projects/the-ai-team-definition/cli`:
-  `python scripts/sync_init_scaffolds.py && uv build && uv pip install --python ~/.local/share/ai-team-dev/bin/python --reinstall dist/<newest wheel>`.
-- Revert to the released version: delete `mise.toml` and `~/.local/share/ai-team-dev`.
+`ai-team` is installed per project by `mise run setup:ai-team`, into the git-ignored `.tmp/tools`, at the released
+version pinned as `AI_TEAM_REF` in `mise.toml`. Bump that pin to move to a new release. Report errors at
+https://github.com/aurora-firmware/The-AI-team-definition/issues.
