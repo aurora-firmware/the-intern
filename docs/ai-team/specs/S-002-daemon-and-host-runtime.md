@@ -46,7 +46,7 @@ This spec uses S-001's Definitions. It adds these terms:
 | Fake model | A deterministic model whose replies are a pure function of the transcript. Used only by tests. |
 
 pi-durable terms (Harness, task, submission, document, extension, registry) keep the meanings given in S-001 and in
-`docs/pi-durable-knowledge.md`. "pi agent login" and "pi agent settings" are the user's credentials and
+`docs/reports/pi-durable-knowledge.md`. "pi agent login" and "pi agent settings" are the user's credentials and
 `settings.json` in pi agent's agent folder.
 
 ## Exclusions

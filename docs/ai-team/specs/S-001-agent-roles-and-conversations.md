@@ -11,11 +11,10 @@ id: S-001
 
 ## Purpose
 
-The new the-intern is a single daemon that runs every conversation in one pi-durable database. Before any channel,
+The-intern is a single daemon that runs every conversation in one pi-durable database. Before any channel,
 schedule or client can be built, we need to define what a conversation is and what the agent working in it is.
-The old the-intern had a single kind of ephemeral agent with no history, and the hierarchical alternatives were
-rejected: an overlord `bob` delegating to agents it owns, `bob` as a default that channels bypass, and a single
-long-lived coordinator. The-intern's work comes from scheduled prompts that have to be turned into the right actions.
+Hierarchical alternatives are rejected: an overlord `bob` delegating to agents it owns, `bob` as a default that
+channels bypass, and a single long-lived coordinator. The-intern's work comes from scheduled prompts that have to be turned into the right actions.
 That needs **roles** that agents are made from: each role brings its own instructions, tools and default model,
 thinking level and workspace. A conversation can pass to an agent of another role whenever the state of the job
 calls for it, and agents can invoke other agents to work in parallel.
@@ -90,7 +89,7 @@ What this specification explicitly does NOT cover:
   take turns in a conversation, and agents that invoke each other are peers. No agent owns another or owns a
   conversation.
 - **Memory across scheduled runs.** Every fire starts a new conversation. Continuing one conversation per schedule
-  entry, as the proof of concept did, is rejected.
+  entry is rejected.
 - **A new conversation per handoff.** A handoff never creates a conversation. A clean start inside the same
   conversation is the Clean context mode. Only agent invocations create conversations.
 - **What happens when a job ends, and job tracking.** Completion criteria, the job and conversation types, which
@@ -555,3 +554,4 @@ minimal host until those exist.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-10-17 | The invocation depth cap (10) and the worker-thread count (32) became built-in constants instead of user settings. Role defaults and workspace registration can change while the daemon runs, and workspaces can be unregistered (R-3, R-3a, Configuration Requirements, Verification). Consistency review: the per-role settings entries name the runtime path too. | Decided with the daemon spec (S-002 R-9, R-22): the counts follow load tests, not user tuning; settings changed from clients apply without a restart. | None; S-001 isn't broken down yet |
+| 2026-10-19 | Wording only: removed references to the earlier implementation and its prototype from the Purpose and the Exclusions. No requirement changed. | Project documents describe the-intern as it is specified, not what it replaces. | None |
