@@ -9,19 +9,6 @@ The background for most rules is in [pi-durable-knowledge.md](../../pi-durable-k
 [feature-review.md](../../feature-review.md). Approved specs and accepted ADRs win over this document; when they
 disagree, fix this document.
 
-## Development environment
-
-- All development, tests and runs happen inside the devcontainer (`.devcontainer.json`). The container
-  user is `ubuntu`, with its UID remapped to the host user's and passwordless `sudo`.
-- The image is pinned to a tag whose pi CLI matches the pi SDK versions in `package.json`. Upgrade the image tag and
-  the pi packages together.
-- `~/.pi` is bind-mounted from the host: it holds the user's pi login, settings and models, shared with the host's pi.
-  Read it, never write to it, and never point tests at it.
-- Reference sources are mounted read-only under `/refs` (for example `/refs/pi-mono`). Never write there. Before
-  writing commits, hooks or tools, read `/refs/pi-mono/packages/durable/docs/spec.md` §12 ("API footguns"), and use
-  `/refs/pi-mono/packages/durable/test/examples` as the API reference.
-- Local state for manual runs goes in a git-ignored `.tmp/` inside the workspace, never in the real XDG directories.
-
 ## Runtime and tooling
 
 | Concern | Choice |
@@ -104,5 +91,5 @@ disagree, fix this document.
   transcript (a self-re-appending `FauxResponseFactory`); the default queue-based faux provider breaks on restart.
 - Durability claims need a restart test: kill or close mid-run, reopen, assert on the resumed outcome.
 - Don't swap the real pi packages for substitutes to get a test passing; only the model is faked.
-- Tests are hermetic: temporary directories for state and runtime paths, no dependence on `~/.pi`, a running
-  `bob serve` or inherited environment variables.
+- Tests are hermetic: temporary directories for state and runtime paths, no dependence on the user's own pi
+  configuration, a running `bob serve` or inherited environment variables.

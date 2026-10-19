@@ -9,7 +9,7 @@
 pr-*-review.md
 
 # Tooling
-mise.toml
+mise.local.toml
 .tmp/
 .env.local
 
