@@ -5,7 +5,7 @@ python = "3.14"
 
 [env]
 # Released ai-team version (git tag). To try another ref locally, override it in the git-ignored mise.local.toml.
-AI_TEAM_REF = "0.12.0"
+AI_TEAM_REF = "0.12.1"
 _.path = ["{{config_root}}/.tmp/tools/bin"]
 
 [tasks."setup:ai-team"]
