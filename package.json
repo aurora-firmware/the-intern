@@ -14,7 +14,8 @@
     "devDependencies": {
         "@biomejs/biome": "2.6.4",
         "@types/node": "24.19.2",
-        "typescript": "7.0.2"
+        "typescript": "7.0.2",
+        "vitepress": "1.6.4"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",
@@ -24,6 +25,7 @@
         "test": "node --test \"test/**/*.test.ts\"",
         "test:unit": "node --test \"test/unit/**/*.test.ts\"",
         "test:service": "node --test \"test/service/**/*.test.ts\"",
+        "docs:build": "vitepress build docs/manual",
         "check": "npm run typecheck && npm run lint && npm run test"
     }
 }
