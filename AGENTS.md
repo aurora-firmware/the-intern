@@ -11,7 +11,8 @@ This file gives coding agents the commands and conventions they need to work in 
 ## Status
 
 The Intern (`bob`) is one TypeScript/Node package that embeds pi as a library on `@earendil-works/pi-durable`.
-There is no source code, test suite or build yet.
+The package and its tooling exist (TypeScript, tests, lint, formatting, CI and the user manual site), but there is no
+product code yet.
 
 Read these before designing anything:
 
@@ -29,38 +30,40 @@ See the "Development environment" and "Building from scratch" sections of `READM
 
 ## Build and Install
 
-Not defined yet. The CI workflows in `.github/workflows/` are placeholders with the job names kept; fill them in when
-the package exists, and add the commands in this section and the three below.
+Node 24 is required (`mise install` provides it). There is no compile step: the code runs as TypeScript on Node.
 
 ```
-# Replace with the command agents should run to install or build the project.
-# Example: npm install / npm run build
+npm ci
 ```
 
 ## Test
 
 ```
-# Replace with the command agents should run to execute the test suite.
-# Example: npm test
+npm test
 ```
+
+`npm run test:unit` and `npm run test:service` run the two test folders separately.
 
 ## Run
 
-```
-# Replace with the command agents should use to start the application locally.
-# Example: npm start
-```
+There is no runnable command yet. The daemon (`bob serve`) is added by the tasks of S-002; until then the code is
+exercised through the tests only.
 
 ## Lint and Format
 
 ```
-# Replace with the command agents should run to check code style.
-# Example: npm run lint
+npm run lint        # biome check
+npm run format      # biome format --write
+npm run typecheck   # tsc --noEmit
+npm run check       # typecheck, lint and tests
 ```
+
+`npm run format:check` verifies formatting without writing. Build the user manual with `npm run docs:build`.
 
 ## Key Conventions
 
-- Reference `docs/development/coding_guidelines.md` for detailed rules.
+- Reference `docs/development/coding_guidelines.md` for detailed rules; `docs/development/README.md` indexes the
+  developer docs.
 
 ### Vocabulary
 
@@ -85,10 +88,22 @@ code change alone.
 .
 ├── AGENTS.md                    # This file
 ├── README.md
+├── package.json                 # Scripts and pinned dependencies
+├── package-lock.json
+├── tsconfig.json                # TypeScript configuration
+├── biome.json                   # Lint and format configuration
+├── mise.toml                    # Tool versions and the ai-team pin
+├── src/                         # Product code
+├── test/                        # Tests (unit/, support/)
 ├── .github/workflows/
-│   ├── build.yml                # CI placeholder: format, build, documentation, user-docs, tests
+│   ├── build.yml                # CI: Format, Build, User Documentation, Tests
+│   ├── pages.yml                # Publishes the user manual to GitHub Pages
 │   └── deploy.yml               # Release placeholder (tag pushes)
-└── docs/                        # Project docs: knowledge base, feature review
+└── docs/
+    ├── development/             # Developer docs and coding guidelines
+    ├── manual/                  # User manual (VitePress site)
+    ├── ai-team/                 # Specs, decisions and project-local ai-team docs
+    └── reports/                 # Knowledge base, feature review
 ```
 
 ### Runtime prerequisites
