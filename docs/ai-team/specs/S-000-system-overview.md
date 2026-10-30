@@ -1,7 +1,7 @@
 ---
 id: S-000
 title: System Overview
-version: '0.2'
+version: '0.3'
 status: draft  # draft | review | approved | superseded
 created: '2026-10-27'
 author: planner
@@ -20,11 +20,11 @@ driving it step by step.
 ## Users
 
 - **Team members.** Anyone who can reach one of The Intern's ways in: the command line, the web interface or its email
-  address. They hand it jobs, answer its questions, follow its work and stop or redirect it. They need it to finish
-  what it is given, to ask only when it lacks something, and to show what it did. All team members are equal.
-- **The admin.** The person who installs The Intern on the always-on machine, decides what it can reach, gives it its
-  accounts, and adds the team's instructions, skills and knowledge sources. They need to set it up once and then
-  leave it running.
+  address. They hand it jobs, answer its questions, follow its work and stop or redirect it, and, from the command
+  line or the web interface, configure it: its schedules, triggers, roles, skills, instructions and knowledge sources.
+  Whoever installs it on the always-on machine and gives it its accounts is a team member like any other. They need
+  it to finish what it is given, to ask only when it lacks something, and to show what it did. All team members are
+  equal; The Intern makes no difference between them.
 
 ## Pain points
 
@@ -59,11 +59,11 @@ driving it step by step.
    or in other folders the team points it to, as part of its jobs or on a schedule, and writes down what it learns
    about the team's systems in the wiki, where people can read and correct it. Removes: 4.
 6. **Email The Intern.** A team member sends a request or an answer to The Intern's own address. It sorts its inbox,
-   turns requests into jobs, attaches answers to the jobs waiting for them, and, when email is set up, writes to the
+   turns requests into jobs, attaches answers to the jobs waiting for them, and, when sending is set up, writes to the
    people it needs. Removes: 6, 2.
 7. **Watch and steer.** In the web interface a team member sees every job with its definition, status, open questions
    and evidence, follows an agent working live, and stops or redirects it. Removes: 1.
-8. **Fit The Intern to the team.** The admin adds instructions, skills and specialist agents, points The Intern at the
+8. **Fit The Intern to the team.** A team member adds instructions, skills and specialist roles, points The Intern at the
    team's knowledge sources, and manages schedules and triggers from the web interface or the command line, without
    changing The Intern itself. Removes: 4, 5.
 
@@ -73,25 +73,28 @@ The Intern is one service that runs all the time on a machine the team owns. All
 kept in its own job record. A job can come from a team member, from a schedule, from an event, or from The Intern
 itself when it finds follow-up work. Every job goes through the same steps: define it (goal, needs, plan and
 definition of done), get what is missing, act, and verify. A job that lacks something is marked blocked with its
-question, and The Intern turns to other jobs until the answer arrives. Many jobs run at the same time, and a job that
-was interrupted by a crash or restart picks up where it stopped.
+question, and The Intern turns to other jobs until the answer arrives. Many jobs run at the same time, up to a limit on
+how many agents work at once; a blocked job waits without counting against it. A job that was interrupted by a crash
+or restart picks up where it stopped.
 
 The work on a job is done by agents. An agent is made from a role: instructions, tools, skills and the model it uses.
-One agent leads each job from definition to verification and calls on agents of specialist roles, such as
-documentation or housekeeping, for parts of it, which can run in parallel and report back. The admin defines the
+Each job has exactly one lead agent at a time, which carries it from definition to verification. The lead can hand
+the job over to an agent of another role when the work changes, and calls on agents of specialist roles, such as
+documentation or housekeeping, for parts of it, which can run in parallel and report back. Team members define the
 roles the team needs.
 
 People reach The Intern through the command line, a web interface and email. None of these needs a login: whoever can
-reach a way in is a team member, and the admin controls who that is by controlling where The Intern can be reached.
+reach a way in is a team member, and who that is follows from where The Intern can be reached.
 The web interface shows every job, its questions and its evidence, follows agents live, and manages schedules and
 triggers. When a job is blocked, the question waits in the web interface and the command line, and is also sent by
-email when email is set up.
+email when sending is set up.
 
-The Intern keeps the history of every job. What it learns about the team's systems and conventions it writes to the
+The Intern keeps the history of every job. Saved state does not carry over to a new version on its own, so the job
+record can be exported and imported into the new version. What it learns about the team's systems and conventions it writes to the
 team's wiki, which the team runs separately and edits in the browser alongside it; the wiki and the team's other
 documents are both where The Intern learns how the team works and documentation it keeps current.
 
-The Intern acts with the accounts and access the admin gives it, from the machine it runs on. What it can do is bounded
+The Intern acts with the accounts and access it is given, from the machine it runs on. What it can do is bounded
 by what that machine and those accounts can reach, not by approval rules for each action.
 
 ## Components
@@ -102,7 +105,7 @@ by what that machine and those accounts can reach, not by approval rules for eac
 
 - **Name:** Intern service.
 - **Responsibility:** The single long-running process on the always-on machine. It owns all saved state, runs many
-  jobs at once up to a limit and queues the rest, resumes interrupted work after a crash or restart, reaches the
+  jobs at once up to a limit on how many agents work at once and queues the rest, resumes interrupted work after a crash or restart, reaches the
   models, offers every capability as a named operation that the ways in share, and publishes a stream of changes that
   they can follow. It starts, stops and reads its configuration in a defined order.
 - **Boundary:** It does not define what a job is or its steps (Jobs), which roles exist (Agents and roles), how people
@@ -116,7 +119,8 @@ by what that machine and those accounts can reach, not by approval rules for eac
 - **Responsibility:** The job record and the life of a job: where it came from, its definition (goal, needs, plan and
   definition of done), its status, its open questions, the evidence it closed with, and the follow-up jobs it
   created. It defines the steps every job goes through (define, get what is missing, act, verify), when a job counts
-  as blocked and how an answer resumes it, and keeps the history of every job.
+  as blocked and how an answer resumes it, keeps the history of every job, and exports and imports the job record so
+  it can be carried to a new version.
 - **Boundary:** It does not do the work of a job (Agents and roles) or decide when recurring jobs start (Schedules and
   triggers). It does not sync with outside ticket trackers.
 - **Works with:** Intern service, Agents and roles, Schedules and triggers, Command line, Web interface, Email.
@@ -124,7 +128,8 @@ by what that machine and those accounts can reach, not by approval rules for eac
 #### Agents and roles
 
 - **Name:** Agents and roles.
-- **Responsibility:** What a role is and which roles ship; how the agent that leads a job is chosen; how it calls on
+- **Responsibility:** What a role is and which roles ship; how the agent that leads a job is chosen and how it hands
+  the job over to an agent of another role, keeping exactly one lead at a time; how the lead calls on
   agents of specialist roles, steers them and collects their reports; the limits on how deep and wide that goes; and
   what shows which agent is working on what.
 - **Boundary:** It does not keep the job record (Jobs), run the process or queue work (Intern service), or supply the
@@ -135,44 +140,50 @@ by what that machine and those accounts can reach, not by approval rules for eac
 
 - **Name:** Command line.
 - **Responsibility:** Commands for using and running The Intern: starting the service, creating jobs, listing them and
-  reading their history, answering blocked jobs, following and stopping work, and managing schedules and triggers.
+  reading their history, answering blocked jobs, following and stopping work, managing schedules, triggers, roles,
+  skills, instructions and knowledge sources, and exporting and importing the job record.
 - **Boundary:** It holds no state and implements no behaviour of its own; each command calls an operation of the
   Intern service.
-- **Works with:** Intern service, Jobs.
+- **Works with:** Intern service, Jobs, Schedules and triggers, Agents and roles, Skills and instructions, Team
+  knowledge.
 
 #### Web interface
 
 - **Name:** Web interface.
 - **Responsibility:** The team's browser view of The Intern: a board of all jobs with their definitions, status, open
   questions and evidence; creating jobs and answering questions; following an agent live and stopping or redirecting
-  it; and managing schedules, triggers, roles and skills.
+  it; and managing schedules, triggers, roles, skills, instructions and knowledge sources.
 - **Boundary:** It holds no work and no state of its own and adds no capabilities: every action calls an operation of
-  the Intern service. It has no login of its own; who can reach it is the admin's network setup.
-- **Works with:** Intern service, Jobs, Schedules and triggers.
+  the Intern service. It has no login of its own; who can reach it follows from the network setup of the machine.
+- **Works with:** Intern service, Jobs, Schedules and triggers, Agents and roles, Skills and instructions, Team
+  knowledge.
 
 #### Email
 
 - **Name:** Email.
 - **Responsibility:** The Intern's own mailbox as a way in and out: it sorts incoming mail, turns requests into jobs,
-  attaches replies to the jobs waiting for them, and, when email is set up, sends questions and reports to the people
-  a job needs.
+  attaches replies to the jobs waiting for them, reports incoming mail as an event that triggers can start jobs from,
+  and, when sending is set up, sends questions and reports to the people a job needs.
 - **Boundary:** It does not read or triage team members' own mailboxes, and it does not decide what a job is or when
-  one is blocked (Jobs). It is optional; The Intern works without it.
-- **Works with:** Intern service, Jobs.
+  one is blocked (Jobs). Both parts are optional and set up separately: The Intern works without a mailbox, and a
+  mailbox can receive without sending being set up.
+- **Works with:** Intern service, Jobs, Agents and roles, Schedules and triggers.
 
 #### Schedules and triggers
 
 - **Name:** Schedules and triggers.
-- **Responsibility:** Starts jobs at set times and when events happen; lets team members add, remove, list and run
-  them on demand; and skips a run while the previous one is still working.
-- **Boundary:** It does not do the work of a job (Agents and roles) or keep the job record (Jobs).
-- **Works with:** Intern service, Jobs, Command line, Web interface.
+- **Responsibility:** Starts jobs at set times and when events happen; defines which events exist, such as a job
+  ending with a given outcome or mail arriving; lets team members add, remove, list and run them on demand; and skips
+  a run while the previous one is still working.
+- **Boundary:** It does not do the work of a job (Agents and roles) or keep the job record (Jobs). It does not watch
+  the mailbox itself; Email reports incoming mail.
+- **Works with:** Intern service, Jobs, Email, Command line, Web interface.
 
 #### Skills and instructions
 
 - **Name:** Skills and instructions.
 - **Responsibility:** The instructions and skills that ship with The Intern, such as explaining The Intern itself, and
-  the way the admin adds the team's own or adjusts the shipped ones without editing the installed copy.
+  the way team members add their own or adjusts the shipped ones without editing the installed copy.
 - **Boundary:** It does not decide which role gets which skills (Agents and roles) and does not hold the team's
   knowledge (Team knowledge). It adds no code to The Intern.
 - **Works with:** Agents and roles, Team knowledge.
@@ -180,7 +191,7 @@ by what that machine and those accounts can reach, not by approval rules for eac
 #### Team knowledge
 
 - **Name:** Team knowledge.
-- **Responsibility:** How The Intern reaches the knowledge sources the admin points it to (the team wiki,
+- **Responsibility:** How The Intern reaches the knowledge sources team members point it to (the team wiki,
   documentation in repositories, other folders of documents), reads them to learn the team's systems and conventions,
   keeps them up to date, and writes what it learns to the wiki where people can read and correct it.
 - **Boundary:** It does not host or serve the wiki; the team runs it separately. It does not keep the job history
@@ -245,7 +256,7 @@ by what that machine and those accounts can reach, not by approval rules for eac
 #### Installation and service setup
 
 - **Name:** Installation and service setup.
-- **Responsibility:** Turns a release into something the admin can install on an always-on machine of a supported
+- **Responsibility:** Turns a release into something a team member can install on an always-on machine of a supported
   platform, and sets the service up so the operating system starts it at boot and restarts it after a failure.
   Covers upgrading and removing it.
 - **Boundary:** It does not define the service's own start-up and shutdown (Intern service) or the team's network
@@ -255,15 +266,15 @@ by what that machine and those accounts can reach, not by approval rules for eac
   - What form does a release take: a package for an existing runtime, or a self-contained bundle?
   - How is a release triggered, built and published?
   - How is the background service registered with each supported operating system?
-  - What does an upgrade do with saved state and jobs still in progress, given that saved state may not carry over
-    between versions?
+  - How does an upgrade export the job record from the old version and import it into the new one, and what happens
+    to jobs still in progress?
 
 #### User manual
 
 - **Name:** User manual.
-- **Responsibility:** The documentation for the admin (installing, configuring access, accounts, email, roles, skills
-  and knowledge sources) and for team members (giving and following jobs, answering questions, schedules and
-  triggers). The shipped skill that explains The Intern draws its content from it.
+- **Responsibility:** The documentation for team members: installing and upgrading The Intern, giving it access,
+  accounts and email, configuring roles, skills, instructions, knowledge sources, schedules and triggers, and giving
+  and following jobs and answering questions. The shipped skill that explains The Intern draws its content from it.
 - **Boundary:** It contains no internal specs, decisions or bug reports.
 - **Works with:** Command line, Web interface, Skills and instructions, Continuous integration, Installation and
   service setup.
@@ -297,8 +308,8 @@ by what that machine and those accounts can reach, not by approval rules for eac
 
 ## Project exclusions
 
-- **Logins and per-person permissions.** Whoever can reach a way in is a team member and all are equal; the admin
-  controls access by controlling where The Intern can be reached.
+- **Logins and per-person permissions.** Whoever can reach a way in is a team member and all are equal; access is
+  controlled by where The Intern can be reached.
 - **Approval rules for each action.** What The Intern can do is bounded by the machine it runs on and the accounts it
   is given, not by per-action rules.
 - **Hosting the wiki.** The team runs its wiki separately; The Intern only reads and writes it.
@@ -312,8 +323,9 @@ by what that machine and those accounts can reach, not by approval rules for eac
   knowledge sources only.
 - **Windows, Linux on ARM and Intel Macs.** Only Linux on x64 and macOS on Apple silicon are supported, to keep the
   test matrix small.
-- **Saved state that survives an upgrade.** The underlying agent runtime is pinned to one version and gives no
-  compatibility promise for saved state.
+- **Saved state that carries over to a new version on its own.** The underlying agent runtime is pinned to one
+  version and gives no compatibility promise for saved state; the job record is carried over by export and import
+  instead.
 
 ## Amendment Log
 
