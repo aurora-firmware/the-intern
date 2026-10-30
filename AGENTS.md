@@ -23,6 +23,9 @@ Read these before designing anything:
 - `docs/reports/feature-review.md`: background only. It records per-feature directions from before S-000, and S-000
   wins where they differ.
 
+`docs/AGENTS.md` maps the `docs/` folder: what each part holds, which documents bind the work, and who updates them
+and when.
+
 ## Development environment
 
 See the "Development environment" and "Building from scratch" sections of `README.md`. Code conventions are in
@@ -64,6 +67,7 @@ npm run check       # typecheck, lint and tests
 
 - Reference `docs/development/coding_guidelines.md` for detailed rules; `docs/development/README.md` indexes the
   developer docs.
+- Write every document, task, review and commit message by `docs/development/writing_style.md`.
 
 ### Vocabulary
 
