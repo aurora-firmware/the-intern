@@ -20,9 +20,9 @@ documentation is the [user manual](docs/manual/index.md). Most of the product is
 
 ## Start here
 
-- [pi-durable and pi SDK knowledge base](docs/reports/pi-durable-knowledge.md): what pi-durable and the
+- [pi-durable and pi SDK knowledge base](docs/research/pi-durable-knowledge.md): what pi-durable and the
   coding-agent SDK provide, how they fit together, prototype results and the API footguns.
-- [Feature review](docs/reports/feature-review.md): the direction for each feature and the open design decisions.
+- [Feature review](docs/research/feature-review.md): the direction for each feature and the open design decisions.
 
 ## Development environment
 
@@ -61,4 +61,4 @@ guaranteed. When the pi version in use changes, update this section; specs and A
 
 - Target: `@earendil-works/pi-durable`, `pi-ai`, `chord` and `pi-coding-agent` 1.4.0 (exact pins in `package.json`
   and `package-lock.json`, released 2026-10-21) with Node 24. The changes between
-  pi versions are analysed in `docs/reports/pi-durable-knowledge.md` §7.
+  pi versions are analysed in `docs/research/pi-durable-knowledge.md` §7.

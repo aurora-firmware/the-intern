@@ -23,5 +23,5 @@ for scope.
   [ADR-001](../ai-team/decisions/ADR-001-one-daemon-process-owns-one-pi-durable-database.md) and
   [ADR-002](../ai-team/decisions/ADR-002-equal-team-members-bounded-by-the-service-account.md).
 - [system_overview.html](../system_overview.html): the shared vocabulary (section 4) and the spec map (section 5).
-- [pi-durable-knowledge.md](../reports/pi-durable-knowledge.md): what is known about pi-durable and the pi agent SDK,
+- [pi-durable-knowledge.md](../research/pi-durable-knowledge.md): what is known about pi-durable and the pi agent SDK,
   the prototype results and the API footguns.

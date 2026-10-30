@@ -19,8 +19,8 @@ Read these before designing anything:
 - `docs/ai-team/specs/S-000-system-overview.md`: what the product is, who it serves, its components and exclusions.
   It is the source of truth for scope.
 - `docs/system_overview.html`: the shared vocabulary and the spec map.
-- `docs/reports/pi-durable-knowledge.md`: pi-durable, the pi coding-agent SDK, prototype results, API footguns.
-- `docs/reports/feature-review.md`: background only. It records per-feature directions from before S-000, and S-000
+- `docs/research/pi-durable-knowledge.md`: pi-durable, the pi coding-agent SDK, prototype results, API footguns.
+- `docs/research/feature-review.md`: background only. It records per-feature directions from before S-000, and S-000
   wins where they differ.
 
 `docs/AGENTS.md` maps the `docs/` folder: what each part holds, which documents bind the work, and who updates them
@@ -107,7 +107,7 @@ code change alone.
     ├── development/             # Developer docs and coding guidelines
     ├── manual/                  # User manual (VitePress site)
     ├── ai-team/                 # Specs, decisions and project-local ai-team docs
-    └── reports/                 # Knowledge base, feature review
+    └── research/                # Knowledge base, feature review
 ```
 
 ### Runtime prerequisites

@@ -14,7 +14,7 @@ survive crashes and restarts: a job that was interrupted picks up where it stopp
 
 The Intern embeds pi as a library on `@earendil-works/pi-durable`. pi-durable already provides what durability needs:
 one open storage per harness, checkpointed pi-durable tasks, resume after a restart, exactly-once admission of input
-through request ids, and durable queued input. It also has firm limits (`docs/reports/pi-durable-knowledge.md`,
+through request ids, and durable queued input. It also has firm limits (`docs/research/pi-durable-knowledge.md`,
 sections 1.4 and 5.5):
 
 - One process owns a storage at a time, and there is no cross-process locking, so the host has to enforce single
@@ -34,7 +34,7 @@ so every later spec and task builds on the same decision. It is one of the stand
 before development starts (S-000, Developer documentation, Decisions needed).
 
 Sources: S-002 Design Principles, R-1, R-7, R-9, R-10 and Exclusions; S-001 Definitions (worker thread) and R-10;
-`docs/reports/pi-durable-knowledge.md` (sections 1.4, 5.5 and 7.2); `docs/development/coding_guidelines.md` (Module
+`docs/research/pi-durable-knowledge.md` (sections 1.4, 5.5 and 7.2); `docs/development/coding_guidelines.md` (Module
 structure).
 
 ## Decision

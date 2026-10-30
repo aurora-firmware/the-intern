@@ -9,8 +9,8 @@ Terms follow the vocabulary of [system_overview.html](../system_overview.html) (
 source, service account, way in. Where a term exists in both runtimes, write "pi-durable X" or "pi agent X".
 
 Read [S-000](../ai-team/specs/S-000-system-overview.md) first: it is the source of truth for scope. The background for
-most rules is in [pi-durable-knowledge.md](../reports/pi-durable-knowledge.md) (sections 5 and 6).
-[feature-review.md](../reports/feature-review.md) is background only; S-000 wins where they differ. Approved specs and
+most rules is in [pi-durable-knowledge.md](../research/pi-durable-knowledge.md) (sections 5 and 6).
+[feature-review.md](../research/feature-review.md) is background only; S-000 wins where they differ. Approved specs and
 accepted ADRs win over this document; when they disagree, fix this document. The tool choices are recorded in
 [tech_stack.md](tech_stack.md).
 
