@@ -15,8 +15,12 @@ There is no source code, test suite or build yet.
 
 Read these before designing anything:
 
+- `docs/ai-team/specs/S-000-system-overview.md`: what the product is, who it serves, its components and exclusions.
+  It is the source of truth for scope.
+- `docs/system_overview.html`: the shared vocabulary and the spec map.
 - `docs/reports/pi-durable-knowledge.md`: pi-durable, the pi coding-agent SDK, prototype results, API footguns.
-- `docs/reports/feature-review.md`: per-feature directions and the open design decisions.
+- `docs/reports/feature-review.md`: background only. It records per-feature directions from before S-000, and S-000
+  wins where they differ.
 
 ## Development environment
 
@@ -57,6 +61,23 @@ the package exists, and add the commands in this section and the three below.
 ## Key Conventions
 
 - Reference `docs/ai-team/docs/coding_guidelines.md` for detailed rules.
+
+### Vocabulary
+
+Shared terms are defined in `docs/system_overview.html` (section 4, Vocabulary). Use them in every spec, task, review
+and commit message. In short:
+
+- **Team member**, never user, operator, admin or owner.
+- **Job** is the product's unit of work. **Task** is used only in the pi-durable meaning.
+- An agent **invokes** another agent; never "subagent".
+- When a term exists in both runtimes, write "pi-durable X" or "pi agent X".
+- Never "sandbox": workspaces don't confine agents.
+
+### Fixes follow the specs
+
+A bug or issue fix must stay within the approved specs and accepted ADRs. If the fix would change or contradict
+specified behaviour, stop and escalate it as blocking (a spec amendment or change request) instead of shipping the
+code change alone.
 
 ### Folder structure
 
