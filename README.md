@@ -44,6 +44,6 @@ There is no build step; Node runs the `.ts` sources directly.
 This README is the canonical record of the pi versions the project is tested against. No backwards compatibility is
 guaranteed. When the pi version in use changes, update this section; specs and ADRs don't pin pi versions.
 
-- Target: `@earendil-works/pi-durable`, `pi-ai`, `chord` and `pi-coding-agent` 1.3.0 (exact pins, released
-  2026-10-15) with Node 24. Nothing is built or pinned in a lockfile yet. The changes between
+- Target: `@earendil-works/pi-durable`, `pi-ai`, `chord` and `pi-coding-agent` 1.4.0 (exact pins in `package.json`
+  and `package-lock.json`, released 2026-10-21) with Node 24. The changes between
   pi versions are analysed in `docs/reports/pi-durable-knowledge.md` §7.
