@@ -63,8 +63,8 @@ driving it step by step.
    people it needs. Removes: 6, 2.
 7. **Watch and steer.** In the web interface a team member sees every job with its definition, status, open questions
    and evidence, follows an agent working live, and stops or redirects it. Removes: 1.
-8. **Fit The Intern to the team.** A team member adds instructions, skills and specialist roles, points The Intern at the
-   team's knowledge sources, and manages schedules and triggers from the web interface or the command line, without
+8. **Fit The Intern to the team.** A team member adds instructions, skills and specialist roles, points The Intern at
+   the team's knowledge sources, and manages schedules and triggers from the web interface or the command line, without
    changing The Intern itself. Removes: 4, 5.
 
 ## Solution overview
@@ -84,14 +84,15 @@ documentation or housekeeping, for parts of it, which can run in parallel and re
 roles the team needs.
 
 People reach The Intern through the command line, a web interface and email. None of these needs a login: whoever can
-reach a way in is a team member, and who that is follows from where The Intern can be reached.
-The web interface shows every job, its questions and its evidence, follows agents live, and manages schedules and
-triggers. When a job is blocked, the question waits in the web interface and the command line, and is also sent by
+reach a way in is a team member, and who that is follows from where The Intern can be reached. The web interface
+shows every job, its questions and its evidence, follows agents live, and configures The Intern: schedules, triggers,
+roles, skills, instructions and knowledge sources. When a job is blocked, the question waits in the web interface and the command line, and is also sent by
 email when sending is set up.
 
-The Intern keeps the history of every job. Saved state does not carry over to a new version on its own, so the job
-record can be exported and imported into the new version. What it learns about the team's systems and conventions it writes to the
-team's wiki, which the team runs separately and edits in the browser alongside it; the wiki and the team's other
+The Intern keeps the history of every job as part of its job record. Saved state does not carry over to a new version
+on its own, so the job record, history included, can be exported and imported into the new version.
+
+What The Intern learns about the team's systems and conventions it writes to the team's wiki, which the team runs separately and edits in the browser alongside it; the wiki and the team's other
 documents are both where The Intern learns how the team works and documentation it keeps current.
 
 The Intern acts with the accounts and access it is given, from the machine it runs on. What it can do is bounded
@@ -105,8 +106,8 @@ by what that machine and those accounts can reach, not by approval rules for eac
 
 - **Name:** Intern service.
 - **Responsibility:** The single long-running process on the always-on machine. It owns all saved state, runs many
-  jobs at once up to a limit on how many agents work at once and queues the rest, resumes interrupted work after a crash or restart, reaches the
-  models, offers every capability as a named operation that the ways in share, and publishes a stream of changes that
+  jobs at once up to a limit on how many agents work at once and queues the rest, resumes interrupted work after a
+  crash or restart, reaches the models, offers every capability as a named operation that the ways in share, and publishes a stream of changes that
   they can follow. It starts, stops and reads its configuration in a defined order.
 - **Boundary:** It does not define what a job is or its steps (Jobs), which roles exist (Agents and roles), how people
   reach it (Command line, Web interface, Email), or when scheduled work runs (Schedules and triggers).
@@ -119,8 +120,8 @@ by what that machine and those accounts can reach, not by approval rules for eac
 - **Responsibility:** The job record and the life of a job: where it came from, its definition (goal, needs, plan and
   definition of done), its status, its open questions, the evidence it closed with, and the follow-up jobs it
   created. It defines the steps every job goes through (define, get what is missing, act, verify), when a job counts
-  as blocked and how an answer resumes it, keeps the history of every job, and exports and imports the job record so
-  it can be carried to a new version.
+  as blocked and how an answer resumes it, keeps the history of every job (what its agents did) in the job record,
+  and exports and imports the whole job record, history included, so it can be carried to a new version.
 - **Boundary:** It does not do the work of a job (Agents and roles) or decide when recurring jobs start (Schedules and
   triggers). It does not sync with outside ticket trackers.
 - **Works with:** Intern service, Agents and roles, Schedules and triggers, Command line, Web interface, Email.
@@ -134,7 +135,7 @@ by what that machine and those accounts can reach, not by approval rules for eac
   what shows which agent is working on what.
 - **Boundary:** It does not keep the job record (Jobs), run the process or queue work (Intern service), or supply the
   content of instructions and skills (Skills and instructions).
-- **Works with:** Intern service, Jobs, Skills and instructions, Team knowledge.
+- **Works with:** Intern service, Jobs, Skills and instructions, Team knowledge, Email, Command line, Web interface.
 
 #### Command line
 
@@ -183,10 +184,10 @@ by what that machine and those accounts can reach, not by approval rules for eac
 
 - **Name:** Skills and instructions.
 - **Responsibility:** The instructions and skills that ship with The Intern, such as explaining The Intern itself, and
-  the way team members add their own or adjusts the shipped ones without editing the installed copy.
+  the way team members add their own or adjust the shipped ones without editing the installed copy.
 - **Boundary:** It does not decide which role gets which skills (Agents and roles) and does not hold the team's
   knowledge (Team knowledge). It adds no code to The Intern.
-- **Works with:** Agents and roles, Team knowledge.
+- **Works with:** Agents and roles, Team knowledge, Command line, Web interface.
 
 #### Team knowledge
 
@@ -196,7 +197,7 @@ by what that machine and those accounts can reach, not by approval rules for eac
   keeps them up to date, and writes what it learns to the wiki where people can read and correct it.
 - **Boundary:** It does not host or serve the wiki; the team runs it separately. It does not keep the job history
   (Jobs).
-- **Works with:** Agents and roles, Skills and instructions.
+- **Works with:** Agents and roles, Skills and instructions, Command line, Web interface.
 
 ### Development infrastructure
 
