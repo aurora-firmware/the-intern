@@ -89,11 +89,11 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
 <main>
 
 <header>
-  <span class="eyebrow">docs/ai-team/docs/system_overview.html · draft for review · last reviewed 2026-10-19</span>
+  <span class="eyebrow">docs/system_overview.html · draft for review · last reviewed 2026-10-30</span>
   <h1>The Intern: system overview</h1>
-  <p class="lede">The Intern is one daemon that runs every conversation of one user in one pi-durable database. Agents made from roles take turns in those conversations and invoke each other. Clients, schedules and agent tools all use the same service layer. This document is the map: the shared vocabulary, the shape of the system, and which spec owns which part.</p>
+  <p class="lede">The Intern is an agent that works for a team. One daemon on a machine the team keeps running takes jobs from anyone who can reach it and sees each one through: define it, get what is missing, act, verify. Agents made from roles do the work in conversations kept in one pi-durable database, with one lead agent per job. Clients, job sources and agent tools all use the same service layer. This document is the map: the shared vocabulary, the shape of the system, and which spec owns which part.</p>
   <div class="chips">
-    <span class="chip warn">Specs and accepted ADRs win over this document</span>
+    <span class="chip warn">S-000, specs and accepted ADRs win over this document</span>
     <span class="chip">contains no requirements</span>
     <span class="chip">updated with every spec that changes a shared term or the spec map</span>
   </div>
@@ -101,7 +101,7 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
     <ol>
       <li><a href="#scope">Scope and principles</a></li>
       <li><a href="#system">The system at a glance</a></li>
-      <li><a href="#conversations">Roles, agents and conversations</a></li>
+      <li><a href="#conversations">Jobs, roles, agents and conversations</a></li>
       <li><a href="#vocabulary">Vocabulary</a></li>
       <li><a href="#specs">Spec map</a></li>
       <li><a href="#sources">Where the rest lives</a></li>
@@ -117,23 +117,25 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
 
 <section id="scope">
   <span class="eyebrow">1 · Scope and principles</span>
-  <h2>One user, one machine, one process</h2>
-  <p class="claim">The Intern is an office assistant for a single person on their own computer. It is one TypeScript package that embeds pi as a library on <code>@earendil-works/pi-durable</code>.</p>
+  <h2>One team, one machine, one process</h2>
+  <p class="claim">The Intern works unattended for a team, from a machine the team keeps running. It is one TypeScript package that embeds pi as a library on <code>@earendil-works/pi-durable</code>. S-000 is the source of truth for scope.</p>
   <div class="grid">
     <div class="panel">
       <h3>In scope</h3>
       <ul>
-        <li>One user and one OS account, on Linux (x64) and macOS (Apple silicon).</li>
-        <li>Work arrives from interactive chat, scheduled prompts and manual requests.</li>
-        <li>Local clients first; a LAN dashboard is planned, read-only at first.</li>
+        <li>Equal team members: anyone who can reach a way in. No logins.</li>
+        <li>Ways in: the command line, a web interface on the team's network, and The Intern's own mailbox.</li>
+        <li>Jobs from requests, schedules, triggers and follow-ups, many at once.</li>
+        <li>One OS account, the installing person's in v1, on Linux (x64) and macOS (Apple silicon), started at machine startup.</li>
       </ul>
     </div>
     <div class="panel">
       <h3>Out of scope</h3>
       <ul>
-        <li>Several users, remote callers, devices or hubs.</li>
-        <li>Windows, Linux arm64 and Intel macOS.</li>
-        <li>Compatibility of the database across pi versions; the pi packages are pinned.</li>
+        <li>Logins, per-person permissions and approval rules for actions.</li>
+        <li>Hosting the wiki, footholds on other machines, tracker sync, chat apps in v1.</li>
+        <li>Code extensions; Windows, Linux arm64 and Intel macOS.</li>
+        <li>Database compatibility across pi versions; the job record moves by export and import.</li>
       </ul>
     </div>
   </div>
@@ -144,12 +146,12 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
       <tbody>
         <tr><td>One owner per database</td><td>At most one daemon opens an instance's database. Nothing else reads or writes it; clients read history through the service layer.</td></tr>
         <tr><td>Durability belongs to the runtime</td><td>Resume, exactly-once input, queued input and checkpoints come from pi-durable. We write no retry loops, intake tables or recovery code.</td></tr>
-        <tr><td>Filesystem permissions are the boundary</td><td>Directories are 0700, files owner-only, no credentials are stored by us. Models authenticate through the user's pi login.</td></tr>
+        <tr><td>The service account is the boundary</td><td>The Intern runs as one OS account. Directories are 0700 and files owner-only. We store no credentials: models, keys and accounts are that account's, used in place. What agents can do is bounded by what that account can reach.</td></tr>
         <tr><td>pi-durable sits behind a narrow host</td><td>Only the host module and our own pi-durable extensions import it. An upgrade touches a few files.</td></tr>
-        <tr><td>Transport-free service layer</td><td>Every capability is a named operation marked read or control. A new listener never changes an operation.</td></tr>
+        <tr><td>Transport-free service layer</td><td>Every capability is a named operation marked read or control. A new listener never changes an operation. No listener authenticates callers.</td></tr>
         <tr><td>Clients are viewers</td><td>No connection owns work. Closing or lagging never stops or slows an agent run.</td></tr>
-        <tr><td>Agents are peers</td><td>No agent owns another or a conversation. An agent of any role can hand off to, or invoke, any role.</td></tr>
-        <tr><td>Unattended by default</td><td>Outside interactive chat, no step waits for a human.</td></tr>
+        <tr><td>One lead per job</td><td>Each job has one lead conversation; its agent is the only lead and the only one that closes the job. No agent owns another: an agent of any role can hand off to, or invoke, any role.</td></tr>
+        <tr><td>Unattended except a blocked job</td><td>No step waits for a human, except a blocked job waiting for the answer to its question. A blocked job holds no worker thread.</td></tr>
         <tr><td>Fail closed on the membrane</td><td>Invalid configuration stops startup; a storage error ends the process and the supervisor restarts it. Missing content (a skill) degrades with a diagnostic.</td></tr>
       </tbody>
     </table>
@@ -159,96 +161,97 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
 <section id="system">
   <span class="eyebrow">2 · The system at a glance</span>
   <h2>Everything goes through the service layer</h2>
-  <p class="claim">The daemon is the only process that touches the database. Chat, schedules and agent tools are different callers of the same operations.</p>
+  <p class="claim">The daemon is the only process that touches the database. The command line, the web interface, email, schedules and agent tools are different callers of the same operations.</p>
   <figure>
     <div class="fig">
-      <svg viewBox="0 0 800 620" role="img" aria-label="The system in layers: callers reach listeners, listeners and the scheduler reach the service layer, which drives agent work on the runtime, which stores to one SQLite file. Every component is tagged with the spec that owns it.">
-        <text class="tm" x="10" y="14" style="letter-spacing:.06em">CALLERS</text>
-        <rect class="b later" x="10" y="22" width="250" height="52" rx="6"/><text class="tm" x="18" y="36" style="font-size:10.5px">S-007</text><text class="tb m" x="135" y="53">bob chat</text><text class="ts m" x="135" y="68">window onto the root conversation</text>
-        <rect class="b later" x="270" y="22" width="250" height="52" rx="6"/><text class="tm" x="278" y="36" style="font-size:10.5px">S-003</text><text class="tb m" x="395" y="53">CLI · TUI · GUI</text><text class="ts m" x="395" y="68">through the client library</text>
-        <rect class="b later" x="530" y="22" width="260" height="52" rx="6"/><text class="tm" x="538" y="36" style="font-size:10.5px">S-006</text><text class="tb m" x="660" y="53">Scheduler</text><text class="ts m" x="660" y="68">cron fires, jobs</text>
+      <svg viewBox="0 0 800 620" role="img" aria-label="The system in layers: ways in and job sources reach listeners or the service layer, which drives jobs and agent work on the runtime, which stores to one SQLite file. Every component is tagged with the spec that owns it.">
+        <text class="tm" x="10" y="14" style="letter-spacing:.06em">WAYS IN AND JOB SOURCES</text>
+        <rect class="b later" x="10" y="22" width="189" height="52" rx="6"/><text class="tm" x="18" y="36" style="font-size:10.5px">later</text><text class="tb m" x="104" y="53">Command line</text><text class="ts m" x="104" y="68">bob commands</text>
+        <rect class="b later" x="207" y="22" width="189" height="52" rx="6"/><text class="tm" x="215" y="36" style="font-size:10.5px">later</text><text class="tb m" x="301" y="53">Web interface</text><text class="ts m" x="301" y="68">browser, team network</text>
+        <rect class="b later" x="404" y="22" width="189" height="52" rx="6"/><text class="tm" x="412" y="36" style="font-size:10.5px">later</text><text class="tb m" x="498" y="53">Email</text><text class="ts m" x="498" y="68">own mailbox, in and out</text>
+        <rect class="b later" x="601" y="22" width="189" height="52" rx="6"/><text class="tm" x="609" y="36" style="font-size:10.5px">later</text><text class="tb m" x="695" y="53">Schedules and triggers</text><text class="ts m" x="695" y="68">fires, events, run history</text>
         <text class="tm" x="10" y="98" style="letter-spacing:.06em">LISTENERS</text>
-        <rect class="b later" x="10" y="104" width="330" height="52" rx="6"/><text class="tm" x="18" y="118" style="font-size:10.5px">S-003</text><text class="tb m" x="175" y="135">Unix socket listener</text><text class="ts m" x="175" y="150">full control, owner-only directory</text>
-        <rect class="b later" x="350" y="104" width="170" height="52" rx="6"/><text class="tm" x="358" y="118" style="font-size:10.5px">S-003</text><text class="tb m" x="435" y="135">LAN listener</text><text class="ts m" x="435" y="150">read-only first</text>
-        <path class="ln" d="M135 74 V104"/><path class="ln" d="M300 74 V104"/>
-        <path class="ln" d="M660 74 V186"/><text class="ts" x="670" y="132">in-process call</text>
+        <rect class="b later" x="10" y="104" width="189" height="52" rx="6"/><text class="tm" x="18" y="118" style="font-size:10.5px">S-003</text><text class="tb m" x="104" y="135">Local socket</text><text class="ts m" x="104" y="150">on the machine</text>
+        <rect class="b later" x="207" y="104" width="189" height="52" rx="6"/><text class="tm" x="215" y="118" style="font-size:10.5px">S-003</text><text class="tb m" x="301" y="135">Network listener</text><text class="ts m" x="301" y="150">no login</text>
+        <path class="ln" d="M104 74 V104"/><path class="ln" d="M301 74 V104"/>
+        <path class="ln" d="M498 74 V186"/><path class="ln" d="M695 74 V186"/><text class="ts" x="560" y="132">in-process calls</text>
         <rect class="b s2" x="10" y="186" width="780" height="52" rx="6"/><text class="tm" x="18" y="200" style="font-size:10.5px">S-002</text><text class="tb m" x="400" y="217">Service layer</text><text class="ts m" x="400" y="232">named read / control operations, no transport inside</text>
-        <path class="ln" d="M175 156 V186"/><path class="ln" d="M435 156 V186"/>
-        <text class="tm" x="10" y="262" style="letter-spacing:.06em">AGENT WORK</text>
-        <rect class="b s1" x="10" y="268" width="148" height="52" rx="6"/><text class="tm" x="18" y="282" style="font-size:10.5px">S-001</text><text class="tb m" x="84" y="299">Role catalog</text><text class="ts m" x="84" y="314">bob, gp, defaults</text>
-        <rect class="b s1" x="168" y="268" width="148" height="52" rx="6"/><text class="tm" x="176" y="282" style="font-size:10.5px">S-001</text><text class="tb m" x="242" y="299">Seating</text><text class="ts m" x="242" y="314">who sits in a conversation</text>
-        <rect class="b s1" x="326" y="268" width="148" height="52" rx="6"/><text class="tm" x="334" y="282" style="font-size:10.5px">S-001</text><text class="tb m" x="400" y="299">Coordination</text><text class="ts m" x="400" y="314">handoff, invoke, steer</text>
-        <rect class="b s1" x="484" y="268" width="148" height="52" rx="6"/><text class="tm" x="492" y="282" style="font-size:10.5px">S-001</text><text class="tb m" x="558" y="299">Entry routing</text><text class="ts m" x="558" y="314">root, new, reset, fires</text>
-        <rect class="b s1" x="642" y="268" width="148" height="52" rx="6"/><text class="tm" x="650" y="282" style="font-size:10.5px">S-001</text><text class="tb m" x="716" y="299">Monitoring</text><text class="ts m" x="716" y="314">list, transcript, live</text>
+        <path class="ln" d="M104 156 V186"/><path class="ln" d="M301 156 V186"/>
+        <text class="tm" x="10" y="262" style="letter-spacing:.06em">JOBS AND AGENT WORK</text>
+        <rect class="b later" x="10" y="268" width="148" height="52" rx="6"/><text class="tm" x="18" y="282" style="font-size:10.5px">later</text><text class="tb m" x="84" y="299">Jobs</text><text class="ts m" x="84" y="314">record, steps, blocked</text>
+        <rect class="b s1" x="168" y="268" width="148" height="52" rx="6"/><text class="tm" x="176" y="282" style="font-size:10.5px">S-001</text><text class="tb m" x="242" y="299">Role catalog</text><text class="ts m" x="242" y="314">bob, gp, team roles</text>
+        <rect class="b s1" x="326" y="268" width="148" height="52" rx="6"/><text class="tm" x="334" y="282" style="font-size:10.5px">S-001</text><text class="tb m" x="400" y="299">Seating</text><text class="ts m" x="400" y="314">who sits in a conversation</text>
+        <rect class="b s1" x="484" y="268" width="148" height="52" rx="6"/><text class="tm" x="492" y="282" style="font-size:10.5px">S-001</text><text class="tb m" x="558" y="299">Coordination</text><text class="ts m" x="558" y="314">handoff, invoke, steer</text>
+        <rect class="b s1" x="642" y="268" width="148" height="52" rx="6"/><text class="tm" x="650" y="282" style="font-size:10.5px">S-001</text><text class="tb m" x="716" y="299">Entry routing</text><text class="ts m" x="716" y="314">lead conversation per job</text>
         <rect class="b s1" x="10" y="330" width="186" height="52" rx="6"/><text class="tm" x="18" y="344" style="font-size:10.5px">S-001</text><text class="tb m" x="103" y="361">Role prompt</text><text class="ts m" x="103" y="376">system prompt per seat</text>
-        <rect class="b later" x="206" y="330" width="186" height="52" rx="6"/><text class="tm" x="214" y="344" style="font-size:10.5px">S-005</text><text class="tb m" x="299" y="361">Prompt and skills</text><text class="ts m" x="299" y="376">shipped content, overlay</text>
-        <rect class="b later" x="402" y="330" width="186" height="52" rx="6"/><text class="tm" x="410" y="344" style="font-size:10.5px">S-004</text><text class="tb m" x="495" y="361">Policy</text><text class="ts m" x="495" y="376">allow / ask before tool calls</text>
-        <rect class="b later" x="598" y="330" width="192" height="52" rx="6"/><text class="tm" x="606" y="344" style="font-size:10.5px">S-009</text><text class="tb m" x="694" y="361">Jobs and open items</text><text class="ts m" x="694" y="376">job tracking, email triage</text>
+        <rect class="b s1" x="206" y="330" width="186" height="52" rx="6"/><text class="tm" x="214" y="344" style="font-size:10.5px">S-001</text><text class="tb m" x="299" y="361">Monitoring</text><text class="ts m" x="299" y="376">list, jobs, transcript, live</text>
+        <rect class="b later" x="402" y="330" width="186" height="52" rx="6"/><text class="tm" x="410" y="344" style="font-size:10.5px">later</text><text class="tb m" x="495" y="361">Skills and instructions</text><text class="ts m" x="495" y="376">shipped content, team overlay</text>
+        <rect class="b later" x="598" y="330" width="192" height="52" rx="6"/><text class="tm" x="606" y="344" style="font-size:10.5px">later</text><text class="tb m" x="694" y="361">Team knowledge</text><text class="ts m" x="694" y="376">wiki, repo docs, folders</text>
         <path class="ln" d="M400 238 V268"/><text class="ts" x="410" y="258">operations</text>
         <text class="tm" x="10" y="406" style="letter-spacing:.06em">RUNTIME</text>
         <rect class="b s2" x="10" y="412" width="186" height="52" rx="6"/><text class="tm" x="18" y="426" style="font-size:10.5px">S-002</text><text class="tb m" x="103" y="443">Admission</text><text class="ts m" x="103" y="458">32 worker threads, FIFO</text>
         <rect class="b s2" x="206" y="412" width="290" height="52" rx="6"/><text class="tm" x="214" y="426" style="font-size:10.5px">S-002</text><text class="tb m" x="351" y="443">Harness host</text><text class="ts m" x="351" y="458">the only importer of pi-durable</text>
-        <rect class="b s2" x="506" y="412" width="284" height="52" rx="6"/><text class="tm" x="514" y="426" style="font-size:10.5px">S-002</text><text class="tb m" x="648" y="443">Model runtime</text><text class="ts m" x="648" y="458">pi agent login, settings mapping</text>
+        <rect class="b s2" x="506" y="412" width="284" height="52" rx="6"/><text class="tm" x="514" y="426" style="font-size:10.5px">S-002</text><text class="tb m" x="648" y="443">Model runtime</text><text class="ts m" x="648" y="458">service account's pi login, settings</text>
         <rect class="b s2" x="10" y="474" width="186" height="52" rx="6"/><text class="tm" x="18" y="488" style="font-size:10.5px">S-002</text><text class="tb m" x="103" y="505">Observation feed</text><text class="ts m" x="103" y="520">snapshot, then deltas</text>
-        <rect class="b later" x="206" y="474" width="290" height="52" rx="6"/><text class="tm" x="214" y="488" style="font-size:10.5px">S-008</text><text class="tb m" x="351" y="505">Audit</text><text class="ts m" x="351" y="520">records derived from the feed</text>
+        <rect class="b s2" x="206" y="474" width="290" height="52" rx="6"/><text class="tm" x="214" y="488" style="font-size:10.5px">S-002</text><text class="tb m" x="351" y="505">Status</text><text class="ts m" x="351" y="520">health, versions, capacity</text>
         <rect class="b s2" x="506" y="474" width="284" height="52" rx="6"/><text class="tm" x="514" y="488" style="font-size:10.5px">S-002</text><text class="tb m" x="648" y="505">Lifecycle, configuration</text><text class="ts m" x="648" y="520">startup order, config file, directories</text>
         <path class="ln" d="M400 382 V412"/>
-        <text class="tm" x="10" y="550" style="letter-spacing:.06em">STORAGE, PROVIDERS, SUPERVISION</text>
+        <text class="tm" x="10" y="550" style="letter-spacing:.06em">STORAGE, OUTSIDE, SUPERVISION</text>
         <rect class="b s2" x="10" y="556" width="250" height="52" rx="6"/><text class="tm" x="18" y="570" style="font-size:10.5px">S-002</text><text class="tb m" x="135" y="587">One SQLite file</text><text class="ts m" x="135" y="602">in the state directory</text>
-        <rect class="b " x="270" y="556" width="250" height="52" rx="6"/><text class="tm" x="278" y="570" style="font-size:10.5px">outside</text><text class="tb m" x="395" y="587">Model providers</text><text class="ts m" x="395" y="602">through the pi agent login</text>
-        <rect class="b later" x="530" y="556" width="260" height="52" rx="6"/><text class="tm" x="538" y="570" style="font-size:10.5px">S-010</text><text class="tb m" x="660" y="587">systemd / launchd</text><text class="ts m" x="660" y="602">unit files, restart on error exit</text>
+        <rect class="b " x="270" y="556" width="250" height="52" rx="6"/><text class="tm" x="278" y="570" style="font-size:10.5px">outside</text><text class="tb m" x="395" y="587">Models, mail server, wiki</text><text class="ts m" x="395" y="602">through the service account</text>
+        <rect class="b later" x="530" y="556" width="260" height="52" rx="6"/><text class="tm" x="538" y="570" style="font-size:10.5px">later</text><text class="tb m" x="660" y="587">systemd / launchd</text><text class="ts m" x="660" y="602">start at boot, restart on error exit</text>
         <path class="ln" d="M400 526 V556"/>
       </svg>
     </div>
-    <figcaption>Read top to bottom. Every box carries the spec that owns it, and the colour follows the same rule: teal is S-001, indigo is S-002, dashed grey is a spec not written yet. The scheduler calls the service layer in the same process; chat and the CLI go through a listener.</figcaption>
+    <figcaption>Read top to bottom. Every box carries the spec that owns it, and the colour follows the same rule: teal is S-001, indigo is S-002, dashed grey is a spec not written yet ("later" boxes are named after their S-000 component). Email and schedules call the service layer in the same process; the command line and the web interface go through a listener.</figcaption>
   </figure>
 </section>
 
 <section id="conversations">
-  <span class="eyebrow">3 · Roles, agents and conversations</span>
-  <h2>A role is the base context; an agent applies it in a conversation</h2>
+  <span class="eyebrow">3 · Jobs, roles, agents and conversations</span>
+  <h2>A role is the base context; an agent applies it in a conversation of a job</h2>
   <ul class="bullets">
-    <li>Every conversation has exactly one agent at a time.</li>
-    <li>A role defines the context where an agent starts.</li>
-    <li>The agent can only exist within a conversation.</li>
-    <li>An agent is mutable: it can be configured during the conversation.</li>
-    <li>Agents change by <em>handoff</em> (same conversation) or spread by <em>invocation</em> (new conversations).</li>
+    <li>Every job has one lead conversation; its current agent is the job's lead.</li>
+    <li>Every conversation belongs to one job and has exactly one agent at a time.</li>
+    <li>A role defines the context where an agent starts. Team members shape roles.</li>
+    <li>Agents change by <em>handoff</em> (same conversation; in the lead conversation it passes the lead) or spread by <em>invocation</em> (new conversations of the same job).</li>
+    <li>Invoked agents do parts of the job and report back; only the lead closes the job.</li>
     <li>Nothing here is an operating-system process.</li>
   </ul>
   <figure>
     <div class="fig">
-      <svg viewBox="0 0 800 330" role="img" aria-label="Roles supply defaults to a seat. A handoff replaces the agent in the same conversation. An invocation creates new conversations for new agents, which report back.">
+      <svg viewBox="0 0 800 330" role="img" aria-label="Roles supply defaults to a seat. Job sources start a job's lead conversation. A handoff replaces the agent in the same conversation. An invocation creates new conversations of the same job for new agents, which report back.">
         <rect class="b s1" x="10" y="30" width="150" height="86" rx="6"/>
-        <text class="tb m" x="85" y="52">Roles</text><text class="ts m" x="85" y="70">bob (default), gp</text>
-        <text class="ts m" x="85" y="86">instructions, tools, skills,</text><text class="ts m" x="85" y="100">default model, thinking, workspace</text>
+        <text class="tb m" x="85" y="52">Roles</text><text class="ts m" x="85" y="70">bob (default lead), gp,</text>
+        <text class="ts m" x="85" y="86">team roles: instructions,</text><text class="ts m" x="85" y="100">tools, skills, defaults</text>
         <rect class="b s1" x="220" y="30" width="170" height="86" rx="6"/>
         <text class="tb m" x="305" y="52">Seat</text><text class="ts m" x="305" y="70">role + model + thinking</text><text class="ts m" x="305" y="86">+ workspace, with</text><text class="ts m" x="305" y="100">optional overrides</text>
         <rect class="b s1" x="450" y="30" width="170" height="86" rx="6"/>
-        <text class="tb m" x="535" y="52">Conversation</text><text class="ts m" x="535" y="70">one agent at a time</text><text class="ts m" x="535" y="86">transcript kept, context</text><text class="ts m" x="535" y="100">cleared by reset</text>
+        <text class="tb m" x="535" y="52">Conversation</text><text class="ts m" x="535" y="70">of one job, one agent</text><text class="ts m" x="535" y="86">at a time; transcript kept,</text><text class="ts m" x="535" y="100">context cleared by reset</text>
         <path class="ln s1" d="M160 73 H220"/><text class="ts m" x="190" y="65">defaults</text>
         <path class="ln s1" d="M390 73 H450"/><text class="ts m" x="420" y="65">seated in</text>
         <rect class="b later" x="650" y="30" width="140" height="86" rx="6"/>
-        <text class="tb m" x="720" y="52">Entry points</text><text class="ts m" x="720" y="70">chat (root only)</text><text class="ts m" x="720" y="86">schedule fire</text><text class="ts m" x="720" y="100">user request</text>
+        <text class="tb m" x="720" y="52">Job sources</text><text class="ts m" x="720" y="70">request (CLI, web, email)</text><text class="ts m" x="720" y="86">schedule fire, trigger</text><text class="ts m" x="720" y="100">follow-up job</text>
         <path class="ln dash" d="M650 73 H620"/>
         <text class="tc s1" x="10" y="150">HANDOFF · same conversation, same worker thread</text>
         <rect class="b s1" x="10" y="160" width="190" height="50" rx="6"/><text class="t m" x="105" y="180">Agent A · role bob</text><text class="ts m" x="105" y="197">its own work ends</text>
         <rect class="b s1" x="300" y="160" width="190" height="50" rx="6"/><text class="t m" x="395" y="180">Seat record</text><text class="ts m" x="395" y="197">old, new, actor, mode, note</text>
         <rect class="b s1" x="590" y="160" width="200" height="50" rx="6"/><text class="t m" x="690" y="180">Agent B · role gp</text><text class="ts m" x="690" y="197">context: Full | Compact | Clean</text>
         <path class="ln s1" d="M200 185 H300"/><path class="ln s1" d="M490 185 H590"/>
-        <text class="tc s1" x="10" y="246">INVOCATION · new conversations, peers, report back</text>
-        <rect class="b s1" x="10" y="256" width="190" height="60" rx="6"/><text class="t m" x="105" y="278">Conversation #k</text><text class="ts m" x="105" y="296">steerable or parked</text>
-        <rect class="b s1" x="400" y="252" width="170" height="30" rx="6"/><text class="t m" x="485" y="272">Conversation #m · bob</text>
-        <rect class="b s1" x="400" y="290" width="170" height="30" rx="6"/><text class="t m" x="485" y="310">Conversation #n · gp</text>
+        <text class="tc s1" x="10" y="246">INVOCATION · new conversations of the same job, report back</text>
+        <rect class="b s1" x="10" y="256" width="190" height="60" rx="6"/><text class="t m" x="105" y="278">Lead conversation · job A</text><text class="ts m" x="105" y="296">steerable or parked</text>
+        <rect class="b s1" x="400" y="252" width="170" height="30" rx="6"/><text class="t m" x="485" y="272">Conversation #m · gp</text>
+        <rect class="b s1" x="400" y="290" width="170" height="30" rx="6"/><text class="t m" x="485" y="310">Conversation #n · docs</text>
         <path class="ln s1" d="M200 275 L400 267"/><path class="ln s1" d="M200 297 L400 305"/>
         <text class="ts" x="215" y="262">job prompt + context mode</text>
-        <text class="ts" x="590" y="270">each on its own worker</text><text class="ts" x="590" y="285">thread, depth + 1</text><text class="ts" x="590" y="305">reports return as input to #k</text>
+        <text class="ts" x="590" y="270">each on its own worker</text><text class="ts" x="590" y="285">thread, depth + 1</text><text class="ts" x="590" y="305">reports return to the lead</text>
       </svg>
     </div>
-    <figcaption>Full, Compact and Clean are the three context modes, used by both moves. Behaviour, caps and records are specified in S-001.</figcaption>
+    <figcaption>Full, Compact and Clean are the three context modes, used by both moves. "docs" stands for any role a team creates. Behaviour, caps and records are specified in S-001; the job record and its steps belong to the Jobs spec.</figcaption>
   </figure>
   <figure>
     <div class="fig">
-      <svg viewBox="0 0 800 280" role="img" aria-label="A conversation is idle, waiting for a worker thread, running or parked. Only running holds a worker thread.">
+      <svg viewBox="0 0 800 280" role="img" aria-label="A conversation is idle, waiting for a worker thread, running or parked. Only running holds a worker thread. A blocked job's lead conversation is parked.">
         <rect class="b s1" x="30" y="100" width="140" height="56" rx="6"/><text class="tb m" x="100" y="124">Idle</text><text class="ts m" x="100" y="141">no worker thread</text>
         <rect class="b s2" x="270" y="100" width="170" height="56" rx="6"/><text class="tb m" x="355" y="124">Waiting</text><text class="ts m" x="355" y="141">for a worker thread</text>
         <rect class="b s2" x="560" y="100" width="170" height="56" rx="6"/><text class="tb m" x="645" y="124">Running</text><text class="ts m" x="645" y="141">holds one worker thread</text>
@@ -256,13 +259,13 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
         <path class="ln" d="M170 128 H270"/><text class="ts m" x="220" y="120">input arrives</text>
         <path class="ln s2" d="M440 128 H560"/><text class="ts m" x="500" y="118">thread free</text><text class="ts m" x="500" y="146">FIFO order</text>
         <path class="ln" d="M600 100 C600 40 140 40 120 100"/><text class="ts m" x="360" y="56">final answer: thread returned</text>
-        <path class="ln" d="M645 156 V214"/><text class="ts" x="655" y="180">invoke, then park</text><text class="ts" x="655" y="195">thread freed</text>
-        <path class="ln dash" d="M560 242 C400 242 360 210 360 156"/><text class="ts m" x="440" y="236">a report arrives</text>
+        <path class="ln" d="M645 156 V214"/><text class="ts" x="655" y="180">invoke and park, or</text><text class="ts" x="655" y="195">job blocked: thread freed</text>
+        <path class="ln dash" d="M560 242 C400 242 360 210 360 156"/><text class="ts m" x="440" y="236">a report or an answer arrives</text>
         <text class="ts" x="30" y="200">S-001 defines the states and the rule that waiting costs no thread.</text>
         <text class="ts" x="30" y="216">S-002 defines the durable queue behind "Waiting" and its capacity.</text>
       </svg>
     </div>
-    <figcaption>The two specs meet here: the states belong to S-001, the capacity and the queue that survives a restart belong to S-002.</figcaption>
+    <figcaption>The two specs meet here: the states belong to S-001, the capacity and the queue that survives a restart belong to S-002. The worker-thread count is S-000's limit on how many agents work at once.</figcaption>
   </figure>
 </section>
 
@@ -275,13 +278,13 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
     <table>
       <thead><tr><th>Say</th><th>Not</th><th>Why</th></tr></thead>
       <tbody>
-        <tr><td>the-intern</td><td>bob (for the product)</td><td>the-intern is the product. <code>bob</code> is only a role name and the CLI name.</td></tr>
-        <tr><td>User</td><td>operator</td><td>There is a single person.</td></tr>
-        <tr><td>agent invokes agent</td><td>subagent</td><td>Agents are peers; none owns another.</td></tr>
-        <tr><td>job</td><td>task (for agent work)</td><td>"Task" is reserved for the pi-durable meaning.</td></tr>
+        <tr><td>The Intern, the-intern</td><td>bob (for the product)</td><td>The Intern is the product; the-intern is its code name. <code>bob</code> is only a role name and the CLI name.</td></tr>
+        <tr><td>team member</td><td>user, operator, admin, owner</td><td>Anyone who can reach a way in; all are equal, and whoever installs it is one of them.</td></tr>
+        <tr><td>agent invokes agent</td><td>subagent</td><td>No agent owns another; the lead owns the job, not the agents it invokes.</td></tr>
+        <tr><td>job</td><td>task (for the product's work)</td><td>"Task" is reserved for the pi-durable meaning.</td></tr>
         <tr><td>worker thread</td><td>thread (alone)</td><td>"Thread" is only for multi-threading; a worker thread is a logical unit of capacity.</td></tr>
         <tr><td>pi-durable X, pi agent X</td><td>unprefixed X</td><td>When both runtimes have a term, name which one.</td></tr>
-        <tr><td>workspace</td><td>sandbox</td><td>Agents work on the OS and filesystem with the user's account; workspaces do not confine them.</td></tr>
+        <tr><td>workspace</td><td>sandbox</td><td>Agents work on the OS and filesystem with the service account; workspaces do not confine them.</td></tr>
       </tbody>
     </table>
   </div>
@@ -290,26 +293,36 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
     <table>
       <thead><tr><th>Term</th><th>Meaning</th></tr></thead>
       <tbody>
-        <tr><td>the-intern</td><td>The product. It runs as a daemon.</td></tr>
-        <tr><td>bob</td><td>The name of a role and of the CLI (<code>bob chat</code>, <code>bob serve</code>).</td></tr>
-        <tr><td>User</td><td>The single person who talks to the-intern's conversations, configures and monitors it.</td></tr>
-        <tr><td>Role</td><td>The base context an agent starts from: instructions, tools, skills and default model, thinking level and workspace.</td></tr>
+        <tr><td>The Intern, the-intern</td><td>The product. It runs as a daemon.</td></tr>
+        <tr><td>bob</td><td>The name of the default lead role and of the CLI (<code>bob serve</code>).</td></tr>
+        <tr><td>Team member</td><td>Anyone who can reach a way in. Gives jobs, answers questions, follows and steers work, configures and installs The Intern. All are equal.</td></tr>
+        <tr><td>Way in</td><td>How team members reach The Intern: the command line, the web interface, or email to its own mailbox.</td></tr>
+        <tr><td>Service account</td><td>The OS account The Intern runs as; the installing person's in v1. Its pi login, keys and account credentials are The Intern's.</td></tr>
+        <tr><td>Job</td><td>The product's unit of work, kept in the job record. Its steps: define it (goal, needs, plan, definition of done), get what is missing, act, verify.</td></tr>
+        <tr><td>Job record</td><td>Where every job, its status, questions, evidence, follow-ups and history are kept. Carried to a new version by export and import.</td></tr>
+        <tr><td>Blocked job</td><td>A job waiting for the answer to its question. Its lead conversation is parked and holds no worker thread.</td></tr>
+        <tr><td>Definition of done, evidence</td><td>What the lead checks the result against before closing a job, and what it closes the job with.</td></tr>
+        <tr><td>Follow-up job</td><td>A job an agent creates for work it noticed while working on another.</td></tr>
+        <tr><td>Job source, origin</td><td>What starts a job and its lead conversation: a request, a schedule fire, a trigger or a follow-up. A conversation's origin records its job source, or the invoking conversation.</td></tr>
+        <tr><td>Schedule, trigger</td><td>A schedule starts jobs at set times, fresh or with the history of its last runs. A trigger starts a job when an event happens, such as a job outcome or mail arriving.</td></tr>
+        <tr><td>Lead conversation, lead agent</td><td>Each job's one lead conversation; its current agent carries the job from definition to verification and is the only one that closes it.</td></tr>
+        <tr><td>Specialist role, specialist agent</td><td>A role suited to a kind of work (any role a team creates); an agent of it invoked for part of a job.</td></tr>
+        <tr><td>Team knowledge</td><td>The knowledge sources The Intern reads and keeps current: the team's wiki (run by the team), repository docs and other folders.</td></tr>
+        <tr><td>Role</td><td>The base context an agent starts from: instructions, tools, skills and default model, thinking level and workspace. Shipped (<code>bob</code>, <code>gp</code>) or created by the team.</td></tr>
         <tr><td>Agent</td><td>The application of a role in a conversation, and the actor that interacts with the model there. It exists only within a conversation, one at a time, and can be configured during it. Not an operating-system process.</td></tr>
         <tr><td>Seat</td><td>The place of the current agent in a conversation, with its role, model, thinking level and workspace (defaults or overrides).</td></tr>
-        <tr><td>Conversation</td><td>The pi-durable meaning: an ordered transcript of entries with its own pi-durable agent.</td></tr>
+        <tr><td>Conversation</td><td>The pi-durable meaning: an ordered transcript of entries with its own pi-durable agent. Each belongs to one job.</td></tr>
         <tr><td>Transcript, context</td><td>The transcript is every stored entry. The context is what the model receives next, after resets and compactions.</td></tr>
         <tr><td>Reset</td><td>Clears what the model sees; the conversation, its id and its entries stay.</td></tr>
         <tr><td>Agent run, model turn</td><td>A run is the model turns from picking up an input until the conversation is idle or parked. A turn is one model request and its tool calls.</td></tr>
-        <tr><td>Worker thread</td><td>One unit of capacity; one active agent run uses one. A slot in the daemon, not an operating-system thread.</td></tr>
-        <tr><td>Job</td><td>The work an agent run is expected to complete. It can pass between agents.</td></tr>
+        <tr><td>Worker thread</td><td>One unit of capacity; one active agent run uses one. A slot in the daemon, not an operating-system thread. Their count is S-000's limit on agents working at once.</td></tr>
         <tr><td>Workspace</td><td>A registered local folder an agent works in. It supplies extra instructions and skills and is where tools start.</td></tr>
-        <tr><td>Entry point, origin</td><td>What starts a conversation (chat for the root, a schedule fire, a user request). The origin records which one, or the invoking conversation.</td></tr>
         <tr><td>Daemon, instance</td><td>The single long-running process (<code>bob serve</code>). An instance is one daemon with its state directory; two instances share nothing.</td></tr>
         <tr><td>Database</td><td>The one pi-durable store of an instance: conversations, entries, pi-durable tasks, submissions and documents, plus the daemon's own documents.</td></tr>
-        <tr><td>Client, listener</td><td>A client is a separate process that uses the daemon and holds no work. A listener is a transport that exposes service operations to clients.</td></tr>
-        <tr><td>Service layer, operation, caller</td><td>The only way to read or change daemon state from outside the harness. An operation is one named capability, either read or control. The caller (client, entry point or agent tool) states the actor that is recorded.</td></tr>
+        <tr><td>Client, listener</td><td>A client is a separate program that uses the daemon and holds no work. A listener is a transport that exposes service operations to clients; none authenticates callers.</td></tr>
+        <tr><td>Service layer, operation, caller</td><td>The only way to read or change daemon state from outside the harness. An operation is one named capability, either read or control. The caller (client, job source or agent tool) states the actor that is recorded.</td></tr>
         <tr><td>Observation feed</td><td>The stream of changes for a scope: a snapshot, then deltas.</td></tr>
-        <tr><td>Supervisor</td><td>The operating system's service manager (systemd user service, launchd agent) that starts and restarts the daemon.</td></tr>
+        <tr><td>Supervisor</td><td>The operating system's startup manager (systemd, launchd) that starts the daemon at machine startup without a login and restarts it on an error exit.</td></tr>
       </tbody>
     </table>
   </div>
@@ -321,11 +334,12 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
         <tr><td>Session</td><td>One transcript, a JSONL file</td><td>The whole store: one database</td><td>Not used. A transcript is a conversation; the store is "the database".</td></tr>
         <tr><td>Agent</td><td>The loop in the <code>pi</code> process</td><td>What a conversation runs with: model, thinking, extensions, tools, instructions, cwd</td><td>The current agent's seat is written into the pi-durable agent of its conversation.</td></tr>
         <tr><td>Subagent</td><td>None built in</td><td>A conversation owned by a task of its caller</td><td>Not used. Agent invocation replaces it.</td></tr>
-        <tr><td>Task</td><td>Not a concept</td><td>A durable state machine</td><td>Only the pi-durable meaning. Agent work is a job.</td></tr>
+        <tr><td>Root conversation</td><td>None</td><td>Conversation 1, from the host's first <code>root()</code></td><td>Not used. Every conversation belongs to a job.</td></tr>
+        <tr><td>Task</td><td>Not a concept</td><td>A durable state machine</td><td>Only the pi-durable meaning. The product's work is a job.</td></tr>
         <tr><td>Extension</td><td>A module pi loads from disk</td><td>Tools, prompt sections and hooks the host installs</td><td>Only our own pi-durable extensions. pi agent extensions are never loaded.</td></tr>
-        <tr><td>Skills, context files</td><td>Loaded from the agent folder, <code>~/.agents/skills</code> and trusted projects</td><td>None of its own; the host supplies prompt sections</td><td>Role skills plus workspace skills and context files. The user's own pi agent skills are not loaded.</td></tr>
+        <tr><td>Skills, context files</td><td>Loaded from the agent folder, <code>~/.agents/skills</code> and trusted projects</td><td>None of its own; the host supplies prompt sections</td><td>Role skills plus workspace skills and context files. The service account's own pi agent skills are not loaded.</td></tr>
         <tr><td>Steer, follow-up</td><td>Queued in memory</td><td>The same, through a durable inbox</td><td>Same meanings, durable.</td></tr>
-        <tr><td>Default model, thinking level</td><td>From pi agent settings</td><td>None; the host passes them</td><td>"pi agent's default" is what the user's pi settings select.</td></tr>
+        <tr><td>Default model, thinking level</td><td>From pi agent settings</td><td>None; the host passes them</td><td>"pi agent's default" is what the service account's pi settings select.</td></tr>
       </tbody>
     </table>
   </div>
@@ -335,42 +349,43 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
 <section id="specs">
   <span class="eyebrow">5 · Spec map</span>
   <h2>Which spec owns what</h2>
-  <p class="claim">Specs are written in layers. Each one builds on the ones before it, and only S-001 and S-002 exist so far.</p>
+  <p class="claim">S-000 owns the decomposition into components; each later spec owns the contract of one component. Specs are written in layers, and only S-000, S-001 and S-002 exist so far.</p>
   <figure>
     <div class="fig">
-      <svg viewBox="0 0 800 340" role="img" aria-label="Spec dependency map: S-002 is the base; S-001 and S-003 build on it; S-004 to S-008 and S-010 build on those.">
-        <rect class="b s2" x="10" y="130" width="140" height="70" rx="6"/><text class="tb m" x="80" y="156">S-002</text><text class="ts m" x="80" y="174">daemon, host,</text><text class="ts m" x="80" y="188">service, feed</text>
-        <rect class="b s1" x="200" y="40" width="140" height="70" rx="6"/><text class="tb m" x="270" y="66">S-001</text><text class="ts m" x="270" y="84">roles, seats,</text><text class="ts m" x="270" y="98">conversations</text>
-        <rect class="b later" x="200" y="220" width="140" height="70" rx="6"/><text class="tb m" x="270" y="246">S-003</text><text class="ts m" x="270" y="264">control endpoint,</text><text class="ts m" x="270" y="278">client library</text>
-        <rect class="b later" x="400" y="10" width="140" height="56" rx="6"/><text class="tb m" x="470" y="34">S-004</text><text class="ts m" x="470" y="52">policy, approvals</text>
-        <rect class="b later" x="400" y="76" width="140" height="56" rx="6"/><text class="tb m" x="470" y="100">S-005</text><text class="ts m" x="470" y="118">prompt, skills</text>
-        <rect class="b later" x="400" y="142" width="140" height="56" rx="6"/><text class="tb m" x="470" y="166">S-006</text><text class="ts m" x="470" y="184">scheduler, jobs</text>
-        <rect class="b later" x="400" y="208" width="140" height="56" rx="6"/><text class="tb m" x="470" y="232">S-007</text><text class="ts m" x="470" y="250">chat client</text>
-        <rect class="b later" x="400" y="274" width="140" height="56" rx="6"/><text class="tb m" x="470" y="298">S-008</text><text class="ts m" x="470" y="316">audit</text>
-        <rect class="b later" x="600" y="76" width="190" height="56" rx="6"/><text class="tb m" x="695" y="100">S-009</text><text class="ts m" x="695" y="118">open items, email triage</text>
-        <rect class="b later" x="600" y="208" width="190" height="56" rx="6"/><text class="tb m" x="695" y="232">S-010</text><text class="ts m" x="695" y="250">packaging, unit files</text>
+      <svg viewBox="0 0 800 340" role="img" aria-label="Spec dependency map: S-002 is the base; S-001 and S-003 build on it; the specs for Jobs, Schedules and triggers, Email, Web interface, Skills and instructions, Team knowledge and Installation build on those.">
+        <rect class="b s2" x="10" y="130" width="140" height="70" rx="6"/><text class="tb m" x="80" y="156">S-002</text><text class="ts m" x="80" y="174">Intern service:</text><text class="ts m" x="80" y="188">daemon, host, feed</text>
+        <rect class="b s1" x="200" y="40" width="140" height="70" rx="6"/><text class="tb m" x="270" y="66">S-001</text><text class="ts m" x="270" y="84">Agents and roles</text><text class="ts m" x="270" y="98">conversations</text>
+        <rect class="b later" x="200" y="220" width="140" height="70" rx="6"/><text class="tb m" x="270" y="246">S-003</text><text class="ts m" x="270" y="264">control endpoint,</text><text class="ts m" x="270" y="278">Command line</text>
+        <rect class="b later" x="400" y="10" width="140" height="56" rx="6"/><text class="tb m" x="470" y="34">Jobs</text><text class="ts m" x="470" y="52">record, steps</text>
+        <rect class="b later" x="400" y="76" width="140" height="56" rx="6"/><text class="tb m" x="470" y="100">Skills, instructions</text><text class="ts m" x="470" y="118">shipped, overlay</text>
+        <rect class="b later" x="400" y="142" width="140" height="56" rx="6"/><text class="tb m" x="470" y="166">Team knowledge</text><text class="ts m" x="470" y="184">wiki, docs</text>
+        <rect class="b later" x="400" y="208" width="140" height="56" rx="6"/><text class="tb m" x="470" y="232">Web interface</text><text class="ts m" x="470" y="250">board, live, config</text>
+        <rect class="b later" x="400" y="274" width="140" height="56" rx="6"/><text class="tb m" x="470" y="298">Installation</text><text class="ts m" x="470" y="316">packaging, supervisor</text>
+        <rect class="b later" x="600" y="10" width="190" height="56" rx="6"/><text class="tb m" x="695" y="34">Schedules and triggers</text><text class="ts m" x="695" y="52">fires, events, history</text>
+        <rect class="b later" x="600" y="76" width="190" height="56" rx="6"/><text class="tb m" x="695" y="100">Email</text><text class="ts m" x="695" y="118">own mailbox, in and out</text>
         <path class="ln s2" d="M150 150 L200 85"/><path class="ln s2" d="M150 180 L200 245"/>
         <path class="ln" d="M340 70 L400 38"/><path class="ln" d="M340 80 L400 104"/><path class="ln" d="M340 95 L400 165"/>
-        <path class="ln" d="M340 245 L400 236"/><path class="ln" d="M340 270 L400 300"/>
-        <path class="ln dash" d="M540 160 L600 118"/><path class="ln dash" d="M150 195 C300 340 560 345 600 250"/>
+        <path class="ln" d="M340 245 L400 236"/><path class="ln dash" d="M150 195 C250 330 350 310 400 300"/>
+        <path class="ln dash" d="M540 38 L600 38"/><path class="ln dash" d="M540 50 L600 100"/>
       </svg>
     </div>
-    <figcaption>Arrows read "is built on". For S-004 onward the dependencies are the intended ones; each spec confirms them when it is written. S-001 phase 1 also needs S-002 phases 1 to 3, and S-002 phase 5 needs the S-010 unit files.</figcaption>
+    <figcaption>Arrows read "is built on". Grey boxes are named after their S-000 component and get a spec number when written; their dependencies are the intended ones, and each spec confirms them. S-001 phase 1 also needs S-002 phases 1 to 3, and S-002 phase 5 needs the Installation spec's supervisor registration.</figcaption>
   </figure>
   <div class="tablewrap">
     <table>
-      <thead><tr><th>Spec</th><th>Topic</th><th>Status</th><th>Tasks</th><th>Owns</th></tr></thead>
+      <thead><tr><th>Spec</th><th>S-000 component</th><th>Status</th><th>Tasks</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td>S-001</td><td>Agent roles and conversations</td><td><span class="chip s1">approved</span></td><td>not broken down</td><td>Roles, seats, handoff, invocation, steering, depth cap, entry points, monitoring views.</td></tr>
-        <tr><td>S-002</td><td>Daemon and host runtime</td><td><span class="chip s2">approved</span></td><td>breakdown paused; see the open item below</td><td>Process, lifecycle, configuration file, worker-thread capacity and queue, service layer, observation feed.</td></tr>
-        <tr><td>S-003</td><td>Control endpoint and CLI</td><td><span class="chip later">next</span></td><td>none</td><td>Unix-socket HTTP listener, client library, trust gate, which operations each listener exposes.</td></tr>
-        <tr><td>S-004</td><td>Policy and approvals</td><td><span class="chip later">planned</span></td><td>none</td><td>Allow / ask rules as a hook before tool calls, approvals, policy reload.</td></tr>
-        <tr><td>S-005</td><td>Prompt, skills, customisation</td><td><span class="chip later">planned</span></td><td>none</td><td>Shipped prompt and skill content, the skill overlay.</td></tr>
-        <tr><td>S-006</td><td>Scheduler and jobs</td><td><span class="chip later">planned</span></td><td>none</td><td>Cron fires, job tracking, clean-up steps, "fire now".</td></tr>
-        <tr><td>S-007</td><td>Chat client</td><td><span class="chip later">planned</span></td><td>none</td><td><code>bob chat</code> as a window onto the root conversation.</td></tr>
-        <tr><td>S-008</td><td>Audit</td><td><span class="chip later">planned</span></td><td>none</td><td>Records derived from the observation feed.</td></tr>
-        <tr><td>S-009</td><td>Open items, email triage</td><td><span class="chip later">planned</span></td><td>none</td><td>Open items that agents track; email triage.</td></tr>
-        <tr><td>S-010</td><td>Packaging</td><td><span class="chip later">planned</span></td><td>none</td><td>Distribution and the supervisor unit files.</td></tr>
+        <tr><td>S-000</td><td>System overview</td><td><span class="chip">approved</span></td><td>bootstrap plan not broken down</td><td>Purpose, users, use cases, the decomposition into components, project exclusions.</td></tr>
+        <tr><td>S-001</td><td>Agents and roles</td><td><span class="chip s1">approved</span></td><td>not broken down</td><td>Shipped and team roles, seats, lead conversations, handoff, invocation, steering, depth cap, job sources' conversations, monitoring views.</td></tr>
+        <tr><td>S-002</td><td>Intern service</td><td><span class="chip s2">approved</span></td><td>not broken down</td><td>Process, lifecycle, service account, configuration file, worker-thread capacity and queue, service layer, observation feed.</td></tr>
+        <tr><td>S-003</td><td>Command line (and both listeners)</td><td><span class="chip later">next</span></td><td>none</td><td>Local socket listener, network listener for the web interface, client library, which operations each listener exposes, the <code>bob</code> commands.</td></tr>
+        <tr><td>—</td><td>Jobs</td><td><span class="chip later">planned</span></td><td>none</td><td>The job record, the job's steps, blocked jobs and answers, verification and closing, follow-ups, export and import.</td></tr>
+        <tr><td>—</td><td>Schedules and triggers</td><td><span class="chip later">planned</span></td><td>none</td><td>Fires and events, run history, skipping busy runs, "run now".</td></tr>
+        <tr><td>—</td><td>Email</td><td><span class="chip later">planned</span></td><td>none</td><td>The Intern's own mailbox: sorting, requests to jobs, answers, mail events, optional sending.</td></tr>
+        <tr><td>—</td><td>Web interface</td><td><span class="chip later">planned</span></td><td>none</td><td>Job board, answering, live view, configuration from the browser.</td></tr>
+        <tr><td>—</td><td>Skills and instructions</td><td><span class="chip later">planned</span></td><td>none</td><td>Shipped prompt and skill content, the team's overlay.</td></tr>
+        <tr><td>—</td><td>Team knowledge</td><td><span class="chip later">planned</span></td><td>none</td><td>Reaching the team's wiki, repository docs and folders; keeping them current; writing what it learns.</td></tr>
+        <tr><td>—</td><td>Installation and service setup</td><td><span class="chip later">planned</span></td><td>none</td><td>Release form, supervisor registration at machine startup, upgrade with export and import.</td></tr>
       </tbody>
     </table>
   </div>
@@ -378,11 +393,11 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
   <div class="panel warn">
     <h3>Open items that cross specs</h3>
     <ul>
-      <li>S-002's startup (R-2 step 6) and operation catalogue (R-12) use S-001 pieces, while S-001 phase 1 waits on S-002 phases 1 to 3. The order of the two breakdowns is undecided.</li>
-      <li>When a parked agent continues (on each report or after the last) and what happens to a prompt sent to a parked conversation: left to the job spec.</li>
-      <li>User customisation beyond a workspace's instructions and skills. One candidate to explore: spawning pi agent sessions (not pi-durable agents) in a workspace, so the user's pi extensions apply. Not specified yet; S-001 and S-002 only exclude loading discovered extensions into the daemon.</li>
-      <li>The packaging form (npm tarball or bundle with Node), and retention of old conversations.</li>
-      <li>No ADRs exist yet for the standing decisions in section 1 (one daemon, one database, pi-durable behind a host).</li>
+      <li>S-002's operation catalogue (R-12) uses S-001 pieces, while S-001 phase 1 waits on S-002 phases 1 to 3. The order of the two breakdowns is undecided.</li>
+      <li>The Jobs spec is the largest gap: S-001 relies on it for creating jobs, blocking and answering, verification and closing, and the run history a schedule passes to its next run.</li>
+      <li>When a parked agent continues (on each report or after the last): left to the Jobs spec.</li>
+      <li>The packaging form (npm tarball or bundle with Node), starting at boot on macOS without a login, and retention of old conversations.</li>
+      <li>No ADRs exist yet for the standing decisions in section 1 (one daemon, one database, pi-durable behind a host, the team model with no logins, no approval rules, the service account as the boundary).</li>
     </ul>
   </div>
 </section>
@@ -394,11 +409,12 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
     <table>
       <thead><tr><th>Document</th><th>Use it for</th></tr></thead>
       <tbody>
+        <tr><td><code>docs/ai-team/specs/S-000-system-overview.md</code></td><td>What the product is, who it serves, its components and exclusions. Source of truth for scope.</td></tr>
         <tr><td><code>docs/ai-team/specs/</code></td><td>Behaviour, requirements and verification. Wins over this document.</td></tr>
         <tr><td><code>docs/ai-team/decisions/</code></td><td>ADRs for durable architecture decisions.</td></tr>
         <tr><td><code>docs/ai-team/docs/coding_guidelines.md</code></td><td>Code conventions, module structure, durability rules.</td></tr>
         <tr><td><code>docs/reports/pi-durable-knowledge.md</code></td><td>What pi-durable and the pi SDK provide; prototype results; API footguns.</td></tr>
-        <tr><td><code>docs/reports/feature-review.md</code></td><td>Per-feature directions and the open design decisions.</td></tr>
+        <tr><td><code>docs/reports/feature-review.md</code></td><td>Per-feature directions from before S-000; S-000 wins where they differ.</td></tr>
         <tr><td><code>README.md</code></td><td>Development environment and the pi versions in use.</td></tr>
       </tbody>
     </table>

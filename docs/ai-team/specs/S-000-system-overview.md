@@ -11,18 +11,18 @@ author: planner
 
 ## Purpose
 
-The Intern is an agent that works for a team. It runs unattended on an always-on machine, takes jobs from anyone who
-can reach it, and sees each one through to the end: it first defines the job properly and works out what it needs,
-asks when information is missing, then does the work and checks the result before closing the job. It exists so that
-a team can hand off work, from one-off objectives to recurring housekeeping, and trust it to get done without anyone
-driving it step by step.
+The Intern is an agent that works for a team. It runs unattended on a machine the team keeps running, takes jobs from
+anyone who can reach it, and sees each one through to the end: it first defines the job properly and works out what it
+needs, asks when information is missing, then does the work and checks the result before closing the job. It exists so
+that a team can hand off work, from one-off objectives to recurring housekeeping, and trust it to get done without
+anyone driving it step by step.
 
 ## Users
 
 - **Team members.** Anyone who can reach one of The Intern's ways in: the command line, the web interface or its email
   address. They hand it jobs, answer its questions, follow its work and stop or redirect it, and, from the command
   line or the web interface, configure it: its schedules, triggers, roles, skills, instructions and knowledge sources.
-  Whoever installs it on the always-on machine and gives it its accounts is a team member like any other. They need
+  Whoever installs it on the machine and gives it its accounts is a team member like any other. They need
   it to finish what it is given, to ask only when it lacks something, and to show what it did. All team members are
   equal; The Intern makes no difference between them.
 
@@ -69,7 +69,7 @@ driving it step by step.
 
 ## Solution overview
 
-The Intern is one service that runs all the time on a machine the team owns. All of its work is organised as jobs,
+The Intern is one service that starts with a machine the team keeps running. All of its work is organised as jobs,
 kept in its own job record. A job can come from a team member, from a schedule, from an event, or from The Intern
 itself when it finds follow-up work. Every job goes through the same steps: define it (goal, needs, plan and
 definition of done), get what is missing, act, and verify. A job that lacks something is marked blocked with its
@@ -96,8 +96,10 @@ What The Intern learns about the team's systems and conventions it writes to the
 separately and edits in the browser alongside it; the wiki and the team's other documents are both where The Intern
 learns how the team works and documentation it keeps current.
 
-The Intern acts with the accounts and access it is given, from the machine it runs on. What it can do is bounded
-by what that machine and those accounts can reach, not by approval rules for each action.
+The Intern runs as one account of the machine it is installed on and acts with that account's credentials and
+access, from that machine. What it can do is bounded by what that account can reach, not by approval rules for each
+action. When it runs as the account of the person who installed it, whoever can reach The Intern acts with that
+person's access.
 
 ## Components
 
@@ -106,7 +108,7 @@ by what that machine and those accounts can reach, not by approval rules for eac
 #### Intern service
 
 - **Name:** Intern service.
-- **Responsibility:** The single long-running process on the always-on machine. It owns all saved state, runs many jobs
+- **Responsibility:** The single long-running process on the team's machine. It owns all saved state, runs many jobs
   at once up to a limit on how many agents work at once and queues the rest, resumes interrupted work after a crash or
   restart, reaches the models, offers every capability as a named operation that the ways in share, and publishes a
   stream of changes that they can follow. It starts, stops and reads its configuration in a defined order.
@@ -175,8 +177,9 @@ by what that machine and those accounts can reach, not by approval rules for eac
 
 - **Name:** Schedules and triggers.
 - **Responsibility:** Starts jobs at set times and when events happen; defines which events exist, such as a job
-  ending with a given outcome or mail arriving; lets team members add, remove, list and run them on demand; and skips
-  a run while the previous one is still working.
+  ending with a given outcome or mail arriving; lets team members add, remove, list and run them on demand; lets a
+  schedule choose whether each run starts fresh or sees the history of its last few runs; and skips a run while the
+  previous one is still working.
 - **Boundary:** It does not do the work of a job (Agents and roles) or keep the job record (Jobs). It does not watch
   the mailbox itself; Email reports incoming mail.
 - **Works with:** Intern service, Jobs, Email, Command line, Web interface.
@@ -258,8 +261,9 @@ by what that machine and those accounts can reach, not by approval rules for eac
 #### Installation and service setup
 
 - **Name:** Installation and service setup.
-- **Responsibility:** Turns a release into something a team member can install on an always-on machine of a supported
-  platform, and sets the service up so the operating system starts it at boot and restarts it after a failure.
+- **Responsibility:** Turns a release into something a team member can install on a machine of a supported platform,
+  running as the installing person's account, and sets the service up so the operating system starts it when the
+  machine starts, without anyone logging in, and restarts it after a failure.
   Covers upgrading and removing it.
 - **Boundary:** It does not define the service's own start-up and shutdown (Intern service) or the team's network
   setup that decides who can reach it.
@@ -267,7 +271,8 @@ by what that machine and those accounts can reach, not by approval rules for eac
 - **Decisions needed:**
   - What form does a release take: a package for an existing runtime, or a self-contained bundle?
   - How is a release triggered, built and published?
-  - How is the background service registered with each supported operating system?
+  - How is the background service registered with each supported operating system, and how does it start at boot
+    without anyone logging in, on macOS in particular?
   - How does an upgrade export the job record from the old version and import it into the new one, and what happens
     to jobs still in progress?
 
@@ -323,6 +328,7 @@ by what that machine and those accounts can reach, not by approval rules for eac
   and email; others come later.
 - **Code extensions and add-ons from other assistants.** The Intern is adapted through instructions, skills and
   knowledge sources only.
+- **Catching up on missed scheduled runs.** Runs due while the machine was off are skipped.
 - **Windows, Linux on ARM and Intel Macs.** Only Linux on x64 and macOS on Apple silicon are supported, to keep the
   test matrix small.
 - **Saved state that carries over to a new version on its own.** The underlying agent runtime is pinned to one
@@ -331,8 +337,6 @@ by what that machine and those accounts can reach, not by approval rules for eac
 
 ## Amendment Log
 
-<!-- Optional. Use when an approved spec is amended after tasks are in flight.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| YYYY-MM-DD | Description of change | Reason for amendment | T-XXX, T-YYY |
--->
+| 2026-10-30 | The machine is one the team keeps running, not an always-on one; The Intern starts at boot without a login and is restarted after a failure; it runs as one OS account, the installing person's in v1, and acts with that account's credentials; schedules choose fresh runs or the history of their last runs; missed runs are skipped (Purpose, Users, Solution overview, Intern service, Schedules and triggers, Installation and service setup, Project exclusions). | Decided with the product owner while aligning S-001 and S-002 with S-000. | None; S-000's bootstrap plan isn't broken down yet |
