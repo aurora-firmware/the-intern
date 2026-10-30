@@ -496,7 +496,7 @@ the two capacity constants by amendment.
     while two wait restores the same order; restarting with a lower count makes the extra runs wait; status and the
     feed report active and waiting work. Without the test switch, status reports 32 worker threads.
   - R-12, R-13: every operation in the catalogue is called in-process with no listener; invalid input changes
-    nothing; each error outcome is produced; a repeated create with the same idempotency key creates one
+    nothing; each error outcome is produced; a repeated create with the same idempotency key creates one lead
     conversation; read operations leave the database unchanged.
   - R-14, R-15: a subscription gets a snapshot, then deltas in commit order; a reconnect gets a fresh snapshot; a
     subscriber that stops reading is disconnected without delaying a running agent run.
