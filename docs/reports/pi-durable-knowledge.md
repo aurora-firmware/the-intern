@@ -9,7 +9,8 @@ here.*
 
 | Source | Where |
 |---|---|
-| pi-durable package (1.3.0, 2026-10-15; analysed at 1.2.0, then diffed to 1.3.0, section 7): README, `CHANGELOG.md`, normative `docs/spec.md` (5.3k lines; §12 "API footguns", §13 non-goals), 32 runnable examples in `test/examples` | Local clone `~/projects/pi-mono/packages/durable`, checked out at tag `v1.3.0` (detached; `main` is already ahead with unreleased commits); upstream `earendil-works/pi` (`badlogic/pi-mono` redirects there) |
+| pi-durable package (1.4.0, 2026-10-21; analysed at 1.2.0, then diffed to 1.3.0 and to 1.4.0, section 7): README, `CHANGELOG.md`, normative `docs/spec.md` (§12 "API footguns", §13 non-goals), 32 runnable examples in `test/examples` | Local clone `~/projects/pi-mono/packages/durable` (tags `v1.3.0` and `v1.4.0` fetched; the 1.4.0 check read the tag's files through `git show` and the installed npm packages); upstream `earendil-works/pi` (`badlogic/pi-mono` redirects there) |
+| Changelogs checked for 1.4.0 (checked 2026-10-30; 1.4.0 is the only release after 1.3.0, per `npm view @earendil-works/pi-durable versions`) | `CHANGELOG.md` of pi-durable, chord and pi-coding-agent in `node_modules/@earendil-works/`, and `packages/ai/CHANGELOG.md` at tag `v1.4.0` for pi-ai (the npm package ships no changelog) |
 | Announcement | <https://earendil.com/posts/pi-durable/> (2026-10-01) |
 | Upstream durable demos (durable coding agent, vacation planner), on pi-durable 1.0.0 | Tag `v1.0.0`, `packages/coding-agent/src/experimental/{durable,vacation}/`. Removed from `main` in `7472cda0` (2026-10-12) together with the experimental client/server packages. Read with `git -C ~/projects/pi-mono show v1.0.0:<path>` |
 | Third-party host `disler/durable-pi` (pinned to pi-durable 1.0.3) | `~/Downloads/durable-pi`, mainly `apps/dpi-backend/src/{store,jobs,addons,streams}.ts` and `API.md` |
@@ -405,9 +406,26 @@ starvation, run end inferred from `agent_end`, orphaned sessions when bob died).
 
 ---
 
-## 6. API footguns (found on pi-durable 1.2.0, unchanged in 1.3.0)
+## 6. API footguns (found on pi-durable 1.2.0, unchanged in 1.3.0 and 1.4.0)
 
-Read spec §12 before writing commits and hooks. Found in practice:
+Read spec §12 before writing commits and hooks. Found in practice. Status in the pinned 1.4.0, checked on 2026-10-30
+against the 1.4.0 changelogs, the §12 text of the 1.4.0 spec and the installed type declarations; the PoC was not
+rerun, so "unchanged" means no documented or visible change, not a new reproduction:
+
+| # | Status in 1.4.0 | Basis |
+|---|---|---|
+| 1 | Unchanged | §12 "Detached draft work" still says drafts reject after the callback settles |
+| 2 | Unchanged | `abortReason?: "restart"` still present in `dist/types.d.ts`; no changelog entry |
+| 3 | Unchanged | `HookApi extends DocumentReader` in the spec; no write methods added |
+| 4 | Unchanged | No JSON type change in either changelog |
+| 5 | Unchanged | `FauxResponseFactory` still exported by pi-ai (`dist/providers/faux.d.ts`) |
+| 6 | Unchanged | §12 "Guards left out of a selection" |
+| 7 | Unchanged | §12 "Selection edits and copies" |
+| 8 | Unchanged | §12 "Long transactions" and the new "Reads inside a commit" entry, which is stricter still |
+| 9 | Changed (narrower) | §12 "Unstable prompt text" still holds. pi-ai 1.4.0 stops OpenAI Responses deferred tool loads from rewriting the tool list, a different cache loss |
+| 10 | Unchanged | Telemetry adds nested-tool replay events only; `replay: "safe"` keeps its meaning |
+
+Nothing is fixed. The list:
 
 1. **Values read from a draft must not leave the commit.** Returning `{ ...existing }` from `commit()` leaked a nested
   draft proxy that later threw `Cannot use a settled overlay`. Return a JSON copy made inside the callback; mutate
@@ -464,10 +482,54 @@ holds**; the spec's §12 footguns are untouched. Pin 1.3.0.
   `off` level on Claude Haiku 5.5 and Opus 5, and `AssistantMessageFrame` removed (unused by us).
 - **pi-coding-agent:** exact internal pins; resumed sessions restore their active tools; `--model` prefers the
   provider with credentials; new `sessionShareDestination`. None affects the embedded use.
-- **Not reviewed:** `main` is past 1.3.0 with unreleased work (telemetry, `Context.telemetry`, a crash-loop guard,
+- **Not reviewed in 1.3.0:** `main` was past 1.3.0 with unreleased work (telemetry, `Context.telemetry`, a crash-loop guard,
   typed `ReportInfo` reasons in pi-durable). Revisit at the next release.
 
-### 7.2 History and templates
+### 7.2 1.3.0 → 1.4.0 (2026-10-21)
+
+Checked on 2026-10-30 through the changelogs of pi-durable, chord, pi-coding-agent and pi-ai (the latter at tag
+`v1.4.0`) and the §12 text of the 1.4.0 spec. 1.4.0 is the only release after 1.3.0. The PoC was not rerun. Pin 1.4.0.
+
+- **pi-durable breaking changes.** `TaskRuntime.sleep()` is removed: a task ends its phase with
+  `runtime.sleepUntil(until, checkpoint, context)` or returns `{ status: "sleeping", ... }` from `commit()`;
+  `setTimer()` paces work inside a phase. Tasks gain a `sleeping` status, so code switching over `TaskState`,
+  `TaskGraphState` or `TaskInspection` needs a case for it. `defineDoc()` and `defineDocFamily()` require an explicit
+  `checkpointWhen` (use `() => false` for plain deltas; §12 "Checkpoint starvation" applies). `TaskRuntime` and
+  `ToolExecutionApi` gained members (`sleepUntil`, `setTimer`, `now`), so hand-built fakes must add them. `ToolControl.terminate`
+  is typed `boolean`.
+- **SQLite migrates to schema version 2 on open and cannot be rolled back.** A 1.3.0 or older build cannot open the
+  database afterwards. Matters for deployments and for any restart test that reopens a database across versions.
+- **Crash-loop guard.** A task cut off by a crash five times in a row without committing new state is parked
+  (blocked with reason `restart_limit`, reported once, resumed with `Harness.retryTask(id)`).
+  `settings.restartLimit: Infinity` restores the old behaviour. This qualifies "a crash is a resume" in section 5.5.
+- **Error reporting.** `onReport(error, info)` gets a typed `ReportInfo` (`session_failed`, `task_faulted`,
+  `task_parked`, `migration_failed`, `task_outdated`, `task_error`, `extension_error`, `host_error`,
+  `listener_error`); a faulted task phase is now reported. A `StorageRequestError` thrown by `commit()` or `mintId()`
+  fails the Harness like any other storage error (documentation fix; only reads are exempt). Section 1.4 stays correct.
+- **New capabilities bob may use.** `Harness.wake()` and `onWake` (host learns when the next process is needed);
+  `HarnessOptions.setTimer` for host or fake clocks (useful for deterministic tests); `settings.afterFailedRun`
+  (`keep` default, `continue`, `withdraw`); `settings.compaction.modelOverrides` per `"provider/modelId"`;
+  `HarnessOptions.identity` for `User-Agent` and attribution (`api.models` is now a wrapper, not the host object);
+  `HarnessOptions.models` and `settings` accept a function returning the current value; `HarnessOptions.telemetry`
+  (content-free spans and metrics); `IndexedDbStorage` (browser, not relevant). Retry and compaction backoffs now sleep
+  durably instead of waiting in a phase.
+- **chord.** `Context` implementations must provide `telemetry` (`NOOP_TELEMETRY_CONTEXT` when disabled); a host that
+  builds its own `Context` must add it. The PoC imports `Context`, `BACKGROUND_CONTEXT` and `withoutAbortSignal` only,
+  so check any custom `Context` object. New `chord/sqlite`, `chord/telemetry-sqlite`; the SQLite drivers moved there
+  but pi-durable re-exports them.
+- **pi-ai.** Breaking: `telemetryContext` request option renamed `telemetry`; `getPiUserAgent()` removed in favour of
+  `formatUserAgent()`; `resolveTranscriptTools()` takes a `TranscriptToolSupport` string. Added client identity
+  configuration. Fixes that touch bob: whitespace-only tool output no longer makes OpenAI and Google requests fail
+  with 400; more gateway and transient OAuth errors retry; HTTP 413 counts as context overflow; OpenAI Responses
+  deferred tool loads keep the prompt cache. The `openai-codex` provider no longer lists `gpt-5.5` or
+  `gpt-5.3-codex-spark`.
+- **pi-coding-agent.** Compaction and branch summaries use the model's output limit (`reserveTokens` only decides when
+  compaction starts; `generateSummary()` ignores its `reserveTokens` argument), which fixes summaries failing on long
+  reasoning. Resumed sessions keep extension tools active unless `defaultActive: false`. A response cut at the output limit no
+  longer leaves orphan tool results. `grep` runs `rg --no-config`. Default Copilot, NVIDIA and Xiaomi models changed.
+  The rest is TUI, Windows and codemode work that does not affect embedded use.
+
+### 7.3 History and templates
 
 The upstream demo targets 1.0.0 and durable-pi 1.0.3; both need these adjustments when used as templates. The demo is
 also a single process with a lock file; bob's daemon is the single owner instead.
