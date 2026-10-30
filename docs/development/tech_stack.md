@@ -93,8 +93,9 @@ is open, to be settled from the comparison in `docs/development/release_form.md`
 ## User manual
 
 **Which documentation format and tool are used, and where is the manual published?**
-Markdown, built into a static site and published to GitHub Pages. The tool is open, to be chosen when the manual is
-scaffolded.
+Markdown, built into a static site and published to GitHub Pages. The tool is VitePress: it runs on the project's Node
+toolchain, builds plain Markdown pages (which the shipped "explain The Intern" skill can read) and needs no extra
+runtime. Its build output and cache go to the git-ignored `.tmp/` folder, and `npm run docs:build` builds the site.
 
 **How is the manual kept in step with the commands, the web interface and the configuration?**
 A task that changes a command, a web interface page or a setting updates the manual in the same change, and the
