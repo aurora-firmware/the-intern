@@ -19,8 +19,14 @@ sections 1.4 and 5.5):
 
 - One process owns a storage at a time, and there is no cross-process locking, so the host has to enforce single
   ownership itself.
-- A storage error closes the harness; the host decides whether to exit or reopen.
+- A storage error closes the harness; the host decides whether to exit or reopen. Since 1.4.0 this explicitly covers
+  any error from `commit()` or `mintId()`, `StorageRequestError` included; only reads are exempt.
 - It has no cap on how many agent runs are active at once.
+- Since 1.4.0 a crash-loop guard parks a pi-durable task that a crash, eviction or reset cut off 5 times in a row
+  without committing a new state (`settings.restartLimit`, default 5). A parked task doesn't run again until the host
+  calls `Harness.retryTask()`. A close that fails to write its stopped tasks back counts as a cut-off too.
+- Opening a database may migrate its schema in place, and the migration can't be undone: 1.4.0 moves SQLite to schema
+  version 2, which 1.3.0 and older can't open.
 - Its API changes between releases, so code that uses it directly is code an upgrade touches.
 
 The product owner approved S-001 and S-002, which together fix the runtime shape. This record states that shape once,
@@ -28,7 +34,8 @@ so every later spec and task builds on the same decision. It is one of the stand
 before development starts (S-000, Developer documentation, Decisions needed).
 
 Sources: S-002 Design Principles, R-1, R-7, R-9, R-10 and Exclusions; S-001 Definitions (worker thread) and R-10;
-`docs/reports/pi-durable-knowledge.md`; `docs/ai-team/docs/coding_guidelines.md` (Module structure).
+`docs/reports/pi-durable-knowledge.md` (sections 1.4, 5.5 and 7.2); `docs/development/coding_guidelines.md` (Module
+structure).
 
 ## Decision
 
@@ -52,11 +59,17 @@ behind a narrow host module, and durability comes from pi-durable, not from code
    as child processes.
 4. **Durability belongs to the runtime.** Resume, exactly-once admission of input, queued input and checkpoints come
    from pi-durable. The daemon writes no retry loops, intake tables or recovery code of its own. Each fact the daemon
-   owns is committed in the same atomic commit as the change it describes.
+   owns is committed in the same atomic commit as the change it describes. The host sets pi-durable's
+   `settings.restartLimit` to `Infinity`, so every start resumes every unfinished pi-durable task, however often a
+   crash cut it off, as S-002 R-8 requires. A finite limit, which parks a task until `Harness.retryTask()`, needs an
+   S-002 amendment first.
 5. **A storage error ends the process.** When a storage error closes the harness, the daemon logs it, stops accepting
    calls and exits with a non-zero status within the 10-second stop bound. It never reopens the database itself. The
    operating system's supervisor (systemd on Linux, launchd on macOS) restarts it, and unfinished work resumes from its
-   last checkpoint (S-002 R-4, R-7).
+   last checkpoint (S-002 R-4, R-7). An error from the daemon's own `commit()` or `mintId()` calls is a storage error
+   like any other: the service operation that made the call fails, and the daemon exits. It never handles that error
+   as an ordinary operation failure and carries on. The daemon learns that the harness failed from `harness.closed`;
+   `onReport` reports, typed by `ReportInfo` since 1.4.0, are diagnostics that it logs, not the exit trigger.
 
 ## Consequences
 
@@ -80,12 +93,16 @@ behind a narrow host module, and durability comes from pi-durable, not from code
   after a restart as well as new ones.
 - The daemon depends on a supervisor being set up; without one, a storage error leaves The Intern stopped.
 - The worker-thread count can't be tuned per machine; changing it takes a release.
+- With pi-durable's crash-loop guard turned off, a pi-durable task that crashes the daemon each time it resumes keeps
+  the daemon in a restart loop, stopping every job, until someone stops the service or removes the cause.
 
 ### Neutral
 
 - Storage only grows; retention and archiving of old conversations are a later decision.
 - The database isn't carried across pi-durable versions; the job record moves to a new version by export and import
-  (S-000).
+  (S-000). pi-durable itself may migrate an older database when a newer version opens it, and that migration can't be
+  undone, so an upgrade that may need to go back has to export the job record before the new version first opens the
+  database.
 - Installation owns registering the daemon with the supervisor (S-000, Installation and service setup).
 
 ## Alternatives Considered
@@ -123,3 +140,9 @@ upgrade. The narrow host keeps that change to a few files.
 **Rejected because:** 32 is the most concurrent agent runs the daemon is tested with; a higher setting would run
 untested, and the count is not a team decision (S-002 Exclusions, R-9). Tests use a test-only switch for a smaller
 count.
+
+## Amendments
+
+| Date | Change | Reason |
+|---|---|---|
+| 2026-10-30 | Clarified for pi 1.4.0: storage errors from `commit()` and `mintId()` (Context, decision 5); the crash-loop guard is turned off with `settings.restartLimit: Infinity` (Context, decision 4, Negative); the one-way SQLite schema migration (Context, Neutral); `onReport` reports are logged diagnostics (decision 5). Fixed the coding-guidelines path in Sources. No decision changes. | Architecture consistency review of ADR-001 against the pinned pi 1.4.0 packages, S-000, S-001, S-002 and ADR-002. |
