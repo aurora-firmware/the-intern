@@ -15,14 +15,14 @@ permissions:
   contents: read
 
 # Each job keeps its name so required checks stay stable. Jobs run in the
-# nodejs-dev container image as root, so files left in the shared runner
+# official node:24.22.0-bookworm image as root, so files left in the shared runner
 # workspace always have the same owner.
 jobs:
   format:
     name: Format
     runs-on: self-hosted
     container:
-      image: localhost:5000/nodejs-dev:1.3.0
+      image: node:24.22.0-bookworm
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -37,7 +37,7 @@ jobs:
     name: Build
     runs-on: self-hosted
     container:
-      image: localhost:5000/nodejs-dev:1.3.0
+      image: node:24.22.0-bookworm
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -55,7 +55,7 @@ jobs:
     name: User Documentation
     runs-on: self-hosted
     container:
-      image: localhost:5000/nodejs-dev:1.3.0
+      image: node:24.22.0-bookworm
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -70,7 +70,7 @@ jobs:
     name: Tests
     runs-on: self-hosted
     container:
-      image: localhost:5000/nodejs-dev:1.3.0
+      image: node:24.22.0-bookworm
     steps:
       - name: Checkout
         uses: actions/checkout@v6
