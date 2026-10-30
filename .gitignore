@@ -15,3 +15,6 @@ mise.local.toml
 
 # ai-team local work-item tracker (tasks, bugs, change-requests)
 /.ai-team/
+
+# Dependencies
+node_modules/
