@@ -1,9 +1,22 @@
 # the-intern
 
-The Intern is an AI office-assistant project. Its service, `bob`, is one TypeScript package that embeds pi as a
-library on `@earendil-works/pi-durable`.
+The Intern is an agent that works for a team. It runs unattended on a machine the team keeps running and takes jobs
+from anyone who can reach it: through the command line, a web interface or its own email address. It sees each job
+through to the end. It defines the job (goal, needs, plan and definition of done), gets what is missing by asking
+back only when it lacks something, acts, and verifies the result before closing the job with the evidence.
 
-Nothing is implemented yet.
+Its main uses are:
+
+- one-off objectives, such as "find out why the nightly build got slower and fix it";
+- recurring housekeeping, such as checking every night that the backups ran and the services answer;
+- keeping the team's documentation current.
+
+The Intern runs as one account of the machine it is installed on and acts with that account's credentials and access.
+What it can do is bounded by what that account can reach, not by approval rules for each action.
+
+Its service, `bob`, is one TypeScript package that embeds pi as a library on `@earendil-works/pi-durable`. The
+product scope is in [S-000, the system overview](docs/ai-team/specs/S-000-system-overview.md); the team-member
+documentation is the [user manual](docs/manual/index.md). Most of the product is not implemented yet.
 
 ## Start here
 
@@ -29,15 +42,17 @@ directories and must not touch your own pi configuration.
 
 ## Building from scratch
 
-There is no package yet, so these steps describe the intended flow and will be corrected when the package lands:
+These steps take a fresh clone to a checked working copy:
 
 1. Clone the repository and check out `dev-pi-durable`.
 2. Install the tools (with mise: `mise install`, then `mise run setup:ai-team`) and confirm `node --version`
    reports 24.
 3. Install the dependencies from the lockfile: `npm ci`.
-4. Typecheck: `npx tsc --noEmit`. Format and lint: `npx biome check`. Test: `node --test`.
+4. Run all checks (typecheck, `biome check` for lint and format, and the tests): `npm run check`.
+5. Build the user manual: `npm run docs:build`.
 
-There is no build step; Node runs the `.ts` sources directly.
+There is no build step for the sources; Node runs the `.ts` sources directly. `npm run docs:build` builds only the
+user manual, as a static site.
 
 ## pi version compatibility
 
