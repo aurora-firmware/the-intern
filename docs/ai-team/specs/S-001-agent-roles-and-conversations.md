@@ -113,7 +113,8 @@ What this specification explicitly does NOT cover:
   are spread over several processes belongs to the daemon and host-runtime spec. This spec uses worker threads only
   as a logical unit of capacity and states the observable caps (R-9, R-10).
 - **Technology choices.** The control protocol, client transport, storage layout, config file format and process
-  model belong to the daemon, control-endpoint and packaging specs. This spec states behaviour only.
+  model belong to the daemon and control-endpoint specs and to S-000's Installation and service setup. This spec
+  states behaviour only.
 
 ## Architecture
 
@@ -268,6 +269,7 @@ Each requirement is checked as described in **Verification** below.
   - A role without a configured default workspace uses a default workspace that the-intern creates and registers for
     that role, owner-only, under the-intern's own data location.
   - A tool set can name only tools the-intern ships. A change naming an unknown tool is refused.
+  - The coordination capabilities (R-6 to R-8a, R-10a) are part of every role. A tool set can't leave them out.
   - A change to a role, or its removal, affects only agents seated after the change. Agents already seated keep
     their instructions, tools, skills, model, thinking level and workspace until their seat changes.
 - **R-3a Workspace registration.** A workspace is a local folder: the files an agent works on, extra instructions
@@ -295,7 +297,7 @@ Each requirement is checked as described in **Verification** below.
 - **R-5 Seat effects.** After a seat is applied, every model turn in that conversation:
   - uses the seat's model and thinking level
   - sees the role's instructions and skills
-  - is offered exactly the role's tools
+  - is offered exactly the role's tools and the coordination capabilities
   - runs its tools in the seat's workspace
   - sees that workspace's instructions and skills
 
@@ -381,7 +383,7 @@ Each requirement is checked as described in **Verification** below.
     time, the trigger and its event, or the conversation that created the follow-up job
 
   Every conversation records the job it belongs to and whether it is the job's lead conversation.
-- **R-13 Schedule fires and triggers.** Each fire of a schedule entry, and each trigger, creates a new job and so a new
+- **R-13 Schedule fires and triggers.** Each fire of a schedule entry or of a trigger creates a new job and so a new
   lead conversation (R-12).
   - The schedule entry or trigger may name a role. An entry that names an unknown role is rejected when it is loaded
     or created and never fires.
@@ -537,7 +539,7 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
     after restart
 - **Live acceptance tests** run against the pi agent-configured OpenAI account of the account running the tests,
   with a low-cost model:
-  1. A scheduled job for the `bob` role that asks for a simple file job in `gp`'s workspace. The lead hands off to
+  1. A scheduled job for the `bob` role that asks for a simple file task in `gp`'s workspace. The lead hands off to
      `gp` or invokes a `gp` agent, the file appears in `gp`'s workspace, and the transcript shows the seat change or
      the invocation.
   2. From the command line, change the seat of a job's lead conversation from `bob` to `gp`. The next answer is
@@ -566,4 +568,4 @@ Jobs spec for creating jobs. Its phases can be developed against a minimal host 
 |------|-------------|-----|----------------|
 | 2026-10-17 | The invocation depth cap (10) and the worker-thread count (32) became built-in constants instead of user settings. Role defaults and workspace registration can change while the daemon runs, and workspaces can be unregistered (R-3, R-3a, Configuration Requirements, Verification). Consistency review: the per-role settings entries name the runtime path too. | Decided with the daemon spec (S-002 R-9, R-22): the counts follow load tests, not user tuning; settings changed from clients apply without a restart. | None; S-001 isn't broken down yet |
 | 2026-10-19 | Wording only: removed references to the earlier implementation and its prototype from the Purpose and the Exclusions. No requirement changed. | Project documents describe the-intern as it is specified, not what it replaces. | None |
-| 2026-10-30 | Aligned with the rewritten S-000: the single user became equal team members; work is organised as jobs, each with one lead conversation and lead agent, and invoked agents do parts of a job and never close it; `bob` is the default lead role; team members can create, change and remove roles, including instructions and tool sets, and change shipped roles without editing the installed copy; the root conversation and interactive chat are removed; job sources (requests, schedule fires, triggers, follow-ups) replace entry points; schedule entries choose fresh runs or the history of their last runs; a blocked job's lead conversation parks; no approval rules; the worker-thread count is S-000's agent limit and bounds width (Purpose, Definitions, Exclusions, Design Principles, all components, R-1 to R-17, Workflow, Configuration Requirements, Verification, Implementation Order). | Product owner ruling: S-000 is the source of truth, and S-001 is aligned as part of creating S-000. | None; S-001 isn't broken down yet |
+| 2026-10-30 Consistency review: the coordination capabilities are part of every role and a tool set can't leave them out (R-3, R-5); Installation named as S-000's component; wording in R-13 and live test 1. | Aligned with the rewritten S-000: the single user became equal team members; work is organised as jobs, each with one lead conversation and lead agent, and invoked agents do parts of a job and never close it; `bob` is the default lead role; team members can create, change and remove roles, including instructions and tool sets, and change shipped roles without editing the installed copy; the root conversation and interactive chat are removed; job sources (requests, schedule fires, triggers, follow-ups) replace entry points; schedule entries choose fresh runs or the history of their last runs; a blocked job's lead conversation parks; no approval rules; the worker-thread count is S-000's agent limit and bounds width (Purpose, Definitions, Exclusions, Design Principles, all components, R-1 to R-17, Workflow, Configuration Requirements, Verification, Implementation Order). | Product owner ruling: S-000 is the source of truth, and S-001 is aligned as part of creating S-000. | None; S-001 isn't broken down yet |

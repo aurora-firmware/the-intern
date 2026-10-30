@@ -1,7 +1,7 @@
 ---
 id: S-000
 title: System Overview
-version: '0.3'
+version: '0.4'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-27'
 author: planner
@@ -111,9 +111,12 @@ person's access.
 - **Responsibility:** The single long-running process on the team's machine. It owns all saved state, runs many jobs
   at once up to a limit on how many agents work at once and queues the rest, resumes interrupted work after a crash or
   restart, reaches the models, offers every capability as a named operation that the ways in share, and publishes a
-  stream of changes that they can follow. It starts, stops and reads its configuration in a defined order.
-- **Boundary:** It does not define what a job is or its steps (Jobs), which roles exist (Agents and roles), how people
-  reach it (Command line, Web interface, Email), or when scheduled work runs (Schedules and triggers).
+  stream of changes that they can follow. It makes those operations reachable: on the machine for the command line,
+  and over the team's network for the web interface, without checking who calls. It starts, stops and reads its
+  configuration in a defined order.
+- **Boundary:** It does not define what a job is or its steps (Jobs), which roles exist (Agents and roles), what the
+  command line and the web interface present to people (Command line, Web interface), the mailbox (Email), or when
+  scheduled work runs (Schedules and triggers).
 - **Works with:** Jobs, Agents and roles, Command line, Web interface, Email, Schedules and triggers, Installation and
   service setup.
 
@@ -147,7 +150,7 @@ person's access.
   reading their history, answering blocked jobs, following and stopping work, managing schedules, triggers, roles,
   skills, instructions and knowledge sources, and exporting and importing the job record.
 - **Boundary:** It holds no state and implements no behaviour of its own; each command calls an operation of the
-  Intern service.
+  Intern service, reached on the machine.
 - **Works with:** Intern service, Jobs, Schedules and triggers, Agents and roles, Skills and instructions, Team
   knowledge.
 
@@ -262,9 +265,9 @@ person's access.
 
 - **Name:** Installation and service setup.
 - **Responsibility:** Turns a release into something a team member can install on a machine of a supported platform,
-  running as the installing person's account, and sets the service up so the operating system starts it when the
-  machine starts, without anyone logging in, and restarts it after a failure.
-  Covers upgrading and removing it.
+  running as one account of that machine (the installing person's in the first version), and sets the service up so the
+  operating system starts it when the machine starts, without anyone logging in, and restarts it after a failure. Covers
+  upgrading and removing it.
 - **Boundary:** It does not define the service's own start-up and shutdown (Intern service) or the team's network
   setup that decides who can reach it.
 - **Works with:** Intern service, Continuous integration, User manual.
@@ -317,8 +320,8 @@ person's access.
 
 - **Logins and per-person permissions.** Whoever can reach a way in is a team member and all are equal; access is
   controlled by where The Intern can be reached.
-- **Approval rules for each action.** What The Intern can do is bounded by the machine it runs on and the accounts it
-  is given, not by per-action rules.
+- **Approval rules for each action.** What The Intern can do is bounded by what the account it runs as can reach, not
+  by per-action rules.
 - **Hosting the wiki.** The team runs its wiki separately; The Intern only reads and writes it.
 - **Footholds on other machines.** The Intern runs on one machine and reaches others only as that machine can over the
   network; it installs nothing on them.
@@ -339,4 +342,4 @@ person's access.
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| 2026-10-30 | The machine is one the team keeps running, not an always-on one; The Intern starts at boot without a login and is restarted after a failure; it runs as one OS account, the installing person's in v1, and acts with that account's credentials; schedules choose fresh runs or the history of their last runs; missed runs are skipped (Purpose, Users, Solution overview, Intern service, Schedules and triggers, Installation and service setup, Project exclusions). | Decided with the product owner while aligning S-001 and S-002 with S-000. | None; S-000's bootstrap plan isn't broken down yet |
+| 2026-10-30 Consistency review: the Intern service makes its operations reachable for the command line on the machine and for the web interface over the network (it owns the listeners); Installation is account-neutral; version 0.4. | The machine is one the team keeps running, not an always-on one; The Intern starts at boot without a login and is restarted after a failure; it runs as one OS account, the installing person's in v1, and acts with that account's credentials; schedules choose fresh runs or the history of their last runs; missed runs are skipped (Purpose, Users, Solution overview, Intern service, Schedules and triggers, Installation and service setup, Project exclusions). | Decided with the product owner while aligning S-001 and S-002 with S-000. | None; S-000's bootstrap plan isn't broken down yet |

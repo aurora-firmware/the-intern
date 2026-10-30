@@ -21,7 +21,7 @@ the machine and the web interface over the team's network alike. When this spec 
 - A kill at any moment loses no committed work. On restart the daemon resumes every unfinished run.
 - At most a fixed number of agent runs are active at once. Further work waits in arrival order, across
   restarts.
-- Every capability the daemon offers is a service operation that clients, entry points and agent tools all call.
+- Every capability the daemon offers is a service operation that clients, job sources and agent tools all call.
   The service layer knows nothing about transports, so new listeners can be added without changing it.
 - Changes in the daemon are published as an observation feed: a snapshot, then deltas. Clients can come and go
   without affecting work.
@@ -36,9 +36,9 @@ This spec uses S-001's Definitions. It adds these terms:
 | Database | The one pi-durable store (S-001) holding every conversation, entry, pi-durable task, submission and document, plus the daemon's own documents. |
 | Instance | One daemon together with its state directory. Two instances share nothing. A second instance with its own state directory is the only hard wall between sets of conversations. |
 | Service layer | The set of service operations. It is the only way to read or change the daemon's state from outside the harness. |
-| Service operation | One named capability of the daemon, such as "create a conversation" or "submit input". It is either a **read** operation (it observes) or a **control** operation (it changes state or starts work). |
-| Caller | Whatever invokes a service operation: a local client through a listener, an entry point (a schedule fire) or an agent tool. The caller states the actor that S-001 attribution records. |
-| Listener | A transport that exposes service operations to clients. Listeners are defined in the control-endpoint spec (S-003), not here. |
+| Service operation | One named capability of the daemon, such as "submit input" or "reset a conversation". It is either a **read** operation (it observes) or a **control** operation (it changes state or starts work). |
+| Caller | Whatever invokes a service operation: a client through a listener, a job source (a schedule fire, a trigger, email) or an agent tool. The caller states the actor that S-001 attribution records. |
+| Listener | A transport that exposes service operations to clients. Listeners belong to S-000's Intern service and are defined in the control-endpoint spec (S-003), not here. |
 | Client | A separate program that uses the daemon through a listener: the `bob` commands and the web interface in a team member's browser. A client holds no work. |
 | Observation feed | The stream of changes the daemon publishes for a scope (the whole instance or one conversation). A subscription gets a snapshot, then deltas. |
 | Admission | The daemon's decision on when an agent run may take a worker thread (S-001 R-10). |
@@ -56,7 +56,7 @@ What this specification explicitly does NOT cover:
 
 - **Listeners.** The local socket for the command line and the network listener for the web interface, the control
   protocol, routes and the client library belong to S-003. This spec defines the operations those surfaces expose,
-  not how they are carried. No listener authenticates callers (S-000, R-16).
+  not how they are carried. No listener authenticates callers (S-000; R-16).
 - **Several devices, a hub, a device registry, tokens and provisioning.** These make up most of durable-pi's weight.
   The-intern runs on one machine, serving the team that can reach it.
 - **One database per session or conversation.** durable-pi's layout is rejected. S-001 fixes one database per
@@ -71,9 +71,10 @@ What this specification explicitly does NOT cover:
   operations apply at once (R-22).
 - **Configurable capacity limits.** The worker-thread count and the invocation depth cap are built-in constants
   (R-9), not settings.
-- **Jobs, the role prompt and skills, schedules and triggers, email, the web interface, team knowledge and
-  packaging.** Each has its own spec. This spec gives them the host, the service layer and the observation feed they
-  build on. Packaging ships the supervisor registration that R-4 requires.
+- **Jobs, skills and instructions, schedules and triggers, email, the web interface and team knowledge.** Each has
+  its own spec. This spec gives them the host, the service layer and the observation feed they build on.
+- **Installation.** Release form and the supervisor registration that R-4 requires belong to S-000's Installation and
+  service setup, decided in the bootstrap plan.
 - **Approval rules for actions.** S-000 excludes them; no policy component exists.
 - **Retention and archiving of old conversations.** Storage only grows. A retention policy is a later decision.
 - **Compatibility across pi-durable versions.** The pi packages are pinned, and no backwards compatibility of the
@@ -145,7 +146,7 @@ What this specification explicitly does NOT cover:
 | Model runtime | Resolves models and thinking levels through the pi agent login and model registry; maps pi agent settings into the harness explicitly; closes model connections on shutdown | The fake model replaces it in tests |
 | Harness host | Opens the database, installs the-intern's extensions, builds the execution environment per seat workspace, then resumes | The only user of pi-durable outside the-intern's extensions |
 | Admission | Grants worker threads to agent runs, keeps waiting work in arrival order, durably | Implements S-001 R-10 |
-| Service layer | The catalogue of read and control operations, their validation and their error outcomes | Called by listeners, entry points and agent tools alike |
+| Service layer | The catalogue of read and control operations, their validation and their error outcomes | Called by listeners, job sources and agent tools alike |
 | Observation feed | Publishes snapshots and deltas for the instance and for each conversation | The source for the command line's and the web interface's live views and for monitoring |
 | Status | Reports health, readiness, versions and capacity in use | A read operation |
 
@@ -206,7 +207,7 @@ feed. Consumes the harness host and the daemon's admission document.
 **Purpose:** Offer every daemon capability as a named read or control operation with validated input, a stated
 caller, and a defined error outcome.
 **Estimated size:** Medium.
-**Interfaces:** Exposes the operation catalogue (R-12) to listeners, entry points and agent tools. Consumes the harness
+**Interfaces:** Exposes the operation catalogue (R-12) to listeners, job sources and agent tools. Consumes the harness
 host, admission, model runtime and S-001's seating and coordination components.
 
 ### Component 8: Observation feed
@@ -248,7 +249,7 @@ host.
 - **R-4 Supervision contract.** The daemon runs in the foreground and never forks itself into the background. It
   writes diagnostics to standard error. It exits with status 0 only after a requested shutdown. Every other exit
   (startup failure, storage failure, unexpected error) has a non-zero status. The supervisor restarts the daemon on
-  a non-zero exit. Packaging registers the daemon with systemd and launchd so that it starts when the machine starts,
+  a non-zero exit. Installation registers the daemon with systemd and launchd so that it starts when the machine starts,
   without anyone logging in.
 - **R-5 Shutdown.** On SIGTERM or SIGINT the daemon:
   1. reports "stopping" and stops accepting new calls
@@ -306,15 +307,16 @@ host.
 - **R-12 Operation catalogue.** The service layer offers at least these operations. Each is marked **read** or
   **control**.
   - Read: daemon status; list conversations; get one conversation (seat, origin, status, depth, invocation links);
-    read a conversation's stored entries, paged, including entries from before resets and compactions; read its
-    current context; read a submission's state; wait for a submission to settle, for a time the caller chooses, at
-    most 5 minutes; list roles with their defaults; list registered workspaces; list available models and thinking
-    levels; read usage per conversation and in total; inspect live pi-durable tasks per conversation; subscribe to
-    the observation feed (R-14); list roles with their instructions, tools and skills.
-  - Control: create a conversation (S-001 R-11); submit input with a request id and a busy mode (follow-up, steer or
-    reject); withdraw a queued input; abort a conversation (with S-001's cascade); reset a conversation; compact a
-    conversation; change a conversation's seat (S-001 R-4); create, change, restore and remove a role (S-001 R-3);
-    register a workspace and unregister one (S-001 R-3a). The settings operations follow R-22.
+    read a conversation's stored entries, paged, including entries from before resets and compactions; read its current
+    context; read a submission's state; wait for a submission to settle, for a time the caller chooses, at most 5
+    minutes; list roles with their instructions, tools, skills and defaults; list registered workspaces; list available
+    models and thinking levels; read usage per conversation and in total; inspect live pi-durable tasks per
+    conversation; subscribe to the observation feed (R-14).
+  - Control: start the lead conversation of a job (S-001 R-12), called when a job is created (Jobs spec); submit input
+    with a request id and a busy mode (follow-up, steer or reject); withdraw a queued input; abort a conversation (with
+    S-001's cascade); reset a conversation; compact a conversation; change a conversation's seat (S-001 R-4); create,
+    change, restore and remove a role (S-001 R-3); register a workspace and unregister one (S-001 R-3a). The settings
+    operations follow R-22.
 
   S-001's agent coordination capabilities (handoff, invoke, steer) are control operations of the same service layer.
   Later specs add theirs the same way (for example creating and answering jobs in the Jobs spec and running a
@@ -326,9 +328,9 @@ host.
     submit), conflict, unavailable (the daemon isn't ready or is stopping), internal. Each outcome carries a message
     that names what failed.
 
-  A control operation that creates something (a conversation, a workspace registration) accepts an idempotency key.
-  A repeated call with the same key returns the original result and creates nothing. Submits are idempotent through
-  their request id (pi-durable). Read operations never change state.
+  A control operation that creates something (a lead conversation, a role, a workspace registration) accepts an
+  idempotency key. A repeated call with the same key returns the original result and creates nothing. Submits are
+  idempotent through their request id (pi-durable). Read operations never change state.
 
 ### Observation feed
 
@@ -509,12 +511,12 @@ the two capacity constants by amendment.
     restart, and one refused under S-001 R-3a leaves the file as it was.
 - **Live acceptance tests** use the pi agent login of the account running the tests, with the low-cost model from
   S-001:
-  1. The daemon starts under that account, answers a prompt in a new conversation, and leaves `~/.pi` unchanged
-     apart from a token refresh.
+  1. The daemon starts under that account, answers a prompt in the lead conversation of a test job, and leaves `~/.pi`
+     unchanged apart from a token refresh.
   2. A `kill -9` during a long `bash` call, then a restart by hand: the run continues with an interrupted result and
      its submission settles once.
-  3. Registered with systemd as packaging does it, the daemon starts at machine startup without a login; killing it
-     with a non-zero exit gets it restarted, and the run resumes.
+  3. Registered with systemd on Linux and launchd on macOS as installation does it, the daemon starts at machine
+     startup without a login; killing it with a non-zero exit gets it restarted, and the run resumes.
 
 ## Implementation Order
 
@@ -524,7 +526,7 @@ the two capacity constants by amendment.
 | 2 | Model runtime: pi agent login, model validation, settings mapping, closing connections on shutdown; live test 1 | Phase 1 |
 | 3 | Service layer with the read and control catalogue, and the observation feed | Phase 1 |
 | 4 | Admission and worker threads, durable across restarts | Phase 3 |
-| 5 | Supervision: storage-failure exit, shutdown bound, live tests 2 and 3 with the packaged supervisor registration | Phases 1–4, packaging spec for the registration |
+| 5 | Supervision: storage-failure exit, shutdown bound, live tests 2 and 3 with the installed supervisor registration | Phases 1–4, the bootstrap plan's supervisor registration |
 
 S-001 phase 1 needs phases 1 to 3 of this spec. S-001 phase 4 needs phase 4.
 
@@ -532,4 +534,4 @@ S-001 phase 1 needs phases 1 to 3 of this spec. S-001 phase 4 needs phase 4.
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| 2026-10-30 | Aligned with the rewritten S-000: the spec covers S-000's Intern service; the daemon serves a team through the command line and a web interface over the network, and no listener authenticates callers; the daemon runs as one service account (the installing person's in v1) whose pi login and other credentials are used in place; the supervisor starts it at machine startup without a login; the root conversation, chat, policy, approvals and audit are removed; role operations cover creating, changing, restoring and removing roles; the job record crosses versions by export and import (Purpose, Definitions, Exclusions, Design Principles, System Diagram, Responsibility Separation, components 2 and 5, R-2, R-4, R-6, R-12, R-16 to R-18, R-21, R-22, Workflow, Configuration Requirements, Verification, Implementation Order). | Product owner ruling: S-000 is the source of truth, and S-002 is aligned as part of creating S-000. | None; S-002 isn't broken down yet |
+| 2026-10-30 Consistency review: the plain "create a conversation" operation became "start the lead conversation of a job" (S-001 R-12); job sources replace entry points; listeners belong to S-000's Intern service; Installation is decided in the bootstrap plan; live test 3 covers launchd. | Aligned with the rewritten S-000: the spec covers S-000's Intern service; the daemon serves a team through the command line and a web interface over the network, and no listener authenticates callers; the daemon runs as one service account (the installing person's in v1) whose pi login and other credentials are used in place; the supervisor starts it at machine startup without a login; the root conversation, chat, policy, approvals and audit are removed; role operations cover creating, changing, restoring and removing roles; the job record crosses versions by export and import (Purpose, Definitions, Exclusions, Design Principles, System Diagram, Responsibility Separation, components 2 and 5, R-2, R-4, R-6, R-12, R-16 to R-18, R-21, R-22, Workflow, Configuration Requirements, Verification, Implementation Order). | Product owner ruling: S-000 is the source of truth, and S-002 is aligned as part of creating S-000. | None; S-002 isn't broken down yet |

@@ -152,7 +152,7 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
         <tr><td>Clients are viewers</td><td>No connection owns work. Closing or lagging never stops or slows an agent run.</td></tr>
         <tr><td>One lead per job</td><td>Each job has one lead conversation; its agent is the only lead and the only one that closes the job. No agent owns another: an agent of any role can hand off to, or invoke, any role.</td></tr>
         <tr><td>Unattended except a blocked job</td><td>No step waits for a human, except a blocked job waiting for the answer to its question. A blocked job holds no worker thread.</td></tr>
-        <tr><td>Fail closed on the membrane</td><td>Invalid configuration stops startup; a storage error ends the process and the supervisor restarts it. Missing content (a skill) degrades with a diagnostic.</td></tr>
+        <tr><td>Fail closed on the membrane</td><td>Invalid configuration stops startup; a storage error ends the process and the supervisor restarts it.</td></tr>
       </tbody>
     </table>
   </div>
@@ -199,11 +199,11 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
         <text class="tm" x="10" y="550" style="letter-spacing:.06em">STORAGE, OUTSIDE, SUPERVISION</text>
         <rect class="b s2" x="10" y="556" width="250" height="52" rx="6"/><text class="tm" x="18" y="570" style="font-size:10.5px">S-002</text><text class="tb m" x="135" y="587">One SQLite file</text><text class="ts m" x="135" y="602">in the state directory</text>
         <rect class="b " x="270" y="556" width="250" height="52" rx="6"/><text class="tm" x="278" y="570" style="font-size:10.5px">outside</text><text class="tb m" x="395" y="587">Models, mail server, wiki</text><text class="ts m" x="395" y="602">through the service account</text>
-        <rect class="b later" x="530" y="556" width="260" height="52" rx="6"/><text class="tm" x="538" y="570" style="font-size:10.5px">later</text><text class="tb m" x="660" y="587">systemd / launchd</text><text class="ts m" x="660" y="602">start at boot, restart on error exit</text>
+        <rect class="b later" x="530" y="556" width="260" height="52" rx="6"/><text class="tm" x="538" y="570" style="font-size:10.5px">bootstrap</text><text class="tb m" x="660" y="587">systemd / launchd</text><text class="ts m" x="660" y="602">start at boot, restart on error exit</text>
         <path class="ln" d="M400 526 V556"/>
       </svg>
     </div>
-    <figcaption>Read top to bottom. Every box carries the spec that owns it, and the colour follows the same rule: teal is S-001, indigo is S-002, dashed grey is a spec not written yet ("later" boxes are named after their S-000 component). Email and schedules call the service layer in the same process; the command line and the web interface go through a listener.</figcaption>
+    <figcaption>Read top to bottom. Every box carries the spec that owns it, and the colour follows the same rule: teal is S-001, indigo is S-002, dashed grey is a spec not written yet ("later" boxes are named after their S-000 component; "bootstrap" is answered by S-000's bootstrap plan). The listeners belong to the Intern service and are specified in S-003. Email and schedules call the service layer in the same process; the command line and the web interface go through a listener.</figcaption>
   </figure>
 </section>
 
@@ -355,21 +355,21 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
       <svg viewBox="0 0 800 340" role="img" aria-label="Spec dependency map: S-002 is the base; S-001 and S-003 build on it; the specs for Jobs, Schedules and triggers, Email, Web interface, Skills and instructions, Team knowledge and Installation build on those.">
         <rect class="b s2" x="10" y="130" width="140" height="70" rx="6"/><text class="tb m" x="80" y="156">S-002</text><text class="ts m" x="80" y="174">Intern service:</text><text class="ts m" x="80" y="188">daemon, host, feed</text>
         <rect class="b s1" x="200" y="40" width="140" height="70" rx="6"/><text class="tb m" x="270" y="66">S-001</text><text class="ts m" x="270" y="84">Agents and roles</text><text class="ts m" x="270" y="98">conversations</text>
-        <rect class="b later" x="200" y="220" width="140" height="70" rx="6"/><text class="tb m" x="270" y="246">S-003</text><text class="ts m" x="270" y="264">control endpoint,</text><text class="ts m" x="270" y="278">Command line</text>
+        <rect class="b later" x="200" y="220" width="140" height="70" rx="6"/><text class="tb m" x="270" y="246">S-003</text><text class="ts m" x="270" y="264">control endpoint:</text><text class="ts m" x="270" y="278">both listeners</text>
         <rect class="b later" x="400" y="10" width="140" height="56" rx="6"/><text class="tb m" x="470" y="34">Jobs</text><text class="ts m" x="470" y="52">record, steps</text>
         <rect class="b later" x="400" y="76" width="140" height="56" rx="6"/><text class="tb m" x="470" y="100">Skills, instructions</text><text class="ts m" x="470" y="118">shipped, overlay</text>
         <rect class="b later" x="400" y="142" width="140" height="56" rx="6"/><text class="tb m" x="470" y="166">Team knowledge</text><text class="ts m" x="470" y="184">wiki, docs</text>
         <rect class="b later" x="400" y="208" width="140" height="56" rx="6"/><text class="tb m" x="470" y="232">Web interface</text><text class="ts m" x="470" y="250">board, live, config</text>
-        <rect class="b later" x="400" y="274" width="140" height="56" rx="6"/><text class="tb m" x="470" y="298">Installation</text><text class="ts m" x="470" y="316">packaging, supervisor</text>
+        <rect class="b later" x="400" y="274" width="140" height="56" rx="6"/><text class="tb m" x="470" y="298">Command line</text><text class="ts m" x="470" y="316">bob commands</text>
         <rect class="b later" x="600" y="10" width="190" height="56" rx="6"/><text class="tb m" x="695" y="34">Schedules and triggers</text><text class="ts m" x="695" y="52">fires, events, history</text>
         <rect class="b later" x="600" y="76" width="190" height="56" rx="6"/><text class="tb m" x="695" y="100">Email</text><text class="ts m" x="695" y="118">own mailbox, in and out</text>
         <path class="ln s2" d="M150 150 L200 85"/><path class="ln s2" d="M150 180 L200 245"/>
         <path class="ln" d="M340 70 L400 38"/><path class="ln" d="M340 80 L400 104"/><path class="ln" d="M340 95 L400 165"/>
-        <path class="ln" d="M340 245 L400 236"/><path class="ln dash" d="M150 195 C250 330 350 310 400 300"/>
+        <path class="ln" d="M340 245 L400 236"/><path class="ln" d="M340 270 L400 300"/>
         <path class="ln dash" d="M540 38 L600 38"/><path class="ln dash" d="M540 50 L600 100"/>
       </svg>
     </div>
-    <figcaption>Arrows read "is built on". Grey boxes are named after their S-000 component and get a spec number when written; their dependencies are the intended ones, and each spec confirms them. S-001 phase 1 also needs S-002 phases 1 to 3, and S-002 phase 5 needs the Installation spec's supervisor registration.</figcaption>
+    <figcaption>Arrows read "is built on". Grey boxes are named after their S-000 component and get a spec number when written; their dependencies are the intended ones, and each spec confirms them. S-001 phase 1 also needs S-002 phases 1 to 3, and S-002 phase 5 needs the supervisor registration from the bootstrap plan (Installation and service setup).</figcaption>
   </figure>
   <div class="tablewrap">
     <table>
@@ -378,14 +378,15 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
         <tr><td>S-000</td><td>System overview</td><td><span class="chip">approved</span></td><td>bootstrap plan not broken down</td><td>Purpose, users, use cases, the decomposition into components, project exclusions.</td></tr>
         <tr><td>S-001</td><td>Agents and roles</td><td><span class="chip s1">approved</span></td><td>not broken down</td><td>Shipped and team roles, seats, lead conversations, handoff, invocation, steering, depth cap, job sources' conversations, monitoring views.</td></tr>
         <tr><td>S-002</td><td>Intern service</td><td><span class="chip s2">approved</span></td><td>not broken down</td><td>Process, lifecycle, service account, configuration file, worker-thread capacity and queue, service layer, observation feed.</td></tr>
-        <tr><td>S-003</td><td>Command line (and both listeners)</td><td><span class="chip later">next</span></td><td>none</td><td>Local socket listener, network listener for the web interface, client library, which operations each listener exposes, the <code>bob</code> commands.</td></tr>
+        <tr><td>S-003</td><td>Intern service: control endpoint</td><td><span class="chip later">next</span></td><td>none</td><td>The local socket listener for the command line, the network listener for the web interface, the client library, which operations each listener exposes.</td></tr>
+        <tr><td>—</td><td>Command line</td><td><span class="chip later">planned</span></td><td>none</td><td>The <code>bob</code> commands.</td></tr>
         <tr><td>—</td><td>Jobs</td><td><span class="chip later">planned</span></td><td>none</td><td>The job record, the job's steps, blocked jobs and answers, verification and closing, follow-ups, export and import.</td></tr>
         <tr><td>—</td><td>Schedules and triggers</td><td><span class="chip later">planned</span></td><td>none</td><td>Fires and events, run history, skipping busy runs, "run now".</td></tr>
         <tr><td>—</td><td>Email</td><td><span class="chip later">planned</span></td><td>none</td><td>The Intern's own mailbox: sorting, requests to jobs, answers, mail events, optional sending.</td></tr>
         <tr><td>—</td><td>Web interface</td><td><span class="chip later">planned</span></td><td>none</td><td>Job board, answering, live view, configuration from the browser.</td></tr>
         <tr><td>—</td><td>Skills and instructions</td><td><span class="chip later">planned</span></td><td>none</td><td>Shipped prompt and skill content, the team's overlay.</td></tr>
         <tr><td>—</td><td>Team knowledge</td><td><span class="chip later">planned</span></td><td>none</td><td>Reaching the team's wiki, repository docs and folders; keeping them current; writing what it learns.</td></tr>
-        <tr><td>—</td><td>Installation and service setup</td><td><span class="chip later">planned</span></td><td>none</td><td>Release form, supervisor registration at machine startup, upgrade with export and import.</td></tr>
+        <tr><td>—</td><td>Installation and service setup</td><td><span class="chip">bootstrap plan</span></td><td>none</td><td>Development infrastructure, answered by S-000's bootstrap plan: release form, supervisor registration at machine startup, upgrade with export and import.</td></tr>
       </tbody>
     </table>
   </div>
@@ -394,8 +395,8 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
     <h3>Open items that cross specs</h3>
     <ul>
       <li>S-002's operation catalogue (R-12) uses S-001 pieces, while S-001 phase 1 waits on S-002 phases 1 to 3. The order of the two breakdowns is undecided.</li>
-      <li>The Jobs spec is the largest gap: S-001 relies on it for creating jobs, blocking and answering, verification and closing, and the run history a schedule passes to its next run.</li>
-      <li>When a parked agent continues (on each report or after the last): left to the Jobs spec.</li>
+      <li>The Jobs spec is the largest gap: S-001 relies on it for creating jobs, blocking and answering, and verification and closing. The run history a schedule passes to its next run belongs to the schedules and triggers spec.</li>
+      <li>When a parked agent continues (on each report or after the last): decided later (S-001).</li>
       <li>The packaging form (npm tarball or bundle with Node), starting at boot on macOS without a login, and retention of old conversations.</li>
       <li>No ADRs exist yet for the standing decisions in section 1 (one daemon, one database, pi-durable behind a host, the team model with no logins, no approval rules, the service account as the boundary).</li>
     </ul>
