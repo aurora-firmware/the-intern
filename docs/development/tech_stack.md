@@ -62,7 +62,8 @@ There is no coverage threshold. Every behaviour change comes with tests, enforce
 ## Continuous integration
 
 **Which continuous-integration service runs the jobs?**
-GitHub Actions, on the self-hosted Linux runner in the `nodejs-dev` container.
+GitHub Actions, on the self-hosted Linux runner, with every job in the official `node:24.22.0-bookworm` container
+image from Docker Hub (Node, npm and git; the exact tag follows the Node version in use).
 
 **Which jobs run on which events, and on which supported platforms?**
 The jobs run on pull requests and on pushes to `dev-pi-durable` and `main`. Linux runs in continuous integration.
