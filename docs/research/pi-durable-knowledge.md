@@ -1,6 +1,6 @@
 # pi-durable and the pi SDK: knowledge base for the rework
 
-*Consolidated 2026-10-15; updated for 1.3.0 on 2026-10-19. Input for the new version of the Intern (`bob`) built as one TypeScript package on
+*Consolidated 2026-10-15; updated for 1.3.0 on 2026-10-19 and for 1.4.0 on 2026-10-30. Input for the new version of the Intern (`bob`) built as one TypeScript package on
 `@earendil-works/pi-durable`. Product decisions per feature are in [feature-review.md](feature-review.md). This
 document replaces the research reports written against the old Rust service; everything still relevant from them is
 here.*
@@ -310,8 +310,8 @@ starvation, run end inferred from `agent_end`, orphaned sessions when bob died).
 
 ### 5.1 Setup that worked
 
-- Exact pins, with a lockfile: `@earendil-works/pi-durable`, `pi-ai`, `chord`, `pi-coding-agent` all `1.2.0` in the PoC; the project targets `1.3.0` (they
-  ship in lockstep, and 1.3.0 pins them to each other exactly); `croner` 10.0.1 (cron); `smol-toml` 1.9.1 (TOML); dev: TypeScript 5.9.3, Biome 2.3.8,
+- Exact pins, with a lockfile: `@earendil-works/pi-durable`, `pi-ai`, `chord`, `pi-coding-agent` all `1.2.0` in the PoC; the project targets `1.4.0` (they
+  ship in lockstep, and 1.4.0 pins them to each other exactly); `croner` 10.0.1 (cron); `smol-toml` 1.9.1 (TOML); dev: TypeScript 5.9.3, Biome 2.3.8,
   `@types/node` 24.
 - Node 24 runs `.ts` directly (type stripping): no build step, `tsc --noEmit` plus Biome for checks, `node:test` for
   tests. Formatting follows pi-mono (tabs, width 3, 120 columns).
