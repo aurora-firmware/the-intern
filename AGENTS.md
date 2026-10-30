@@ -62,7 +62,8 @@ npm run check       # typecheck, lint and tests
 
 ## Key Conventions
 
-- Reference `docs/development/coding_guidelines.md` for detailed rules.
+- Reference `docs/development/coding_guidelines.md` for detailed rules; `docs/development/README.md` indexes the
+  developer docs.
 
 ### Vocabulary
 
