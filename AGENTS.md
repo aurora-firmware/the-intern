@@ -25,7 +25,7 @@ Read these before designing anything:
 ## Development environment
 
 See the "Development environment" and "Building from scratch" sections of `README.md`. Code conventions are in
-`docs/ai-team/docs/coding_guidelines.md`.
+`docs/development/coding_guidelines.md`.
 
 ## Build and Install
 
@@ -60,7 +60,7 @@ the package exists, and add the commands in this section and the three below.
 
 ## Key Conventions
 
-- Reference `docs/ai-team/docs/coding_guidelines.md` for detailed rules.
+- Reference `docs/development/coding_guidelines.md` for detailed rules.
 
 ### Vocabulary
 
