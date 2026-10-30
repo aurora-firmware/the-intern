@@ -406,7 +406,7 @@ starvation, run end inferred from `agent_end`, orphaned sessions when bob died).
 
 ---
 
-## 6. API footguns (found on pi-durable 1.2.0, unchanged in 1.3.0 and 1.4.0)
+## 6. API footguns (found on pi-durable 1.2.0, unchanged in 1.3.0; status in 1.4.0 below)
 
 Read spec §12 before writing commits and hooks. Found in practice. Status in the pinned 1.4.0, checked on 2026-10-30
 against the 1.4.0 changelogs, the §12 text of the 1.4.0 spec and the installed type declarations; the PoC was not
