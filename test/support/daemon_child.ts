@@ -78,6 +78,19 @@ function modelsWithFake(runtime: InternModels, fake: ReturnType<typeof createFak
     return runtime.models;
 }
 
+/** The fake model wins; then the `model` switch, which the registry must accept; then the pi agent folder's default. */
+function modelFor(ctx: ServiceContext, fakeModelId: string | undefined, requestedModel: string | undefined): string {
+    if (fakeModelId) return fakeModelId;
+    if (requestedModel !== undefined) {
+        const check = ctx.models.checkModelChoice({ model: requestedModel });
+        if (!check.ok) throw new Error(check.reason);
+        return requestedModel;
+    }
+    const defaultModel = ctx.models.defaultChoice()?.model;
+    if (!defaultModel) throw new Error("No model to create a conversation with: the pi agent folder has no default");
+    return defaultModel;
+}
+
 function failingOnDemand(storage: Storage, storageSwitch: StorageSwitch): Storage {
     return new Proxy(storage, {
         get(target, property, receiver) {
@@ -155,12 +168,7 @@ function main(): void {
         components: createComponents(switches, hold.promise),
         operations: createTestOperations({
             storageSwitch,
-            modelFor: (ctx) => {
-                const model = fakeModelId ?? ctx.models.defaultChoice()?.model;
-                if (!model)
-                    throw new Error("No model to create a conversation with: the pi agent folder has no default");
-                return model;
-            },
+            modelFor: (ctx) => modelFor(ctx, fakeModelId, switches.model),
         }),
         ...(switches.workerThreads !== undefined && { workerThreadCount: switches.workerThreads }),
         ...(fake && { prepareModels: (runtime: InternModels) => modelsWithFake(runtime, fake) }),
