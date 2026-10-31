@@ -5,7 +5,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type Models, Type } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
-import { defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { defineExtension, defineTask, defineTool } from "@earendil-works/pi-durable";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { abortConversation, HostNotFoundError, submitInput } from "../../src/host/conversation_control.ts";
 import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
@@ -170,6 +170,58 @@ describe("liveTasks", () => {
         await answer(host, id, "req-1");
 
         assert.deepEqual(await liveTasks(host, id), []);
+    });
+});
+
+// A task of an extension: once the extension is not installed, nothing can run the task and the graph blocks it.
+const parkedTask = defineTask<null, { phase: "idle" }, null>({
+    name: "test.parked",
+    version: 1,
+    initial: () => ({ phase: "idle" }),
+    phases: { idle: async () => undefined },
+    abort: (_task, runtime, taskContext) =>
+        runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), taskContext),
+});
+const parkedExtension = defineExtension({ name: "parked", tasks: [parkedTask] });
+
+describe("liveTasks of a task that cannot run", () => {
+    it("names the missing definition as the blocked reason after a restart without the task's extension", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const fake = createFakeModel(() => "ok");
+        fakes.push(fake);
+        const open = (extensions: Parameters<typeof openHarnessHost>[0]["extensions"]) =>
+            openHarnessHost({
+                databaseFile: join(env.root, "state.sqlite"),
+                models: modelsFor(fake),
+                harnessSettings: {},
+                extensions,
+                defaultCwd: process.cwd(),
+                logger: createLogger({ stream: { write: () => true } }),
+            });
+        const first = await open([parkedExtension]);
+        const id = await first.createConversation({
+            agent: { model: `${fake.getModel().provider}/${fake.getModel().id}` },
+        });
+        const conversation = await internalHarness(first).conversation(Number(id) as never, ctx);
+        assert.ok(conversation, "conversation exists");
+        await conversation.commit(
+            (tx) =>
+                tx.createTask(parkedTask, null, {
+                    ownership: { kind: "conversation" },
+                }),
+            ctx,
+        );
+        assert.equal((await liveTasks(first, id))[0]?.blockedReason, undefined);
+        await first.close();
+
+        const second = await open([]);
+        hosts.push(second);
+        const tasks = await liveTasks(second, id);
+
+        assert.equal(tasks.length, 1);
+        assert.equal(tasks[0]?.kind, "test.parked");
+        assert.equal(tasks[0]?.blockedReason, "missing_task");
     });
 });
 
