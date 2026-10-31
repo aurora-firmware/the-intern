@@ -61,6 +61,28 @@ describe("createWorkspaceContextLoader", () => {
         assert.deepEqual(context.roleSkills, []);
     });
 
+    it("returns no context file or skill from the pi agent folder", async () => {
+        const agentDir = join(root, "agent");
+        await writeFile(join(workspace, "AGENTS.md"), "workspace rules");
+        await mkdir(agentDir, { recursive: true });
+        await writeFile(join(agentDir, "AGENTS.md"), "account rules");
+        await writeSkill(join(agentDir, "skills", "account-skill"), "account-skill");
+        const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+        process.env.PI_CODING_AGENT_DIR = agentDir;
+        try {
+            const context = createWorkspaceContextLoader({ logger: recordingLogger(entries) }).load(makeSeat());
+
+            const contents = context.contextFiles.map((file) => file.content);
+            assert.ok(contents.includes("workspace rules"));
+            assert.ok(!contents.includes("account rules"));
+            assert.deepEqual(context.roleSkills, []);
+            assert.deepEqual(context.workspaceSkills, []);
+        } finally {
+            if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+            else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+        }
+    });
+
     it("loads the role skills named by the seat", async () => {
         const skillDir = join(root, "role-skills", "role-skill");
         await writeSkill(skillDir, "role-skill");
