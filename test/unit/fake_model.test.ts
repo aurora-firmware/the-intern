@@ -108,10 +108,7 @@ describe("createFakeModel tool calls", () => {
         const second = makeModel(callEcho);
         const after = toolCallsIn(await completeSimple(second.getModel(), context));
         assert.equal(before.length, 1);
-        assert.deepEqual(
-            after.map(({ name, arguments: args }) => ({ name, args })),
-            before.map(({ name, arguments: args }) => ({ name, args })),
-        );
+        assert.deepEqual(after, before);
     });
 });
 

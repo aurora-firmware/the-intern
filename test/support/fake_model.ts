@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
     type FauxProviderRegistration,
     type FauxResponseFactory,
@@ -39,10 +40,19 @@ function waitUnlessAborted(delayMs: number, signal: AbortSignal | undefined): Pr
     });
 }
 
-function messageFor(reply: FakeReply) {
+// pi-ai picks a random tool-call id, which would make a restarted run see a different step for the same transcript.
+function toolCallIdFor(transcript: FakeTranscript, toolCall: { name: string; arguments: unknown }): string {
+    const digest = createHash("sha256")
+        .update(JSON.stringify([transcript, toolCall]))
+        .digest("hex");
+    return `tool-${digest.slice(0, 16)}`;
+}
+
+function messageFor(reply: FakeReply, transcript: FakeTranscript) {
     if (typeof reply === "string") return fauxAssistantMessage(reply);
     const { name, arguments: toolArguments } = reply.toolCall;
-    return fauxAssistantMessage([fauxToolCall(name, toolArguments as JsonObject)], { stopReason: "toolUse" });
+    const id = toolCallIdFor(transcript, reply.toolCall);
+    return fauxAssistantMessage([fauxToolCall(name, toolArguments as JsonObject, { id })], { stopReason: "toolUse" });
 }
 
 /**
@@ -63,7 +73,7 @@ export function createFakeModel(
         registration.appendResponses([answerFromTranscript]);
         const transcript = toFakeTranscript(context);
         await waitUnlessAborted(options.delayMs?.(transcript) ?? 0, streamOptions?.signal);
-        return messageFor(reply(transcript));
+        return messageFor(reply(transcript), transcript);
     };
     registration.setResponses([answerFromTranscript]);
     return registration;
