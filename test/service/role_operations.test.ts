@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
@@ -17,10 +17,7 @@ const daemons: RunningDaemon[] = [];
 
 afterEach(async () => {
     for (const daemon of daemons.splice(0)) await daemon.stop();
-    for (const env of envs.splice(0)) {
-        await chmod(env.configDir, 0o700);
-        await env.dispose();
-    }
+    for (const env of envs.splice(0)) await env.dispose();
 });
 
 type Role = { name: string; instructions: string; changed: boolean; shipped: boolean };
@@ -256,7 +253,9 @@ describe("the role operations", () => {
     it("refuses with internal naming the file and applies nothing when the file can't be written", async () => {
         const env = await hermetic();
         const { invoke, roles } = await start(env);
-        await chmod(env.configDir, 0o500);
+        // A missing directory makes the write fail for every user; root ignores a read-only directory mode.
+        assert.equal(await fileText(env), "");
+        await rm(env.configDir, { recursive: true });
 
         const error = await refusal(invoke("roles.create", reviewer));
 
