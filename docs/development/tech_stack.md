@@ -125,7 +125,8 @@ One plain line per event on standard error (S-002 R-4). Each line holds an ISO-8
 2026-10-31T18:08:49.668Z INFO ready stateDir=/path/to/state intern=0.0.0 pi=1.4.0 workerThreads=32
 ```
 
-`--verbose` shows the `DEBUG` lines; without it the daemon writes `ERROR` and `INFO` only. journald and launchd capture the lines as they are. The product owner ruled
+`--verbose` shows the `DEBUG` lines; without it the daemon writes `ERROR` and `INFO` only.
+journald and launchd capture the lines as they are. The product owner ruled
 this on 2026-10-31.
 
 **How does a developer inspect a running instance's state without opening its saved data directly?**
