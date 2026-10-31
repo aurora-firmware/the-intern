@@ -147,7 +147,7 @@ async function lastSeatRecord(
 }
 
 describe("createInvokedConversations", () => {
-    it("creates one seated conversation of the same job per request and adds each to the invoker's awaiting", async () => {
+    it("creates one seated conversation of the same job per request, each in the invoker's awaiting", async () => {
         const fixture = await createFixture();
         const invokingId = await fixture.startInvoker({ depth: 2 });
 
