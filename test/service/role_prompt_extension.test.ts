@@ -268,4 +268,14 @@ describe("the role prompt extension", () => {
 
         assert.equal(loadedSeats.length, 1);
     });
+
+    it("loads the seat's workspace again for the next request", async () => {
+        const { loadedSeats, seatFor, say, seatConversation } = await createFixture();
+        const id = await seatConversation(await seatFor("developer"));
+
+        await say(id);
+        await say(id);
+
+        assert.equal(loadedSeats.length, 2);
+    });
 });

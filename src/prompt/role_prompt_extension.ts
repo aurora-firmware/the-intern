@@ -30,23 +30,25 @@ async function readSeat(input: PromptInput, context: Context): Promise<Seat | un
 
 export function createRolePromptExtension(options: RolePromptExtensionOptions): Extension {
     const { preamble, loader } = options;
-    // The five sections of one request read the same seat, so the seat is loaded and rendered once and each section
-    // takes its part. This also keeps all sections of one prompt on one state of the workspace.
-    const renderedBySeat = new Map<string, PromptSection[]>();
-    const renderSeat = (seat: Seat): PromptSection[] => {
-        const cacheKey = JSON.stringify(seat);
-        const cached = renderedBySeat.get(cacheKey);
+    // pi-durable hands every section of one request preparation the same input, so the seat is read, loaded and rendered
+    // once per request and each section takes its part. All sections of one prompt then come from one state of the
+    // workspace, the next request renders afresh, and nothing outlives the request that rendered it.
+    const renderedByRequest = new WeakMap<PromptInput, Promise<PromptSection[] | undefined>>();
+    const renderRequest = (input: PromptInput, context: Context): Promise<PromptSection[] | undefined> => {
+        const cached = renderedByRequest.get(input);
         if (cached) return cached;
-        const rendered = renderRolePrompt({ preamble, seat, ...loader.load(seat) });
-        renderedBySeat.set(cacheKey, rendered);
+        const rendered = readSeat(input, context).then((seat) =>
+            seat === undefined ? undefined : renderRolePrompt({ preamble, seat, ...loader.load(seat) }),
+        );
+        renderedByRequest.set(input, rendered);
         return rendered;
     };
     const sections = SECTION_KEYS.map((key) =>
         // pi-durable section keys allow no dots, so the dot of the rendered part's key becomes a hyphen.
         section(key.replace(".", "-"), async (input, context) => {
-            const seat = await readSeat(input, context);
-            if (seat === undefined) return key === PREAMBLE_KEY && preamble !== "" ? preamble : undefined;
-            return renderSeat(seat).find((part) => part.key === key)?.text;
+            const rendered = await renderRequest(input, context);
+            if (rendered === undefined) return key === PREAMBLE_KEY && preamble !== "" ? preamble : undefined;
+            return rendered.find((part) => part.key === key)?.text;
         }),
     );
     return defineExtension({ name: ROLE_PROMPT_EXTENSION_NAME, sections });
