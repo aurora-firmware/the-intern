@@ -14,6 +14,7 @@ import {
     type HarnessHost,
     internalHarness,
     openHarnessHost,
+    resolveHarnessSettings,
     type Storage,
 } from "../../src/host/harness_host.ts";
 import { createFakeModel, type FakeReply, type FakeTranscript } from "../support/fake_model.ts";
@@ -125,6 +126,22 @@ async function waitFor(condition: () => Promise<boolean>): Promise<void> {
     }
     assert.fail("condition was not met in time");
 }
+
+describe("resolveHarnessSettings", () => {
+    it("resolves restartLimit to Infinity and keeps the mapped settings and the extensions", () => {
+        const settings = resolveHarnessSettings({ retry: { maxRetries: 2 } }, [probeExtension]);
+
+        assert.equal(settings.restartLimit, Number.POSITIVE_INFINITY);
+        assert.deepEqual(settings.retry, { maxRetries: 2 });
+        assert.deepEqual(settings.extensions, [probeExtension]);
+    });
+
+    it("resolves restartLimit to Infinity even when the mapping carries another limit", () => {
+        const mappingWithLimit = { restartLimit: 3 } as Record<string, unknown>;
+
+        assert.equal(resolveHarnessSettings(mappingWithLimit, []).restartLimit, Number.POSITIVE_INFINITY);
+    });
+});
 
 describe("openHarnessHost", () => {
     it("makes the database file and its wal and shm files owner-only", async () => {

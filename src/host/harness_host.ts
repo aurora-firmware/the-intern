@@ -14,6 +14,7 @@ import {
     type EntryRecord,
     type Extension,
     Harness,
+    type HarnessSettings,
     type ReportInfo,
     type SessionEnd,
     type Storage,
@@ -84,6 +85,17 @@ async function restrictSiblingFiles(databaseFile: string): Promise<void> {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
     }
+}
+
+/**
+ * The settings handed to pi-durable. `restartLimit` is set after the mapping, so no pi agent setting can lower it
+ * (ADR-001 decision 4). pi-durable's own resolver is not a public export, so this is the setting as the host sets it.
+ */
+export function resolveHarnessSettings(
+    mapping: HarnessSettingsMapping,
+    extensions: readonly Extension[],
+): HarnessSettings {
+    return { ...mapping, extensions, restartLimit: Number.POSITIVE_INFINITY };
 }
 
 function logReport(logger: Logger, error: unknown, info: ReportInfo): void {
@@ -202,11 +214,7 @@ export async function openHarnessHost(options: HarnessHostOptions): Promise<Harn
             models: options.models,
             registry,
             // Applied after the mapping, so no pi agent setting can lower it (ADR-001 decision 4).
-            settings: {
-                ...options.harnessSettings,
-                extensions: options.extensions,
-                restartLimit: Number.POSITIVE_INFINITY,
-            },
+            settings: resolveHarnessSettings(options.harnessSettings, options.extensions),
             onReport: (error, info) => logReport(logger, error, info),
             env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? options.defaultCwd }),
         },
