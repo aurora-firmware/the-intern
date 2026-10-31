@@ -21,6 +21,8 @@ export type StartDaemonOptions = {
     /** How long the `slow` script holds each answer back. */
     delayMs?: number;
     realModels?: boolean;
+    /** Live tests only: the model new conversations use with `realModels`, instead of the pi agent folder's default. */
+    model?: string;
     checkModel?: string;
     holdStart?: boolean;
 };
