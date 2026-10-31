@@ -104,7 +104,7 @@ describe("startup failures", () => {
         const env = await hermetic();
         await writeFile(join(env.configDir, CONFIG_FILE_NAME), "this is = = not toml [");
 
-        await assertFailsAt(start({ hermetic: env }), /load configuration/i, /config\.toml/);
+        await assertFailsAt(start({ hermetic: env }), /name="load configuration"/, /invalid TOML/);
 
         assert.equal(await exists(join(env.stateDir, DATABASE_FILE_NAME)), false);
     });
@@ -113,7 +113,11 @@ describe("startup failures", () => {
         const env = await hermetic();
         await writeFile(join(env.configDir, CONFIG_FILE_NAME), 'mystery_key = "x"\n');
 
-        await assertFailsAt(start({ hermetic: env }), /load configuration/i, /mystery_key/);
+        await assertFailsAt(
+            start({ hermetic: env }),
+            /name="load configuration"/,
+            /mystery_key: no configuration section owns this key/,
+        );
 
         assert.equal(await exists(join(env.stateDir, DATABASE_FILE_NAME)), false);
     });
@@ -122,7 +126,11 @@ describe("startup failures", () => {
         const env = await hermetic();
         await chmod(env.stateDir, GROUP_READABLE_MODE);
 
-        await assertFailsAt(start({ hermetic: env }), /director/i, new RegExp(env.stateDir));
+        await assertFailsAt(
+            start({ hermetic: env }),
+            /name="ensure directories"/,
+            /the directory is accessible to the group or others/,
+        );
 
         assert.equal(await exists(join(env.stateDir, DATABASE_FILE_NAME)), false);
     });
@@ -130,7 +138,7 @@ describe("startup failures", () => {
     it("exits naming the check models step when a configured model doesn't resolve", async () => {
         const env = await hermetic();
 
-        await assertFailsAt(start({ hermetic: env, checkModel: "nowhere/nothing" }), /check models/i, /nowhere/);
+        await assertFailsAt(start({ hermetic: env, checkModel: "nowhere/nothing" }), /name="check models"/, /nowhere/);
     });
 });
 
