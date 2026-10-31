@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
     type FauxProviderRegistration,
     type FauxResponseFactory,
@@ -10,10 +11,11 @@ import {
 } from "@earendil-works/pi-ai";
 import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
+import type { ConversationId } from "@earendil-works/pi-durable";
 import { INVOCATION_DEPTH_CAP } from "../../src/daemon/constants.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
-import { type HarnessHost, openHarnessHost } from "../../src/host/harness_host.ts";
+import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import {
     continueParked,
     createInvokedConversations,
@@ -22,6 +24,7 @@ import {
     parkConversation,
 } from "../../src/host/invocation.ts";
 import {
+    conversationMetaDoc,
     createSeatedConversation,
     type JobLinks,
     readConversationMeta,
@@ -175,32 +178,40 @@ describe("createInvokedConversations", () => {
         assert.deepEqual((await readConversationMeta(fixture.host, invokingId))?.awaiting, ids);
     });
 
-    it("gives the invoked conversation its own document even when the invoker is parked and awaiting", async () => {
+    it("gives a fork none of the invoker's isLead, awaiting, parked or held state", async () => {
         const fixture = await createFixture();
         const invokingId = await fixture.startInvoker();
-
+        const parked = { waitingFor: "reports", continueOn: "all" } as const;
+        const held = { content: "hold", mode: "steer", actor: fixture.actor, requestId: "held-1" } as const;
         const [first] = await createInvokedConversations(fixture.host, {
             invokingId,
             callId: "call-1",
-            agents: [request(fixture, "alpha", "full")],
+            agents: [request(fixture, "alpha", "clean")],
             actor: fixture.actor,
-            parked: { waitingFor: "reports", continueOn: "all" },
+            parked,
         });
+        await internalHarness(fixture.host).commit(async (tx) => {
+            (await tx.doc(conversationMetaDoc, Number(invokingId) as ConversationId)).held.push(held);
+        }, BACKGROUND_CONTEXT);
+
         const [second] = await createInvokedConversations(fixture.host, {
-            invokingId: first as string,
+            invokingId,
             callId: "call-2",
             agents: [request(fixture, "beta", "full")],
             actor: fixture.actor,
         });
 
         const invoker = await readConversationMeta(fixture.host, invokingId);
-        assert.deepEqual(invoker?.parked, { waitingFor: "reports", continueOn: "all" });
-        assert.deepEqual(invoker?.awaiting, [first]);
+        assert.equal(invoker?.isLead, true);
+        assert.deepEqual(invoker?.awaiting, [first, second]);
+        assert.deepEqual(invoker?.parked, parked);
+        assert.deepEqual(invoker?.held, [held]);
         const forked = await readConversationMeta(fixture.host, second as string);
         assert.equal(forked?.isLead, false);
-        assert.equal(forked?.parked, null);
         assert.deepEqual(forked?.awaiting, []);
-        assert.equal(forked?.depth, 2);
+        assert.equal(forked?.parked, null);
+        assert.deepEqual(forked?.held, []);
+        assert.equal(forked?.depth, 1);
     });
 
     it("starts a Full invoked context with a copy of the invoking context followed by the job prompt", async () => {
