@@ -88,7 +88,8 @@ async function runAndStop(): Promise<void> {
         content: "hello",
         requestId: "request-hello",
     })) as { submissionId: string };
-    await daemon.invoke("submissions.wait", { submissionId, timeoutMs: SETTLE_TIMEOUT_MS });
+    const outcome = await daemon.invoke("submissions.wait", { submissionId, timeoutMs: SETTLE_TIMEOUT_MS });
+    assert.deepEqual(outcome, { state: "done" });
     daemon.signal("SIGTERM");
     const { code } = await daemon.exited;
     assert.equal(code, 0, `the daemon did not stop cleanly: ${daemon.stderr()}`);
