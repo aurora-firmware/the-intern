@@ -368,7 +368,7 @@ describe("conversations.seat with a reset", () => {
         assert.equal(after?.seat.role, "bob");
     });
 
-    it("lets a running turn finish with the old seat, then clears the context for the next turn with the new seat", async () => {
+    it("lets a running turn finish with the old seat, then clears the context for the new seat", async () => {
         const started = await start();
         await createReviewerRole(started, started.provider);
         const conversationId = await started.seatConversation("gp");
