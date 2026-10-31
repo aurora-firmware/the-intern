@@ -46,12 +46,21 @@ type Started = {
         conversationId: string,
     ): Promise<{ previous: unknown; next: unknown; actor: unknown; contextMode?: string }[]>;
     answers(conversationId: string): Promise<string[]>;
+    heldTurn: { entered: Promise<void>; release(): void };
     folder(name: string): Promise<string>;
 };
 
 // One provider with two reasoning models. The answer names the model that gave it; a request to run `pwd` becomes a
 // bash tool call, and the tool's output becomes the answer.
-function registerModels(): FauxProviderRegistration {
+function registerModels(): { registration: FauxProviderRegistration; heldTurn: Started["heldTurn"] } {
+    let markEntered = () => {};
+    let release = () => {};
+    const entered = new Promise<void>((resolve) => {
+        markEntered = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+        release = resolve;
+    });
     const registration = registerFauxProvider({
         models: [
             { id: "model-one", reasoning: true },
@@ -67,6 +76,10 @@ function registerModels(): FauxProviderRegistration {
         registration.appendResponses([answer]);
         const last = context.messages[context.messages.length - 1];
         const lastText = JSON.stringify(last?.content);
+        if (lastText.includes("hold the turn")) {
+            markEntered();
+            await released;
+        }
         if (last?.role === "toolResult") return fauxAssistantMessage(`tool-said ${lastText}`);
         if (lastText.includes("run pwd")) {
             return fauxAssistantMessage([fauxToolCall("bash", { command: "pwd" }, { id: "tool-pwd" })], {
@@ -76,13 +89,13 @@ function registerModels(): FauxProviderRegistration {
         return fauxAssistantMessage(`from-${model.id}`);
     };
     registration.setResponses([answer]);
-    return registration;
+    return { registration, heldTurn: { entered, release } };
 }
 
 async function start(): Promise<Started> {
     const env = await createHermeticEnv();
     envs.push(env);
-    const fake = registerModels();
+    const { registration: fake, heldTurn } = registerModels();
     fakes.push(fake);
     const provider = fake.getModel().provider;
     await writeFile(
@@ -133,6 +146,7 @@ async function start(): Promise<Started> {
         ctx,
         provider,
         invoke,
+        heldTurn,
         seatOperation: (input, as) => invoke("conversations.seat", input, as),
         async seatConversation(role, isLead = false) {
             conversationCount += 1;
@@ -352,6 +366,33 @@ describe("conversations.seat with a reset", () => {
         assert.equal(after?.isLead, true);
         assert.equal(after?.jobId, before?.jobId);
         assert.equal(after?.seat.role, "bob");
+    });
+
+    it("lets a running turn finish with the old seat, then clears the context for the next turn with the new seat", async () => {
+        const started = await start();
+        await createReviewerRole(started, started.provider);
+        const conversationId = await started.seatConversation("gp");
+        await started.runTurn(conversationId, "hello");
+        const entriesBefore = (await started.ctx.host.readEntries(conversationId, { limit: 100 })).entries;
+        const running = started.runTurn(conversationId, "hold the turn");
+        await started.heldTurn.entered;
+
+        await started.seatOperation({ conversationId, role: "reviewer", reset: {} });
+        started.heldTurn.release();
+        await running;
+        await started.runTurn(conversationId, "again");
+
+        const entries = (await started.ctx.host.readEntries(conversationId, { limit: 100 })).entries;
+        const resetIndex = entries.findIndex((entry) => entry.kind === "pi.reset");
+        const lastHeldAnswerIndex = entries.findLastIndex(
+            (entry) => entry.kind === "pi.assistant" && JSON.stringify(entry.data).includes("from-model-one"),
+        );
+        assert.ok(resetIndex > lastHeldAnswerIndex, "the reset comes after the held turn's answer");
+        for (const earlier of entriesBefore) assert.ok(entries.some((entry) => entry.id === earlier.id));
+        const answers = await started.answers(conversationId);
+        assert.equal(answers.length, 1);
+        assert.match(answers[0] ?? "", /from-model-two/);
+        assert.ok(!answers.some((answer) => answer.includes("from-model-one")));
     });
 
     it("refuses a seat that does not resolve, and neither resets nor changes the seat", async () => {
