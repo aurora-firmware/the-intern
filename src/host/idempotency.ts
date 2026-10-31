@@ -1,0 +1,82 @@
+/**
+ * Idempotency keys for operations that create a conversation (S-002 R-13). The key is recorded in the session-wide
+ * document `intern.idempotency`, in the same commit that creates the conversation, so a crash leaves neither or both.
+ */
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { defineDoc } from "@earendil-works/pi-durable";
+import { type AgentChoice, type HarnessHost, internalHarness } from "./harness_host.ts";
+
+const context = BACKGROUND_CONTEXT;
+const MAX_KEY_LENGTH = 200;
+
+export class HostInvalidKeyError extends Error {
+    constructor(scope: string, length: number) {
+        super(`The idempotency key for "${scope}" has ${length} characters; it must have 1 to ${MAX_KEY_LENGTH}.`);
+        this.name = "HostInvalidKeyError";
+    }
+}
+
+// Maps a scope and key (as a JSON pair, so no separator can make two pairs collide) to the conversation it created.
+const idempotencyDocument = defineDoc<{ conversations: Record<string, string> }>({
+    kind: "intern.idempotency",
+    version: 1,
+    scope: "session",
+    initial: () => ({ conversations: {} }),
+    checkpointWhen: () => false,
+});
+
+// One lookup-then-create at a time per host, so concurrent calls with one key can't both miss the lookup.
+const pendingCreates = new WeakMap<HarnessHost, Promise<unknown>>();
+
+function toModelRef(model: string): { provider: string; modelId: string } {
+    const separator = model.indexOf("/");
+    if (separator <= 0 || separator === model.length - 1) {
+        throw new Error(`Model "${model}" is not of the form provider/id.`);
+    }
+    return { provider: model.slice(0, separator), modelId: model.slice(separator + 1) };
+}
+
+async function lookupOrCreate(
+    host: HarnessHost,
+    entryKey: string,
+    agent: AgentChoice,
+): Promise<{ conversationId: string; created: boolean }> {
+    const harness = internalHarness(host);
+    const stored = (await harness.snapshot(idempotencyDocument, context))?.conversations[entryKey];
+    if (stored !== undefined) return { conversationId: stored, created: false };
+
+    const conversation = await harness.createConversation(
+        {
+            ownership: { kind: "ownerless" },
+            agent: {
+                model: toModelRef(agent.model),
+                ...(agent.thinkingLevel !== undefined && { thinkingLevel: agent.thinkingLevel as never }),
+                ...(agent.cwd !== undefined && { cwd: agent.cwd }),
+                ...(agent.instructions !== undefined && { instructions: agent.instructions }),
+            },
+            init: async (tx, conversationId) => {
+                const draft = await tx.doc(idempotencyDocument);
+                draft.conversations[entryKey] = String(conversationId);
+            },
+        },
+        context,
+    );
+    return { conversationId: String(conversation.id), created: true };
+}
+
+/** Creates the conversation for `scope` and `key` once; a repeated call returns the original with `created: false`. */
+export async function createConversationOnce(
+    host: HarnessHost,
+    input: { scope: string; key: string; agent: AgentChoice },
+): Promise<{ conversationId: string; created: boolean }> {
+    const { scope, key, agent } = input;
+    if (key.length < 1 || key.length > MAX_KEY_LENGTH) throw new HostInvalidKeyError(scope, key.length);
+
+    const previous = pendingCreates.get(host) ?? Promise.resolve();
+    const result = previous.then(() => lookupOrCreate(host, JSON.stringify([scope, key]), agent));
+    pendingCreates.set(
+        host,
+        result.catch(() => undefined),
+    );
+    return result;
+}
