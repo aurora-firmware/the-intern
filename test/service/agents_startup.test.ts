@@ -146,6 +146,20 @@ describe("the agents component at startup", () => {
         assert.match(serving.stderr(), /nowhere\/missing-model/);
     });
 
+    it("stops at step 5 naming the role and the thinking level when the model does not support the level", async () => {
+        const env = await hermetic(
+            () => '[roles.gp]\nmodel = "amazon-bedrock/amazon.nova-lite-v1:0"\nthinking_level = "unsupported-level"\n',
+        );
+        const serving = serve(env);
+
+        const status = await serving.exit;
+
+        assert.notEqual(status, 0);
+        assert.match(serving.stderr(), /startup failed step=5/);
+        assert.match(serving.stderr(), /gp/);
+        assert.match(serving.stderr(), /unsupported-level/);
+    });
+
     it("stops at step 6 naming the path and the reason when a registered workspace fails the check", async () => {
         const env = await hermetic((e) => `[workspaces]\nregistered = ["${join(e.root, "missing-workspace")}"]\n`);
         const serving = serve(env);
