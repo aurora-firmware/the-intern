@@ -143,6 +143,24 @@ async function send(fixture: Fixture, conversationId: string): Promise<void> {
     await waitForSubmission(fixture.host, submissionId, SUBMISSION_TIMEOUT_MS);
 }
 
+// Counts the entries every Set iteration yields while `action` runs, which is how many subscribers a publish visits.
+async function countSetEntriesVisitedDuring(action: () => Promise<void>): Promise<number> {
+    const original = Set.prototype[Symbol.iterator];
+    let visited = 0;
+    Set.prototype[Symbol.iterator] = function* (this: Set<unknown>) {
+        for (const entry of original.call(this)) {
+            visited++;
+            yield entry;
+        }
+    } as typeof original;
+    try {
+        await action();
+    } finally {
+        Set.prototype[Symbol.iterator] = original;
+    }
+    return visited;
+}
+
 describe("the instance feed", () => {
     it("snapshots every conversation with its status and the worker threads", async () => {
         const fixture = await openFixture(3);
@@ -218,6 +236,24 @@ describe("the instance feed", () => {
         await send(fixture, id);
 
         assert.deepEqual(await lagging.next(), { closed: "lagging" });
+    });
+
+    it("stops visiting a lagged subscriber that never reads again on later deltas", async () => {
+        const fixture = await openFixture();
+        const feed = await fixture.open(1);
+        const live = feed.subscribe();
+        const baseline = await countSetEntriesVisitedDuring(() => fixture.config.change(labelSection, { label: "a" }));
+        await nextDelta(live);
+        const dead = feed.subscribe();
+        await fixture.config.change(labelSection, { label: "b" });
+        await nextDelta(live);
+        await fixture.config.change(labelSection, { label: "c" });
+        await nextDelta(live);
+
+        const visited = await countSetEntriesVisitedDuring(() => fixture.config.change(labelSection, { label: "d" }));
+
+        assert.equal(visited, baseline);
+        assert.deepEqual(await dead.next(), { closed: "lagging" });
     });
 
     it("closes subscribers with reason stopped when the feed closes and refuses new ones", async () => {

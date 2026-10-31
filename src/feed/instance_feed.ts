@@ -86,7 +86,23 @@ export async function createInstanceFeed(options: {
                 snapshot(),
                 maxPending,
             );
-            const sink = { push, end, nextSeq: () => ++seq };
+            // Mirrors the subscription's own buffer so a subscriber it closes as lagging is dropped from the feed
+            // at once, not when (if ever) it reads again.
+            let undelivered = 0;
+            let isReaderWaiting = false;
+            const sink = {
+                push(delta: InstanceDelta) {
+                    push(delta);
+                    if (isReaderWaiting) {
+                        isReaderWaiting = false;
+                        return;
+                    }
+                    undelivered++;
+                    if (undelivered > maxPending) sinks.delete(sink);
+                },
+                end,
+                nextSeq: () => ++seq,
+            };
             sinks.add(sink);
             return {
                 ...subscription,
@@ -95,6 +111,8 @@ export async function createInstanceFeed(options: {
                     subscription.close();
                 },
                 async next() {
+                    if (undelivered > 0) undelivered--;
+                    else isReaderWaiting = true;
                     const result = await subscription.next();
                     if ("closed" in result) sinks.delete(sink);
                     return result;
