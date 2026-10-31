@@ -16,8 +16,11 @@ export class HostInvalidKeyError extends Error {
     }
 }
 
+type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
+
 // Maps a scope and key (as a JSON pair, so no separator can make two pairs collide) to the conversation it created.
-const idempotencyDocument = defineDoc<{ conversations: Record<string, string> }>({
+// `results` holds the recorded results of the settings operations (`settingsResultOnce`), under the same kind of key.
+const idempotencyDocument = defineDoc<{ conversations: Record<string, string>; results?: Record<string, Json> }>({
     kind: "intern.idempotency",
     version: 1,
     scope: "session",
@@ -69,6 +72,41 @@ export async function createConversationOnce(
 
     const previous = pendingCreates.get(host) ?? Promise.resolve();
     const result = previous.then(() => lookupOrCreate(host, JSON.stringify([scope, key]), agent, init));
+    pendingCreates.set(
+        host,
+        result.catch(() => undefined),
+    );
+    return result;
+}
+
+async function lookupOrRecord<T>(host: HarnessHost, entryKey: string, create: () => Promise<T>): Promise<T> {
+    const harness = internalHarness(host);
+    const stored = (await harness.snapshot(idempotencyDocument, context))?.results?.[entryKey];
+    if (stored !== undefined) return stored as T;
+
+    const result = await create();
+    await harness.commit(async (tx) => {
+        const draft = await tx.doc(idempotencyDocument);
+        draft.results ??= {};
+        draft.results[entryKey] = result as Json;
+    }, context);
+    return result;
+}
+
+/**
+ * Runs `create` for `scope` and `key` once and records its result after it succeeds; a repeated call returns the
+ * recorded result without calling `create`. The result must survive JSON. A failed `create` records nothing.
+ */
+export async function settingsResultOnce<T>(
+    host: HarnessHost,
+    input: { scope: string; key: string },
+    create: () => Promise<T>,
+): Promise<T> {
+    const { scope, key } = input;
+    if (key.length < 1 || key.length > MAX_KEY_LENGTH) throw new HostInvalidKeyError(scope, key.length);
+
+    const previous = pendingCreates.get(host) ?? Promise.resolve();
+    const result = previous.then(() => lookupOrRecord(host, JSON.stringify([scope, key]), create));
     pendingCreates.set(
         host,
         result.catch(() => undefined),
