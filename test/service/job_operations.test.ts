@@ -14,6 +14,7 @@ import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts"
 
 const WAIT_MS = 20_000;
 const POLL_MS = 10;
+const SETTLE_MS = 400;
 const quietLogger = createLogger({ stream: { write: () => true } });
 const caller: Caller = { actor: { kind: "team_member", wayIn: "cli" } };
 const requestOrigin = { kind: "request", wayIn: "cli" } as const;
@@ -33,7 +34,8 @@ type Started = {
     provider: string;
     startLead(input: Record<string, unknown>, as?: Caller): Promise<{ conversationId: string; created: boolean }>;
     folder(name: string): Promise<string>;
-    seatConversation(): Promise<string>;
+    seatConversation(slot?: { scope: string; key: string }): Promise<string>;
+    answerCount(conversationId: string): Promise<number>;
     userInputs(conversationId: string): Promise<string[]>;
     seatRecords(conversationId: string): Promise<unknown[]>;
     conversationCount(): Promise<number>;
@@ -107,10 +109,9 @@ async function start(): Promise<Started> {
             await agents.runtime().workspaces.register(path);
             return path;
         },
-        async seatConversation() {
+        async seatConversation(slot = { scope: "test", key: "existing" }) {
             const { conversationId } = await createSeatedConversation(ctx.host, {
-                scope: "test",
-                key: "existing",
+                ...slot,
                 job: { jobId: "other-job", isLead: true, origin: requestOrigin, depth: 0 },
                 seat: agents.runtime().catalog.seatFor("gp"),
                 actor: caller.actor as never,
@@ -120,6 +121,10 @@ async function start(): Promise<Started> {
         async userInputs(conversationId) {
             const page = await ctx.host.readEntries(conversationId, { limit: 100 });
             return page.entries.filter((entry) => entry.kind === "pi.user").map((entry) => JSON.stringify(entry.data));
+        },
+        async answerCount(conversationId) {
+            const page = await ctx.host.readEntries(conversationId, { limit: 100 });
+            return page.entries.filter((entry) => entry.kind === "pi.assistant").length;
         },
         async seatRecords(conversationId) {
             const page = await ctx.host.readEntries(conversationId, { limit: 100 });
@@ -146,6 +151,16 @@ async function waitForInputs(started: Started, conversationId: string, count: nu
     for (;;) {
         const inputs = await started.userInputs(conversationId);
         if (inputs.length >= count || Date.now() > deadline) return inputs;
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    }
+}
+
+// Returns the answer count once it reaches `count` or the wait ends.
+async function waitForAnswers(started: Started, conversationId: string, count: number, waitMs = WAIT_MS) {
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+        const answers = await started.answerCount(conversationId);
+        if (answers >= count || Date.now() > deadline) return answers;
         await new Promise((resolve) => setTimeout(resolve, POLL_MS));
     }
 }
@@ -223,11 +238,37 @@ describe("jobs.startLead", () => {
         await waitForInputs(started, first.conversationId, 1);
         const before = await started.conversationCount();
 
+        await waitForAnswers(started, first.conversationId, 1);
+
         const repeat = await started.startLead({ jobId: "job-3", firstInput: "only once", origin: requestOrigin });
+        // A second submission would start another turn; give it time to show before counting.
+        const duplicateAnswers = await waitForAnswers(started, first.conversationId, 2, SETTLE_MS);
 
         assert.deepEqual(repeat, { conversationId: first.conversationId, created: false });
         assert.equal(await started.conversationCount(), before);
+        assert.equal(duplicateAnswers, 1);
         assert.equal((await started.userInputs(first.conversationId)).length, 1);
+    });
+
+    it("submits the first input to a conversation created before a crash, once", async () => {
+        const started = await start();
+        const existing = await started.seatConversation({ scope: "jobs.startLead", key: "job-9" });
+
+        await started.startLead({ jobId: "job-9", firstInput: "repair me", origin: requestOrigin });
+        await started.startLead({ jobId: "job-9", firstInput: "repair me", origin: requestOrigin });
+
+        const inputs = await waitForInputs(started, existing, 1);
+        assert.equal(inputs.length, 1);
+        assert.match(inputs[0] ?? "", /repair me/);
+    });
+
+    it("returns the conversation that holds the job's key in the jobs.startLead scope", async () => {
+        const started = await start();
+        const existing = await started.seatConversation({ scope: "jobs.startLead", key: "job-8" });
+
+        const result = await started.startLead({ jobId: "job-8", firstInput: "go", origin: requestOrigin });
+
+        assert.deepEqual(result, { conversationId: existing, created: false });
     });
 
     it("refuses an unknown role and creates nothing", async () => {
