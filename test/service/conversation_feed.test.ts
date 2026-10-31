@@ -211,6 +211,21 @@ describe("conversation observation feed", () => {
         assert.deepEqual(await waiting, { closed: "stopped" });
     });
 
+    it("rejects a subscription requested after the feed closed", async () => {
+        const { host, feed, agentModel } = await openFixture();
+        const conversationId = await host.createConversation({ agent: { model: agentModel } });
+        feed.close();
+        await assert.rejects(feed.subscribeConversation(conversationId), /feed is closed/);
+    });
+
+    it("rejects a subscription that was still being created when the feed closed", async () => {
+        const { host, feed, agentModel } = await openFixture();
+        const conversationId = await host.createConversation({ agent: { model: agentModel } });
+        const pendingSubscription = feed.subscribeConversation(conversationId);
+        feed.close();
+        await assert.rejects(pendingSubscription, /feed is closed/);
+    });
+
     it("completes a run with the same entries whether or not a subscriber reads", async () => {
         const withoutSubscriber = await openFixture(RUN_DELAY_MS);
         const controlId = await withoutSubscriber.host.createConversation({

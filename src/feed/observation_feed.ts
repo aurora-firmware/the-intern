@@ -22,14 +22,22 @@ export type ObservationFeed = {
     close(): void;
 };
 
-/**
- * Creates a pull-based subscription. `push` only queues: it never awaits the subscriber. `onClosed` runs once, when
- * the subscription closes for any reason, so the producer can stop feeding it.
- */
-export function createSubscription<S, D>(
+type SubscriptionParts<S, D> = {
+    subscription: Subscription<S, D>;
+    push(delta: D): void;
+    end(reason: CloseReason): void;
+};
+
+/** Creates a pull-based subscription. `push` only queues: it never awaits the subscriber. */
+export function createSubscription<S, D>(snapshot: S, maxPending: number = FEED_MAX_PENDING): SubscriptionParts<S, D> {
+    return createReleasingSubscription(snapshot, maxPending, () => {});
+}
+
+// `onClosed` runs once, when the subscription closes for any reason, so the feed can release what feeds it.
+function createReleasingSubscription<S, D>(
     snapshot: S,
-    maxPending: number = FEED_MAX_PENDING,
-    onClosed?: (reason: CloseReason) => void,
+    maxPending: number,
+    onClosed: (reason: CloseReason) => void,
 ): { subscription: Subscription<S, D>; push(delta: D): void; end(reason: CloseReason): void } {
     const pending: D[] = [];
     let closedReason: CloseReason | undefined;
@@ -41,7 +49,7 @@ export function createSubscription<S, D>(
         pending.length = 0;
         waiting?.({ closed: reason });
         waiting = undefined;
-        onClosed?.(reason);
+        onClosed(reason);
     }
 
     function push(delta: D): void {
@@ -70,19 +78,26 @@ export function createSubscription<S, D>(
 }
 
 export function createObservationFeed(options: { host: HarnessHost; maxPending?: number }): ObservationFeed {
-    const { host, maxPending } = options;
+    const { host, maxPending = FEED_MAX_PENDING } = options;
     const active = new Set<{ end(reason: CloseReason): void }>();
+    let isClosed = false;
+    const closedError = () => new Error("The observation feed is closed; it accepts no new subscriptions.");
 
     return {
         async subscribeConversation(id) {
+            if (isClosed) throw closedError();
             // Frames can arrive before the watch is returned; they are held until the subscription exists.
             let sink: ((frame: { view: ConversationView; ops: unknown[] }) => void) | undefined;
             const early: { view: ConversationView; ops: unknown[] }[] = [];
             const watch = await watchConversation(host, id, (frame) => (sink ? sink(frame) : early.push(frame)));
+            if (isClosed) {
+                await watch.stop();
+                throw closedError();
+            }
 
             let seq = 0;
             const entry = { end: (_reason: CloseReason) => {} };
-            const { subscription, push, end } = createSubscription<ConversationView, ConversationDelta>(
+            const { subscription, push, end } = createReleasingSubscription<ConversationView, ConversationDelta>(
                 watch.snapshot,
                 maxPending,
                 () => {
@@ -97,6 +112,7 @@ export function createObservationFeed(options: { host: HarnessHost; maxPending?:
             return subscription;
         },
         close() {
+            isClosed = true;
             for (const entry of [...active]) entry.end("stopped");
         },
     };
