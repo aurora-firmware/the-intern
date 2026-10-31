@@ -299,3 +299,31 @@ describe("conversation control", () => {
         assert.ok((await allEntries(host, conversationId)).some((entry) => entry.kind === "pi.compaction"));
     });
 });
+
+describe("unknown ids", () => {
+    const UNKNOWN_ID = "9999";
+    const NON_NUMERIC_ID = "not-a-number";
+
+    it("throws HostNotFoundError when input is submitted to an unknown or non-numeric conversation id", async () => {
+        const { host } = await openFixture();
+        const input = { content: "hello", requestId: "req-1", busyMode: "followUp" } as const;
+
+        await assert.rejects(submitInput(host, UNKNOWN_ID, input), HostNotFoundError);
+        await assert.rejects(submitInput(host, NON_NUMERIC_ID, input), HostNotFoundError);
+    });
+
+    it("throws HostNotFoundError when an unknown conversation is aborted, reset or compacted", async () => {
+        const { host } = await openFixture();
+
+        await assert.rejects(abortConversation(host, UNKNOWN_ID), HostNotFoundError);
+        await assert.rejects(resetConversation(host, UNKNOWN_ID), HostNotFoundError);
+        await assert.rejects(compactConversation(host, UNKNOWN_ID), HostNotFoundError);
+    });
+
+    it("throws HostNotFoundError when the state of, or a wait for, an unknown submission is requested", async () => {
+        const { host } = await openFixture();
+
+        await assert.rejects(submissionState(host, UNKNOWN_ID), HostNotFoundError);
+        await assert.rejects(waitForSubmission(host, NON_NUMERIC_ID, 10), HostNotFoundError);
+    });
+});
