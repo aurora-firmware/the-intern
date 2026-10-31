@@ -98,6 +98,19 @@ const isToolResult = (entry: Entry) => entry.kind === "pi.tool-result";
 const mentions = (text: string) => (entry: Entry) =>
     entry.kind === "pi.assistant" && JSON.stringify(entry.data).includes(text);
 
+const isUserInput = (entry: Entry) => entry.kind === "pi.user";
+
+/** Waits until the run has taken its input and has no answer yet, which is the span of the model request. */
+async function untilModelRequestInFlight(daemon: DaemonProcess, conversationId: string): Promise<void> {
+    await untilEntry(daemon, conversationId, isUserInput, "the run to take its input");
+    const entries = await entriesOf(daemon, conversationId);
+    assert.equal(entries.filter((entry) => entry.kind === "pi.assistant").length, 0, "the model already answered");
+}
+
+async function submissionState(daemon: DaemonProcess, submissionId: string): Promise<string> {
+    return ((await daemon.invoke("submissions.get", { submissionId })) as { state: string }).state;
+}
+
 describe("kill -9 during a model request", () => {
     it("resumes the run and settles its submission once", { timeout: TEST_TIMEOUT_MS }, async () => {
         const env = await hermetic();
@@ -105,6 +118,7 @@ describe("kill -9 during a model request", () => {
         await first.ready;
         const conversationId = await createConversation(first, "one");
         const submissionId = await submit(first, conversationId, "alpha");
+        await untilModelRequestInFlight(first, conversationId);
         await crash(first);
 
         const second = start(env, "slow");
@@ -148,6 +162,9 @@ describe("kill -9 with follow-up inputs queued", () => {
         const contents = ["alpha", "beta", "gamma"];
         const submissionIds: string[] = [];
         for (const content of contents) submissionIds.push(await submit(first, conversationId, content));
+        await untilModelRequestInFlight(first, conversationId);
+        assert.equal(await submissionState(first, submissionIds[0]), "running");
+        for (const queued of submissionIds.slice(1)) assert.notEqual(await submissionState(first, queued), "done");
         await crash(first);
 
         const second = start(env, "slow");
@@ -170,6 +187,9 @@ describe("kill -9 during an admission change", () => {
             await submit(first, conversationIds[0], "alpha"),
             await submit(first, conversationIds[1], "beta"),
         ];
+        const { workerThreads: beforeKill } = (await first.invoke("daemon.status", {})) as Status;
+        assert.equal(beforeKill.inUse, 1, "the first run is not holding the worker thread");
+        assert.equal(beforeKill.waiting.length, 1, "the second conversation is not waiting");
         await crash(first);
 
         const second = start(env, "slow", 1);
@@ -190,6 +210,8 @@ describe("kill -9 during test.createConversation", () => {
         const first = start(env, "echo");
         await first.ready;
         const interrupted = first.invoke("test.createConversation", { key: "one", cwd: "." }).catch(() => undefined);
+        // IPC messages are handled in order, so once the status answers the daemon has begun the create call.
+        await first.invoke("daemon.status", {});
         await crash(first);
         await interrupted;
 
