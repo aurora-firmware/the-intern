@@ -3,7 +3,7 @@
  * document `intern.idempotency`, in the same commit that creates the conversation, so a crash leaves neither or both.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { defineDoc } from "@earendil-works/pi-durable";
+import { defineDoc, type Tx } from "@earendil-works/pi-durable";
 import { type AgentChoice, type HarnessHost, internalHarness, toAgentSpec } from "./harness_host.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -32,6 +32,7 @@ async function lookupOrCreate(
     host: HarnessHost,
     entryKey: string,
     agent: AgentChoice,
+    init: ConversationInit | undefined,
 ): Promise<{ conversationId: string; created: boolean }> {
     const harness = internalHarness(host);
     const stored = (await harness.snapshot(idempotencyDocument, context))?.conversations[entryKey];
@@ -44,6 +45,7 @@ async function lookupOrCreate(
             init: async (tx, conversationId) => {
                 const draft = await tx.doc(idempotencyDocument);
                 draft.conversations[entryKey] = String(conversationId);
+                await init?.(tx, String(conversationId));
             },
         },
         context,
@@ -51,16 +53,22 @@ async function lookupOrCreate(
     return { conversationId: String(conversation.id), created: true };
 }
 
-/** Creates the conversation for `scope` and `key` once; a repeated call returns the original with `created: false`. */
+/** Runs in the commit that creates the conversation, so its writes exist exactly when the conversation does. */
+export type ConversationInit = (tx: Tx, conversationId: string) => Promise<void>;
+
+/**
+ * Creates the conversation for `scope` and `key` once; a repeated call returns the original with `created: false`.
+ * The optional `init` runs only for a new conversation, in the same commit.
+ */
 export async function createConversationOnce(
     host: HarnessHost,
-    input: { scope: string; key: string; agent: AgentChoice },
+    input: { scope: string; key: string; agent: AgentChoice; init?: ConversationInit },
 ): Promise<{ conversationId: string; created: boolean }> {
-    const { scope, key, agent } = input;
+    const { scope, key, agent, init } = input;
     if (key.length < 1 || key.length > MAX_KEY_LENGTH) throw new HostInvalidKeyError(scope, key.length);
 
     const previous = pendingCreates.get(host) ?? Promise.resolve();
-    const result = previous.then(() => lookupOrCreate(host, JSON.stringify([scope, key]), agent));
+    const result = previous.then(() => lookupOrCreate(host, JSON.stringify([scope, key]), agent, init));
     pendingCreates.set(
         host,
         result.catch(() => undefined),
