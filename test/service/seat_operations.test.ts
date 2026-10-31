@@ -304,6 +304,35 @@ describe("conversations.seat", () => {
     });
 });
 
+describe("conversations.seat called by an agent", () => {
+    it("records the agent with the role its own conversation is seated in", async () => {
+        const started = await start();
+        const callerConversationId = await started.seatConversation("gp");
+        const conversationId = await started.seatConversation("bob");
+
+        await started.seatOperation(
+            { conversationId, role: "gp" },
+            { actor: { kind: "agent", conversationId: callerConversationId } },
+        );
+
+        const records = await started.records(conversationId);
+        assert.deepEqual(records[1]?.actor, { kind: "agent", conversationId: callerConversationId, role: "gp" });
+    });
+
+    it("fails as internal and leaves the seat unchanged when the calling agent's conversation is not seated", async () => {
+        const started = await start();
+        const conversationId = await started.seatConversation("bob");
+
+        const code = await refusalCode(
+            started.seatOperation({ conversationId, role: "gp" }, { actor: { kind: "agent", conversationId: "9999" } }),
+        );
+
+        assert.equal(code, "internal");
+        assert.equal((await readConversationMeta(started.ctx.host, conversationId))?.seat.role, "bob");
+        assert.equal((await started.records(conversationId)).length, 1);
+    });
+});
+
 describe("seatActorFor", () => {
     it("names the way in of a team member, and in-process when none is named", () => {
         assert.deepEqual(seatActorFor({ actor: { kind: "team_member", wayIn: "telegram" } }), {
