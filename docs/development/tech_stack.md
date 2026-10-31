@@ -118,7 +118,11 @@ changes a shared term updates it in the same change, and the reviewer checks it.
 In the git-ignored `.tmp/` directory, through the instance-directory flags (S-002 R-6), apart from any team's instance.
 
 **What logging and diagnostic output does the service give, and at which levels?**
-Open, to be decided when the Intern service spec (S-002) is broken down.
+One plain line per event on standard error (S-002 R-4). Each line holds an ISO-8601 timestamp, a level (`ERROR`,
+`INFO` or `DEBUG`), the message, then `key=value` fields, for example
+`2026-10-31T09:00:00.000Z INFO ready workerThreads=32`. `--verbose` shows the `DEBUG` lines; without it
+the daemon writes `ERROR` and `INFO` only. journald and launchd capture the lines as they are. The product owner ruled
+this on 2026-10-31.
 
 **How does a developer inspect a running instance's state without opening its saved data directly?**
 Through `bob` read commands, never by opening its database.
