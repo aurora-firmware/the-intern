@@ -5,6 +5,7 @@
  */
 import { homedir } from "node:os";
 import { parseArgs } from "node:util";
+import { createAgentsComponent } from "../agents/agents_component.ts";
 import { runDaemon } from "../daemon/daemon.ts";
 import { createLogger, type Logger } from "../daemon/logger.ts";
 
@@ -52,6 +53,7 @@ async function serve(args: readonly string[]): Promise<number> {
     const flags = values.values;
     const logger = createLogger({ verbose: flags.verbose ?? false });
     exitOnUncaughtFailure(logger);
+    const agents = await createAgentsComponent({ logger });
     const daemon = runDaemon({
         flags: {
             ...(flags["config-dir"] !== undefined && { configDir: flags["config-dir"] }),
@@ -63,6 +65,9 @@ async function serve(args: readonly string[]): Promise<number> {
         env: process.env,
         homeDir: homedir(),
         logger,
+        sections: agents.sections,
+        components: [agents.component],
+        operations: agents.operations,
     });
 
     // stop() of a running shutdown waits for it, so a repeated signal needs no handling of its own.

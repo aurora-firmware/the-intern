@@ -11,6 +11,7 @@ import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import type { Models, Storage } from "../../src/host/harness_host.ts";
@@ -146,7 +147,7 @@ function parseFlags(args: readonly string[]) {
     };
 }
 
-function main(): void {
+async function main(): Promise<void> {
     const switches = JSON.parse(process.argv[2] ?? "{}") as Switches;
     const send = process.send?.bind(process);
     if (!send) throw new Error("daemon_child.ts must be started with an IPC channel");
@@ -160,16 +161,22 @@ function main(): void {
     const storageSwitch: StorageSwitch = { isFailing: false };
     const hold = Promise.withResolvers<void>();
 
+    const logger = createLogger({ verbose: false });
+    const agents = await createAgentsComponent({ logger });
     const daemon = runDaemon({
         flags: parseFlags(process.argv.slice(3)),
         env: process.env,
         homeDir: process.env.HOME ?? "",
-        logger: createLogger({ verbose: false }),
-        components: createComponents(switches, hold.promise),
-        operations: createTestOperations({
-            storageSwitch,
-            modelFor: (ctx) => modelFor(ctx, fakeModelId, switches.model),
-        }),
+        logger,
+        sections: agents.sections,
+        components: [agents.component, ...createComponents(switches, hold.promise)],
+        operations: [
+            ...agents.operations,
+            ...createTestOperations({
+                storageSwitch,
+                modelFor: (ctx) => modelFor(ctx, fakeModelId, switches.model),
+            }),
+        ],
         ...(switches.workerThreads !== undefined && { workerThreadCount: switches.workerThreads }),
         ...(fake && { prepareModels: (runtime: InternModels) => modelsWithFake(runtime, fake) }),
         openStorage: async (file) => failingOnDemand(await openNodeSqliteStorage(file), storageSwitch),
@@ -206,4 +213,4 @@ function main(): void {
     );
 }
 
-main();
+await main();
