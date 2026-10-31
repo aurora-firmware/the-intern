@@ -49,11 +49,11 @@ npm test
 
 ## Run
 
-Start a development instance of the daemon with its directories under `.tmp/`:
+Start a development instance of the daemon with its directories under `.tmp/` (the flags take absolute paths):
 
 ```
-node src/cli/bob.ts serve --config-dir .tmp/dev/config --state-dir .tmp/dev/state \
-  --data-dir .tmp/dev/data --runtime-dir .tmp/dev/runtime --verbose
+node src/cli/bob.ts serve --config-dir "$PWD/.tmp/dev/config" --state-dir "$PWD/.tmp/dev/state" \
+  --data-dir "$PWD/.tmp/dev/data" --runtime-dir "$PWD/.tmp/dev/runtime" --verbose
 ```
 
 `npm run test:live` runs the live checks over your own pi login. `docs/development/local_runs.md` has the details.
