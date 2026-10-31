@@ -122,3 +122,21 @@ export async function waitForSubmission(
         clearTimeout(timer);
     }
 }
+
+export async function abortConversation(host: HarnessHost, conversationId: string): Promise<void> {
+    await (await requireConversation(host, conversationId)).abort(context);
+}
+
+export async function resetConversation(host: HarnessHost, conversationId: string, note?: string): Promise<void> {
+    await (await requireConversation(host, conversationId)).reset(note, context);
+}
+
+export async function compactConversation(
+    host: HarnessHost,
+    conversationId: string,
+    instructions?: string,
+): Promise<void> {
+    const conversation = await requireConversation(host, conversationId);
+    const taskId = await conversation.compact(instructions, context);
+    await internalHarness(host).waitForTask(taskId, context);
+}

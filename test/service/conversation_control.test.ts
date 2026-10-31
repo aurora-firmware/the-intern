@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Models } from "@earendil-works/pi-ai";
+import { type Models, Type } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
+import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { createLogger } from "../../src/daemon/logger.ts";
 import {
+    abortConversation,
+    compactConversation,
     HostBusyError,
     HostConflictError,
     HostNotFoundError,
+    resetConversation,
     submissionState,
     submitInput,
     waitForSubmission,
@@ -51,21 +55,38 @@ function modelsFor(fake: FakeModel): Models {
     return models;
 }
 
-async function openFixture(options: { delayMs?: number } = {}): Promise<Fixture> {
+// Holds a tool call open until the abort reaches it, so the run is cut off mid-round.
+const waitTool = defineTool({
+    name: "wait",
+    description: "Waits until aborted",
+    parameters: Type.Object({}),
+    execute: async (_args, _api, toolContext) => {
+        await new Promise<void>((resolve) => {
+            if (toolContext.abortSignal?.aborted) resolve();
+            toolContext.abortSignal?.addEventListener("abort", () => resolve());
+        });
+        return { output: [{ type: "text", text: "stopped" }] };
+    },
+});
+const waitExtension = defineExtension({ name: "wait", tools: [waitTool] });
+
+type FixtureOptions = { delayMs?: number; reply?: FakeReply; compactEveryTurn?: boolean };
+
+async function openFixture(options: FixtureOptions = {}): Promise<Fixture> {
     const env = await createHermeticEnv();
     envs.push(env);
     let modelCalls = 0;
     const reply = (_transcript: FakeTranscript): FakeReply => {
         modelCalls++;
-        return "ok";
+        return options.reply ?? "ok";
     };
     const fake = createFakeModel(reply, { delayMs: () => options.delayMs ?? 0 });
     fakes.push(fake);
     const host = await openHarnessHost({
         databaseFile: join(env.root, "state.sqlite"),
         models: modelsFor(fake),
-        harnessSettings: {},
-        extensions: [],
+        harnessSettings: options.compactEveryTurn ? { compaction: { keepRecentTokens: 1 } } : {},
+        extensions: [waitExtension],
         defaultCwd: process.cwd(),
         logger: createLogger({ stream: { write: () => true } }),
     });
@@ -91,6 +112,16 @@ async function waitForSettled(host: HarnessHost, submissionId: string): Promise<
     const submission = await internalHarness(host).submission(Number(submissionId) as never, ctx);
     assert.ok(submission, "submission exists");
     await submission.wait(ctx);
+}
+
+async function waitForEntryKind(host: HarnessHost, conversationId: string, kind: string): Promise<void> {
+    const attemptLimit = 200;
+    const pauseMs = 25;
+    for (let attempt = 0; attempt < attemptLimit; attempt++) {
+        if ((await allEntries(host, conversationId)).some((entry) => entry.kind === kind)) return;
+        await new Promise((resolve) => setTimeout(resolve, pauseMs));
+    }
+    assert.fail(`no ${kind} entry appeared in conversation ${conversationId}`);
 }
 
 const userTexts = (entries: HostEntry[]): string[] =>
@@ -214,5 +245,57 @@ describe("waitForSubmission", () => {
         });
 
         assert.deepEqual(await waitForSubmission(host, submissionId, LONG_TIMEOUT_MS), { state: "done" });
+    });
+});
+
+describe("conversation control", () => {
+    it("leaves an aborted conversation idle with the aborted tool call in its entries", async () => {
+        const { host, conversationId } = await openFixture({ reply: { toolCall: { name: "wait", arguments: {} } } });
+        const { submissionId } = await submitInput(host, conversationId, {
+            content: "hello",
+            requestId: "req-1",
+            busyMode: "followUp",
+        });
+        await waitForEntryKind(host, conversationId, "pi.assistant");
+
+        await abortConversation(host, conversationId);
+
+        assert.equal((await host.conversationInfo(conversationId))?.busy, false);
+        assert.deepEqual(await submissionState(host, submissionId), { state: "unanswered", reason: "aborted" });
+        const entries = await allEntries(host, conversationId);
+        const abortedResult = entries.find((entry) => entry.kind === "pi.tool-result");
+        assert.match(JSON.stringify(abortedResult?.data), /Tool wait was aborted/);
+    });
+
+    it("leaves a reset conversation idle with a pi.reset entry", async () => {
+        const { host, conversationId } = await openFixture();
+        const { submissionId } = await submitInput(host, conversationId, {
+            content: "hello",
+            requestId: "req-1",
+            busyMode: "followUp",
+        });
+        await waitForSettled(host, submissionId);
+
+        await resetConversation(host, conversationId, "carry on");
+
+        assert.equal((await host.conversationInfo(conversationId))?.busy, false);
+        assert.ok((await allEntries(host, conversationId)).some((entry) => entry.kind === "pi.reset"));
+    });
+
+    it("leaves a compacted conversation idle with a pi.compaction entry", async () => {
+        const { host, conversationId } = await openFixture({ compactEveryTurn: true });
+        for (const requestId of ["req-1", "req-2"]) {
+            const { submissionId } = await submitInput(host, conversationId, {
+                content: "hello",
+                requestId,
+                busyMode: "followUp",
+            });
+            await waitForSettled(host, submissionId);
+        }
+
+        await compactConversation(host, conversationId, "be brief");
+
+        assert.equal((await host.conversationInfo(conversationId))?.busy, false);
+        assert.ok((await allEntries(host, conversationId)).some((entry) => entry.kind === "pi.compaction"));
     });
 });
