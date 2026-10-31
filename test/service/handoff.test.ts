@@ -214,7 +214,7 @@ describe("the handoff tool", () => {
         assert.equal(last.note, "KEEP-THE-PLAN");
     });
 
-    it("continues a clean handoff on a context whose only input is the note and keeps every earlier entry", async () => {
+    it("continues a clean handoff with only the note as input and keeps every earlier entry", async () => {
         const started = await start({ handoff: { role: "gp", contextMode: "clean", note: "CLEAN-NOTE" } });
 
         const conversationId = await startAndWaitForNewAgent(started, "clean-1");
