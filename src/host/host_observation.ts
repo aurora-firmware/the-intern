@@ -6,7 +6,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { CommitChange, ConversationId, EntryRecord, JsonObject, TaskId } from "@earendil-works/pi-durable";
 import { HostNotFoundError } from "./conversation_control.ts";
-import { type HarnessHost, type HostEntry, internalHarness, toHostEntry } from "./harness_host.ts";
+import { type HarnessHost, type HostEntry, internalHarness } from "./harness_host.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -17,20 +17,32 @@ export type InstanceEvent = {
     conversationId: string;
 };
 
+type LiveState = { run?: unknown; compactions?: unknown[] };
 type StructuralView = { entries: readonly EntryRecord[]; docs: Readonly<Record<string, JsonObject>> };
 
-function toConversationView(view: StructuralView, isBusy: boolean): ConversationView {
+// Same mapping as the host's entry reads: an entry that contributes messages is shown by them, any other by its data.
+function toHostEntryView(entry: EntryRecord): HostEntry {
+    return { id: String(entry.id), kind: entry.kind, data: entry.model ?? entry.data };
+}
+
+// Busy is read from the view itself, so it always describes the same commit as the entries: a run is recorded in
+// `pi.live` from its start to its end, and a compaction is listed there while it works.
+function isViewBusy(docs: StructuralView["docs"]): boolean {
+    const live = docs["pi.live"] as LiveState | undefined;
+    return live?.run !== undefined || (live?.compactions?.length ?? 0) > 0;
+}
+
+function toConversationView(view: StructuralView): ConversationView {
     return {
-        entries: view.entries.map(toHostEntry),
+        entries: view.entries.map(toHostEntryView),
         live: view.docs["pi.live"] ?? null,
         inbox: view.docs["pi.inbox"] ?? null,
-        busy: isBusy,
+        busy: isViewBusy(view.docs),
     };
 }
 
 type CommitTracker = {
     conversations(): { id: string; busy: boolean }[];
-    isBusy(id: string): boolean;
     stop(): void;
 };
 
@@ -97,7 +109,6 @@ async function trackCommits(host: HarnessHost, onEvent: (event: InstanceEvent) =
     const isBusy = (id: string): boolean => isConversationBusy(Number(id) as ConversationId);
     return {
         conversations: () => [...knownConversations].map((id) => ({ id, busy: isBusy(id) })),
-        isBusy,
         stop() {
             isStopped = true;
             unsubscribe();
@@ -120,25 +131,17 @@ export async function watchConversation(
         : undefined;
     if (!conversation) throw new HostNotFoundError(`Conversation "${id}" does not exist.`);
 
-    const tracker = await trackCommits(host, () => {});
-    let watch: Awaited<ReturnType<typeof conversation.watch>>;
-    try {
-        watch = await conversation.watch(context);
-    } catch (error) {
-        tracker.stop();
-        throw error;
-    }
-    const snapshot = toConversationView(watch.value, tracker.isBusy(id));
+    const watch = await conversation.watch(context);
+    const snapshot = toConversationView(watch.value);
     let isStopped = false;
     watch.start(async (view, ops) => {
         if (isStopped) return;
-        onFrame({ view: toConversationView(view, tracker.isBusy(id)), ops: [...ops] });
+        onFrame({ view: toConversationView(view), ops: [...ops] });
     });
     return {
         snapshot,
         async stop() {
             isStopped = true;
-            tracker.stop();
             await watch.stop();
         },
     };

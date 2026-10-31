@@ -118,7 +118,7 @@ function toModelRef(model: string): { provider: string; modelId: string } {
 }
 
 // An entry that contributes messages to the model is shown by those messages; any other by its own data.
-export function toHostEntry(entry: EntryRecord): HostEntry {
+function toHostEntry(entry: EntryRecord): HostEntry {
     return { id: String(entry.id), kind: entry.kind, data: entry.model ?? entry.data };
 }
 

@@ -6,7 +6,7 @@ import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { abortConversation, submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
-import { type HarnessHost, openHarnessHost } from "../../src/host/harness_host.ts";
+import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import {
     type ConversationFrame,
     type InstanceEvent,
@@ -113,6 +113,55 @@ describe("watchConversation", () => {
         }
         assert.ok(JSON.stringify(frames.at(-1)?.view).includes("second"));
         assert.deepEqual(JSON.parse(JSON.stringify(frames)), frames, "frames are plain JSON");
+    });
+
+    it("delivers exactly one frame for each commit that changes the conversation's view", async () => {
+        const { host, agentModel } = await openFixture();
+        const conversationId = await host.createConversation({ agent: { model: agentModel } });
+        const frames: ConversationFrame[] = [];
+        let viewCommits = 0;
+        const unsubscribe = internalHarness(host).subscribeCommits((publication) => {
+            const isViewChange = publication.changes.some(
+                (change) =>
+                    (change.type === "entry" && String(change.value.conversationId) === conversationId) ||
+                    (change.type === "document" &&
+                        String(change.conversationId) === conversationId &&
+                        change.ops.length > 0),
+            );
+            if (isViewChange) viewCommits++;
+        });
+        const watch = await watchConversation(host, conversationId, (frame) => frames.push(frame));
+
+        await sendAndSettle(host, conversationId, "count me");
+        await until(() => frames.length >= viewCommits && viewCommits > 0, "frames for every view commit");
+        await pause(SETTLE_PAUSE_MS);
+        await watch.stop();
+        unsubscribe();
+
+        assert.equal(frames.length, viewCommits);
+    });
+
+    it("reports busy in the snapshot and in each frame according to the run in that frame's own view", async () => {
+        const { host, agentModel } = await openFixture(BUSY_DELAY_MS);
+        const conversationId = await host.createConversation({ agent: { model: agentModel } });
+        await submitInput(host, conversationId, { content: "slow", requestId: "slow-1", busyMode: "followUp" });
+        await until(async () => (await host.conversationInfo(conversationId))?.busy === true, "the run to start");
+        const frames: ConversationFrame[] = [];
+
+        const watch = await watchConversation(host, conversationId, (frame) => frames.push(frame));
+        await until(
+            async () => (await host.conversationInfo(conversationId))?.busy === false && frames.length > 0,
+            "the run to finish",
+        );
+        await pause(SETTLE_PAUSE_MS);
+        await watch.stop();
+
+        assert.equal(watch.snapshot.busy, true);
+        assert.equal(frames.at(-1)?.view.busy, false);
+        for (const frame of frames) {
+            const live = frame.view.live as { run?: unknown } | null;
+            assert.equal(frame.view.busy, live?.run !== undefined, "busy agrees with the run in the same view");
+        }
     });
 
     it("delivers no frame after stop is called", async () => {
