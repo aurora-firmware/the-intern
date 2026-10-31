@@ -66,7 +66,7 @@ const unsetMeta = (): ConversationMeta => ({
 });
 
 // Latest-only: only the current value is read, and the transcript's seat records are the history.
-const conversationMetaDoc = defineDoc<ConversationMeta>({
+export const conversationMetaDoc = defineDoc<ConversationMeta>({
     kind: CONVERSATION_META_KIND,
     version: 1,
     scope: "conversation",

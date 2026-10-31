@@ -21,6 +21,8 @@ import {
     readConversationMeta,
     SEAT_RECORD_KIND,
     type SeatActor,
+    SeatingError,
+    seatWrites,
 } from "../../src/host/seating.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
@@ -288,6 +290,48 @@ async function readSeatWorkspace(host: HarnessHost, conversationId: string, inde
     }[];
     return record.next.workspace;
 }
+
+describe("a failing seat change", () => {
+    it("throws SeatingError and changes nothing when the conversation has no metadata", async () => {
+        const { open, seatOn } = await createFixture();
+        const host = await open();
+        const conversationId = await host.createConversation({ agent: { model: seatOn("model-one").model } });
+        const before = await agentOf(host, conversationId);
+
+        await assert.rejects(changeSeat(host, conversationId, { seat: seatOn("model-two"), actor }), SeatingError);
+
+        assert.deepEqual(await agentOf(host, conversationId), before);
+        assert.equal(await readConversationMeta(host, conversationId), undefined);
+        assert.deepEqual(await seatRecordsOf(host, conversationId), []);
+    });
+
+    it("leaves the agent, document and seat records unchanged when the transaction fails after seatWrites", async () => {
+        const { open, seatOn } = await createFixture();
+        const host = await open();
+        const { conversationId } = await createSeatedConversation(host, {
+            scope: "start-job",
+            key: "k1",
+            job,
+            seat: seatOn("model-one"),
+            actor,
+        });
+        const agentBefore = await agentOf(host, conversationId);
+        const metaBefore = await readConversationMeta(host, conversationId);
+        const recordsBefore = await seatRecordsOf(host, conversationId);
+
+        await assert.rejects(
+            internalHarness(host).commit(async (tx) => {
+                await seatWrites(tx, conversationId, { seat: seatOn("model-two"), actor });
+                throw new Error("later write failed");
+            }, context),
+            /later write failed/,
+        );
+
+        assert.deepEqual(await agentOf(host, conversationId), agentBefore);
+        assert.deepEqual(await readConversationMeta(host, conversationId), metaBefore);
+        assert.deepEqual(await seatRecordsOf(host, conversationId), recordsBefore);
+    });
+});
 
 describe("conversation metadata after reopening", () => {
     it("reads the same metadata and seat records when the host is closed and opened again", async () => {
