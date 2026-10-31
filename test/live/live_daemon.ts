@@ -100,15 +100,30 @@ async function entriesOf(daemon: DaemonProcess, conversationId: string): Promise
     return entries;
 }
 
-async function untilToolCall(daemon: DaemonProcess, conversationId: string): Promise<void> {
-    const isToolCall = (entry: Entry) =>
-        entry.kind === "pi.assistant" && JSON.stringify(entry.data).includes("toolCall");
+/** Waits for a live `pi.tool` task: the tool call has started, so a kill lands during the long `bash` call. */
+async function untilToolTaskLive(daemon: DaemonProcess, conversationId: string): Promise<void> {
     const deadline = Date.now() + WAIT_BOUND_MS;
     while (Date.now() < deadline) {
-        if ((await entriesOf(daemon, conversationId)).some(isToolCall)) return;
+        const tasks = (await daemon.invoke("tasks.live", { conversationId })) as { kind: string }[];
+        if (tasks.some((task) => task.kind === "pi.tool")) return;
         await new Promise((resolveWait) => setTimeout(resolveWait, POLL_INTERVAL_MS));
     }
-    assert.fail("Timed out waiting for the model to call the bash tool");
+    assert.fail("Timed out waiting for the bash tool task to be live");
+}
+
+function isFinalAnswer(entry: Entry): boolean {
+    return entry.kind === "pi.assistant" && !JSON.stringify(entry.data).includes("toolCall");
+}
+
+/** One input, one interrupted tool result and one final answer after it: the run was not repeated after the restart. */
+function assertRunSettledOnce(entries: Entry[]): void {
+    const results = entries.filter((entry) => entry.kind === "pi.tool-result");
+    assert.equal(results.length, 1, `expected one tool result, found ${results.length}`);
+    assert.match(JSON.stringify(results[0].data), /interrupted/);
+    assert.equal(entries.filter((entry) => entry.kind === "pi.user").length, 1, "the input was taken more than once");
+    const resultIndex = entries.indexOf(results[0]);
+    const answersAfterResult = entries.slice(resultIndex).filter(isFinalAnswer);
+    assert.equal(answersAfterResult.length, 1, `expected one final answer, found ${answersAfterResult.length}`);
 }
 
 async function stopDaemon(daemon: DaemonProcess): Promise<void> {
@@ -155,9 +170,11 @@ async function liveKillDuringBashSettlesOnce(model: string): Promise<void> {
         try {
             await first.ready;
             const conversationId = await createConversation(first, "live-two");
-            const prompt = "Use the bash tool to run exactly `sleep 60`. Then reply with the word done.";
+            const prompt =
+                "Use the bash tool to run exactly `sleep 60`, once. Then reply with the word done. " +
+                "If the tool result says it was interrupted, do not run it again: reply done.";
             const submissionId = await submit(first, conversationId, prompt);
-            await untilToolCall(first, conversationId);
+            await untilToolTaskLive(first, conversationId);
             first.kill9();
             await first.exited;
 
@@ -165,11 +182,7 @@ async function liveKillDuringBashSettlesOnce(model: string): Promise<void> {
             await second.ready;
             assert.deepEqual(await settle(second, submissionId), { state: "done" });
             assert.deepEqual(await settle(second, submissionId), { state: "done" });
-            const results = (await entriesOf(second, conversationId)).filter(
-                (entry) => entry.kind === "pi.tool-result",
-            );
-            assert.ok(results.length >= 1, "the run holds no tool result");
-            assert.match(JSON.stringify(results[0].data), /interrupted/);
+            assertRunSettledOnce(await entriesOf(second, conversationId));
         } finally {
             for (const daemon of [first, second]) {
                 daemon?.kill9();
