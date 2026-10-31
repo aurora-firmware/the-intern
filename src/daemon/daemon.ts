@@ -1,6 +1,8 @@
 /**
- * The daemon's startup (S-002 component 1, R-2, R-3): eight steps in a fixed order. A failing step is logged with its
- * number, name and cause, the earlier steps are undone, and `exited` settles with 1. `runDaemon` never throws.
+ * The daemon's startup and shutdown (S-002 component 1, R-2 to R-5, R-7). Startup is eight steps in a fixed order. A
+ * failing step is logged with its number, name and cause, the earlier steps are undone, and `exited` settles with 1.
+ * Shutdown undoes the same steps in reverse and settles with 0, or with 1 when it overruns `STOP_BOUND_MS`. A storage
+ * failure runs the shutdown without closing the host and settles with 1. `runDaemon` never throws.
  */
 import { type Admission, createAdmission } from "../admission/admission.ts";
 import { createAdmissionGate } from "../admission/admission_extension.ts";
@@ -17,7 +19,7 @@ import { feedOperations } from "../service/feed_operations.ts";
 import { type Catalogue, createCatalogue, type DaemonPhase, type Operation } from "../service/operations.ts";
 import { runtimeReadOperations } from "../service/runtime_read_operations.ts";
 import { type StatusSources, statusOperation } from "../service/status_operation.ts";
-import { WORKER_THREAD_COUNT } from "./constants.ts";
+import { STOP_BOUND_MS, WORKER_THREAD_COUNT } from "./constants.ts";
 import type { Logger } from "./logger.ts";
 import { acquireOwnership, type OwnershipHandle } from "./ownership.ts";
 import {
@@ -122,6 +124,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
     const startedComponents: DaemonComponent[] = [];
     let phase: DaemonPhase = "starting";
     let admission: Admission | undefined;
+    let isHostClosedByStorageFailure = false;
 
     const { dirs, failure: pathFailure } = resolveDirs(options);
     const status: StatusSources = {
@@ -180,7 +183,10 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
             logger,
             ...(options.openStorage && { openStorage: options.openStorage }),
         });
-        undoStack.push(() => host.close());
+        // After a storage failure the harness has already closed itself, and closing it again would only fail.
+        undoStack.push(async () => {
+            if (!isHostClosedByStorageFailure) await host.close();
+        });
         const gateAdmission = createAdmission({ host, capacity: workerThreadCount, logger, gate });
         undoStack.push(async () => gateAdmission.stop());
         return { models, host, gateAdmission };
@@ -246,35 +252,68 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         });
     }
 
-    let resolveStop: (status: number) => void = () => {};
+    let resolveExit: (status: number) => void = () => {};
     const exited = new Promise<number>((resolve) => {
-        startUp().then(
-            () => {
-                phase = "ready";
-                logger.info("ready", {
-                    stateDir: dirs.stateDir,
-                    intern: versions.intern,
-                    pi: versions.pi,
-                    workerThreads: workerThreadCount,
-                });
-            },
-            async (error: unknown) => {
-                phase = "stopping";
-                const failure = error instanceof StartupFailure ? error : new StartupFailure(0, "startup", error);
-                logger.error("startup failed", { step: failure.step, name: failure.stepName, cause: failure.message });
-                await undoAll();
-                resolve(1);
-            },
-        );
-        resolveStop = resolve;
+        resolveExit = resolve;
     });
+
+    /** Undoes everything within `STOP_BOUND_MS`: shutdown that code stalls by ignoring its abort ends with status 1. */
+    async function shutDown(successStatus: number): Promise<void> {
+        phase = "stopping";
+        let boundTimer: NodeJS.Timeout | undefined;
+        const bound = new Promise<"overran">((resolve) => {
+            boundTimer = setTimeout(() => resolve("overran"), STOP_BOUND_MS);
+        });
+        const outcome = await Promise.race([undoAll().then(() => "finished" as const), bound]);
+        clearTimeout(boundTimer);
+        if (outcome === "overran") {
+            logger.error("shutdown did not finish within the bound", { boundMs: STOP_BOUND_MS });
+            resolveExit(1);
+            return;
+        }
+        resolveExit(successStatus);
+    }
+
+    async function exitAfterFailure(description: string, error: unknown): Promise<void> {
+        logger.error(description, { cause: error instanceof Error ? error.message : String(error) });
+        await shutDown(1);
+    }
+
+    function watchHostAfterReady(host: HarnessHost): void {
+        host.closed.then(
+            (end) => {
+                if (end.reason !== "failed") return;
+                isHostClosedByStorageFailure = true;
+                return exitAfterFailure("storage failed; the daemon exits", end.error);
+            },
+            (error: unknown) => exitAfterFailure("daemon failed after ready", error),
+        );
+    }
+
+    startUp().then(
+        () => {
+            phase = "ready";
+            logger.info("ready", {
+                stateDir: dirs.stateDir,
+                intern: versions.intern,
+                pi: versions.pi,
+                workerThreads: workerThreadCount,
+            });
+            if (context.host) watchHostAfterReady(context.host);
+        },
+        async (error: unknown) => {
+            phase = "stopping";
+            const failure = error instanceof StartupFailure ? error : new StartupFailure(0, "startup", error);
+            logger.error("startup failed", { step: failure.step, name: failure.stepName, cause: failure.message });
+            await undoAll();
+            resolveExit(1);
+        },
+    );
     return {
         catalogue,
         phase: () => phase,
         async stop() {
-            phase = "stopping";
-            await undoAll();
-            resolveStop(0);
+            await shutDown(0);
             return exited;
         },
         exited,
