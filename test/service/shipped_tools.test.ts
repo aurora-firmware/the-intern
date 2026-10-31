@@ -1,0 +1,168 @@
+import assert from "node:assert/strict";
+import { mkdir, realpath, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { afterEach, describe, it } from "node:test";
+import {
+    type FauxProviderRegistration,
+    type FauxResponseFactory,
+    fauxAssistantMessage,
+    fauxToolCall,
+} from "@earendil-works/pi-ai";
+import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
+import { createModels, createProvider } from "@earendil-works/pi-ai/models";
+import { createLogger } from "../../src/daemon/logger.ts";
+import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
+import { type HarnessHost, openHarnessHost } from "../../src/host/harness_host.ts";
+import { createSeatedConversation, type JobLinks, type SeatActor } from "../../src/host/seating.ts";
+import { COORDINATION_TOOL_NAMES, SHIPPED_TOOL_NAMES } from "../../src/roles/role_model.ts";
+import { SHIPPED_TOOLS_EXTENSION_NAME, shippedToolsExtension } from "../../src/tools/shipped_tools_extension.ts";
+import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+
+const WAIT_MS = 10_000;
+const job: JobLinks = { jobId: "job-1", isLead: true, origin: { kind: "request", wayIn: "cli" }, depth: 0 };
+const actor: SeatActor = { kind: "team_member", wayIn: "cli" };
+
+type Step = { toolCall: { name: string; arguments: Record<string, unknown> } } | { text: string };
+type ModelContext = Parameters<FauxResponseFactory>[0];
+
+const fakes: FauxProviderRegistration[] = [];
+const envs: HermeticEnv[] = [];
+const hosts: HarnessHost[] = [];
+
+afterEach(async () => {
+    for (const host of hosts.splice(0)) await host.close();
+    for (const fake of fakes.splice(0)) fake.unregister();
+    for (const env of envs.splice(0)) await env.dispose();
+});
+
+// pi-durable sends the tools as changes on system messages; the tools in effect are the fold of them.
+function toolNamesOf(context: ModelContext): string[] {
+    const inEffect = new Set<string>();
+    for (const message of context.messages) {
+        if (message.role !== "system") continue;
+        for (const tool of message.toolsAdded ?? []) inEffect.add(tool.name);
+        for (const tool of message.toolsRemoved ?? []) inEffect.delete(tool.name);
+    }
+    return [...inEffect];
+}
+
+function toolResultTexts(context: ModelContext): string[] {
+    return context.messages.flatMap((message) =>
+        message.role === "toolResult"
+            ? [message.content.map((block) => (block.type === "text" ? block.text : "")).join("")]
+            : [],
+    );
+}
+
+// The fake model plays the steps in order, one per request, and records what each request offered and carried.
+async function createFixture(steps: Step[]) {
+    const env = await createHermeticEnv();
+    envs.push(env);
+    const offered: string[][] = [];
+    const results: string[][] = [];
+    const fake = registerFauxProvider();
+    const respond: FauxResponseFactory = async (context) => {
+        fake.appendResponses([respond]);
+        offered.push(toolNamesOf(context));
+        results.push(toolResultTexts(context));
+        const step = steps[offered.length - 1] ?? { text: "done" };
+        if ("text" in step) return fauxAssistantMessage(step.text);
+        return fauxAssistantMessage([fauxToolCall(step.toolCall.name, step.toolCall.arguments as never)], {
+            stopReason: "toolUse",
+        });
+    };
+    fake.setResponses([respond]);
+    fakes.push(fake);
+    const implementation = getApiProvider(fake.api);
+    assert.ok(implementation);
+    const models = createModels();
+    models.setProvider(
+        createProvider({
+            id: fake.getModel().provider,
+            auth: { apiKey: { name: "Fake", resolve: async () => ({ auth: {} }) } },
+            models: fake.models,
+            api: { stream: implementation.stream, streamSimple: implementation.streamSimple },
+        }),
+    );
+    const host = await openHarnessHost({
+        databaseFile: join(env.root, "state.sqlite"),
+        models,
+        harnessSettings: {},
+        extensions: [shippedToolsExtension],
+        defaultCwd: process.cwd(),
+        logger: createLogger({ stream: { write: () => true } }),
+    });
+    hosts.push(host);
+    const workspace = join(env.root, "workspace");
+    await mkdir(workspace);
+    const seat = (tools: string[]) => ({
+        role: "developer",
+        model: `${fake.getModel().provider}/${fake.getModel().id}`,
+        workspace,
+        instructions: "Work.",
+        tools,
+        skills: [],
+    });
+    const seatConversation = async (tools: string[]) =>
+        (await createSeatedConversation(host, { scope: "s", key: "k", job, seat: seat(tools), actor })).conversationId;
+    let turn = 0;
+    const say = async (conversationId: string) => {
+        turn += 1;
+        const submission = await submitInput(host, conversationId, {
+            content: `turn ${turn}`,
+            requestId: `r${turn}`,
+            busyMode: "reject",
+        });
+        return waitForSubmission(host, submission.submissionId, WAIT_MS);
+    };
+    return { offered, results, workspace, seatConversation, say };
+}
+
+describe("the shipped tools extension", () => {
+    it("is named intern.tools and brings exactly the shipped tools", () => {
+        assert.equal(SHIPPED_TOOLS_EXTENSION_NAME, "intern.tools");
+        assert.equal(shippedToolsExtension.name, SHIPPED_TOOLS_EXTENSION_NAME);
+        assert.deepEqual(shippedToolsExtension.tools?.map((tool) => tool.name).sort(), [...SHIPPED_TOOL_NAMES].sort());
+    });
+
+    it("offers the model read and none of write, edit and bash when the agent tools are read and the coordination names", async () => {
+        const { offered, seatConversation, say } = await createFixture([]);
+        const id = await seatConversation(["read", ...COORDINATION_TOOL_NAMES]);
+
+        await say(id);
+
+        assert.ok(offered[0].includes("read"));
+        for (const absent of ["write", "edit", "bash"]) assert.equal(offered[0].includes(absent), false, absent);
+    });
+
+    it("runs bash in the workspace the conversation is seated in", async () => {
+        const { results, workspace, seatConversation, say } = await createFixture([
+            { toolCall: { name: "bash", arguments: { command: "pwd" } } },
+        ]);
+        const id = await seatConversation(["bash"]);
+
+        await say(id);
+
+        assert.match(results[1].join("\n"), new RegExp(`${(await realpath(workspace)).replace(/\//g, "\\/")}\\s*$`));
+    });
+
+    it("returns an error result and answers the next input when the workspace folder is removed", async () => {
+        const { results, workspace, seatConversation, say } = await createFixture([
+            { text: "first" },
+            { toolCall: { name: "bash", arguments: { command: "pwd" } } },
+            { text: "after the error" },
+            { text: "answer to the next input" },
+        ]);
+        const id = await seatConversation(["bash", "read"]);
+        await say(id);
+        await rm(workspace, { recursive: true });
+
+        const second = await say(id);
+        const third = await say(id);
+
+        assert.equal(second.state, "done");
+        assert.equal(third.state, "done");
+        assert.ok(results[2].length > 0, "the model saw a tool result");
+        assert.match(results[2].join("\n"), new RegExp(workspace.replace(/[/.]/g, "\\$&")));
+    });
+});
