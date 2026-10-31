@@ -117,6 +117,18 @@ describe("model runtime", () => {
         assert.ok(runtime.listModels().some((entry) => entry.model === "fixture/plain-model"));
     });
 
+    it("writes_no_auth_json_into_a_pi_agent_folder_that_has_none", async () => {
+        await rm(join(hermetic.piAgentDir, "auth.json"));
+        const before = await snapshotFolder(hermetic.piAgentDir);
+        runtime = await createModelRuntime({ piAgentDir: hermetic.piAgentDir });
+        runtime.checkModelChoice({ model: "fixture/plain-model" });
+        await runtime.models.getAvailable();
+        await runtime.models.checkAuth("fixture");
+        await runtime.close();
+        runtime = undefined;
+        assert.deepEqual(await snapshotFolder(hermetic.piAgentDir), before);
+    });
+
     it("leaves_every_file_in_the_pi_agent_folder_byte_identical", async () => {
         const before = await snapshotFolder(hermetic.piAgentDir);
         runtime = await createModelRuntime({ piAgentDir: hermetic.piAgentDir });

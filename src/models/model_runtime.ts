@@ -3,9 +3,9 @@
  * are used in place (R-18, ADR-002 decision 5). The folder is only read here, except that pi's own credential store
  * writes an OAuth refresh back to `auth.json` under its own lock. No pi-durable import.
  */
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getSupportedThinkingLevels, InMemoryModelsStore } from "@earendil-works/pi-ai";
+import { type CredentialStore, getSupportedThinkingLevels, InMemoryModelsStore } from "@earendil-works/pi-ai";
 import { closeOpenAICodexWebSocketSessions } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { type HarnessSettingsMapping, mapPiSettings } from "./settings_mapping.ts";
@@ -72,11 +72,39 @@ function checkChoice(models: ModelRuntime, choice: ModelChoice): ModelChoiceChec
     };
 }
 
+/**
+ * Stands in for pi's credential store while the folder has no `auth.json`: pi's own store would create the file. It
+ * holds no logins and refuses to store one, so a login made with pi afterwards takes effect when the daemon restarts.
+ */
+function createNoLoginStore(authPath: string): CredentialStore {
+    return {
+        read: async () => undefined,
+        list: async () => [],
+        modify: async (providerId, fn) => {
+            if ((await fn(undefined)) === undefined) return undefined;
+            throw new Error(`No pi login at ${authPath}: log in to "${providerId}" with pi, then restart the daemon.`);
+        },
+        delete: async () => {},
+    };
+}
+
+async function exists(path: string): Promise<boolean> {
+    try {
+        await access(path);
+        return true;
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+        throw error;
+    }
+}
+
 /** Opens the pi agent folder's model registry and settings. A missing `auth.json` leaves the registry without logins. */
 export async function createModelRuntime(options: { piAgentDir: string }): Promise<InternModels> {
     const { piAgentDir } = options;
+    const authPath = join(piAgentDir, "auth.json");
     const models = await ModelRuntime.create({
-        authPath: join(piAgentDir, "auth.json"),
+        authPath,
+        ...(!(await exists(authPath)) && { credentials: createNoLoginStore(authPath) }),
         modelsPath: join(piAgentDir, "models.json"),
         allowModelNetwork: false,
         // The catalog cache would add a models-store.json to the folder, and nothing refreshes a catalog offline.
