@@ -125,12 +125,12 @@ describe("the agents component at startup", () => {
         assert.throws(() => agents.runtime(), /step 5|not.*started|before/i);
     });
 
-    it("installs the intern.role-prompt and intern.tools extensions", async () => {
+    it("installs the intern.role-prompt, intern.tools and intern.coordination extensions", async () => {
         const agents = await createAgentsComponent({ logger: quietLogger });
 
         assert.deepEqual(
             (agents.component.extensions ?? []).map((extension) => extension.name),
-            ["intern.role-prompt", "intern.tools"],
+            ["intern.role-prompt", "intern.tools", "intern.coordination"],
         );
     });
 

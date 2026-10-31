@@ -4,8 +4,10 @@
  * workspaces are usable and every role has a registered default workspace).
  */
 import type { ConfigSection } from "../config/config_file.ts";
+import { createCoordinationExtension } from "../coordination/coordination_extension.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
+import type { HarnessHost } from "../host/harness_host.ts";
 import { createRolePromptExtension } from "../prompt/role_prompt_extension.ts";
 import { createWorkspaceContextLoader } from "../prompt/workspace_context.ts";
 import { createRoleCatalog, type RoleCatalog } from "../roles/role_catalog.ts";
@@ -39,12 +41,18 @@ export async function createAgentsComponent(options: { logger: Logger }): Promis
     const preamble = await loadPreamble();
     const loader = createWorkspaceContextLoader({ logger: options.logger });
     let runtime: AgentsRuntime | undefined;
+    let host: HarnessHost | undefined;
 
     const requireRuntime = (): AgentsRuntime => {
         if (runtime === undefined) {
             throw new Error("The agents runtime exists only after startup step 5 (check models) has run");
         }
         return runtime;
+    };
+
+    const requireHost = (): HarnessHost => {
+        if (host === undefined) throw new Error("The harness host exists only after startup step 4 (open the host)");
+        return host;
     };
 
     const buildRuntime = (ctx: ServiceContext): AgentsRuntime => {
@@ -73,8 +81,13 @@ export async function createAgentsComponent(options: { logger: Logger }): Promis
 
     const component: DaemonComponent = {
         name: "agents",
-        extensions: [createRolePromptExtension({ preamble, loader }), shippedToolsExtension],
+        extensions: [
+            createRolePromptExtension({ preamble, loader }),
+            shippedToolsExtension,
+            createCoordinationExtension({ host: requireHost, runtime: requireRuntime }),
+        ],
         async checkModels(ctx) {
+            host = ctx.host;
             runtime = buildRuntime(ctx);
             runtime.catalog.checkConfigured();
         },
