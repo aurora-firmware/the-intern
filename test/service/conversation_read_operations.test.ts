@@ -5,7 +5,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
-import { defineDoc } from "@earendil-works/pi-durable";
+import { defineDoc, type JsonObject } from "@earendil-works/pi-durable";
 import { type Admission, createAdmission } from "../../src/admission/admission.ts";
 import { createAdmissionGate } from "../../src/admission/admission_extension.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
@@ -33,7 +33,7 @@ const caller: Caller = { actor: { kind: "team_member" } };
 
 // The daemon documents (S-002 Definitions, "Database"), declared again here to read what the product stored.
 const daemonDocuments = ["intern.admission", "intern.versions", "intern.idempotency"].map((kind) =>
-    defineDoc<Record<string, unknown>>({
+    defineDoc<JsonObject>({
         kind,
         version: 1,
         scope: "session",
