@@ -9,6 +9,9 @@ import {
     configure,
     defineDoc,
     defineEntry,
+    InboxDoc,
+    LiveDoc,
+    ResetEntry,
     type ToolRegistration,
     type Tx,
 } from "@earendil-works/pi-durable";
@@ -167,6 +170,38 @@ export async function createSeatedConversation(
 /** Changes the conversation's seat in one commit. A model turn that is running finishes with the old seat. */
 export async function changeSeat(host: HarnessHost, conversationId: string, change: SeatChange): Promise<void> {
     await internalHarness(host).commit((tx) => seatWrites(tx, conversationId, change), context);
+}
+
+/**
+ * Resets the conversation's context and changes its seat in one commit, so the new seat and its record never exist
+ * without the reset. The reset entry is the one `Conversation.reset` writes, with the note as the start of the new
+ * context; the earlier entries stay in the transcript. While a model turn is running the reset is queued in the
+ * inbox, as pi-durable's admission does, so it lands at the turn boundary and the turn's answer stays before it.
+ */
+export async function resetWithSeat(
+    host: HarnessHost,
+    conversationId: string,
+    input: { note?: string; change: SeatChange },
+): Promise<void> {
+    const { note, change } = input;
+    const id = toNumericId(conversationId);
+    await internalHarness(host).commit(async (tx) => {
+        // The live state is read before any table write, as pi-durable's admission does.
+        const isBusy = (await tx.doc(LiveDoc, id)).run !== undefined;
+        await seatWrites(tx, conversationId, change);
+        const model = note === undefined ? {} : { model: [{ role: "user", content: note, timestamp: Date.now() }] };
+        const draft = { head: "self", ...model };
+        if (!isBusy) {
+            await tx.appendEntry(ResetEntry, id, draft as never);
+            return;
+        }
+        const submission = await tx.createSubmission({ conversationId: id, type: "write", status: "queued" });
+        (await tx.doc(InboxDoc, id)).items.push({
+            id: submission.id,
+            mode: "write",
+            entry: { kind: ResetEntry.kind, ...draft },
+        } as never);
+    }, context);
 }
 
 export async function readConversationMeta(
