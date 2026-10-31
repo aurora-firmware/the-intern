@@ -49,8 +49,14 @@ npm test
 
 ## Run
 
-There is no runnable command yet. The daemon (`bob serve`) is added by the tasks of S-002; until then the code is
-exercised through the tests only.
+Start a development instance of the daemon with its directories under `.tmp/` (the flags take absolute paths):
+
+```
+node src/cli/bob.ts serve --config-dir "$PWD/.tmp/dev/config" --state-dir "$PWD/.tmp/dev/state" \
+  --data-dir "$PWD/.tmp/dev/data" --runtime-dir "$PWD/.tmp/dev/runtime" --verbose
+```
+
+`npm run test:live` runs the live checks over your own pi login. `docs/development/local_runs.md` has the details.
 
 ## Lint and Format
 
