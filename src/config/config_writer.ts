@@ -93,6 +93,19 @@ export function createConfigStore(
     let fingerprint = loaded.fingerprint;
     let queue: Promise<void> = Promise.resolve();
 
+    // The change is already persisted, so a failing listener is reported as a warning and never rejects the change.
+    function notifyListeners(sectionName: string): void {
+        for (const listener of listeners) {
+            try {
+                listener({ section: sectionName });
+            } catch (error) {
+                process.emitWarning(
+                    `a configuration change listener for ${sectionName} threw: ${(error as Error).message}`,
+                );
+            }
+        }
+    }
+
     async function applyChange<T>(section: ConfigSection<T>, next: T): Promise<void> {
         validate(file, section, next);
         if ((await readFingerprint(file)) !== fingerprint) {
@@ -107,7 +120,7 @@ export function createConfigStore(
         }
         values.set(section.name, next);
         fingerprint = fingerprintOf(text);
-        for (const listener of listeners) listener({ section: section.name });
+        notifyListeners(section.name);
     }
 
     return {

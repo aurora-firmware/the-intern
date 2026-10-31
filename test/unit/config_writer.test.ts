@@ -75,6 +75,23 @@ describe("createConfigStore", () => {
         assert.deepEqual(await readdir(directory), ["config.toml"]);
     });
 
+    it("resolves the change and still notifies later listeners when a listener throws", async () => {
+        const store = await openStore();
+        const seen: string[] = [];
+        store.onChange(() => {
+            throw new Error("listener broke");
+        });
+        store.onChange((change) => seen.push(change.section));
+        const warning = new Promise<Error>((resolve) => process.once("warning", resolve));
+
+        await store.change(limitsSection, { max: 6 });
+
+        assert.deepEqual(seen, ["limits"]);
+        assert.deepEqual(store.current(limitsSection), { max: 6 });
+        assert.equal(await readFile(file, "utf8"), "[limits]\nmax = 6\n");
+        assert.match((await warning).message, /listener broke/);
+    });
+
     it("stops notifying a listener after it unsubscribes", async () => {
         const store = await openStore();
         const seen: string[] = [];
