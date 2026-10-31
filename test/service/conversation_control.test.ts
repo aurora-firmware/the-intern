@@ -6,7 +6,15 @@ import type { Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import { createLogger } from "../../src/daemon/logger.ts";
-import { HostBusyError, submitInput } from "../../src/host/conversation_control.ts";
+import {
+    HostBusyError,
+    HostConflictError,
+    HostNotFoundError,
+    submissionState,
+    submitInput,
+    waitForSubmission,
+    withdrawInput,
+} from "../../src/host/conversation_control.ts";
 import { type HarnessHost, type HostEntry, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import { createFakeModel, type FakeReply, type FakeTranscript } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
@@ -118,5 +126,93 @@ describe("submitInput", () => {
         const texts = userTexts(await allEntries(host, conversationId));
         assert.equal(texts.length, 1);
         assert.ok(!texts.some((text) => text.includes("second")));
+    });
+});
+
+describe("withdrawInput", () => {
+    it("settles a queued submission unanswered and never places it in the transcript", async () => {
+        const { host, conversationId } = await openFixture({ delayMs: BUSY_DELAY_MS });
+        const running = await submitInput(host, conversationId, {
+            content: "first",
+            requestId: "req-1",
+            busyMode: "followUp",
+        });
+        const queued = await submitInput(host, conversationId, {
+            content: "second",
+            requestId: "req-2",
+            busyMode: "followUp",
+        });
+        assert.equal((await submissionState(host, queued.submissionId)).state, "queued");
+
+        await withdrawInput(host, queued.submissionId);
+        await waitForSettled(host, running.submissionId);
+
+        assert.equal((await submissionState(host, queued.submissionId)).state, "unanswered");
+        assert.ok((await submissionState(host, queued.submissionId)).reason);
+        const texts = userTexts(await allEntries(host, conversationId));
+        assert.equal(texts.length, 1);
+        assert.ok(!texts.some((text) => text.includes("second")));
+    });
+
+    it("throws HostConflictError when the input is already placed", async () => {
+        const { host, conversationId } = await openFixture({ delayMs: BUSY_DELAY_MS });
+        const running = await submitInput(host, conversationId, {
+            content: "first",
+            requestId: "req-1",
+            busyMode: "followUp",
+        });
+
+        await assert.rejects(withdrawInput(host, running.submissionId), HostConflictError);
+        await waitForSettled(host, running.submissionId);
+    });
+
+    it("throws HostNotFoundError for an unknown submission", async () => {
+        const { host } = await openFixture();
+
+        await assert.rejects(withdrawInput(host, "9999"), HostNotFoundError);
+    });
+});
+
+describe("submissionState", () => {
+    it("reports running while the model answers and done afterwards", async () => {
+        const { host, conversationId } = await openFixture({ delayMs: BUSY_DELAY_MS });
+        const { submissionId } = await submitInput(host, conversationId, {
+            content: "hello",
+            requestId: "req-1",
+            busyMode: "followUp",
+        });
+
+        assert.deepEqual(await submissionState(host, submissionId), { state: "running" });
+        await waitForSettled(host, submissionId);
+        assert.deepEqual(await submissionState(host, submissionId), { state: "done" });
+    });
+});
+
+describe("waitForSubmission", () => {
+    const SHORT_TIMEOUT_MS = 20;
+    const LONG_TIMEOUT_MS = 10_000;
+
+    it("returns the current state without throwing when the timeout comes before the submission settles", async () => {
+        const { host, conversationId } = await openFixture({ delayMs: BUSY_DELAY_MS });
+        const { submissionId } = await submitInput(host, conversationId, {
+            content: "hello",
+            requestId: "req-1",
+            busyMode: "followUp",
+        });
+
+        const state = await waitForSubmission(host, submissionId, SHORT_TIMEOUT_MS);
+
+        assert.deepEqual(state, { state: "running" });
+    });
+
+    it("returns done once the submission settles before the timeout", async () => {
+        const { host, conversationId } = await openFixture();
+        const { submissionId } = await submitInput(host, conversationId, {
+            content: "hello",
+            requestId: "req-1",
+            busyMode: "followUp",
+        });
+
+        assert.deepEqual(await waitForSubmission(host, submissionId, LONG_TIMEOUT_MS), { state: "done" });
     });
 });
