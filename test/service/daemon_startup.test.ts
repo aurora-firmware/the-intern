@@ -5,6 +5,7 @@ import { afterEach, describe, it } from "node:test";
 import type { Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { WORKER_THREAD_COUNT } from "../../src/daemon/constants.ts";
 import {
     type DaemonComponent,
@@ -14,7 +15,7 @@ import {
     type ServiceContext,
 } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
-import { openHarnessHost } from "../../src/host/harness_host.ts";
+import { openHarnessHost, type Storage } from "../../src/host/harness_host.ts";
 import { recordOpenedVersions, runningVersions } from "../../src/host/versions.ts";
 import { ServiceError } from "../../src/service/operations.ts";
 import type { DaemonStatus } from "../../src/service/status_operation.ts";
@@ -355,4 +356,81 @@ describe("runDaemon startup failures", () => {
         assert.deepEqual(stopped, ["first"]);
         assert.equal(await exists(join(fixture.env.stateDir, "owner.lock")), false);
     });
+
+    it("names step 4, releases ownership and settles with 1 when the database cannot be opened", async () => {
+        const fixture = await createFixture();
+        const daemon = fixture.start({
+            openStorage: async () => {
+                throw new Error("storage refused to open");
+            },
+        });
+
+        assert.equal(await daemon.exited, 1);
+
+        const failure = linesMatching(fixture.lines, "ERROR");
+        assert.equal(failure.length, 1);
+        assert.match(failure[0], /step=4/);
+        assert.match(failure[0], /create model runtime/);
+        assert.match(failure[0], /storage refused to open/);
+        assert.equal(await exists(join(fixture.env.stateDir, "owner.lock")), false);
+        assert.equal(daemon.phase(), "stopping");
+    });
+
+    it("names step 6, releases ownership and settles with 1 when ensuring workspaces fails", async () => {
+        const fixture = await createFixture();
+        const component: DaemonComponent = {
+            name: "workspaces",
+            async ensureWorkspaces() {
+                throw new Error("workspace folder is not writable");
+            },
+        };
+        const daemon = fixture.start({ components: [component] });
+
+        assert.equal(await daemon.exited, 1);
+
+        const failure = linesMatching(fixture.lines, "ERROR");
+        assert.equal(failure.length, 1);
+        assert.match(failure[0], /step=6/);
+        assert.match(failure[0], /ensure workspaces/);
+        assert.match(failure[0], /workspace folder is not writable/);
+        assert.equal(await exists(join(fixture.env.stateDir, "owner.lock")), false);
+    });
+
+    it("names step 7, releases ownership and settles with 1 when recording the versions fails", async () => {
+        const fixture = await createFixture();
+        const storageSwitch = { isFailing: false };
+        const component: DaemonComponent = {
+            name: "storage-breaker",
+            async ensureWorkspaces() {
+                storageSwitch.isFailing = true;
+            },
+        };
+        const daemon = fixture.start({
+            components: [component],
+            openStorage: async (file) => failingOnDemand(await openNodeSqliteStorage(file), storageSwitch),
+        });
+
+        assert.equal(await daemon.exited, 1);
+
+        // pi-durable also reports the failed session itself, so only the daemon's own line is selected.
+        const failure = linesMatching(fixture.lines, "startup failed");
+        assert.equal(failure.length, 1);
+        assert.match(failure[0], /step=7/);
+        assert.match(failure[0], /restore admission and resume/);
+        assert.match(failure[0], /storage commit refused/);
+        assert.equal(await exists(join(fixture.env.stateDir, "owner.lock")), false);
+    });
 });
+
+function failingOnDemand(storage: Storage, storageSwitch: { isFailing: boolean }): Storage {
+    return new Proxy(storage, {
+        get(target, property, receiver) {
+            const value = Reflect.get(target, property, receiver);
+            if (typeof value !== "function") return value;
+            if (property === "commit" && storageSwitch.isFailing) {
+                return () => Promise.reject(new Error("storage commit refused"));
+            }
+            return value.bind(target);
+        },
+    });
+}
