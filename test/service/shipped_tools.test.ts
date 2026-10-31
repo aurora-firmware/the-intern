@@ -46,10 +46,17 @@ function toolNamesOf(context: ModelContext): string[] {
     return [...inEffect];
 }
 
-function toolResultTexts(context: ModelContext): string[] {
+type ToolResultSeen = { text: string; isError: boolean };
+
+function toolResultsOf(context: ModelContext): ToolResultSeen[] {
     return context.messages.flatMap((message) =>
         message.role === "toolResult"
-            ? [message.content.map((block) => (block.type === "text" ? block.text : "")).join("")]
+            ? [
+                  {
+                      text: message.content.map((block) => (block.type === "text" ? block.text : "")).join(""),
+                      isError: message.isError,
+                  },
+              ]
             : [],
     );
 }
@@ -59,12 +66,12 @@ async function createFixture(steps: Step[]) {
     const env = await createHermeticEnv();
     envs.push(env);
     const offered: string[][] = [];
-    const results: string[][] = [];
+    const results: ToolResultSeen[][] = [];
     const fake = registerFauxProvider();
     const respond: FauxResponseFactory = async (context) => {
         fake.appendResponses([respond]);
         offered.push(toolNamesOf(context));
-        results.push(toolResultTexts(context));
+        results.push(toolResultsOf(context));
         const step = steps[offered.length - 1] ?? { text: "done" };
         if ("text" in step) return fauxAssistantMessage(step.text);
         return fauxAssistantMessage([fauxToolCall(step.toolCall.name, step.toolCall.arguments as never)], {
@@ -143,7 +150,10 @@ describe("the shipped tools extension", () => {
 
         await say(id);
 
-        assert.match(results[1].join("\n"), new RegExp(`${(await realpath(workspace)).replace(/\//g, "\\/")}\\s*$`));
+        assert.match(
+            results[1].map((result) => result.text).join("\n"),
+            new RegExp(`${(await realpath(workspace)).replace(/\//g, "\\/")}\\s*$`),
+        );
     });
 
     it("returns an error result and answers the next input when the workspace folder is removed", async () => {
@@ -162,7 +172,8 @@ describe("the shipped tools extension", () => {
 
         assert.equal(second.state, "done");
         assert.equal(third.state, "done");
-        assert.ok(results[2].length > 0, "the model saw a tool result");
-        assert.match(results[2].join("\n"), new RegExp(workspace.replace(/[/.]/g, "\\$&")));
+        assert.equal(results[2].length, 1, "the model saw one tool result");
+        assert.equal(results[2][0].isError, true);
+        assert.match(results[2][0].text, new RegExp(workspace.replace(/[/.]/g, "\\$&")));
     });
 });
