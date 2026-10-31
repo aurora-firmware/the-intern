@@ -3,7 +3,7 @@
  * only read, so no call changes a conversation or a daemon document.
  */
 import type { Admission, AdmissionSnapshot } from "../admission/admission.ts";
-import type { ConversationInfo, HarnessHost, HostEntry } from "../host/harness_host.ts";
+import { type ConversationInfo, type HarnessHost, type HostEntry, HostInvalidCursorError } from "../host/harness_host.ts";
 import { defineOperation, type Operation, ServiceError } from "./operations.ts";
 
 export type ConversationStatus = "waiting for a worker thread" | "running" | "idle";
@@ -79,7 +79,12 @@ const entriesOperation = defineOperation<ReadContext, EntriesInput, { entries: H
     parse: parseEntriesInput,
     async run({ host }, { conversationId, after, limit }) {
         await requireConversation(host, conversationId);
-        return host.readEntries(conversationId, after === undefined ? { limit } : { after, limit });
+        try {
+            return await host.readEntries(conversationId, after === undefined ? { limit } : { after, limit });
+        } catch (error) {
+            if (error instanceof HostInvalidCursorError) throw new ServiceError("invalid_input", error.message);
+            throw error;
+        }
     },
 });
 

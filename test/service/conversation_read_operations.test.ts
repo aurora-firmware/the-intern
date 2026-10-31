@@ -267,6 +267,18 @@ describe("conversations.entries", () => {
             "not_found",
         );
     });
+
+    it("rejects a cursor the host never returned with invalid_input", async () => {
+        const fixture = await openFixture();
+        const id = await fixture.newConversation();
+        for (const after of ["not json", '"text"', "42", '{"bogus":true}']) {
+            assert.equal(
+                await rejectionCode(fixture.call("conversations.entries", { conversationId: id, after })),
+                "invalid_input",
+                `after ${after}`,
+            );
+        }
+    });
 });
 
 describe("conversations.context", () => {

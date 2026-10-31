@@ -18,6 +18,7 @@ import {
     type ReportInfo,
     type SessionEnd,
     type Storage,
+    StorageRequestError,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -34,6 +35,14 @@ const context = BACKGROUND_CONTEXT;
 export type AgentChoice = { model: string; thinkingLevel?: string; cwd?: string; instructions?: string };
 export type HostEntry = { id: string; kind: string; data: unknown };
 export type ConversationInfo = { id: string; busy: boolean };
+
+/** A page cursor that this host never returned: the caller's input is invalid (S-002 R-13). */
+export class HostInvalidCursorError extends Error {
+    constructor(cursor: string, reason: string) {
+        super(`Page cursor "${cursor}" is not one this host returned: ${reason}`);
+        this.name = "HostInvalidCursorError";
+    }
+}
 
 export type HarnessHost = {
     /** Starts the work the last run left unfinished. Nothing runs before this is called. */
@@ -138,7 +147,7 @@ function decodeCursor(text: string): Cursor {
     try {
         return JSON.parse(text) as Cursor;
     } catch (error) {
-        throw new Error(`Page cursor "${text}" is not one this host returned: ${(error as Error).message}`);
+        throw new HostInvalidCursorError(text, (error as Error).message);
     }
 }
 
@@ -187,7 +196,16 @@ function createHost(harness: Harness): HarnessHost {
         async readEntries(id, page) {
             const conversation = await requireConversation(harness, id);
             const cursor = page.after === undefined ? undefined : decodeCursor(page.after);
-            const result = await conversation.entries({ order: "ascending" }, page.limit, cursor, context);
+            let result: Awaited<ReturnType<Conversation["entries"]>>;
+            try {
+                result = await conversation.entries({ order: "ascending" }, page.limit, cursor, context);
+            } catch (error) {
+                // An invalid read fails only that call (pi-durable, Errors rule 2); a bad cursor is the caller's input.
+                if (page.after !== undefined && error instanceof StorageRequestError) {
+                    throw new HostInvalidCursorError(page.after, error.message);
+                }
+                throw error;
+            }
             return {
                 entries: result.items.map(toHostEntry),
                 ...(result.next !== undefined && { next: JSON.stringify(result.next) }),
