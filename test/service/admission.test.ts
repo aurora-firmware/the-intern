@@ -222,3 +222,99 @@ describe("admission with one worker thread", () => {
         assert.deepEqual(fixture.requests, ["message-0"]);
     });
 });
+
+async function closeFixture(fixture: Fixture): Promise<void> {
+    fixture.admission.stop();
+    hosts.splice(hosts.indexOf(fixture.host), 1);
+    await fixture.host.close();
+}
+
+function neverAborted(): AbortSignal {
+    return new AbortController().signal;
+}
+
+describe("admission after the host is opened again", () => {
+    it("resumes the active run first and starts the waiting runs in their stored order", async () => {
+        const env = await newEnv();
+        const first = await openFixture({ env, capacity: 1, delayMs: LONG_REPLY_DELAY_MS });
+        await first.admission.restore();
+        first.host.resume();
+        const conversations = [await first.newConversation(), await first.newConversation()];
+        conversations.push(await first.newConversation());
+        const submissions: string[] = [];
+        for (const [index, conversationId] of conversations.entries()) {
+            submissions.push(await first.submit(conversationId, `message-${index}`));
+        }
+        await pollUntil(() => first.admission.state().waiting.length === 2);
+        await closeFixture(first);
+
+        const second = await openFixture({ env, capacity: 1 });
+        await second.admission.restore();
+        second.host.resume();
+        for (const submissionId of submissions) await settle(second.host, submissionId);
+
+        assert.deepEqual(second.requests, ["message-0", "message-1", "message-2"]);
+        assert.equal(second.maxInFlight(), 1);
+    });
+
+    it("drops an idle conversation committed into active and gives its worker thread to the next waiting run", async () => {
+        const env = await newEnv();
+        const first = await openFixture({ env, capacity: 1, delayMs: LONG_REPLY_DELAY_MS });
+        await first.admission.restore();
+        first.host.resume();
+        const idle = await first.newConversation();
+        const waitingConversations = [await first.newConversation(), await first.newConversation()];
+        await first.admission.acquire(idle, neverAborted());
+        const submissions: string[] = [];
+        for (const [index, conversationId] of waitingConversations.entries()) {
+            submissions.push(await first.submit(conversationId, `message-${index}`));
+        }
+        await pollUntil(() => first.admission.state().waiting.length === 2);
+        assert.deepEqual(first.admission.state().active, [idle]);
+        await closeFixture(first);
+
+        const second = await openFixture({ env, capacity: 1 });
+        await second.admission.restore();
+
+        assert.deepEqual(second.admission.state(), {
+            capacity: 1,
+            active: [waitingConversations[0]],
+            waiting: [{ conversationId: waitingConversations[1], position: 1 }],
+        });
+        second.host.resume();
+        for (const submissionId of submissions) await settle(second.host, submissionId);
+        assert.deepEqual(second.requests, ["message-0", "message-1"]);
+    });
+
+    it("keeps the extra runs waiting at the head of the queue when the capacity is lower", async () => {
+        const env = await newEnv();
+        const first = await openFixture({ env, capacity: 2, delayMs: LONG_REPLY_DELAY_MS });
+        await first.admission.restore();
+        first.host.resume();
+        const conversations = [await first.newConversation(), await first.newConversation()];
+        conversations.push(await first.newConversation());
+        const submissions: string[] = [];
+        for (const [index, conversationId] of conversations.entries()) {
+            submissions.push(await first.submit(conversationId, `message-${index}`));
+        }
+        await pollUntil(() => first.admission.state().waiting.length === 1);
+        assert.deepEqual(first.admission.state().active, [conversations[0], conversations[1]]);
+        await closeFixture(first);
+
+        const second = await openFixture({ env, capacity: 1 });
+        await second.admission.restore();
+
+        assert.deepEqual(second.admission.state(), {
+            capacity: 1,
+            active: [conversations[0]],
+            waiting: [
+                { conversationId: conversations[1], position: 1 },
+                { conversationId: conversations[2], position: 2 },
+            ],
+        });
+        second.host.resume();
+        for (const submissionId of submissions) await settle(second.host, submissionId);
+        assert.deepEqual(second.requests, ["message-0", "message-1", "message-2"]);
+        assert.equal(second.maxInFlight(), 1);
+    });
+});
