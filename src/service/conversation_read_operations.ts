@@ -3,7 +3,12 @@
  * only read, so no call changes a conversation or a daemon document.
  */
 import type { Admission, AdmissionSnapshot } from "../admission/admission.ts";
-import { type ConversationInfo, type HarnessHost, type HostEntry, HostInvalidCursorError } from "../host/harness_host.ts";
+import {
+    type ConversationInfo,
+    type HarnessHost,
+    type HostEntry,
+    HostInvalidCursorError,
+} from "../host/harness_host.ts";
 import { defineOperation, type Operation, ServiceError } from "./operations.ts";
 
 export type ConversationStatus = "waiting for a worker thread" | "running" | "idle";
