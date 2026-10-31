@@ -1,18 +1,22 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { type FauxProviderRegistration, type FauxResponseFactory, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
+import { loadConfig } from "../../src/config/config_file.ts";
+import { createConfigStore } from "../../src/config/config_writer.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { type HarnessHost, openHarnessHost } from "../../src/host/harness_host.ts";
 import { changeSeat, createSeatedConversation, type JobLinks, type SeatActor } from "../../src/host/seating.ts";
 import { createRolePromptExtension, ROLE_PROMPT_EXTENSION_NAME } from "../../src/prompt/role_prompt_extension.ts";
 import { createWorkspaceContextLoader } from "../../src/prompt/workspace_context.ts";
+import { createRoleCatalog } from "../../src/roles/role_catalog.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
-import { applyRoleChange, resolveSeat } from "../../src/roles/role_model.ts";
+import { rolesSection, workspacesSection } from "../../src/roles/roles_section.ts";
+import { createWorkspaceRegistry } from "../../src/workspaces/workspace_registry.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const WAIT_MS = 10_000;
@@ -61,6 +65,36 @@ async function writeWorkspace(root: string, name: string): Promise<string> {
     await writeFile(join(workspace, "AGENTS.md"), `Context of ${name}.\n`);
     await writeSkill(join(workspace, ".pi", "skills"), `${name}-skill`);
     return workspace;
+}
+
+// The team's role catalog, stored in a configuration file, with the fake model as pi agent's default model.
+async function createCatalog(root: string, model: string) {
+    const file = join(root, "config.toml");
+    const dataDir = join(root, "catalog-data");
+    await mkdir(dataDir, { mode: 0o700 });
+    const sections = [rolesSection, workspacesSection];
+    const config = createConfigStore(file, sections, await loadConfig(file, sections));
+    const workspaces = createWorkspaceRegistry({
+        config,
+        dataDir,
+        account: { uid: process.getuid?.() ?? 0 },
+        defaultWorkspaceUsers: () => [],
+    });
+    const catalog = createRoleCatalog({
+        config,
+        shipped: [],
+        workspaces,
+        dataDir,
+        models: { checkModelChoice: () => ({ ok: true }), defaultChoice: () => ({ model }) },
+    });
+    const registerWorkspace = async (name: string): Promise<string> => {
+        const workspace = await writeWorkspace(root, name);
+        // A workspace is registered only when no one but the service account can reach it.
+        await chmod(workspace, 0o700);
+        await workspaces.register(workspace);
+        return workspace;
+    };
+    return Object.assign(catalog, { registerWorkspace });
 }
 
 async function createFixture() {
@@ -123,9 +157,10 @@ async function createFixture() {
         });
         await waitForSubmission(host, submission.submissionId, WAIT_MS);
     };
-    const seatConversation = async (seat: Seat) =>
-        (await createSeatedConversation(host, { scope: "start-job", key: "k1", job, seat, actor })).conversationId;
-    return { host, prompts, loadedSeats, seatFor, say, seatConversation };
+    const seatConversation = async (seat: Seat, key = "k1") =>
+        (await createSeatedConversation(host, { scope: "start-job", key, job, seat, actor })).conversationId;
+    const model = `${fake.getModel().provider}/${fake.getModel().id}`;
+    return { host, prompts, loadedSeats, model, root: env.root, seatFor, say, seatConversation };
 }
 
 describe("the role prompt extension", () => {
@@ -195,32 +230,34 @@ describe("the role prompt extension", () => {
     });
 
     it("keeps sending the instructions and skills the agent was seated with when the team role changes later", async () => {
-        const { prompts, loadedSeats, seatFor, say, seatConversation } = await createFixture();
-        const seated = await seatFor("developer");
-        const role = {
+        const { prompts, model, root, say, seatConversation } = await createFixture();
+        const catalog = await createCatalog(root, model);
+        await catalog.create({
             name: "developer",
-            instructions: seated.instructions,
+            instructions: "Instructions of developer.",
             tools: [],
-            skills: seated.skills,
-        };
-        const defaults = { model: seated.model, workspace: seated.workspace };
-        const id = await seatConversation(resolveSeat(role, defaults));
-        await say(id);
-
-        const editedRole = applyRoleChange(role, {
-            instructions: "Edited instructions.",
-            skills: [await writeSkill(join(seated.workspace, "edited"), "edited-role-skill")],
+            skills: [await writeSkill(join(root, "role-skills"), "developer-role-skill")],
+            workspace: await catalog.registerWorkspace("ws-developer"),
         });
-        assert.notEqual(resolveSeat(editedRole, defaults).instructions, seated.instructions);
-        await say(id);
+        const seatedId = await seatConversation(catalog.seatFor("developer"), "seated-before");
+        await say(seatedId);
 
-        assert.match(prompts[1], /Instructions of developer\./);
-        assert.match(prompts[1], /developer-role-skill/);
-        assert.equal(prompts[1].includes("Edited instructions."), false);
-        assert.equal(prompts[1].includes("edited-role-skill"), false);
-        // The only way a current role could reach the prompt is through the seat handed to the loader.
-        assert.ok(loadedSeats.every((seat) => seat.instructions === seated.instructions));
-        assert.ok(loadedSeats.every((seat) => seat.skills.join() === seated.skills.join()));
+        await catalog.change("developer", {
+            instructions: "Edited instructions.",
+            skills: [await writeSkill(join(root, "role-skills"), "edited-role-skill")],
+        });
+        await say(seatedId);
+        const seatedAfterId = await seatConversation(catalog.seatFor("developer"), "seated-after");
+        await say(seatedAfterId);
+
+        const [, seatedPrompt, newcomerPrompt] = prompts;
+        // An agent seated after the change gets the edited role, so the change reached the running system.
+        assert.match(newcomerPrompt, /Edited instructions\./);
+        assert.match(newcomerPrompt, /edited-role-skill/);
+        assert.match(seatedPrompt, /Instructions of developer\./);
+        assert.match(seatedPrompt, /developer-role-skill/);
+        assert.equal(seatedPrompt.includes("Edited instructions."), false);
+        assert.equal(seatedPrompt.includes("edited-role-skill"), false);
     });
 
     it("loads the seat's workspace once for the five sections of one request", async () => {
