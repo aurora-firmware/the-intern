@@ -9,6 +9,7 @@ import {
     configure,
     defineDoc,
     defineEntry,
+    ResetEntry,
     type ToolRegistration,
     type Tx,
 } from "@earendil-works/pi-durable";
@@ -167,6 +168,24 @@ export async function createSeatedConversation(
 /** Changes the conversation's seat in one commit. A model turn that is running finishes with the old seat. */
 export async function changeSeat(host: HarnessHost, conversationId: string, change: SeatChange): Promise<void> {
     await internalHarness(host).commit((tx) => seatWrites(tx, conversationId, change), context);
+}
+
+/**
+ * Resets the conversation's context and changes its seat in one commit, so the new seat and its record never exist
+ * without the reset. The reset entry is the one `Conversation.reset` writes, with the note as the start of the new
+ * context; the earlier entries stay in the transcript.
+ */
+export async function resetWithSeat(
+    host: HarnessHost,
+    conversationId: string,
+    input: { note?: string; change: SeatChange },
+): Promise<void> {
+    const { note, change } = input;
+    await internalHarness(host).commit(async (tx) => {
+        await seatWrites(tx, conversationId, change);
+        const model = note === undefined ? {} : { model: [{ role: "user", content: note, timestamp: Date.now() }] };
+        await tx.appendEntry(ResetEntry, toNumericId(conversationId), { head: "self", ...model } as never);
+    }, context);
 }
 
 export async function readConversationMeta(

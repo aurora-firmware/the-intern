@@ -1,16 +1,23 @@
 /**
  * The seat change operation (S-001 R-4, R-7): a team member changes the seat of any conversation, naming a role and
  * optionally a model, a thinking level and a registered workspace. A new agent of that role is seated with the Full
- * context mode. An override that doesn't resolve is refused and the seat stays unchanged.
+ * context mode, or with the Clean mode when the change names a reset (R-11). An override that doesn't resolve is refused and the seat stays unchanged.
  */
 import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { ServiceContext } from "../daemon/daemon.ts";
-import { changeSeat, readConversationMeta, type SeatActor } from "../host/seating.ts";
+import { changeSeat, readConversationMeta, resetWithSeat, type SeatActor } from "../host/seating.ts";
 import { RoleRefusedError } from "../roles/role_catalog.ts";
 import type { Seat } from "../roles/role_model.ts";
 import { type Caller, defineOperation, type Operation, ServiceError } from "./operations.ts";
 
-type SeatInput = { conversationId: string; role: string; model?: string; thinkingLevel?: string; workspace?: string };
+type SeatInput = {
+    conversationId: string;
+    role: string;
+    model?: string;
+    thinkingLevel?: string;
+    workspace?: string;
+    reset?: { note?: string };
+};
 type SeatResult = Pick<Seat, "role" | "model" | "thinkingLevel" | "workspace">;
 
 const IN_PROCESS_WAY_IN = "in-process";
@@ -27,6 +34,11 @@ function requireString(record: Record<string, unknown>, field: string): string {
     return value;
 }
 
+function parseReset(raw: unknown): { note?: string } {
+    const record = asRecord(raw);
+    return record.note === undefined ? {} : { note: requireString(record, "note") };
+}
+
 function parseSeat(raw: unknown): SeatInput {
     const record = asRecord(raw);
     const input: SeatInput = {
@@ -36,6 +48,7 @@ function parseSeat(raw: unknown): SeatInput {
     for (const field of OPTIONAL_FIELDS) {
         if (record[field] !== undefined) input[field] = requireString(record, field);
     }
+    if (record.reset !== undefined) input.reset = parseReset(record.reset);
     return input;
 }
 
@@ -58,7 +71,7 @@ export function seatOperations(component: AgentsComponent) {
         name: "conversations.seat",
         kind: "control",
         parse: parseSeat,
-        async run({ host }, { conversationId, role, ...overrides }, caller) {
+        async run({ host }, { conversationId, role, reset, ...overrides }, caller) {
             if ((await readConversationMeta(host, conversationId)) === undefined) {
                 throw new ServiceError("not_found", `There is no seated conversation ${conversationId}`);
             }
@@ -73,11 +86,13 @@ export function seatOperations(component: AgentsComponent) {
                 caller.actor.kind === "agent"
                     ? (await readConversationMeta(host, caller.actor.conversationId))?.seat.role
                     : undefined;
-            await changeSeat(host, conversationId, {
-                seat,
-                actor: seatActorFor(caller, callerRole),
-                contextMode: "full",
-            });
+            const actor = seatActorFor(caller, callerRole);
+            if (reset === undefined) {
+                await changeSeat(host, conversationId, { seat, actor, contextMode: "full" });
+            } else {
+                const change = { seat, actor, contextMode: "clean" as const };
+                await resetWithSeat(host, conversationId, { ...reset, change });
+            }
             const { thinkingLevel, model, workspace } = seat;
             return { role: seat.role, model, ...(thinkingLevel !== undefined && { thinkingLevel }), workspace };
         },

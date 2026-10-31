@@ -304,6 +304,111 @@ describe("conversations.seat", () => {
     });
 });
 
+describe("conversations.seat with a reset", () => {
+    it("clears the context for the next turn, keeps the earlier entries and records a clean seat change", async () => {
+        const started = await start();
+        await createReviewerRole(started, started.provider);
+        const conversationId = await started.seatConversation("gp");
+        await started.runTurn(conversationId, "hello");
+        const entriesBefore = (await started.ctx.host.readEntries(conversationId, { limit: 100 })).entries;
+
+        await started.seatOperation({ conversationId, role: "reviewer", reset: {} });
+        assert.deepEqual(await started.answers(conversationId), []);
+        await started.runTurn(conversationId, "again");
+
+        const entries = (await started.ctx.host.readEntries(conversationId, { limit: 100 })).entries;
+        for (const earlier of entriesBefore) assert.ok(entries.some((entry) => entry.id === earlier.id));
+        assert.equal(entries.filter((entry) => entry.kind === "pi.reset").length, 1);
+        const answers = await started.answers(conversationId);
+        assert.equal(answers.length, 1);
+        assert.match(answers[0] ?? "", /from-model-two/);
+        const records = await started.records(conversationId);
+        assert.equal(records[1]?.next && (records[1].next as { role: string }).role, "reviewer");
+        assert.equal(records[1]?.contextMode, "clean");
+        assert.deepEqual(records[1]?.actor, { kind: "team_member", wayIn: "cli" });
+    });
+
+    it("gives the model the note as the start of the new context", async () => {
+        const started = await start();
+        const conversationId = await started.seatConversation("gp");
+        await started.runTurn(conversationId, "hello");
+
+        await started.seatOperation({ conversationId, role: "bob", reset: { note: "fresh start" } });
+
+        const context = await started.ctx.host.readContext(conversationId);
+        assert.ok(JSON.stringify(context).includes("fresh start"));
+        assert.deepEqual(await started.answers(conversationId), []);
+    });
+
+    it("keeps the depth and the job links of the conversation", async () => {
+        const started = await start();
+        const conversationId = await started.seatConversation("gp", true);
+        const before = await readConversationMeta(started.ctx.host, conversationId);
+
+        await started.seatOperation({ conversationId, role: "bob", reset: {} });
+
+        const after = await readConversationMeta(started.ctx.host, conversationId);
+        assert.equal(after?.depth, before?.depth);
+        assert.equal(after?.isLead, true);
+        assert.equal(after?.jobId, before?.jobId);
+        assert.equal(after?.seat.role, "bob");
+    });
+
+    it("refuses a seat that does not resolve, and neither resets nor changes the seat", async () => {
+        const started = await start();
+        const conversationId = await started.seatConversation("gp");
+        await started.runTurn(conversationId, "hello");
+        const before = await readConversationMeta(started.ctx.host, conversationId);
+
+        assert.equal(
+            await refusalCode(started.seatOperation({ conversationId, role: "nobody", reset: {} })),
+            "not_found",
+        );
+        assert.equal(
+            await refusalCode(started.seatOperation({ conversationId, role: "bob", model: "nowhere/none", reset: {} })),
+            "invalid_input",
+        );
+
+        assert.deepEqual(await readConversationMeta(started.ctx.host, conversationId), before);
+        assert.equal((await started.records(conversationId)).length, 1);
+        const entries = (await started.ctx.host.readEntries(conversationId, { limit: 100 })).entries;
+        assert.equal(entries.filter((entry) => entry.kind === "pi.reset").length, 0);
+        assert.equal((await started.answers(conversationId)).length, 1);
+    });
+
+    it("refuses a reset that is not an object with an optional note", async () => {
+        const started = await start();
+        const conversationId = await started.seatConversation("gp");
+
+        assert.equal(
+            await refusalCode(started.seatOperation({ conversationId, role: "bob", reset: "yes" })),
+            "invalid_input",
+        );
+        assert.equal(
+            await refusalCode(started.seatOperation({ conversationId, role: "bob", reset: { note: 3 } })),
+            "invalid_input",
+        );
+    });
+});
+
+describe("conversations.reset", () => {
+    it("empties the context, keeps every earlier entry and keeps the seat", async () => {
+        const started = await start();
+        const conversationId = await started.seatConversation("gp");
+        await started.runTurn(conversationId, "hello");
+        const before = await readConversationMeta(started.ctx.host, conversationId);
+        const entriesBefore = (await started.ctx.host.readEntries(conversationId, { limit: 100 })).entries;
+
+        await started.invoke("conversations.reset", { conversationId });
+
+        assert.deepEqual(await started.answers(conversationId), []);
+        const entries = (await started.ctx.host.readEntries(conversationId, { limit: 100 })).entries;
+        for (const earlier of entriesBefore) assert.ok(entries.some((entry) => entry.id === earlier.id));
+        assert.deepEqual(await readConversationMeta(started.ctx.host, conversationId), before);
+        assert.equal((await started.records(conversationId)).length, 1);
+    });
+});
+
 describe("conversations.seat called by an agent", () => {
     it("records the agent with the role its own conversation is seated in", async () => {
         const started = await start();
