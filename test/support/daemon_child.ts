@@ -1,0 +1,201 @@
+/**
+ * A daemon for the process-level tests. `startDaemon` (daemon_process.ts) runs it as a child process: argv[2] holds the
+ * test-only switches as JSON, the rest are the four directory flags. It answers `{ id, op, input }` messages on Node's
+ * IPC channel with `{ id, result }` or `{ id, error: { code, message } }`, posts `{ ready: true }` once the daemon is
+ * ready, and stops on SIGTERM as `src/cli/bob.ts` does.
+ */
+import { spawn } from "node:child_process";
+import { parseArgs } from "node:util";
+import { Type } from "@earendil-works/pi-ai";
+import { getApiProvider } from "@earendil-works/pi-ai/compat";
+import { createProvider } from "@earendil-works/pi-ai/models";
+import { defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { type DaemonComponent, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
+import { createLogger } from "../../src/daemon/logger.ts";
+import type { Models, Storage } from "../../src/host/harness_host.ts";
+import type { InternModels } from "../../src/models/model_runtime.ts";
+import { type Caller, ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
+import type { StartDaemonOptions } from "./daemon_process.ts";
+import { createFakeModel, type FakeReply, type FakeTranscript } from "./fake_model.ts";
+import { createTestOperations, type StorageSwitch } from "./test_operations.ts";
+
+const TEAM_MEMBER: Caller = { actor: { kind: "team_member" } };
+const READY_POLL_INTERVAL_MS = 10;
+const DEFAULT_SLOW_DELAY_MS = 1_000;
+const DEFAULT_SLEEP_SECONDS = "1";
+const FAILURE_EXIT_STATUS = 1;
+
+type Switches = Omit<StartDaemonOptions, "hermetic">;
+
+type Request = { id: number; op: string; input: unknown };
+
+function lastUserText(transcript: FakeTranscript): string {
+    return transcript.findLast((turn) => turn.role === "user")?.text ?? "";
+}
+
+function hasToolResult(transcript: FakeTranscript): boolean {
+    return transcript.some((turn) => turn.role === "toolResult");
+}
+
+/** `bash-sleep` takes its duration in seconds from the input, so a test sets how long the tool runs. */
+function replyFor(script: NonNullable<Switches["script"]>, transcript: FakeTranscript): FakeReply {
+    if (script !== "bash-sleep") return `echo: ${lastUserText(transcript)}`;
+    if (hasToolResult(transcript)) return "slept";
+    const seconds = /^\d+(\.\d+)?$/.test(lastUserText(transcript)) ? lastUserText(transcript) : DEFAULT_SLEEP_SECONDS;
+    return { toolCall: { name: "bash", arguments: { command: `sleep ${seconds}` } } };
+}
+
+// pi-durable has no built-in tool of this name; the tool ends its process when the call is aborted.
+function createBashExtension() {
+    const bash = defineTool({
+        name: "bash",
+        description: "Runs a shell command",
+        parameters: Type.Object({ command: Type.String() }),
+        execute: async ({ command }, _api, toolContext) => {
+            const shell = spawn("bash", ["-c", command], { stdio: "ignore", signal: toolContext.abortSignal });
+            await new Promise<void>((resolve) => {
+                shell.on("error", () => resolve());
+                shell.on("close", () => resolve());
+            });
+            return { output: [{ type: "text", text: `ran: ${command}` }] };
+        },
+    });
+    return defineExtension({ name: "bash", tools: [bash] });
+}
+
+function modelsWithFake(runtime: InternModels, fake: ReturnType<typeof createFakeModel>): Models {
+    const implementation = getApiProvider(fake.api);
+    if (!implementation) throw new Error("The fake model's api is not registered");
+    runtime.models.registerNativeProvider(
+        createProvider({
+            id: fake.getModel().provider,
+            auth: { apiKey: { name: "Fake", resolve: async () => ({ auth: {} }) } },
+            models: fake.models,
+            api: { stream: implementation.stream, streamSimple: implementation.streamSimple },
+        }),
+    );
+    return runtime.models;
+}
+
+function failingOnDemand(storage: Storage, storageSwitch: StorageSwitch): Storage {
+    return new Proxy(storage, {
+        get(target, property, receiver) {
+            const value = Reflect.get(target, property, receiver);
+            if (typeof value !== "function") return value;
+            if (property === "commit" && storageSwitch.isFailing) {
+                return () => Promise.reject(new Error("storage commit refused"));
+            }
+            return value.bind(target);
+        },
+    });
+}
+
+function createComponents(switches: Switches, release: Promise<void>): DaemonComponent[] {
+    const components: DaemonComponent[] = [];
+    if (switches.script === "bash-sleep") {
+        components.push({ name: "bash", extensions: [createBashExtension()] });
+    }
+    const { checkModel } = switches;
+    if (checkModel !== undefined) {
+        components.push({
+            name: "check-model",
+            async checkModels(ctx: ServiceContext) {
+                const check = ctx.models.checkModelChoice({ model: checkModel });
+                if (!check.ok) throw new Error(check.reason);
+            },
+        });
+    }
+    if (switches.holdStart) components.push({ name: "hold-start", start: () => release });
+    return components;
+}
+
+function errorFields(error: unknown): { code: ServiceErrorCode; message: string } {
+    if (error instanceof ServiceError) return { code: error.code, message: error.message };
+    return { code: "internal", message: error instanceof Error ? error.message : String(error) };
+}
+
+function parseFlags(args: readonly string[]) {
+    const { values } = parseArgs({
+        args: [...args],
+        options: {
+            "config-dir": { type: "string" },
+            "state-dir": { type: "string" },
+            "data-dir": { type: "string" },
+            "runtime-dir": { type: "string" },
+        },
+    });
+    return {
+        configDir: values["config-dir"],
+        stateDir: values["state-dir"],
+        dataDir: values["data-dir"],
+        runtimeDir: values["runtime-dir"],
+    };
+}
+
+function main(): void {
+    const switches = JSON.parse(process.argv[2] ?? "{}") as Switches;
+    const send = process.send?.bind(process);
+    if (!send) throw new Error("daemon_child.ts must be started with an IPC channel");
+
+    const fake = switches.realModels
+        ? undefined
+        : createFakeModel((transcript) => replyFor(switches.script ?? "echo", transcript), {
+              delayMs: () => (switches.script === "slow" ? (switches.delayMs ?? DEFAULT_SLOW_DELAY_MS) : 0),
+          });
+    const fakeModelId = fake ? `${fake.getModel().provider}/${fake.getModel().id}` : undefined;
+    const storageSwitch: StorageSwitch = { isFailing: false };
+    const hold = Promise.withResolvers<void>();
+
+    const daemon = runDaemon({
+        flags: parseFlags(process.argv.slice(3)),
+        env: process.env,
+        homeDir: process.env.HOME ?? "",
+        logger: createLogger({ verbose: false }),
+        components: createComponents(switches, hold.promise),
+        operations: createTestOperations({
+            storageSwitch,
+            modelFor: (ctx) => {
+                const model = fakeModelId ?? ctx.models.defaultChoice()?.model;
+                if (!model)
+                    throw new Error("No model to create a conversation with: the pi agent folder has no default");
+                return model;
+            },
+        }),
+        ...(switches.workerThreads !== undefined && { workerThreadCount: switches.workerThreads }),
+        ...(fake && { prepareModels: (runtime: InternModels) => modelsWithFake(runtime, fake) }),
+        openStorage: async (file) => failingOnDemand(await openNodeSqliteStorage(file), storageSwitch),
+    });
+
+    process.on("message", async (message: Request | { release: true }) => {
+        if ("release" in message) return hold.resolve();
+        const { id, op, input } = message;
+        try {
+            send({ id, result: await daemon.catalogue.invoke(op, input, TEAM_MEMBER) });
+        } catch (error) {
+            send({ id, error: errorFields(error) });
+        }
+    });
+
+    let isStopping = false;
+    const requestStop = () => {
+        if (isStopping) return;
+        isStopping = true;
+        void daemon.stop();
+    };
+    process.on("SIGTERM", requestStop);
+    process.on("SIGINT", requestStop);
+
+    const readyPoll = setInterval(() => {
+        if (daemon.phase() !== "ready") return;
+        clearInterval(readyPoll);
+        send({ ready: true });
+    }, READY_POLL_INTERVAL_MS);
+
+    daemon.exited.then(
+        (status) => process.exit(status),
+        () => process.exit(FAILURE_EXIT_STATUS),
+    );
+}
+
+main();
