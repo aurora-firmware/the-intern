@@ -4,7 +4,7 @@
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { defineDoc } from "@earendil-works/pi-durable";
-import { type AgentChoice, type HarnessHost, internalHarness } from "./harness_host.ts";
+import { type AgentChoice, type HarnessHost, internalHarness, toAgentSpec } from "./harness_host.ts";
 
 const context = BACKGROUND_CONTEXT;
 const MAX_KEY_LENGTH = 200;
@@ -28,14 +28,6 @@ const idempotencyDocument = defineDoc<{ conversations: Record<string, string> }>
 // One lookup-then-create at a time per host, so concurrent calls with one key can't both miss the lookup.
 const pendingCreates = new WeakMap<HarnessHost, Promise<unknown>>();
 
-function toModelRef(model: string): { provider: string; modelId: string } {
-    const separator = model.indexOf("/");
-    if (separator <= 0 || separator === model.length - 1) {
-        throw new Error(`Model "${model}" is not of the form provider/id.`);
-    }
-    return { provider: model.slice(0, separator), modelId: model.slice(separator + 1) };
-}
-
 async function lookupOrCreate(
     host: HarnessHost,
     entryKey: string,
@@ -48,12 +40,7 @@ async function lookupOrCreate(
     const conversation = await harness.createConversation(
         {
             ownership: { kind: "ownerless" },
-            agent: {
-                model: toModelRef(agent.model),
-                ...(agent.thinkingLevel !== undefined && { thinkingLevel: agent.thinkingLevel as never }),
-                ...(agent.cwd !== undefined && { cwd: agent.cwd }),
-                ...(agent.instructions !== undefined && { instructions: agent.instructions }),
-            },
+            agent: toAgentSpec(agent),
             init: async (tx, conversationId) => {
                 const draft = await tx.doc(idempotencyDocument);
                 draft.conversations[entryKey] = String(conversationId);

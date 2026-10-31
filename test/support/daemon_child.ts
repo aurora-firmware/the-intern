@@ -46,7 +46,7 @@ function replyFor(script: NonNullable<Switches["script"]>, transcript: FakeTrans
     return { toolCall: { name: "bash", arguments: { command: `sleep ${seconds}` } } };
 }
 
-// pi-durable has no built-in tool of this name; the tool ends its process when the call is aborted.
+// A stand-in for pi-durable's bash tool that only waits for its command, and ends it when the call is aborted.
 function createBashExtension() {
     const bash = defineTool({
         name: "bash",

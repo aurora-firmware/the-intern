@@ -48,6 +48,11 @@ export function defineConfigSection<T>(section: ConfigSection<T>): ConfigSection
 
 type ReadResult = { text: string; fingerprint: string } | undefined;
 
+/** The SHA-256 of a configuration file's bytes, which detects a change made by someone else. */
+export function fingerprintOf(bytes: Buffer | string): string {
+    return createHash("sha256").update(bytes).digest("hex");
+}
+
 async function readConfigFile(file: string): Promise<ReadResult> {
     let bytes: Buffer;
     try {
@@ -57,8 +62,7 @@ async function readConfigFile(file: string): Promise<ReadResult> {
         if (code === "ENOENT") return undefined;
         throw new ConfigError(file, `can't read the file (${code ?? String(error)})`);
     }
-    const fingerprint = createHash("sha256").update(bytes).digest("hex");
-    return { text: bytes.toString("utf8"), fingerprint };
+    return { text: bytes.toString("utf8"), fingerprint: fingerprintOf(bytes) };
 }
 
 function parseTomlTable(file: string, text: string): Record<string, unknown> {

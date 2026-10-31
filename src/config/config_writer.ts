@@ -1,8 +1,13 @@
-import { createHash } from "node:crypto";
 import { open, readFile, rename, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { stringify as stringifyToml } from "smol-toml";
-import { ABSENT_FINGERPRINT, type ConfigSection, ConfigValueError, type LoadedConfig } from "./config_file.ts";
+import {
+    ABSENT_FINGERPRINT,
+    type ConfigSection,
+    ConfigValueError,
+    fingerprintOf,
+    type LoadedConfig,
+} from "./config_file.ts";
 
 const OWNER_ONLY_MODE = 0o600;
 
@@ -29,10 +34,6 @@ export type ConfigStore = {
     change<T>(section: ConfigSection<T>, next: T): Promise<void>;
     onChange(listener: (change: { section: string }) => void): () => void;
 };
-
-function fingerprintOf(bytes: Buffer | string): string {
-    return createHash("sha256").update(bytes).digest("hex");
-}
 
 async function readFingerprint(file: string): Promise<string> {
     try {

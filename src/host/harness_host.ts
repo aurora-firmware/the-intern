@@ -126,6 +126,16 @@ function toModelRef(model: string): { provider: string; modelId: string } {
     return { provider: model.slice(0, separator), modelId: model.slice(separator + 1) };
 }
 
+/** The pi-durable agent of a new conversation. Shared with `idempotency.ts`, which creates conversations too. */
+export function toAgentSpec(agent: AgentChoice) {
+    return {
+        model: toModelRef(agent.model),
+        ...(agent.thinkingLevel !== undefined && { thinkingLevel: agent.thinkingLevel as never }),
+        ...(agent.cwd !== undefined && { cwd: agent.cwd }),
+        ...(agent.instructions !== undefined && { instructions: agent.instructions }),
+    };
+}
+
 // An entry that contributes messages to the model is shown by those messages; any other by its own data.
 function toHostEntry(entry: EntryRecord): HostEntry {
     return { id: String(entry.id), kind: entry.kind, data: entry.model ?? entry.data };
@@ -175,12 +185,7 @@ function createHost(harness: Harness): HarnessHost {
             const conversation = await harness.createConversation(
                 {
                     ownership: { kind: "ownerless" },
-                    agent: {
-                        model: toModelRef(agent.model),
-                        ...(agent.thinkingLevel !== undefined && { thinkingLevel: agent.thinkingLevel as never }),
-                        ...(agent.cwd !== undefined && { cwd: agent.cwd }),
-                        ...(agent.instructions !== undefined && { instructions: agent.instructions }),
-                    },
+                    agent: toAgentSpec(agent),
                 },
                 context,
             );
