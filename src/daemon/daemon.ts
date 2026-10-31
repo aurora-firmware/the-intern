@@ -257,9 +257,19 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         resolveExit = resolve;
     });
 
-    /** Undoes everything within `STOP_BOUND_MS`: shutdown that code stalls by ignoring its abort ends with status 1. */
-    async function shutDown(successStatus: number): Promise<void> {
+    let shutdownInFlight: Promise<void> | undefined;
+
+    /**
+     * Undoes everything within `STOP_BOUND_MS`: shutdown that code stalls by ignoring its abort ends with status 1.
+     * The first request decides the status; a later request waits for that shutdown instead of starting another.
+     */
+    function shutDown(successStatus: number): Promise<void> {
         phase = "stopping";
+        shutdownInFlight ??= undoWithinBound(successStatus);
+        return shutdownInFlight;
+    }
+
+    async function undoWithinBound(successStatus: number): Promise<void> {
         let boundTimer: NodeJS.Timeout | undefined;
         const bound = new Promise<"overran">((resolve) => {
             boundTimer = setTimeout(() => resolve("overran"), STOP_BOUND_MS);

@@ -217,6 +217,39 @@ describe("runDaemon shutdown", () => {
         assert.equal(await stopping, 0);
     });
 
+    it("keeps exited pending when stop is called again while the first shutdown is still running", async () => {
+        const fixture = await createFixture();
+        const hookEntered = Promise.withResolvers<void>();
+        const hookRelease = Promise.withResolvers<void>();
+        const capture = capturingComponent();
+        const slow: DaemonComponent = {
+            name: "slow",
+            async stop() {
+                hookEntered.resolve();
+                await hookRelease.promise;
+            },
+        };
+        const daemon = fixture.start({ components: [slow, capture.component] });
+        await until(() => daemon.phase() === "ready", "the daemon to be ready");
+        const { host } = capture.context();
+        let isSettled = false;
+        daemon.exited.then(() => {
+            isSettled = true;
+        });
+
+        const first = daemon.stop();
+        await hookEntered.promise;
+        const second = daemon.stop();
+        await sleep(100);
+
+        assert.equal(isSettled, false, "exited settled before the first shutdown finished");
+        hookRelease.resolve();
+        assert.equal(await first, 0);
+        assert.equal(await second, 0);
+        assert.deepEqual(await host.closed, { reason: "closed" });
+        assert.equal(await exists(join(fixture.env.stateDir, "owner.lock")), false);
+    });
+
     it("records no abort during a tool call so the restarted run resumes with an interrupted result", async () => {
         const fixture = await createFixture({ toolCall: { name: "wait", arguments: {} } });
         const firstRuns = { count: 0 };
@@ -311,6 +344,72 @@ describe("runDaemon storage failure", () => {
             daemon.catalogue.invoke("conversations.list", {}, TEAM_MEMBER),
             (error: unknown) => error instanceof ServiceError && error.code === "unavailable",
         );
+    });
+});
+
+describe("runDaemon storage failure during a requested stop", () => {
+    it("settles non-zero when stop is called while the storage-failure shutdown is running", async () => {
+        const fixture = await createFixture();
+        const storageSwitch = { isFailing: false };
+        const hookEntered = Promise.withResolvers<void>();
+        const hookRelease = Promise.withResolvers<void>();
+        const capture = capturingComponent();
+        const slow: DaemonComponent = {
+            name: "slow",
+            async stop() {
+                hookEntered.resolve();
+                await hookRelease.promise;
+            },
+        };
+        const daemon = fixture.start({
+            components: [slow, capture.component],
+            openStorage: async (file) => failingOnDemand(await openNodeSqliteStorage(file), storageSwitch),
+        });
+        await until(() => daemon.phase() === "ready", "the daemon to be ready");
+        const { host } = capture.context();
+
+        storageSwitch.isFailing = true;
+        await host.createConversation({ agent: { model: fixture.modelId } }).catch(() => undefined);
+        await hookEntered.promise;
+        const stopping = daemon.stop();
+        await sleep(100);
+        hookRelease.resolve();
+
+        assert.notEqual(await stopping, 0);
+        assert.notEqual(await daemon.exited, 0);
+    });
+});
+
+describe("runDaemon host closed rejection", () => {
+    it("logs the error and settles non-zero when host.closed rejects after ready", async () => {
+        const fixture = await createFixture();
+        const rejection = Promise.withResolvers<never>();
+        const stopped: string[] = [];
+        // The daemon watches `host.closed` once the start hooks are done, so a hook can swap in a promise that rejects.
+        const swapClosed: DaemonComponent = {
+            name: "swap-closed",
+            async start(ctx) {
+                (ctx.host as { closed: Promise<unknown> }).closed = rejection.promise;
+            },
+        };
+        const daemon = fixture.start({
+            components: [
+                {
+                    name: "recorder",
+                    async stop() {
+                        stopped.push("recorder");
+                    },
+                },
+                swapClosed,
+            ],
+        });
+        await until(() => daemon.phase() === "ready", "the daemon to be ready");
+
+        rejection.reject(new Error("harness session broke"));
+
+        assert.notEqual(await daemon.exited, 0);
+        assert.deepEqual(stopped, ["recorder"]);
+        assert.match(linesMatching(fixture.lines, "daemon failed after ready")[0] ?? "", /harness session broke/);
     });
 });
 
