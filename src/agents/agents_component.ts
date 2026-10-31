@@ -13,6 +13,7 @@ import { rolesSection, workspacesSection } from "../roles/roles_section.ts";
 import { loadPreamble, loadShippedRoles } from "../roles/shipped_roles.ts";
 import type { Operation } from "../service/operations.ts";
 import { roleOperations } from "../service/role_operations.ts";
+import { seatOperations } from "../service/seat_operations.ts";
 import { workspaceOperations } from "../service/workspace_operations.ts";
 import { shippedToolsExtension } from "../tools/shipped_tools_extension.ts";
 import { roleWorkspacePath } from "../workspaces/workspace_folder.ts";
@@ -92,6 +93,6 @@ export async function createAgentsComponent(options: { logger: Logger }): Promis
         operations: [],
         runtime: requireRuntime,
     };
-    agents.operations.push(...roleOperations(agents), ...workspaceOperations(agents));
+    agents.operations.push(...roleOperations(agents), ...workspaceOperations(agents), ...seatOperations(agents));
     return agents;
 }

@@ -15,7 +15,7 @@ export class ServiceError extends Error {
 export type DaemonPhase = "starting" | "ready" | "stopping";
 
 export type Actor =
-    | { kind: "team_member" }
+    | { kind: "team_member"; wayIn?: string }
     | { kind: "agent"; conversationId: string }
     | { kind: "job_source"; source: string };
 
