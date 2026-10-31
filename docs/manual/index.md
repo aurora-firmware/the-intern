@@ -3,6 +3,11 @@
 This manual is for team members who install, configure and work with The Intern. Each section below is written
 together with the feature it describes.
 
+## Running The Intern
+
+See [Running The Intern](running_the_intern.md): start the service, set its directories and configuration file,
+and see which pi agent settings take effect.
+
 ## Installing and upgrading
 
 This page comes with its feature.
