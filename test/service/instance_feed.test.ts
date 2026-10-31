@@ -19,7 +19,7 @@ import {
 } from "../../src/feed/instance_feed.ts";
 import { createObservationFeed, type ObservationFeed, type Subscription } from "../../src/feed/observation_feed.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
-import { type HarnessHost, openHarnessHost } from "../../src/host/harness_host.ts";
+import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import { feedOperations } from "../../src/service/feed_operations.ts";
 import { type Caller, ServiceError } from "../../src/service/operations.ts";
 import { createFakeModel } from "../support/fake_model.ts";
@@ -29,6 +29,7 @@ const TEAM_MEMBER: Caller = { actor: { kind: "team_member" } };
 const NEXT_TIMEOUT_MS = 5000;
 const SUBMISSION_TIMEOUT_MS = 10_000;
 const RUN_DELAY_MS = 100;
+const MAX_OPENING_MICROTASKS = 1000;
 
 type FakeModel = ReturnType<typeof createFakeModel>;
 type Sub = Subscription<InstanceSnapshot, InstanceDelta>;
@@ -161,6 +162,47 @@ async function countSetEntriesVisitedDuring(action: () => Promise<void>): Promis
     return visited;
 }
 
+type CommitListener = (publication: unknown, context: unknown) => void;
+type PatchableHarness = {
+    subscribeCommits(listener: CommitListener): () => void;
+    inspect(context: unknown): Promise<unknown>;
+};
+
+// Delivers a commit that starts a run in `conversationId` to the instance watch `depth` microtasks after the watch's
+// initial read, so it can reach the feed while `createInstanceFeed` is still waiting for the watch to return.
+function startRunWhileWatchReturns(
+    host: HarnessHost,
+    conversationId: string,
+    depth: number,
+): { restore(): void; hasStarted(): boolean } {
+    const harness = internalHarness(host) as unknown as PatchableHarness;
+    const { subscribeCommits, inspect } = harness;
+    let listener: CommitListener | undefined;
+    let hasStarted = false;
+    harness.subscribeCommits = (watchListener) => {
+        listener = watchListener;
+        return subscribeCommits.call(harness, watchListener);
+    };
+    harness.inspect = async (context) => {
+        const result = await inspect.call(harness, context);
+        let step = Promise.resolve();
+        for (let tick = 0; tick < depth; tick++) step = step.then(() => {});
+        const task = { id: -1, conversationId: Number(conversationId), state: { status: "running" } };
+        void step.then(() => {
+            hasStarted = true;
+            listener?.({ changes: [{ type: "task", value: task }] }, context);
+        });
+        return result;
+    };
+    return {
+        restore() {
+            harness.subscribeCommits = subscribeCommits;
+            harness.inspect = inspect;
+        },
+        hasStarted: () => hasStarted,
+    };
+}
+
 describe("the instance feed", () => {
     it("snapshots every conversation with its status and the worker threads", async () => {
         const fixture = await openFixture(3);
@@ -188,6 +230,27 @@ describe("the instance feed", () => {
         await sending;
 
         assert.equal(snapshot.conversations.find((conversation) => conversation.id === id)?.status, "running");
+    });
+
+    it("keeps a run that starts while the feed is opening in its snapshot", async () => {
+        const fixture = await openFixture();
+        const id = await fixture.host.createConversation({ agent: { model: fixture.modelId } });
+
+        // Each pass starts the run one microtask later, until it starts only after the feed has opened: every moment
+        // of the opening is then covered, however many steps the watch takes to return.
+        let hasStartedBeforeOpen = true;
+        for (let depth = 0; hasStartedBeforeOpen; depth++) {
+            assert.ok(depth < MAX_OPENING_MICROTASKS, "the feed opens within the microtask budget");
+            const run = startRunWhileWatchReturns(fixture.host, id, depth);
+            const feed = await fixture.open().finally(run.restore);
+            hasStartedBeforeOpen = run.hasStarted();
+            await new Promise((resolve) => setImmediate(resolve));
+
+            const { snapshot } = feed.subscribe();
+
+            const status = snapshot.conversations.find((conversation) => conversation.id === id)?.status;
+            assert.equal(status, "running", `run started ${depth} microtasks after the watch's read`);
+        }
     });
 
     it("delivers created, run, admission and settings deltas in order with increasing seq", async () => {

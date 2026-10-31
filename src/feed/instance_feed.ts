@@ -7,7 +7,7 @@
 import type { Admission, AdmissionSnapshot } from "../admission/admission.ts";
 import type { ConfigStore } from "../config/config_writer.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
-import { watchInstance } from "../host/host_observation.ts";
+import { type InstanceEvent, watchInstance } from "../host/host_observation.ts";
 import { type ConversationStatus, conversationStatus } from "../service/conversation_read_operations.ts";
 import { createSubscription, FEED_MAX_PENDING, type Subscription } from "./observation_feed.ts";
 
@@ -46,24 +46,24 @@ export async function createInstanceFeed(options: {
     }
 
     // The watch can report events before it returns; they are applied once the map holds its snapshot.
-    const early: DeltaBody[] = [];
+    const early: InstanceEvent[] = [];
     let isReady = false;
-    function onEvent(event: { type: "conversation_created" | "run_started" | "run_finished"; conversationId: string }) {
+    function onEvent(event: InstanceEvent): void {
         if (!isReady) {
             early.push(event);
             return;
         }
         applyEvent(event);
     }
-    function applyEvent(event: { type: string; conversationId: string }): void {
+    function applyEvent(event: InstanceEvent): void {
         busyById.set(event.conversationId, event.type === "run_started");
-        publish(event as DeltaBody);
+        publish(event);
     }
 
     const watch = await watchInstance(host, onEvent);
     for (const { id, busy } of watch.snapshot.conversations) busyById.set(id, busy);
     isReady = true;
-    for (const event of early.splice(0)) applyEvent(event as { type: string; conversationId: string });
+    for (const event of early.splice(0)) applyEvent(event);
 
     const stopAdmission = admission.onChange((snapshot) => publish({ type: "admission_changed", admission: snapshot }));
     const stopConfig = config.onChange(({ section }) => publish({ type: "settings_changed", section }));
