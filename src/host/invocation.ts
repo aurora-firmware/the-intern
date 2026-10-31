@@ -30,7 +30,7 @@ export class InvocationDepthError extends Error {
 
     constructor(invokingId: string, depth: number, cap: number) {
         super(
-            `Conversation "${invokingId}" is at depth ${depth}; an invocation would pass the depth cap of ${cap} and was refused.`,
+            `Conversation "${invokingId}" is at depth ${depth}; an invocation would pass the cap of ${cap} and was refused.`,
         );
         this.name = "InvocationDepthError";
         this.cap = cap;

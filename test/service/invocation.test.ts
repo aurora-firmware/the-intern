@@ -147,7 +147,7 @@ async function lastSeatRecord(
 }
 
 describe("createInvokedConversations", () => {
-    it("creates one seated conversation of the same job per request and records each in the invoker's awaiting", async () => {
+    it("creates one seated conversation of the same job per request and adds each to the invoker's awaiting", async () => {
         const fixture = await createFixture();
         const invokingId = await fixture.startInvoker({ depth: 2 });
 
@@ -259,7 +259,7 @@ describe("createInvokedConversations", () => {
     });
 
     for (const contextMode of ["full", "compact", "clean"] as const) {
-        it(`starts the first seat record of a ${contextMode} invoked conversation without a previous seat`, async () => {
+        it(`records no previous seat for a ${contextMode} invoked conversation`, async () => {
             const fixture = await createFixture();
             const invokingId = await fixture.startInvoker();
 
