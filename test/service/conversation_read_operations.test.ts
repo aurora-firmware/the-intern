@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
+import { defineDoc } from "@earendil-works/pi-durable";
 import { type Admission, createAdmission } from "../../src/admission/admission.ts";
 import { createAdmissionGate } from "../../src/admission/admission_extension.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
@@ -13,7 +15,7 @@ import {
     submitInput,
     waitForSubmission,
 } from "../../src/host/conversation_control.ts";
-import { type HarnessHost, openHarnessHost } from "../../src/host/harness_host.ts";
+import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import {
     type ConversationStatus,
     conversationReadOperations,
@@ -28,6 +30,17 @@ const BUSY_DELAY_MS = 400;
 const POLL_ATTEMPTS = 200;
 const POLL_PAUSE_MS = 25;
 const caller: Caller = { actor: { kind: "team_member" } };
+
+// The daemon documents (S-002 Definitions, "Database"), declared again here to read what the product stored.
+const daemonDocuments = ["intern.admission", "intern.versions", "intern.idempotency"].map((kind) =>
+    defineDoc<Record<string, unknown>>({
+        kind,
+        version: 1,
+        scope: "session",
+        initial: () => ({}),
+        checkpointWhen: () => false,
+    }),
+);
 
 type FakeModel = ReturnType<typeof createFakeModel>;
 type Fixture = {
@@ -292,21 +305,25 @@ describe("read operations leave state unchanged", () => {
         );
     });
 
-    it("changes no conversation entries and no admission document when every operation runs", async () => {
+    it("changes no conversation's entries and no daemon document when every operation runs", async () => {
         const fixture = await openFixture();
-        const id = await fixture.newConversation();
-        await exchange(fixture, id, "hello");
+        const ids = [await fixture.newConversation(), await fixture.newConversation()];
+        for (const id of ids) await exchange(fixture, id, "hello");
+        const harness = internalHarness(fixture.host);
         const snapshot = async () => ({
-            entries: await fixture.call("conversations.entries", { conversationId: id }),
-            admission: fixture.admission.state(),
+            entries: await Promise.all(ids.map((id) => fixture.call("conversations.entries", { conversationId: id }))),
+            documents: await Promise.all(daemonDocuments.map((doc) => harness.snapshot(doc, BACKGROUND_CONTEXT))),
         });
         const before = await snapshot();
 
         await fixture.call("conversations.list");
-        await fixture.call("conversations.get", { conversationId: id });
-        await fixture.call("conversations.entries", { conversationId: id, limit: 1 });
-        await fixture.call("conversations.context", { conversationId: id });
+        for (const id of ids) {
+            await fixture.call("conversations.get", { conversationId: id });
+            await fixture.call("conversations.entries", { conversationId: id, limit: 1 });
+            await fixture.call("conversations.context", { conversationId: id });
+        }
 
         assert.deepEqual(await snapshot(), before);
+        assert.ok(before.documents.some((document) => document !== undefined));
     });
 });
