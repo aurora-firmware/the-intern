@@ -1,6 +1,6 @@
 ---
 title: Daemon and host runtime
-version: '0.2'
+version: '0.3'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-16'
 author: planner
@@ -266,7 +266,8 @@ host.
   - config (configuration file)
   - state (database)
   - data (per-role default workspaces, S-001 R-3)
-  - runtime (the socket's directory, S-003)
+  - runtime (the socket's directory, S-003). When `XDG_RUNTIME_DIR` is unset, as on macOS and under launchd, the
+    runtime directory is the `run` folder inside the state directory.
 
   Each can be overridden by a command-line flag (R-21). A missing directory is created owner-only (mode 0700). An
   existing one that isn't a directory, isn't owned by the service account, or is accessible to the group or others
@@ -535,3 +536,4 @@ S-001 phase 1 needs phases 1 to 3 of this spec. S-001 phase 4 needs phase 4.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-10-30 | Aligned with the rewritten S-000: the spec covers S-000's Intern service; the daemon serves a team through the command line and a web interface over the network, and no listener authenticates callers; the daemon runs as one service account (the installing person's in v1) whose pi login and other credentials are used in place; the supervisor starts it at machine startup without a login; the root conversation, chat, policy, approvals and audit are removed; role operations cover creating, changing, restoring and removing roles; the job record crosses versions by export and import (Purpose, Definitions, Exclusions, Design Principles, System Diagram, Responsibility Separation, components 2 and 5, R-2, R-4, R-6, R-12, R-16 to R-18, R-21, R-22, Workflow, Configuration Requirements, Verification, Implementation Order). Consistency review: the plain "create a conversation" operation became "start the lead conversation of a job" (S-001 R-12); job sources replace entry points; listeners belong to S-000's Intern service; Installation is decided in the bootstrap plan; live test 3 covers launchd. | Product owner ruling: S-000 is the source of truth, and S-002 is aligned as part of creating S-000. | None; S-002 isn't broken down yet |
+| 2026-10-31 | The runtime directory falls back to the `run` folder inside the state directory when `XDG_RUNTIME_DIR` is unset (R-6). | Product owner ruling during the breakdown: the XDG base directories give no default for the runtime directory, and macOS and launchd don't set it. | None; S-002 isn't broken down yet |
