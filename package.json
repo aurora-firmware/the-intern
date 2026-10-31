@@ -9,7 +9,8 @@
         "@earendil-works/chord": "1.4.0",
         "@earendil-works/pi-ai": "1.4.0",
         "@earendil-works/pi-coding-agent": "1.4.0",
-        "@earendil-works/pi-durable": "1.4.0"
+        "@earendil-works/pi-durable": "1.4.0",
+        "smol-toml": "1.9.1"
     },
     "devDependencies": {
         "@biomejs/biome": "2.6.4",
