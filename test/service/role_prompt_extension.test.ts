@@ -12,6 +12,7 @@ import { changeSeat, createSeatedConversation, type JobLinks, type SeatActor } f
 import { createRolePromptExtension, ROLE_PROMPT_EXTENSION_NAME } from "../../src/prompt/role_prompt_extension.ts";
 import { createWorkspaceContextLoader } from "../../src/prompt/workspace_context.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
+import { applyRoleChange, resolveSeat } from "../../src/roles/role_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const WAIT_MS = 10_000;
@@ -86,13 +87,19 @@ async function createFixture() {
         }),
     );
     const logger = createLogger({ stream: { write: () => true } });
+    const realLoader = createWorkspaceContextLoader({ logger });
+    const loadedSeats: Seat[] = [];
+    const recordingLoader = {
+        load(seat: Seat) {
+            loadedSeats.push(seat);
+            return realLoader.load(seat);
+        },
+    };
     const host = await openHarnessHost({
         databaseFile: join(env.root, "state.sqlite"),
         models,
         harnessSettings: {},
-        extensions: [
-            createRolePromptExtension({ preamble: PREAMBLE, loader: createWorkspaceContextLoader({ logger }) }),
-        ],
+        extensions: [createRolePromptExtension({ preamble: PREAMBLE, loader: recordingLoader })],
         defaultCwd: process.cwd(),
         logger,
     });
@@ -118,7 +125,7 @@ async function createFixture() {
     };
     const seatConversation = async (seat: Seat) =>
         (await createSeatedConversation(host, { scope: "start-job", key: "k1", job, seat, actor })).conversationId;
-    return { host, prompts, seatFor, say, seatConversation };
+    return { host, prompts, loadedSeats, seatFor, say, seatConversation };
 }
 
 describe("the role prompt extension", () => {
@@ -187,16 +194,41 @@ describe("the role prompt extension", () => {
         ]);
     });
 
-    it("keeps sending the instructions the agent was seated with when the team role changes later", async () => {
-        const { prompts, seatFor, say, seatConversation } = await createFixture();
-        const role = { instructions: "Original instructions." };
-        const id = await seatConversation(await seatFor("developer", { instructions: role.instructions }));
+    it("keeps sending the instructions and skills the agent was seated with when the team role changes later", async () => {
+        const { prompts, loadedSeats, seatFor, say, seatConversation } = await createFixture();
+        const seated = await seatFor("developer");
+        const role = {
+            name: "developer",
+            instructions: seated.instructions,
+            tools: [],
+            skills: seated.skills,
+        };
+        const defaults = { model: seated.model, workspace: seated.workspace };
+        const id = await seatConversation(resolveSeat(role, defaults));
         await say(id);
 
-        role.instructions = "Edited instructions.";
+        const editedRole = applyRoleChange(role, {
+            instructions: "Edited instructions.",
+            skills: [await writeSkill(join(seated.workspace, "edited"), "edited-role-skill")],
+        });
+        assert.notEqual(resolveSeat(editedRole, defaults).instructions, seated.instructions);
         await say(id);
 
-        assert.match(prompts[1], /Original instructions\./);
+        assert.match(prompts[1], /Instructions of developer\./);
+        assert.match(prompts[1], /developer-role-skill/);
         assert.equal(prompts[1].includes("Edited instructions."), false);
+        assert.equal(prompts[1].includes("edited-role-skill"), false);
+        // The only way a current role could reach the prompt is through the seat handed to the loader.
+        assert.ok(loadedSeats.every((seat) => seat.instructions === seated.instructions));
+        assert.ok(loadedSeats.every((seat) => seat.skills.join() === seated.skills.join()));
+    });
+
+    it("loads the seat's workspace once for the five sections of one request", async () => {
+        const { loadedSeats, seatFor, say, seatConversation } = await createFixture();
+        const id = await seatConversation(await seatFor("developer"));
+
+        await say(id);
+
+        assert.equal(loadedSeats.length, 1);
     });
 });
