@@ -54,19 +54,26 @@ function isLive(lock: LockContent | undefined): lock is LockContent {
     return isProcessAlive(lock.pid);
 }
 
-/** Creates the lock file exclusively; returns false when it already exists. */
+/**
+ * Creates the lock file exclusively and complete: the content is written to a private temporary file that is then
+ * linked to the lock path, so no reader ever sees an empty lock. Returns false when the lock already exists.
+ */
 async function tryCreateLock(lockPath: string, content: LockContent): Promise<boolean> {
+    const draftPath = `${lockPath}.${randomUUID()}.draft`;
+    const file = await open(draftPath, "wx", LOCK_FILE_MODE);
     try {
-        const file = await open(lockPath, "wx", LOCK_FILE_MODE);
-        try {
-            await file.writeFile(JSON.stringify(content));
-        } finally {
-            await file.close();
-        }
+        await file.writeFile(JSON.stringify(content));
+    } finally {
+        await file.close();
+    }
+    try {
+        await link(draftPath, lockPath);
         return true;
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
         throw error;
+    } finally {
+        await unlink(draftPath);
     }
 }
 

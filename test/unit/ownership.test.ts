@@ -26,6 +26,31 @@ process.stdin.on("end", () => process.exit(0));
 console.log("ready");
 `;
 
+// A child that reads the lock file in a tight loop and counts the contents that are not complete JSON.
+const LOCK_WATCHING_CHILD = `
+import { readFileSync } from "node:fs";
+let unreadable = 0;
+let isStopped = false;
+process.stdin.once("data", () => { isStopped = true; });
+console.log("ready");
+const poll = () => {
+    const deadline = Date.now() + 20;
+    while (Date.now() < deadline) {
+        try {
+            JSON.parse(readFileSync(process.argv[1], "utf8"));
+        } catch (error) {
+            if (error.code !== "ENOENT") unreadable++;
+        }
+    }
+    if (isStopped) {
+        console.log(unreadable + " unreadable");
+        process.exit(0);
+    }
+    setImmediate(poll);
+};
+poll();
+`;
+
 const IDLE_CHILD = `
 console.log("ready");
 process.stdin.resume();
@@ -100,6 +125,18 @@ describe("acquireOwnership", () => {
         assert.equal(typeof lock.token, "string");
         assert.ok(lock.token.length > 0);
         assert.equal((await stat(join(env.stateDir, "owner.lock"))).mode & 0o777, 0o600);
+    });
+
+    it("never shows an empty or partial lock file to a reader while acquiring", async () => {
+        const reader = await trackedChild(LOCK_WATCHING_CHILD, [join(env.stateDir, "owner.lock")]);
+        const report = nextLine(reader);
+        for (let attempt = 0; attempt < 200; attempt++) {
+            const handle = await acquireOwnership(env.stateDir);
+            await handle.release();
+        }
+        reader.stdin?.write("stop\n");
+
+        assert.equal(await report, "0 unreadable");
     });
 
     it("refuses and leaves the file unchanged when the lock names a live process", async () => {
