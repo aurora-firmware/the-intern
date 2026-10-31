@@ -206,6 +206,25 @@ describe("the role operations", () => {
         assert.equal(await fileText(env), "");
     });
 
+    it("ends with conflict naming the role and the referrer when a referenced role is removed, leaving the file unchanged", async () => {
+        const env = await hermetic();
+        const { agents, invoke, roles } = await start(env);
+        await invoke("roles.create", reviewer);
+        const before = await fileText(env);
+        agents.runtime().catalog.addReferenceSource({
+            name: "job-template",
+            referrersOf: (role) => (role === "reviewer" ? ["nightly-review"] : []),
+        });
+
+        const error = await refusal(invoke("roles.remove", { name: "reviewer" }));
+
+        assert.equal(error.code, "conflict");
+        assert.match(error.message, /reviewer/);
+        assert.match(error.message, /nightly-review/);
+        assert.equal(await fileText(env), before);
+        assert.ok((await roles()).some((role) => role.name === "reviewer"));
+    });
+
     it("removes the change from the file and lists the shipped values when a changed shipped role is restored", async () => {
         const env = await hermetic();
         const { invoke, roles } = await start(env);
