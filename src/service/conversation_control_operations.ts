@@ -3,7 +3,6 @@
  * compact. They need only the host; the host's errors map to the service error codes.
  */
 import {
-    abortConversation,
     type BusyMode,
     compactConversation,
     HostBusyError,
@@ -14,6 +13,7 @@ import {
     withdrawInput,
 } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
+import { abortWithAwaited } from "../host/invocation.ts";
 import { defineOperation, type Operation, ServiceError } from "./operations.ts";
 
 type ControlContext = { host: HarnessHost };
@@ -103,7 +103,7 @@ const abortOperation = defineOperation<ControlContext, ConversationRef, Record<s
     parse: parseConversationRef,
     run: ({ host }, { conversationId }) =>
         mappingHostErrors(async () => {
-            await abortConversation(host, conversationId);
+            await abortWithAwaited(host, conversationId);
             return {};
         }),
 });
