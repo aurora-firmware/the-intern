@@ -137,11 +137,18 @@ function isFeedRoute(req: IncomingMessage, pathname: string): boolean {
     return req.method === "GET" && pathname === FEED_PATH;
 }
 
+function conversationIdOf(query: URLSearchParams): string {
+    const id = query.get("id");
+    if (!id)
+        throw new ServiceError("invalid_input", "Query parameter id must name a conversation for scope conversation");
+    return id;
+}
+
 /** The `feed.subscribe` input the query of `GET /feed` stands for (S-003 Interfaces). */
 function subscribeInputOf(query: URLSearchParams): { scope: string; conversationId?: string } {
     const scope = query.get("scope");
     if (scope === "instance") return { scope };
-    if (scope === "conversation") return { scope, conversationId: query.get("id") ?? undefined };
+    if (scope === "conversation") return { scope, conversationId: conversationIdOf(query) };
     throw new ServiceError(
         "invalid_input",
         `Query parameter scope must be "instance" or "conversation", got ${scope ?? "none"}`,

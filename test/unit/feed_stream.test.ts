@@ -170,3 +170,47 @@ describe("feed stream: snapshot then deltas", () => {
         assert.deepEqual(harness.calls[0]?.input, { scope: "instance" });
     });
 });
+
+async function readErrorCode(res: IncomingMessage): Promise<string> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of res) chunks.push(chunk as Buffer);
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { error: { code: string; message: string } };
+    assert.equal(typeof body.error.message, "string");
+    return body.error.code;
+}
+
+describe("feed stream: refusals before any event", () => {
+    let harness: Harness;
+    beforeEach(async () => {
+        harness = await startFront();
+    });
+    afterEach(() => harness.close());
+
+    const refused = [
+        { label: "no scope", path: "/feed", status: 400, code: "invalid_input" },
+        { label: "an unknown scope", path: "/feed?scope=everything", status: 400, code: "invalid_input" },
+        {
+            label: "a conversation scope with no id",
+            path: "/feed?scope=conversation",
+            status: 400,
+            code: "invalid_input",
+        },
+        { label: "an empty conversation id", path: "/feed?scope=conversation&id=", status: 400, code: "invalid_input" },
+        {
+            label: "an unknown conversation",
+            path: "/feed?scope=conversation&id=unknown",
+            status: 404,
+            code: "not_found",
+        },
+    ];
+
+    for (const { label, path, status, code } of refused) {
+        it(`answers ${status} ${code} with the JSON error body for ${label}`, async () => {
+            const res = await harness.open(path);
+
+            assert.equal(res.statusCode, status);
+            assert.match(res.headers["content-type"] ?? "", /^application\/json/);
+            assert.equal(await readErrorCode(res), code);
+        });
+    }
+});
