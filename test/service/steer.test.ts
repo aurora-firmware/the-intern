@@ -208,7 +208,10 @@ async function assertPlacedAsSteerEntry(ctx: ServiceContext, conversationId: str
     assert.equal(placed.length, 1, "the steer entry's data shows the message text");
 }
 
-async function rawSteerDataOf(ctx: ServiceContext, conversationId: string): Promise<{ content?: string }[]> {
+async function rawSteerDataOf(
+    ctx: ServiceContext,
+    conversationId: string,
+): Promise<{ content?: string; actor?: SeatActor; mode?: string }[]> {
     const conversation = await internalHarness(ctx.host).conversation(
         Number(conversationId) as ConversationId,
         BACKGROUND_CONTEXT,
@@ -395,6 +398,40 @@ describe("the steer tool and steering a conversation", () => {
                 assert.ok(users.includes(expected), `the lead's context holds "${expected}"`);
             }
             assert.deepEqual((await readConversationMeta(started.ctx.host, leadId))?.held, []);
+        });
+
+        it("delivers each held message as its own intern.steer entry with its sender", async () => {
+            const { started, leadId, release } = await startParkedLead();
+            await started.submit(leadId, "from the team member", "member-1", "steer");
+            await started.startLead("steerer work", "job-steerer", "gp");
+            await waitFor(() => started.callsOf("steerer work").length === 2, "the steerer to get the tool result");
+            assert.deepEqual(
+                (await rawSteerDataOf(started.ctx, leadId)).map((data) => data.content),
+                [undefined, undefined],
+                "the hold records carry no text",
+            );
+
+            release();
+
+            await waitFor(
+                () => started.callsOf("lead work").some((call) => usersOf(call.messages).includes("report of job A")),
+                "the lead to continue with the report",
+            );
+            const delivered = (await rawSteerDataOf(started.ctx, leadId)).filter((data) => data.content !== undefined);
+            assert.deepEqual(
+                delivered.map((data) => [data.actor?.kind, data.mode, data.content]),
+                [
+                    ["team_member", "steer", "from the team member"],
+                    ["agent", "followUp", "from the agent"],
+                ],
+            );
+            assert.deepEqual(delivered[0]?.actor, CLI_ACTOR);
+            await assertPlacedAsSteerEntry(started.ctx, leadId, "from the team member");
+            await assertPlacedAsSteerEntry(started.ctx, leadId, "from the agent");
+            const users = usersOf((started.callsOf("lead work").at(-1) as ModelCall).messages);
+            for (const expected of ["from the team member", "from the agent"]) {
+                assert.ok(users.includes(expected), `the lead's model gets "${expected}"`);
+            }
         });
 
         it("holds a message once when the same request is steered twice", async () => {
