@@ -8,7 +8,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type ConversationId, defineDoc, type Tx } from "@earendil-works/pi-durable";
 import { INVOCATION_DEPTH_CAP } from "../daemon/constants.ts";
 import type { Seat } from "../roles/role_model.ts";
-import { compactConversation, submitInput } from "./conversation_control.ts";
+import { abortConversation, compactConversation, submitInput } from "./conversation_control.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import {
     type ContextMode,
@@ -228,4 +228,35 @@ export async function continueParked(
         meta.held = [];
     });
     return submitted;
+}
+
+async function abortRecursively(host: HarnessHost, conversationId: string, aborted: Set<string>): Promise<void> {
+    if (aborted.has(conversationId)) return;
+    // Read before aborting: the abort ends the runs whose reports would otherwise change the list.
+    // A conversation that was not seated has no invocation links and awaits nothing.
+    const awaiting = (await readConversationMeta(host, conversationId))?.awaiting ?? [];
+    aborted.add(conversationId);
+    await abortConversation(host, conversationId);
+    for (const awaitedId of awaiting) await abortRecursively(host, awaitedId, aborted);
+}
+
+/**
+ * Aborts the conversation, then every conversation it still awaits a report from, recursively, whether it is
+ * steerable or parked. An invoked conversation that has reported has left `awaiting` and is not touched.
+ */
+export async function abortWithAwaited(host: HarnessHost, conversationId: string): Promise<string[]> {
+    const aborted = new Set<string>();
+    await abortRecursively(host, conversationId, aborted);
+    return [...aborted];
+}
+
+/** Aborts every conversation whose `intern.conversation` document names the job. */
+export async function abortJobConversations(host: HarnessHost, jobId: string): Promise<string[]> {
+    const aborted: string[] = [];
+    for (const { id } of await host.listConversations()) {
+        if ((await readConversationMeta(host, id))?.jobId !== jobId) continue;
+        await abortConversation(host, id);
+        aborted.push(id);
+    }
+    return aborted;
 }
