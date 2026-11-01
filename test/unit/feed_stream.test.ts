@@ -285,3 +285,40 @@ describe("feed stream: a client that doesn't read", () => {
         assert.deepEqual(rest.at(-1), { event: "end", data: '{"reason":"lagging"}' });
     });
 });
+
+describe("feed stream: shutdown", () => {
+    let harness: Harness;
+    beforeEach(async () => {
+        harness = await startFront();
+    });
+    afterEach(() => harness.close());
+
+    it("writes end with the reason stopped, closes the subscription and ends the response when the signal aborts", async () => {
+        const res = await harness.open("/feed?scope=instance");
+        const events = eventReader(res);
+        await events.next();
+
+        harness.abort.abort();
+
+        assert.deepEqual(await events.rest(), [{ event: "end", data: '{"reason":"stopped"}' }]);
+        await harness.feed.closeCalled;
+    });
+
+    it("ends a stream waiting for a client that doesn't read with stopped when the signal aborts", async () => {
+        const res = await harness.open("/feed?scope=instance");
+        const events = eventReader(res);
+        await events.next();
+        res.pause();
+        for (let seq = 1; seq <= 100; seq++) {
+            harness.feed.push({ seq, text: LARGE_TEXT });
+            await new Promise((resolve) => setImmediate(resolve));
+        }
+
+        harness.abort.abort();
+        res.resume();
+
+        const rest = await events.rest();
+        assert.ok(rest.length < 100, `the stream wrote ${rest.length} events`);
+        assert.deepEqual(rest.at(-1), { event: "end", data: '{"reason":"stopped"}' });
+    });
+});
