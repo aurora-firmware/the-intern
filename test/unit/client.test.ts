@@ -3,18 +3,56 @@
  * directory, and a call that no daemon answers fails with `UnreachableError` naming where it went (AC-009.2).
  */
 import assert from "node:assert/strict";
+import { createServer, type RequestListener, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, describe, it } from "node:test";
-import { createClient, parseEventStream, type StreamEvent, UnreachableError } from "../../src/client/client.ts";
+import {
+    ClientError,
+    createClient,
+    parseEventStream,
+    type StreamEvent,
+    UnreachableError,
+} from "../../src/client/client.ts";
 import { defaultSocketPath, nodeTransport } from "../../src/client/node_transport.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const HOME = "/home/team";
 
+const LOOPBACK = "127.0.0.1";
+
 const envs: HermeticEnv[] = [];
+const servers: Server[] = [];
 
 afterEach(async () => {
+    for (const server of servers.splice(0)) await closeServer(server);
     for (const env of envs.splice(0)) await env.dispose();
 });
+
+function closeServer(server: Server): Promise<void> {
+    server.closeAllConnections();
+    return new Promise((resolve) => server.close(() => resolve()));
+}
+
+/** A server on a free loopback port that answers every request with `answer`; resolves with its base URL. */
+async function serve(answer: RequestListener): Promise<string> {
+    const server = createServer(answer);
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, LOOPBACK, resolve));
+    return `http://${LOOPBACK}:${(server.address() as AddressInfo).port}`;
+}
+
+/** The base URL of a loopback port nothing listens on: a server took it, then closed. */
+async function refusingUrl(): Promise<string> {
+    const baseUrl = await serve(() => {});
+    await closeServer(servers.pop() as Server);
+    return baseUrl;
+}
+
+function assertUnreachable(error: unknown, target: string): void {
+    assert.ok(error instanceof UnreachableError, `the call fails with UnreachableError, not ${error}`);
+    assert.equal(error.target, target);
+    assert.ok(error.message.includes(target), `the message names ${target}: ${error.message}`);
+}
 
 describe("defaultSocketPath", () => {
     it("is bob.sock in the runtime directory under XDG_RUNTIME_DIR", () => {
@@ -53,9 +91,76 @@ describe("a call no daemon answers", () => {
 
         const error = await rejection(client.invoke("daemon.status"));
 
-        assert.ok(error instanceof UnreachableError, `the call fails with UnreachableError, not ${error}`);
-        assert.equal(error.target, socketPath);
-        assert.match(error.message, new RegExp(socketPath.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+        assertUnreachable(error, socketPath);
+    });
+
+    it("fails with UnreachableError naming the URL when the connection is refused", async () => {
+        const baseUrl = await refusingUrl();
+
+        const error = await rejection(createClient(nodeTransport({ baseUrl })).invoke("daemon.status"));
+
+        assertUnreachable(error, baseUrl);
+    });
+
+    it("fails with UnreachableError naming the URL when the connection closes before the answer", async () => {
+        const baseUrl = await serve((req) => req.socket.destroy());
+
+        const error = await rejection(createClient(nodeTransport({ baseUrl })).invoke("daemon.status"));
+
+        assertUnreachable(error, baseUrl);
+    });
+
+    it("fails with UnreachableError naming the URL when the answer is cut off halfway", async () => {
+        const baseUrl = await serve((_req, res) => {
+            res.writeHead(200, { "content-type": "application/json", "content-length": 100 });
+            res.write('{"result":');
+            setImmediate(() => res.destroy());
+        });
+
+        const error = await rejection(createClient(nodeTransport({ baseUrl })).invoke("daemon.status"));
+
+        assertUnreachable(error, baseUrl);
+    });
+
+    it("fails a subscription with UnreachableError naming the URL when its stream is cut off", async () => {
+        const baseUrl = await serve((_req, res) => {
+            res.writeHead(200, { "content-type": "text/event-stream" });
+            res.write("event: snapshot\ndata: {}\n\n");
+            setImmediate(() => res.destroy());
+        });
+        const feed = createClient(nodeTransport({ baseUrl })).subscribe({ scope: "instance" });
+
+        const first = await feed.next();
+        const error = await rejection(feed.next());
+
+        assert.deepEqual(first, { done: false, value: { snapshot: {} } });
+        assertUnreachable(error, baseUrl);
+    });
+});
+
+describe("an answer not in the daemon's format", () => {
+    it("fails with an error naming the URL and the status when the body is not JSON", async () => {
+        const baseUrl = await serve((_req, res) => {
+            res.writeHead(502, { "content-type": "text/plain" });
+            res.end("Bad Gateway");
+        });
+
+        const error = await rejection(createClient(nodeTransport({ baseUrl })).invoke("daemon.status"));
+
+        assert.ok(error instanceof Error && !(error instanceof UnreachableError), `a plain error, not ${error}`);
+        assert.match(error.message, new RegExp(`${baseUrl} is not JSON \\(status 502\\)`));
+    });
+
+    it("fails with an error that is not a ClientError when the JSON holds neither a result nor an error", async () => {
+        const baseUrl = await serve((_req, res) => {
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end('{"unexpected":1}');
+        });
+
+        const error = await rejection(createClient(nodeTransport({ baseUrl })).invoke("daemon.status"));
+
+        assert.ok(error instanceof Error && !(error instanceof ClientError), `a plain error, not ${error}`);
+        assert.match(error.message, /neither a result nor an error/);
     });
 });
 
