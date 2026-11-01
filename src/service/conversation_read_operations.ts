@@ -9,29 +9,104 @@ import {
     type HostEntry,
     HostInvalidCursorError,
 } from "../host/harness_host.ts";
+import { type Origin, readConversationMeta, SEAT_RECORD_KIND, type SeatSummary } from "../host/seating.ts";
+import type { Seat } from "../roles/role_model.ts";
+import { type AttributedEntry, attributeEntries } from "./attribution.ts";
 import { defineOperation, type Operation, ServiceError } from "./operations.ts";
 
-export type ConversationStatus = "waiting for a worker thread" | "running" | "idle";
+export type ConversationStatus = "waiting for a worker thread" | "running" | "parked" | "idle";
+
+export type ConversationListing = {
+    id: string;
+    jobId: string | null;
+    isLead: boolean;
+    seat: SeatSummary | null;
+    origin: Origin | null;
+    status: ConversationStatus;
+    lastActivity: string | null;
+    invokedBy?: string;
+    depth: number;
+};
+export type InvocationTree = { id: string; role: string | null; status: ConversationStatus; invoked: InvocationTree[] };
 
 type ReadContext = { host: HarnessHost; admission: Admission };
-type ConversationSummary = { id: string; status: ConversationStatus };
 type ConversationRef = { conversationId: string };
 type EntriesInput = ConversationRef & { after?: string; limit: number };
+type ListInput = { jobId?: string };
 
 const DEFAULT_ENTRIES_LIMIT = 100;
 const MIN_ENTRIES_LIMIT = 1;
 const MAX_ENTRIES_LIMIT = 500;
 
 export function conversationStatus(
-    info: { id: string; busy: boolean },
+    info: { id: string; busy: boolean; isParked?: boolean },
     admission: AdmissionSnapshot,
 ): ConversationStatus {
     if (admission.waiting.some((waiter) => waiter.conversationId === info.id)) return "waiting for a worker thread";
-    return info.busy ? "running" : "idle";
+    if (info.busy) return "running";
+    return info.isParked === true ? "parked" : "idle";
 }
 
-function summarize(info: ConversationInfo, admission: Admission): ConversationSummary {
-    return { id: info.id, status: conversationStatus(info, admission.state()) };
+// Entries carry no wall-clock time of their own; the messages they contribute to the model do.
+function newestMessageTime(entries: HostEntry[]): number | null {
+    let newest: number | null = null;
+    for (const entry of entries) {
+        if (!Array.isArray(entry.data)) continue;
+        for (const message of entry.data as { timestamp?: unknown }[]) {
+            if (typeof message?.timestamp === "number" && (newest === null || message.timestamp > newest)) {
+                newest = message.timestamp;
+            }
+        }
+    }
+    return newest;
+}
+
+async function readAllEntries(host: HarnessHost, conversationId: string): Promise<HostEntry[]> {
+    const entries: HostEntry[] = [];
+    let after: string | undefined;
+    do {
+        const page = await host.readEntries(conversationId, {
+            limit: MAX_ENTRIES_LIMIT,
+            ...(after !== undefined && { after }),
+        });
+        entries.push(...page.entries);
+        after = page.next;
+    } while (after !== undefined);
+    return entries;
+}
+
+async function lastActivityOf(host: HarnessHost, conversationId: string): Promise<string | null> {
+    const newest = newestMessageTime(await readAllEntries(host, conversationId));
+    return newest === null ? null : new Date(newest).toISOString();
+}
+
+async function listingOf(
+    host: HarnessHost,
+    admission: Admission,
+    info: ConversationInfo,
+): Promise<ConversationListing> {
+    const meta = await readConversationMeta(host, info.id);
+    const status = conversationStatus({ ...info, isParked: meta?.parked != null }, admission.state());
+    return {
+        id: info.id,
+        jobId: meta?.jobId ?? null,
+        isLead: meta?.isLead ?? false,
+        seat: meta === undefined ? null : summarizeSeat(meta.seat),
+        origin: meta?.origin ?? null,
+        status,
+        lastActivity: await lastActivityOf(host, info.id),
+        ...(meta?.invokedBy !== undefined && { invokedBy: meta.invokedBy }),
+        depth: meta?.depth ?? 0,
+    };
+}
+
+function summarizeSeat(seat: Seat): SeatSummary {
+    return {
+        role: seat.role,
+        model: seat.model,
+        ...(seat.thinkingLevel !== undefined && { thinkingLevel: seat.thinkingLevel }),
+        workspace: seat.workspace,
+    };
 }
 
 function asRecord(raw: unknown): Record<string, unknown> {
@@ -60,32 +135,105 @@ async function requireConversation(host: HarnessHost, conversationId: string): P
     return info;
 }
 
-const listOperation = defineOperation<ReadContext, Record<string, never>, ConversationSummary[]>({
+function parseListInput(raw: unknown): ListInput {
+    const { jobId } = asRecord(raw);
+    if (jobId !== undefined && (typeof jobId !== "string" || jobId === "")) {
+        throw new Error("jobId must be a non-empty string");
+    }
+    return jobId === undefined ? {} : { jobId };
+}
+
+const listOperation = defineOperation<ReadContext, ListInput, ConversationListing[]>({
     name: "conversations.list",
     kind: "read",
-    parse: () => ({}),
-    async run({ host, admission }) {
-        return (await host.listConversations()).map((info) => summarize(info, admission));
+    parse: parseListInput,
+    async run({ host, admission }, { jobId }) {
+        const listings: ConversationListing[] = [];
+        for (const info of await host.listConversations()) {
+            if (jobId !== undefined && (await readConversationMeta(host, info.id))?.jobId !== jobId) continue;
+            listings.push(await listingOf(host, admission, info));
+        }
+        return listings;
     },
 });
 
-const getOperation = defineOperation<ReadContext, ConversationRef, ConversationSummary>({
+const getOperation = defineOperation<ReadContext, ConversationRef, ConversationListing>({
     name: "conversations.get",
     kind: "read",
     parse: parseConversationRef,
     async run({ host, admission }, { conversationId }) {
-        return summarize(await requireConversation(host, conversationId), admission);
+        return listingOf(host, admission, await requireConversation(host, conversationId));
     },
 });
 
-const entriesOperation = defineOperation<ReadContext, EntriesInput, { entries: HostEntry[]; next?: string }>({
+async function buildInvocationTree(
+    node: ConversationInfo,
+    childrenOf: Map<string, ConversationInfo[]>,
+    describe: (info: ConversationInfo) => Promise<{ role: string | null; status: ConversationStatus }>,
+): Promise<InvocationTree> {
+    const invoked: InvocationTree[] = [];
+    for (const child of childrenOf.get(node.id) ?? [])
+        invoked.push(await buildInvocationTree(child, childrenOf, describe));
+    return { id: node.id, ...(await describe(node)), invoked };
+}
+
+const invocationsOperation = defineOperation<ReadContext, ConversationRef, InvocationTree>({
+    name: "conversations.invocations",
+    kind: "read",
+    parse: parseConversationRef,
+    async run({ host, admission }, { conversationId }) {
+        const root = await requireConversation(host, conversationId);
+        const childrenOf = new Map<string, ConversationInfo[]>();
+        const metaOf = new Map<string, Awaited<ReturnType<typeof readConversationMeta>>>();
+        for (const info of await host.listConversations()) {
+            const meta = await readConversationMeta(host, info.id);
+            metaOf.set(info.id, meta);
+            if (meta?.invokedBy === undefined) continue;
+            childrenOf.set(meta.invokedBy, [...(childrenOf.get(meta.invokedBy) ?? []), info]);
+        }
+        const state = admission.state();
+        return buildInvocationTree(root, childrenOf, async (info) => {
+            const meta = metaOf.get(info.id);
+            return {
+                role: meta?.seat.role ?? null,
+                status: conversationStatus({ ...info, isParked: meta?.parked != null }, state),
+            };
+        });
+    },
+});
+
+// An assistant entry on a later page takes its seat from the latest seat record before that page.
+async function seatRecordBefore(host: HarnessHost, conversationId: string, firstEntryId: string): Promise<HostEntry[]> {
+    let latest: HostEntry | undefined;
+    let cursor: string | undefined;
+    do {
+        const page = await host.readEntries(conversationId, {
+            limit: MAX_ENTRIES_LIMIT,
+            ...(cursor !== undefined && { after: cursor }),
+        });
+        for (const entry of page.entries) {
+            if (entry.id === firstEntryId) return latest === undefined ? [] : [latest];
+            if (entry.kind === SEAT_RECORD_KIND) latest = entry;
+        }
+        cursor = page.next;
+    } while (cursor !== undefined);
+    return latest === undefined ? [] : [latest];
+}
+
+const entriesOperation = defineOperation<ReadContext, EntriesInput, { entries: AttributedEntry[]; next?: string }>({
     name: "conversations.entries",
     kind: "read",
     parse: parseEntriesInput,
     async run({ host }, { conversationId, after, limit }) {
         await requireConversation(host, conversationId);
         try {
-            return await host.readEntries(conversationId, after === undefined ? { limit } : { after, limit });
+            const page = await host.readEntries(conversationId, after === undefined ? { limit } : { after, limit });
+            const firstEntry = page.entries[0];
+            const prefix =
+                after === undefined || firstEntry === undefined
+                    ? []
+                    : await seatRecordBefore(host, conversationId, firstEntry.id);
+            return { ...page, entries: attributeEntries([...prefix, ...page.entries]).slice(prefix.length) };
         } catch (error) {
             if (error instanceof HostInvalidCursorError) throw new ServiceError("invalid_input", error.message);
             throw error;
@@ -107,6 +255,7 @@ const contextOperation = defineOperation<ReadContext, ConversationRef, HostEntry
 export const conversationReadOperations: readonly Operation<ReadContext, any, any>[] = [
     listOperation,
     getOperation,
+    invocationsOperation,
     entriesOperation,
     contextOperation,
 ];
