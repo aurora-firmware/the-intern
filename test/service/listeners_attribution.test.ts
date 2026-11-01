@@ -15,6 +15,7 @@ import { STOP_BOUND_MS } from "../../src/daemon/constants.ts";
 import { type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { SEAT_RECORD_KIND } from "../../src/host/seating.ts";
+import { STEER_RECORD_KIND } from "../../src/host/steering.ts";
 import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
 import { createNetworkListenerComponent } from "../../src/listeners/network_listener.ts";
 import { networkSection } from "../../src/listeners/network_section.ts";
@@ -204,6 +205,13 @@ function seatActors(entries: readonly Entry[]): unknown[] {
         .map((entry) => (entry.data as { actor: unknown }).actor);
 }
 
+/** The actor each submitted message names, by its content. */
+function messageActors(entries: readonly Entry[]): Record<string, unknown> {
+    const messages = entries.filter((entry) => entry.kind === STEER_RECORD_KIND);
+    const pairs = messages.map((entry) => entry.data as { content: string; actor: unknown });
+    return Object.fromEntries(pairs.map(({ content, actor }) => [content, actor]));
+}
+
 describe("the way in recorded through each listener", { timeout: TEST_TIMEOUT_MS }, () => {
     it("records a seat change over each listener as a team member with that listener's way in", async () => {
         const fixture = await startFixture();
@@ -214,5 +222,17 @@ describe("the way in recorded through each listener", { timeout: TEST_TIMEOUT_MS
 
         const changes = seatActors(await fixture.entries(conversationId)).slice(1);
         assert.deepEqual(changes, [COMMAND_LINE, WEB_INTERFACE]);
+    });
+
+    it("records input submitted over each listener as a team member with that listener's way in", async () => {
+        const fixture = await startFixture();
+        const conversationId = await fixture.idleConversation("submitted");
+
+        await fixture.submitAndSettle("local socket", conversationId, "over the socket");
+        await fixture.submitAndSettle("network listener", conversationId, "over the network");
+
+        const actors = messageActors(await fixture.entries(conversationId));
+        assert.deepEqual(actors["over the socket"], COMMAND_LINE);
+        assert.deepEqual(actors["over the network"], WEB_INTERFACE);
     });
 });
