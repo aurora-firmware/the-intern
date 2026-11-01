@@ -35,9 +35,24 @@ error exit, and unfinished work resumes from its checkpoints.
 - **Service layer.** Every capability is a named read or control operation. Listeners, job sources and agent tools all
   call the same operations, and the layer knows nothing about transports, so adding a listener changes no operation
   (S-002).
-- **Listeners.** A local one for the command line and a network one for the web interface. They belong to the Intern
-  service and are defined in the control-endpoint spec (S-003, not written yet). No listener authenticates callers
-  (ADR-002).
+- **Listeners.** Two listeners serve one HTTP protocol and belong to the Intern service
+  ([S-003](../ai-team/specs/S-003-control-endpoint.md)). The local socket, `bob.sock` in the instance's runtime
+  directory, is always on and serves the `bob` commands on the machine. The network listener is off until the
+  configuration file has a `[network]` section; it then listens on the configured address and fixed port, in plain
+  HTTP, and serves the web interface. Both expose every catalogue operation at `POST /operations/<name>`, with the
+  routes derived from the catalogue so a new operation needs no listener change, and the observation feed as
+  Server-Sent Events at `GET /feed`. Only the network listener serves the web interface files, under `/ui/`. No
+  listener authenticates callers, checks request headers or encrypts traffic: whoever reaches a listener is a team
+  member ([ADR-002](../ai-team/decisions/ADR-002-equal-team-members-bounded-by-the-service-account.md)). Each
+  listener stamps the way in itself: it calls the service layer as a team member with the way in `command line` on
+  the local socket and `web interface` on the network listener, and nothing in a request changes the caller (S-003
+  REQ-007).
+- **Client library.** The TypeScript library in `src/client/` calls operations and follows the feed through a
+  listener, from Node over the local socket or a URL, or from a browser over a URL. The `bob` commands and the web
+  interface reach the daemon only through it (S-003 REQ-009).
+- **Job origin.** The service layer builds a job's origin from the caller, never from the input: a team member's job
+  records a request with the caller's way in, an agent's job a follow-up of its conversation, and only a job source
+  states its own origin (S-002 REQ-012, AC-012.5).
 - **Observation feed.** The one source of live data for clients: a snapshot, then deltas. A client that is slow or
   gone never affects an agent run (S-002).
 - **Worker threads.** A worker thread is a logical slot for one active agent run, not an operating-system thread. The
@@ -56,7 +71,7 @@ that defines it.
 
 | Component | Responsibility | Spec |
 |---|---|---|
-| Intern service | The one long-running process: saved state, many jobs at once, resume after a restart, models, the shared operations, the feed, the listeners | S-002 (process, service layer, feed); S-003 (listeners, planned) |
+| Intern service | The one long-running process: saved state, many jobs at once, resume after a restart, models, the shared operations, the feed, the listeners | S-002 (process, service layer, feed); S-003 (listeners, client library) |
 | Agents and roles | Roles, seats, the lead and handoff, invoking specialist agents, monitoring of who works on what | S-001 |
 | Jobs | The job record and the life of a job, blocked jobs and answers, history, export and import | No spec yet |
 | Schedules and triggers | Starts jobs at set times and on events, with run history and on-demand runs | No spec yet |
@@ -76,5 +91,8 @@ are not described here.
   pi-durable. The service layer and every other component depend on the host's interface, so an upgrade of the pi
   packages touches a few files.
 - **Every job source ends in the same service operation.** Every way in and job source submits through the service layer.
+- **Listeners and the client library use only the service layer.** Listener and client library code imports neither
+  the harness host nor any pi package. Listeners reach the daemon's state only through the catalogue, the feed and the
+  lifecycle hooks, and import the daemon and feed modules only as types (S-003 REQ-013, ADR-001).
 
 See [coding_guidelines.md](coding_guidelines.md), Module structure, for the full rules.
