@@ -356,3 +356,93 @@ describe("http front: fallback", () => {
         }
     });
 });
+
+describe("http front: aborted calls", () => {
+    it("answers 503 unavailable when the signal aborts while the operation runs, without cancelling it", {
+        timeout: 5000,
+    }, async () => {
+        const started = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        let isFinished = false;
+        const held = recordingOperation("test.held", async () => {
+            started.resolve();
+            await release.promise;
+            isFinished = true;
+            return "done";
+        });
+        const harness = await startFront([held]);
+        try {
+            const pending = harness.call("/operations/test.held", { headers: JSON_TYPE });
+            await started.promise;
+            harness.abort.abort();
+
+            assertError(await pending, 503, "unavailable");
+            release.resolve();
+            await new Promise((resolve) => setImmediate(resolve));
+            assert.equal(isFinished, true);
+        } finally {
+            release.resolve();
+            await harness.close();
+        }
+    });
+
+    it("answers 503 unavailable without calling the operation when the signal has already aborted", async () => {
+        const harness = await startFront([echo]);
+        try {
+            harness.abort.abort();
+
+            const reply = await harness.call("/operations/test.echo", { headers: JSON_TYPE });
+
+            assertError(reply, 503, "unavailable");
+            assert.deepEqual(harness.context.calls, []);
+        } finally {
+            await harness.close();
+        }
+    });
+});
+
+describe("http front: no access checks", () => {
+    const foreignHeaders = {
+        origin: "https://elsewhere.example",
+        host: "attacker.example:9999",
+        referer: "https://elsewhere.example/page",
+    };
+
+    function corsHeaderNames(headers: IncomingHttpHeaders): string[] {
+        return Object.keys(headers).filter((name) => name.startsWith("access-control-"));
+    }
+
+    it("answers a call with foreign Origin, Host and Referer headers as without them, with no CORS header", async () => {
+        const harness = await startFront([echo]);
+        try {
+            const body = JSON.stringify({ text: "hi" });
+            const plain = await harness.call("/operations/test.echo", { headers: JSON_TYPE, body });
+            const foreign = await harness.call("/operations/test.echo", {
+                headers: { ...JSON_TYPE, ...foreignHeaders },
+                body,
+            });
+
+            assert.deepEqual([foreign.status, foreign.body], [plain.status, plain.body]);
+            assert.deepEqual(corsHeaderNames(foreign.headers), []);
+        } finally {
+            await harness.close();
+        }
+    });
+
+    it("sends no CORS header on a refusal or an unrouted request", async () => {
+        const harness = await startFront([echo]);
+        try {
+            const refused = await harness.call("/operations/test.echo", { headers: foreignHeaders, body: "x" });
+            const preflight = await harness.call("/operations/test.echo", {
+                method: "OPTIONS",
+                headers: foreignHeaders,
+            });
+
+            assert.equal(refused.status, 400);
+            assert.equal(preflight.status, 404);
+            assert.deepEqual([...corsHeaderNames(refused.headers), ...corsHeaderNames(preflight.headers)], []);
+        } finally {
+            await harness.close();
+        }
+    });
+});

@@ -128,14 +128,39 @@ function refuseStreamOperation(name: string): void {
     throw new ServiceError("invalid_input", `Operation ${name} is a stream; call it at ${STREAM_ROUTES[name]}`);
 }
 
+function cutOff(name: string): ServiceError {
+    return new ServiceError("unavailable", `Operation ${name} was cut off because the daemon is stopping`);
+}
+
+/**
+ * Starts the operation unless the signal has aborted, then settles with its outcome, or rejects with `unavailable` as
+ * soon as the signal aborts. The operation itself keeps running: the front only stops waiting for it (S-003 REQ-010).
+ */
+function runUntilAborted<T>(start: () => Promise<T>, signal: AbortSignal, name: string): Promise<T> {
+    if (signal.aborted) return Promise.reject(cutOff(name));
+    const operation = start();
+    // The outcome of an abandoned operation has no reader; the catalogue logs unexpected failures itself.
+    operation.catch(() => {});
+    const { promise: aborted, reject } = Promise.withResolvers<never>();
+    const onAbort = () => reject(cutOff(name));
+    signal.addEventListener("abort", onAbort, { once: true });
+    return Promise.race([operation, aborted]).finally(() => signal.removeEventListener("abort", onAbort));
+}
+
 export function createHttpFront(options: HttpFrontOptions): HttpFront {
     const caller: Caller = { actor: { kind: "team_member", wayIn: options.wayIn } };
 
-    async function callOperation(req: IncomingMessage, res: ServerResponse, name: string): Promise<void> {
+    async function callOperation(
+        req: IncomingMessage,
+        res: ServerResponse,
+        name: string,
+        signal: AbortSignal,
+    ): Promise<void> {
         try {
             refuseStreamOperation(name);
             const input = await readInput(req);
-            const result = await options.catalogue.invoke(name, input, caller);
+            const invoke = () => options.catalogue.invoke(name, input, caller);
+            const result = await runUntilAborted(invoke, signal, name);
             sendJson(res, 200, { result });
         } catch (error) {
             // A refusal that leaves the body unread can't keep the connection for another request.
@@ -151,12 +176,12 @@ export function createHttpFront(options: HttpFrontOptions): HttpFront {
     }
 
     return {
-        async handle(req, res) {
+        async handle(req, res, ctx) {
             // A fixed base: the front never reads the Host header (S-003 REQ-014).
             const pathname = new URL(req.url ?? "/", "http://front.invalid").pathname;
             const name = operationNameOf(req, pathname);
             if (name === undefined) await answerUnrouted(req, res, pathname);
-            else await callOperation(req, res, name);
+            else await callOperation(req, res, name, ctx.signal);
         },
     };
 }
