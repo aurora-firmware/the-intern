@@ -50,7 +50,9 @@ kind through pi-durable `InputEntry`. The entry's data names the sender and carr
 
 1. **One entry, one commit.** The input's `entry` option is `{ kind, data }`. The data holds the actor, as S-001
    R-7 names actors, and `content`, the text of the message. The model sees the input's user message as before. A
-   transcript read shows the text from `content`.
+   transcript read (`conversations.entries`) and the conversation feed show the entry's own data, so they name the
+   sender and show the text from `content`. A context read (`conversations.context`) shows what the model sees, as
+   S-001 defines the context, so it shows the input's user message (product owner decision, 2026-11-01).
 2. **The kinds.**
    - `intern.steer`, with data `{ actor, mode, content }`: a steer or follow-up from a team member or an agent
      (S-001 R-10a). `mode` is `steer` or `followUp`.
@@ -88,11 +90,9 @@ kind through pi-durable `InputEntry`. The entry's data names the sender and carr
   follow each new kind.
 - The host depends on pi-durable's `InputEntry` and on the rule that a kind doesn't start with `pi.`. Each pi-durable
   upgrade rechecks them, together with the README compatibility section.
-- The transcript read doesn't follow decision 1 yet. `toHostEntry` in `src/host/harness_host.ts` and
-  `toHostEntryView` in `src/host/host_observation.ts` map an entry to `entry.model ?? entry.data`. An input entry
-  carries the model's user message, so an `intern.steer` or `intern.report` entry reads as a plain user message, and
-  `conversations.entries` and the instance feed don't show its sender. A follow-up task (finding N1 of the S-001
-  spec-truth reconciliation) makes the read show the entry's own data.
+- An input entry carries the model's user message as well as its own data, so each read has to choose which it
+  shows. `toHostEntry` in `src/host/harness_host.ts` shows an `intern.` entry by its own data, for
+  `conversations.entries` (T-090) and the conversation feed (T-091). `readContext` keeps the model's message.
 
 ### Neutral
 
@@ -127,3 +127,4 @@ the message it describes.
 |---|---|---|
 | 2026-11-01 | Decision 5: a reject input held for a parked conversation is held as a follow-up and delivered as `intern.steer`. Decision 3: an "aborted" report is an `intern.report` with the request id ADR-001 decision 4 fixes. No decision changes. | S-001 v0.3 R-10a (a reject input to a parked conversation is held like any other message, T-086) and R-8a (the "aborted" report, T-085), with the ADR-001 amendment of the same date. |
 | 2026-11-01 | Context and Negative: report delivery, held-message delivery and held reports now follow the decision (T-087, T-088, T-089). Negative: the transcript read still shows these entries as plain user messages, until follow-up N1. No decision changes. | S-001 spec-truth reconciliation, finding A1. |
+| 2026-11-01 | Decision 1: a transcript read and the conversation feed show the entry's own data; a context read shows the model's user message. Negative: the transcript read and the conversation feed now follow decision 1 (T-090, T-091); the earlier text named the instance feed, but entries are in the conversation feed. No decision changes. | S-001 spec-truth reconciliation, closing finding N1; product owner decision of 2026-11-01 that `conversations.context` shows what the model sees. |
