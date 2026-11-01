@@ -1,6 +1,6 @@
 ---
 title: Daemon and host runtime
-version: '0.3'
+version: '0.4'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-16'
 author: planner
@@ -89,8 +89,11 @@ What this specification explicitly does NOT cover:
 - **One owner per database.** At most one daemon process opens an instance's database. Nothing but the daemon reads
   or writes it, including history, which clients read through the service layer.
 - **Durability belongs to the runtime.** Recovery, exactly-once admission of input, queued input and checkpoints come
-  from pi-durable. The daemon adds no retry loops, intake tables or recovery code of its own. Each daemon-owned fact
-  is committed in the same atomic commit as the change it describes.
+  from pi-durable. The daemon adds no retry loops, intake tables or recovery code of its own, except one bounded
+  exception (ADR-001 decision 4): the facts the-intern owns about a conversation (held messages, awaiting links and
+  creation keys) live in its own documents, and the only recovery is redelivering the input those facts show as
+  undelivered, made safe to repeat by pi-durable request ids. Each daemon-owned fact is committed in the same atomic
+  commit as the change it describes.
 - **The service layer is free of transport.** Every service operation can be called in-process with no request,
   connection or listener in scope. Neither authorization nor the choice of which operations a listener exposes lives
   in the service layer. Adding a listener never changes a service operation.
@@ -319,6 +322,12 @@ host.
     change, restore and remove a role (S-001 R-3); register a workspace and unregister one (S-001 R-3a). The settings
     operations follow R-22.
 
+  A submit to a parked conversation holds the message until the conversation continues (S-001 R-10a), whatever its
+  busy mode, and returns `{ held: true }` with no submission id. The submission read, wait and withdraw operations
+  take a submission id, so they don't apply to a held message. The message shows in the conversation's transcript as
+  its hold record, and once the conversation continues it is an input like any other. A repeated submit with the same
+  request id while the message is held returns `{ held: true }` again and holds nothing twice.
+
   S-001's agent coordination capabilities (handoff, invoke, steer) are control operations of the same service layer.
   Later specs add theirs the same way (for example creating and answering jobs in the Jobs spec and running a
   schedule now in the schedules and triggers spec).
@@ -498,7 +507,8 @@ the two capacity constants by amendment.
     feed report active and waiting work. Without the test switch, status reports 32 worker threads.
   - R-12, R-13: every operation in the catalogue is called in-process with no listener; invalid input changes
     nothing; each error outcome is produced; a repeated create with the same idempotency key creates one lead
-    conversation; read operations leave the database unchanged.
+    conversation; read operations leave the database unchanged; a submit to a parked conversation returns
+    `{ held: true }` in each busy mode.
   - R-14, R-15: a subscription gets a snapshot, then deltas in commit order; a reconnect gets a fresh snapshot; a
     subscriber that stops reading is disconnected without delaying a running agent run.
   - R-17: a test enumerates the catalogue and fails if any operation lacks a read or control mark.
@@ -537,3 +547,4 @@ S-001 phase 1 needs phases 1 to 3 of this spec. S-001 phase 4 needs phase 4.
 |------|-------------|-----|----------------|
 | 2026-10-30 | Aligned with the rewritten S-000: the spec covers S-000's Intern service; the daemon serves a team through the command line and a web interface over the network, and no listener authenticates callers; the daemon runs as one service account (the installing person's in v1) whose pi login and other credentials are used in place; the supervisor starts it at machine startup without a login; the root conversation, chat, policy, approvals and audit are removed; role operations cover creating, changing, restoring and removing roles; the job record crosses versions by export and import (Purpose, Definitions, Exclusions, Design Principles, System Diagram, Responsibility Separation, components 2 and 5, R-2, R-4, R-6, R-12, R-16 to R-18, R-21, R-22, Workflow, Configuration Requirements, Verification, Implementation Order). Consistency review: the plain "create a conversation" operation became "start the lead conversation of a job" (S-001 R-12); job sources replace entry points; listeners belong to S-000's Intern service; Installation is decided in the bootstrap plan; live test 3 covers launchd. | Product owner ruling: S-000 is the source of truth, and S-002 is aligned as part of creating S-000. | None; S-002 isn't broken down yet |
 | 2026-10-31 | The runtime directory falls back to the `run` folder inside the state directory when `XDG_RUNTIME_DIR` is unset (R-6). | Product owner ruling during the breakdown: the XDG base directories give no default for the runtime directory, and macOS and launchd don't set it. | None; S-002 isn't broken down yet |
+| 2026-11-01 | Design Principles: "Durability belongs to the runtime" names its bounded exception, the-intern's own facts about a conversation and redelivery from them. R-12: a submit to a parked conversation returns `{ held: true }` with no submission id in every busy mode, and the submission read, wait and withdraw operations don't apply to a held message; Verification item for it. | Spec-truth reconciliation of S-001 (findings F6 and F10). Driving ADR: ADR-001 decision 4, amended 2026-11-01. | T-034, T-071, T-073, T-075 (built as amended); follow-up T-086 |
