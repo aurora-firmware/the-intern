@@ -112,9 +112,3 @@ network setup, and the service layer stays free of transport and authorization (
 **Description:** Copy model keys and account credentials into The Intern's configuration or database.
 **Rejected because:** It creates a second credential store to protect, and lets The Intern and a person's own pi under
 the same account log each other out. Using the service account's credentials in place keeps one copy and one boundary.
-
-## Amendments
-
-| Date | Change | Reason |
-|---|---|---|
-| 2026-11-01 | Decision 1 and Negative: through DNS rebinding, someone who can't reach the network listener can act through the browser of a team member who can. ADR-005 records this and the rules that keep other sites' pages out. No decision changes. | S-003 design interview: the product owner ruled out authentication, `Origin` and `Host` checks and CORS headers, and accepted the DNS-rebinding exposure. |
