@@ -18,6 +18,7 @@ import {
     type Tx,
 } from "@earendil-works/pi-durable";
 import type { AgentsRuntime } from "../agents/agents_component.ts";
+import { HostNotFoundError } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { createInvokedConversations, InvocationDepthError, type InvocationRequest } from "../host/invocation.ts";
 import {
@@ -27,6 +28,7 @@ import {
     type SeatChange,
     seatWrites,
 } from "../host/seating.ts";
+import { steerConversation } from "../host/steering.ts";
 import { RoleRefusedError } from "../roles/role_catalog.ts";
 import type { Seat } from "../roles/role_model.ts";
 import { WorkspaceRefusedError } from "../workspaces/workspace_registry.ts";
@@ -221,6 +223,52 @@ const invokeTool = (options: CoordinationOptions) =>
         },
     });
 
+const steerParameters = Type.Object({
+    conversationId: Type.String({ description: "The conversation to steer." }),
+    message: Type.String({ description: "The message to send to the conversation." }),
+    mode: Type.Union([Type.Literal("steer"), Type.Literal("followUp")], {
+        description:
+            "steer arrives after the conversation's current tool calls, followUp after its run ends. A parked " +
+            "conversation holds either until it continues.",
+    }),
+});
+
+const steerTool = (options: CoordinationOptions) =>
+    defineTool({
+        name: "steer",
+        description:
+            "Send a message to another conversation of the job, for example one you invoked. A running conversation " +
+            "takes it after its current tool calls (steer) or after its run ends (followUp); a parked one holds it " +
+            "until it continues.",
+        parameters: steerParameters,
+        async execute(args, api) {
+            const steererId = String(api.conversationId);
+            const meta = await readConversationMeta(options.host(), steererId);
+            if (meta === undefined) throw new Error(`Conversation ${steererId} is not a seated conversation`);
+            const { conversationId, message, mode } = args;
+            try {
+                const { held } = await steerConversation(options.host(), conversationId, {
+                    content: message,
+                    mode,
+                    actor: { kind: "agent", conversationId: steererId, role: meta.seat.role },
+                    requestId: `steer:${steererId}:${api.callId}`,
+                });
+                return textResult(
+                    held
+                        ? `Conversation ${conversationId} is parked and will receive the message when it continues.`
+                        : `The message was sent to conversation ${conversationId}.`,
+                );
+            } catch (error) {
+                if (error instanceof HostNotFoundError)
+                    return textResult(`The steer was refused: ${error.message}`, true);
+                throw error;
+            }
+        },
+    });
+
 export function createCoordinationExtension(options: CoordinationOptions): Extension {
-    return defineExtension({ name: COORDINATION_EXTENSION_NAME, tools: [handoffTool(options), invokeTool(options)] });
+    return defineExtension({
+        name: COORDINATION_EXTENSION_NAME,
+        tools: [handoffTool(options), invokeTool(options), steerTool(options)],
+    });
 }
