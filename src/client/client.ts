@@ -104,9 +104,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null;
 }
 
-/** The result of an answer `{"result": <result>}`. */
+/** The error a refused answer carries, `{"error": {"code", "message"}}`, as a `ClientError`. */
+export function answerError(body: unknown): Error {
+    const error = isRecord(body) ? body.error : undefined;
+    return new ClientError(String(isRecord(error) && error.code), String(isRecord(error) && error.message));
+}
+
+/** The result of an answer `{"result": <result>}`; any other answer is thrown as its error. */
 export function decodeAnswer(body: unknown): unknown {
-    return isRecord(body) ? body.result : undefined;
+    if (isRecord(body) && Object.hasOwn(body, "result")) return body.result;
+    throw answerError(body);
 }
 
 /**
