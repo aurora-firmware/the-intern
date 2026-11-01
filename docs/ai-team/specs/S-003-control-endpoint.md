@@ -1,0 +1,629 @@
+---
+id: S-003
+title: Control endpoint
+version: '0.1'
+status: review  # draft | review | approved | superseded
+created: '2026-11-01'
+author: planner
+---
+
+# Control endpoint
+
+## Purpose
+
+This spec covers the listeners of S-000's **Intern service** component, which the spec map calls the control
+endpoint. S-002 gives the daemon a transport-free catalogue of read and control operations and an observation feed, but
+nothing outside the daemon process can reach them yet, so neither the `bob` commands nor the web interface can be
+built. This spec fixes two listeners that speak one HTTP protocol (a local socket on the machine, always on, and a
+network listener for the team's network, off until configured), the routes that carry every catalogue operation and
+the feed, and the TypeScript client library that the `bob` commands and the web interface use. When it is done, every
+catalogue operation answers through both listeners exactly as it answers in-process (Success Criteria).
+
+## Definitions
+
+This spec uses the Definitions of S-001 and S-002 (listener, client, caller, service operation, observation feed). It
+adds these terms:
+
+| Term | Meaning in this spec |
+|---|---|
+| Local socket | The listener on a Unix domain socket in the instance's runtime directory. The `bob` commands on the machine use it. |
+| Network listener | The listener on a TCP address and port of the machine. The web interface in a team member's browser uses it. |
+| HTTP front | The request handling both listeners share: operation routes, feed route, validation and error mapping. |
+| Way in | The value S-001 attribution records with a team member's action, naming how the team member reached The Intern. |
+| Client library | The TypeScript library that calls the daemon through a listener, from Node or from a browser. |
+| Web interface files | The static files of the web interface (pages, scripts, styles). They ship with the package; the Web interface spec owns their content. |
+
+## Users and Journeys
+
+| Actor | Goal |
+|---|---|
+| Team member on the machine | Runs `bob` commands that call the daemon over the local socket. |
+| Team member on the team's network | Opens the web interface in a browser, follows work live and calls control operations. |
+| Other programs (downstream systems) | Scripts and tools on the machine or on the team's network call the same routes, with the same contract as The Intern's own clients. |
+| Later specs (downstream systems) | The Command line and Web interface specs build on the client library; Jobs, schedules and triggers and other specs add operations that become reachable with no listener change. |
+| Developer | Runs both listeners in tests on the fake model, with a temporary socket and a loopback port, and no outside network. |
+
+Journeys, in priority order:
+
+1. **A `bob` command calls the daemon on the machine.** It reaches the local socket, calls an operation and gets the
+   same result or error as an in-process call; the action is attributed to a team member with the way in
+   `command line`. Delivered by REQ-001, REQ-003, REQ-004, REQ-005, REQ-007, REQ-009.
+2. **A team member uses the web interface from another computer.** A team member configures the network listener, the
+   browser loads the web interface from it, subscribes to the feed and calls control operations, attributed with the
+   way in `web interface`. Delivered by REQ-002, REQ-003, REQ-006, REQ-007, REQ-008, REQ-009.
+3. **A later spec adds an operation.** It is reachable on both listeners and through the client library without a
+   listener change. Delivered by REQ-003, REQ-009.
+4. **Listeners start and stop with the daemon.** A misconfigured network listener stops startup; shutdown ends every
+   call and stream cleanly. Delivered by REQ-001, REQ-002, REQ-010.
+5. **Watching never slows work.** A slow or vanished client is dropped without delaying an agent run. Delivered by
+   REQ-011, REQ-012.
+
+## Exclusions
+
+What this specification explicitly does NOT cover:
+
+- **TLS.** The network listener speaks plain HTTP. A team that needs encryption puts a reverse proxy or a VPN in
+  front of it.
+- **Authentication and origin checks.** No listener checks who calls, and no listener refuses a call because of its
+  `Origin` or `Host` header (ADR-002; product owner ruling on this spec). REQ-014 states what follows from that.
+- **Cross-origin permissions.** The listeners send no CORS headers, so a web page served from another site can't call
+  operations from a browser. Allowing a named other site is a later, explicit change.
+- **A version check between client and daemon.** Neither side compares versions, and a mismatch isn't detected.
+- **Changing listener settings while the daemon runs.** They are read at startup; a change takes effect at the next
+  restart (S-002 REQ-021).
+- **The content of the web interface and of the `bob` commands.** The Web interface and Command line specs own them.
+  This spec serves the web interface files and gives both a client library.
+- **New service operations.** This spec adds none. The listeners carry whatever the catalogue holds.
+- **A stable public API.** The routes are the contract of The Intern's own clients. Other programs may use them, but
+  they get no compatibility promise across versions.
+- **Windows, Linux arm64 and Intel macOS.** These remain unsupported (S-000).
+
+## Architecture
+
+### Design Principles
+
+- **One protocol, two listeners.** Both listeners serve the same HTTP front. A difference between them is limited to
+  what REQ-002, REQ-007 and REQ-008 name: whether it runs, the way in it records, and serving the web interface files.
+- **The catalogue is the route table.** Routes are derived from S-002's catalogue, so an operation added to the
+  catalogue is reachable on both listeners with no listener change, and no second list of operations exists (REQ-003).
+- **Listeners are transports only.** A listener decides no outcome: it parses the request, calls the service layer
+  with a fixed caller and returns what the service layer returned. Listeners call only the service layer and never
+  the host or pi-durable (ADR-001; REQ-013). The service layer stays free of transport (S-002 REQ-016).
+- **Clients are viewers.** No connection or stream owns work. A slow, stalled or closed client never delays an agent
+  run or holds a worker thread (S-002 REQ-015; REQ-011).
+- **Reach is decided outside The Intern.** Who reaches the local socket follows from the owner-only runtime
+  directory; who reaches the network listener follows from its address and the team's network setup (ADR-002).
+  Exposing The Intern on the network is a deliberate setting, never a default (REQ-002).
+- **Fail closed at startup.** A listener that can't start stops startup (S-002 REQ-002).
+- **No new runtime dependency.** The listeners and the client library use the HTTP support built into Node and the
+  browser.
+
+### Alternatives Considered
+
+- **Resource-style routes mapped by hand** (for example a read of one conversation at `/conversations/<id>` and a
+  submit at `/conversations/<id>/submit`). Rejected: friendlier to curl and outsiders, but every new operation needs a
+  hand-designed route, and the route table becomes a second catalogue to keep in step with S-002 and every later
+  spec, against "adding a listener, or an operation, changes no listener".
+- **TCP only, with no Unix socket**, the command line using the network listener on loopback. Rejected: it gives up
+  the owner-only runtime directory as the gate on the machine, and the command line wouldn't work while the network
+  listener is off, which is the default.
+- **WebSocket for the feed.** Rejected: the feed is one-way, Server-Sent Events carry it over plain HTTP in Node and
+  in browsers, and a WebSocket server needs more machinery for no gain.
+- **A line protocol (NDJSON) on the socket and HTTP only on the network.** Rejected: two protocols to keep in step.
+  The feature review had already chosen HTTP over the socket (`docs/research/feature-review.md`, open decision 3).
+- **The network listener on by default** (on loopback or on every interface). Rejected: with no authentication,
+  exposing The Intern on a network has to be a deliberate setting.
+- **A read-only network listener.** Rejected: S-000 has team members create jobs, answer, stop and redirect agents and
+  configure The Intern from the web interface.
+- **The client stating its own way in.** Rejected: anyone could claim any way in. The listener stamps it.
+- **Logging a network listener bind failure and running without it.** Rejected: it hides a misconfiguration; the
+  daemon fails closed instead.
+- **An `Origin` or `Host` header check.** Rejected by the product owner. Requiring a JSON body (REQ-004) is kept as
+  ordinary input validation.
+- **Rebinding the network listener when its settings change at runtime.** Rejected: a rare and security-relevant
+  change, and a restart is cheap under the supervisor.
+
+## Interfaces
+
+### Exposed: the HTTP protocol
+
+Both listeners serve these routes (REQ-003 to REQ-006). Any other method or path gets `404` with `not_found`.
+
+**Contract:**
+
+| Route | Request | Success | Failure |
+|---|---|---|---|
+| `POST /operations/<name>` | Body: the operation's input as JSON, with `Content-Type: application/json`; an empty body means no input | `200`, body `{"result": <result>}` | Status from the table below, body `{"error": {"code": "<code>", "message": "<message>"}}` |
+| `GET /feed?scope=instance` | none | `200`, `Content-Type: text/event-stream`, events below | Status and error body as for operations, before any event |
+| `GET /feed?scope=conversation&id=<conversation id>` | none | as above | as above |
+| `GET /ui/…` (network listener only) | none | The web interface file | `404` for a missing file |
+| `GET /` (network listener only) | none | Redirect to `/ui/` | — |
+
+**Contract** (error outcome to HTTP status; the codes are S-002's):
+
+| Code | Status |
+|---|---|
+| `invalid_input` | 400 |
+| `not_found` | 404 |
+| `busy` | 409 |
+| `conflict` | 409 |
+| `unavailable` | 503 |
+| `internal` | 500 |
+
+Clients branch on `code`, never on the status.
+
+**Contract** (feed events, Server-Sent Events):
+
+| Event name | `id` | `data` |
+|---|---|---|
+| `snapshot` | none | The feed's snapshot for the scope, as JSON |
+| `delta` | The delta's sequence number | The delta, as JSON |
+| `end` | none | `{"reason": "lagging" \| "unsubscribed" \| "stopped"}`; the stream closes after it |
+
+A client that closes the connection is unsubscribed. A new request starts a new subscription with a fresh snapshot;
+the listener ignores `Last-Event-ID` (S-002 REQ-014).
+
+### Exposed: the client library
+
+A TypeScript library, usable in Node and in the browser (REQ-009):
+
+- connect to the local socket (Node) or to a base URL (Node or browser); in Node the default socket is the one the
+  daemon uses, resolved from the runtime directory as S-002 REQ-006 resolves it, and can be overridden
+- call an operation by name with an input; the call returns the result, or fails with the same code and message an
+  in-process call gives
+- subscribe to a scope; the subscription yields the snapshot, then the deltas in order, and ends with the reason
+- fail with a distinct "unreachable" error, naming the socket path or URL, when no daemon answers; it is not one of
+  S-002's error codes
+
+The library's function names and types are not contract; the tasks fix them.
+
+### Consumed
+
+- S-002's catalogue: listing operations and invoking one by name with an input and a caller (S-002 REQ-012, REQ-013,
+  REQ-017).
+- S-002's observation feed: subscribing to a scope and its end reasons (S-002 REQ-014, REQ-015).
+- S-002's lifecycle start and stop hooks, and the runtime directory (S-002 REQ-002, REQ-005, REQ-006).
+- The `[network]` section of the configuration file (Configuration Requirements; S-002 REQ-021).
+- The web interface files shipped in the package (Web interface spec).
+
+## Workflow
+
+```
+Startup (S-002 REQ-002 step 8)
+  local socket: check path length → replace leftover socket file → listen, owner-only        REQ-001
+  [network] set? → bind address and port; failure → daemon exits 1 naming address, reason    REQ-002
+  no [network] → nothing listens on TCP                                                      REQ-002
+  → daemon reports ready
+
+Operation call
+  POST /operations/<name>
+    → not JSON content type, malformed JSON, body over 10 MiB → 400 invalid_input            REQ-004
+    → unknown name → 404 not_found                                                           REQ-003
+    → caller = team member, way in fixed by the listener                                     REQ-007
+    → catalogue.invoke(name, input, caller)                                                  REQ-003
+    → 200 {result} or status from the code with {error}                                      REQ-005
+
+Feed
+  GET /feed?scope=…
+    → invalid scope 400; unknown conversation 404                                            REQ-006
+    → snapshot → delta … → end(reason)                                                       REQ-006
+    → client stops reading → end(lagging), run unaffected                                    REQ-011
+    → client disconnects → unsubscribed                                                      REQ-006
+
+Shutdown (S-002 REQ-005)
+  "stopping" → new calls 503 unavailable → streams end(stopped) → listeners close
+  → socket file removed → harness closes                                                     REQ-010
+```
+
+## Behavioral Requirements
+
+### REQ-001 — The local socket
+
+The daemon SHALL always run the local socket listener, on the socket file `bob.sock` in the instance's runtime
+directory (S-002 REQ-006), accessible only to the service account. It starts in startup step 8 (S-002 REQ-002), after
+the daemon holds single ownership, so a socket file left by an earlier daemon is replaced. If the socket path is
+longer than the platform allows, startup stops with an error naming the path.
+
+#### AC-001.1 — Started with the daemon
+
+- **Given:** a valid instance
+- **When:** the daemon becomes ready
+- **Then:** `bob.sock` exists in the runtime directory, is accessible only to the service account, and answers
+  `POST /operations/daemon.status` with status `ready`
+
+**Verification:** test — a service test starting the daemon on the fake model with a temporary runtime directory.
+
+#### AC-001.2 — A leftover socket file is replaced
+
+- **Given:** a runtime directory holding a `bob.sock` left by a killed daemon
+- **When:** a daemon starts on the instance
+- **Then:** it becomes ready and answers on the socket
+
+**Verification:** test — a service test that creates the leftover file, then starts the daemon.
+
+#### AC-001.3 — A socket path that is too long
+
+- **Given:** a runtime directory whose socket path exceeds the platform limit
+- **When:** the daemon starts
+- **Then:** it exits non-zero with an error naming step 8 and the socket path, and stops the components already
+  started (S-002 AC-002.2)
+
+**Verification:** test — a service test with a deeply nested runtime directory.
+
+### REQ-002 — The network listener
+
+The network listener SHALL run only when the configuration file has a `[network]` section; it then listens on the
+configured address and port. When it can't listen (the port is in use, the address is unknown or not on the machine),
+startup stops with an error naming the address, the port and the reason, and the components already started are
+stopped (S-002 REQ-002). Its settings are read at startup only.
+
+#### AC-002.1 — Off without configuration
+
+- **Given:** a configuration file without a `[network]` section
+- **When:** the daemon becomes ready
+- **Then:** the daemon listens on no TCP port, and the local socket answers
+
+**Verification:** test — a service test checking the daemon's open listening sockets.
+
+#### AC-002.2 — On with configuration
+
+- **Given:** `[network]` with address `127.0.0.1` and port `0` (any free port, test only)
+- **When:** the daemon becomes ready
+- **Then:** the network listener answers `POST /operations/daemon.status`, and the port it uses appears in its
+  start log line
+
+**Verification:** test — a service test on loopback.
+
+#### AC-002.3 — A bind failure stops startup
+
+- **Given:** `[network]` naming a port already in use, and in a second case an address not on the machine
+- **When:** the daemon starts
+- **Then:** it exits 1 naming the address, the port and the reason; the local socket file doesn't remain; nothing
+  answers on either listener
+
+**Verification:** test — a service test that holds the port with another socket first.
+
+### REQ-003 — Operations through the listeners
+
+Each listener SHALL expose every operation of S-002's catalogue, read and control, at `POST /operations/<name>`, and
+answer it with the result the service layer returns for the same input. The routes are derived from the catalogue, so
+an operation added to the catalogue is reachable with no listener change. An unknown name gets `not_found`.
+
+#### AC-003.1 — Same result as in-process
+
+- **Given:** a ready daemon with both listeners
+- **When:** each catalogue operation is called with a valid input in-process, over the local socket and over the
+  network listener
+- **Then:** the three results are equal apart from values that differ between calls by nature (ids, times), and read
+  operations leave state unchanged
+
+**Verification:** test — one service test that enumerates the catalogue and calls every operation through both
+listeners.
+
+#### AC-003.2 — An operation added later
+
+- **Given:** a test operation registered in the catalogue (as `test.createConversation` is, S-002)
+- **When:** it is called through both listeners
+- **Then:** it answers on both, with no change to listener code
+
+**Verification:** test — a service test using the test operations of `test/support/test_operations.ts`.
+
+#### AC-003.3 — Unknown routes
+
+- **Given:** a ready daemon
+- **When:** `POST /operations/no.such`, `GET /operations/daemon.status` and `GET /nothing` are called
+- **Then:** each gets `404` with code `not_found` and a message naming the operation or path
+
+**Verification:** test — a service test.
+
+### REQ-004 — Request validation
+
+The HTTP front SHALL refuse an operation call with `invalid_input`, without calling the operation, when its body is
+not declared `application/json`, isn't valid JSON, or is larger than 10 MiB. A body larger than 10 MiB is refused
+without reading the rest of it. An empty body means the operation is called with no input. The request never carries
+the caller: the input is the operation's input only.
+
+#### AC-004.1 — Refused bodies
+
+- **Given:** a ready daemon
+- **When:** an operation is called with `Content-Type: text/plain`, with a form body, with malformed JSON, and with a
+  body of 10 MiB plus one byte
+- **Then:** each gets `400` with `invalid_input`, the operation isn't run and nothing changes
+
+**Verification:** test — a service test.
+
+#### AC-004.2 — The size boundary
+
+- **Given:** a ready daemon
+- **When:** `conversations.submit` is called with a JSON body of exactly 10 MiB
+- **Then:** the body is accepted and the operation answers as it would in-process
+
+**Verification:** test — a service test.
+
+### REQ-005 — Error outcomes
+
+Every error outcome of an operation SHALL reach the client as the HTTP status of the Interfaces table and a body
+carrying S-002's code and the operation's message unchanged.
+
+#### AC-005.1 — Each code and its status
+
+- **Given:** a ready daemon
+- **When:** calls are made that end in each outcome: invalid input, an unknown conversation, a reject-if-busy submit
+  to a busy conversation, a conflicting create, a call while the daemon is stopping, and a failing run (through
+  `test.failStorage`)
+- **Then:** they get `400 invalid_input`, `404 not_found`, `409 busy`, `409 conflict`, `503 unavailable` and
+  `500 internal`, each with the message the in-process call gives
+
+**Verification:** test — a service test.
+
+### REQ-006 — The feed over Server-Sent Events
+
+`GET /feed` SHALL subscribe to the observation feed for the scope named in its query, and stream the snapshot, the
+deltas with their sequence numbers as event ids, and a final `end` event with the reason, as the Interfaces table
+gives them. An invalid scope is refused with `invalid_input` and an unknown conversation with `not_found`, before any
+event. When the client closes the connection, the subscription is ended as `unsubscribed`.
+
+#### AC-006.1 — Snapshot, then deltas
+
+- **Given:** a conversation with a run
+- **When:** a client opens the conversation feed, then opens it again
+- **Then:** each stream starts with a `snapshot` event, then `delta` events with increasing ids in commit order; the
+  second stream starts from a fresh snapshot with no replay
+
+**Verification:** test — a service test over both listeners.
+
+#### AC-006.2 — Instance scope
+
+- **Given:** several conversations
+- **When:** a client opens the instance feed
+- **Then:** the snapshot and deltas are those of S-002 AC-014.2
+
+**Verification:** test — a service test.
+
+#### AC-006.3 — Refused and closed subscriptions
+
+- **Given:** a ready daemon
+- **When:** a client opens `/feed` with no scope, with `scope=conversation` and an unknown id, and opens a valid
+  stream and closes it
+- **Then:** the first gets `400 invalid_input`, the second `404 not_found`, and the closed stream's subscription ends
+  as `unsubscribed` and holds no resources
+
+**Verification:** test — a service test.
+
+### REQ-007 — The way in
+
+Each listener SHALL call every operation and subscription with the caller "team member", with the way in fixed by the
+listener: `command line` on the local socket and `web interface` on the network listener. Nothing in the request can
+change it. It is attribution only and grants nothing (ADR-002).
+
+#### AC-007.1 — Attribution per listener
+
+- **Given:** a conversation
+- **When:** its seat is changed once over the local socket and once over the network listener, and input is submitted
+  over each
+- **Then:** the seat records and the submitted messages name a team member with the way in `command line` and
+  `web interface` respectively (S-001 REQ-007)
+
+**Verification:** test — a service test reading the conversation's entries.
+
+#### AC-007.2 — The request can't claim another way in
+
+- **Given:** a ready daemon
+- **When:** a call over the local socket sends an input or header claiming the way in `web interface` or an agent
+  actor
+- **Then:** the recorded actor is still a team member with the way in `command line`
+
+**Verification:** test — a service test.
+
+### REQ-008 — The web interface files
+
+The network listener SHALL serve the web interface files under `/ui/`, and redirect `/` to `/ui/`. The local socket
+doesn't serve them. A missing file gets `404`.
+
+#### AC-008.1 — Files served from the network listener
+
+- **Given:** the network listener running, with web interface files in the package
+- **When:** a client requests `/`, `/ui/`, a file under `/ui/`, and a missing file
+- **Then:** `/` redirects to `/ui/`, the files are returned with their content types, and the missing file gets `404`;
+  the same paths on the local socket get `404`
+
+**Verification:** test — a service test using a placeholder file until the Web interface spec delivers the content.
+
+### REQ-009 — The client library
+
+The client library SHALL let a program in Node (over the local socket or a URL) or in a browser (over a URL) call any
+operation by name and subscribe to any feed scope. A failed call MUST fail with the same code and message as the
+in-process call. A subscription yields the snapshot, then the deltas in order, and ends with the reason. When no
+daemon answers, it fails with an "unreachable" error naming the socket path or URL. In Node, the default socket is the
+daemon's, resolved as S-002 REQ-006 resolves the runtime directory, and can be overridden. The `bob` commands and the
+web interface call the daemon only through this library.
+
+#### AC-009.1 — Calls and subscriptions over both listeners
+
+- **Given:** a ready daemon with both listeners
+- **When:** the library calls `daemon.status`, an operation that fails with `not_found`, and subscribes to the
+  instance feed, once over the socket and once over the URL
+- **Then:** it returns the status, fails with `not_found` and the in-process message, and yields a snapshot then
+  deltas, ending with `stopped` when the daemon stops
+
+**Verification:** test — a service test of the library in Node over both listeners.
+
+#### AC-009.2 — No daemon
+
+- **Given:** no daemon on the instance
+- **When:** the library calls an operation over the default socket
+- **Then:** it fails with "unreachable" naming the socket path
+
+**Verification:** test — a unit test.
+
+#### AC-009.3 — The browser transport
+
+- **Given:** the library's browser transport
+- **When:** a reviewer checks it
+- **Then:** it uses only the browser's own HTTP and event-stream support, and the same request and event format as the
+  Node transport
+
+**Verification:** inspection — the client library's browser transport and its shared format code.
+
+### REQ-010 — Listeners at shutdown
+
+When the daemon reports "stopping" (S-002 REQ-005), the listeners SHALL answer new calls `503 unavailable`, end every
+open feed stream with `end` and the reason `stopped`, and close before the harness closes. The local socket file is
+removed.
+
+#### AC-010.1 — Shutdown with open streams
+
+- **Given:** a ready daemon with a client streaming the instance feed over each listener and a call waiting in
+  `submissions.wait`
+- **When:** the daemon receives SIGTERM
+- **Then:** each stream receives `end` with `stopped`; the waiting call ends with the result or `unavailable` as the
+  service layer returns it; a new call gets `503 unavailable` or a refused connection; the socket file is gone after
+  exit, and the daemon exits 0
+
+**Verification:** test — a service test.
+
+## Quality Requirements
+
+### REQ-011 — Clients don't affect work
+
+A client that stops reading a feed stream MUST be ended with `lagging` once more than 1000 deltas are undelivered
+(S-002 REQ-015), counting deltas the listener has accepted but not yet written to the connection. Neither a slow or
+stalled connection nor any number of open connections delays an agent run, holds a worker thread or loses a
+committed change.
+
+#### AC-011.1 — A stalled HTTP reader
+
+- **Given:** a conversation feed open over a listener whose client stops reading
+- **When:** a run produces more than 1000 deltas
+- **Then:** the stream is ended with `lagging`, the run finishes in the same time bound as with no subscriber, and its
+  entries are the same
+
+**Verification:** test — a service test with a client that pauses its socket.
+
+### REQ-012 — No call cut short
+
+The listeners' request and idle timeouts MUST be longer than the longest operation, `submissions.wait` with its
+5-minute maximum (S-002 REQ-012), and MUST NOT end an open feed stream that is still being read.
+
+#### AC-012.1 — A full-length wait
+
+- **Given:** a submission that doesn't settle
+- **When:** a client calls `submissions.wait` with the 5-minute maximum over each listener
+- **Then:** the call returns the current state after 5 minutes rather than a timeout from the listener
+
+**Verification:** test — a service test with the timeouts made observable (for example a shortened wait maximum in a
+test switch, checking that the listener's timeouts exceed it); inspection — the listeners' timeout settings.
+
+### REQ-013 — Listeners use only the service layer
+
+Listener and client library code MUST NOT import the harness host, pi-durable or any pi package. Listeners reach the
+daemon's state only through the catalogue, the feed and the lifecycle hooks (ADR-001; S-002 REQ-016).
+
+#### AC-013.1 — Imports
+
+- **Given:** the listener and client library code
+- **When:** a reviewer checks its imports
+- **Then:** it imports none of the host module, `@earendil-works/pi-durable`, `pi-ai`, `chord` or `pi-coding-agent`
+
+**Verification:** inspection — the import lists of the listener and client library modules.
+
+### REQ-014 — Security posture is stated
+
+No listener SHALL authenticate callers, check `Origin` or `Host` headers, or send CORS headers. The user manual MUST
+state, where it describes `[network]`, that:
+
+- whoever can reach the network listener's address acts with the service account's access (ADR-002)
+- the network listener speaks plain HTTP, unencrypted
+- a site that makes its own name resolve to the listener's address (DNS rebinding) can, through the browser of a
+  team member who opens it, read the feed and call operations; limiting who can reach the address is the only
+  protection
+
+#### AC-014.1 — No access checks
+
+- **Given:** a ready daemon with both listeners
+- **When:** operations are called with no credentials and with arbitrary `Origin` and `Host` headers
+- **Then:** each answers as without those headers, and no response carries a CORS header
+
+**Verification:** test — a service test.
+
+#### AC-014.2 — The manual warns
+
+- **Given:** the user manual
+- **When:** a reviewer reads its `[network]` section
+- **Then:** it states the three points above in plain words
+
+**Verification:** inspection — `docs/manual/`.
+
+## Configuration Requirements
+
+- **Network listener.**
+  - **What:** whether the network listener runs, and on which address and port (REQ-002).
+  - **Where:** the `[network]` section of the configuration file, with the keys `address` and `port` (**Contract**:
+    the section and key names). Hand-edited; no settings operation changes it.
+  - **Constraints:** `address` is an IP address or a host name of the machine; `port` is an integer from 1 to 65535.
+    Port `0` (any free port) is accepted for tests and logged with the port in use. Unknown keys in the section are
+    refused (S-002 REQ-021).
+  - **Missing:** without the section, the network listener doesn't run. A section without `address` or `port`, or
+    with an invalid value, stops startup naming the file, the key and the reason (S-002 REQ-021).
+- **Local socket.**
+  - **What:** where the local socket lives (REQ-001).
+  - **Where:** `bob.sock` in the runtime directory, set by S-002 REQ-006 and its `--runtime-dir` flag; no setting of
+    its own.
+  - **Constraints:** owner-only; path within the platform's socket path limit.
+  - **Missing:** always present.
+- **Client library socket override.**
+  - **What:** lets a client use another instance's socket, for development instances and tests (REQ-009).
+  - **Where:** an option of the library; the Command line spec decides how `bob` exposes it.
+  - **Missing:** the daemon's default socket.
+
+Built-in constants, not configurable: the 10 MiB body limit (REQ-004) and the 1000-delta lag bound (S-002 REQ-015).
+
+## Assumptions and Dependencies
+
+- **S-002** (approved) provides the catalogue with read and control marks, invocation by name with a caller, the
+  observation feed with its end reasons, the lifecycle start and stop hooks with startup step 8, and the runtime
+  directory. A change to any of these needs a review of this spec.
+- **S-001** records the team member's way in on seat records and messages (S-001 REQ-007); this spec supplies its
+  value.
+- **ADR-001** keeps pi-durable behind the host; **ADR-002** settles that no listener authenticates and that reach
+  decides who is a team member. Both are accepted.
+- **Node 24's built-in HTTP support** serves HTTP on a Unix socket and on TCP, and supports Server-Sent Events by
+  streaming a response; browsers support `fetch` and event streams. No dependency is added.
+- **Platform socket path limits** (about 104 bytes on macOS, 108 on Linux). The default runtime directories fit; long
+  overridden paths may not (REQ-001).
+- **The Web interface spec** delivers the web interface files. Until then, `/ui/` serves what the package ships, which
+  may be a placeholder.
+- **Assumption, confirmed by the product owner on 2026-11-01:** teams accept the exposure REQ-014 describes, and limit
+  who reaches the network listener with their network setup.
+
+## Success Criteria
+
+1. Every acceptance scenario of REQ-001 to REQ-014 passes in `npm test` on the fake model, with a temporary instance,
+   a temporary socket and loopback ports only.
+2. One test calls every operation of the catalogue through both listeners and gets the same result as in-process
+   (REQ-003). Measured by `npm test`.
+3. With no `[network]` section, a ready daemon has no listening TCP socket (REQ-002). Measured by `npm test`.
+4. Live check: `npm run test:live` starts the daemon over the service account's pi login, and the client library over
+   the local socket submits a prompt to the lead conversation of a test job and follows the answer on the conversation
+   feed until the run finishes (REQ-001, REQ-006, REQ-009).
+5. The user manual documents `[network]` with the warnings of REQ-014, and `npm run docs:build` succeeds.
+
+## Implementation Order
+
+| Phase | What | Depends On |
+|---|---|---|
+| 1 | HTTP front and the local socket: operation routes from the catalogue, validation, error mapping, the way in, startup and shutdown | S-002 (delivered) |
+| 2 | The feed over Server-Sent Events, with the lag bound and shutdown ends | Phase 1 |
+| 3 | The network listener: `[network]` settings, bind failures, the web interface files, the security posture and the manual | Phases 1 and 2 |
+| 4 | The client library for Node and the browser, and the live check | Phases 1 to 3 |
+
+The Command line and Web interface specs need phase 4.
+
+## Open Questions
+
+None affect the specified behaviour.
+
+## Amendment Log
+
+| Date | What changed | Why | Affected tasks |
+|------|-------------|-----|----------------|
