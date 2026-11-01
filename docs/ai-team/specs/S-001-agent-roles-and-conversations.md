@@ -1,6 +1,6 @@
 ---
 title: Agent roles and conversations
-version: '0.2'
+version: '0.3'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-15'
 author: planner
@@ -98,13 +98,18 @@ What this specification explicitly does NOT cover:
   resumes it, how the lead verifies and closes it, follow-up jobs, and export and import belong to the Jobs spec. This
   spec requires only that every conversation knows its job (R-12), that the lead conversation parks while its job is
   blocked (R-14), and the report-back clean-up step (R-8a).
-- **When a parked agent continues.** Whether a parked agent continues on each report as it arrives, or stays parked
-  until every agent it invoked has reported, is decided later. Both must be possible (R-8a).
+- **How a parked agent's continue rule is chosen.** Whether a parked agent continues on each report as it arrives, or
+  stays parked until every agent it invoked has reported, and who chooses, is decided later. Both must be possible.
+  Until then a parked agent continues on each report (R-8a).
 - **Approval rules for actions.** S-000 excludes per-action rules: what an agent can do is bounded by the account
   the-intern runs as and the tools its role is offered.
-- **The mailbox, schedules and triggers themselves.** Reading the-intern's own mailbox belongs to the Email spec, and
-  when schedules and triggers fire belongs to the schedules and triggers spec. This spec defines only the lead
-  conversation each of them starts (R-13).
+- **The mailbox, schedules and triggers themselves.** Reading the-intern's own mailbox belongs to the Email spec.
+  When schedules and triggers fire, what their store accepts, the run history an entry passes on and when a fire is
+  skipped belong to the schedules and triggers spec. This spec defines only the lead conversation each of them starts
+  (R-13).
+- **Command-line views and the job abort operation.** This spec delivers the read operations that monitoring needs
+  (R-16). The command-line views built on them belong to the command-line spec. It delivers the capability that aborts
+  every conversation of a job (R-8); the operation that aborts a job belongs to the Jobs spec.
 - **Interactive chat.** There is no chat window and no root conversation. Team members follow, answer and steer jobs
   through the command line, the web interface and email.
 - **Model, thinking level or workspace per schedule entry.** Whether a schedule entry can name values other than its
@@ -216,7 +221,10 @@ agents, steer another conversation). Park and continue invoking conversations, r
 and enforce the depth cap and the number of worker threads.
 **Estimated size:** Medium to large. The worker threads depend on the process model the daemon spec chooses.
 **Interfaces:** Exposes agent tools. Consumes seating, conversation reset, compaction and fork, conversation
-creation, and the inbox of the target conversation.
+creation, the inbox of the target conversation, and each conversation's own `intern.conversation` document. That
+document holds the messages held for the conversation while it is parked and the invoked conversations whose reports
+it awaits. They are facts the-intern owns, written in the commit that changes them, and the only recovery from them is
+redelivery (ADR-001 decision 4).
 
 ### Component 5: Entry routing
 
@@ -232,8 +240,9 @@ Consumes seating and the role catalog. Called by the Jobs component when a job i
 current seat (role, model, thinking level, workspace), origin, status, the conversation that invoked it and the ones
 it invoked, and its transcript, live while it runs.
 **Estimated size:** Medium.
-**Interfaces:** Exposes list, invocations, transcript and live-follow views to the command line and the web
-interface. Consumes the conversation store and its observation streams.
+**Interfaces:** Exposes list, invocations, transcript and live-follow read operations of the service layer (S-002
+R-12, R-14). The command line and the web interface build their views on them; the command-line views belong to the
+command-line spec. Consumes the conversation store and its observation streams.
 
 ## Behavioural Requirements
 
@@ -340,17 +349,33 @@ Each requirement is checked as described in **Verification** below.
     1. **Steerable.** It keeps running on its worker thread and can steer the agents it invoked (R-10a).
     2. **Parked.** Its conversation is parked: pi-durable keeps the state of the conversation and its agent, and the
        worker thread is freed. A parked agent can't steer. It continues as R-8a describes.
+  - An invocation that parks must be the only tool call of its model turn. One that shares its model turn with other
+    tool calls is refused like an invocation past the depth cap (R-9): the invoking agent gets an error result that
+    says why, no conversation is created, and its run continues.
   - Aborting a conversation also aborts the invoked conversations whose report it is still waiting for, whether it
     is steerable or parked. Each of those aborts the conversations it waits for in turn. Aborting a job aborts every
-    conversation of the job.
+    conversation of the job; the operation that does it belongs to the Jobs spec, and this spec delivers the capability
+    it calls.
+  - An abort leaves no aborted conversation parked or waiting for a report. Its held messages (R-10a) are withdrawn,
+    as an abort withdraws queued input. Whether its invoking conversation gets a report follows R-8a.
 - **R-8a Clean-up step and reports.** When an invoked agent decides its part is done, the report-back clean-up step
   runs:
-  - The invoked agent's summary is delivered into the invoking conversation as a new input the moment the invoked
-    agent finishes.
+  - An invoked agent's part is done when its agent run ends while its conversation is not parked and waits for no
+    report from a conversation it invoked. A run that ends while either holds doesn't end the part; the report goes
+    back when a later run ends that way.
+  - The invoked agent's summary, its last answer, is delivered into the invoking conversation as a new input the
+    moment the invoked agent finishes.
   - If the invoking conversation is running, the report arrives like a follow-up (R-10a). If it is idle or parked, the
     conversation becomes ready, takes a free worker thread and continues with the report.
+  - The transcript records which invoked agent sent each report: the report is placed as an `intern.report` entry
+    whose data names the invoked conversation and its role and carries the text (ADR-004).
   - A parked conversation continues either on each report as it arrives or only when every agent it invoked has
-    reported. Both behaviours must be possible. Which one applies, and how it is chosen, is decided later.
+    reported. Both behaviours must be possible. How the choice is made is decided later. Until then the continue rule
+    is "continue on each report" (product owner ruling, 2026-10-31).
+  - When an invoked conversation is aborted on its own, not by an abort that cascades from its invoking conversation,
+    the invoking conversation gets a report that says the invoked conversation was aborted, with the invoked agent's
+    last answer when there is one. A parked invoking conversation then continues under its continue rule. An abort
+    that cascades from the invoking conversation (R-8), or that aborts the whole job, delivers no report.
 
   When the lead agent decides the job is done, closing the job follows the Jobs spec.
 - **R-9 Depth cap.** Agent invocations may chain only to a maximum depth. A job's lead conversation has depth 0, and
@@ -369,7 +394,9 @@ Each requirement is checked as described in **Verification** below.
 - **R-10a Steering.** A team member, and any agent, can steer a running conversation by injecting a message that the
   running model turn picks up after its current tool round. The message can be queued as a follow-up instead. An
   agent steers through a coordination capability that names the target conversation. A message sent to a parked
-  conversation waits until it continues. The transcript records who steered.
+  conversation waits until it continues, whatever its busy mode: a message sent with the mode that refuses input while
+  a run is active (reject, S-002 R-12) is held like any other message, not refused, and the conversation takes it as a
+  follow-up when it continues. The transcript records who steered.
 
 ### Job sources
 
@@ -384,15 +411,11 @@ Each requirement is checked as described in **Verification** below.
 
   Every conversation records the job it belongs to and whether it is the job's lead conversation.
 - **R-13 Schedule fires and triggers.** Each fire of a schedule entry or of a trigger creates a new job and so a new
-  lead conversation (R-12).
-  - The schedule entry or trigger may name a role. An entry that names an unknown role is rejected when it is loaded
-    or created and never fires.
-  - A schedule entry chooses whether each run starts fresh or sees the history of its last runs, up to a number the
-    entry gives. A fresh run's lead conversation starts with only the job's first input. Otherwise its first input
-    also carries the job records of the entry's last runs, as the schedules and triggers spec defines.
-  - If the seat's workspace folder no longer exists at fire time, the fire doesn't run. The skip is recorded with
-    the entry, the fire time and the missing path, and no job is created.
-  - A fire while the entry's previous job is still working is skipped, as the schedules and triggers spec defines.
+  lead conversation (R-12). The schedule entry or trigger may name a role, and the lead conversation starts with it.
+  The schedules and triggers spec defines the rest of a fire's behaviour (product owner ruling, 2026-10-31): refusing
+  an entry that names an unknown role when it is loaded or created, the history of its last runs an entry passes to
+  its next run, skipping a fire whose seat workspace folder no longer exists, and skipping a fire while the entry's
+  previous job still works.
 - **R-14 Unattended runs and blocked jobs.** No conversation waits for a human, except a job's lead conversation while
   its job is blocked. Then the lead conversation is parked: it holds no worker thread, and the answer to the job's
   question arrives as a new input that makes it ready again. Handoffs and agent invocations have no confirmation
@@ -402,7 +425,9 @@ Each requirement is checked as described in **Verification** below.
 
 ### Monitoring and durability
 
-- **R-16 Monitoring.** A team member can do all of the following without the daemon interrupting any running work:
+- **R-16 Monitoring.** A team member can do all of the following through the read operations of the service layer
+  (S-002 R-12, R-14), without the daemon interrupting any running work. The command-line views of them belong to the
+  command-line spec (product owner ruling, 2026-10-31).
   - list all conversations with id, job, whether it is the job's lead conversation, seat (role, model, thinking
     level, workspace), origin (job source or invoking conversation), status (running, idle, parked or waiting for a
     worker thread) and last activity
@@ -424,7 +449,7 @@ A job, from its source to delegated work:
 ```
 Job source: request, schedule fire, trigger or follow-up (role named, default bob)
   ↓
-Schedule fire: workspace of the seat missing, or previous job still working? → skipped and recorded; stop
+Schedule fire skipped or refused? → the schedules and triggers spec; stop
   ↓
 Jobs creates the job → entry routing starts its lead conversation, origin = job source
   ↓
@@ -476,14 +501,10 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
 
 - **Role in a schedule entry or trigger.**
   - **What:** an optional role name per schedule entry or trigger.
-  - **Where:** the schedule and trigger store.
+  - **Where:** the schedule and trigger store, which the schedules and triggers spec defines, together with each
+    entry's run history (R-13).
   - **Constraints:** an existing role.
-  - **Missing:** `bob`. An unknown name rejects the entry (R-13).
-- **Run history per schedule entry.**
-  - **What:** whether each run starts fresh or sees the history of the entry's last runs, and how many (R-13).
-  - **Where:** the schedule and trigger store.
-  - **Constraints:** a whole number of runs, zero meaning fresh.
-  - **Missing:** fresh.
+  - **Missing:** `bob` (R-12).
 - **Invocation depth cap.**
   - **What:** the maximum invocation depth (R-9). It bounds runaway invocation chains that no human is watching.
   - **Where:** a built-in constant of the daemon (S-002 R-9), not a setting.
@@ -517,11 +538,17 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
     stored transcript keeps every entry; the new agent runs on the same worker thread
   - seat records (R-7)
   - agent invocation (R-8): each context mode; several invoked agents running in parallel in conversations of the
-    same job; steerable with steering of an invoked agent; parked, with the worker thread freed; an abort reaches
-    the invoked agents whose report is awaited, recursively; aborting a job aborts all its conversations
-  - reports (R-8a): a report arrives as new input in a running, an idle and a parked invoking conversation; a
-    parked conversation continues on each report, and in the other behaviour only after the last report
-  - steering (R-10a), including a message sent to a parked conversation
+    same job; steerable with steering of an invoked agent; parked, with the worker thread freed; a parked invocation
+    that shares its model turn with another tool call is refused while the run continues; an abort reaches the
+    invoked agents whose report is awaited, recursively; aborting a job aborts all its conversations; after an
+    abort, with report delivery running, no aborted conversation is parked or waiting for a report, for a steerable
+    and for a parked invoking conversation
+  - reports (R-8a): a report arrives as new input in a running, an idle and a parked invoking conversation, as an
+    `intern.report` entry naming the invoked conversation and its role; a parked conversation continues on each
+    report, and in the other behaviour only after the last report; an invoked agent that parks on two agents of its
+    own reports only after its own last run ends; an invoked conversation aborted on its own delivers an "aborted"
+    report with its last answer, and one aborted by its invoker's cascade delivers none
+  - steering (R-10a), including a message sent to a parked conversation, with each busy mode
   - R-9 and R-10: an invocation at the depth cap is refused while the invoking agent continues; with one worker
     thread, a parked agent's invoked agent runs and the parked agent then continues; waiting work starts in arrival
     order
@@ -530,8 +557,7 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
     workspace the-intern created; after unregistering, a seated agent keeps working there and a new seat naming it
     is refused
   - R-11 to R-13: reset; a new job's lead conversation gets the named role (or `bob`), its first input and its
-    origin for each job source; a fire with fresh history and one with the last runs' history; a fire whose
-    workspace is missing is skipped and recorded
+    origin for each job source. The tests of a fire's history and skips belong to the schedules and triggers spec.
   - R-14: a blocked job's lead conversation holds no worker thread, and an answer makes it continue
   - R-15: a removed workspace produces a tool error and the daemon keeps running
   - R-16: list, job links, statuses, invocations and transcript content
@@ -540,11 +566,12 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
     after restart
 - **Live acceptance tests** run against the pi agent-configured OpenAI account of the account running the tests,
   with a low-cost model:
-  1. A scheduled job for the `bob` role that asks for a simple file task in `gp`'s workspace. The lead hands off to
-     `gp` or invokes a `gp` agent, the file appears in `gp`'s workspace, and the transcript shows the seat change or
-     the invocation.
-  2. From the command line, change the seat of a job's lead conversation from `bob` to `gp`. The next answer is
-     attributed to `gp`, and `gp`'s tools run in `gp`'s workspace.
+  1. Moved to the schedules and triggers spec (product owner ruling, 2026-10-31): a scheduled job for the `bob` role
+     that asks for a simple file task in `gp`'s workspace. The lead hands off to `gp` or invokes a `gp` agent, the
+     file appears in `gp`'s workspace, and the transcript shows the seat change or the invocation.
+  2. Through the seat change operation (`conversations.seat`), change the seat of a job's lead conversation from
+     `bob` to `gp`. The next answer is attributed to `gp`, and `gp`'s tools run in `gp`'s workspace. The command line
+     comes with its own spec (product owner ruling, 2026-10-31).
   3. A `gp` agent invokes two `bob` agents and parks. Both reports arrive as new input, and the `gp` agent continues.
 - **Prompt stability:** with the seat and the role unchanged, two consecutive turns produce byte-identical system
   prompt sections.
@@ -561,7 +588,7 @@ Jobs spec for creating jobs. Its phases can be developed against a minimal host 
 | 2 | Handoff by agents in all three context modes | Phase 1 |
 | 3 | Agent invocation (context modes, steerable and parked), report-back step, abort of awaited invoked agents, steering by agents, depth cap | Phase 1 |
 | 4 | Worker threads, and parked conversations freeing them | Phase 3, daemon spec's process model |
-| 5 | Job sources: lead conversations for requests, schedule fires and triggers with run history, follow-ups, the missing-workspace skip; blocked jobs parking. Monitoring: list, job links, statuses, invocations, live transcript | Phases 1–3, control endpoint, Jobs spec |
+| 5 | Job sources: the operation that starts a job's lead conversation for requests, schedule fires, triggers and follow-ups; the parking and continuing that blocked jobs use; the capability that aborts every conversation of a job. Monitoring read operations: list, job links, statuses, invocations, live transcript. The schedule behaviour, the command-line views and the job abort operation come with their own specs | Phases 1–3, S-002 phase 3 |
 
 ## Amendment Log
 
@@ -570,3 +597,5 @@ Jobs spec for creating jobs. Its phases can be developed against a minimal host 
 | 2026-10-17 | The invocation depth cap (10) and the worker-thread count (32) became built-in constants instead of user settings. Role defaults and workspace registration can change while the daemon runs, and workspaces can be unregistered (R-3, R-3a, Configuration Requirements, Verification). Consistency review: the per-role settings entries name the runtime path too. | Decided with the daemon spec (S-002 R-9, R-22): the counts follow load tests, not user tuning; settings changed from clients apply without a restart. | None; S-001 isn't broken down yet |
 | 2026-10-19 | Wording only: removed references to the earlier implementation and its prototype from the Purpose and the Exclusions. No requirement changed. | Project documents describe the-intern as it is specified, not what it replaces. | None |
 | 2026-10-30 | Aligned with the rewritten S-000: the single user became equal team members; work is organised as jobs, each with one lead conversation and lead agent, and invoked agents do parts of a job and never close it; `bob` is the default lead role; team members can create, change and remove roles, including instructions and tool sets, and change shipped roles without editing the installed copy; the root conversation and interactive chat are removed; job sources (requests, schedule fires, triggers, follow-ups) replace entry points; schedule entries choose fresh runs or the history of their last runs; a blocked job's lead conversation parks; no approval rules; the worker-thread count is S-000's agent limit and bounds width (Purpose, Definitions, Exclusions, Design Principles, all components, R-1 to R-17, Workflow, Configuration Requirements, Verification, Implementation Order). Consistency review: the coordination capabilities are part of every role and a tool set can't leave them out (R-3, R-5); Installation named as S-000's component; wording in R-13 and live test 1; a Verification item for the coordination rule. | Product owner ruling: S-000 is the source of truth, and S-001 is aligned as part of creating S-000. | None; S-001 isn't broken down yet |
+| 2026-11-01 | spec-truth reconciliation — FAIL | Abort, report timing, report sender and reject-hold defects; 2026-10-31 rulings and the interim continue rule not recorded; one question to the product owner | none |
+| 2026-11-01 | R-8a: an invoked agent's part is done when its run ends while it is not parked and awaits no report; the continue rule is "continue on each report" until the choice is decided; an invoked conversation aborted on its own sends its invoker an "aborted" report with its last answer, and a parked invoker continues under its continue rule, while an abort that cascades from the invoker or aborts the job sends none; the transcript records which invoked agent sent each report, as an `intern.report` entry. R-8: a parked invocation that shares its model turn with other tool calls is refused like the depth cap; an abort leaves no aborted conversation parked or waiting for a report, and withdraws its held messages; the job abort operation belongs to the Jobs spec, and S-001 delivers the capability it calls (`abortJobConversations`). R-10a: a reject input to a parked conversation is held like any other message. Component 4 Interfaces: the conversation's own `intern.conversation` document (held messages, awaiting links). R-13, R-16, Component 6 Interfaces, Exclusions, Workflow, Configuration Requirements, Verification and Phase 5: R-13's schedule behaviour and live test 1 moved to the schedules and triggers spec; live test 2 runs through `conversations.seat`; the command-line monitoring views moved to the command-line spec, and S-001 delivers the read operations. Verification items for each change. | Spec-truth reconciliation of S-001 after T-071 to T-082 (findings F1 to F5, F7 to F9). Product owner decision on F3, 2026-11-01: a lone abort of an invoked conversation reports "aborted" with its last answer; a cascading abort reports nothing and leaves nothing parked or awaiting. Product owner rulings of 2026-10-31 (F7, F8). Driving ADRs: ADR-001 decision 4 (amended 2026-11-01) for the conversation's own document; ADR-004 for `intern.report`. | T-069, T-072, T-074, T-075, T-077, T-081 (built as amended); follow-ups T-083 to T-089 |
