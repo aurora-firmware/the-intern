@@ -36,6 +36,7 @@ const JSON_HEADERS: OutgoingHttpHeaders = { "content-type": "application/json" }
 
 const COMMAND_LINE = { kind: "team_member", wayIn: "command line" };
 const WEB_INTERFACE = { kind: "team_member", wayIn: "web interface" };
+const COMMAND_LINE_REQUEST = { kind: "request", wayIn: "command line" };
 
 type Listener = "local socket" | "network listener";
 type HttpTarget = { socketPath: string } | { host: string; port: number };
@@ -205,6 +206,25 @@ function seatActors(entries: readonly Entry[]): unknown[] {
         .map((entry) => (entry.data as { actor: unknown }).actor);
 }
 
+/** Input fields that claim the way in `web interface` or an agent actor; no operation's input names a caller. */
+function inputClaims(conversationId: string): Record<string, unknown> {
+    const agent = { kind: "agent", conversationId, role: "bob" };
+    return { wayIn: "web interface", actor: agent, caller: { actor: agent } };
+}
+
+/** Request headers that claim the way in `web interface` or an agent actor. */
+function headerClaims(conversationId: string): OutgoingHttpHeaders {
+    return {
+        "x-intern-way-in": "web interface",
+        "x-intern-actor": JSON.stringify({ kind: "agent", conversationId, role: "bob" }),
+        "user-agent": "web interface",
+    };
+}
+
+async function originOf(fixture: Fixture, conversationId: string): Promise<unknown> {
+    return ((await fixture.invoke("conversations.get", { conversationId })) as { origin: unknown }).origin;
+}
+
 /** The actor each submitted message names, by its content. */
 function messageActors(entries: readonly Entry[]): Record<string, unknown> {
     const messages = entries.filter((entry) => entry.kind === STEER_RECORD_KIND);
@@ -234,5 +254,42 @@ describe("the way in recorded through each listener", { timeout: TEST_TIMEOUT_MS
         const actors = messageActors(await fixture.entries(conversationId));
         assert.deepEqual(actors["over the socket"], COMMAND_LINE);
         assert.deepEqual(actors["over the network"], WEB_INTERFACE);
+    });
+
+    it("records a team member with command line when a local socket call's input claims another caller", async () => {
+        const fixture = await startFixture();
+        const conversationId = await fixture.idleConversation("claimed-in-input");
+        const claims = inputClaims(conversationId);
+
+        await fixture.call("local socket", "conversations.seat", { ...claims, conversationId, role: "gp" });
+        await fixture.submitAndSettle("local socket", conversationId, "claiming", { input: claims });
+        const lead = { ...claims, jobId: "claimed-origin", firstInput: "go" };
+        const started = (await fixture.call("local socket", "jobs.startLead", {
+            ...lead,
+            origin: { kind: "request", wayIn: "web interface" },
+        })) as { conversationId: string };
+
+        const entries = await fixture.entries(conversationId);
+        assert.deepEqual(seatActors(entries).at(-1), COMMAND_LINE);
+        assert.deepEqual(messageActors(entries).claiming, COMMAND_LINE);
+        assert.deepEqual(await originOf(fixture, started.conversationId), COMMAND_LINE_REQUEST);
+    });
+
+    it("records a team member with command line when a local socket call's headers claim another caller", async () => {
+        const fixture = await startFixture();
+        const conversationId = await fixture.idleConversation("claimed-in-headers");
+        const headers = headerClaims(conversationId);
+
+        await fixture.call("local socket", "conversations.seat", { conversationId, role: "gp" }, headers);
+        await fixture.submitAndSettle("local socket", conversationId, "claiming", { headers });
+        const lead = { jobId: "claimed-origin", firstInput: "go" };
+        const started = (await fixture.call("local socket", "jobs.startLead", lead, headers)) as {
+            conversationId: string;
+        };
+
+        const entries = await fixture.entries(conversationId);
+        assert.deepEqual(seatActors(entries).at(-1), COMMAND_LINE);
+        assert.deepEqual(messageActors(entries).claiming, COMMAND_LINE);
+        assert.deepEqual(await originOf(fixture, started.conversationId), COMMAND_LINE_REQUEST);
     });
 });
