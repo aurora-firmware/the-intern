@@ -89,7 +89,7 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
 <main>
 
 <header>
-  <span class="eyebrow">docs/system_overview.html · draft for review · last reviewed 2026-10-30</span>
+  <span class="eyebrow">docs/system_overview.html · draft for review · last reviewed 2026-11-01</span>
   <h1>The Intern: system overview</h1>
   <p class="lede">The Intern is an agent that works for a team. One daemon on a machine the team keeps running takes jobs from anyone who can reach it and sees each one through: define it, get what is missing, act, verify. Agents made from roles do the work in conversations kept in one pi-durable database, with one lead agent per job. Clients, job sources and agent tools all use the same service layer. This document is the map: the shared vocabulary, the shape of the system, and which spec owns which part.</p>
   <div class="chips">
@@ -145,7 +145,7 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
       <thead><tr><th>Principle</th><th>What it means</th></tr></thead>
       <tbody>
         <tr><td>One owner per database</td><td>At most one daemon opens an instance's database. Nothing else reads or writes it; clients read history through the service layer.</td></tr>
-        <tr><td>Durability belongs to the runtime</td><td>Resume, exactly-once input, queued input and checkpoints come from pi-durable. We write no retry loops, intake tables or recovery code.</td></tr>
+        <tr><td>Durability belongs to the runtime</td><td>Resume, exactly-once input, queued input and checkpoints come from pi-durable. We write no retry loops, intake tables or recovery code, with one bounded exception: the facts The Intern owns about a conversation (held messages, awaiting links, creation keys) live in its own documents, and the only recovery is redelivering what they show as undelivered, safe to repeat through pi-durable request ids (ADR-001).</td></tr>
         <tr><td>The service account is the boundary</td><td>The Intern runs as one OS account. Directories are 0700 and files owner-only. We store no credentials: models, keys and accounts are that account's, used in place. What agents can do is bounded by what that account can reach.</td></tr>
         <tr><td>pi-durable sits behind a narrow host</td><td>Only the host module and our own pi-durable extensions import it. An upgrade touches a few files.</td></tr>
         <tr><td>Transport-free service layer</td><td>Every capability is a named operation marked read or control. A new listener never changes an operation. No listener authenticates callers.</td></tr>
@@ -375,13 +375,13 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
     <table>
       <thead><tr><th>Spec</th><th>S-000 component</th><th>Status</th><th>Tasks</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td>S-000</td><td>System overview</td><td><span class="chip">approved</span></td><td>bootstrap plan not broken down</td><td>Purpose, users, use cases, the decomposition into components, project exclusions.</td></tr>
-        <tr><td>S-001</td><td>Agents and roles</td><td><span class="chip s1">approved</span></td><td>not broken down</td><td>Shipped and team roles, seats, lead conversations, handoff, invocation, steering, depth cap, job sources' conversations, monitoring views.</td></tr>
-        <tr><td>S-002</td><td>Intern service</td><td><span class="chip s2">approved</span></td><td>not broken down</td><td>Process, lifecycle, service account, configuration file, worker-thread capacity and queue, service layer, observation feed.</td></tr>
+        <tr><td>S-000</td><td>System overview</td><td><span class="chip">approved</span></td><td>bootstrap plan T-001 to T-016, done</td><td>Purpose, users, use cases, the decomposition into components, project exclusions.</td></tr>
+        <tr><td>S-001</td><td>Agents and roles</td><td><span class="chip s1">approved</span></td><td>T-053 to T-082 done; follow-ups T-083 to T-089 open</td><td>Shipped and team roles, seats, lead conversations, handoff, invocation, steering, depth cap, job sources' conversations, monitoring read operations.</td></tr>
+        <tr><td>S-002</td><td>Intern service</td><td><span class="chip s2">approved</span></td><td>T-017 to T-052, done</td><td>Process, lifecycle, service account, configuration file, worker-thread capacity and queue, service layer, observation feed.</td></tr>
         <tr><td>S-003</td><td>Intern service: control endpoint</td><td><span class="chip later">next</span></td><td>none</td><td>The local socket listener for the command line, the network listener for the web interface, the client library, which operations each listener exposes.</td></tr>
-        <tr><td>—</td><td>Command line</td><td><span class="chip later">planned</span></td><td>none</td><td>The <code>bob</code> commands.</td></tr>
-        <tr><td>—</td><td>Jobs</td><td><span class="chip later">planned</span></td><td>none</td><td>The job record, the job's steps, blocked jobs and answers, verification and closing, follow-ups, export and import.</td></tr>
-        <tr><td>—</td><td>Schedules and triggers</td><td><span class="chip later">planned</span></td><td>none</td><td>Fires and events, run history, skipping busy runs, "run now".</td></tr>
+        <tr><td>—</td><td>Command line</td><td><span class="chip later">planned</span></td><td>none</td><td>The <code>bob</code> commands, including the monitoring views.</td></tr>
+        <tr><td>—</td><td>Jobs</td><td><span class="chip later">planned</span></td><td>none</td><td>The job record, the job's steps, blocked jobs and answers, verification and closing, aborting a job, follow-ups, export and import.</td></tr>
+        <tr><td>—</td><td>Schedules and triggers</td><td><span class="chip later">planned</span></td><td>none</td><td>Fires and events, run history, refusing an unknown role, skipping busy runs and fires whose workspace is missing, "run now", live test 1 of S-001.</td></tr>
         <tr><td>—</td><td>Email</td><td><span class="chip later">planned</span></td><td>none</td><td>The Intern's own mailbox: sorting, requests to jobs, answers, mail events, optional sending.</td></tr>
         <tr><td>—</td><td>Web interface</td><td><span class="chip later">planned</span></td><td>none</td><td>Job board, answering, live view, configuration from the browser.</td></tr>
         <tr><td>—</td><td>Skills and instructions</td><td><span class="chip later">planned</span></td><td>none</td><td>Shipped prompt and skill content, the team's overlay.</td></tr>
@@ -394,11 +394,10 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
   <div class="panel warn">
     <h3>Open items that cross specs</h3>
     <ul>
-      <li>S-002's operation catalogue (R-12) uses S-001 pieces, while S-001 phase 1 waits on S-002 phases 1 to 3. The order of the two breakdowns is undecided.</li>
       <li>The Jobs spec is the largest gap: S-001 relies on it for creating jobs, blocking and answering, and verification and closing. The run history a schedule passes to its next run belongs to the schedules and triggers spec.</li>
-      <li>When a parked agent continues (on each report or after the last): decided later (S-001).</li>
+      <li>How the choice is made between continuing a parked agent on each report or after the last: decided later. Until then a parked agent continues on each report (S-001 R-8a).</li>
       <li>The packaging form (npm tarball or bundle with Node), starting at boot on macOS without a login, and retention of old conversations.</li>
-      <li>No ADRs exist yet for the standing decisions in section 1 (one daemon, one database, pi-durable behind a host, the team model with no logins, no approval rules, the service account as the boundary).</li>
+      <li>The standing decisions in section 1 are recorded: ADR-001 (one daemon, one database, pi-durable behind a host) and ADR-002 (equal team members with no logins, no approval rules, the service account as the boundary). ADR-003 and ADR-004 record how host commits and inputs sent on someone's behalf reach pi-durable.</li>
     </ul>
   </div>
 </section>
