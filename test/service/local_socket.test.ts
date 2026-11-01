@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { access, stat, writeFile } from "node:fs/promises";
-import { type IncomingMessage, request } from "node:http";
+import fsPromises, { access, stat, writeFile } from "node:fs/promises";
+import { type IncomingMessage, request, Server } from "node:http";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import { afterEach, describe, it } from "node:test";
+import { syncBuiltinESMExports } from "node:module";
+import { afterEach, describe, it, mock } from "node:test";
 import type { Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
@@ -31,6 +32,8 @@ const envs: HermeticEnv[] = [];
 const daemons: RunningDaemon[] = [];
 
 afterEach(async () => {
+    mock.restoreAll();
+    syncBuiltinESMExports();
     for (const daemon of daemons.splice(0)) await Promise.race([daemon.stop(), sleep(STOP_BOUND_MS)]);
     for (const fake of fakes.splice(0)) fake.unregister();
     for (const env of envs.splice(0)) await env.dispose();
@@ -202,6 +205,34 @@ describe("local socket listener", () => {
         assert.ok(failure, "startup logs the failing step");
         assert.match(failure, /step=8 name="start components"/);
         assert.ok(failure.includes(socketPath), `the failure names ${socketPath}`);
+    });
+
+    it("closes the listener and removes bob.sock when startup fails after the listener is up", async () => {
+        const fixture = await createFixture();
+        const socketPath = localSocketPath(fixture.env.runtimeDir);
+        // Only the socket file's chmod fails: the daemon's own directory setup uses chmod too.
+        const chmod = fsPromises.chmod;
+        mock.method(fsPromises, "chmod", async (path: string, mode: number) => {
+            if (path === socketPath) throw new Error("chmod refused");
+            return chmod(path, mode);
+        });
+        syncBuiltinESMExports();
+
+        const servers: Server[] = [];
+        const listen = Server.prototype.listen;
+        mock.method(Server.prototype, "listen", function (this: Server, ...args: Parameters<Server["listen"]>) {
+            servers.push(this);
+            return listen.apply(this, args);
+        });
+
+        const daemon = fixture.start([createLocalSocketComponent()]);
+
+        assert.equal(await daemon.exited, 1);
+        assert.ok(fixture.lines.some((line) => line.includes("chmod refused")));
+        assert.equal(await exists(socketPath), false);
+        await assert.rejects(call(socketPath, "POST", "/operations/daemon.status", {}));
+        assert.equal(servers.length, 1);
+        assert.equal(servers[0]?.listening, false, "the listener stays open");
     });
 
     it("answers daemon.status starting and refuses other calls and the feed while a later start hook is held", async () => {

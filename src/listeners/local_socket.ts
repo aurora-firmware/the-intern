@@ -29,9 +29,17 @@ export function createLocalSocketComponent(): DaemonComponent {
             assertPathFits(path);
             await rm(path, { force: true });
             const front = createHttpFront({ catalogue: ctx.catalogue, wayIn: "command line" });
-            listener = await startListenerServer(front, { path });
+            const started = await startListenerServer(front, { path });
+            try {
+                await chmod(path, OWNER_ONLY_FILE_MODE);
+            } catch (error) {
+                // The daemon does not stop a component whose start failed, so this one cleans up after itself.
+                await started.stop();
+                await rm(path, { force: true });
+                throw error;
+            }
+            listener = started;
             socketPath = path;
-            await chmod(path, OWNER_ONLY_FILE_MODE);
         },
         async stop() {
             const running = listener;
