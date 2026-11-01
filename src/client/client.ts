@@ -56,10 +56,6 @@ export type Client = {
     subscribe(scope: FeedScope): AsyncGenerator<FeedItem, { end: string }>;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null;
-}
-
 export function feedPath(scope: FeedScope): string {
     const query =
         scope.scope === "instance"
@@ -107,6 +103,10 @@ export async function* parseEventStream(chunks: AsyncIterable<string>): AsyncIte
             if (event) yield event;
         }
     }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
 }
 
 /** The error a refused answer carries, `{"error": {"code", "message"}}`, as a `ClientError`. */
