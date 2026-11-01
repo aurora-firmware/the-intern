@@ -60,7 +60,9 @@ idle boundary for queued items stay with `Conversation.submit` and aren't copied
 
 This keeps ADR-001 decision 4: the queue, its durability and the placement at the boundary stay pi-durable's. The
 host only puts an item on pi-durable's own queue in the commit that owns the change, and writes no queue or intake
-table of its own.
+table of its own. The `held` list of a parked conversation isn't such a queue: it is a fact the-intern owns under the
+bounded exception in ADR-001 decision 4, and its messages reach the conversation through `Conversation.submit` when it
+continues.
 
 ## Consequences
 
@@ -106,3 +108,9 @@ R-11.
 **Description:** Use pi-durable submission admission in its own commit and write the seat in a second commit.
 **Rejected because:** It is two commits. A crash between them leaves a reset without its seat change, which R-17
 forbids.
+
+## Amendments
+
+| Date | Change | Reason |
+|---|---|---|
+| 2026-11-01 | Added a pointer in the Decision: the `held` list of a parked conversation is a fact the-intern owns under ADR-001 decision 4's bounded exception, not a queue in front of pi-durable. No decision changes. | Spec-truth reconciliation of S-001, finding F6, and the ADR-001 amendment of the same date. |

@@ -33,9 +33,25 @@ The product owner approved S-001 and S-002, which together fix the runtime shape
 so every later spec and task builds on the same decision. It is one of the standing decisions S-000 asks to record
 before development starts (S-000, Developer documentation, Decisions needed).
 
-Sources: S-002 Design Principles, R-1, R-7, R-9, R-10 and Exclusions; S-001 Definitions (worker thread) and R-10;
-`docs/research/pi-durable-knowledge.md` (sections 1.4, 5.5 and 7.2); `docs/development/coding_guidelines.md` (Module
-structure).
+Some facts about a conversation belong to the-intern, and pi-durable has no place for them. Building S-001 found
+three (spec-truth reconciliation of S-001, finding F6):
+
+- **Held messages.** A message for a parked conversation waits until it continues (S-001 R-10a, R-8a). It can't go
+  to pi-durable's queued input: an input to a conversation that isn't running starts a run, and a parked
+  conversation must hold no worker thread (S-001 R-10). The message waits in the `held` list of the conversation's
+  `intern.conversation` document (T-075).
+- **Awaiting links.** An invoking conversation lists in `awaiting` the invoked conversations whose report it still
+  waits for (S-001 R-8a, R-17). The daemon learns that an invoked run finished from a live event, which a crash can
+  cut off before the report is submitted. The `awaiting` list is what tells the next start which report is still
+  undelivered (T-073).
+- **Invocation keys.** The `intern.invocations` document maps an invocation's request id to the conversation it
+  created, written in the commit that creates or forks it, so a repeated invocation creates nothing twice (T-071).
+  `intern.idempotency` does the same for service operations that create a conversation (S-002 R-13, T-034).
+
+Sources: S-002 Design Principles, R-1, R-7, R-8, R-9, R-10 and Exclusions; S-001 Definitions (worker thread), R-8a,
+R-10, R-10a and R-17; `docs/research/pi-durable-knowledge.md` (sections 1.4, 5.5 and 7.2);
+`docs/development/coding_guidelines.md` (Module structure); `src/host/invocation.ts`, `src/host/reports.ts` and
+`src/host/steering.ts`.
 
 ## Decision
 
@@ -58,11 +74,27 @@ behind a narrow host module, and durability comes from pi-durable, not from code
    database so it survives a restart (S-002 R-10). CPU-heavy work runs outside the daemon process: tools run commands
    as child processes.
 4. **Durability belongs to the runtime.** Resume, exactly-once admission of input, queued input and checkpoints come
-   from pi-durable. The daemon writes no retry loops, intake tables or recovery code of its own. Each fact the daemon
-   owns is committed in the same atomic commit as the change it describes. The host sets pi-durable's
-   `settings.restartLimit` to `Infinity`, so every start resumes every unfinished pi-durable task, however often a
-   crash cut it off, as S-002 R-8 requires. A finite limit, which parks a task until `Harness.retryTask()`, needs an
-   S-002 amendment first.
+   from pi-durable. The daemon writes no retry loops, intake tables or recovery code of its own, except for the
+   bounded exception below. Each fact the daemon owns is committed in the same atomic commit as the change it
+   describes. The host sets pi-durable's `settings.restartLimit` to `Infinity`, so every start resumes every
+   unfinished pi-durable task, however often a crash cut it off, as S-002 R-8 requires. A finite limit, which parks a
+   task until `Harness.retryTask()`, needs an S-002 amendment first.
+
+   **Bounded exception: the-intern's own facts, and redelivery from them.**
+   - Facts the-intern owns about a conversation live in its own pi-durable documents: held messages (`held`) and
+     awaiting links (`awaiting`) in the conversation's `intern.conversation` document, and creation keys in
+     `intern.invocations` and `intern.idempotency`. Each is written in the commit that changes it, together with the
+     change it describes.
+   - The only recovery the daemon does is redelivery worked out from those facts. The daemon submits the input the
+     facts show as undelivered: a conversation's held messages when it continues, and, at start, the report of each
+     awaited conversation whose run has finished. A creation key turns a repeated invocation or create operation into
+     the conversation it already created.
+   - Every redelivered input carries a request id fixed by the fact: the held message's own request id, or
+     `report:<invokedId>:<entryId>` for a report. pi-durable's exactly-once admission makes a repeat harmless. A fact
+     is cleared only after its input is admitted, so a crash in between repeats the submission and loses nothing.
+   - Nothing else is allowed: no retry of a failed call, no timer that tries again, no list that holds input for a
+     conversation that can take it, and no repair of state pi-durable owns. A new kind of fact or a new redelivery
+     path amends this decision first.
 5. **A storage error ends the process.** When a storage error closes the harness, the daemon logs it, stops accepting
    calls and exits with a non-zero status within the 10-second stop bound. It never reopens the database itself. The
    operating system's supervisor (systemd on Linux, launchd on macOS) restarts it, and unfinished work resumes from its
@@ -77,8 +109,8 @@ behind a narrow host module, and durability comes from pi-durable, not from code
 
 - One source of truth: every conversation, pi-durable task and daemon-owned fact lives in one database with one
   writer, so there is no locking or merging between processes.
-- A crash or kill is a resume, not a loss: work restarts from pi-durable's checkpoints without recovery code of our
-  own to write, test and keep correct.
+- A crash or kill is a resume, not a loss: work restarts from pi-durable's checkpoints. The daemon's own recovery is
+  limited to redelivery from its own facts, and pi-durable request ids make it safe to repeat.
 - An upgrade of the pi packages touches a few files: the host module and the-intern's extensions.
 - The number of active agent runs is bounded and visible, including during recovery after a restart.
 - The whole daemon, with kills and restarts, can be tested in one process on a fake model.
@@ -95,6 +127,8 @@ behind a narrow host module, and durability comes from pi-durable, not from code
 - The worker-thread count can't be tuned per machine; changing it takes a release.
 - With pi-durable's crash-loop guard turned off, a pi-durable task that crashes the daemon each time it resumes keeps
   the daemon in a restart loop, stopping every job, until someone stops the service or removes the cause.
+- Redelivery from the-intern's own facts is code of our own that a crash exercises: report delivery at start and the
+  delivery of held messages need kill tests (S-001 R-17), and each new kind of fact needs this record amended.
 
 ### Neutral
 
@@ -141,8 +175,17 @@ upgrade. The narrow host keeps that change to a few files.
 untested, and the count is not a team decision (S-002 Exclusions, R-9). Tests use a test-only switch for a smaller
 count.
 
+### Alternative F: Keep held messages and undelivered reports in pi-durable alone
+
+**Description:** Submit a message for a parked conversation as pi-durable queued input at once, and deliver a report
+only from the live event that an invoked run finished.
+**Rejected because:** An input to a conversation that isn't running starts a run, so a parked conversation would take
+a worker thread and continue before its report arrives (S-001 R-8a, R-10). A live event isn't durable: a crash
+between the run's end and the report's submission would lose the report, which S-001 R-17 forbids.
+
 ## Amendments
 
 | Date | Change | Reason |
 |---|---|---|
 | 2026-10-30 | Clarified for pi 1.4.0: storage errors from `commit()` and `mintId()` (Context, decision 5); the crash-loop guard is turned off with `settings.restartLimit: Infinity` (Context, decision 4, Negative); the one-way SQLite schema migration (Context, Neutral); `onReport` reports are logged diagnostics (decision 5). Fixed the coding-guidelines path in Sources. No decision changes. | Architecture consistency review of ADR-001 against the pinned pi 1.4.0 packages, S-000, S-001, S-002 and ADR-002. |
+| 2026-11-01 | Added a bounded exception to decision 4: the-intern's own facts about a conversation (`held`, `awaiting`, the creation keys in `intern.invocations` and `intern.idempotency`) live in its own documents, written in the commit that changes them, and the only recovery is redelivery worked out from them, made safe to repeat by pi-durable request ids (Context, Sources, decision 4, Positive, Negative, Alternative F). | Spec-truth reconciliation of S-001, finding F6: T-071, T-073 and T-075 built these facts and this redelivery, and the work is right. |
