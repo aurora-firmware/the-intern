@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { request } from "node:http";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -16,6 +16,7 @@ import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts"
 const WAIT_TIMEOUT_MS = 10_000;
 const POLL_INTERVAL_MS = 10;
 const LOOPBACK = "127.0.0.1";
+const LEAKED_CONTENT = "contents-of-a-file-outside-the-root";
 
 type Answer = { status: number; headers: Record<string, string | string[] | undefined>; body: string };
 type Target = { socketPath: string } | { host: string; port: number };
@@ -83,7 +84,8 @@ async function filesIn(env: HermeticEnv): Promise<string> {
     await writeFile(join(root, "assets", "logo.svg"), "<svg/>");
     await writeFile(join(root, "assets", "logo.png"), "png");
     await writeFile(join(root, "assets", "data.json"), "{}");
-    await writeFile(join(env.root, "secret.txt"), "secret");
+    await writeFile(join(env.root, "secret.txt"), LEAKED_CONTENT);
+    await symlink(join(env.root, "secret.txt"), join(root, "linked.txt"));
     return root;
 }
 
@@ -141,12 +143,13 @@ describe("static files on the network listener", () => {
             "/ui/assets/../../secret.txt",
             "/ui/%2e%2e/secret.txt",
             "/ui/..%2fsecret.txt",
+            "/ui/linked.txt",
             "/ui/%00",
             "/elsewhere",
         ]) {
             const answer = await get(network, path);
             assert.equal(answer.status, 404, path);
-            assert.doesNotMatch(answer.body, /secret$/, path);
+            assert.ok(!answer.body.includes(LEAKED_CONTENT), `${path} leaked the file`);
         }
     });
 

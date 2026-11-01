@@ -2,7 +2,7 @@
  * The web interface files, served by the network listener (S-003 REQ-008). The Web interface spec owns their content;
  * this module only serves the folder.
  */
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,15 +43,21 @@ function fileUnder(root: string, pathname: string): string | undefined {
         root,
         relativePath === "" || relativePath.endsWith("/") ? join(relativePath, INDEX_FILE) : relativePath,
     );
-    const inside = relative(root, file);
-    if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return undefined;
-    return file;
+    return isInside(root, file) ? file : undefined;
 }
 
-async function sendFile(file: string, res: ServerResponse): Promise<boolean> {
+function isInside(root: string, file: string): boolean {
+    const inside = relative(root, file);
+    return inside !== "" && !inside.startsWith("..") && !isAbsolute(inside);
+}
+
+/** Reads the file only when its real location, after symlinks, is still under the real root. */
+async function sendFile(root: string, file: string, res: ServerResponse): Promise<boolean> {
     let content: Buffer;
     try {
-        content = await readFile(file);
+        const [realRoot, realFile] = await Promise.all([realpath(root), realpath(file)]);
+        if (!isInside(realRoot, realFile)) return false;
+        content = await readFile(realFile);
     } catch {
         return false;
     }
@@ -76,6 +82,6 @@ export function createStaticFiles(root: string): Fallback {
         }
         if (pathname === undefined || !pathname.startsWith(UI_PREFIX)) return false;
         const file = fileUnder(base, pathname);
-        return file !== undefined && (await sendFile(file, res));
+        return file !== undefined && (await sendFile(base, file, res));
     };
 }
