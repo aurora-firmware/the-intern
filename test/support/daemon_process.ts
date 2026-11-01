@@ -15,15 +15,17 @@ const READY_POLL_TIMEOUT_MS = 30_000;
 /**
  * `handoff-clean`: a seated agent's first answer is a Clean handoff to `gp` with the note `CLEAN-NOTE`; the new agent's
  * answer is slow. `invoke-parked`: a lead's first answer is a parked invoke of two `gp` agents with the job prompts
- * `job A` and `job B`; the invoked agents' answers are slow. Both answer anything else with an echo.
+ * `job A` and `job B`; the invoked agents' answers are slow. `invoke-parked-slow-lead`: as `invoke-parked`, but the invoked
+ * agents answer at once and the lead's answer to each report is slow, so a kill lands while a report is being delivered.
+ * All of them answer anything else with an echo.
  */
-export type FakeScript = "echo" | "bash-sleep" | "slow" | "handoff-clean" | "invoke-parked";
+export type FakeScript = "echo" | "bash-sleep" | "slow" | "handoff-clean" | "invoke-parked" | "invoke-parked-slow-lead";
 
 export type StartDaemonOptions = {
     hermetic: HermeticEnv;
     workerThreads?: number;
     script?: FakeScript;
-    /** How long a slow answer of the `slow`, `handoff-clean` and `invoke-parked` scripts is held back. */
+    /** How long a slow answer of the `slow`, `handoff-clean`, `invoke-parked` and `invoke-parked-slow-lead` scripts is held back. */
     delayMs?: number;
     realModels?: boolean;
     /** Live tests only: the model new conversations use with `realModels`, instead of the pi agent folder's default. */

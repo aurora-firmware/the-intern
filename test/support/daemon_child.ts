@@ -63,7 +63,7 @@ function replyFor(script: Script, transcript: FakeTranscript): FakeReply {
     if (script === "handoff-clean") {
         return lastText === HANDOFF_NOTE || hasToolResult(transcript) ? echo : { toolCall: HANDOFF_CALL };
     }
-    if (script === "invoke-parked") {
+    if (script === "invoke-parked" || script === "invoke-parked-slow-lead") {
         const isInvokedAgent = lastText.startsWith(INVOKED_JOB_PROMPT_PREFIX);
         return isInvokedAgent || hasToolResult(transcript) ? echo : { toolCall: PARKED_INVOKE_CALL };
     }
@@ -73,13 +73,18 @@ function replyFor(script: Script, transcript: FakeTranscript): FakeReply {
     return { toolCall: { name: "bash", arguments: { command: `sleep ${seconds}` } } };
 }
 
-/** Holds back the answers a kill is meant to interrupt: all of `slow`, and the answers after the call of the others. */
+/**
+ * Holds back the answers a kill is meant to interrupt: all of `slow`, the lead's answers to reports for
+ * `invoke-parked-slow-lead`, and the answers after the call of the others.
+ */
 function delayFor(switches: Switches, transcript: FakeTranscript): number {
     const delayMs = switches.delayMs ?? DEFAULT_SLOW_DELAY_MS;
     const lastText = lastUserText(transcript);
     if (switches.script === "slow") return delayMs;
     if (switches.script === "handoff-clean") return lastText === HANDOFF_NOTE ? delayMs : 0;
     if (switches.script === "invoke-parked") return lastText.startsWith(INVOKED_JOB_PROMPT_PREFIX) ? delayMs : 0;
+    if (switches.script === "invoke-parked-slow-lead")
+        return lastText.includes(`echo: ${INVOKED_JOB_PROMPT_PREFIX}`) ? delayMs : 0;
     return 0;
 }
 
