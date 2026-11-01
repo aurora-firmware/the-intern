@@ -66,8 +66,9 @@ export function feedPath(scope: FeedScope): string {
 
 type PendingEvent = { event?: string; id?: string; dataLines: string[] };
 
-/** Adds one field line to the pending event. */
+/** Adds one field line to the pending event; a line starting with a colon is a comment. */
 function addField(pending: PendingEvent, line: string): void {
+    if (line.startsWith(":")) return;
     const colon = line.indexOf(":");
     const name = colon < 0 ? line : line.slice(0, colon);
     const value = colon < 0 ? "" : line.slice(colon + 1).replace(/^ /, "");
@@ -84,11 +85,15 @@ function completed(pending: PendingEvent): StreamEvent | undefined {
     return pending.id === undefined ? { event, data } : { event, id: pending.id, data };
 }
 
-/** Parses Server-Sent Events from text chunks. */
+/** Parses Server-Sent Events from text chunks split anywhere, even inside a line. */
 export async function* parseEventStream(chunks: AsyncIterable<string>): AsyncIterable<StreamEvent> {
+    let buffered = "";
     let pending: PendingEvent = { dataLines: [] };
     for await (const chunk of chunks) {
-        for (const line of chunk.split("\n")) {
+        const lines = (buffered + chunk).split("\n");
+        buffered = lines.pop() ?? "";
+        for (const rawLine of lines) {
+            const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
             if (line !== "") {
                 addField(pending, line);
                 continue;
