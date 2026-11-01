@@ -8,6 +8,7 @@ import { createCoordinationExtension } from "../coordination/coordination_extens
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
+import { startReportDelivery } from "../host/reports.ts";
 import { createRolePromptExtension } from "../prompt/role_prompt_extension.ts";
 import { createWorkspaceContextLoader } from "../prompt/workspace_context.ts";
 import { createRoleCatalog, type RoleCatalog } from "../roles/role_catalog.ts";
@@ -42,6 +43,7 @@ export async function createAgentsComponent(options: { logger: Logger }): Promis
     const loader = createWorkspaceContextLoader({ logger: options.logger });
     let runtime: AgentsRuntime | undefined;
     let host: HarnessHost | undefined;
+    let reportDelivery: { stop(): void } | undefined;
 
     const requireRuntime = (): AgentsRuntime => {
         if (runtime === undefined) {
@@ -98,6 +100,13 @@ export async function createAgentsComponent(options: { logger: Logger }): Promis
                 if (role.workspace === undefined) await workspaces.ensureRoleDefault(role.name);
             }
             checkRoleWorkspacesRegistered({ catalog, workspaces }, ctx.dirs.dataDir);
+        },
+        async start(ctx) {
+            reportDelivery = await startReportDelivery(ctx.host, { logger: options.logger });
+        },
+        async stop() {
+            reportDelivery?.stop();
+            reportDelivery = undefined;
         },
     };
 

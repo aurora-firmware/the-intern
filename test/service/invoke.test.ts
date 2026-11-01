@@ -205,20 +205,21 @@ describe("the invoke tool", () => {
         const started = await start({
             leadCalls: [{ agents: [invokedAgent("job A")], mode: "parked" }],
             workerThreadCount: 1,
+            isInvokedHeld: true,
         });
 
         const { conversationId } = await started.startLead("lead work");
 
-        // With one worker thread, the invoked agent can only run once the parked lead has freed it.
-        await waitFor(async () => {
-            const [invokedId] = (await conversationIds(started.ctx)).filter((id) => id !== conversationId);
-            return invokedId !== undefined && (await started.ctx.host.readContext(invokedId)).length >= 2;
-        }, "the invoked agent to answer");
+        // With one worker thread, the invoked agent can only run once the parked lead has freed it. It is held, so its
+        // report has not yet continued the lead.
+        await waitFor(() => started.arrivals() === 1, "the invoked agent to start");
         assert.deepEqual((await readConversationMeta(started.ctx.host, conversationId))?.parked, {
             waitingFor: "reports",
             continueOn: "each",
         });
         assert.equal(started.leadRequests.length, 1, "the parked run asked for no further model turn");
+        started.release();
+        await waitFor(async () => (await started.status()).workerThreads.inUse === 0, "every run to finish");
     });
 
     it("refuses an invocation past the depth cap with an error naming the cap and continues the run", async () => {

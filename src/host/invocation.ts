@@ -202,7 +202,11 @@ export async function parkConversation(host: HarnessHost, conversationId: string
     });
 }
 
-/** Clears the parked state, then submits the input as a follow-up, which starts a run on a free worker thread. */
+/**
+ * Clears the parked state, then submits the held messages in order and the input after them, as follow-ups: the first
+ * starts a run on a free worker thread. The held messages are cleared only once submitted, so a crash in between
+ * loses none; their request ids make a repeated call safe.
+ */
 export async function continueParked(
     host: HarnessHost,
     conversationId: string,
@@ -211,5 +215,17 @@ export async function continueParked(
     await updateMeta(host, conversationId, (meta) => {
         meta.parked = null;
     });
-    return submitInput(host, conversationId, { ...input, busyMode: "followUp" });
+    const held = (await requireMeta(host, conversationId)).held;
+    for (const message of held) {
+        await submitInput(host, conversationId, {
+            content: message.content,
+            requestId: message.requestId,
+            busyMode: message.mode,
+        });
+    }
+    const submitted = await submitInput(host, conversationId, { ...input, busyMode: "followUp" });
+    await updateMeta(host, conversationId, (meta) => {
+        meta.held = [];
+    });
+    return submitted;
 }
