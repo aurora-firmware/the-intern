@@ -13,6 +13,7 @@ import {
     parseEventStream,
     type StreamEvent,
     type Transport,
+    UnreachableError,
 } from "./client.ts";
 
 export type NodeTarget = { socketPath: string } | { baseUrl: string };
@@ -35,26 +36,30 @@ function openRequest(target: NodeTarget, options: RequestOptions & { path: strin
     return request(new URL(options.path, target.baseUrl), { ...options, agent: false });
 }
 
-/** Sends the request and resolves with the response. */
-function responseOf(req: ClientRequest, body: string): Promise<IncomingMessage> {
+/** Sends the request and resolves with the response; a connection that fails before it rejects as unreachable. */
+function responseOf(req: ClientRequest, body: string, target: string): Promise<IncomingMessage> {
     return new Promise((resolve, reject) => {
         req.once("response", resolve);
         // Kept for the request's whole life: an error after the response must not go unhandled.
-        req.on("error", reject);
+        req.on("error", (error) => reject(new UnreachableError(target, error.message)));
         req.end(body);
     });
 }
 
-/** The response's text chunks. */
-async function* chunksOf(response: IncomingMessage): AsyncIterable<string> {
+/** The response's text chunks; a connection that closes before the response is complete fails as unreachable. */
+async function* chunksOf(response: IncomingMessage, target: string): AsyncIterable<string> {
     response.setEncoding("utf8");
-    for await (const chunk of response) yield chunk as string;
+    try {
+        for await (const chunk of response) yield chunk as string;
+    } catch (error) {
+        throw new UnreachableError(target, error instanceof Error ? error.message : String(error));
+    }
 }
 
 /** Reads the whole response body. */
-async function readText(response: IncomingMessage): Promise<string> {
+async function readText(response: IncomingMessage, target: string): Promise<string> {
     let text = "";
-    for await (const chunk of chunksOf(response)) text += chunk;
+    for await (const chunk of chunksOf(response, target)) text += chunk;
     return text;
 }
 
@@ -70,11 +75,11 @@ function parseAnswer(text: string, status: number | undefined, target: string): 
 async function* streamEvents(target: NodeTarget, described: string, path: string): AsyncIterable<StreamEvent> {
     const req = openRequest(target, { method: "GET", path });
     try {
-        const response = await responseOf(req, "");
+        const response = await responseOf(req, "", described);
         if (response.statusCode !== 200) {
-            throw answerError(parseAnswer(await readText(response), response.statusCode, described));
+            throw answerError(parseAnswer(await readText(response, described), response.statusCode, described));
         }
-        yield* parseEventStream(chunksOf(response));
+        yield* parseEventStream(chunksOf(response, described));
     } finally {
         req.destroy();
     }
@@ -88,8 +93,8 @@ export function nodeTransport(target: NodeTarget): Transport {
             const headers = { "content-type": JSON_CONTENT_TYPE, "content-length": Buffer.byteLength(body) };
             const req = openRequest(target, { method: "POST", path: operationPath(name), headers });
             try {
-                const response = await responseOf(req, body);
-                return parseAnswer(await readText(response), response.statusCode, described);
+                const response = await responseOf(req, body, described);
+                return parseAnswer(await readText(response, described), response.statusCode, described);
             } finally {
                 req.destroy();
             }
