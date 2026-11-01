@@ -27,8 +27,10 @@ const fakes: FauxProviderRegistration[] = [];
 const envs: HermeticEnv[] = [];
 const hosts: HarnessHost[] = [];
 const deliveries: { stop(): void }[] = [];
+const releaseHeldAnswers: (() => void)[] = [];
 
 afterEach(async () => {
+    for (const release of releaseHeldAnswers.splice(0)) release();
     for (const delivery of deliveries.splice(0)) delivery.stop();
     for (const host of hosts.splice(0)) await host.close();
     for (const fake of fakes.splice(0)) fake.unregister();
@@ -149,6 +151,7 @@ async function createFixture(): Promise<Fixture> {
         holdAnswerTo(prompt) {
             let release: () => void = () => {};
             holds.set(prompt, new Promise<void>((resolve) => (release = resolve)));
+            releaseHeldAnswers.push(() => release());
             return release;
         },
         async reopenHost() {
@@ -253,6 +256,53 @@ describe("startReportDelivery", () => {
         assert.deepEqual(after?.held, []);
         assert.deepEqual(after?.awaiting, []);
         assert.notEqual(idA, idB);
+    });
+
+    it("reports a nested agent that parked on two agents only after its run on the last report ends", async () => {
+        const fixture = await createFixture();
+        const idA = await fixture.startInvoker();
+        const [idB] = (await fixture.invoke(idA, ["job B"])) as [string];
+        await until(async () => (await fixture.host.conversationInfo(idB))?.busy === false, "B's first run");
+        const releaseD = fixture.holdAnswerTo("job D");
+        const parked: ParkedState = { waitingFor: "reports", continueOn: "each" };
+        const [idC, idD] = (await fixture.invoke(idB, ["job C", "job D"], parked)) as [string, string];
+        await parkConversation(fixture.host, idB, parked);
+        const requestsBefore = fixture.invokerRequests().length;
+
+        await fixture.startDelivery();
+        await until(async () => (await awaitingOf(fixture.host, idB))?.[0] === idD, "C's report to reach B");
+        await until(async () => (await fixture.host.conversationInfo(idB))?.busy === false, "B's run on C's report");
+        await settle();
+        assert.equal(fixture.invokerRequests().length, requestsBefore, "A got no report while B awaits D");
+        assert.deepEqual((await readConversationMeta(fixture.host, idA))?.awaiting, [idB]);
+        releaseD();
+
+        await until(() => fixture.invokerRequests().length === requestsBefore + 1, "B's report to reach A");
+        await until(async () => (await awaitingOf(fixture.host, idA))?.length === 0, "A's awaiting to empty");
+        await settle();
+        assert.equal(fixture.invokerRequests().length, requestsBefore + 1, "B's report reached A exactly once");
+        assert.notEqual(idC, idD);
+    });
+
+    it("reports a steerable nested agent only after its run on the awaited report ends", async () => {
+        const fixture = await createFixture();
+        const idA = await fixture.startInvoker();
+        const [idB] = (await fixture.invoke(idA, ["job B"])) as [string];
+        await until(async () => (await fixture.host.conversationInfo(idB))?.busy === false, "B's first run");
+        const releaseC = fixture.holdAnswerTo("job C");
+        await fixture.invoke(idB, ["job C"]);
+        const requestsBefore = fixture.invokerRequests().length;
+
+        await fixture.startDelivery();
+        await settle();
+        assert.equal(fixture.invokerRequests().length, requestsBefore, "A got no report while B awaits C");
+        assert.deepEqual((await readConversationMeta(fixture.host, idA))?.awaiting, [idB]);
+        releaseC();
+
+        await until(() => fixture.invokerRequests().length === requestsBefore + 1, "B's report to reach A");
+        await settle();
+        assert.equal(fixture.invokerRequests().length, requestsBefore + 1, "B's report reached A exactly once");
+        assert.deepEqual(await awaitingOf(fixture.host, idA), []);
     });
 
     it("delivers a report exactly once when the host closed before it was delivered", async () => {

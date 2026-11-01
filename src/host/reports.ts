@@ -1,7 +1,7 @@
 /**
- * Report delivery (S-001 R-8a, R-17): when an invoked agent's run ends and it isn't parked, its part is done, and its
- * last answer becomes new input to the invoking conversation. A running invoker gets it as a follow-up, an idle or
- * parked one is continued. The request id `report:<invokedId>:<entryId>` makes a repeat harmless, and an invoked id
+ * Report delivery (S-001 R-8a, R-17): when an invoked agent's run ends while it isn't parked and awaits no report, its
+ * part is done, and its last answer becomes new input to the invoking conversation. A running invoker gets it as a
+ * follow-up, an idle or parked one is continued. The request id `report:<invokedId>:<entryId>` makes a repeat harmless, and an invoked id
  * stays in the invoker's `awaiting` until its report is delivered, so a restart redelivers what a crash cut off.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -74,6 +74,8 @@ async function holdReport(host: HarnessHost, input: { invokerId: string; invoked
 async function deliver(host: HarnessHost, invokedId: string): Promise<void> {
     const invoked = await readConversationMeta(host, invokedId);
     if (invoked?.invokedBy === undefined || invoked.parked !== null) return;
+    // A run that ends while the agent still waits for reports of agents it invoked doesn't end its part.
+    if (invoked.awaiting.length > 0) return;
     const invokerId = invoked.invokedBy;
     const invoker = await readConversationMeta(host, invokerId);
     if (invoker === undefined || !invoker.awaiting.includes(invokedId)) return;
