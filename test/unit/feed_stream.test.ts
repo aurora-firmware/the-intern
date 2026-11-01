@@ -1,0 +1,172 @@
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { type ClientRequest, createServer, type IncomingMessage, request, type Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, it } from "node:test";
+import type { Logger } from "../../src/daemon/logger.ts";
+import { createSubscription, type Subscription } from "../../src/feed/observation_feed.ts";
+import { createHttpFront } from "../../src/listeners/http_front.ts";
+import { type Caller, createCatalogue, defineOperation, ServiceError } from "../../src/service/operations.ts";
+
+const SILENT_LOGGER: Logger = { error: () => {}, info: () => {}, debug: () => {} };
+
+type TestDelta = { seq: number; text: string };
+type FeedParts = ReturnType<typeof createSubscription<{ view: string }, TestDelta>>;
+type SubscribeCall = { input: unknown; caller: Caller };
+type FeedEvent = { event?: string; id?: string; data?: string };
+
+/** A hand-made subscription the test drives, and a promise that settles when the stream closes it. */
+type ServedFeed = FeedParts & { closeCalled: Promise<void> };
+
+function serveFeed(snapshot: { view: string }, maxPending?: number): ServedFeed {
+    const parts = createSubscription<{ view: string }, TestDelta>(snapshot, maxPending);
+    const { promise: closeCalled, resolve } = Promise.withResolvers<void>();
+    const original = parts.subscription.close;
+    parts.subscription.close = () => {
+        resolve();
+        original();
+    };
+    return { ...parts, closeCalled };
+}
+
+type Harness = {
+    calls: SubscribeCall[];
+    abort: AbortController;
+    feed: ServedFeed;
+    open(path: string): Promise<IncomingMessage & { clientRequest: ClientRequest }>;
+    close(): Promise<void>;
+};
+
+async function startFront(options: { serverTimeoutMs?: number; maxPending?: number } = {}): Promise<Harness> {
+    const calls: SubscribeCall[] = [];
+    const feed = serveFeed({ view: "start" }, options.maxPending);
+    const subscribe = defineOperation<unknown, unknown, Subscription<unknown, TestDelta>>({
+        name: "feed.subscribe",
+        kind: "read",
+        parse: (raw) => raw,
+        async run(_context, input, caller) {
+            calls.push({ input, caller });
+            const { conversationId } = input as { conversationId?: string };
+            if (conversationId === "unknown") throw new ServiceError("not_found", "No conversation unknown");
+            return feed.subscription;
+        },
+    });
+    const catalogue = createCatalogue([subscribe], { context: {}, phase: () => "ready", logger: SILENT_LOGGER });
+    const front = createHttpFront({ catalogue, wayIn: "web interface" });
+    const abort = new AbortController();
+    const server: Server = createServer((req, res) => {
+        void front.handle(req, res, { signal: abort.signal });
+    });
+    if (options.serverTimeoutMs !== undefined) server.setTimeout(options.serverTimeoutMs);
+    const dir = await mkdtemp(join(tmpdir(), "bob-feed-"));
+    const socketPath = join(dir, "front.sock");
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+
+    function open(path: string): Promise<IncomingMessage & { clientRequest: ClientRequest }> {
+        return new Promise((resolve, reject) => {
+            const req = request({ socketPath, path, method: "GET" }, (res) =>
+                resolve(Object.assign(res, { clientRequest: req })),
+            );
+            req.on("error", reject);
+            req.end();
+        });
+    }
+
+    async function close(): Promise<void> {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await rm(dir, { recursive: true, force: true });
+    }
+
+    return { calls, abort, feed, open, close };
+}
+
+function parseEvent(block: string): FeedEvent {
+    const event: FeedEvent = {};
+    for (const line of block.split("\n")) {
+        const separator = line.indexOf(": ");
+        const field = line.slice(0, separator) as keyof FeedEvent;
+        event[field] = line.slice(separator + 2);
+    }
+    return event;
+}
+
+/** Reads Server-Sent Events from a response, one at a time. */
+function eventReader(res: IncomingMessage): { next(): Promise<FeedEvent>; rest(): Promise<FeedEvent[]> } {
+    let text = "";
+    const ended = new Promise<void>((resolve) => res.on("end", resolve));
+    let wake: (() => void) | undefined;
+    res.setEncoding("utf8");
+    res.on("data", (chunk: string) => {
+        text += chunk;
+        wake?.();
+    });
+    res.on("end", () => wake?.());
+
+    function takeEvent(): FeedEvent | undefined {
+        const boundary = text.indexOf("\n\n");
+        if (boundary === -1) return undefined;
+        const block = text.slice(0, boundary);
+        text = text.slice(boundary + 2);
+        return parseEvent(block);
+    }
+
+    async function next(): Promise<FeedEvent> {
+        for (;;) {
+            const event = takeEvent();
+            if (event) return event;
+            if (res.readableEnded) throw new Error(`Stream ended with no further event; left: ${JSON.stringify(text)}`);
+            await new Promise<void>((resolve) => {
+                wake = resolve;
+            });
+        }
+    }
+
+    async function rest(): Promise<FeedEvent[]> {
+        await ended;
+        const events: FeedEvent[] = [];
+        for (let event = takeEvent(); event; event = takeEvent()) events.push(event);
+        return events;
+    }
+
+    return { next, rest };
+}
+
+describe("feed stream: snapshot then deltas", () => {
+    let harness: Harness;
+    beforeEach(async () => {
+        harness = await startFront();
+    });
+    afterEach(() => harness.close());
+
+    it("answers text/event-stream with the snapshot, then each delta with its seq as id, in order", async () => {
+        const res = await harness.open("/feed?scope=conversation&id=c-1");
+        const events = eventReader(res);
+
+        assert.equal(res.statusCode, 200);
+        assert.match(res.headers["content-type"] ?? "", /^text\/event-stream/);
+        assert.deepEqual(await events.next(), { event: "snapshot", data: '{"view":"start"}' });
+        harness.feed.push({ seq: 1, text: "a" });
+        harness.feed.push({ seq: 2, text: "b" });
+        assert.deepEqual(await events.next(), { event: "delta", id: "1", data: '{"seq":1,"text":"a"}' });
+        assert.deepEqual(await events.next(), { event: "delta", id: "2", data: '{"seq":2,"text":"b"}' });
+    });
+
+    it("subscribes to the conversation named in the query as a team member", async () => {
+        await harness.open("/feed?scope=conversation&id=c-1");
+
+        assert.deepEqual(harness.calls, [
+            {
+                input: { scope: "conversation", conversationId: "c-1" },
+                caller: { actor: { kind: "team_member", wayIn: "web interface" } },
+            },
+        ]);
+    });
+
+    it("subscribes to the instance feed for the instance scope", async () => {
+        await harness.open("/feed?scope=instance");
+
+        assert.deepEqual(harness.calls[0]?.input, { scope: "instance" });
+    });
+});
