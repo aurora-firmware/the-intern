@@ -230,19 +230,33 @@ export async function continueParked(
     return submitted;
 }
 
+// One commit per conversation (ADR-001 decision 4): an aborted conversation is left neither parked nor waiting for
+// a report, and its held messages are withdrawn as an abort withdraws queued input.
+async function clearWaiting(host: HarnessHost, conversationId: string): Promise<void> {
+    if ((await readConversationMeta(host, conversationId)) === undefined) return;
+    await updateMeta(host, conversationId, (meta) => {
+        meta.parked = null;
+        meta.awaiting = [];
+        meta.held = [];
+    });
+}
+
 async function abortRecursively(host: HarnessHost, conversationId: string, aborted: Set<string>): Promise<void> {
     if (aborted.has(conversationId)) return;
-    // Read before aborting: the abort ends the runs whose reports would otherwise change the list.
-    // A conversation that was not seated has no invocation links and awaits nothing.
+    // Read before clearing: the list is what the cascade follows. A conversation that was not seated has no
+    // invocation links and awaits nothing.
     const awaiting = (await readConversationMeta(host, conversationId))?.awaiting ?? [];
     aborted.add(conversationId);
+    // Cleared before the abort and before the recursion, so no cascaded run finds its invoker still waiting.
+    await clearWaiting(host, conversationId);
     await abortConversation(host, conversationId);
     for (const awaitedId of awaiting) await abortRecursively(host, awaitedId, aborted);
 }
 
 /**
  * Aborts the conversation, then every conversation it still awaits a report from, recursively, whether it is
- * steerable or parked. An invoked conversation that has reported has left `awaiting` and is not touched.
+ * steerable or parked. An invoked conversation that has reported has left `awaiting` and is not touched. No aborted
+ * conversation stays parked, waits for a report or keeps held messages.
  */
 export async function abortWithAwaited(host: HarnessHost, conversationId: string): Promise<string[]> {
     const aborted = new Set<string>();
@@ -250,13 +264,13 @@ export async function abortWithAwaited(host: HarnessHost, conversationId: string
     return [...aborted];
 }
 
-/** Aborts every conversation whose `intern.conversation` document names the job. */
+/** Aborts every conversation whose `intern.conversation` document names the job, clearing them all first. */
 export async function abortJobConversations(host: HarnessHost, jobId: string): Promise<string[]> {
-    const aborted: string[] = [];
+    const ofJob: string[] = [];
     for (const { id } of await host.listConversations()) {
-        if ((await readConversationMeta(host, id))?.jobId !== jobId) continue;
-        await abortConversation(host, id);
-        aborted.push(id);
+        if ((await readConversationMeta(host, id))?.jobId === jobId) ofJob.push(id);
     }
-    return aborted;
+    for (const id of ofJob) await clearWaiting(host, id);
+    for (const id of ofJob) await abortConversation(host, id);
+    return ofJob;
 }
