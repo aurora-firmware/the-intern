@@ -2,7 +2,7 @@
 id: S-003
 title: Control endpoint
 version: '0.1'
-status: review  # draft | review | approved | superseded
+status: approved  # draft | review | approved | superseded
 created: '2026-11-01'
 author: planner
 ---
