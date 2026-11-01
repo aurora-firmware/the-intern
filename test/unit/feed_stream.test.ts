@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { getEventListeners, once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { type ClientRequest, createServer, type IncomingMessage, request, type Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -30,16 +31,33 @@ function serveFeed(snapshot: { view: string }, maxPending?: number): ServedFeed 
     return { ...parts, closeCalled };
 }
 
+/** A request the server is handling: settles when the front's handler does, and when the response closes. */
+type HandledRequest = { handled: Promise<void>; responseClosed: Promise<unknown> };
+
+type HarnessOptions = {
+    serverTimeoutMs?: number;
+    maxPending?: number;
+    /** Holds every `feed.subscribe` call until it settles, as a conversation subscribe awaits its watch. */
+    subscribeGate?: Promise<void>;
+};
+
 type Harness = {
     calls: SubscribeCall[];
+    /** Settles when the first `feed.subscribe` call starts. */
+    subscribeStarted: Promise<void>;
+    handledRequests: HandledRequest[];
+    /** Sends a request without waiting for its answer. */
+    send(path: string): ClientRequest;
     abort: AbortController;
     feed: ServedFeed;
     open(path: string): Promise<IncomingMessage & { clientRequest: ClientRequest }>;
     close(): Promise<void>;
 };
 
-async function startFront(options: { serverTimeoutMs?: number; maxPending?: number } = {}): Promise<Harness> {
+async function startFront(options: HarnessOptions = {}): Promise<Harness> {
     const calls: SubscribeCall[] = [];
+    const handledRequests: HandledRequest[] = [];
+    const { promise: subscribeStarted, resolve: markSubscribeStarted } = Promise.withResolvers<void>();
     const feed = serveFeed({ view: "start" }, options.maxPending);
     const subscribe = defineOperation<unknown, unknown, Subscription<unknown, TestDelta>>({
         name: "feed.subscribe",
@@ -47,6 +65,8 @@ async function startFront(options: { serverTimeoutMs?: number; maxPending?: numb
         parse: (raw) => raw,
         async run(_context, input, caller) {
             calls.push({ input, caller });
+            markSubscribeStarted();
+            await options.subscribeGate;
             const { conversationId } = input as { conversationId?: string };
             if (conversationId === "unknown") throw new ServiceError("not_found", "No conversation unknown");
             return feed.subscription;
@@ -56,12 +76,20 @@ async function startFront(options: { serverTimeoutMs?: number; maxPending?: numb
     const front = createHttpFront({ catalogue, wayIn: "web interface" });
     const abort = new AbortController();
     const server: Server = createServer((req, res) => {
-        void front.handle(req, res, { signal: abort.signal });
+        const responseClosed = once(res, "close");
+        handledRequests.push({ handled: front.handle(req, res, { signal: abort.signal }), responseClosed });
     });
     if (options.serverTimeoutMs !== undefined) server.setTimeout(options.serverTimeoutMs);
     const dir = await mkdtemp(join(tmpdir(), "bob-feed-"));
     const socketPath = join(dir, "front.sock");
     await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+
+    function send(path: string): ClientRequest {
+        const req = request({ socketPath, path, method: "GET" });
+        req.on("error", () => {});
+        req.end();
+        return req;
+    }
 
     function open(path: string): Promise<IncomingMessage & { clientRequest: ClientRequest }> {
         return new Promise((resolve, reject) => {
@@ -79,7 +107,7 @@ async function startFront(options: { serverTimeoutMs?: number; maxPending?: numb
         await rm(dir, { recursive: true, force: true });
     }
 
-    return { calls, abort, feed, open, close };
+    return { calls, subscribeStarted, handledRequests, send, abort, feed, open, close };
 }
 
 function parseEvent(block: string): FeedEvent {
@@ -341,5 +369,31 @@ describe("feed stream: a quiet stream", () => {
         harness.feed.push({ seq: 1, text: "late" });
 
         assert.deepEqual(await events.next(), { event: "delta", id: "1", data: '{"seq":1,"text":"late"}' });
+    });
+});
+
+describe("feed stream: a client that leaves while subscribing", () => {
+    let harness: Harness;
+    let releaseSubscribe: () => void;
+    beforeEach(async () => {
+        const gate = Promise.withResolvers<void>();
+        releaseSubscribe = gate.resolve;
+        harness = await startFront({ subscribeGate: gate.promise });
+    });
+    afterEach(() => harness.close());
+
+    it("closes the subscription and settles the request at once, leaving no listener on the signal", async () => {
+        const clientRequest = harness.send("/feed?scope=instance");
+        await harness.subscribeStarted;
+        clientRequest.destroy();
+        const [handledRequest] = harness.handledRequests;
+        assert.ok(handledRequest);
+        await handledRequest.responseClosed;
+
+        releaseSubscribe();
+        await handledRequest.handled;
+
+        assert.deepEqual(await harness.feed.subscription.next(), { closed: "unsubscribed" });
+        assert.equal(getEventListeners(harness.abort.signal, "abort").length, 0);
     });
 });

@@ -14,9 +14,12 @@ function formatEvent(event: FeedEvent): string {
     return `event: ${event.name}\n${idLine}data: ${JSON.stringify(event.data)}\n\n`;
 }
 
-/** Resolves once the response can take more: at once, or when it drains, closes or the signal aborts. */
+/**
+ * Resolves once the response can take more: at once, or when it drains, closes or the signal aborts. A destroyed
+ * response refuses the write and has already closed, so it resolves at once too.
+ */
 function writeEvent(res: ServerResponse, event: FeedEvent, signal: AbortSignal): Promise<void> {
-    if (res.write(formatEvent(event)) || signal.aborted) return Promise.resolve();
+    if (res.write(formatEvent(event)) || res.destroyed || signal.aborted) return Promise.resolve();
     return new Promise((resolve) => {
         const settle = () => {
             res.off("drain", settle);
