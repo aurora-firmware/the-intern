@@ -46,9 +46,8 @@ async function holdIfParked(host: HarnessHost, conversationId: ConversationId, i
 
 /**
  * Steers the target conversation. Returns `held: true` when the target is parked and the message waits for it to
- * continue, with no submission. Otherwise an `intern.steer` entry naming the actor is written first, then the message
- * is submitted as input. pi-durable cannot write both in one commit, so each carries a request id derived from the
- * message's own: a repeated call after a crash between them adds neither twice.
+ * continue, with no submission. Otherwise the message is submitted as input and placed as the `intern.steer` entry
+ * itself (its data names the actor and keeps the text), so the record and the message are one commit.
  */
 export async function steerConversation(
     host: HarnessHost,
@@ -57,17 +56,15 @@ export async function steerConversation(
 ): Promise<{ held: boolean; submissionId?: string }> {
     const conversation = await requireConversation(host, targetId);
     if (await holdIfParked(host, conversation.id, input)) return { held: true };
-    const record: SteerRecord = { actor: input.actor, mode: input.mode };
-    await conversation.submit(
-        {
-            type: "write",
-            entry: { kind: STEER_RECORD_KIND, data: toStoredJson(record) as never },
-            requestId: `${input.requestId}:steer`,
-        },
-        context,
-    );
+    const placed: SteerRecord & { content: string } = { actor: input.actor, mode: input.mode, content: input.content };
     const submission = await conversation.submit(
-        { type: "input", content: input.content, requestId: input.requestId, whenBusy: input.mode },
+        {
+            type: "input",
+            content: input.content,
+            requestId: input.requestId,
+            whenBusy: input.mode,
+            entry: { kind: STEER_RECORD_KIND, data: toStoredJson(placed) as never },
+        },
         context,
     );
     return { held: false, submissionId: String(submission.id) };

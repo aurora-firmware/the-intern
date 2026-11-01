@@ -154,8 +154,10 @@ async function rejectionCode(promise: Promise<unknown>): Promise<string> {
     return assert.fail("expected the call to reject");
 }
 
+// A routed follow-up or steer input is placed as its intern.steer entry; a reject input stays a pi.user entry.
+const INPUT_KINDS = ["pi.user", "intern.steer"];
 const userTexts = (entries: HostEntry[]): string[] =>
-    entries.filter((entry) => entry.kind === "pi.user").map((entry) => JSON.stringify(entry.data));
+    entries.filter((entry) => INPUT_KINDS.includes(entry.kind)).map((entry) => JSON.stringify(entry.data));
 
 async function isBusy(fixture: Fixture): Promise<boolean | undefined> {
     return (await fixture.host.conversationInfo(fixture.conversationId))?.busy;

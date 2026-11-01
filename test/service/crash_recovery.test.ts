@@ -98,7 +98,8 @@ const isToolResult = (entry: Entry) => entry.kind === "pi.tool-result";
 const mentions = (text: string) => (entry: Entry) =>
     entry.kind === "pi.assistant" && JSON.stringify(entry.data).includes(text);
 
-const isUserInput = (entry: Entry) => entry.kind === "pi.user";
+// A follow-up or steer input is placed as its intern.steer entry, a plain input as pi.user.
+const isUserInput = (entry: Entry) => entry.kind === "pi.user" || entry.kind === "intern.steer";
 
 /** Waits until the run has taken its input and has no answer yet, which is the span of the model request. */
 async function untilModelRequestInFlight(daemon: DaemonProcess, conversationId: string): Promise<void> {

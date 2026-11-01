@@ -178,7 +178,10 @@ async function steerEntriesOf(ctx: ServiceContext, conversationId: string): Prom
     const page = await conversation?.entries({ order: "ascending" }, 500, undefined, BACKGROUND_CONTEXT);
     return (page?.items ?? [])
         .filter((entry) => entry.kind === STEER_RECORD_KIND)
-        .map((entry) => entry.data as SteerEntry);
+        .map((entry) => {
+            const { actor, mode } = entry.data as SteerEntry;
+            return { actor, mode };
+        });
 }
 
 // The transcript in order, as the entry kind and the text a message entry carries (empty for other entries).
@@ -191,13 +194,27 @@ async function transcriptOf(ctx: ServiceContext, conversationId: string): Promis
     return (page?.items ?? []).map((entry) => ({ kind: entry.kind, text: textOf(entry.model?.[0]) }));
 }
 
-async function assertRecordPrecedesMessage(ctx: ServiceContext, conversationId: string, message: string) {
+// The steered message is placed as the intern.steer entry itself, so the record and the message are one commit and
+// no pi.user entry repeats it.
+async function assertPlacedAsSteerEntry(ctx: ServiceContext, conversationId: string, message: string) {
     const transcript = await transcriptOf(ctx, conversationId);
-    const recordAt = transcript.findIndex((entry) => entry.kind === STEER_RECORD_KIND);
-    const messageAt = transcript.findIndex((entry) => entry.text === message);
-    assert.ok(recordAt >= 0, "the steer record is in the transcript");
-    assert.ok(messageAt >= 0, "the message is in the transcript");
-    assert.ok(recordAt < messageAt, `the steer record (${recordAt}) precedes the message (${messageAt})`);
+    const carriers = transcript.filter((entry) => entry.text === message);
+    assert.deepEqual(
+        carriers.map((entry) => entry.kind),
+        [STEER_RECORD_KIND],
+        "the message is placed once, as the steer entry",
+    );
+    const placed = (await rawSteerDataOf(ctx, conversationId)).filter((data) => data.content === message);
+    assert.equal(placed.length, 1, "the steer entry's data shows the message text");
+}
+
+async function rawSteerDataOf(ctx: ServiceContext, conversationId: string): Promise<{ content?: string }[]> {
+    const conversation = await internalHarness(ctx.host).conversation(
+        Number(conversationId) as ConversationId,
+        BACKGROUND_CONTEXT,
+    );
+    const page = await conversation?.entries({ order: "ascending" }, 500, undefined, BACKGROUND_CONTEXT);
+    return (page?.items ?? []).filter((entry) => entry.kind === STEER_RECORD_KIND).map((e) => e.data as never);
 }
 
 const isBusy = async (ctx: ServiceContext, id: string) => (await ctx.host.conversationInfo(id))?.busy !== false;
@@ -235,7 +252,7 @@ describe("the steer tool and steering a conversation", () => {
         assert.deepEqual(await steerEntriesOf(started.ctx, ids.target), [
             { actor: { kind: "agent", conversationId: steererId, role: "gp" }, mode: "steer" },
         ]);
-        await assertRecordPrecedesMessage(started.ctx, ids.target, "change course");
+        await assertPlacedAsSteerEntry(started.ctx, ids.target, "change course");
     });
 
     it("delivers a follow-up only after the run ends", async () => {
@@ -309,7 +326,7 @@ describe("the steer tool and steering a conversation", () => {
         await waitFor(() => started.callsOf("target work").length === 2, "the run for the new input");
         assert.ok(usersOf((started.callsOf("target work")[1] as ModelCall).messages).includes("one more thing"));
         assert.deepEqual(await steerEntriesOf(started.ctx, targetId), [{ actor: CLI_ACTOR, mode: "followUp" }]);
-        await assertRecordPrecedesMessage(started.ctx, targetId, "one more thing");
+        await assertPlacedAsSteerEntry(started.ctx, targetId, "one more thing");
     });
 
     describe("a parked conversation", () => {
