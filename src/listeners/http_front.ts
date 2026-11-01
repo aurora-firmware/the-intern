@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Subscription } from "../feed/observation_feed.ts";
 import { type Caller, type Catalogue, ServiceError, type ServiceErrorCode } from "../service/operations.ts";
+import { streamFeed } from "./feed_stream.ts";
 
 export type WayIn = "command line" | "web interface";
 
@@ -29,6 +31,10 @@ export const STATUS_BY_CODE: Record<ServiceErrorCode, number> = {
 export const STREAM_ROUTES: Readonly<Record<string, string>> = Object.freeze({ "feed.subscribe": "GET /feed" });
 
 const OPERATION_ROUTE = /^\/operations\/([^/]+)$/;
+const FEED_PATH = "/feed";
+const SUBSCRIBE_OPERATION = "feed.subscribe";
+
+type FeedSubscription = Subscription<unknown, { seq: number }>;
 const JSON_MEDIA_TYPE = "application/json";
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -119,13 +125,36 @@ async function readInput(req: IncomingMessage): Promise<unknown> {
 }
 
 /**
- * The path of a request target. Node's parser accepts some targets the URL parser refuses; such a target is kept as
- * it is, so it matches no route and is still answered.
+ * The path and query of a request target. Node's parser accepts some targets the URL parser refuses; such a target
+ * is kept as it is, with no query, so it matches no route and is still answered.
  */
-function pathnameOf(target: string): string {
+function parseTarget(target: string): { pathname: string; query: URLSearchParams } {
     // A fixed base: the front never reads the Host header (S-003 REQ-014).
-    if (!URL.canParse(target, "http://front.invalid")) return target;
-    return new URL(target, "http://front.invalid").pathname;
+    if (!URL.canParse(target, "http://front.invalid")) return { pathname: target, query: new URLSearchParams() };
+    const url = new URL(target, "http://front.invalid");
+    return { pathname: url.pathname, query: url.searchParams };
+}
+
+function isFeedRoute(req: IncomingMessage, pathname: string): boolean {
+    return req.method === "GET" && pathname === FEED_PATH;
+}
+
+function conversationIdOf(query: URLSearchParams): string {
+    const id = query.get("id");
+    if (!id)
+        throw new ServiceError("invalid_input", "Query parameter id must name a conversation for scope conversation");
+    return id;
+}
+
+/** The `feed.subscribe` input the query of `GET /feed` stands for (S-003 Interfaces). */
+function subscribeInputOf(query: URLSearchParams): { scope: string; conversationId?: string } {
+    const scope = query.get("scope");
+    if (scope === "instance") return { scope };
+    if (scope === "conversation") return { scope, conversationId: conversationIdOf(query) };
+    throw new ServiceError(
+        "invalid_input",
+        `Query parameter scope must be "instance" or "conversation", got ${scope ?? "none"}`,
+    );
 }
 
 function operationNameOf(req: IncomingMessage, pathname: string): string | undefined {
@@ -179,6 +208,18 @@ export function createHttpFront(options: HttpFrontOptions): HttpFront {
         }
     }
 
+    async function openFeed(res: ServerResponse, query: URLSearchParams, signal: AbortSignal): Promise<void> {
+        let subscription: FeedSubscription;
+        try {
+            const input = subscribeInputOf(query);
+            subscription = (await options.catalogue.invoke(SUBSCRIBE_OPERATION, input, caller)) as FeedSubscription;
+        } catch (error) {
+            sendError(res, asServiceError(error, SUBSCRIBE_OPERATION));
+            return;
+        }
+        await streamFeed(subscription, res, signal);
+    }
+
     async function answerUnrouted(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
         if (options.fallback && (await options.fallback(req, res))) return;
         if (!req.complete) res.shouldKeepAlive = false;
@@ -187,10 +228,11 @@ export function createHttpFront(options: HttpFrontOptions): HttpFront {
 
     return {
         async handle(req, res, ctx) {
-            const pathname = pathnameOf(req.url ?? "/");
+            const { pathname, query } = parseTarget(req.url ?? "/");
             const name = operationNameOf(req, pathname);
-            if (name === undefined) await answerUnrouted(req, res, pathname);
-            else await callOperation(req, res, name, ctx.signal);
+            if (name !== undefined) await callOperation(req, res, name, ctx.signal);
+            else if (isFeedRoute(req, pathname)) await openFeed(res, query, ctx.signal);
+            else await answerUnrouted(req, res, pathname);
         },
     };
 }
