@@ -100,6 +100,44 @@ pi agent setting has no effect. A value of the wrong type is left out, and the d
 - A stop takes at most 10 seconds. If the service hasn't finished by then, it exits with a non-zero status. Queued
   and waiting work is kept either way.
 
+## Reach The Intern over the network
+
+On the machine, the command line reaches the service through the local socket `bob.sock` in the runtime directory. It
+needs no setting.
+
+Other computers reach The Intern through the network listener, which serves the web interface. The network listener is
+off until you add a `[network]` section to `config.toml`. To open it to the computers on your LAN, add:
+
+```toml
+[network]
+address = "0.0.0.0"
+port = 8080
+```
+
+| Key       | Value                                                                                          |
+| --------- | ---------------------------------------------------------------------------------------------- |
+| `address` | an IP address or a host name of the machine. `0.0.0.0` listens on every network interface.     |
+| `port`    | a whole number from 1 to 65535                                                                 |
+
+Both keys are required, and the section takes no other key. Choose a fixed port that nothing else on the machine uses.
+
+- Without the section, The Intern listens on no network port.
+- The service reads the section at start. A change applies at the next restart.
+- If a key is missing, has an invalid value, or isn't one of these two, the service refuses to start and names the file,
+  the key and the reason.
+- If the port is in use, or the address isn't one of the machine's, the service stops during startup with an error that
+  names the address, the port and the reason. Free the port or fix the address, then start the service again.
+
+After a restart, open `http://<address>:<port>/` in a browser, with the machine's address or host name on your network,
+for example `http://192.168.1.20:8080/`. Until the web interface is released, the page reads "The web interface comes
+later."
+
+::: warning No login and no encryption
+The network listener has no login and no encryption. Anyone who can reach its address and port can use The Intern,
+with the service account's access, and what they send and receive crosses the network as plain text. Limit who can
+reach that address with your network setup, for example with a firewall.
+:::
+
 ## Who can use The Intern
 
 No listener asks who you are. Everyone who can reach the service is an equal team member, and what they can do is
