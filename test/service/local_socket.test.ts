@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import fsPromises, { access, stat, writeFile } from "node:fs/promises";
 import { type IncomingMessage, request, Server } from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import { syncBuiltinESMExports } from "node:module";
 import { afterEach, describe, it, mock } from "node:test";
 import type { Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
