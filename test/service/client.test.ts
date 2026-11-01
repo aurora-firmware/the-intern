@@ -126,6 +126,12 @@ async function rejection(promise: Promise<unknown>): Promise<unknown> {
     );
 }
 
+/** The code and message an operation fails with in-process. */
+async function inProcessFailure(fixture: Fixture, name: string, input: unknown) {
+    const error = (await rejection(fixture.invoke(name, input))) as Error & { code: string };
+    return { code: error.code, message: error.message };
+}
+
 describe("calls through the client over each listener", { timeout: TEST_TIMEOUT_MS }, () => {
     for (const listener of LISTENERS) {
         it(`returns the in-process daemon.status over the ${listener}`, async () => {
@@ -138,9 +144,7 @@ describe("calls through the client over each listener", { timeout: TEST_TIMEOUT_
 
         it(`fails over the ${listener} with ClientError carrying the in-process code and message`, async () => {
             const fixture = await startFixture();
-            const inProcess = (await rejection(fixture.invoke("conversations.get", UNKNOWN_CONVERSATION))) as Error & {
-                code: string;
-            };
+            const inProcess = await inProcessFailure(fixture, "conversations.get", UNKNOWN_CONVERSATION);
 
             const error = await rejection(
                 fixture.clientOver(listener).invoke("conversations.get", UNKNOWN_CONVERSATION),
@@ -148,27 +152,19 @@ describe("calls through the client over each listener", { timeout: TEST_TIMEOUT_
 
             assert.ok(error instanceof ClientError, `the call fails with ClientError, not ${error}`);
             assert.equal(inProcess.code, "not_found");
-            assert.deepEqual(
-                { code: error.code, message: error.message },
-                { code: inProcess.code, message: inProcess.message },
-            );
+            assert.deepEqual({ code: error.code, message: error.message }, inProcess);
         });
 
         it(`fails a refused subscription over the ${listener} with the in-process code and message`, async () => {
             const fixture = await startFixture();
-            const inProcess = (await rejection(fixture.invoke("feed.subscribe", UNKNOWN_CONVERSATION_FEED))) as Error & {
-                code: string;
-            };
+            const inProcess = await inProcessFailure(fixture, "feed.subscribe", UNKNOWN_CONVERSATION_FEED);
 
             const feed = fixture.clientOver(listener).subscribe(UNKNOWN_CONVERSATION_FEED);
             const error = await rejection(feed.next());
 
             assert.ok(error instanceof ClientError, `the subscription fails with ClientError, not ${error}`);
             assert.equal(inProcess.code, "not_found");
-            assert.deepEqual(
-                { code: error.code, message: error.message },
-                { code: inProcess.code, message: inProcess.message },
-            );
+            assert.deepEqual({ code: error.code, message: error.message }, inProcess);
         });
     }
 });
