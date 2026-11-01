@@ -46,37 +46,41 @@ function parseAnswer(text: string, status: number, baseUrl: string): unknown {
 
 /**
  * The body's text chunks, read with `getReader()` because not every browser can iterate a `ReadableStream` with
- * `for await`. A body that fails while read fails as unreachable; a reader that stops early cancels the body.
+ * `for await`. A body that fails while read fails as unreachable.
  */
-async function* chunksOf(body: ReadableStream<Uint8Array>, baseUrl: string): AsyncIterable<string> {
-    const reader = body.getReader();
+async function* chunksOf(reader: ReadableStreamDefaultReader<Uint8Array>, baseUrl: string): AsyncIterable<string> {
     const decoder = new TextDecoder();
-    // Cancelling a body that already closed or failed is not needed, and on a failed body it would throw again.
-    let isSettled = false;
-    try {
-        while (true) {
-            let read: ReadableStreamReadResult<Uint8Array>;
-            try {
-                read = await reader.read();
-            } catch (error) {
-                isSettled = true;
-                throw new UnreachableError(baseUrl, reasonOf(error));
-            }
-            if (read.done) {
-                isSettled = true;
-                yield decoder.decode();
-                return;
-            }
-            yield decoder.decode(read.value, { stream: true });
+    while (true) {
+        let read: ReadableStreamReadResult<Uint8Array>;
+        try {
+            read = await reader.read();
+        } catch (error) {
+            throw new UnreachableError(baseUrl, reasonOf(error));
         }
-    } finally {
-        if (!isSettled) await reader.cancel();
+        if (read.done) {
+            yield decoder.decode();
+            return;
+        }
+        yield decoder.decode(read.value, { stream: true });
+    }
+}
+
+/**
+ * Cancels the feed body. `cancel()` rejects when the connection failed, even while no read was pending; before `end`
+ * that is the unreachable failure. After `end` the feed is complete and the stream closes anyway (S-003), so a
+ * connection that fails as it closes takes nothing from the reader and is not reported.
+ */
+async function cancelBody(reader: ReadableStreamDefaultReader<Uint8Array>, baseUrl: string, hasEnded: boolean) {
+    try {
+        await reader.cancel();
+    } catch (error) {
+        if (!hasEnded) throw new UnreachableError(baseUrl, reasonOf(error));
     }
 }
 
 /**
  * Opens the feed route and yields its events up to and including `end`, then cancels the body. It never reopens the
- * feed, as an `EventSource` would; a body that closes before `end` fails as unreachable.
+ * feed, as an `EventSource` would; a body that closes or fails before `end` fails as unreachable.
  */
 async function* streamEvents(baseUrl: string, path: string): AsyncIterable<StreamEvent> {
     const response = await send(new URL(path, baseUrl), { method: "GET" }, baseUrl);
@@ -84,11 +88,19 @@ async function* streamEvents(baseUrl: string, path: string): AsyncIterable<Strea
         throw answerError(parseAnswer(await readText(response, baseUrl), response.status, baseUrl));
     }
     if (response.body === null) throw new UnreachableError(baseUrl, "the feed answer has no body");
-    for await (const event of parseEventStream(chunksOf(response.body, baseUrl))) {
-        yield event;
-        if (event.event === "end") return;
+    const reader = response.body.getReader();
+    // Set before `end` is yielded, so a reader that stops right after `end` still counts as a complete feed.
+    let hasEnded = false;
+    try {
+        for await (const event of parseEventStream(chunksOf(reader, baseUrl))) {
+            hasEnded = event.event === "end";
+            yield event;
+            if (hasEnded) return;
+        }
+        throw new UnreachableError(baseUrl, `the feed ${path} closed before its end event`);
+    } finally {
+        await cancelBody(reader, baseUrl, hasEnded);
     }
-    throw new UnreachableError(baseUrl, `the feed ${path} closed before its end event`);
 }
 
 export function browserTransport(baseUrl: string): Transport {
