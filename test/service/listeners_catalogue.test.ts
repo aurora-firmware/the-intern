@@ -513,3 +513,41 @@ describe("error outcomes through both listeners", () => {
         await assertErrorThroughListeners(failingCall, "internal");
     });
 });
+
+const FOREIGN_HEADERS: OutgoingHttpHeaders = {
+    origin: "https://elsewhere.example",
+    host: "attacker.example:9999",
+    referer: "https://elsewhere.example/page",
+};
+const JSON_HEADERS: OutgoingHttpHeaders = { "content-type": "application/json" };
+const LISTENERS = ["local socket", "network listener"] as const;
+
+function corsHeaderNames(headers: IncomingHttpHeaders): string[] {
+    return Object.keys(headers).filter((name) => name.startsWith("access-control-"));
+}
+
+describe("no access checks through both listeners", () => {
+    it("answers calls with foreign Origin and Host headers and no credentials as without them, with no CORS header", async () => {
+        const fixture = await startFixture();
+        const requests = [
+            { method: "POST", path: "/operations/daemon.status", body: "{}" },
+            { method: "POST", path: "/operations/conversations.list", body: "{}" },
+            { method: "POST", path: "/operations/conversations.get", body: '{"conversationId":"9999"}' },
+            { method: "POST", path: "/operations/no.such", body: "{}" },
+            { method: "OPTIONS", path: "/operations/daemon.status" },
+        ];
+
+        for (const way of LISTENERS) {
+            for (const { method, path, body } of requests) {
+                const target = fixture.targetOf(way);
+                const plain = await send(target, method, path, JSON_HEADERS, body);
+                const foreign = await send(target, method, path, { ...JSON_HEADERS, ...FOREIGN_HEADERS }, body);
+
+                const what = `${method} ${path} over the ${way}`;
+                assert.deepEqual([foreign.status, foreign.body], [plain.status, plain.body], what);
+                assert.deepEqual(corsHeaderNames(foreign.headers), [], `${what} sends no CORS header`);
+                assert.deepEqual(corsHeaderNames(plain.headers), [], `${what} sends no CORS header`);
+            }
+        }
+    });
+});
