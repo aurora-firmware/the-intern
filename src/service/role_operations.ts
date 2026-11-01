@@ -1,6 +1,6 @@
 /**
- * The role operations (S-002 R-12, R-13, R-22): list roles, and create, change, restore and remove one. Each change
- * is validated by the role catalog, written to the configuration file first and applied at once.
+ * The role operations (S-002 REQ-012, REQ-013, REQ-022): list roles, and create, change, restore and remove one. Each
+ * change is validated by the role catalog, written to the configuration file first and applied at once.
  */
 import { isDeepStrictEqual } from "node:util";
 import type { AgentsComponent } from "../agents/agents_component.ts";

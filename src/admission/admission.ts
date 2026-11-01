@@ -1,5 +1,5 @@
 /**
- * Admission (S-002 component 6, R-10, R-11): which conversations may make model requests, held in the session-wide
+ * Admission (S-002 Admission, REQ-010, REQ-011): which conversations may make model requests, held in the session-wide
  * document `intern.admission` so the order survives a restart. Every change is its own commit, because the document
  * is the fact itself. `restore()` must run at startup before `host.resume()`.
  */

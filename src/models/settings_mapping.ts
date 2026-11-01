@@ -1,7 +1,7 @@
 /**
- * Maps pi agent's `settings.json` onto the settings pi-durable's Harness reads (S-002 R-19). pi agent's file does not
- * reach the harness by itself, so only the settings listed in `MAPPED_PI_SETTINGS` take effect; every other pi agent
- * setting is ignored. Pure core: no pi-durable import and no I/O.
+ * Maps pi agent's `settings.json` onto the settings pi-durable's Harness reads (S-002 REQ-019). pi agent's file does
+ * not reach the harness by itself, so only the settings listed in `MAPPED_PI_SETTINGS` take effect; every other pi
+ * agent setting is ignored. Pure core: no pi-durable import and no I/O.
  */
 
 type Json = Record<string, unknown>;

@@ -1,5 +1,5 @@
 /**
- * The conversation control operations (S-002 R-12, R-13): submit input, withdraw a queued input, abort, reset and
+ * The conversation control operations (S-002 REQ-012, REQ-013): submit input, withdraw a queued input, abort, reset and
  * compact. They need only the host; the host's errors map to the service error codes.
  */
 import {

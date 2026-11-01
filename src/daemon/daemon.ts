@@ -1,8 +1,8 @@
 /**
- * The daemon's startup and shutdown (S-002 component 1, R-2 to R-5, R-7). Startup is eight steps in a fixed order. A
- * failing step is logged with its number, name and cause, the earlier steps are undone, and `exited` settles with 1.
- * Shutdown undoes the same steps in reverse and settles with 0, or with 1 when it overruns `STOP_BOUND_MS`. A storage
- * failure runs the shutdown without closing the host and settles with 1. `runDaemon` never throws.
+ * The daemon's startup and shutdown (S-002 Lifecycle, REQ-002 to REQ-005, REQ-007). Startup is eight steps in a fixed
+ * order. A failing step is logged with its number, name and cause, the earlier steps are undone, and `exited` settles
+ * with 1. Shutdown undoes the same steps in reverse and settles with 0, or with 1 when it overruns `STOP_BOUND_MS`. A
+ * storage failure runs the shutdown without closing the host and settles with 1. `runDaemon` never throws.
  */
 import { type Admission, createAdmission } from "../admission/admission.ts";
 import { createAdmissionGate } from "../admission/admission_extension.ts";

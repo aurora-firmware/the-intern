@@ -1,7 +1,7 @@
 /**
- * Seating (S-001 R-4, R-5, R-7, R-12, R-17): the only path that changes a conversation's seat. The seat goes into the
- * conversation's pi-durable agent, a snapshot of it and the job links into the `intern.conversation` document, and a
- * seat record into the transcript, all in one commit, so a seat is never applied without its record.
+ * Seating (S-001 REQ-004, REQ-005, REQ-007, REQ-012, REQ-017): the only path that changes a conversation's seat. The
+ * seat goes into the conversation's pi-durable agent, a snapshot of it and the job links into the `intern.conversation`
+ * document, and a seat record into the transcript, all in one commit, so a seat is never applied without its record.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {

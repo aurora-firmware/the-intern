@@ -1,5 +1,5 @@
 /**
- * The-intern's admission extension (S-002 component 6, ADR-001): a pi-durable generation hook that waits for a worker
+ * The-intern's admission extension (S-002 Admission, ADR-001): a pi-durable generation hook that waits for a worker
  * thread before every model request. Hooks can't write, so the hook only calls the host-side admission it is bound to.
  * The extension is built before the host opens, because the host installs it; the admission binds to it afterwards.
  */

@@ -1,7 +1,7 @@
 /**
- * The model runtime (S-002 component 4): models and credentials come from the service account's pi agent folder and
- * are used in place (R-18, ADR-002 decision 5). The folder is only read here, except that pi's own credential store
- * writes an OAuth refresh back to `auth.json` under its own lock. No pi-durable import.
+ * The model runtime (S-002 Model runtime): models and credentials come from the service account's pi agent folder and
+ * are used in place (S-002 REQ-018, ADR-002 decision 5). The folder is only read here, except that pi's own credential
+ * store writes an OAuth refresh back to `auth.json` under its own lock. No pi-durable import.
  */
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";

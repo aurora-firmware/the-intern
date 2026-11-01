@@ -1,5 +1,5 @@
 /**
- * Attribution (S-001 R-7): every assistant entry of a transcript names the seat that produced it, which is the seat
+ * Attribution (S-001 REQ-007): every assistant entry of a transcript names the seat that produced it, which is the seat
  * of the latest seat record before it.
  */
 import type { HostEntry } from "../host/harness_host.ts";

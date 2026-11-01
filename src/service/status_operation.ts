@@ -1,5 +1,5 @@
 /**
- * The `daemon.status` operation (S-002 component 9, R-3, R-11, R-20): the daemon's phase, versions, instance
+ * The `daemon.status` operation (S-002 Status, REQ-003, REQ-011, REQ-020): the daemon's phase, versions, instance
  * directories and worker-thread capacity. It is allowed in every phase so it can report `starting` until ready.
  */
 import type { AdmissionSnapshot } from "../admission/admission.ts";

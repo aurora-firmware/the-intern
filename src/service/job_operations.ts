@@ -1,7 +1,7 @@
 /**
- * The control operation that starts a job's lead conversation (S-001 R-12, S-002 R-12, R-13). The Jobs component calls
- * it when a job is created. The job id is the idempotency key: a job has one lead conversation, and a repeated call
- * returns it and submits the first input once, because the input's request id is derived from the job id.
+ * The control operation that starts a job's lead conversation (S-001 REQ-012, S-002 REQ-012, REQ-013). The Jobs
+ * component calls it when a job is created. The job id is the idempotency key: a job has one lead conversation, and a
+ * repeated call returns it and submits the first input once, because the input's request id is derived from the job id.
  */
 import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { ServiceContext } from "../daemon/daemon.ts";

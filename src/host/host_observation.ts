@@ -1,7 +1,7 @@
 /**
- * Committed-change observation (S-002 component 8 input): the observation feed and admission watch conversations and
- * the instance through these functions, never through pi-durable. Listeners run synchronously inside pi-durable's
- * delivery and are never awaited, so a listener can't delay a commit; buffering is the feed's job.
+ * Committed-change observation (the input of the S-002 Observation feed): the observation feed and admission watch
+ * conversations and the instance through these functions, never through pi-durable. Listeners run synchronously inside
+ * pi-durable's delivery and are never awaited, so a listener can't delay a commit; buffering is the feed's job.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { CommitChange, ConversationId, EntryRecord, JsonObject, TaskId } from "@earendil-works/pi-durable";

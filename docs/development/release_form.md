@@ -8,7 +8,7 @@ need. It does not change [tech_stack.md](tech_stack.md); recording the choice th
 The supported platforms are Linux on x64 and macOS on Apple silicon (S-000, Project exclusions). The service runs as the
 installing person's account (S-000, Installation and service setup; [ADR-002](../ai-team/decisions/ADR-002-equal-team-members-bounded-by-the-service-account.md),
 decision 4), runs in the foreground, exits non-zero on every error and is restarted by the operating system's
-supervisor ([S-002](../ai-team/specs/S-002-daemon-and-host-runtime.md) R-4;
+supervisor ([S-002](../ai-team/specs/S-002-daemon-and-host-runtime.md) REQ-004;
 [ADR-001](../ai-team/decisions/ADR-001-one-daemon-process-owns-one-pi-durable-database.md), decision 5).
 
 ## How to read this page
@@ -61,8 +61,8 @@ service definition, and it is covered after the two platforms.
 ### Linux x64: systemd with lingering for the installing account
 
 - `bob` writes a user unit to `~/.config/systemd/user/` (a documented load path for user mode [4]) with
-  `Restart=on-failure`, which restarts the service on a non-zero exit and not after a clean exit [3]. That is the R-4
-  contract. The unit is wanted by `default.target`. `systemctl --user enable --now` starts it.
+  `Restart=on-failure`, which restarts the service on a non-zero exit and not after a clean exit [3]. That is the
+  REQ-004 contract. The unit is wanted by `default.target`. `systemctl --user enable --now` starts it.
 - A user manager normally runs only while the person is logged in. With lingering enabled, "a user manager is spawned for the user at boot and kept around after
   logouts", which "allows users who are not logged in to run long-running services": `loginctl enable-linger <user>`
   [5]. That is what lets the service start at boot with no login. `bob` enables it for the installing account.
@@ -82,9 +82,9 @@ service definition, and it is covered after the two platforms.
 | **LaunchAgent**, plist in `~/Library/LaunchAgents` | **No.** A user agent "executes only while that user is logged in" [6] | No (the file is the user's own [6]) |
 
 - Chosen design: a LaunchDaemon with `UserName`, `KeepAlive` with `SuccessfulExit` false (restart on a non-zero exit,
-  matching R-4 [9]), `RunAtLoad`, and `StandardErrorPath` for the diagnostics R-4 writes to standard error [9]. launchd
-  does not respawn a job more than once every 10 seconds by default (`ThrottleInterval` [9]), so a start-up failure
-  loops slowly instead of hot.
+  matching REQ-004 [9]), `RunAtLoad`, and `StandardErrorPath` for the diagnostics REQ-004 writes to standard error [9].
+  launchd does not respawn a job more than once every 10 seconds by default (`ThrottleInterval` [9]), so a start-up
+  failure loops slowly instead of hot.
 - `bob service install` therefore needs administrator rights, once: it writes the root-owned plist and runs
   `launchctl bootstrap system <plist>`; removal is `launchctl bootout system/<label>` and deleting the plist [7].
   Everything else, including the daemon itself, runs as the installing account. This holds for all three forms.

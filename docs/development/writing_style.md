@@ -11,7 +11,7 @@ Code comments follow [coding_guidelines.md](coding_guidelines.md).
 - Use one term for one thing. Don't switch to a synonym for variety.
 - Prefer plain words: "use", not "leverage" or "utilize"; "start", not "initiate".
 - Write out a term the first time you use an abbreviation in a document, unless the vocabulary defines it.
-- Name things exactly: give the file path, command, flag, requirement ID (S-002 R-8) or ADR decision number.
+- Name things exactly: give the file path, command, flag, requirement ID (S-002 REQ-008) or ADR decision number.
 
 ## Sentences
 

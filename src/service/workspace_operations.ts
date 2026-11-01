@@ -1,6 +1,6 @@
 /**
- * The workspace operations (S-002 R-12, R-22): list the registered workspaces, and register and unregister one. Each
- * change is validated by the workspace registry, written to the configuration file first and applied at once.
+ * The workspace operations (S-002 REQ-012, REQ-022): list the registered workspaces, and register and unregister one.
+ * Each change is validated by the workspace registry, written to the configuration file first and applied at once.
  */
 import type { AgentsComponent } from "../agents/agents_component.ts";
 import { ConfigChangeRefused } from "../config/config_writer.ts";

@@ -1,5 +1,5 @@
 /**
- * The runtime read operations (S-002 R-12, R-13): a submission's state, waiting for a submission, usage, live
+ * The runtime read operations (S-002 REQ-012, REQ-013): a submission's state, waiting for a submission, usage, live
  * pi-durable tasks and the available models. They only read, so no call changes a conversation or a daemon document.
  */
 import { MAX_SUBMISSION_WAIT_MS } from "../daemon/constants.ts";

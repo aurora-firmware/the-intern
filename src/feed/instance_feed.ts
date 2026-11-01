@@ -1,7 +1,8 @@
 /**
- * The instance scope of the observation feed (S-002 R-14, R-11, R-22): every conversation with its status, the worker
- * threads in use, and then conversations being created, runs starting and finishing, admission changes and settings
- * changes. Publishing never waits for a subscriber; one that falls too far behind is closed with reason `lagging`.
+ * The instance scope of the observation feed (S-002 REQ-014, REQ-011, REQ-022): every conversation with its status, the
+ * worker threads in use, and then conversations being created, runs starting and finishing, admission changes and
+ * settings changes. Publishing never waits for a subscriber; one that falls too far behind is closed with reason
+ * `lagging`.
  */
 
 import type { Admission, AdmissionSnapshot } from "../admission/admission.ts";

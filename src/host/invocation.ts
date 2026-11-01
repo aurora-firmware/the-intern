@@ -1,6 +1,6 @@
 /**
- * Invoked conversations (S-001 R-8, R-9, R-14, R-17): an agent invokes agents for parts of its job, and a conversation
- * can park until input arrives. The creation commit forks or creates the conversation, writes its whole
+ * Invoked conversations (S-001 REQ-008, REQ-009, REQ-014, REQ-017): an agent invokes agents for parts of its job, and a
+ * conversation can park until input arrives. The creation commit forks or creates the conversation, writes its whole
  * `intern.conversation` document and adds its id to the invoking conversation's `awaiting`, so a crash never leaves an
  * invoked conversation without its invocation link.
  */

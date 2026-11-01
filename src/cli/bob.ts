@@ -1,6 +1,6 @@
 /**
- * The `bob` command line (S-002 R-4 to R-6, R-21). `bob serve` runs the daemon in the foreground: log lines go to
- * standard error, standard output stays unused, and the process exits with the status the daemon settles with.
+ * The `bob` command line (S-002 REQ-004 to REQ-006, REQ-021). `bob serve` runs the daemon in the foreground: log lines
+ * go to standard error, standard output stays unused, and the process exits with the status the daemon settles with.
  * Run it as `node src/cli/bob.ts serve` until the release form provides a `bob` launcher.
  */
 import { homedir } from "node:os";

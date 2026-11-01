@@ -1,8 +1,8 @@
 /**
- * The seat change operation (S-001 R-4, R-7): a team member changes the seat of any conversation, naming a role and
- * optionally a model, a thinking level and a registered workspace. A new agent of that role is seated with the Full
- * context mode, or with the Clean mode when the change names a reset (R-11). An override that doesn't
- * resolve is refused and the seat stays unchanged.
+ * The seat change operation (S-001 REQ-004, REQ-007): a team member changes the seat of any conversation, naming a role
+ * and optionally a model, a thinking level and a registered workspace. A new agent of that role is seated with the Full
+ * context mode, or with the Clean mode when the change names a reset (S-001 REQ-011). An override that doesn't resolve
+ * is refused and the seat stays unchanged.
  */
 import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { ServiceContext } from "../daemon/daemon.ts";

@@ -1,6 +1,6 @@
 /**
- * Host-side conversation input and control (S-002 R-12, R-13). Only `src/host/` calls pi-durable, so the service layer
- * reaches submit, abort, reset and compact through these functions.
+ * Host-side conversation input and control (S-002 REQ-012, REQ-013). Only `src/host/` calls pi-durable, so the service
+ * layer reaches submit, abort, reset and compact through these functions.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
