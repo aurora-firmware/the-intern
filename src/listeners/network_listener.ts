@@ -6,6 +6,7 @@ import type { DaemonComponent } from "../daemon/daemon.ts";
 import { createHttpFront, type Fallback } from "./http_front.ts";
 import { type ListenerServer, startListenerServer } from "./listener_server.ts";
 import { networkSection } from "./network_section.ts";
+import { createStaticFiles, WEB_UI_DIR } from "./static_files.ts";
 
 const ANY_FREE_PORT = 0;
 
@@ -17,7 +18,7 @@ export type NetworkListenerComponent = DaemonComponent & {
 export type NetworkListenerOptions = {
     /** Test-only: listen on a free port instead of the configured one, so parallel tests never collide. */
     freePort?: boolean;
-    /** Answers the requests the front has no route for. */
+    /** Answers the requests the front has no route for; the web interface files by default. */
     fallback?: Fallback;
 };
 
@@ -33,7 +34,7 @@ export function createNetworkListenerComponent(options: NetworkListenerOptions =
             const front = createHttpFront({
                 catalogue: ctx.catalogue,
                 wayIn: "web interface",
-                ...(options.fallback !== undefined && { fallback: options.fallback }),
+                fallback: options.fallback ?? createStaticFiles(WEB_UI_DIR),
             });
             const started = await startListenerServer(front, { host: settings.address, port });
             listener = started;
