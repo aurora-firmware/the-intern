@@ -22,7 +22,8 @@ This page comes with its feature.
 
 ## Configuring roles
 
-This page comes with its feature.
+See [Roles, workspaces and agents sharing a job](roles_and_agents.md): the shipped roles, the `roles` and
+`workspaces` sections of the configuration file, and how agents hand off, invoke each other and report.
 
 ## Configuring skills
 
