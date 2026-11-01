@@ -1,6 +1,6 @@
 ---
 title: Agent roles and conversations
-version: '0.5'
+version: '0.6'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-15'
 author: planner
@@ -981,7 +981,8 @@ Every conversation MUST record the job it belongs to and whether it is the job's
 #### AC-012.3 — Refusals create nothing
 
 - **Given:** a start that names an unknown role, an unresolvable override, an override from a source other than a
-  request, or a follow-up origin naming no existing conversation
+  request, a follow-up from an agent whose conversation doesn't exist, or an origin of another kind than the
+  caller's (S-002 AC-012.5)
 - **When:** it is called
 - **Then:** it is refused and nothing is created
 
@@ -1249,3 +1250,4 @@ behaviour. Deciding either one is a scope amendment of this spec.
 | 2026-11-01 | spec-truth reconciliation — PASS | Re-run after T-090 and T-091: finding N1 is closed; the transcript read and the conversation feed show `intern.report` and `intern.steer` by their own data, and the context read keeps the model message by product owner decision; ADR-004 amended | none |
 | 2026-11-01 | v0.5, format only; no requirement changed meaning. Restructured to the ai-team 0.18.0 spec format: requirements renumbered `R-n` → `REQ-00n`, with R-3a → REQ-018, R-8a → REQ-019 and R-10a → REQ-020 (mapping table in Behavioral Requirements); each requirement got acceptance scenarios with a Verification method, taken from the former Verification section and naming the tests that cover them; Prompt stability became AC-005.4; R-17 moved to Quality Requirements; Components merged into Responsibility Separation; added Users and Journeys, Alternatives Considered (from Exclusions and Definitions), Interfaces (from the shipped tools and operations), Assumptions and Dependencies, Success Criteria (from the Purpose outcomes and the live acceptance tests) and Open Questions (the two deferred decisions already recorded). Earlier rows keep their `R-n` identifiers. | Product owner request: S-001 must match the ai-team 0.18.0 format, keeping its meaning so the implementation stays valid. | None; references in code, docs and ADRs updated to the new identifiers |
 | 2026-11-01 | Gate 5 sign-off — product owner. No scope change. | The spec-truth reconciliation of 2026-11-01 passed against v0.4; v0.5 changed the format only, so the verdict carries over. Two accepted limits stay open as follow-up tasks and don't block the sign-off: T-092 (a Compact invocation repeated after a crash compacts again) and T-093 (`lastActivity` reads the whole transcript). | none |
+| 2026-11-01 | v0.6. AC-012.3: the refused follow-up is one from an agent whose conversation doesn't exist, and an origin of another kind than the caller's is refused. | S-002 v0.7 builds a lead conversation's origin from the caller (S-002 AC-012.5); S-003 architecture consistency review, finding A. | Investigation task for the S-002 v0.7 deviations |

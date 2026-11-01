@@ -86,8 +86,8 @@ What this specification explicitly does NOT cover:
 - **One protocol, two listeners.** Both listeners serve the same HTTP front. A difference between them is limited to
   what REQ-002, REQ-007 and REQ-008 name: whether it runs, the way in it records, and serving the web interface files.
 - **The catalogue is the route table.** Routes are derived from S-002's catalogue, so an operation added to the
-  catalogue is reachable on both listeners with no listener change, and no second list of operations exists. An
-  operation whose result is a stream is served as a stream, not as a single result (REQ-003, REQ-006).
+  catalogue is reachable on both listeners with no listener change, and no second list of operations exists. The one
+  exception is `feed.subscribe`, whose result is a stream and which is served as one (REQ-003, REQ-006).
 - **Listeners are transports only.** A listener decides no outcome: it parses the request, calls the service layer
   with a fixed caller and returns what the service layer returned. Listeners call only the service layer and never
   the host or pi-durable (ADR-001; REQ-013). The service layer stays free of transport (S-002 REQ-016).
@@ -145,8 +145,8 @@ Both listeners serve these routes (REQ-003 to REQ-006). Any other method or path
 | `GET /` (network listener only) | none | Redirect to `/ui/` | — |
 
 `feed.subscribe` is served only at `GET /feed`, its query standing in for the operation's input. Called at
-`POST /operations/feed.subscribe`, it is refused with `invalid_input` and a message naming `GET /feed`. Any later
-operation whose result is a stream follows the same rule.
+`POST /operations/feed.subscribe`, it is refused with `invalid_input` and a message naming `GET /feed`. It is the
+only streaming operation; a later spec that adds another names its route by amending this spec.
 
 **Contract** (error outcome to HTTP status; the codes are S-002's):
 
@@ -326,8 +326,8 @@ operation route with `invalid_input` naming its stream route.
 - **Given:** a ready daemon with both listeners
 - **When:** each catalogue operation except `feed.subscribe` is called with a valid input in-process, over the local
   socket and over the network listener
-- **Then:** the three results are equal apart from values that differ between calls by nature (ids, times), and read
-  operations leave state unchanged
+- **Then:** the three results are equal apart from values that differ between calls by nature (ids, times) and the
+  recorded way in (`in-process`, `command line`, `web interface`), and read operations leave state unchanged
 
 **Verification:** test — one service test that enumerates the catalogue and calls every operation through both
 listeners.
@@ -568,8 +568,8 @@ read. Shutdown follows REQ-010.
 - **When:** a client calls `submissions.wait` with the 5-minute maximum over each listener
 - **Then:** the call returns the current state at the wait's end rather than a timeout from the listener
 
-**Verification:** inspection — the listeners' request and idle timeouts exceed 5 minutes; test — a service test that
-holds a feed stream and a wait open past Node's default request timeouts.
+**Verification:** test — a service test that reads both listeners' configured request and idle timeouts and checks
+they exceed 5 minutes, and keeps a feed stream open past Node's default idle timeout.
 
 ### REQ-013 — Listeners use only the service layer
 

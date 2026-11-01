@@ -617,12 +617,14 @@ whose input names an origin of another kind than its caller's is refused as `inv
 
 #### AC-012.5 — The origin comes from the caller
 
-- **Given:** callers of each kind: a team member with a way in, an agent, and a job source
-- **When:** each starts a job's lead conversation, and a team member's call names a schedule, trigger or follow-up
-  origin
-- **Then:** the team member's job records a request with its way in, the agent's job a follow-up of its own
-  conversation, the job source's job the origin it states; the team member's call naming another origin is refused
-  `invalid_input` and creates nothing
+- **Given:** callers of each kind: a team member with a way in, a team member with none named, an agent, and a job
+  source
+- **When:** each starts a job's lead conversation; a team member's call names a request origin with another way in;
+  and a team member's call names a schedule, trigger or follow-up origin
+- **Then:** the team member's job records a request with the caller's way in (`in-process` when none is named, S-001
+  AC-007.1), also when the input named another; the agent's job a follow-up of its own conversation; the job
+  source's job the origin it states; the team member's call naming another origin kind is refused `invalid_input`
+  and creates nothing
 
 **Verification:** test — `test/service/job_operations.test.ts`.
 
@@ -1022,4 +1024,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-01 | Design Principles: "Durability belongs to the runtime" names its bounded exception, the-intern's own facts about a conversation and redelivery from them. R-12: a submit to a parked conversation returns `{ held: true }` with no submission id in every busy mode, and the submission read, wait and withdraw operations don't apply to a held message; Verification item for it. | Spec-truth reconciliation of S-001 (findings F6 and F10). Driving ADR: ADR-001 decision 4, amended 2026-11-01. | T-034, T-071, T-073, T-075 (built as amended); follow-up T-086 |
 | 2026-11-01 | Design Principles, "Durability belongs to the runtime": the-intern's own facts also include a conversation's parked state and its abort mark; an abort's facts are written in one commit just before pi-durable's abort, not in pi-durable's abort commit. | S-001 v0.3 R-8 and R-8a (product owner decision F3): a lone abort owes the invoker an "aborted" report, and an abort withdraws held messages and awaiting links. Driving ADR: ADR-001 decision 4, amended 2026-11-01. | T-084, T-085 |
 | 2026-11-01 | v0.6, format only; no requirement changed meaning. Restructured to the ai-team 0.18.0 spec format: requirements renumbered `R-n` → `REQ-00n`/`REQ-0nn` with the same number; each requirement got acceptance scenarios with a Verification method, taken from the former Verification section and naming the tests that cover them; R-1, R-7, R-8, R-15 and R-18 moved to Quality Requirements; R-15's "bounded amount" names the implemented bound of 1000 undelivered deltas; Components merged into Responsibility Separation; rejected designs moved from Exclusions to Alternatives Considered; added Users and Journeys, Interfaces (the `bob serve` command, the operation catalogue's names and kinds and the feed, from the shipped code), Assumptions and Dependencies, Success Criteria (from the Purpose outcomes and the live acceptance tests) and Open Questions. Earlier rows keep their `R-n` identifiers. | Product owner request: S-002 must match the ai-team 0.18.0 format, keeping its meaning so the implementation stays valid. | None; references in code, docs and ADRs updated to the new identifiers |
-| 2026-11-01 | v0.7. REQ-003: listeners open in step 8 and refuse every call but status as `unavailable` until ready. REQ-012 and new AC-012.5: a lead conversation's origin is built from the caller; only job sources state their own. REQ-021: the configuration file also holds sections later specs add. REQ-022: a settings write keeps sections it doesn't change. Assumptions: S-003 exists. | S-003 architecture consistency review (findings 2, 3, 6, 7, 13); product owner decision 2026-11-01: the origin is built in the service from the caller. The current code takes the origin from the input and may drop unknown sections; a task investigates the deviations. | Investigation task to be created in the S-003 breakdown |
+| 2026-11-01 | v0.7. REQ-003: listeners open in step 8 and refuse every call but status as `unavailable` until ready. REQ-012 and new AC-012.5: a lead conversation's origin is built from the caller; only job sources state their own. REQ-021: the configuration file also holds sections later specs add. REQ-022: a settings write keeps sections it doesn't change. Assumptions: S-003 exists. | S-003 architecture consistency review (findings 2, 3, 6, 7, 13; re-run finding B); product owner decision 2026-11-01: the origin is built in the service from the caller. The current code takes the origin from the input and may drop unknown sections; a task investigates the deviations. | Investigation task to be created in the S-003 breakdown |
