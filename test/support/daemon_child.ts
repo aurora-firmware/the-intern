@@ -39,12 +39,48 @@ function hasToolResult(transcript: FakeTranscript): boolean {
     return transcript.some((turn) => turn.role === "toolResult");
 }
 
+const HANDOFF_NOTE = "CLEAN-NOTE";
+const INVOKED_JOB_PROMPT_PREFIX = "job";
+const HANDOFF_CALL = { name: "handoff", arguments: { role: "gp", contextMode: "clean", note: HANDOFF_NOTE } };
+const PARKED_INVOKE_CALL = {
+    name: "invoke",
+    arguments: {
+        agents: [
+            { role: "gp", contextMode: "clean", jobPrompt: `${INVOKED_JOB_PROMPT_PREFIX} A` },
+            { role: "gp", contextMode: "clean", jobPrompt: `${INVOKED_JOB_PROMPT_PREFIX} B` },
+        ],
+        // biome-ignore lint/suspicious/noThenProperty: `then` is the invoke tool's parameter name
+        then: "parked",
+    },
+};
+
+type Script = NonNullable<Switches["script"]>;
+
 /** `bash-sleep` takes its duration in seconds from the input, so a test sets how long the tool runs. */
-function replyFor(script: NonNullable<Switches["script"]>, transcript: FakeTranscript): FakeReply {
-    if (script !== "bash-sleep") return `echo: ${lastUserText(transcript)}`;
+function replyFor(script: Script, transcript: FakeTranscript): FakeReply {
+    const lastText = lastUserText(transcript);
+    const echo = `echo: ${lastText}`;
+    if (script === "handoff-clean") {
+        return lastText === HANDOFF_NOTE || hasToolResult(transcript) ? echo : { toolCall: HANDOFF_CALL };
+    }
+    if (script === "invoke-parked") {
+        const isInvokedAgent = lastText.startsWith(INVOKED_JOB_PROMPT_PREFIX);
+        return isInvokedAgent || hasToolResult(transcript) ? echo : { toolCall: PARKED_INVOKE_CALL };
+    }
+    if (script !== "bash-sleep") return echo;
     if (hasToolResult(transcript)) return "slept";
-    const seconds = /^\d+(\.\d+)?$/.test(lastUserText(transcript)) ? lastUserText(transcript) : DEFAULT_SLEEP_SECONDS;
+    const seconds = /^\d+(\.\d+)?$/.test(lastText) ? lastText : DEFAULT_SLEEP_SECONDS;
     return { toolCall: { name: "bash", arguments: { command: `sleep ${seconds}` } } };
+}
+
+/** Holds back the answers a kill is meant to interrupt: all of `slow`, and the answers after the call of the others. */
+function delayFor(switches: Switches, transcript: FakeTranscript): number {
+    const delayMs = switches.delayMs ?? DEFAULT_SLOW_DELAY_MS;
+    const lastText = lastUserText(transcript);
+    if (switches.script === "slow") return delayMs;
+    if (switches.script === "handoff-clean") return lastText === HANDOFF_NOTE ? delayMs : 0;
+    if (switches.script === "invoke-parked") return lastText.startsWith(INVOKED_JOB_PROMPT_PREFIX) ? delayMs : 0;
+    return 0;
 }
 
 // A stand-in for pi-durable's bash tool that only waits for its command, and ends it when the call is aborted.
@@ -155,7 +191,7 @@ async function main(): Promise<void> {
     const fake = switches.realModels
         ? undefined
         : createFakeModel((transcript) => replyFor(switches.script ?? "echo", transcript), {
-              delayMs: () => (switches.script === "slow" ? (switches.delayMs ?? DEFAULT_SLOW_DELAY_MS) : 0),
+              delayMs: (transcript) => delayFor(switches, transcript),
           });
     const fakeModelId = fake ? `${fake.getModel().provider}/${fake.getModel().id}` : undefined;
     const storageSwitch: StorageSwitch = { isFailing: false };
