@@ -181,7 +181,8 @@ The invoking agent then carries on in one of two ways:
 
 When an invoked agent decides its part is done, its summary goes to the invoking conversation as a new input. If the
 invoking agent is running, the report arrives like a follow-up message. If it is parked, it continues with the report
-as soon as a worker thread is free. A parked agent continues on each report as it arrives.
+as soon as a worker thread is free. A parked agent continues on each report as it arrives. An invoked agent that still
+waits for reports from agents it invoked reports back only after those arrive and its own run ends.
 
 ### Steering
 
