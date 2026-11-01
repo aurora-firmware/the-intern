@@ -57,6 +57,8 @@ export type HarnessHost = {
     readEntries(id: string, page: { after?: string; limit: number }): Promise<{ entries: HostEntry[]; next?: string }>;
     /** The entries the model sees now. */
     readContext(id: string): Promise<HostEntry[]>;
+    /** The largest `timestamp` of the model messages of the stored entries, or `null` when there is none. */
+    readLastMessageTime(id: string): Promise<number | null>;
 };
 
 export type HarnessHostOptions = {
@@ -136,9 +138,34 @@ export function toAgentSpec(agent: AgentChoice) {
     };
 }
 
-// An entry that contributes messages to the model is shown by those messages; any other by its own data.
-function toHostEntry(entry: EntryRecord): HostEntry {
+const INTERN_KIND_PREFIX = "intern.";
+
+/**
+ * How a transcript read shows an entry. An `intern.` entry (a report or a steer) is placed as an input, so it carries
+ * the input's user message too, but the transcript shows its own data: who sent it (ADR-004 decision 1). Any other
+ * entry that contributes messages to the model is shown by those messages, and the rest by their own data.
+ */
+export function toHostEntry(entry: EntryRecord): HostEntry {
+    if (entry.kind.startsWith(INTERN_KIND_PREFIX)) return { id: String(entry.id), kind: entry.kind, data: entry.data };
+    return toContextEntry(entry);
+}
+
+// What the model sees: an entry that contributes messages is shown by those messages, any other by its own data.
+function toContextEntry(entry: EntryRecord): HostEntry {
     return { id: String(entry.id), kind: entry.kind, data: entry.model ?? entry.data };
+}
+
+// Entries carry no wall-clock time of their own; the messages they contribute to the model do.
+function newestModelMessageTime(entries: readonly EntryRecord[]): number | null {
+    let newest: number | null = null;
+    for (const entry of entries) {
+        for (const message of entry.model ?? []) {
+            if (typeof message?.timestamp === "number" && (newest === null || message.timestamp > newest)) {
+                newest = message.timestamp;
+            }
+        }
+    }
+    return newest;
 }
 
 async function listBusyConversationIds(harness: Harness): Promise<Set<ConversationId>> {
@@ -218,7 +245,24 @@ function createHost(harness: Harness): HarnessHost {
         },
         async readContext(id) {
             const conversation = await requireConversation(harness, id);
-            return (await conversation.context(context)).entries.map(toHostEntry);
+            return (await conversation.context(context)).entries.map(toContextEntry);
+        },
+        async readLastMessageTime(id) {
+            const conversation = await requireConversation(harness, id);
+            let newest: number | null = null;
+            let cursor: Cursor | undefined;
+            do {
+                const page = await conversation.entries(
+                    { order: "ascending" },
+                    CONVERSATION_PAGE_SIZE,
+                    cursor,
+                    context,
+                );
+                const pageNewest = newestModelMessageTime(page.items);
+                if (pageNewest !== null && (newest === null || pageNewest > newest)) newest = pageNewest;
+                cursor = page.next;
+            } while (cursor !== undefined);
+            return newest;
         },
     };
 }

@@ -17,6 +17,7 @@ import {
 } from "../../src/host/conversation_control.ts";
 import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import { createInvokedConversations, parkConversation } from "../../src/host/invocation.ts";
+import { REPORT_KIND, type ReportRecord } from "../../src/host/reports.ts";
 import {
     changeSeat,
     createSeatedConversation,
@@ -24,6 +25,7 @@ import {
     resetWithSeat,
     type SeatActor,
 } from "../../src/host/seating.ts";
+import { steerConversation } from "../../src/host/steering.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 import {
     type ConversationStatus,
@@ -516,6 +518,116 @@ describe("conversations.entries", () => {
                 `after ${after}`,
             );
         }
+    });
+});
+
+type TranscriptEntry = { id: string; kind: string; data: unknown };
+type Message = { role: string; content: unknown; timestamp: number };
+
+const reportActor: SeatActor = { kind: "agent", conversationId: "7", role: "reviewer" };
+
+async function placeReport(fixture: Fixture, conversationId: string, record: ReportRecord): Promise<void> {
+    const { submissionId } = await submitInput(fixture.host, conversationId, {
+        content: record.content,
+        requestId: "report-request",
+        busyMode: "followUp",
+        entry: { kind: REPORT_KIND, data: record },
+    });
+    await fixture.settle(submissionId);
+}
+
+async function steer(fixture: Fixture, conversationId: string, content: string): Promise<string> {
+    const placed = await steerConversation(fixture.host, conversationId, {
+        content,
+        mode: "followUp",
+        actor,
+        requestId: "steer-request",
+    });
+    assert.equal(placed.held, false);
+    return placed.submissionId as string;
+}
+
+async function transcriptOf(fixture: Fixture, conversationId: string): Promise<TranscriptEntry[]> {
+    const result = (await fixture.call("conversations.entries", { conversationId })) as { entries: TranscriptEntry[] };
+    return result.entries;
+}
+
+describe("conversations.entries shows report and steer entries by their own data", () => {
+    it("returns an intern.report entry with its stored actor and content", async () => {
+        const fixture = await openFixture();
+        const id = await fixture.newConversation();
+        const record: ReportRecord = { actor: reportActor, content: "the review is done" };
+        await placeReport(fixture, id, record);
+
+        const report = (await transcriptOf(fixture, id)).find((entry) => entry.kind === REPORT_KIND);
+
+        assert.deepEqual(report?.data, record);
+    });
+
+    it("returns an intern.steer entry with its stored actor, mode and content", async () => {
+        const fixture = await openFixture();
+        const id = await fixture.newConversation();
+        await fixture.settle(await steer(fixture, id, "use the other approach"));
+
+        const steered = (await transcriptOf(fixture, id)).find((entry) => entry.kind === "intern.steer");
+
+        assert.deepEqual(steered?.data, { actor, mode: "followUp", content: "use the other approach" });
+    });
+
+    it("returns pi.user and pi.assistant entries as their model messages", async () => {
+        const fixture = await openFixture();
+        const id = await fixture.newConversation();
+        await exchange(fixture, id, "hello");
+
+        const entries = await transcriptOf(fixture, id);
+        const user = entries.find((entry) => entry.kind === "pi.user")?.data as Message[];
+        const assistant = entries.find((entry) => entry.kind === "pi.assistant")?.data as Message[];
+
+        assert.equal(user[0]?.role, "user");
+        assert.equal(assistant[0]?.role, "assistant");
+    });
+
+    it("keeps the stored model message of a report or steer entry as the input's user message", async () => {
+        const fixture = await openFixture();
+        const id = await fixture.newConversation();
+        await placeReport(fixture, id, { actor: reportActor, content: "report text" });
+        await fixture.settle(await steer(fixture, id, "steer text"));
+
+        const conversation = await internalHarness(fixture.host).conversation(Number(id) as never, BACKGROUND_CONTEXT);
+        const page = await conversation?.entries({ order: "ascending" }, 500, undefined, BACKGROUND_CONTEXT);
+        const modelOf = (kind: string) =>
+            ((page?.items.find((entry) => entry.kind === kind)?.model ?? []) as unknown as Message[])[0];
+
+        assert.equal(modelOf(REPORT_KIND)?.role, "user");
+        assert.deepEqual(modelOf(REPORT_KIND)?.content, "report text");
+        assert.equal(modelOf("intern.steer")?.role, "user");
+        assert.deepEqual(modelOf("intern.steer")?.content, "steer text");
+    });
+
+    it("keeps conversations.context showing a report entry by its model message", async () => {
+        const fixture = await openFixture();
+        const id = await fixture.newConversation();
+        await placeReport(fixture, id, { actor: reportActor, content: "report text" });
+
+        const context = (await fixture.call("conversations.context", { conversationId: id })) as TranscriptEntry[];
+        const report = context.find((entry) => entry.kind === REPORT_KIND)?.data as Message[];
+
+        assert.equal(report[0]?.role, "user");
+        assert.ok(JSON.stringify(report[0]?.content).includes("report text"));
+    });
+
+    it("reports the timestamp of a steer message as lastActivity while the model is still answering it", async () => {
+        const fixture = await openFixture({ delayMs: BUSY_DELAY_MS * 5 });
+        const id = await fixture.newConversation();
+        const submissionId = await steer(fixture, id, "steer text");
+        await pollUntil(async () => (await transcriptOf(fixture, id)).some((entry) => entry.kind === "intern.steer"));
+
+        const context = (await fixture.call("conversations.context", { conversationId: id })) as TranscriptEntry[];
+        const steerMessage = context.find((entry) => entry.kind === "intern.steer")?.data as Message[];
+        const listing = (await fixture.call("conversations.get", { conversationId: id })) as { lastActivity: string };
+
+        assert.equal(listing.lastActivity, new Date(steerMessage[0]?.timestamp as number).toISOString());
+        await fixture.settle(submissionId);
     });
 });
 
