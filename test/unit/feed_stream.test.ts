@@ -314,6 +314,27 @@ describe("feed stream: a client that doesn't read", () => {
         );
         assert.deepEqual(rest.at(-1), { event: "end", data: '{"reason":"lagging"}' });
     });
+
+    it("closes the connection of a client that never reads again once the subscription closes lagging", async () => {
+        const res = await harness.open("/feed?scope=instance");
+        const events = eventReader(res);
+        await events.next();
+        res.pause();
+
+        for (let seq = 1; seq <= 300; seq++) {
+            harness.feed.push({ seq, text: LARGE_TEXT });
+            await new Promise((resolve) => setImmediate(resolve));
+        }
+
+        // The client stays paused: the server must still end the response and release the connection.
+        const [request] = harness.handledRequests;
+        assert.ok(request);
+        const outcome = await Promise.race([
+            request.responseClosed.then(() => "closed"),
+            new Promise((resolve) => setTimeout(() => resolve("still open"), 3000)),
+        ]);
+        assert.equal(outcome, "closed");
+    });
 });
 
 describe("feed stream: shutdown", () => {

@@ -8,6 +8,9 @@ import type { CloseReason, Subscription } from "../feed/observation_feed.ts";
 
 type FeedEvent = { name: "snapshot" | "delta" | "end"; id?: number; data: unknown };
 
+/** How long an ended stream may take to flush its last events before its connection is closed. */
+const FINAL_FLUSH_MS = 1000;
+
 function formatEvent(event: FeedEvent): string {
     const idLine = event.id === undefined ? "" : `id: ${event.id}\n`;
     // JSON.stringify escapes line breaks, so the data always fits on one `data` line.
@@ -15,13 +18,22 @@ function formatEvent(event: FeedEvent): string {
 }
 
 /**
- * Resolves once the response can take more: at once, or when it drains, closes or the signal aborts. A destroyed
- * response refuses the write and has already closed, so it resolves at once too.
+ * Resolves once the response can take more: at once, or when it drains, closes, the subscription closes or the signal
+ * aborts. A client that stops reading never drains, so the subscription closing `lagging` must also end the wait
+ * (S-003 REQ-011). A destroyed response refuses the write and has already closed, so it resolves at once too.
  */
-function writeEvent(res: ServerResponse, event: FeedEvent, signal: AbortSignal): Promise<void> {
+function writeEvent(
+    res: ServerResponse,
+    event: FeedEvent,
+    signal: AbortSignal,
+    closed: Promise<CloseReason>,
+): Promise<void> {
     if (res.write(formatEvent(event)) || res.destroyed || signal.aborted) return Promise.resolve();
     return new Promise((resolve) => {
+        let isSettled = false;
         const settle = () => {
+            if (isSettled) return;
+            isSettled = true;
             res.off("drain", settle);
             res.off("close", settle);
             signal.removeEventListener("abort", settle);
@@ -30,16 +42,25 @@ function writeEvent(res: ServerResponse, event: FeedEvent, signal: AbortSignal):
         res.on("drain", settle);
         res.on("close", settle);
         signal.addEventListener("abort", settle, { once: true });
+        void closed.then(settle);
     });
 }
 
-/** Ends the response with the reason the stream ends, unless the client has already left. */
+/**
+ * Ends the response with the reason the stream ends, unless the client has already left. A client that doesn't read
+ * can't take the last event, so its connection is closed once the event has had `FINAL_FLUSH_MS` to flush.
+ */
 function finish(res: ServerResponse, closedReason: CloseReason, signal: AbortSignal): void {
     if (res.destroyed) return;
     // The stream closes its own subscription at shutdown, which ends it `unsubscribed`; the client hears `stopped`.
     const reason = signal.aborted ? "stopped" : closedReason;
     if (reason === "unsubscribed") res.end();
     else res.end(formatEvent({ name: "end", data: { reason } }));
+    if (res.writableFinished) return;
+    const timer = setTimeout(() => res.destroy(), FINAL_FLUSH_MS);
+    timer.unref();
+    res.once("finish", () => clearTimeout(timer));
+    res.once("close", () => clearTimeout(timer));
 }
 
 /**
@@ -61,11 +82,16 @@ export async function streamFeed(
         // A quiet stream is still being read, so the server's idle timeout must not end it (S-003 REQ-012).
         res.setTimeout(0);
         res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
-        await writeEvent(res, { name: "snapshot", data: subscription.snapshot }, signal);
+        await writeEvent(res, { name: "snapshot", data: subscription.snapshot }, signal, subscription.closed);
         for (;;) {
             const result = await subscription.next();
             if ("closed" in result) return finish(res, result.closed, signal);
-            await writeEvent(res, { name: "delta", id: result.delta.seq, data: result.delta }, signal);
+            await writeEvent(
+                res,
+                { name: "delta", id: result.delta.seq, data: result.delta },
+                signal,
+                subscription.closed,
+            );
         }
     } finally {
         signal.removeEventListener("abort", stop);
