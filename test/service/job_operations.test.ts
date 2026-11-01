@@ -256,8 +256,9 @@ describe("jobs.startLead", () => {
         assert.deepEqual(record?.actor, { kind: "agent", conversationId: own, role: "gp" });
     });
 
-    it("records the schedule or trigger origin a job source states, with the job source as seat actor", async () => {
+    it("records the origin of each job source kind, seats the role it names with its defaults, and the job source as the seat actor", async () => {
         const started = await start();
+        const gpDefaults = await readConversationMeta(started.ctx.host, await started.seatConversation());
         const origins = [
             { kind: "schedule", entry: "nightly", fireTime: "2026-10-31T02:00:00Z" },
             { kind: "trigger", trigger: "ci", event: "build-failed" },
@@ -266,11 +267,12 @@ describe("jobs.startLead", () => {
 
         for (const [index, origin] of origins.entries()) {
             const { conversationId } = await started.startLead(
-                { jobId: `source-${index}`, firstInput: "go", origin },
+                { jobId: `source-${index}`, firstInput: "go", origin, role: "gp" },
                 source,
             );
             const meta = await readConversationMeta(started.ctx.host, conversationId);
             assert.deepEqual(meta?.origin, origin);
+            assert.deepEqual(meta?.seat, gpDefaults?.seat);
             const [record] = (await started.seatRecords(conversationId)) as { actor: unknown }[];
             assert.deepEqual(record?.actor, { kind: "job_source", source: "schedule" });
         }
