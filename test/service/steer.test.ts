@@ -181,6 +181,25 @@ async function steerEntriesOf(ctx: ServiceContext, conversationId: string): Prom
         .map((entry) => entry.data as SteerEntry);
 }
 
+// The transcript in order, as the entry kind and the text a message entry carries (empty for other entries).
+async function transcriptOf(ctx: ServiceContext, conversationId: string): Promise<{ kind: string; text: string }[]> {
+    const conversation = await internalHarness(ctx.host).conversation(
+        Number(conversationId) as ConversationId,
+        BACKGROUND_CONTEXT,
+    );
+    const page = await conversation?.entries({ order: "ascending" }, 500, undefined, BACKGROUND_CONTEXT);
+    return (page?.items ?? []).map((entry) => ({ kind: entry.kind, text: textOf(entry.model?.[0]) }));
+}
+
+async function assertRecordPrecedesMessage(ctx: ServiceContext, conversationId: string, message: string) {
+    const transcript = await transcriptOf(ctx, conversationId);
+    const recordAt = transcript.findIndex((entry) => entry.kind === STEER_RECORD_KIND);
+    const messageAt = transcript.findIndex((entry) => entry.text === message);
+    assert.ok(recordAt >= 0, "the steer record is in the transcript");
+    assert.ok(messageAt >= 0, "the message is in the transcript");
+    assert.ok(recordAt < messageAt, `the steer record (${recordAt}) precedes the message (${messageAt})`);
+}
+
 const isBusy = async (ctx: ServiceContext, id: string) => (await ctx.host.conversationInfo(id))?.busy !== false;
 
 describe("the steer tool and steering a conversation", () => {
@@ -216,6 +235,7 @@ describe("the steer tool and steering a conversation", () => {
         assert.deepEqual(await steerEntriesOf(started.ctx, ids.target), [
             { actor: { kind: "agent", conversationId: steererId, role: "gp" }, mode: "steer" },
         ]);
+        await assertRecordPrecedesMessage(started.ctx, ids.target, "change course");
     });
 
     it("delivers a follow-up only after the run ends", async () => {
@@ -289,6 +309,7 @@ describe("the steer tool and steering a conversation", () => {
         await waitFor(() => started.callsOf("target work").length === 2, "the run for the new input");
         assert.ok(usersOf((started.callsOf("target work")[1] as ModelCall).messages).includes("one more thing"));
         assert.deepEqual(await steerEntriesOf(started.ctx, targetId), [{ actor: CLI_ACTOR, mode: "followUp" }]);
+        await assertRecordPrecedesMessage(started.ctx, targetId, "one more thing");
     });
 
     describe("a parked conversation", () => {
