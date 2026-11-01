@@ -10,7 +10,7 @@ import { afterEach, describe, it, mock } from "node:test";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
-import { type Client, ClientError, createClient } from "../../src/client/client.ts";
+import { type Client, ClientError, createClient, UnreachableError } from "../../src/client/client.ts";
 import { nodeTransport } from "../../src/client/node_transport.ts";
 import { STOP_BOUND_MS } from "../../src/daemon/constants.ts";
 import { type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
@@ -33,6 +33,11 @@ const LISTENERS = ["local socket", "network listener"] as const;
 const UNKNOWN_CONVERSATION = { conversationId: "999" };
 const UNKNOWN_CONVERSATION_FEED = { scope: "conversation", conversationId: "999" } as const;
 const INSTANCE_FEED = { scope: "instance" } as const;
+const HOLD_INPUT = "hold";
+/** Longer than the test; stopping the daemon aborts the held answer. */
+const HOLD_DELAY_MS = 120_000;
+/** Longer than the test, so only the daemon stopping ends the wait. */
+const WAIT_LONGER_THAN_TEST_MS = 120_000;
 const WATCHED_ROLE = { name: "watched", instructions: "Watch.", tools: ["read"], skills: [] };
 
 type Listener = (typeof LISTENERS)[number];
@@ -52,9 +57,9 @@ function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function until(condition: () => boolean, what: string): Promise<void> {
+async function until(condition: () => boolean | Promise<boolean>, what: string): Promise<void> {
     const deadline = Date.now() + WAIT_TIMEOUT_MS;
-    while (!condition()) {
+    while (!(await condition())) {
         if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
         await sleep(POLL_INTERVAL_MS);
     }
@@ -63,6 +68,8 @@ async function until(condition: () => boolean, what: string): Promise<void> {
 type Fixture = {
     daemon: RunningDaemon;
     invoke(name: string, input: unknown): Promise<unknown>;
+    /** The socket path or base URL the client over the listener calls. */
+    targetOf(listener: Listener): string;
     clientOver(listener: Listener): Client;
 };
 
@@ -104,17 +111,22 @@ async function startFixture(delayMs: (transcript: FakeTranscript) => number = ()
     daemons.push(daemon);
     await until(() => daemon.phase() === "ready", "the daemon to be ready");
 
-    function clientOver(listener: Listener): Client {
-        if (listener === "local socket")
-            return createClient(nodeTransport({ socketPath: localSocketPath(env.runtimeDir) }));
+    function targetOf(listener: Listener): string {
+        if (listener === "local socket") return localSocketPath(env.runtimeDir);
         const address = network.address();
         assert.ok(address, "the network listener is running");
-        return createClient(nodeTransport({ baseUrl: `http://${address.host}:${address.port}` }));
+        return `http://${address.host}:${address.port}`;
+    }
+
+    function clientOver(listener: Listener): Client {
+        const target = targetOf(listener);
+        return createClient(nodeTransport(listener === "local socket" ? { socketPath: target } : { baseUrl: target }));
     }
 
     return {
         daemon,
         invoke: (name, input) => daemon.catalogue.invoke(name, input, IN_PROCESS),
+        targetOf,
         clientOver,
     };
 }
@@ -224,6 +236,57 @@ describe("a subscription through the client over each listener", { timeout: TEST
             assert.deepEqual(rest.end, { end: "stopped" });
             assert.deepEqual(afterEnd, { done: true, value: undefined }, "the ended subscription stays ended");
             assert.equal(subscriptions.count, 1, "the client opened one subscription and no other");
+        });
+    }
+});
+
+/** Holds the answer to `HOLD_INPUT` back for `HOLD_DELAY_MS`; any other input is answered at once. */
+function holdingDelay(transcript: FakeTranscript): number {
+    return transcript.findLast((message) => message.role === "user")?.text === HOLD_INPUT ? HOLD_DELAY_MS : 0;
+}
+
+/** Starts a job, waits until its lead conversation is idle, then submits the held input and returns its id. */
+async function heldSubmission(fixture: Fixture): Promise<string> {
+    const { conversationId } = (await fixture.invoke("jobs.startLead", { jobId: "held", firstInput: "hello" })) as {
+        conversationId: string;
+    };
+    const isIdle = async () =>
+        ((await fixture.invoke("conversations.get", { conversationId })) as { status: string }).status === "idle";
+    await until(isIdle, `conversation ${conversationId} to be idle`);
+    const submit = { conversationId, content: HOLD_INPUT, requestId: "held-request" };
+    return ((await fixture.invoke("conversations.submit", submit)) as { submissionId: string }).submissionId;
+}
+
+/** Resolves once a listener has handed `submissions.wait` to the catalogue. */
+function waitReachesCatalogue(catalogue: Catalogue): Promise<void> {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    const invoke = catalogue.invoke.bind(catalogue);
+    mock.method(catalogue, "invoke", (name: string, input: unknown, caller: Caller) => {
+        if (name === "submissions.wait") resolve();
+        return invoke(name, input, caller);
+    });
+    return promise;
+}
+
+describe("a call waiting in submissions.wait when the daemon stops", { timeout: TEST_TIMEOUT_MS }, () => {
+    for (const listener of LISTENERS) {
+        it(`fails over the ${listener} with ClientError unavailable or UnreachableError naming the target`, async () => {
+            const fixture = await startFixture(holdingDelay);
+            const submissionId = await heldSubmission(fixture);
+            const reached = waitReachesCatalogue(fixture.daemon.catalogue);
+
+            const waiting = rejection(
+                fixture
+                    .clientOver(listener)
+                    .invoke("submissions.wait", { submissionId, timeoutMs: WAIT_LONGER_THAN_TEST_MS }),
+            );
+            await reached;
+            await fixture.daemon.stop();
+            const error = await waiting;
+
+            const isUnavailable = error instanceof ClientError && error.code === "unavailable";
+            const isUnreachable = error instanceof UnreachableError && error.target === fixture.targetOf(listener);
+            assert.ok(isUnavailable || isUnreachable, `the wait fails as unavailable or unreachable, not ${error}`);
         });
     }
 });
