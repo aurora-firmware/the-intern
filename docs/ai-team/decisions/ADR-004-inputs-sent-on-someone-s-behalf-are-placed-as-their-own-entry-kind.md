@@ -54,8 +54,9 @@ kind through pi-durable `InputEntry`. The entry's data names the sender and carr
    - `intern.report`, with data `{ actor, content }`: an invoked agent's report (S-001 R-8a). The actor is the agent
      whose report it is, with its conversation id and role.
 3. **Request ids stay as they are.** The input's request id is its exactly-once key: the caller's request id for a
-   steer, and `report:<invokedId>:<entryId>` for a report. A repeat is admitted once and placed once, which is what
-   the redelivery in ADR-001 decision 4 relies on.
+   steer, and `report:<invokedId>:<entryId>` for a report. An "aborted" report (S-001 R-8a) is an `intern.report`
+   too, with the id ADR-001 decision 4 fixes for it. A repeat is admitted once and placed once, which is what the
+   redelivery in ADR-001 decision 4 relies on.
 4. **Held messages keep their kind.** When a parked conversation continues, each held message is placed as its own
    kind: a held steer as `intern.steer`, a held report as `intern.report`. The held message keeps what that needs.
    The `intern.steer` record that the hold commit writes for a held steer stays. Its data is `{ actor, mode }`, with
@@ -63,7 +64,8 @@ kind through pi-durable `InputEntry`. The entry's data names the sender and carr
    text, so a transcript read shows the text once.
 5. **Other inputs stay `pi.user`.** A conversation's first input stays plain `pi.user`, because the conversation's
    origin already records its source: a job's first input (S-001 R-12) and the job prompt of an invoked
-   conversation (S-001 R-8). An input submitted with `whenBusy: "reject"` also stays plain `pi.user`. Any other
+   conversation (S-001 R-8). An input submitted with `whenBusy: "reject"` also stays plain `pi.user`. A reject input
+   held for a parked conversation is held as a follow-up and delivered as `intern.steer` (S-001 R-10a). Any other
    input sent on someone's behalf, such as the answer to a blocked job's question (S-001 R-14), gets its kind by
    amending this record.
 
@@ -112,3 +114,9 @@ out request-id idempotency, which every redelivery needs (ADR-001 decision 4).
 **Description:** Place every input as `pi.user` and keep the sender in a the-intern document.
 **Rejected because:** The transcript wouldn't record who steered (S-001 R-10a), and the sender would live apart from
 the message it describes.
+
+## Amendments
+
+| Date | Change | Reason |
+|---|---|---|
+| 2026-11-01 | Decision 5: a reject input held for a parked conversation is held as a follow-up and delivered as `intern.steer`. Decision 3: an "aborted" report is an `intern.report` with the request id ADR-001 decision 4 fixes. No decision changes. | S-001 v0.3 R-10a (a reject input to a parked conversation is held like any other message, T-086) and R-8a (the "aborted" report, T-085), with the ADR-001 amendment of the same date. |
