@@ -14,11 +14,16 @@ import {
 } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { abortWithAwaited } from "../host/invocation.ts";
-import { defineOperation, type Operation, ServiceError } from "./operations.ts";
+import { readConversationMeta } from "../host/seating.ts";
+import { steerConversation } from "../host/steering.ts";
+import { type Caller, defineOperation, type Operation, ServiceError } from "./operations.ts";
+import { seatActorFor } from "./seat_operations.ts";
 
 type ControlContext = { host: HarnessHost };
 type ConversationRef = { conversationId: string };
 type SubmitInput = ConversationRef & { content: string; requestId: string; busyMode: BusyMode };
+// A message to a parked conversation is held and has no submission until the conversation continues.
+type SubmitResult = { submissionId: string } | { held: true };
 type ResetInput = ConversationRef & { note?: string };
 type CompactInput = ConversationRef & { instructions?: string };
 
@@ -79,11 +84,32 @@ async function mappingHostErrors<T>(action: () => Promise<T>): Promise<T> {
     }
 }
 
-const submitOperation = defineOperation<ControlContext, SubmitInput, { submissionId: string }>({
+// The agent's role is the one its own conversation is seated in.
+async function actorOf(host: HarnessHost, caller: Caller) {
+    const { actor } = caller;
+    const role =
+        actor.kind === "agent" ? (await readConversationMeta(host, actor.conversationId))?.seat.role : undefined;
+    return seatActorFor(caller, role);
+}
+
+// Every steer and follow-up goes through steering, which records who sent it and holds it for a parked conversation.
+async function submitOrSteer(host: HarnessHost, input: SubmitInput, caller: Caller): Promise<SubmitResult> {
+    const { conversationId, busyMode, content, requestId } = input;
+    if (busyMode === "reject") return submitInput(host, conversationId, input);
+    const { held, submissionId } = await steerConversation(host, conversationId, {
+        content,
+        mode: busyMode,
+        actor: await actorOf(host, caller),
+        requestId,
+    });
+    return held ? { held: true } : { submissionId: submissionId as string };
+}
+
+const submitOperation = defineOperation<ControlContext, SubmitInput, SubmitResult>({
     name: "conversations.submit",
     kind: "control",
     parse: parseSubmit,
-    run: ({ host }, { conversationId, ...input }) => mappingHostErrors(() => submitInput(host, conversationId, input)),
+    run: ({ host }, input, caller) => mappingHostErrors(() => submitOrSteer(host, input, caller)),
 });
 
 const withdrawOperation = defineOperation<ControlContext, { submissionId: string }, Record<string, never>>({
