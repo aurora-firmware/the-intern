@@ -167,20 +167,20 @@ describe("kill -9 while a conversation is parked", () => {
 describe("kill -9 while a report is being delivered", () => {
     it("delivers each report to the lead exactly once", { timeout: TEST_TIMEOUT_MS }, async () => {
         const env = await hermetic();
-        const first = start(env, "invoke-parked");
+        const first = start(env, "invoke-parked-slow-lead");
         await first.ready;
-        const leadId = await startParkedLead(first);
-        const invokedIds = await invokedOf(first, leadId);
+        const leadId = await startLead(first, JOB_ID, "lead work");
+        // A report in the lead's entries means delivery has started; no answer to it yet means it is not finished.
         await untilTrue(async () => {
-            for (const id of invokedIds) {
-                const answered = (await entriesOf(first, id)).some((entry) => entry.kind === "pi.assistant");
-                if (answered) return true;
-            }
-            return false;
-        }, "the first invoked agent to answer");
+            const entries = await entriesOf(first, leadId);
+            const hasReport = JOB_PROMPTS.some((prompt) => entries.some(takesInput(`echo: ${prompt}`)));
+            const hasAnswer = entries.some(mentions("echo: echo: job"));
+            return hasReport && !hasAnswer && (await listingOf(first, leadId)).status === "running";
+        }, "a report to be delivered to the lead and not yet answered");
+        const invokedIds = await invokedOf(first, leadId);
         await crash(first);
 
-        const second = start(env, "invoke-parked");
+        const second = start(env, "invoke-parked-slow-lead");
         await second.ready;
 
         await assertEachReportReachedLeadOnce(second, leadId);
