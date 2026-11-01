@@ -33,6 +33,8 @@ export const STREAM_ROUTES: Readonly<Record<string, string>> = Object.freeze({ "
 const OPERATION_ROUTE = /^\/operations\/([^/]+)$/;
 const FEED_PATH = "/feed";
 const SUBSCRIBE_OPERATION = "feed.subscribe";
+
+type FeedSubscription = Subscription<unknown, { seq: number }>;
 const JSON_MEDIA_TYPE = "application/json";
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -123,8 +125,8 @@ async function readInput(req: IncomingMessage): Promise<unknown> {
 }
 
 /**
- * The path of a request target. Node's parser accepts some targets the URL parser refuses; such a target is kept as
- * it is, so it matches no route and is still answered.
+ * The path and query of a request target. Node's parser accepts some targets the URL parser refuses; such a target
+ * is kept as it is, with no query, so it matches no route and is still answered.
  */
 function parseTarget(target: string): { pathname: string; query: URLSearchParams } {
     // A fixed base: the front never reads the Host header (S-003 REQ-014).
@@ -207,13 +209,10 @@ export function createHttpFront(options: HttpFrontOptions): HttpFront {
     }
 
     async function openFeed(res: ServerResponse, query: URLSearchParams, signal: AbortSignal): Promise<void> {
-        let subscription: Subscription<unknown, { seq: number }>;
+        let subscription: FeedSubscription;
         try {
             const input = subscribeInputOf(query);
-            subscription = (await options.catalogue.invoke(SUBSCRIBE_OPERATION, input, caller)) as Subscription<
-                unknown,
-                { seq: number }
-            >;
+            subscription = (await options.catalogue.invoke(SUBSCRIBE_OPERATION, input, caller)) as FeedSubscription;
         } catch (error) {
             sendError(res, asServiceError(error, SUBSCRIBE_OPERATION));
             return;
