@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { createClient, UnreachableError } from "../../src/client/client.ts";
+import { createClient, parseEventStream, type StreamEvent, UnreachableError } from "../../src/client/client.ts";
 import { defaultSocketPath, nodeTransport } from "../../src/client/node_transport.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -56,5 +56,52 @@ describe("a call no daemon answers", () => {
         assert.ok(error instanceof UnreachableError, `the call fails with UnreachableError, not ${error}`);
         assert.equal(error.target, socketPath);
         assert.match(error.message, new RegExp(socketPath.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    });
+});
+
+async function* fromChunks(chunks: readonly string[]): AsyncIterable<string> {
+    yield* chunks;
+}
+
+async function collect<T>(items: AsyncIterable<T>): Promise<T[]> {
+    const collected: T[] = [];
+    for await (const item of items) collected.push(item);
+    return collected;
+}
+
+describe("parseEventStream", () => {
+    it("parses events split anywhere across chunks, with CRLF line ends and comment lines", async () => {
+        const text =
+            'event: snapshot\ndata: {"a":1}\n\n: keep-alive\r\nevent: delta\r\nid: 1\r\ndata: {"seq":1}\r\n\r\n';
+        const chunks = text.match(/.{1,3}/gs) ?? [];
+
+        const events = await collect(parseEventStream(fromChunks(chunks)));
+
+        assert.deepEqual(events, [
+            { event: "snapshot", data: '{"a":1}' },
+            { event: "delta", id: "1", data: '{"seq":1}' },
+        ]);
+    });
+});
+
+describe("a subscription whose stream closes without an end event", () => {
+    it("fails instead of finishing or opening a new stream", async () => {
+        const opened: string[] = [];
+        const client = createClient({
+            call: () => assert.fail("the subscription calls no operation"),
+            async *stream(path: string): AsyncIterable<StreamEvent> {
+                opened.push(path);
+                yield { event: "snapshot", data: "{}" };
+            },
+        });
+        const feed = client.subscribe({ scope: "instance" });
+
+        const first = await feed.next();
+        const error = await rejection(feed.next());
+
+        assert.deepEqual(first, { done: false, value: { snapshot: {} } });
+        assert.ok(error instanceof Error && !(error instanceof UnreachableError), `a plain error, not ${error}`);
+        assert.match(error.message, /closed without an end event/);
+        assert.deepEqual(opened, ["/feed?scope=instance"]);
     });
 });
