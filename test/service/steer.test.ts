@@ -409,5 +409,33 @@ describe("the steer tool and steering a conversation", () => {
             assert.equal((await steerEntriesOf(started.ctx, leadId)).length, 1);
             release();
         });
+
+        it("holds a reject input like any other message and delivers it when it continues", async () => {
+            const { started, leadId, release } = await startParkedLead();
+
+            const first = await started.submit(leadId, "rejectable", "reject-1", "reject");
+            const second = await started.submit(leadId, "rejectable", "reject-1", "reject");
+
+            assert.deepEqual([first, second], [{ held: true }, { held: true }]);
+            assert.equal(started.callsOf("lead work").length, 1, "no run started for the held reject input");
+            const held = (await readConversationMeta(started.ctx.host, leadId))?.held ?? [];
+            assert.deepEqual(
+                held.map((message) => [message.content, message.mode]),
+                [["rejectable", "followUp"]],
+            );
+            assert.deepEqual(await steerEntriesOf(started.ctx, leadId), [{ actor: CLI_ACTOR, mode: "followUp" }]);
+
+            release();
+
+            await waitFor(
+                () => started.callsOf("lead work").some((call) => usersOf(call.messages).includes("report of job A")),
+                "the lead to continue with the report",
+            );
+            const users = usersOf((started.callsOf("lead work").at(-1) as ModelCall).messages);
+            for (const expected of ["rejectable", "report of job A"]) {
+                assert.ok(users.includes(expected), `the lead's context holds "${expected}"`);
+            }
+            assert.deepEqual((await readConversationMeta(started.ctx.host, leadId))?.held, []);
+        });
     });
 });

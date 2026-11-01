@@ -45,6 +45,15 @@ async function holdIfParked(host: HarnessHost, conversationId: ConversationId, i
 }
 
 /**
+ * Holds the message when the target conversation is parked, whatever busy mode the caller chose. Returns `false` and
+ * writes nothing when the target is not parked, so the caller submits the message as input.
+ */
+export async function holdForParked(host: HarnessHost, targetId: string, input: SteerInput): Promise<boolean> {
+    const conversation = await requireConversation(host, targetId);
+    return holdIfParked(host, conversation.id, input);
+}
+
+/**
  * Steers the target conversation. Returns `held: true` when the target is parked and the message waits for it to
  * continue, with no submission. Otherwise the message is submitted as input and placed as the `intern.steer` entry
  * itself (its data names the actor and keeps the text), so the record and the message are one commit.
