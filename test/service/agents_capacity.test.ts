@@ -232,7 +232,7 @@ describe("a job's lead conversation parked for an answer", () => {
         await waitFor(() => started.callsOf("other work").length === 1, "the other run to start");
         assert.equal((await started.workerThreads()).inUse, 1);
         assert.equal(await started.statusOf(otherId), "running");
-        assert.equal(await started.statusOf(leadId), "idle");
+        assert.equal(await started.statusOf(leadId), "parked");
         holder.release();
         await waitFor(async () => (await started.workerThreads()).inUse === 0, "the other run to finish");
     });
