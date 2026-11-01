@@ -9,6 +9,8 @@ import { createAgentsComponent } from "../agents/agents_component.ts";
 import { runDaemon } from "../daemon/daemon.ts";
 import { createLogger, type Logger } from "../daemon/logger.ts";
 import { createLocalSocketComponent } from "../listeners/local_socket.ts";
+import { createNetworkListenerComponent } from "../listeners/network_listener.ts";
+import { networkSection } from "../listeners/network_section.ts";
 
 const USAGE_EXIT_STATUS = 2;
 const FAILURE_EXIT_STATUS = 1;
@@ -66,9 +68,9 @@ async function serve(args: readonly string[]): Promise<number> {
         env: process.env,
         homeDir: homedir(),
         logger,
-        sections: agents.sections,
+        sections: [...agents.sections, networkSection],
         // The listeners follow the agents component, so they open once the agents are ready (S-003 REQ-001).
-        components: [agents.component, createLocalSocketComponent()],
+        components: [agents.component, createLocalSocketComponent(), createNetworkListenerComponent()],
         operations: agents.operations,
     });
 
