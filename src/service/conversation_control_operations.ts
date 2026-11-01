@@ -15,7 +15,7 @@ import {
 import type { HarnessHost } from "../host/harness_host.ts";
 import { abortWithAwaited } from "../host/invocation.ts";
 import { readConversationMeta } from "../host/seating.ts";
-import { steerConversation } from "../host/steering.ts";
+import { holdForParked, steerConversation } from "../host/steering.ts";
 import { type Caller, defineOperation, type Operation, ServiceError } from "./operations.ts";
 import { seatActorFor } from "./seat_operations.ts";
 
@@ -95,13 +95,13 @@ async function actorOf(host: HarnessHost, caller: Caller) {
 // Every steer and follow-up goes through steering, which records who sent it and holds it for a parked conversation.
 async function submitOrSteer(host: HarnessHost, input: SubmitInput, caller: Caller): Promise<SubmitResult> {
     const { conversationId, busyMode, content, requestId } = input;
-    if (busyMode === "reject") return submitInput(host, conversationId, input);
-    const { held, submissionId } = await steerConversation(host, conversationId, {
-        content,
-        mode: busyMode,
-        actor: await actorOf(host, caller),
-        requestId,
-    });
+    const message = { content, mode: busyMode, actor: await actorOf(host, caller), requestId };
+    if (busyMode === "reject") {
+        // A parked conversation holds a reject input as a follow-up; a running one still refuses it with busy.
+        const isHeld = await holdForParked(host, conversationId, { ...message, mode: "followUp" });
+        return isHeld ? { held: true } : submitInput(host, conversationId, input);
+    }
+    const { held, submissionId } = await steerConversation(host, conversationId, { ...message, mode: busyMode });
     return held ? { held: true } : { submissionId: submissionId as string };
 }
 
