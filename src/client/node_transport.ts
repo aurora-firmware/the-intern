@@ -46,13 +46,7 @@ function responseOf(req: ClientRequest, body: string, target: string): Promise<I
     });
 }
 
-async function readText(response: IncomingMessage, target: string): Promise<string> {
-    let text = "";
-    for await (const chunk of chunksOf(response, target)) text += chunk;
-    return text;
-}
-
-/** The response's text chunks; a connection that closes before the response is complete throws as unreachable. */
+/** The response's text chunks; a connection that closes before the response is complete fails as unreachable. */
 async function* chunksOf(response: IncomingMessage, target: string): AsyncIterable<string> {
     response.setEncoding("utf8");
     try {
@@ -60,7 +54,13 @@ async function* chunksOf(response: IncomingMessage, target: string): AsyncIterab
     } catch (error) {
         throw new UnreachableError(target, error instanceof Error ? error.message : String(error));
     }
-    if (!response.complete) throw new UnreachableError(target, "the connection closed before the answer was complete");
+}
+
+/** Reads the whole response body. */
+async function readText(response: IncomingMessage, target: string): Promise<string> {
+    let text = "";
+    for await (const chunk of chunksOf(response, target)) text += chunk;
+    return text;
 }
 
 function parseAnswer(text: string, status: number | undefined, target: string): unknown {
