@@ -551,3 +551,123 @@ describe("no access checks through both listeners", () => {
         }
     });
 });
+
+/** S-003 REQ-004's body limit, written out so a changed limit is caught. */
+const BODY_LIMIT_BYTES = 10 * 1024 * 1024;
+
+/** A `conversations.submit` input whose JSON encoding is exactly `bytes` long. */
+function submitBodyOfBytes(conversationId: string, requestId: string, bytes: number): string {
+    const empty = JSON.stringify({ conversationId, requestId, content: "" });
+    const body = JSON.stringify({ conversationId, requestId, content: "a".repeat(bytes - Buffer.byteLength(empty)) });
+    assert.equal(Buffer.byteLength(body), bytes);
+    return body;
+}
+
+function errorOf(answer: Answer): { code: string; message: string } {
+    return (answer.body as { error: { code: string; message: string } }).error;
+}
+
+describe("routes and request validation through both listeners", () => {
+    it("answers unknown routes 404 and feed.subscribe at the operation route 400 naming GET /feed", async () => {
+        const fixture = await startFixture();
+
+        for (const way of LISTENERS) {
+            const target = fixture.targetOf(way);
+            const unknownName = await send(target, "POST", "/operations/no.such", JSON_HEADERS, "{}");
+            const wrongMethod = await send(target, "GET", "/operations/daemon.status", {});
+            const unknownPath = await send(target, "GET", "/nothing", {});
+            const stream = await send(
+                target,
+                "POST",
+                "/operations/feed.subscribe",
+                JSON_HEADERS,
+                '{"scope":"instance"}',
+            );
+
+            for (const [answer, named] of [
+                [unknownName, "no.such"],
+                [wrongMethod, "/operations/daemon.status"],
+                [unknownPath, "/nothing"],
+            ] as const) {
+                assert.equal(answer.status, 404, `${named} over the ${way}`);
+                assert.equal(errorOf(answer).code, "not_found");
+                assert.ok(errorOf(answer).message.includes(named), `${errorOf(answer).message} names ${named}`);
+            }
+            assert.equal(stream.status, 400, `feed.subscribe over the ${way}`);
+            assert.equal(errorOf(stream).code, "invalid_input");
+            assert.match(errorOf(stream).message, /GET \/feed/);
+        }
+    });
+
+    it("refuses non-JSON, malformed and oversized bodies without running the operation", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const fixture = await startFixture();
+        const conversationId = await fixture.settledConversation("validated");
+        const validBody = JSON.stringify({ conversationId, content: "never run", requestId: "refused" });
+        const refused = [
+            { what: "a text/plain body", headers: { "content-type": "text/plain" }, body: validBody },
+            {
+                what: "a form body",
+                headers: { "content-type": "application/x-www-form-urlencoded" },
+                body: `conversationId=${conversationId}&content=never&requestId=refused`,
+            },
+            { what: "an empty body with no content type", headers: {}, body: undefined },
+            { what: "malformed JSON", headers: JSON_HEADERS, body: '{"conversationId":' },
+            {
+                what: "a body of 10 MiB plus one byte",
+                headers: JSON_HEADERS,
+                body: submitBodyOfBytes(conversationId, "refused", BODY_LIMIT_BYTES + 1),
+            },
+        ];
+        const before = await fixture.stateSnapshot();
+
+        for (const way of LISTENERS) {
+            for (const { what, headers, body } of refused) {
+                const answer = await send(
+                    fixture.targetOf(way),
+                    "POST",
+                    "/operations/conversations.submit",
+                    headers,
+                    body,
+                );
+                assert.equal(answer.status, 400, `${what} over the ${way}`);
+                assert.equal(errorOf(answer).code, "invalid_input", `${what} over the ${way}`);
+            }
+        }
+
+        assert.deepEqual(await fixture.stateSnapshot(), before);
+    });
+
+    it("accepts exactly 10 MiB of JSON for conversations.submit and an empty daemon.status with a charset", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const fixture = await startFixture();
+        const conversationId = await fixture.settledConversation("boundary");
+        const charsetHeaders = { "content-type": "application/json; charset=utf-8" };
+        const expectedStatus = comparable({ result: await fixture.invoke("daemon.status", undefined) });
+
+        // daemon.status first: a run started by a submit would change its count of worker threads in use.
+        for (const way of LISTENERS) {
+            const status = await send(fixture.targetOf(way), "POST", "/operations/daemon.status", charsetHeaders);
+            assert.equal(status.status, 200, `the empty daemon.status over the ${way}`);
+            assert.deepEqual(comparable(status.body), expectedStatus);
+        }
+        const inProcessSubmit = submitBodyOfBytes(conversationId, "in-process", BODY_LIMIT_BYTES);
+        const expectedSubmit = comparable({
+            result: await fixture.invoke("conversations.submit", JSON.parse(inProcessSubmit)),
+        });
+        for (const way of LISTENERS) {
+            const body = submitBodyOfBytes(conversationId, label(way), BODY_LIMIT_BYTES);
+            const submitted = await send(
+                fixture.targetOf(way),
+                "POST",
+                "/operations/conversations.submit",
+                JSON_HEADERS,
+                body,
+            );
+            assert.equal(submitted.status, 200, `the 10 MiB submit over the ${way}: ${JSON.stringify(submitted.body)}`);
+            assert.deepEqual(comparable(submitted.body), expectedSubmit);
+        }
+    });
+});
