@@ -31,14 +31,17 @@ pi-durable 1.4.0 has three ways to write such a record:
   with `pi.`. The record and the message are then one entry, placed in the submission's own commit.
 
 The Architect ruled for the third form on T-075 (finding F2, 2026-11-01). `steerConversation` in
-`src/host/steering.ts` now submits one input placed as an `intern.steer` entry. Three places don't follow it yet:
+`src/host/steering.ts` submits one input placed as an `intern.steer` entry. T-087, T-088 and T-089 brought the
+other deliveries in line:
 
-- Report delivery (`deliver` in `src/host/reports.ts`) submits the report through `submitInput`, as plain `pi.user`.
-- `continueParked` in `src/host/invocation.ts` delivers held messages as plain `pi.user`.
-- A report held for a parked conversation (`holdReport` in `src/host/reports.ts`) writes no record.
+- Report delivery (`deliver` in `src/host/reports.ts`) places a report as an `intern.report` entry (T-087).
+- `continueParked` in `src/host/invocation.ts` delivers each held message as its own kind, `intern.steer` or
+  `intern.report` (T-088).
+- A report held for a parked conversation (`holdReport` in `src/host/reports.ts`) keeps its kind and its sender, the
+  invoked agent's conversation id and role, so its delivery names the sender (T-089).
 
 Sources: S-001 R-7, R-8a, R-10a, R-16 and R-17; ADR-001 decision 4; ADR-003; T-075 (Review Verdict, Architect ruling
-on F2); pi-durable 1.4.0 `dist/harness/types.d.ts` (`InputEntry`, `SubmissionDraft`).
+on F2); T-087, T-088 and T-089; pi-durable 1.4.0 `dist/harness/types.d.ts` (`InputEntry`, `SubmissionDraft`).
 
 ## Decision
 
@@ -85,8 +88,11 @@ kind through pi-durable `InputEntry`. The entry's data names the sender and carr
   follow each new kind.
 - The host depends on pi-durable's `InputEntry` and on the rule that a kind doesn't start with `pi.`. Each pi-durable
   upgrade rechecks them, together with the README compatibility section.
-- Report delivery and held-message delivery don't follow this decision yet. Until they do, a report and a delivered
-  held message show as `pi.user` with no sender.
+- The transcript read doesn't follow decision 1 yet. `toHostEntry` in `src/host/harness_host.ts` and
+  `toHostEntryView` in `src/host/host_observation.ts` map an entry to `entry.model ?? entry.data`. An input entry
+  carries the model's user message, so an `intern.steer` or `intern.report` entry reads as a plain user message, and
+  `conversations.entries` and the instance feed don't show its sender. A follow-up task (finding N1 of the S-001
+  spec-truth reconciliation) makes the read show the entry's own data.
 
 ### Neutral
 
@@ -120,3 +126,4 @@ the message it describes.
 | Date | Change | Reason |
 |---|---|---|
 | 2026-11-01 | Decision 5: a reject input held for a parked conversation is held as a follow-up and delivered as `intern.steer`. Decision 3: an "aborted" report is an `intern.report` with the request id ADR-001 decision 4 fixes. No decision changes. | S-001 v0.3 R-10a (a reject input to a parked conversation is held like any other message, T-086) and R-8a (the "aborted" report, T-085), with the ADR-001 amendment of the same date. |
+| 2026-11-01 | Context and Negative: report delivery, held-message delivery and held reports now follow the decision (T-087, T-088, T-089). Negative: the transcript read still shows these entries as plain user messages, until follow-up N1. No decision changes. | S-001 spec-truth reconciliation, finding A1. |
