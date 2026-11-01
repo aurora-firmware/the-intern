@@ -184,6 +184,11 @@ invoking agent is running, the report arrives like a follow-up message. If it is
 as soon as a worker thread is free. A parked agent continues on each report as it arrives. An invoked agent that still
 waits for reports from agents it invoked reports back only after those arrive and its own run ends.
 
+### Aborting
+
+Aborting a conversation also aborts the agents it still waits for, and the agents they wait for, in turn. Nothing
+aborted stays parked, waits for a report or keeps its held messages, and the aborted agents send no report back.
+
 ### Steering
 
 You and any agent can steer a running conversation with a message. The message arrives after the current tool calls, or

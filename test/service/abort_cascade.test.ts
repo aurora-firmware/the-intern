@@ -10,6 +10,7 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { submitInput } from "../../src/host/conversation_control.ts";
 import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import { abortJobConversations, abortWithAwaited, createInvokedConversations } from "../../src/host/invocation.ts";
+import { startReportDelivery } from "../../src/host/reports.ts";
 import {
     conversationMetaDoc,
     createSeatedConversation,
@@ -32,8 +33,10 @@ type FakeModel = ReturnType<typeof createFakeModel>;
 const envs: HermeticEnv[] = [];
 const hosts: HarnessHost[] = [];
 const fakes: FakeModel[] = [];
+const deliveries: { stop(): void }[] = [];
 
 afterEach(async () => {
+    for (const delivery of deliveries.splice(0)) delivery.stop();
     for (const host of hosts.splice(0)) await host.close();
     for (const fake of fakes.splice(0)) fake.unregister();
     for (const env of envs.splice(0)) await env.dispose();
@@ -77,6 +80,7 @@ type Fixture = {
     seat: Seat;
     start(jobId: string, prompt: string): Promise<string>;
     invoke(invokingId: string, callId: string, names: string[], parked?: boolean): Promise<string[]>;
+    inputsOf(id: string): Promise<number>;
     waitUntilBusy(ids: string[]): Promise<void>;
     busy(id: string): Promise<boolean>;
 };
@@ -101,6 +105,7 @@ async function openFixture(): Promise<Fixture> {
         logger: createLogger({ stream: { write: () => true } }),
     });
     hosts.push(host);
+    deliveries.push(await startReportDelivery(host, { logger: createLogger({ stream: { write: () => true } }) }));
     const seat: Seat = {
         role: "developer",
         model: `${fake.getModel().provider}/${fake.getModel().id}`,
@@ -140,9 +145,14 @@ async function openFixture(): Promise<Fixture> {
             callId,
             agents: names.map((name) => ({ seat, contextMode: "clean" as const, jobPrompt: `job ${name}` })),
             actor,
-            ...(parked && { parked: { waitingFor: "reports" as const, continueOn: "all" as const } }),
+            ...(parked && { parked: { waitingFor: "reports" as const, continueOn: "each" as const } }),
         });
-    return { host, actor, seat, start, invoke, waitUntilBusy, busy };
+    // Counts the user messages in a conversation: a delivered report is one of them.
+    const inputsOf = async (id: string) =>
+        (await host.readEntries(id, { limit: 1000 })).entries.filter((entry) =>
+            JSON.stringify(entry.data).includes('"role":"user"'),
+        ).length;
+    return { host, actor, seat, start, invoke, inputsOf, waitUntilBusy, busy };
 }
 
 describe("abortWithAwaited", () => {
@@ -207,6 +217,51 @@ describe("abortJobConversations", () => {
         await pause(SETTLE_PAUSE_MS);
         assert.equal(await fixture.busy(other), true);
     });
+});
+
+async function assertNothingLeft(fixture: Fixture, ids: string[], inputsBefore: number[]) {
+    await pause(SETTLE_PAUSE_MS);
+    for (const [index, id] of ids.entries()) {
+        const meta = await readConversationMeta(fixture.host, id);
+        assert.equal(meta?.parked, null, `${id} is not parked`);
+        assert.deepEqual(meta?.awaiting, [], `${id} awaits nothing`);
+        assert.deepEqual(meta?.held, [], `${id} holds nothing`);
+        assert.equal(await fixture.busy(id), false, `${id} is not busy`);
+        assert.equal(await fixture.inputsOf(id), inputsBefore[index], `${id} received no input`);
+    }
+}
+
+describe("an abort with report delivery running", () => {
+    for (const isParked of [false, true]) {
+        const kind = isParked ? "parked" : "steerable";
+
+        it(`leaves nothing parked, awaited or held after abortWithAwaited on a ${kind} invoker`, async () => {
+            const fixture = await openFixture();
+            const lead = await fixture.start("job-1", isParked ? "idle" : "lead");
+            const [child] = await fixture.invoke(lead, "c1", ["child"], isParked);
+            const [grandchild] = await fixture.invoke(child as string, "c2", ["grandchild"]);
+            const all = [lead, child as string, grandchild as string];
+            await fixture.waitUntilBusy(all.slice(1));
+            const inputsBefore = await Promise.all(all.map(fixture.inputsOf));
+
+            await abortWithAwaited(fixture.host, lead);
+
+            await assertNothingLeft(fixture, all, inputsBefore);
+        });
+
+        it(`leaves nothing parked, awaited or held after abortJobConversations on a ${kind} invoker`, async () => {
+            const fixture = await openFixture();
+            const lead = await fixture.start("job-1", isParked ? "idle" : "lead");
+            const [child] = await fixture.invoke(lead, "c1", ["child"], isParked);
+            const all = [lead, child as string];
+            await fixture.waitUntilBusy(all.slice(1));
+            const inputsBefore = await Promise.all(all.map(fixture.inputsOf));
+
+            await abortJobConversations(fixture.host, "job-1");
+
+            await assertNothingLeft(fixture, all, inputsBefore);
+        });
+    }
 });
 
 describe("conversations.abort", () => {
