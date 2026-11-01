@@ -6,7 +6,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { CommitChange, ConversationId, EntryRecord, JsonObject, TaskId } from "@earendil-works/pi-durable";
 import { HostNotFoundError } from "./conversation_control.ts";
-import { type HarnessHost, type HostEntry, internalHarness } from "./harness_host.ts";
+import { type HarnessHost, type HostEntry, internalHarness, toHostEntry } from "./harness_host.ts";
 import { CONVERSATION_META_KIND, type ConversationMeta } from "./seating.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -21,11 +21,6 @@ export type InstanceEvent = {
 type LiveState = { run?: unknown; compactions?: unknown[] };
 type StructuralView = { entries: readonly EntryRecord[]; docs: Readonly<Record<string, JsonObject>> };
 
-// Same mapping as the host's entry reads: an entry that contributes messages is shown by them, any other by its data.
-function toHostEntryView(entry: EntryRecord): HostEntry {
-    return { id: String(entry.id), kind: entry.kind, data: entry.model ?? entry.data };
-}
-
 // Busy is read from the view itself, so it always describes the same commit as the entries: a run is recorded in
 // `pi.live` from its start to its end, and a compaction is listed there while it works.
 function isViewBusy(docs: StructuralView["docs"]): boolean {
@@ -35,7 +30,7 @@ function isViewBusy(docs: StructuralView["docs"]): boolean {
 
 function toConversationView(view: StructuralView): ConversationView {
     return {
-        entries: view.entries.map(toHostEntryView),
+        entries: view.entries.map(toHostEntry),
         live: view.docs["pi.live"] ?? null,
         inbox: view.docs["pi.inbox"] ?? null,
         busy: isViewBusy(view.docs),
