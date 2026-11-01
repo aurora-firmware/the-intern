@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type FauxProviderRegistration, fauxAssistantMessage, type Message, type Models } from "@earendil-works/pi-ai";
 import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
+import type { ConversationId } from "@earendil-works/pi-durable";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
-import { type HarnessHost, openHarnessHost } from "../../src/host/harness_host.ts";
+import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import { createInvokedConversations, parkConversation } from "../../src/host/invocation.ts";
-import { startReportDelivery } from "../../src/host/reports.ts";
+import { REPORT_KIND, type ReportRecord, startReportDelivery } from "../../src/host/reports.ts";
 import {
     createSeatedConversation,
     type ParkedState,
@@ -322,5 +324,86 @@ describe("startReportDelivery", () => {
         await settle();
 
         assert.equal(reportsSeenBy(fixture.invokerRequests(), "job A"), 1);
+    });
+});
+
+async function rawEntriesOf(host: HarnessHost, conversationId: string) {
+    const conversation = await internalHarness(host).conversation(
+        Number(conversationId) as ConversationId,
+        BACKGROUND_CONTEXT,
+    );
+    const page = await conversation?.entries({ order: "ascending" }, 500, undefined, BACKGROUND_CONTEXT);
+    return page?.items ?? [];
+}
+
+// A report is placed once, as an intern.report entry that names the invoked agent, and no pi.user entry repeats it.
+async function assertPlacedAsReportEntry(host: HarnessHost, invokerId: string, invokedId: string, prompt: string) {
+    const entries = await rawEntriesOf(host, invokerId);
+    const reports = entries.filter((entry) => entry.kind === REPORT_KIND).map((entry) => entry.data as ReportRecord);
+    assert.deepEqual(
+        reports.filter((report) => report.content === reportOf(prompt)),
+        [{ actor: { kind: "agent", conversationId: invokedId, role: "developer" }, content: reportOf(prompt) }],
+    );
+    const carriers = entries.filter((entry) => JSON.stringify(entry.model ?? []).includes(reportOf(prompt)));
+    assert.deepEqual(
+        carriers.map((entry) => entry.kind),
+        [REPORT_KIND],
+        "the report text is carried once, by the report entry",
+    );
+}
+
+describe("report entries", () => {
+    it("places the report to an idle invoker as an intern.report entry naming the invoked agent", async () => {
+        const fixture = await createFixture();
+        const invokerId = await fixture.startInvoker();
+        await fixture.startDelivery();
+
+        const [invokedId] = (await fixture.invoke(invokerId, ["job A"])) as [string];
+
+        await until(() => reportsSeenBy(fixture.invokerRequests(), "job A") === 1, "the invoker to run on the report");
+        await assertPlacedAsReportEntry(fixture.host, invokerId, invokedId, "job A");
+    });
+
+    it("places the report to a running invoker as an intern.report entry naming the invoked agent", async () => {
+        const fixture = await createFixture();
+        const invokerId = await fixture.startInvoker();
+        await fixture.startDelivery();
+        const release = fixture.holdAnswerTo("busy work");
+        await submitInput(fixture.host, invokerId, { content: "busy work", requestId: "busy", busyMode: "followUp" });
+        await until(() => fixture.invokerRequests().length === 2, "the invoker to start the busy run");
+
+        const [invokedId] = (await fixture.invoke(invokerId, ["job A"])) as [string];
+        await until(async () => (await awaitingOf(fixture.host, invokerId))?.length === 0, "the report to be sent");
+        release();
+
+        await until(() => reportsSeenBy(fixture.invokerRequests(), "job A") === 1, "the invoker to take the report");
+        await assertPlacedAsReportEntry(fixture.host, invokerId, invokedId, "job A");
+    });
+
+    it("places the report that continues a parked invoker as an intern.report entry naming the invoked agent", async () => {
+        const fixture = await createFixture();
+        const invokerId = await fixture.startInvoker();
+        await fixture.startDelivery();
+        const parked: ParkedState = { waitingFor: "reports", continueOn: "each" };
+        const [invokedId] = (await fixture.invoke(invokerId, ["job A"], parked)) as [string];
+        await parkConversation(fixture.host, invokerId, parked);
+
+        await until(() => reportsSeenBy(fixture.invokerRequests(), "job A") === 1, "the run on the report");
+        await assertPlacedAsReportEntry(fixture.host, invokerId, invokedId, "job A");
+    });
+
+    it("places one intern.report entry when the report is delivered again after a restart", async () => {
+        const fixture = await createFixture();
+        const invokerId = await fixture.startInvoker();
+        const [invokedId] = (await fixture.invoke(invokerId, ["job A"])) as [string];
+        await until(async () => (await fixture.host.conversationInfo(invokedId))?.busy === false, "its run");
+        await fixture.reopenHost();
+        await fixture.startDelivery();
+        await until(() => reportsSeenBy(fixture.invokerRequests(), "job A") === 1, "the report");
+        await fixture.reopenHost();
+        await fixture.startDelivery();
+        await settle();
+
+        await assertPlacedAsReportEntry(fixture.host, invokerId, invokedId, "job A");
     });
 });

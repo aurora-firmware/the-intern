@@ -97,6 +97,8 @@ const statusOf = async (daemon: DaemonProcess): Promise<Status> => (await daemon
 
 const takesInput = (text: string) => (entry: Entry) =>
     entry.kind === "pi.user" && JSON.stringify(entry.data).includes(text);
+const carriesReport = (text: string) => (entry: Entry) =>
+    entry.kind === "intern.report" && JSON.stringify(entry.data).includes(text);
 const mentions = (text: string) => (entry: Entry) =>
     entry.kind === "pi.assistant" && JSON.stringify(entry.data).includes(text);
 
@@ -127,7 +129,7 @@ async function assertEachReportReachedLeadOnce(daemon: DaemonProcess, leadId: st
     await untilIdle(daemon, [leadId]);
     const entries = await entriesOf(daemon, leadId);
     for (const prompt of JOB_PROMPTS) {
-        assert.equal(entries.filter(takesInput(`echo: ${prompt}`)).length, 1, `the report of ${prompt} came once`);
+        assert.equal(entries.filter(carriesReport(`echo: ${prompt}`)).length, 1, `the report of ${prompt} came once`);
         assert.equal(entries.filter(mentions(`echo: echo: ${prompt}`)).length, 1, `the report of ${prompt} ran once`);
     }
 }
@@ -173,7 +175,7 @@ describe("kill -9 while a report is being delivered", () => {
         // A report in the lead's entries means delivery has started; no answer to it yet means it is not finished.
         await untilTrue(async () => {
             const entries = await entriesOf(first, leadId);
-            const hasReport = JOB_PROMPTS.some((prompt) => entries.some(takesInput(`echo: ${prompt}`)));
+            const hasReport = JOB_PROMPTS.some((prompt) => entries.some(carriesReport(`echo: ${prompt}`)));
             const hasAnswer = entries.some(mentions("echo: echo: job"));
             return hasReport && !hasAnswer && (await listingOf(first, leadId)).status === "running";
         }, "a report to be delivered to the lead and not yet answered");

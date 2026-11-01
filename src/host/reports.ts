@@ -18,6 +18,10 @@ import { type ConversationMeta, conversationMetaDoc, readConversationMeta, type 
 const context = BACKGROUND_CONTEXT;
 const ENTRY_PAGE_SIZE = 20;
 
+/** The entry a report is placed as: it names the invoked conversation and its role, and carries the report text. */
+export const REPORT_KIND = "intern.report";
+export type ReportRecord = { actor: SeatActor; content: string };
+
 type Report = { content: string; requestId: string };
 type LastAnswer = { text: string; entryId: EntryId };
 
@@ -112,10 +116,13 @@ async function deliver(host: HarnessHost, invokedId: string): Promise<void> {
         await holdReport(host, { invokerId, invokedId, report });
         return;
     }
+    const actor: SeatActor = { kind: "agent", conversationId: invokedId, role: invoked.seat.role };
+    const record: ReportRecord = { actor, content: report.content };
+    const input = { ...report, entry: { kind: REPORT_KIND, data: record } };
     if (invoker.parked !== null || invoker.held.length > 0) {
-        await continueParked(host, invokerId, report);
+        await continueParked(host, invokerId, input);
     } else {
-        await submitInput(host, invokerId, { ...report, busyMode: "followUp" });
+        await submitInput(host, invokerId, { ...input, busyMode: "followUp" });
     }
     await changeMeta(host, invokerId, (meta) => {
         meta.awaiting = withoutId(meta.awaiting, invokedId);

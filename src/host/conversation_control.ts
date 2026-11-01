@@ -7,6 +7,7 @@ import {
     type Conversation,
     ConversationBusy,
     type ConversationId,
+    type InputEntry,
     type Submission,
     type SubmissionId,
     type SubmissionRecord,
@@ -70,16 +71,25 @@ function toSubmissionState(record: SubmissionRecord): SubmissionState {
     return { state: record.status };
 }
 
+/** The entry an input is placed as instead of `pi.user`; its model message is still the input's user message. */
+export type InputRecord = { kind: string; data: unknown };
+
 /** Submits input. The request id deduplicates: a known request id returns its existing submission. */
 export async function submitInput(
     host: HarnessHost,
     conversationId: string,
-    input: { content: string; requestId: string; busyMode: BusyMode },
+    input: { content: string; requestId: string; busyMode: BusyMode; entry?: InputRecord },
 ): Promise<{ submissionId: string }> {
     const conversation = await requireConversation(host, conversationId);
     try {
         const submission = await conversation.submit(
-            { type: "input", content: input.content, requestId: input.requestId, whenBusy: input.busyMode },
+            {
+                type: "input",
+                content: input.content,
+                requestId: input.requestId,
+                whenBusy: input.busyMode,
+                ...(input.entry !== undefined && { entry: input.entry as InputEntry }),
+            },
             context,
         );
         return { submissionId: String(submission.id) };
