@@ -72,6 +72,8 @@ export function nodeTransport(target: NodeTarget): Transport {
                 req.destroy();
             }
         },
-        stream: async function* () {},
+        stream: () => {
+            throw new Error("Feed streams are not available yet");
+        },
     };
 }

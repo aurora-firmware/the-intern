@@ -46,3 +46,40 @@ export function operationPath(name: string): string {
 export function encodeInput(input: unknown): string {
     return input === undefined ? "" : JSON.stringify(input);
 }
+
+export type FeedScope = { scope: "instance" } | { scope: "conversation"; conversationId: string };
+
+export type FeedItem = { snapshot: unknown } | { delta: unknown };
+
+export type Client = {
+    invoke(name: string, input?: unknown): Promise<unknown>;
+    subscribe(scope: FeedScope): AsyncGenerator<FeedItem, { end: string }>;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+}
+
+/** The error a refused answer carries, `{"error": {"code", "message"}}`, as a `ClientError`. */
+export function answerError(body: unknown): Error {
+    const error = isRecord(body) ? body.error : undefined;
+    if (isRecord(error) && typeof error.code === "string" && typeof error.message === "string") {
+        return new ClientError(error.code, error.message);
+    }
+    return new Error(`The daemon's answer is neither a result nor an error: ${JSON.stringify(body)?.slice(0, 200)}`);
+}
+
+/** The result of an answer `{"result": <result>}`; any other answer is thrown as its error. */
+export function decodeAnswer(body: unknown): unknown {
+    if (isRecord(body) && Object.hasOwn(body, "result")) return body.result;
+    throw answerError(body);
+}
+
+export function createClient(transport: Transport): Client {
+    return {
+        invoke: async (name, input) => decodeAnswer(await transport.call(name, input)),
+        subscribe: () => {
+            throw new Error("Feed subscriptions are not available yet");
+        },
+    };
+}

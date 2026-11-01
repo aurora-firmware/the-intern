@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { UnreachableError } from "../../src/client/client.ts";
+import { createClient, UnreachableError } from "../../src/client/client.ts";
 import { defaultSocketPath, nodeTransport } from "../../src/client/node_transport.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -49,9 +49,9 @@ describe("a call no daemon answers", () => {
         const env = await createHermeticEnv();
         envs.push(env);
         const socketPath = defaultSocketPath({ env: env.env, homeDir: env.root });
-        const transport = nodeTransport({ socketPath });
+        const client = createClient(nodeTransport({ socketPath }));
 
-        const error = await rejection(transport.call("daemon.status", undefined));
+        const error = await rejection(client.invoke("daemon.status"));
 
         assert.ok(error instanceof UnreachableError, `the call fails with UnreachableError, not ${error}`);
         assert.equal(error.target, socketPath);
