@@ -12,13 +12,18 @@ import type { HermeticEnv } from "./hermetic_env.ts";
 const CHILD_ENTRY = join(import.meta.dirname, "daemon_child.ts");
 const READY_POLL_TIMEOUT_MS = 30_000;
 
-export type FakeScript = "echo" | "bash-sleep" | "slow";
+/**
+ * `handoff-clean`: a seated agent's first answer is a Clean handoff to `gp` with the note `CLEAN-NOTE`; the new agent's
+ * answer is slow. `invoke-parked`: a lead's first answer is a parked invoke of two `gp` agents with the job prompts
+ * `job A` and `job B`; the invoked agents' answers are slow. Both answer anything else with an echo.
+ */
+export type FakeScript = "echo" | "bash-sleep" | "slow" | "handoff-clean" | "invoke-parked";
 
 export type StartDaemonOptions = {
     hermetic: HermeticEnv;
     workerThreads?: number;
     script?: FakeScript;
-    /** How long the `slow` script holds each answer back. */
+    /** How long a slow answer of the `slow`, `handoff-clean` and `invoke-parked` scripts is held back. */
     delayMs?: number;
     realModels?: boolean;
     /** Live tests only: the model new conversations use with `realModels`, instead of the pi agent folder's default. */
