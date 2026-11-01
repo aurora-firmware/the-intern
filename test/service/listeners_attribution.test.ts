@@ -293,3 +293,34 @@ describe("the way in recorded through each listener", { timeout: TEST_TIMEOUT_MS
         assert.deepEqual(await originOf(fixture, started.conversationId), COMMAND_LINE_REQUEST);
     });
 });
+
+describe("a job's origin through the local socket", { timeout: TEST_TIMEOUT_MS }, () => {
+    it("refuses a jobs.startLead call naming a schedule origin as invalid_input and creates nothing", async () => {
+        const fixture = await startFixture();
+        const before = await fixture.invoke("conversations.list", {});
+        const origin = { kind: "schedule", entry: "nightly", fireTime: "2026-11-01T00:00:00.000Z" };
+
+        const answer = await fixture.post("local socket", "jobs.startLead", {
+            jobId: "scheduled",
+            firstInput: "go",
+            origin,
+        });
+
+        assert.equal(answer.status, 400);
+        assert.equal(answer.body.error?.code, "invalid_input");
+        assert.deepEqual(await fixture.invoke("conversations.list", {}), before);
+    });
+
+    it("records a request with the way in command line for a jobs.startLead call naming no origin", async () => {
+        const fixture = await startFixture();
+
+        const started = (await fixture.call("local socket", "jobs.startLead", {
+            jobId: "asked",
+            firstInput: "go",
+        })) as {
+            conversationId: string;
+        };
+
+        assert.deepEqual(await originOf(fixture, started.conversationId), COMMAND_LINE_REQUEST);
+    });
+});
