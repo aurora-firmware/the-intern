@@ -88,6 +88,7 @@ async function createOne(
     meta.awaiting = [];
     meta.parked = null;
     meta.held = [];
+    meta.aborted = false;
     await seatWrites(tx, conversationId, { seat: request.seat, actor });
     return conversationId;
 }
@@ -231,26 +232,40 @@ export async function continueParked(
 }
 
 // One commit per conversation (ADR-001 decision 4): an aborted conversation is left neither parked nor waiting for
-// a report, and its held messages are withdrawn as an abort withdraws queued input.
-async function clearWaiting(host: HarnessHost, conversationId: string): Promise<void> {
+// a report, and its held messages are withdrawn as an abort withdraws queued input. The same commit marks a lone
+// abort of an invoked conversation (`isReportOwed`), so its invoker is owed an "aborted" report.
+async function clearWaiting(host: HarnessHost, conversationId: string, isReportOwed = false): Promise<void> {
     if ((await readConversationMeta(host, conversationId)) === undefined) return;
     await updateMeta(host, conversationId, (meta) => {
         meta.parked = null;
         meta.awaiting = [];
         meta.held = [];
+        if (isReportOwed) meta.aborted = true;
     });
 }
 
-async function abortRecursively(host: HarnessHost, conversationId: string, aborted: Set<string>): Promise<void> {
+// The abort's root owes a report only when it was invoked and its invoker still awaits it.
+async function isReportOwedTo(host: HarnessHost, meta: ConversationMeta | undefined, id: string): Promise<boolean> {
+    if (meta?.invokedBy === undefined) return false;
+    return (await readConversationMeta(host, meta.invokedBy))?.awaiting.includes(id) ?? false;
+}
+
+async function abortRecursively(
+    host: HarnessHost,
+    conversationId: string,
+    aborted: Set<string>,
+    isRoot = false,
+): Promise<void> {
     if (aborted.has(conversationId)) return;
     // Read before clearing: the list is what the cascade follows. A conversation that was not seated has no
     // invocation links and awaits nothing.
-    const awaiting = (await readConversationMeta(host, conversationId))?.awaiting ?? [];
+    const meta = await readConversationMeta(host, conversationId);
+    const isReportOwed = isRoot && (await isReportOwedTo(host, meta, conversationId));
     aborted.add(conversationId);
     // Cleared before the abort and before the recursion, so no cascaded run finds its invoker still waiting.
-    await clearWaiting(host, conversationId);
+    await clearWaiting(host, conversationId, isReportOwed);
     await abortConversation(host, conversationId);
-    for (const awaitedId of awaiting) await abortRecursively(host, awaitedId, aborted);
+    for (const awaitedId of meta?.awaiting ?? []) await abortRecursively(host, awaitedId, aborted);
 }
 
 /**
@@ -260,7 +275,7 @@ async function abortRecursively(host: HarnessHost, conversationId: string, abort
  */
 export async function abortWithAwaited(host: HarnessHost, conversationId: string): Promise<string[]> {
     const aborted = new Set<string>();
-    await abortRecursively(host, conversationId, aborted);
+    await abortRecursively(host, conversationId, aborted, true);
     return [...aborted];
 }
 

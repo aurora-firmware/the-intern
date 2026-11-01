@@ -75,7 +75,7 @@ const waitExtension = defineExtension({ name: "wait", tools: [waitTool] });
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 type Fixture = {
-    host: HarnessHost;
+    readonly host: HarnessHost;
     actor: SeatActor;
     seat: Seat;
     start(jobId: string, prompt: string): Promise<string>;
@@ -83,6 +83,9 @@ type Fixture = {
     inputsOf(id: string): Promise<number>;
     waitUntilBusy(ids: string[]): Promise<void>;
     busy(id: string): Promise<boolean>;
+    reportsTo(id: string, text: string): Promise<string[]>;
+    stopDelivery(): void;
+    reopen(): Promise<void>;
 };
 
 // A prompt starting "idle" is answered at once; every other prompt calls the wait tool and keeps its conversation busy.
@@ -96,16 +99,20 @@ async function openFixture(): Promise<Fixture> {
         return { toolCall: { name: "wait", arguments: {} } };
     });
     fakes.push(fake);
-    const host = await openHarnessHost({
-        databaseFile: join(env.root, "state.sqlite"),
-        models: modelsFor(fake),
-        harnessSettings: {},
-        extensions: [waitExtension],
-        defaultCwd: process.cwd(),
-        logger: createLogger({ stream: { write: () => true } }),
-    });
-    hosts.push(host);
-    deliveries.push(await startReportDelivery(host, { logger: createLogger({ stream: { write: () => true } }) }));
+    const openHost = async () => {
+        const opened = await openHarnessHost({
+            databaseFile: join(env.root, "state.sqlite"),
+            models: modelsFor(fake),
+            harnessSettings: {},
+            extensions: [waitExtension],
+            defaultCwd: process.cwd(),
+            logger: createLogger({ stream: { write: () => true } }),
+        });
+        hosts.push(opened);
+        deliveries.push(await startReportDelivery(opened, { logger: createLogger({ stream: { write: () => true } }) }));
+        return opened;
+    };
+    let host = await openHost();
     const seat: Seat = {
         role: "developer",
         model: `${fake.getModel().provider}/${fake.getModel().id}`,
@@ -152,7 +159,36 @@ async function openFixture(): Promise<Fixture> {
         (await host.readEntries(id, { limit: 1000 })).entries.filter((entry) =>
             JSON.stringify(entry.data).includes('"role":"user"'),
         ).length;
-    return { host, actor, seat, start, invoke, inputsOf, waitUntilBusy, busy };
+    // The user messages of a conversation that contain the text: a delivered report is one of them.
+    const reportsTo = async (id: string, text: string) =>
+        (await host.readEntries(id, { limit: 1000 })).entries
+            .map((entry) => JSON.stringify(entry.data))
+            .filter((data) => data.includes('"role":"user"') && data.includes(text));
+    const stopDelivery = () => {
+        for (const delivery of deliveries.splice(0)) delivery.stop();
+    };
+    // Closes the host and opens the same database again, with report delivery running.
+    const reopen = async () => {
+        stopDelivery();
+        await host.close();
+        hosts.splice(hosts.indexOf(host), 1);
+        host = await openHost();
+    };
+    return {
+        get host() {
+            return host;
+        },
+        actor,
+        seat,
+        start,
+        invoke,
+        inputsOf,
+        waitUntilBusy,
+        busy,
+        reportsTo,
+        stopDelivery,
+        reopen,
+    };
 }
 
 describe("abortWithAwaited", () => {
@@ -280,5 +316,132 @@ describe("conversations.abort", () => {
 
         assert.equal(await fixture.busy(child as string), false);
         assert.equal(await fixture.busy(lead), false);
+    });
+});
+
+async function waitFor(isDone: () => Promise<boolean>, what: string): Promise<void> {
+    for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt++) {
+        if (await isDone()) return;
+        await pause(POLL_PAUSE_MS);
+    }
+    assert.fail(`timed out waiting for ${what}`);
+}
+
+// An invoked conversation that answered "ok" at once and then awaits the wait-tool conversation it invoked, so it is
+// not busy and has a last answer while its invoker still awaits it.
+async function invokeAnsweredAndWaiting(fixture: Fixture, invokerId: string, isParked: boolean) {
+    const [answered] = await createInvokedConversations(fixture.host, {
+        invokingId: invokerId,
+        callId: "c1",
+        agents: [{ seat: fixture.seat, contextMode: "clean", jobPrompt: "idle answer" }],
+        actor: fixture.actor,
+    });
+    const answeredId = answered as string;
+    const [child] = await fixture.invoke(answeredId, "c2", ["child"], isParked);
+    await fixture.waitUntilBusy([child as string]);
+    await waitFor(async () => !(await fixture.busy(answeredId)), "the invoked conversation to finish its run");
+    return answeredId;
+}
+
+describe("a lone abort of an invoked conversation with report delivery running", () => {
+    it("reports an aborted running invoked conversation to its invoker once", async () => {
+        const fixture = await openFixture();
+        const lead = await fixture.start("job-1", "idle lead");
+        const [invoked] = await fixture.invoke(lead, "c1", ["worker"]);
+        await fixture.waitUntilBusy([invoked as string]);
+
+        await abortWithAwaited(fixture.host, invoked as string);
+
+        const text = `Conversation ${invoked} (developer) was aborted.`;
+        await waitFor(async () => (await fixture.reportsTo(lead, text)).length > 0, "the aborted report");
+        await pause(SETTLE_PAUSE_MS);
+        assert.equal((await fixture.reportsTo(lead, text)).length, 1);
+        assert.deepEqual((await readConversationMeta(fixture.host, lead))?.awaiting, []);
+    });
+
+    for (const isParked of [false, true]) {
+        const kind = isParked ? "parked" : "idle";
+
+        it(`reports an aborted ${kind} invoked conversation with its last answer`, async () => {
+            const fixture = await openFixture();
+            const lead = await fixture.start("job-1", "idle lead");
+            const answeredId = await invokeAnsweredAndWaiting(fixture, lead, isParked);
+            assert.equal((await readConversationMeta(fixture.host, answeredId))?.parked !== null, isParked);
+
+            await abortWithAwaited(fixture.host, answeredId);
+
+            const text = `Conversation ${answeredId} (developer) was aborted.`;
+            await waitFor(async () => (await fixture.reportsTo(lead, text)).length > 0, "the aborted report");
+            await pause(SETTLE_PAUSE_MS);
+            const reports = await fixture.reportsTo(lead, text);
+            assert.equal(reports.length, 1);
+            assert.ok((reports[0] as string).includes("Its last answer:"));
+            assert.ok((reports[0] as string).includes("ok"));
+            assert.deepEqual((await readConversationMeta(fixture.host, lead))?.awaiting, []);
+        });
+    }
+
+    it("reports an aborted invoked conversation without a last answer as the first sentence alone", async () => {
+        const fixture = await openFixture();
+        const lead = await fixture.start("job-1", "idle lead");
+        const [invoked] = await fixture.invoke(lead, "c1", ["worker"]);
+        await fixture.waitUntilBusy([invoked as string]);
+        await internalHarness(fixture.host).commit(async (tx) => {
+            const meta = await tx.doc(conversationMetaDoc, Number(invoked) as ConversationId);
+            meta.parked = { waitingFor: "answer", continueOn: "each" };
+        }, ctx);
+
+        await abortWithAwaited(fixture.host, invoked as string);
+
+        const text = `Conversation ${invoked} (developer) was aborted.`;
+        await waitFor(async () => (await fixture.reportsTo(lead, text)).length > 0, "the aborted report");
+        for (const report of await fixture.reportsTo(lead, text)) assert.ok(!report.includes("Its last answer:"));
+    });
+
+    it("continues a parked invoker with the aborted report", async () => {
+        const fixture = await openFixture();
+        const lead = await fixture.start("job-1", "idle lead");
+        const [invoked] = await fixture.invoke(lead, "c1", ["worker"], true);
+        await fixture.waitUntilBusy([invoked as string]);
+        assert.notEqual((await readConversationMeta(fixture.host, lead))?.parked, null);
+
+        await abortWithAwaited(fixture.host, invoked as string);
+
+        const text = `Conversation ${invoked} (developer) was aborted.`;
+        await waitFor(async () => (await fixture.reportsTo(lead, text)).length > 0, "the aborted report");
+        const meta = await readConversationMeta(fixture.host, lead);
+        assert.equal(meta?.parked, null);
+        assert.deepEqual(meta?.awaiting, []);
+    });
+
+    it("delivers the aborted report once when the host reopens after the abort and before the delivery", async () => {
+        const fixture = await openFixture();
+        const lead = await fixture.start("job-1", "idle lead");
+        const answeredId = await invokeAnsweredAndWaiting(fixture, lead, false);
+        fixture.stopDelivery();
+
+        await abortWithAwaited(fixture.host, answeredId);
+        await pause(SETTLE_PAUSE_MS);
+        const text = `Conversation ${answeredId} (developer) was aborted.`;
+        assert.equal((await fixture.reportsTo(lead, text)).length, 0);
+        await fixture.reopen();
+
+        await waitFor(async () => (await fixture.reportsTo(lead, text)).length > 0, "the aborted report");
+        await pause(SETTLE_PAUSE_MS);
+        assert.equal((await fixture.reportsTo(lead, text)).length, 1);
+        assert.deepEqual((await readConversationMeta(fixture.host, lead))?.awaiting, []);
+    });
+
+    it("reports nothing for a conversation aborted by the cascade from its invoker", async () => {
+        const fixture = await openFixture();
+        const lead = await fixture.start("job-1", "idle lead");
+        const answeredId = await invokeAnsweredAndWaiting(fixture, lead, false);
+        const before = await fixture.inputsOf(lead);
+
+        await abortWithAwaited(fixture.host, lead);
+
+        await pause(SETTLE_PAUSE_MS);
+        assert.equal(await fixture.inputsOf(lead), before);
+        assert.equal((await readConversationMeta(fixture.host, answeredId))?.aborted, false);
     });
 });

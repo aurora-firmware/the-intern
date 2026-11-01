@@ -187,7 +187,9 @@ waits for reports from agents it invoked reports back only after those arrive an
 ### Aborting
 
 Aborting a conversation also aborts the agents it still waits for, and the agents they wait for, in turn. Nothing
-aborted stays parked, waits for a report or keeps its held messages, and the aborted agents send no report back.
+aborted stays parked, waits for a report or keeps its held messages. An agent aborted on its own sends a report that
+says so, with its last answer when it has one, and a parked agent that invoked it continues on that report. The agents
+aborted along with their invoker send no report back.
 
 ### Steering
 

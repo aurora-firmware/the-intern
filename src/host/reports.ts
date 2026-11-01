@@ -7,11 +7,11 @@
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
-import type { Conversation, ConversationId } from "@earendil-works/pi-durable";
+import type { Conversation, ConversationId, EntryId } from "@earendil-works/pi-durable";
 import type { Logger } from "../daemon/logger.ts";
 import { submitInput } from "./conversation_control.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
-import { watchInstance } from "./host_observation.ts";
+import { watchConversationMeta, watchInstance } from "./host_observation.ts";
 import { continueParked } from "./invocation.ts";
 import { type ConversationMeta, conversationMetaDoc, readConversationMeta, type SeatActor } from "./seating.ts";
 
@@ -19,6 +19,7 @@ const context = BACKGROUND_CONTEXT;
 const ENTRY_PAGE_SIZE = 20;
 
 type Report = { content: string; requestId: string };
+type LastAnswer = { text: string; entryId: EntryId };
 
 const toNumericId = (conversationId: string): ConversationId => Number(conversationId) as ConversationId;
 
@@ -31,8 +32,8 @@ function textOfAssistant(message: AssistantMessage): string {
         .join("");
 }
 
-// The report is the text of the last assistant message; entries are read newest first.
-async function readReport(host: HarnessHost, invokedId: string): Promise<Report | undefined> {
+// The last answer is the text of the last assistant message; entries are read newest first.
+async function readLastAnswer(host: HarnessHost, invokedId: string): Promise<LastAnswer | undefined> {
     const conversation: Conversation | undefined = await internalHarness(host).conversation(
         toNumericId(invokedId),
         context,
@@ -44,12 +45,34 @@ async function readReport(host: HarnessHost, invokedId: string): Promise<Report 
         for (const entry of page.items) {
             const message = entry.model?.findLast(isAssistantMessage);
             if (message !== undefined) {
-                return { content: textOfAssistant(message), requestId: `report:${invokedId}:${entry.id}` };
+                return { text: textOfAssistant(message), entryId: entry.id };
             }
         }
         cursor = page.next;
     } while (cursor !== undefined);
     return undefined;
+}
+
+// An aborted conversation reports that it was aborted. With a last answer the request id is the ordinary report's, so
+// a report admitted just before the abort is not delivered a second time.
+function abortedReport(invokedId: string, role: string, answer: LastAnswer | undefined): Report {
+    const sentence = `Conversation ${invokedId} (${role}) was aborted.`;
+    if (answer === undefined) return { content: sentence, requestId: `report:${invokedId}:aborted` };
+    return {
+        content: `${sentence}\n\nIts last answer:\n${answer.text}`,
+        requestId: `report:${invokedId}:${answer.entryId}`,
+    };
+}
+
+async function readReport(
+    host: HarnessHost,
+    invoked: ConversationMeta,
+    invokedId: string,
+): Promise<Report | undefined> {
+    const answer = await readLastAnswer(host, invokedId);
+    if (invoked.aborted) return abortedReport(invokedId, invoked.seat.role, answer);
+    if (answer === undefined) return undefined;
+    return { content: answer.text, requestId: `report:${invokedId}:${answer.entryId}` };
 }
 
 async function changeMeta(host: HarnessHost, conversationId: string, change: (meta: ConversationMeta) => void) {
@@ -81,7 +104,7 @@ async function deliver(host: HarnessHost, invokedId: string): Promise<void> {
     const invoker = await readConversationMeta(host, invokerId);
     if (invoker === undefined || !invoker.awaiting.includes(invokedId)) return;
     if ((await host.conversationInfo(invokedId))?.busy !== false) return;
-    const report = await readReport(host, invokedId);
+    const report = await readReport(host, invoked, invokedId);
     if (report === undefined) return;
 
     const isLastReport = withoutId(invoker.awaiting, invokedId).length === 0;
@@ -123,6 +146,10 @@ export async function startReportDelivery(host: HarnessHost, options: { logger: 
     const watch = await watchInstance(host, (event) => {
         if (event.type === "run_finished") enqueue(event.conversationId);
     });
+    // An aborted idle or parked conversation has no run to end, so the commit that marks it starts its delivery.
+    const watchMarks = await watchConversationMeta(host, ({ conversationId, meta }) => {
+        if (meta.aborted && meta.invokedBy !== undefined) enqueue(conversationId);
+    });
     for (const { id, busy } of watch.snapshot.conversations) {
         if (!busy) enqueue(id);
     }
@@ -130,6 +157,7 @@ export async function startReportDelivery(host: HarnessHost, options: { logger: 
         stop() {
             isStopped = true;
             watch.stop();
+            watchMarks.stop();
         },
     };
 }

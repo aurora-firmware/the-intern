@@ -51,6 +51,7 @@ export type ConversationMeta = JobLinks & {
     awaiting: string[];
     parked: ParkedState | null;
     held: HeldMessage[];
+    aborted: boolean;
 };
 export type SeatChange = { seat: Seat; actor: SeatActor; contextMode?: ContextMode; note?: string };
 
@@ -66,6 +67,7 @@ const unsetMeta = (): ConversationMeta => ({
     awaiting: [],
     parked: null,
     held: [],
+    aborted: false,
 });
 
 // Latest-only: only the current value is read, and the transcript's seat records are the history. A fork starts from
