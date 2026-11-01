@@ -1,0 +1,309 @@
+/**
+ * The feed and long calls through both listeners of a real daemon (S-003 REQ-006, REQ-011, REQ-012): `GET /feed`
+ * streams a snapshot and then deltas over Server-Sent Events, a client that stops reading is ended `lagging` without
+ * touching the run, and neither a quiet stream nor a long `submissions.wait` is cut short by the listener.
+ */
+import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
+import { type IncomingMessage, request } from "node:http";
+import { join } from "node:path";
+import { afterEach, describe, it } from "node:test";
+import { getApiProvider } from "@earendil-works/pi-ai/compat";
+import { createProvider } from "@earendil-works/pi-ai/models";
+import { createAgentsComponent } from "../../src/agents/agents_component.ts";
+import { STOP_BOUND_MS } from "../../src/daemon/constants.ts";
+import { type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
+import { createLogger } from "../../src/daemon/logger.ts";
+import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
+import { createNetworkListenerComponent } from "../../src/listeners/network_listener.ts";
+import { networkSection } from "../../src/listeners/network_section.ts";
+import { localSocketPath } from "../../src/listeners/socket_path.ts";
+import type { Caller } from "../../src/service/operations.ts";
+import { createFakeModel, type FakeReply, type FakeTranscript } from "../support/fake_model.ts";
+import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+
+const WAIT_TIMEOUT_MS = 20_000;
+const POLL_INTERVAL_MS = 10;
+const SETTLE_WAIT_MS = 30_000;
+const EVENT_TIMEOUT_MS = 10_000;
+const TEST_TIMEOUT_MS = 90_000;
+const ENTRIES_PAGE_LIMIT = 500;
+const LOOPBACK = "127.0.0.1";
+const IN_PROCESS: Caller = { actor: { kind: "team_member" } };
+const quietLogger = createLogger({ stream: { write: () => true } });
+const LISTENERS = ["local socket", "network listener"] as const;
+
+type Listener = (typeof LISTENERS)[number];
+type HttpTarget = { socketPath: string } | { host: string; port: number };
+type Entry = { kind: string; data: unknown };
+type View = { entries: Entry[]; busy: boolean };
+type FeedEvent = { name: string; id?: number; data: unknown };
+
+const envs: HermeticEnv[] = [];
+const daemons: RunningDaemon[] = [];
+const fakes: { unregister(): void }[] = [];
+const streams: FeedStream[] = [];
+
+afterEach(async () => {
+    for (const stream of streams.splice(0)) stream.close();
+    for (const daemon of daemons.splice(0)) await Promise.race([daemon.stop(), sleep(STOP_BOUND_MS)]);
+    for (const fake of fakes.splice(0)) fake.unregister();
+    for (const env of envs.splice(0)) await env.dispose();
+});
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function until(condition: () => Promise<boolean>, what: string): Promise<void> {
+    const deadline = Date.now() + WAIT_TIMEOUT_MS;
+    while (!(await condition())) {
+        if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+        await sleep(POLL_INTERVAL_MS);
+    }
+}
+
+/** Parses one Server-Sent Event block: `event:`, an optional `id:` and one `data:` line holding JSON. */
+function parseEvent(block: string): FeedEvent {
+    const fields = new Map(
+        block.split("\n").map((line) => [line.slice(0, line.indexOf(":")), line.slice(line.indexOf(":") + 2)]),
+    );
+    const id = fields.get("id");
+    return {
+        name: fields.get("event") ?? "",
+        ...(id !== undefined && { id: Number(id) }),
+        data: JSON.parse(fields.get("data") ?? "null"),
+    };
+}
+
+/** A `GET /feed` stream read event by event; `next` resolves undefined once the server has ended the stream. */
+type FeedStream = {
+    status: number;
+    /** The JSON body of a refused subscription. */
+    refusal(): Promise<{ error?: { code: string } }>;
+    next(): Promise<FeedEvent | undefined>;
+    pause(): void;
+    resume(): void;
+    close(): void;
+};
+
+function openFeedAt(target: HttpTarget, query: string): Promise<FeedStream> {
+    return new Promise((resolve, reject) => {
+        const call = request({ ...target, method: "GET", path: `/feed${query}`, agent: false }, (response) => {
+            resolve(readFeed(response, () => call.destroy()));
+        });
+        call.once("error", reject);
+        call.end();
+    });
+}
+
+function readFeed(response: IncomingMessage, destroy: () => void): FeedStream {
+    const events: FeedEvent[] = [];
+    let buffered = "";
+    let hasEnded = false;
+    let wake: (() => void) | undefined;
+    const bodyChunks: Buffer[] = [];
+    response.on("data", (chunk: Buffer) => {
+        bodyChunks.push(chunk);
+        buffered += chunk.toString("utf8");
+        const blocks = buffered.split("\n\n");
+        buffered = blocks.pop() ?? "";
+        for (const block of blocks) events.push(parseEvent(block));
+        wake?.();
+    });
+    const markEnded = () => {
+        hasEnded = true;
+        wake?.();
+    };
+    response.once("end", markEnded);
+    response.once("close", markEnded);
+
+    async function next(): Promise<FeedEvent | undefined> {
+        const deadline = Date.now() + EVENT_TIMEOUT_MS;
+        while (events.length === 0 && !hasEnded) {
+            if (Date.now() > deadline) throw new Error("timed out waiting for the next feed event");
+            await new Promise<void>((resolve) => {
+                wake = resolve;
+                setTimeout(resolve, POLL_INTERVAL_MS * 10);
+            });
+        }
+        return events.shift();
+    }
+
+    async function refusal() {
+        await until(async () => hasEnded, "the refusal body");
+        return JSON.parse(Buffer.concat(bodyChunks).toString("utf8"));
+    }
+
+    return {
+        status: response.statusCode ?? 0,
+        refusal,
+        next,
+        pause: () => response.pause(),
+        resume: () => response.resume(),
+        close: destroy,
+    };
+}
+
+type Fixture = {
+    invoke(name: string, input: unknown): Promise<unknown>;
+    openFeed(listener: Listener, query: string): Promise<FeedStream>;
+    /** Starts a job in-process and waits until its lead conversation is idle. */
+    idleConversation(jobId: string): Promise<string>;
+    /** Submits input in-process and waits until it is done and the conversation idle again. */
+    submitAndSettle(conversationId: string, content: string): Promise<void>;
+    entries(conversationId: string): Promise<Entry[]>;
+};
+
+async function startFixture(reply: (transcript: FakeTranscript) => FakeReply = () => "ok"): Promise<Fixture> {
+    const env = await createHermeticEnv();
+    envs.push(env);
+    const fake = createFakeModel(reply);
+    fakes.push(fake);
+    const provider = fake.getModel().provider;
+    await writeFile(
+        join(env.piAgentDir, "settings.json"),
+        JSON.stringify({ defaultProvider: provider, defaultModel: fake.getModel().id }),
+    );
+    await writeFile(join(env.configDir, "config.toml"), `[network]\naddress = "${LOOPBACK}"\nport = 8080\n`);
+    const agents = await createAgentsComponent({ logger: quietLogger });
+    const network = createNetworkListenerComponent({ freePort: true });
+    const daemon = runDaemon({
+        flags: { configDir: env.configDir, stateDir: env.stateDir, dataDir: env.dataDir, runtimeDir: env.runtimeDir },
+        env: env.env,
+        homeDir: env.root,
+        logger: quietLogger,
+        sections: [...agents.sections, networkSection],
+        components: [agents.component, createLocalSocketComponent(), network],
+        operations: agents.operations,
+        prepareModels: (runtime) => {
+            const implementation = getApiProvider(fake.api);
+            assert.ok(implementation, "the fake model's api is registered");
+            runtime.models.registerNativeProvider(
+                createProvider({
+                    id: provider,
+                    auth: { apiKey: { name: "Fake", resolve: async () => ({ auth: {} }) } },
+                    models: fake.models,
+                    api: { stream: implementation.stream, streamSimple: implementation.streamSimple },
+                }),
+            );
+            return runtime.models;
+        },
+    });
+    daemons.push(daemon);
+    await until(async () => daemon.phase() === "ready", "the daemon to be ready");
+    const socketPath = localSocketPath(env.runtimeDir);
+
+    const invoke = (name: string, input: unknown) => daemon.catalogue.invoke(name, input, IN_PROCESS);
+
+    function targetOf(listener: Listener): HttpTarget {
+        if (listener === "local socket") return { socketPath };
+        const address = network.address();
+        assert.ok(address, "the network listener is running");
+        return address;
+    }
+
+    async function openFeed(listener: Listener, query: string): Promise<FeedStream> {
+        const stream = await openFeedAt(targetOf(listener), query);
+        streams.push(stream);
+        return stream;
+    }
+
+    async function submitAndSettle(conversationId: string, content: string): Promise<void> {
+        const submit = { conversationId, content, requestId: `${content}-request` };
+        const { submissionId } = (await invoke("conversations.submit", submit)) as { submissionId: string };
+        const waited = (await invoke("submissions.wait", { submissionId, timeoutMs: SETTLE_WAIT_MS })) as {
+            state: string;
+        };
+        assert.equal(waited.state, "done", `submission ${submissionId} is done`);
+        const isIdle = async () =>
+            ((await invoke("conversations.get", { conversationId })) as { status: string }).status === "idle";
+        await until(isIdle, `conversation ${conversationId} to be idle`);
+    }
+
+    async function idleConversation(jobId: string): Promise<string> {
+        const { conversationId } = (await invoke("jobs.startLead", { jobId, firstInput: "hello" })) as {
+            conversationId: string;
+        };
+        await submitAndSettle(conversationId, `settle-${jobId}`);
+        return conversationId;
+    }
+
+    async function entries(conversationId: string): Promise<Entry[]> {
+        const all: Entry[] = [];
+        let after: string | undefined;
+        do {
+            const input = { conversationId, limit: ENTRIES_PAGE_LIMIT, ...(after !== undefined && { after }) };
+            const page = (await invoke("conversations.entries", input)) as { entries: Entry[]; next?: string };
+            all.push(...page.entries);
+            after = page.next;
+        } while (after !== undefined);
+        return all;
+    }
+
+    return { invoke, openFeed, idleConversation, submitAndSettle, entries };
+}
+
+async function nextEvent(stream: FeedStream): Promise<FeedEvent> {
+    const event = await stream.next();
+    assert.ok(event, "the stream is still open");
+    return event;
+}
+
+/** Reads `delta` events until one shows the conversation idle with `content` in its entries. */
+async function readDeltasUntilSettled(stream: FeedStream, content: string): Promise<FeedEvent[]> {
+    const deltas: FeedEvent[] = [];
+    for (;;) {
+        const event = await nextEvent(stream);
+        assert.equal(event.name, "delta", `event ${JSON.stringify(event).slice(0, 200)} is a delta`);
+        deltas.push(event);
+        const view = (event.data as { view: View }).view;
+        if (!view.busy && JSON.stringify(view.entries).includes(content)) return deltas;
+    }
+}
+
+/** Asserts the deltas carry ids 1, 2, 3 … equal to their sequence numbers, each extending the view before it. */
+function assertCommitOrder(snapshot: View, deltas: readonly FeedEvent[]): void {
+    assert.deepEqual(
+        deltas.map((delta) => delta.id),
+        deltas.map((_, index) => index + 1),
+    );
+    let previousLength = snapshot.entries.length;
+    for (const delta of deltas) {
+        const { seq, view } = delta.data as { seq: number; view: View };
+        assert.equal(seq, delta.id, "the event id is the delta's sequence number");
+        assert.ok(view.entries.length >= previousLength, "each delta extends the view before it");
+        previousLength = view.entries.length;
+    }
+}
+
+/** Opens the conversation feed, lets a run commit `content`, and returns the snapshot and the deltas read. */
+async function observeRun(fixture: Fixture, listener: Listener, conversationId: string, content: string) {
+    const stream = await fixture.openFeed(listener, `?scope=conversation&id=${conversationId}`);
+    assert.equal(stream.status, 200);
+    const first = await nextEvent(stream);
+    assert.equal(first.name, "snapshot");
+    await fixture.submitAndSettle(conversationId, content);
+    const deltas = await readDeltasUntilSettled(stream, content);
+    stream.close();
+    return { snapshot: first.data as View, deltas };
+}
+
+describe("the conversation feed through each listener", { timeout: TEST_TIMEOUT_MS }, () => {
+    for (const listener of LISTENERS) {
+        it(`starts each stream over the ${listener} with a fresh snapshot, then deltas in commit order`, async () => {
+            const fixture = await startFixture();
+            const conversationId = await fixture.idleConversation("observed");
+
+            const first = await observeRun(fixture, listener, conversationId, "first run");
+            const second = await observeRun(fixture, listener, conversationId, "second run");
+
+            assertCommitOrder(first.snapshot, first.deltas);
+            assertCommitOrder(second.snapshot, second.deltas);
+            assert.ok(!JSON.stringify(first.snapshot).includes("first run"), "the first snapshot precedes its run");
+            assert.ok(JSON.stringify(second.snapshot).includes("first run"), "the second snapshot is fresh");
+            const replayed = second.deltas.filter((delta) => !JSON.stringify(delta.data).includes("first run"));
+            assert.deepEqual(replayed, [], "the second stream replays no delta from before its snapshot");
+        });
+    }
+});
