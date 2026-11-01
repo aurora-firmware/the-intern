@@ -409,4 +409,21 @@ describe("catalogue through both listeners", () => {
             assert.deepEqual(outcomes[2], outcomes[0], `${name} over the network listener answers as in-process`);
         }
     });
+
+    it("answers test.createConversation, an operation with no listener code, through both listeners", async () => {
+        const fixture = await startFixture();
+        const outcomes: unknown[] = [];
+
+        for (const way of WAYS) {
+            const input = { key: `key-${label(way)}`, cwd: fixture.env.dataDir };
+            const outcome = await fixture.call(way, "test.createConversation", input);
+            assert.equal(outcome.status, 200, `${way}: ${JSON.stringify(outcome.body)}`);
+            outcomes.push(comparable(outcome.body));
+        }
+
+        assert.deepEqual(outcomes[0], { result: { conversationId: "<id>", created: true } });
+        assert.deepEqual(outcomes[1], outcomes[0]);
+        assert.deepEqual(outcomes[2], outcomes[0]);
+        assert.equal((await fixture.ctx.host.listConversations()).length, WAYS.length);
+    });
 });
