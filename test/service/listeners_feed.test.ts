@@ -307,3 +307,81 @@ describe("the conversation feed through each listener", { timeout: TEST_TIMEOUT_
         });
     }
 });
+
+type InstanceConversation = {
+    id: string;
+    jobId: string | null;
+    isLead: boolean;
+    seat: { role: string } | null;
+    status: string;
+};
+type InstanceSnapshot = { conversations: InstanceConversation[]; workerThreads: { count: number; inUse: number } };
+type InstanceDelta = { seq: number; type: string; conversationId?: string; seat?: { role: string } };
+
+/** Reads `delta` events until one has the type `last`. */
+async function readInstanceDeltasUntil(stream: FeedStream, last: string): Promise<FeedEvent[]> {
+    const deltas: FeedEvent[] = [];
+    for (;;) {
+        const event = await nextEvent(stream);
+        assert.equal(event.name, "delta");
+        deltas.push(event);
+        if ((event.data as InstanceDelta).type === last) return deltas;
+    }
+}
+
+describe("the instance feed through each listener", { timeout: TEST_TIMEOUT_MS }, () => {
+    it("streams over both listeners the snapshot and the deltas the in-process subscription gets", async () => {
+        const fixture = await startFixture();
+        const alpha = await fixture.idleConversation("alpha");
+        const beta = await fixture.idleConversation("beta");
+        const inProcess = (await fixture.invoke("feed.subscribe", { scope: "instance" })) as {
+            snapshot: InstanceSnapshot;
+            close(): void;
+        };
+        inProcess.close();
+        const opened = await Promise.all(LISTENERS.map((listener) => fixture.openFeed(listener, "?scope=instance")));
+        const snapshots = await Promise.all(opened.map(nextEvent));
+
+        const gamma = await fixture.idleConversation("gamma");
+        await fixture.invoke("conversations.seat", { conversationId: alpha, role: "gp" });
+        await fixture.invoke("roles.create", { name: "watched", instructions: "Watch.", tools: ["read"], skills: [] });
+        const [overSocket, overNetwork] = await Promise.all(
+            opened.map((stream) => readInstanceDeltasUntil(stream, "settings_changed")),
+        );
+
+        for (const snapshot of snapshots) {
+            assert.equal(snapshot.name, "snapshot");
+            assert.deepEqual(snapshot.data, inProcess.snapshot);
+        }
+        const conversations = (snapshots[0]?.data as InstanceSnapshot).conversations;
+        const byJob = Object.fromEntries(conversations.map(({ id, jobId, isLead }) => [jobId, { id, isLead }]));
+        assert.deepEqual(byJob, { alpha: { id: alpha, isLead: true }, beta: { id: beta, isLead: true } });
+        assert.ok(conversations.every(({ seat, status }) => seat?.role === "bob" && status === "idle"));
+        assert.equal((snapshots[0]?.data as InstanceSnapshot).workerThreads.inUse, 0);
+        assert.deepEqual(overNetwork, overSocket, "both listeners deliver the same deltas");
+        assertInstanceDeltas(overSocket ?? [], { gamma, alpha });
+    });
+});
+
+function assertInstanceDeltas(events: readonly FeedEvent[], ids: { gamma: string; alpha: string }): void {
+    const deltas = events.map((event) => event.data as InstanceDelta);
+    assert.deepEqual(
+        events.map((event) => event.id),
+        deltas.map((delta) => delta.seq),
+    );
+    assert.deepEqual(
+        deltas.map((delta) => delta.seq),
+        deltas.map((_, index) => index + 1),
+    );
+    const indexOf = (type: string, conversationId?: string) =>
+        deltas.findIndex(
+            (delta) => delta.type === type && (!conversationId || delta.conversationId === conversationId),
+        );
+    assert.equal(indexOf("conversation_created"), indexOf("conversation_created", ids.gamma));
+    assert.ok(indexOf("conversation_created", ids.gamma) < indexOf("run_started", ids.gamma));
+    assert.ok(indexOf("run_started", ids.gamma) < indexOf("run_finished", ids.gamma));
+    assert.ok(indexOf("admission_changed") >= 0, "admission changes are reported");
+    assert.ok(indexOf("run_finished", ids.gamma) < indexOf("seat_changed", ids.alpha));
+    assert.equal(deltas[indexOf("seat_changed", ids.alpha)]?.seat?.role, "gp");
+    assert.equal(indexOf("settings_changed"), deltas.length - 1);
+}
