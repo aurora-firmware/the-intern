@@ -103,6 +103,7 @@ function eventReader(res: IncomingMessage): { next(): Promise<FeedEvent>; rest()
         wake?.();
     });
     res.on("end", () => wake?.());
+    res.on("close", () => wake?.());
 
     function takeEvent(): FeedEvent | undefined {
         const boundary = text.indexOf("\n\n");
@@ -116,7 +117,8 @@ function eventReader(res: IncomingMessage): { next(): Promise<FeedEvent>; rest()
         for (;;) {
             const event = takeEvent();
             if (event) return event;
-            if (res.readableEnded) throw new Error(`Stream ended with no further event; left: ${JSON.stringify(text)}`);
+            if (res.readableEnded || res.destroyed)
+                throw new Error(`Stream ended with no further event; left: ${JSON.stringify(text)}`);
             await new Promise<void>((resolve) => {
                 wake = resolve;
             });
@@ -320,5 +322,24 @@ describe("feed stream: shutdown", () => {
         const rest = await events.rest();
         assert.ok(rest.length < 100, `the stream wrote ${rest.length} events`);
         assert.deepEqual(rest.at(-1), { event: "end", data: '{"reason":"stopped"}' });
+    });
+});
+
+describe("feed stream: a quiet stream", () => {
+    let harness: Harness;
+    beforeEach(async () => {
+        harness = await startFront({ serverTimeoutMs: 100 });
+    });
+    afterEach(() => harness.close());
+
+    it("stays open past the server's idle timeout while no delta arrives", async () => {
+        const res = await harness.open("/feed?scope=instance");
+        const events = eventReader(res);
+        await events.next();
+
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        harness.feed.push({ seq: 1, text: "late" });
+
+        assert.deepEqual(await events.next(), { event: "delta", id: "1", data: '{"seq":1,"text":"late"}' });
     });
 });

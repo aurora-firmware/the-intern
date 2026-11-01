@@ -55,6 +55,8 @@ export async function streamFeed(
     signal.addEventListener("abort", stop, { once: true });
     if (res.closed || signal.aborted) stop();
     try {
+        // A quiet stream is still being read, so the server's idle timeout must not end it (S-003 REQ-012).
+        res.setTimeout(0);
         res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
         await writeEvent(res, { name: "snapshot", data: subscription.snapshot }, signal);
         for (;;) {
