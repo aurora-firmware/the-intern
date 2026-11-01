@@ -36,7 +36,14 @@ export type Origin =
 
 export type ContextMode = "full" | "compact" | "clean";
 export type ParkedState = { waitingFor: "reports" | "answer"; continueOn: "each" | "all" };
-export type HeldMessage = { content: string; mode: "steer" | "followUp"; actor: SeatActor; requestId: string };
+// A held message without `kind` is a steer or follow-up; a held report names its kind.
+export type HeldMessage = {
+    content: string;
+    mode: "steer" | "followUp";
+    actor: SeatActor;
+    requestId: string;
+    kind?: "intern.report";
+};
 export type SeatSummary = { role: string; model: string; thinkingLevel?: string; workspace: string };
 export type SeatRecord = {
     previous: SeatSummary | null;

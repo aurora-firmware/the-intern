@@ -14,12 +14,14 @@ import {
     type ContextMode,
     type ConversationMeta,
     conversationMetaDoc,
+    type HeldMessage,
     type ParkedState,
     readConversationMeta,
     type SeatActor,
     SeatingError,
     seatWrites,
 } from "./seating.ts";
+import { STEER_RECORD_KIND } from "./steering.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -203,6 +205,13 @@ export async function parkConversation(host: HarnessHost, conversationId: string
     });
 }
 
+// A held message is placed as its own kind, so the transcript names its sender where it is delivered.
+function heldEntryOf(message: HeldMessage): InputRecord {
+    const { actor, mode, content } = message;
+    if (message.kind !== undefined) return { kind: message.kind, data: { actor, content } };
+    return { kind: STEER_RECORD_KIND, data: { actor, mode, content } };
+}
+
 /**
  * Clears the parked state, then submits the held messages in order and the input after them, as follow-ups: the first
  * starts a run on a free worker thread. The held messages are cleared only once submitted, so a crash in between
@@ -222,6 +231,7 @@ export async function continueParked(
             content: message.content,
             requestId: message.requestId,
             busyMode: message.mode,
+            entry: heldEntryOf(message),
         });
     }
     const submitted = await submitInput(host, conversationId, { ...input, busyMode: "followUp" });

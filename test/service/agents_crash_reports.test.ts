@@ -95,8 +95,9 @@ const conversationsOfJob = async (daemon: DaemonProcess, jobId: string): Promise
 
 const statusOf = async (daemon: DaemonProcess): Promise<Status> => (await daemon.invoke("daemon.status", {})) as Status;
 
-const takesInput = (text: string) => (entry: Entry) =>
-    entry.kind === "pi.user" && JSON.stringify(entry.data).includes(text);
+// The hold record is an intern.steer entry with no text; the delivered message is one that carries it.
+const takesSteer = (text: string) => (entry: Entry) =>
+    entry.kind === "intern.steer" && JSON.stringify(entry.data).includes(text);
 const carriesReport = (text: string) => (entry: Entry) =>
     entry.kind === "intern.report" && JSON.stringify(entry.data).includes(text);
 const mentions = (text: string) => (entry: Entry) =>
@@ -242,14 +243,14 @@ describe("kill -9 while a message to a parked conversation is held", () => {
         await second.ready;
 
         assert.equal((await listingOf(second, leadId)).status, "parked");
-        assert.equal((await entriesOf(second, leadId)).filter(takesInput("held note")).length, 0, "still held");
+        assert.equal((await entriesOf(second, leadId)).filter(takesSteer("held note")).length, 0, "still held");
         await untilTrue(
             async () => (await entriesOf(second, leadId)).some(mentions("echo: held note")),
             "the held message to be answered",
         );
         await untilIdle(second, [leadId]);
         const entries = await entriesOf(second, leadId);
-        assert.equal(entries.filter(takesInput("held note")).length, 1, "the held message came once");
+        assert.equal(entries.filter(takesSteer("held note")).length, 1, "the held message came once");
         assert.equal(entries.filter(mentions("echo: held note")).length, 1, "the held message ran once");
     });
 });
