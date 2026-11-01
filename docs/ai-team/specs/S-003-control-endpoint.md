@@ -188,6 +188,9 @@ The library's function names and types are not contract; the tasks fix them.
 
 ## Workflow
 
+The listeners' life inside the daemon's startup and shutdown, an operation call and a feed subscription, with
+their failure paths:
+
 ```
 Startup (S-002 REQ-002 step 8)
   local socket: check path length → replace leftover socket file → listen, owner-only        REQ-001
