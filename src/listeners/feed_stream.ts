@@ -19,11 +19,16 @@ export async function streamFeed(
     res: ServerResponse,
     _signal: AbortSignal,
 ): Promise<void> {
+    // A client that leaves is unsubscribed; on a response that ended first, closing again does nothing.
+    res.on("close", () => subscription.close());
+    if (res.closed) subscription.close();
     res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
     res.write(formatEvent({ name: "snapshot", data: subscription.snapshot }));
     for (;;) {
         const result = await subscription.next();
         if ("closed" in result) {
+            // Only the client leaving unsubscribes, and no event can reach it then.
+            if (result.closed === "unsubscribed") return;
             res.end(formatEvent({ name: "end", data: { reason: result.closed } }));
             return;
         }

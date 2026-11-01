@@ -234,3 +234,21 @@ describe("feed stream: a closed subscription", () => {
         });
     }
 });
+
+describe("feed stream: the client leaves", () => {
+    let harness: Harness;
+    beforeEach(async () => {
+        harness = await startFront();
+    });
+    afterEach(() => harness.close());
+
+    it("closes the subscription, which ends unsubscribed, when the client closes the connection", async () => {
+        const res = await harness.open("/feed?scope=instance");
+        await eventReader(res).next();
+
+        res.clientRequest.destroy();
+        await harness.feed.closeCalled;
+
+        assert.deepEqual(await harness.feed.subscription.next(), { closed: "unsubscribed" });
+    });
+});
