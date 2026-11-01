@@ -3,10 +3,18 @@
  * directory, and a call that no daemon answers fails with `UnreachableError` naming where it went (AC-009.2).
  */
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import { defaultSocketPath } from "../../src/client/node_transport.ts";
+import { afterEach, describe, it } from "node:test";
+import { UnreachableError } from "../../src/client/client.ts";
+import { defaultSocketPath, nodeTransport } from "../../src/client/node_transport.ts";
+import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const HOME = "/home/team";
+
+const envs: HermeticEnv[] = [];
+
+afterEach(async () => {
+    for (const env of envs.splice(0)) await env.dispose();
+});
 
 describe("defaultSocketPath", () => {
     it("is bob.sock in the runtime directory under XDG_RUNTIME_DIR", () => {
@@ -26,5 +34,27 @@ describe("defaultSocketPath", () => {
             runtimeDir: "/srv/bob/run",
         });
         assert.equal(path, "/srv/bob/run/bob.sock");
+    });
+});
+
+async function rejection(promise: Promise<unknown>): Promise<unknown> {
+    return promise.then(
+        (value) => assert.fail(`the call was answered with ${JSON.stringify(value)}`),
+        (error: unknown) => error,
+    );
+}
+
+describe("a call no daemon answers", () => {
+    it("fails with UnreachableError naming the default socket path when no daemon runs on the instance", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const socketPath = defaultSocketPath({ env: env.env, homeDir: env.root });
+        const transport = nodeTransport({ socketPath });
+
+        const error = await rejection(transport.call("daemon.status", undefined));
+
+        assert.ok(error instanceof UnreachableError, `the call fails with UnreachableError, not ${error}`);
+        assert.equal(error.target, socketPath);
+        assert.match(error.message, new RegExp(socketPath.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     });
 });
