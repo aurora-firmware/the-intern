@@ -68,13 +68,15 @@ const unsetMeta = (): ConversationMeta => ({
     held: [],
 });
 
-// Latest-only: only the current value is read, and the transcript's seat records are the history.
+// Latest-only: only the current value is read, and the transcript's seat records are the history. A fork starts from
+// the initial value: pi-durable rejects writes to a fork source's current-policy documents in the fork commit, which
+// the invoker's `awaiting` and `parked` need, and a fork must not inherit the invoker's job links.
 export const conversationMetaDoc = defineDoc<ConversationMeta>({
     kind: CONVERSATION_META_KIND,
     version: 1,
     scope: "conversation",
     history: "latest",
-    fork: "current",
+    fork: "initial",
     initial: unsetMeta,
     checkpointWhen: () => false,
 });
@@ -142,7 +144,9 @@ export async function seatWrites(tx: Tx, conversationId: string, change: SeatCha
     if (meta.jobId === "") {
         throw new SeatingError(`Conversation "${conversationId}" was not created by createSeatedConversation.`);
     }
-    await writeSeat(tx, conversationId, change, meta as ConversationMeta, meta.seat as Seat);
+    // A conversation whose document still holds the unset placeholder seat has no earlier seat to record.
+    const previous = meta.seat.model === "" ? null : (meta.seat as Seat);
+    await writeSeat(tx, conversationId, change, meta as ConversationMeta, previous);
 }
 
 /** Creates the conversation for `scope` and `key` once, seated, with its job links and first seat record. */
