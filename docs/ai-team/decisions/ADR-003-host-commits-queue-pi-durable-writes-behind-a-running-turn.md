@@ -27,8 +27,9 @@ needs: `LiveDoc` (whose `run` field is set exactly while a run is active), `Inbo
 `Tx.doc` and `Tx.createSubmission`. A queued write survives `Conversation.abort()`, which withdraws only queued
 inputs, and it survives a restart because the inbox is a durable document.
 
-Later operations will meet the same problem. One is a report delivered into a running invoking conversation
-(S-001 R-8a), which S-001 R-17 never lets be lost or delivered twice.
+Later operations may meet the same problem. A report delivered into a running invoking conversation (S-001 R-8a)
+doesn't: it is an input with no writes of the-intern's own in its commit, so it goes through `Conversation.submit`,
+placed as an `intern.report` entry (ADR-004).
 
 Sources: S-001 R-4, R-8a, R-11, R-17; S-002 R-10, R-12, R-13; ADR-001 decision 4;
 `docs/research/pi-durable-knowledge.md` (durable inbox); pi-durable 1.4.0 `dist/harness/submissions.js`
@@ -114,3 +115,4 @@ forbids.
 | Date | Change | Reason |
 |---|---|---|
 | 2026-11-01 | Added a pointer in the Decision: the `held` list of a parked conversation is a fact the-intern owns under ADR-001 decision 4's bounded exception, not a queue in front of pi-durable. No decision changes. | Spec-truth reconciliation of S-001, finding F6, and the ADR-001 amendment of the same date. |
+| 2026-11-01 | Context: a report delivered into a running invoking conversation goes through `Conversation.submit` as an `intern.report` entry (ADR-004), not through this record's busy path. No decision changes. | Architecture consistency review of ADR-004. |
