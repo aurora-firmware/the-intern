@@ -118,6 +118,16 @@ async function readInput(req: IncomingMessage): Promise<unknown> {
     return parseInput(await readBody(req));
 }
 
+/**
+ * The path of a request target. Node's parser accepts some targets the URL parser refuses; such a target is kept as
+ * it is, so it matches no route and is still answered.
+ */
+function pathnameOf(target: string): string {
+    // A fixed base: the front never reads the Host header (S-003 REQ-014).
+    if (!URL.canParse(target, "http://front.invalid")) return target;
+    return new URL(target, "http://front.invalid").pathname;
+}
+
 function operationNameOf(req: IncomingMessage, pathname: string): string | undefined {
     if (req.method !== "POST") return undefined;
     return OPERATION_ROUTE.exec(pathname)?.[1];
@@ -177,8 +187,7 @@ export function createHttpFront(options: HttpFrontOptions): HttpFront {
 
     return {
         async handle(req, res, ctx) {
-            // A fixed base: the front never reads the Host header (S-003 REQ-014).
-            const pathname = new URL(req.url ?? "/", "http://front.invalid").pathname;
+            const pathname = pathnameOf(req.url ?? "/");
             const name = operationNameOf(req, pathname);
             if (name === undefined) await answerUnrouted(req, res, pathname);
             else await callOperation(req, res, name, ctx.signal);

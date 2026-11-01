@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type IncomingHttpHeaders, request, type Server } from "node:http";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -54,6 +55,8 @@ type Harness = {
     context: TestContext;
     abort: AbortController;
     call(path: string, options?: CallOptions): Promise<Reply>;
+    /** Sends raw HTTP/1.1 text and resolves with the raw answer, for request targets a client library won't send. */
+    sendRaw(text: string): Promise<string>;
     close(): Promise<void>;
 };
 
@@ -98,7 +101,17 @@ async function startFront(
         await rm(dir, { recursive: true, force: true });
     }
 
-    return { context, abort, call, close };
+    function sendRaw(text: string): Promise<string> {
+        return new Promise((resolve, reject) => {
+            const socket = connect(socketPath, () => socket.end(text));
+            const chunks: Buffer[] = [];
+            socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+            socket.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+            socket.on("error", reject);
+        });
+    }
+
+    return { context, abort, call, sendRaw, close };
 }
 
 const echo = recordingOperation("test.echo", async (input) => ({ echoed: input }));
@@ -290,6 +303,21 @@ describe("http front: routes", () => {
             assert.deepEqual(harness.context.calls, []);
         });
     }
+
+    it("answers 404 not_found naming a request target that isn't a parseable URL", { timeout: 5000 }, async () => {
+        const target = "http://[/operations/test.echo";
+
+        const answer = await harness.sendRaw(
+            `POST ${target} HTTP/1.1\r\nHost: front.test\r\nContent-Type: application/json\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`,
+        );
+
+        const [head = "", body = ""] = answer.split("\r\n\r\n");
+        assert.match(head, /^HTTP\/1\.1 404 /);
+        const error = JSON.parse(body).error;
+        assert.equal(error.code, "not_found");
+        assert.ok(error.message.includes(target));
+        assert.deepEqual(harness.context.calls, []);
+    });
 
     it("refuses feed.subscribe at the operation route with 400 invalid_input naming GET /feed", async () => {
         const reply = await harness.call("/operations/feed.subscribe", {
