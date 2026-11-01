@@ -10,6 +10,7 @@ import {
     type Fallback,
     MAX_BODY_BYTES,
     STATUS_BY_CODE,
+    STREAM_ROUTES,
     type WayIn,
 } from "../../src/listeners/http_front.ts";
 import {
@@ -254,6 +255,102 @@ describe("http front: error outcomes", () => {
             const reply = await harness.call("/operations/test.any", { headers: JSON_TYPE });
 
             assertError(reply, 500, "internal");
+        } finally {
+            await harness.close();
+        }
+    });
+});
+
+describe("http front: routes", () => {
+    let harness: Harness;
+    beforeEach(async () => {
+        harness = await startFront([echo]);
+    });
+    afterEach(() => harness.close());
+
+    it("answers 404 not_found naming an unknown operation", async () => {
+        const reply = await harness.call("/operations/no.such", { headers: JSON_TYPE });
+
+        assert.match(assertError(reply, 404, "not_found"), /no\.such/);
+    });
+
+    const unroutedRequests: { method: string; path: string }[] = [
+        { method: "GET", path: "/operations/test.echo" },
+        { method: "GET", path: "/nothing" },
+        { method: "POST", path: "/nothing" },
+        { method: "POST", path: "/operations/" },
+        { method: "POST", path: "/operations/test.echo/extra" },
+    ];
+
+    for (const { method, path } of unroutedRequests) {
+        it(`answers 404 not_found naming the path for ${method} ${path}`, async () => {
+            const reply = await harness.call(path, { method, headers: JSON_TYPE });
+
+            assert.ok(assertError(reply, 404, "not_found").includes(path));
+            assert.deepEqual(harness.context.calls, []);
+        });
+    }
+
+    it("refuses feed.subscribe at the operation route with 400 invalid_input naming GET /feed", async () => {
+        const reply = await harness.call("/operations/feed.subscribe", {
+            headers: JSON_TYPE,
+            body: JSON.stringify({ scope: "instance" }),
+        });
+
+        assert.match(assertError(reply, 400, "invalid_input"), /GET \/feed/);
+    });
+
+    it("treats an operation named like an object property as an unknown operation", async () => {
+        const reply = await harness.call("/operations/constructor", { headers: JSON_TYPE });
+
+        assertError(reply, 404, "not_found");
+    });
+
+    it("names GET /feed as the stream route of feed.subscribe", () => {
+        assert.deepEqual(STREAM_ROUTES, { "feed.subscribe": "GET /feed" });
+    });
+});
+
+describe("http front: fallback", () => {
+    it("lets the fallback answer a request the front has no route for", async () => {
+        const fallback: Fallback = async (_req, res) => {
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify({ servedBy: "fallback" }));
+            return true;
+        };
+        const harness = await startFront([echo], { fallback });
+        try {
+            const reply = await harness.call("/ui/index.html", { method: "GET" });
+
+            assert.equal(reply.status, 200);
+            assert.deepEqual(reply.body, { servedBy: "fallback" });
+        } finally {
+            await harness.close();
+        }
+    });
+
+    it("answers 404 not_found naming the path when the fallback declines", async () => {
+        const harness = await startFront([echo], { fallback: async () => false });
+        try {
+            const reply = await harness.call("/ui/missing.html", { method: "GET" });
+
+            assert.ok(assertError(reply, 404, "not_found").includes("/ui/missing.html"));
+        } finally {
+            await harness.close();
+        }
+    });
+
+    it("never hands an operation call to the fallback", async () => {
+        let fallbackCalls = 0;
+        const fallback: Fallback = async () => {
+            fallbackCalls += 1;
+            return false;
+        };
+        const harness = await startFront([echo], { fallback });
+        try {
+            await harness.call("/operations/test.echo", { headers: JSON_TYPE });
+
+            assert.equal(fallbackCalls, 0);
         } finally {
             await harness.close();
         }

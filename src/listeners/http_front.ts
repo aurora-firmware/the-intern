@@ -25,6 +25,9 @@ export const STATUS_BY_CODE: Record<ServiceErrorCode, number> = {
     internal: 500,
 };
 
+/** Operations whose result is a stream, and the route that serves each one instead of the operation route. */
+export const STREAM_ROUTES: Readonly<Record<string, string>> = Object.freeze({ "feed.subscribe": "GET /feed" });
+
 const OPERATION_ROUTE = /^\/operations\/([^/]+)$/;
 const JSON_MEDIA_TYPE = "application/json";
 
@@ -115,23 +118,45 @@ async function readInput(req: IncomingMessage): Promise<unknown> {
     return parseInput(await readBody(req));
 }
 
+function operationNameOf(req: IncomingMessage, pathname: string): string | undefined {
+    if (req.method !== "POST") return undefined;
+    return OPERATION_ROUTE.exec(pathname)?.[1];
+}
+
+function refuseStreamOperation(name: string): void {
+    if (!Object.hasOwn(STREAM_ROUTES, name)) return;
+    throw new ServiceError("invalid_input", `Operation ${name} is a stream; call it at ${STREAM_ROUTES[name]}`);
+}
+
 export function createHttpFront(options: HttpFrontOptions): HttpFront {
     const caller: Caller = { actor: { kind: "team_member", wayIn: options.wayIn } };
 
+    async function callOperation(req: IncomingMessage, res: ServerResponse, name: string): Promise<void> {
+        try {
+            refuseStreamOperation(name);
+            const input = await readInput(req);
+            const result = await options.catalogue.invoke(name, input, caller);
+            sendJson(res, 200, { result });
+        } catch (error) {
+            // A refusal that leaves the body unread can't keep the connection for another request.
+            if (!req.complete) res.shouldKeepAlive = false;
+            sendError(res, asServiceError(error, name));
+        }
+    }
+
+    async function answerUnrouted(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
+        if (options.fallback && (await options.fallback(req, res))) return;
+        if (!req.complete) res.shouldKeepAlive = false;
+        sendError(res, new ServiceError("not_found", `No route for ${req.method} ${pathname}`));
+    }
+
     return {
         async handle(req, res) {
+            // A fixed base: the front never reads the Host header (S-003 REQ-014).
             const pathname = new URL(req.url ?? "/", "http://front.invalid").pathname;
-            const match = OPERATION_ROUTE.exec(pathname);
-            const name = match?.[1] ?? "";
-            try {
-                const input = await readInput(req);
-                const result = await options.catalogue.invoke(name, input, caller);
-                sendJson(res, 200, { result });
-            } catch (error) {
-                // A refusal that leaves the body unread can't keep the connection for another request.
-                if (!req.complete) res.shouldKeepAlive = false;
-                sendError(res, asServiceError(error, name));
-            }
+            const name = operationNameOf(req, pathname);
+            if (name === undefined) await answerUnrouted(req, res, pathname);
+            else await callOperation(req, res, name);
         },
     };
 }
