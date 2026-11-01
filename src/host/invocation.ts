@@ -8,7 +8,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type ConversationId, defineDoc, type Tx } from "@earendil-works/pi-durable";
 import { INVOCATION_DEPTH_CAP } from "../daemon/constants.ts";
 import type { Seat } from "../roles/role_model.ts";
-import { abortConversation, compactConversation, submitInput } from "./conversation_control.ts";
+import { abortConversation, compactConversation, type InputRecord, submitInput } from "./conversation_control.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import {
     type ContextMode,
@@ -211,7 +211,7 @@ export async function parkConversation(host: HarnessHost, conversationId: string
 export async function continueParked(
     host: HarnessHost,
     conversationId: string,
-    input: { content: string; requestId: string },
+    input: { content: string; requestId: string; entry?: InputRecord },
 ): Promise<{ submissionId: string }> {
     await updateMeta(host, conversationId, (meta) => {
         meta.parked = null;

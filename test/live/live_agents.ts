@@ -162,7 +162,7 @@ async function liveParkedInvocationDeliversBothReports(model: string): Promise<v
             const entries = await entriesOf(daemon, conversationId);
             const firstCall = entries.findIndex((entry) => entry.kind === "pi.assistant" && !isFinalAnswer(entry));
             const afterCall = entries.slice(firstCall + 1);
-            const reports = afterCall.filter((entry) => entry.kind === "pi.user");
+            const reports = afterCall.filter((entry) => entry.kind === "intern.report");
             return reports.length >= 2 && afterCall.some(isFinalAnswer);
         });
     });
