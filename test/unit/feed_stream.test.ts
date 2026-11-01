@@ -214,3 +214,23 @@ describe("feed stream: refusals before any event", () => {
         });
     }
 });
+
+describe("feed stream: a closed subscription", () => {
+    let harness: Harness;
+    beforeEach(async () => {
+        harness = await startFront();
+    });
+    afterEach(() => harness.close());
+
+    for (const reason of ["lagging", "stopped"] as const) {
+        it(`writes an end event with the reason ${reason} and ends the response`, async () => {
+            const res = await harness.open("/feed?scope=instance");
+            const events = eventReader(res);
+            await events.next();
+
+            harness.feed.end(reason);
+
+            assert.deepEqual(await events.rest(), [{ event: "end", data: JSON.stringify({ reason }) }]);
+        });
+    }
+});
