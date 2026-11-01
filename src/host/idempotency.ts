@@ -1,5 +1,5 @@
 /**
- * Idempotency keys for operations that create a conversation (S-002 R-13). The key is recorded in the session-wide
+ * Idempotency keys for operations that create a conversation (S-002 REQ-013). The key is recorded in the session-wide
  * document `intern.idempotency`, in the same commit that creates the conversation, so a crash leaves neither or both.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";

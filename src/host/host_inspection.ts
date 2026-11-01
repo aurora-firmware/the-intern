@@ -1,5 +1,5 @@
 /**
- * Host-side usage and live task reads (S-002 R-12). Only `src/host/` calls pi-durable, so the service layer reads
+ * Host-side usage and live task reads (S-002 REQ-012). Only `src/host/` calls pi-durable, so the service layer reads
  * spend and unfinished pi-durable tasks through these functions.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";

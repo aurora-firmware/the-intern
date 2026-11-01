@@ -1,7 +1,7 @@
 /**
- * The observation feed (S-002 component 8): a snapshot, then deltas, per scope. Publishing never waits for a
+ * The observation feed (S-002 Observation feed): a snapshot, then deltas, per scope. Publishing never waits for a
  * subscriber. Each subscription buffers its undelivered deltas, and a subscriber that falls too far behind is closed
- * with reason `lagging` and has to subscribe again from a fresh snapshot (R-14, R-15).
+ * with reason `lagging` and has to subscribe again from a fresh snapshot (S-002 REQ-014, REQ-015).
  */
 
 import type { HarnessHost } from "../host/harness_host.ts";

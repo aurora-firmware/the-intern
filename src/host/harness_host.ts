@@ -1,5 +1,5 @@
 /**
- * The harness host (S-002 component 5): owns the open pi-durable harness. Only this folder and the-intern's own
+ * The harness host (S-002 Harness host): owns the open pi-durable harness. Only this folder and the-intern's own
  * pi-durable extensions import pi-durable (ADR-001 decision 2), so the rest of the product depends on `HarnessHost`
  * and the type re-exports below.
  */
@@ -36,7 +36,7 @@ export type AgentChoice = { model: string; thinkingLevel?: string; cwd?: string;
 export type HostEntry = { id: string; kind: string; data: unknown };
 export type ConversationInfo = { id: string; busy: boolean };
 
-/** A page cursor that this host never returned: the caller's input is invalid (S-002 R-13). */
+/** A page cursor that this host never returned: the caller's input is invalid (S-002 REQ-013). */
 export class HostInvalidCursorError extends Error {
     constructor(cursor: string, reason: string) {
         super(`Page cursor "${cursor}" is not one this host returned: ${reason}`);

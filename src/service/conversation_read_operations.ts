@@ -1,6 +1,6 @@
 /**
- * The conversation read operations (S-002 R-12, R-11, R-13): list, get, stored entries and current context. They
- * only read, so no call changes a conversation or a daemon document.
+ * The conversation read operations (S-002 REQ-012, REQ-011, REQ-013): list, get, stored entries and current context.
+ * They only read, so no call changes a conversation or a daemon document.
  */
 import type { Admission, AdmissionSnapshot } from "../admission/admission.ts";
 import {

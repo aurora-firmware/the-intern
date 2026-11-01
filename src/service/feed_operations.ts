@@ -1,6 +1,6 @@
 /**
- * The subscribe operation (S-002 R-12, R-14): it returns the in-process subscription to the instance feed or to one
- * conversation's feed. S-003's listeners carry the subscription to clients.
+ * The subscribe operation (S-002 REQ-012, REQ-014): it returns the in-process subscription to the instance feed or to
+ * one conversation's feed. S-003's listeners carry the subscription to clients.
  */
 import type { InstanceFeed } from "../feed/instance_feed.ts";
 import type { ObservationFeed, Subscription } from "../feed/observation_feed.ts";

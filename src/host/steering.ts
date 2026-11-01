@@ -1,8 +1,8 @@
 /**
- * Steering (S-001 R-10a, R-17): a team member or an agent injects a message into a conversation, and the transcript
- * records who steered. A running conversation picks the message up after its current tool round (steer) or after its
- * run ends (follow-up); an idle one takes it as input; a parked one holds it in its `intern.conversation` document, so
- * the message survives a restart, and `continueParked` delivers it.
+ * Steering (S-001 REQ-020, REQ-017): a team member or an agent injects a message into a conversation, and the
+ * transcript records who steered. A running conversation picks the message up after its current tool round (steer) or
+ * after its run ends (follow-up); an idle one takes it as input; a parked one holds it in its `intern.conversation`
+ * document, so the message survives a restart, and `continueParked` delivers it.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type ConversationId, defineEntry } from "@earendil-works/pi-durable";

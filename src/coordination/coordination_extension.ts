@@ -1,7 +1,7 @@
 /**
- * The coordination extension (S-001 R-6, Component 4): the tools an agent uses to work with other agents. It is built
- * before the host opens, like the admission extension, so it takes the host and the agents runtime as functions that
- * are bound once startup has reached them.
+ * The coordination extension (S-001 REQ-006, Agent coordination): the tools an agent uses to work with other agents. It
+ * is built before the host opens, like the admission extension, so it takes the host and the agents runtime as
+ * functions that are bound once startup has reached them.
  */
 import { type Static, Type } from "@earendil-works/pi-ai";
 import {
@@ -158,7 +158,7 @@ const handoffTool = (options: CoordinationOptions) =>
         },
     });
 
-// The park continues the invoking conversation on each report; "all" exists in the host for tests (S-001 R-8a).
+// The park continues the invoking conversation on each report; "all" exists in the host for tests (S-001 REQ-019).
 const PARK_ON_EACH_REPORT: ParkedState = { waitingFor: "reports", continueOn: "each" };
 
 function resolveInvocationSeats(runtime: AgentsRuntime, agents: InvokedAgentArguments[]): InvocationRequest[] | string {

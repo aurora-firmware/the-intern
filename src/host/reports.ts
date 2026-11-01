@@ -1,9 +1,9 @@
 /**
- * Report delivery (S-001 R-8a, R-17): when an invoked agent's run ends while it isn't parked and awaits no report, its
- * part is done, and its last answer becomes new input to the invoking conversation. A running invoker gets it as a
- * follow-up, an idle or parked one is continued. The request id `report:<invokedId>:<entryId>` makes a repeat
- * harmless, and an invoked id stays in the invoker's `awaiting` until its report is delivered, so a restart
- * redelivers what a crash cut off.
+ * Report delivery (S-001 REQ-019, REQ-017): when an invoked agent's run ends while it isn't parked and awaits no
+ * report, its part is done, and its last answer becomes new input to the invoking conversation. A running invoker gets
+ * it as a follow-up, an idle or parked one is continued. The request id `report:<invokedId>:<entryId>` makes a repeat
+ * harmless, and an invoked id stays in the invoker's `awaiting` until its report is delivered, so a restart redelivers
+ * what a crash cut off.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";

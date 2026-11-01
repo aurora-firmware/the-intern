@@ -19,8 +19,8 @@ node src/cli/bob.ts serve \
   --verbose
 ```
 
-The daemon runs in the foreground and writes its log to standard error (S-002 R-4). `--verbose` adds the debug lines.
-Stop it with Ctrl-C. For a second instance, use another folder under `.tmp/`.
+The daemon runs in the foreground and writes its log to standard error (S-002 REQ-004). `--verbose` adds the debug
+lines. Stop it with Ctrl-C. For a second instance, use another folder under `.tmp/`.
 
 Run the live checks, which start the daemon over your own pi login, with `npm run test:live`.
 
@@ -28,23 +28,23 @@ Run the live checks, which start the daemon over your own pi login, with `npm ru
 
 An instance uses four directories: config, state (the database), data (the default workspaces of the roles) and
 runtime (the socket's directory). By default they are resolved from the XDG base directories, in a folder named
-`the-intern` (S-002 R-6). A team's instance runs there unless its flags say otherwise.
+`the-intern` (S-002 REQ-006). A team's instance runs there unless its flags say otherwise.
 
-A development instance overrides them with the instance-directory flags (S-002 R-6, R-21) and points them at
+A development instance overrides them with the instance-directory flags (S-002 REQ-006, REQ-021) and points them at
 subfolders of the git-ignored `.tmp/` folder of the repository. This keeps its state apart from any team's instance,
-so several instances can run side by side. The rules of R-6 apply to these directories too: a missing directory is
+so several instances can run side by side. The rules of REQ-006 apply to these directories too: a missing directory is
 created owner-only (mode 0700), and an existing one that is not a directory, not owned by you, or accessible to the
 group or others stops startup (ADR-002, decision 6).
 
 The runtime directory has a fallback. When `XDG_RUNTIME_DIR` is unset, as on macOS and under launchd, and no
-`--runtime-dir` is given, the runtime directory is the `run` folder inside the state directory (S-002 R-6).
+`--runtime-dir` is given, the runtime directory is the `run` folder inside the state directory (S-002 REQ-006).
 
 The database belongs to one daemon: only the daemon opens it (ADR-001, decision 1).
 
 ## The model login
 
 A real model comes from your own pi login, used in place. The environment sets the pi agent folder, as for pi agent
-itself (S-002 R-21). The instance does not copy the login into its directories or its database, and writes into the
+itself (S-002 REQ-021). The instance does not copy the login into its directories or its database, and writes into the
 agent folder only the login's own token refreshes (ADR-002, decision 5).
 
 ## Inspecting a running instance

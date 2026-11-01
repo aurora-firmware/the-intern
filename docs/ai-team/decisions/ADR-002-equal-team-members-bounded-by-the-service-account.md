@@ -23,7 +23,7 @@ one of the standing decisions S-000 asks to record before development starts (S-
 Decisions needed).
 
 Sources: S-000 Users, Solution overview and Project exclusions; S-002 Definitions (service account), Design
-Principles, Exclusions, R-6, R-16 and R-18.
+Principles, Exclusions, REQ-006, REQ-016 and REQ-018.
 
 ## Decision
 
@@ -36,8 +36,8 @@ operating-system account The Intern runs as, not by logins or per-action rules.
 2. **No logins and no per-person permissions.** The Intern has no login, user list or roles for people, and makes no
    difference between team members. No listener authenticates callers: whoever can reach a listener can call the
    operations it exposes. No service operation reads transport details, a connection or the caller's machine to decide
-   its outcome (S-002 R-16). Where S-001 requires attribution, the actor is still recorded: a team member with the
-   way in they used, an agent, or a job source (S-001 R-7). It says where an action came from and grants nothing.
+   its outcome (S-002 REQ-016). Where S-001 requires attribution, the actor is still recorded: a team member with the
+   way in they used, an agent, or a job source (S-001 REQ-007). It says where an action came from and grants nothing.
 3. **No per-action approval rules.** The Intern has no policy component and no approvals for each action. What it can
    do is bounded by what the service account can reach.
 4. **The service account is the boundary.** The Intern runs as one operating-system account, the service account. In
@@ -46,10 +46,10 @@ operating-system account The Intern runs as, not by logins or per-action rules.
 5. **Credentials are used in place, never copied.** Models and their credentials come from the service account's pi
    agent login, and every other credential (mail, wiki, repositories, other hosts) is the service account's, in that
    account's usual places. The daemon writes nothing into pi agent's agent folder except the login's own token
-   refreshes. No credential is copied into the instance's directories or the database (S-002 R-18).
+   refreshes. No credential is copied into the instance's directories or the database (S-002 REQ-018).
 6. **Owner-only files.** Every directory The Intern creates is owner-only (mode 0700) and every file it creates is
    accessible only to the service account. An existing directory that is accessible to the group or others, or not
-   owned by the service account, stops startup (S-002 R-6).
+   owned by the service account, stops startup (S-002 REQ-006).
 
 **The consequence, stated plainly:** whoever can reach The Intern acts with the service account's access. In v1 that
 is the installing person's access. Limiting who can reach a way in, and what the service account can reach, is how a
@@ -105,7 +105,7 @@ and the limit that actually holds is what the service account can reach, which r
 
 **Description:** The local socket and the network listener check a token or certificate before accepting calls.
 **Rejected because:** It is a login in another form. Who can reach a listener is decided by the machine and the
-network setup, and the service layer stays free of transport and authorization (S-002 Design Principles, R-16).
+network setup, and the service layer stays free of transport and authorization (S-002 Design Principles, REQ-016).
 
 ### Alternative D: The Intern holds its own credentials
 

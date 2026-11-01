@@ -115,10 +115,11 @@ changes a shared term updates it in the same change, and the reviewer checks it.
 ## Local runs and diagnostics
 
 **Where does a development instance keep its state, and how is it kept apart from a real one?**
-In the git-ignored `.tmp/` directory, through the instance-directory flags (S-002 R-6), apart from any team's instance.
+In the git-ignored `.tmp/` directory, through the instance-directory flags (S-002 REQ-006), apart from any team's
+instance.
 
 **What logging and diagnostic output does the service give, and at which levels?**
-One plain line per event on standard error (S-002 R-4). Each line holds an ISO-8601 timestamp, a level (`ERROR`,
+One plain line per event on standard error (S-002 REQ-004). Each line holds an ISO-8601 timestamp, a level (`ERROR`,
 `INFO` or `DEBUG`), the message, then `key=value` fields. The line written when the daemon is ready is:
 
 ```
