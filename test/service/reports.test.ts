@@ -392,6 +392,49 @@ describe("report entries", () => {
         await assertPlacedAsReportEntry(fixture.host, invokerId, invokedId, "job A");
     });
 
+    it("holds the first report as an intern.report naming the invoked agent when the invoker continues after all", async () => {
+        const fixture = await createFixture();
+        const invokerId = await fixture.startInvoker();
+        await fixture.startDelivery();
+        fixture.holdAnswerTo("job B");
+        const parked: ParkedState = { waitingFor: "reports", continueOn: "all" };
+        const [idA] = (await fixture.invoke(invokerId, ["job A", "job B"], parked)) as [string, string];
+        await parkConversation(fixture.host, invokerId, parked);
+
+        await until(async () => (await awaitingOf(fixture.host, invokerId))?.length === 1, "the first report");
+        const meta = await readConversationMeta(fixture.host, invokerId);
+        assert.deepEqual(
+            meta?.held.map(({ kind, actor, content }) => ({ kind, actor, content })),
+            [
+                {
+                    kind: REPORT_KIND,
+                    actor: { kind: "agent", conversationId: idA, role: "developer" },
+                    content: reportOf("job A"),
+                },
+            ],
+        );
+    });
+
+    it("places every report as an intern.report naming its own agent, in arrival order, after the last report", async () => {
+        const fixture = await createFixture();
+        const invokerId = await fixture.startInvoker();
+        await fixture.startDelivery();
+        const releaseB = fixture.holdAnswerTo("job B");
+        const parked: ParkedState = { waitingFor: "reports", continueOn: "all" };
+        const [idA, idB] = (await fixture.invoke(invokerId, ["job A", "job B"], parked)) as [string, string];
+        await parkConversation(fixture.host, invokerId, parked);
+        await until(async () => (await awaitingOf(fixture.host, invokerId))?.length === 1, "the first report");
+        releaseB();
+
+        await until(() => reportsSeenBy(fixture.invokerRequests(), "job B") === 1, "the run on the last report");
+        const entries = await rawEntriesOf(fixture.host, invokerId);
+        const reports = entries.filter((entry) => entry.kind === REPORT_KIND).map((entry) => entry.data);
+        assert.deepEqual(reports, [
+            { actor: { kind: "agent", conversationId: idA, role: "developer" }, content: reportOf("job A") },
+            { actor: { kind: "agent", conversationId: idB, role: "developer" }, content: reportOf("job B") },
+        ]);
+    });
+
     it("places one intern.report entry when the report is delivered again after a restart", async () => {
         const fixture = await createFixture();
         const invokerId = await fixture.startInvoker();

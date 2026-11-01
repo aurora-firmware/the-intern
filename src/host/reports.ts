@@ -88,12 +88,21 @@ async function changeMeta(host: HarnessHost, conversationId: string, change: (me
 const withoutId = (ids: string[], id: string): string[] => ids.filter((candidate) => candidate !== id);
 
 // One commit moves an earlier report into `held` and out of `awaiting`, so a crash never loses or repeats it.
-async function holdReport(host: HarnessHost, input: { invokerId: string; invokedId: string; report: Report }) {
-    const { invokerId, invokedId, report } = input;
-    const actor: SeatActor = { kind: "agent", conversationId: invokedId, role: "" };
+async function holdReport(
+    host: HarnessHost,
+    input: { invokerId: string; invokedId: string; role: string; report: Report },
+) {
+    const { invokerId, invokedId, role, report } = input;
+    const actor: SeatActor = { kind: "agent", conversationId: invokedId, role };
     await changeMeta(host, invokerId, (meta) => {
         if (!meta.held.some((message) => message.requestId === report.requestId)) {
-            meta.held.push({ content: report.content, mode: "followUp", actor, requestId: report.requestId });
+            meta.held.push({
+                content: report.content,
+                mode: "followUp",
+                kind: REPORT_KIND,
+                actor,
+                requestId: report.requestId,
+            });
         }
         meta.awaiting = withoutId(meta.awaiting, invokedId);
     });
@@ -113,7 +122,7 @@ async function deliver(host: HarnessHost, invokedId: string): Promise<void> {
 
     const isLastReport = withoutId(invoker.awaiting, invokedId).length === 0;
     if (invoker.parked?.continueOn === "all" && !isLastReport) {
-        await holdReport(host, { invokerId, invokedId, report });
+        await holdReport(host, { invokerId, invokedId, role: invoked.seat.role, report });
         return;
     }
     const actor: SeatActor = { kind: "agent", conversationId: invokedId, role: invoked.seat.role };
