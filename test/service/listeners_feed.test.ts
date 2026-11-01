@@ -50,7 +50,7 @@ const NODE_DEFAULT_IDLE_TIMEOUT_MS = 5000;
 /** Longer than Node's default idle timeout; the full 5-minute wait is not run in `npm test`. */
 const LONG_WAIT_MS = 6000;
 const HOLD_INPUT = "hold";
-/** Holds the answer to `HOLD_INPUT` past the end of the test; stopping the daemon aborts it. */
+/** Longer than the test; stopping the daemon aborts the held answer. */
 const HOLD_DELAY_MS = 120_000;
 const TAG_HEADER = "x-test-request";
 const JSON_HEADERS: OutgoingHttpHeaders = { "content-type": "application/json" };
@@ -219,6 +219,11 @@ function loopingReply(transcript: FakeTranscript): FakeReply {
     return step < LOOP_STEPS ? { toolCall: { name: "no_such_tool", arguments: { step } } } : "ok";
 }
 
+/** Holds the answer to `HOLD_INPUT` back for `HOLD_DELAY_MS`; any other input is answered at once. */
+function holdingDelay(transcript: FakeTranscript): number {
+    return transcript.findLast((message) => message.role === "user")?.text === HOLD_INPUT ? HOLD_DELAY_MS : 0;
+}
+
 type Fixture = {
     /** The catalogue both listeners call. */
     catalogue: Catalogue;
@@ -324,8 +329,15 @@ async function startFixture(
     const postTo = (listener: Listener, name: string, input: unknown, headers: OutgoingHttpHeaders = {}) =>
         post(targetOf(listener), name, input, headers);
 
-    const fixture = { catalogue: daemon.catalogue, invoke, openFeed, post: postTo, idleConversation, submitAndSettle };
-    return { ...fixture, entries };
+    return {
+        catalogue: daemon.catalogue,
+        invoke,
+        openFeed,
+        post: postTo,
+        idleConversation,
+        submitAndSettle,
+        entries,
+    };
 }
 
 async function nextEvent(stream: FeedStream): Promise<FeedEvent> {
@@ -560,9 +572,7 @@ async function readDeltasUntilRunEnds(stream: FeedStream): Promise<void> {
 describe("long calls through each listener", { timeout: TEST_TIMEOUT_MS }, () => {
     it("keeps a read feed stream and a 6-second submissions.wait open past Node's default idle timeout", async () => {
         const recorded = recordServers();
-        const delayMs = (transcript: FakeTranscript) =>
-            transcript.findLast((message) => message.role === "user")?.text === HOLD_INPUT ? HOLD_DELAY_MS : 0;
-        const fixture = await startFixture(() => "ok", { delayMs });
+        const fixture = await startFixture(() => "ok", { delayMs: holdingDelay });
         const conversationId = await fixture.idleConversation("held");
         const query = `?scope=conversation&id=${conversationId}`;
         const feeds = await Promise.all(LISTENERS.map((way) => fixture.openFeed(way, query, tagged(`feed ${way}`))));
