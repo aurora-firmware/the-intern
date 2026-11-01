@@ -4,22 +4,24 @@
  * touching the run, and neither a quiet stream nor a long `submissions.wait` is cut short by the listener.
  */
 import assert from "node:assert/strict";
+import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import { writeFile } from "node:fs/promises";
-import { type IncomingMessage, request } from "node:http";
+import { type IncomingMessage, type OutgoingHttpHeaders, request, type Server } from "node:http";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
-import { STOP_BOUND_MS } from "../../src/daemon/constants.ts";
+import { MAX_SUBMISSION_WAIT_MS, STOP_BOUND_MS } from "../../src/daemon/constants.ts";
 import { type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
+import { LISTENER_TIMEOUT_MS } from "../../src/listeners/listener_server.ts";
 import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
 import { createNetworkListenerComponent } from "../../src/listeners/network_listener.ts";
 import { networkSection } from "../../src/listeners/network_section.ts";
 import { localSocketPath } from "../../src/listeners/socket_path.ts";
 import type { Caller } from "../../src/service/operations.ts";
-import { createFakeModel, type FakeReply, type FakeTranscript } from "../support/fake_model.ts";
+import { createFakeModel, type FakeModelOptions, type FakeReply, type FakeTranscript } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const WAIT_TIMEOUT_MS = 20_000;
@@ -42,19 +44,33 @@ const LOOP_INPUT = "loop";
 const RUN_TIME_FACTOR = 2;
 const RUN_TIME_MARGIN_MS = 2000;
 const LAGGING_END: FeedEvent = { name: "end", data: { reason: "lagging" } };
+/** Node's default `keepAliveTimeout`, the idle timeout a listener left at its defaults would apply. */
+const NODE_DEFAULT_IDLE_TIMEOUT_MS = 5000;
+/** Longer than Node's default idle timeout; the full 5-minute wait is not run in `npm test`. */
+const LONG_WAIT_MS = 6000;
+const HOLD_INPUT = "hold";
+/** Holds the answer to `HOLD_INPUT` past the end of the test; stopping the daemon aborts it. */
+const HOLD_DELAY_MS = 120_000;
+const TAG_HEADER = "x-test-request";
+const JSON_HEADERS: OutgoingHttpHeaders = { "content-type": "application/json" };
+const REQUEST_START_CHANNEL = "http.server.request.start";
 
 type Listener = (typeof LISTENERS)[number];
 type HttpTarget = { socketPath: string } | { host: string; port: number };
 type Entry = { kind: string; data: unknown };
 type View = { entries: Entry[]; busy: boolean };
 type FeedEvent = { name: string; id?: number; data: unknown };
+type AnswerBody = { result?: unknown; error?: { code: string; message?: string } };
+type Answer = { status: number; body: AnswerBody };
 
 const envs: HermeticEnv[] = [];
 const daemons: RunningDaemon[] = [];
 const fakes: { unregister(): void }[] = [];
 const streams: FeedStream[] = [];
+const recorders: { stop(): void }[] = [];
 
 afterEach(async () => {
+    for (const recorder of recorders.splice(0)) recorder.stop();
     for (const stream of streams.splice(0)) stream.close();
     for (const daemon of daemons.splice(0)) await Promise.race([daemon.stop(), sleep(STOP_BOUND_MS)]);
     for (const fake of fakes.splice(0)) fake.unregister();
@@ -93,16 +109,17 @@ type FeedRead = FeedEvent | "ended" | "silent";
 type FeedStream = {
     status: number;
     /** The JSON body of a refused subscription. */
-    refusal(): Promise<{ error?: { code: string } }>;
+    refusal(): Promise<AnswerBody>;
     next(): Promise<FeedRead>;
     pause(): void;
     resume(): void;
     close(): void;
 };
 
-function openFeedAt(target: HttpTarget, query: string): Promise<FeedStream> {
+function openFeedAt(target: HttpTarget, query: string, headers: OutgoingHttpHeaders): Promise<FeedStream> {
     return new Promise((resolve, reject) => {
-        const call = request({ ...target, method: "GET", path: `/feed${query}`, agent: false }, (response) => {
+        const options = { ...target, method: "GET", path: `/feed${query}`, headers, agent: false };
+        const call = request(options, (response) => {
             resolve(readFeed(response, () => call.destroy()));
         });
         call.once("error", reject);
@@ -110,12 +127,31 @@ function openFeedAt(target: HttpTarget, query: string): Promise<FeedStream> {
     });
 }
 
-function readJson(response: IncomingMessage): Promise<{ error?: { code: string } }> {
+function readJson(response: IncomingMessage): Promise<AnswerBody> {
     return new Promise((resolve, reject) => {
         const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer) => chunks.push(chunk));
         response.once("end", () => resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))));
         response.once("error", reject);
+    });
+}
+
+/** Calls an operation; a connection the listener cuts is answered with status 0 and the connection error. */
+function post(target: HttpTarget, name: string, input: unknown, headers: OutgoingHttpHeaders): Promise<Answer> {
+    return new Promise((resolve) => {
+        const options = {
+            ...target,
+            method: "POST",
+            path: `/operations/${name}`,
+            headers: { ...JSON_HEADERS, ...headers },
+        };
+        const call = request(options, (response) => {
+            readJson(response).then((body) => resolve({ status: response.statusCode ?? 0, body }));
+        });
+        call.once("error", (error) =>
+            resolve({ status: 0, body: { error: { code: "connection", message: error.message } } }),
+        );
+        call.end(JSON.stringify(input));
     });
 }
 
@@ -183,7 +219,8 @@ function loopingReply(transcript: FakeTranscript): FakeReply {
 
 type Fixture = {
     invoke(name: string, input: unknown): Promise<unknown>;
-    openFeed(listener: Listener, query: string): Promise<FeedStream>;
+    openFeed(listener: Listener, query: string, headers?: OutgoingHttpHeaders): Promise<FeedStream>;
+    post(listener: Listener, name: string, input: unknown, headers?: OutgoingHttpHeaders): Promise<Answer>;
     /** Starts a job in-process and waits until its lead conversation is idle. */
     idleConversation(jobId: string): Promise<string>;
     /** Submits input in-process and waits until it is done and the conversation idle again. */
@@ -191,10 +228,13 @@ type Fixture = {
     entries(conversationId: string): Promise<Entry[]>;
 };
 
-async function startFixture(reply: (transcript: FakeTranscript) => FakeReply = () => "ok"): Promise<Fixture> {
+async function startFixture(
+    reply: (transcript: FakeTranscript) => FakeReply = () => "ok",
+    modelOptions: FakeModelOptions = {},
+): Promise<Fixture> {
     const env = await createHermeticEnv();
     envs.push(env);
-    const fake = createFakeModel(reply);
+    const fake = createFakeModel(reply, modelOptions);
     fakes.push(fake);
     const provider = fake.getModel().provider;
     await writeFile(
@@ -239,8 +279,8 @@ async function startFixture(reply: (transcript: FakeTranscript) => FakeReply = (
         return address;
     }
 
-    async function openFeed(listener: Listener, query: string): Promise<FeedStream> {
-        const stream = await openFeedAt(targetOf(listener), query);
+    async function openFeed(listener: Listener, query: string, headers: OutgoingHttpHeaders = {}) {
+        const stream = await openFeedAt(targetOf(listener), query, headers);
         streams.push(stream);
         return stream;
     }
@@ -277,7 +317,10 @@ async function startFixture(reply: (transcript: FakeTranscript) => FakeReply = (
         return all;
     }
 
-    return { invoke, openFeed, idleConversation, submitAndSettle, entries };
+    const postTo = (listener: Listener, name: string, input: unknown, headers: OutgoingHttpHeaders = {}) =>
+        post(targetOf(listener), name, input, headers);
+
+    return { invoke, openFeed, post: postTo, idleConversation, submitAndSettle, entries };
 }
 
 async function nextEvent(stream: FeedStream): Promise<FeedEvent> {
@@ -471,5 +514,78 @@ describe("a feed client that stops reading", { timeout: TEST_TIMEOUT_MS }, () =>
         const bound = controlTime * RUN_TIME_FACTOR + RUN_TIME_MARGIN_MS;
         assert.ok(observedTime <= bound, `the run took ${observedTime} ms, the bound is ${bound} ms`);
         assert.deepEqual(loopShape(await fixture.entries(observed)), loopShape(await fixture.entries(control)));
+    });
+});
+
+/** The server that took each tagged request, heard on Node's `http.server.request.start` diagnostics channel. */
+function recordServers(): { serverOf(tag: string): Server; stop(): void } {
+    const servers = new Map<string, Server>();
+    const onRequest = (message: unknown) => {
+        const { request: incoming, server } = message as { request: IncomingMessage; server: Server };
+        const tag = incoming.headers[TAG_HEADER];
+        if (typeof tag === "string") servers.set(tag, server);
+    };
+    subscribe(REQUEST_START_CHANNEL, onRequest);
+    const recorder = {
+        serverOf(tag: string) {
+            const server = servers.get(tag);
+            assert.ok(server, `a server took the request tagged ${tag}`);
+            return server;
+        },
+        stop: () => unsubscribe(REQUEST_START_CHANNEL, onRequest),
+    };
+    recorders.push(recorder);
+    return recorder;
+}
+
+const tagged = (tag: string): OutgoingHttpHeaders => ({ [TAG_HEADER]: tag });
+
+/** Reads `delta` events until the conversation has been seen busy and then idle again. */
+async function readDeltasUntilRunEnds(stream: FeedStream): Promise<void> {
+    let hasSeenBusy = false;
+    for (;;) {
+        const event = await nextEvent(stream);
+        assert.equal(event.name, "delta");
+        const { busy } = (event.data as { view: View }).view;
+        if (hasSeenBusy && !busy) return;
+        hasSeenBusy ||= busy;
+    }
+}
+
+describe("long calls through each listener", { timeout: TEST_TIMEOUT_MS }, () => {
+    it("keeps a read feed stream and a 6-second submissions.wait open past Node's default idle timeout", async () => {
+        const recorded = recordServers();
+        const delayMs = (transcript: FakeTranscript) =>
+            transcript.findLast((message) => message.role === "user")?.text === HOLD_INPUT ? HOLD_DELAY_MS : 0;
+        const fixture = await startFixture(() => "ok", { delayMs });
+        const conversationId = await fixture.idleConversation("held");
+        const query = `?scope=conversation&id=${conversationId}`;
+        const feeds = await Promise.all(LISTENERS.map((way) => fixture.openFeed(way, query, tagged(`feed ${way}`))));
+        for (const stream of feeds) assert.equal((await nextEvent(stream)).name, "snapshot");
+        const hold = { conversationId, content: HOLD_INPUT, requestId: "hold-request" };
+        const { submissionId } = (await fixture.invoke("conversations.submit", hold)) as { submissionId: string };
+
+        const wait = { submissionId, timeoutMs: LONG_WAIT_MS };
+        const waitedFor = await timed(async () => {
+            const answers = await Promise.all(
+                LISTENERS.map((way) => fixture.post(way, "submissions.wait", wait, tagged(`wait ${way}`))),
+            );
+            for (const answer of answers) {
+                assert.equal(answer.status, 200, `the wait is answered, not cut: ${JSON.stringify(answer.body)}`);
+                assert.equal((answer.body.result as { state: string }).state, "running");
+            }
+        });
+        await fixture.invoke("conversations.abort", { conversationId });
+        await Promise.all(feeds.map(readDeltasUntilRunEnds));
+
+        assert.ok(waitedFor >= LONG_WAIT_MS && LONG_WAIT_MS > NODE_DEFAULT_IDLE_TIMEOUT_MS, `waited ${waitedFor} ms`);
+        assert.ok(LISTENER_TIMEOUT_MS > MAX_SUBMISSION_WAIT_MS, "the timeouts outlast the longest wait");
+        for (const way of LISTENERS) {
+            const server = recorded.serverOf(`wait ${way}`);
+            assert.equal(recorded.serverOf(`feed ${way}`), server, `one server serves the ${way}`);
+            assert.equal(server.requestTimeout, LISTENER_TIMEOUT_MS, `the ${way}'s request timeout`);
+            assert.equal(server.timeout, LISTENER_TIMEOUT_MS, `the ${way}'s idle timeout`);
+        }
+        assert.notEqual(recorded.serverOf("wait local socket"), recorded.serverOf("wait network listener"));
     });
 });
