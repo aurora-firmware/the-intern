@@ -427,3 +427,89 @@ describe("catalogue through both listeners", () => {
         assert.equal((await fixture.ctx.host.listConversations()).length, WAYS.length);
     });
 });
+
+type HeldStop = { component: DaemonComponent; entered: Promise<void>; release(): void };
+
+/** A component placed after the listeners: components stop in reverse, so the listeners stay open while it is held. */
+function heldStop(): HeldStop {
+    const entered = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    return {
+        component: {
+            name: "held stop",
+            async stop() {
+                entered.resolve();
+                await released.promise;
+            },
+        },
+        entered: entered.promise,
+        release: () => released.resolve(),
+    };
+}
+
+/** Calls in-process and through each listener; each listener answers with the in-process status, code and message. */
+async function assertErrorThroughListeners(
+    call: (way: Way) => Promise<Outcome>,
+    code: ServiceErrorCode,
+): Promise<void> {
+    const inProcess = await call("in-process");
+    const throughListeners = [await call("local socket"), await call("network listener")];
+    assert.equal(inProcess.status, STATUS_OF[code], JSON.stringify(inProcess.body));
+    assert.equal((inProcess.body as { error: { code: string } }).error.code, code);
+    for (const outcome of throughListeners) assert.deepEqual(outcome, inProcess);
+}
+
+describe("error outcomes through both listeners", () => {
+    it("answers invalid input, an unknown conversation, a busy submit and a conflicting create as in-process", async () => {
+        const fixture = await startFixture();
+        const busyConversation = await fixture.runningConversation("busy");
+        const callEach = (name: string, input: (way: Way) => unknown) => (way: Way) =>
+            fixture.call(way, name, input(way));
+
+        await assertErrorThroughListeners(
+            callEach("conversations.get", () => ({})),
+            "invalid_input",
+        );
+        await assertErrorThroughListeners(
+            callEach("conversations.get", () => ({ conversationId: "9999" })),
+            "not_found",
+        );
+        const rejectIfBusy = (way: Way) => ({
+            conversationId: busyConversation,
+            content: "later",
+            requestId: `reject-${label(way)}`,
+            busyMode: "reject",
+        });
+        await assertErrorThroughListeners(callEach("conversations.submit", rejectIfBusy), "busy");
+        const sameName = () => ({ name: "gp", instructions: "Another gp.", tools: [], skills: [] });
+        await assertErrorThroughListeners(callEach("roles.create", sameName), "conflict");
+    });
+
+    it("answers 503 unavailable while the daemon is stopping", async () => {
+        const held = heldStop();
+        const fixture = await startFixture({ lastComponents: [held.component] });
+        const stopped = fixture.daemon.stop();
+        await held.entered;
+        try {
+            await assertErrorThroughListeners((way) => fixture.call(way, "conversations.list", {}), "unavailable");
+        } finally {
+            held.release();
+        }
+        assert.equal(await stopped, 0);
+    });
+
+    it("answers 500 internal for a run that fails on storage", { timeout: TEST_TIMEOUT_MS }, async () => {
+        async function failingCall(way: Way): Promise<Outcome> {
+            const held = heldStop();
+            const fixture = await startFixture({ lastComponents: [held.component] });
+            try {
+                await fixture.invoke("test.failStorage", {});
+                return await fixture.call(way, "test.createConversation", { key: "doomed", cwd: fixture.env.dataDir });
+            } finally {
+                held.release();
+            }
+        }
+
+        await assertErrorThroughListeners(failingCall, "internal");
+    });
+});
