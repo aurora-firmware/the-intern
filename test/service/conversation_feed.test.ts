@@ -15,6 +15,9 @@ import {
 } from "../../src/feed/observation_feed.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { type HarnessHost, type HostEntry, openHarnessHost } from "../../src/host/harness_host.ts";
+import { REPORT_KIND, type ReportRecord } from "../../src/host/reports.ts";
+import type { SeatActor } from "../../src/host/seating.ts";
+import { STEER_RECORD_KIND, steerConversation } from "../../src/host/steering.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -79,6 +82,38 @@ async function sendAndSettle(host: HarnessHost, conversationId: string, content:
         busyMode: "followUp",
     });
     await waitForSubmission(host, submissionId, SUBMISSION_TIMEOUT_MS);
+}
+
+const reportRecord: ReportRecord = {
+    actor: { kind: "agent", conversationId: "7", role: "reviewer" },
+    content: "the review is done",
+};
+const steerActor: SeatActor = { kind: "team_member", wayIn: "cli" };
+const steerData = { actor: steerActor, mode: "followUp", content: "use the other approach" };
+
+async function placeReport(host: HarnessHost, conversationId: string): Promise<void> {
+    const { submissionId } = await submitInput(host, conversationId, {
+        content: reportRecord.content,
+        requestId: "report-request",
+        busyMode: "followUp",
+        entry: { kind: REPORT_KIND, data: reportRecord },
+    });
+    await waitForSubmission(host, submissionId, SUBMISSION_TIMEOUT_MS);
+}
+
+async function placeSteer(host: HarnessHost, conversationId: string): Promise<void> {
+    const placed = await steerConversation(host, conversationId, {
+        content: steerData.content,
+        mode: "followUp",
+        actor: steerActor,
+        requestId: "steer-request",
+    });
+    assert.equal(placed.held, false);
+    await waitForSubmission(host, placed.submissionId as string, SUBMISSION_TIMEOUT_MS);
+}
+
+function ownDataOf(entries: readonly HostEntry[], kind: string): unknown {
+    return entries.find((entry) => entry.kind === kind)?.data;
 }
 
 async function nextWithin(subscription: Subscription<unknown, ConversationDelta>): Promise<Next> {
@@ -259,5 +294,63 @@ describe("conversation observation feed", () => {
         assert.deepEqual(await nextWithin(idle), { closed: "lagging" });
         const { entries } = await host.readEntries(conversationId, { limit: 100 });
         assert.ok(JSON.stringify(entries).includes('"text":"ok"'), "the run completed");
+    });
+
+    it("shows an intern.report entry in a delta by its stored actor and content", async () => {
+        const { host, feed, agentModel } = await openFixture();
+        const conversationId = await host.createConversation({ agent: { model: agentModel } });
+        const subscription = await feed.subscribeConversation(conversationId);
+        await placeReport(host, conversationId);
+        const deltas = await collectUntil(subscription, (seen) =>
+            seen.some((delta) => delta.view.entries.some((entry) => entry.kind === REPORT_KIND)),
+        );
+        subscription.close();
+
+        assert.deepEqual(ownDataOf(deltas.at(-1)?.view.entries ?? [], REPORT_KIND), reportRecord);
+    });
+
+    it("shows an intern.steer entry in a delta by its stored actor, mode and content", async () => {
+        const { host, feed, agentModel } = await openFixture();
+        const conversationId = await host.createConversation({ agent: { model: agentModel } });
+        const subscription = await feed.subscribeConversation(conversationId);
+        await placeSteer(host, conversationId);
+        const deltas = await collectUntil(subscription, (seen) =>
+            seen.some((delta) => delta.view.entries.some((entry) => entry.kind === STEER_RECORD_KIND)),
+        );
+        subscription.close();
+
+        assert.deepEqual(ownDataOf(deltas.at(-1)?.view.entries ?? [], STEER_RECORD_KIND), steerData);
+    });
+
+    it("shows report and steer entries in a fresh snapshot by their own data", async () => {
+        const { host, feed, agentModel } = await openFixture();
+        const conversationId = await host.createConversation({ agent: { model: agentModel } });
+        await placeReport(host, conversationId);
+        await placeSteer(host, conversationId);
+
+        const subscription = await feed.subscribeConversation(conversationId);
+        subscription.close();
+
+        assert.deepEqual(ownDataOf(subscription.snapshot.entries, REPORT_KIND), reportRecord);
+        assert.deepEqual(ownDataOf(subscription.snapshot.entries, STEER_RECORD_KIND), steerData);
+    });
+
+    it("shows every entry with the same kind and data as readEntries returns for it", async () => {
+        const { host, feed, agentModel } = await openFixture();
+        const conversationId = await host.createConversation({ agent: { model: agentModel } });
+        await sendAndSettle(host, conversationId, "hello");
+        await placeReport(host, conversationId);
+        await placeSteer(host, conversationId);
+
+        const subscription = await feed.subscribeConversation(conversationId);
+        subscription.close();
+        const { entries } = await host.readEntries(conversationId, { limit: 100 });
+
+        const kinds = subscription.snapshot.entries.map((entry) => entry.kind);
+        assert.ok(["pi.user", "pi.assistant", REPORT_KIND, STEER_RECORD_KIND].every((kind) => kinds.includes(kind)));
+        assert.deepEqual(
+            subscription.snapshot.entries.map(({ kind, data }) => ({ kind, data })),
+            entries.map(({ kind, data }) => ({ kind, data })),
+        );
     });
 });
