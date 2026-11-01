@@ -31,10 +31,12 @@ It needs a second computer on the same network as the machine that runs the daem
 
 1. Find the machine's LAN address, for example with `ip -4 addr` on Linux or `ipconfig getifaddr en0` on macOS, and
    choose a fixed port that nothing on the machine listens on (`ss -ltn` lists the ports in use on Linux).
-2. Write the `[network]` section into the development instance's `config.toml`, with that address and port:
+2. Write the `[network]` section into the development instance's `config.toml`, with that address and port. The
+   daemon refuses to start on a config directory that the group or others can access, so the command creates it with
+   umask `077`:
 
    ```
-   mkdir -p "$PWD/.tmp/dev-lan/config"
+   (umask 077 && mkdir -p "$PWD/.tmp/dev-lan/config")
    printf '[network]\naddress = "192.168.1.20"\nport = 8080\n' > "$PWD/.tmp/dev-lan/config/config.toml"
    ```
 
