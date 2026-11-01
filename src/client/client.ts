@@ -107,7 +107,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** The error a refused answer carries, `{"error": {"code", "message"}}`, as a `ClientError`. */
 export function answerError(body: unknown): Error {
     const error = isRecord(body) ? body.error : undefined;
-    return new ClientError(String(isRecord(error) && error.code), String(isRecord(error) && error.message));
+    if (isRecord(error) && typeof error.code === "string" && typeof error.message === "string") {
+        return new ClientError(error.code, error.message);
+    }
+    return new Error(`The daemon's answer is neither a result nor an error: ${JSON.stringify(body)?.slice(0, 200)}`);
 }
 
 /** The result of an answer `{"result": <result>}`; any other answer is thrown as its error. */
