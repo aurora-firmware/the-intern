@@ -10,7 +10,7 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { submitInput } from "../../src/host/conversation_control.ts";
 import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import { abortJobConversations, abortWithAwaited, createInvokedConversations } from "../../src/host/invocation.ts";
-import { startReportDelivery } from "../../src/host/reports.ts";
+import { REPORT_KIND, startReportDelivery } from "../../src/host/reports.ts";
 import {
     conversationMetaDoc,
     createSeatedConversation,
@@ -154,16 +154,17 @@ async function openFixture(): Promise<Fixture> {
             actor,
             ...(parked && { parked: { waitingFor: "reports" as const, continueOn: "each" as const } }),
         });
-    // Counts the user messages in a conversation: a delivered report is one of them.
-    const inputsOf = async (id: string) =>
-        (await host.readEntries(id, { limit: 1000 })).entries.filter((entry) =>
-            JSON.stringify(entry.data).includes('"role":"user"'),
-        ).length;
-    // The user messages of a conversation that contain the text: a delivered report is one of them.
+    // A user message, or a report entry: the transcript shows a report by its own data, not by its user message.
+    const isInput = (entry: { kind: string; data: unknown }) =>
+        entry.kind === REPORT_KIND || JSON.stringify(entry.data).includes('"role":"user"');
+    // Counts the inputs in a conversation: a delivered report is one of them.
+    const inputsOf = async (id: string) => (await host.readEntries(id, { limit: 1000 })).entries.filter(isInput).length;
+    // The inputs of a conversation that contain the text: a delivered report is one of them.
     const reportsTo = async (id: string, text: string) =>
         (await host.readEntries(id, { limit: 1000 })).entries
+            .filter(isInput)
             .map((entry) => JSON.stringify(entry.data))
-            .filter((data) => data.includes('"role":"user"') && data.includes(text));
+            .filter((data) => data.includes(text));
     const stopDelivery = () => {
         for (const delivery of deliveries.splice(0)) delivery.stop();
     };

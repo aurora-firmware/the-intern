@@ -47,36 +47,8 @@ export function conversationStatus(
     return info.isParked === true ? "parked" : "idle";
 }
 
-// Entries carry no wall-clock time of their own; the messages they contribute to the model do.
-function newestMessageTime(entries: HostEntry[]): number | null {
-    let newest: number | null = null;
-    for (const entry of entries) {
-        if (!Array.isArray(entry.data)) continue;
-        for (const message of entry.data as { timestamp?: unknown }[]) {
-            if (typeof message?.timestamp === "number" && (newest === null || message.timestamp > newest)) {
-                newest = message.timestamp;
-            }
-        }
-    }
-    return newest;
-}
-
-async function readAllEntries(host: HarnessHost, conversationId: string): Promise<HostEntry[]> {
-    const entries: HostEntry[] = [];
-    let after: string | undefined;
-    do {
-        const page = await host.readEntries(conversationId, {
-            limit: MAX_ENTRIES_LIMIT,
-            ...(after !== undefined && { after }),
-        });
-        entries.push(...page.entries);
-        after = page.next;
-    } while (after !== undefined);
-    return entries;
-}
-
 async function lastActivityOf(host: HarnessHost, conversationId: string): Promise<string | null> {
-    const newest = newestMessageTime(await readAllEntries(host, conversationId));
+    const newest = await host.readLastMessageTime(conversationId);
     return newest === null ? null : new Date(newest).toISOString();
 }
 
