@@ -40,6 +40,7 @@ export type ServiceContext = {
     status: StatusSources;
     dirs: InstanceDirs;
     logger: Logger;
+    catalogue: Catalogue;
 };
 
 export type DaemonComponent = {
@@ -147,6 +148,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         ],
         { context, phase: () => phase, logger },
     );
+    context.catalogue = catalogue;
 
     async function step<T>(number: number, name: string, action: () => Promise<T>): Promise<T> {
         logger.debug("startup step", { step: number, name });
