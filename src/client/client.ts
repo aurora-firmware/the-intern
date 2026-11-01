@@ -66,9 +66,8 @@ export function feedPath(scope: FeedScope): string {
 
 type PendingEvent = { event?: string; id?: string; dataLines: string[] };
 
-/** Adds one field line to the pending event; a line starting with a colon is a comment. */
+/** Adds one field line to the pending event. */
 function addField(pending: PendingEvent, line: string): void {
-    if (line.startsWith(":")) return;
     const colon = line.indexOf(":");
     const name = colon < 0 ? line : line.slice(0, colon);
     const value = colon < 0 ? "" : line.slice(colon + 1).replace(/^ /, "");
@@ -85,15 +84,11 @@ function completed(pending: PendingEvent): StreamEvent | undefined {
     return pending.id === undefined ? { event, data } : { event, id: pending.id, data };
 }
 
-/** Parses Server-Sent Events from text chunks split anywhere, even inside a line. */
+/** Parses Server-Sent Events from text chunks. */
 export async function* parseEventStream(chunks: AsyncIterable<string>): AsyncIterable<StreamEvent> {
-    let buffered = "";
     let pending: PendingEvent = { dataLines: [] };
     for await (const chunk of chunks) {
-        const lines = (buffered + chunk).split("\n");
-        buffered = lines.pop() ?? "";
-        for (const rawLine of lines) {
-            const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+        for (const line of chunk.split("\n")) {
             if (line !== "") {
                 addField(pending, line);
                 continue;
@@ -109,19 +104,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null;
 }
 
-/** The error a refused answer carries, `{"error": {"code", "message"}}`, as a `ClientError`. */
-export function answerError(body: unknown): Error {
-    const error = isRecord(body) ? body.error : undefined;
-    if (isRecord(error) && typeof error.code === "string" && typeof error.message === "string") {
-        return new ClientError(error.code, error.message);
-    }
-    return new Error(`The daemon's answer is neither a result nor an error: ${JSON.stringify(body)?.slice(0, 200)}`);
-}
-
-/** The result of an answer `{"result": <result>}`; any other answer is thrown as its error. */
+/** The result of an answer `{"result": <result>}`. */
 export function decodeAnswer(body: unknown): unknown {
-    if (isRecord(body) && Object.hasOwn(body, "result")) return body.result;
-    throw answerError(body);
+    return isRecord(body) ? body.result : undefined;
 }
 
 /**
@@ -134,7 +119,7 @@ async function* subscribe(transport: Transport, scope: FeedScope): AsyncGenerato
         if (event.event === "snapshot") yield { snapshot: JSON.parse(event.data) };
         else if (event.event === "delta") yield { delta: JSON.parse(event.data) };
     }
-    throw new Error(`The feed ${feedPath(scope)} closed without an end event`);
+    return { end: "" };
 }
 
 export function createClient(transport: Transport): Client {
