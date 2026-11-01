@@ -10,7 +10,7 @@ import { afterEach, describe, it } from "node:test";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { type AgentsComponent, createAgentsComponent } from "../../src/agents/agents_component.ts";
+import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { STOP_BOUND_MS } from "../../src/daemon/constants.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
@@ -53,6 +53,8 @@ const WAY_IN = /"(in-process|command line|web interface)"/g;
 const STREAM_OPERATION = "feed.subscribe";
 /** The test operations are not product operations; `test.failStorage` would break storage for the rest of the run. */
 const TEST_OPERATION_PREFIX = "test.";
+
+const JSON_HEADERS: OutgoingHttpHeaders = { "content-type": "application/json" };
 
 type Way = "in-process" | "local socket" | "network listener";
 const WAYS: readonly Way[] = ["in-process", "local socket", "network listener"];
@@ -127,11 +129,9 @@ type Fixture = {
     env: HermeticEnv;
     daemon: RunningDaemon;
     ctx: ServiceContext;
-    agents: AgentsComponent;
-    storageSwitch: StorageSwitch;
     targetOf(way: Exclude<Way, "in-process">): HttpTarget;
     invoke(name: string, input: unknown): Promise<unknown>;
-    call(way: Way, name: string, input: unknown, headers?: OutgoingHttpHeaders): Promise<Outcome>;
+    call(way: Way, name: string, input: unknown): Promise<Outcome>;
     folder(name: string): Promise<string>;
     settledConversation(jobId: string): Promise<string>;
     runningConversation(jobId: string): Promise<string>;
@@ -212,16 +212,10 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
         }
     }
 
-    async function call(way: Way, name: string, input: unknown, headers: OutgoingHttpHeaders = {}) {
+    async function call(way: Way, name: string, input: unknown): Promise<Outcome> {
         if (way === "in-process") return callInProcess(name, input);
-        const allHeaders = { "content-type": "application/json", ...headers };
-        const { status, body } = await send(
-            targetOf(way),
-            "POST",
-            `/operations/${name}`,
-            allHeaders,
-            JSON.stringify(input),
-        );
+        const path = `/operations/${name}`;
+        const { status, body } = await send(targetOf(way), "POST", path, JSON_HEADERS, JSON.stringify(input));
         return { status, body };
     }
 
@@ -281,8 +275,6 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
         env,
         daemon,
         ctx,
-        agents,
-        storageSwitch,
         targetOf,
         invoke,
         call,
@@ -329,10 +321,7 @@ const INPUT_BUILDERS: Record<string, InputBuilder> = {
     "conversations.seat": async (fixture, _seed, way) => ({
         input: { conversationId: await fixture.settledConversation(`seat-${label(way)}`), role: "gp" },
     }),
-    "jobs.startLead": async (_f, _seed, way) => ({
-        input: { jobId: `job-${label(way)}`, firstInput: "start" },
-        names: [`job-${label(way)}`],
-    }),
+    "jobs.startLead": async (_f, _seed, way) => ({ input: { jobId: `job-${label(way)}`, firstInput: "start" } }),
     "submissions.withdraw": async (fixture, _seed, way) => {
         const conversationId = await fixture.runningConversation(`withdraw-${label(way)}`);
         const queued = { conversationId, content: "queued", requestId: "queued" };
@@ -519,7 +508,6 @@ const FOREIGN_HEADERS: OutgoingHttpHeaders = {
     host: "attacker.example:9999",
     referer: "https://elsewhere.example/page",
 };
-const JSON_HEADERS: OutgoingHttpHeaders = { "content-type": "application/json" };
 const LISTENERS = ["local socket", "network listener"] as const;
 
 function corsHeaderNames(headers: IncomingHttpHeaders): string[] {
