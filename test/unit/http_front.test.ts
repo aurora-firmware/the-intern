@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import type { Logger } from "../../src/daemon/logger.ts";
-import { createHttpFront, type Fallback, type WayIn } from "../../src/listeners/http_front.ts";
+import { createHttpFront, type Fallback, MAX_BODY_BYTES, type WayIn } from "../../src/listeners/http_front.ts";
 import { type AnyOperation, type Caller, createCatalogue, defineOperation } from "../../src/service/operations.ts";
 
 const SILENT_LOGGER: Logger = { error: () => {}, info: () => {}, debug: () => {} };
@@ -15,7 +15,13 @@ type TestContext = { calls: { name: string; input: unknown; caller: Caller }[] }
 
 type Reply = { status: number; headers: IncomingHttpHeaders; body: unknown };
 
-type CallOptions = { method?: string; headers?: Record<string, string | number>; body?: string | Buffer };
+type CallOptions = {
+    method?: string;
+    headers?: Record<string, string | number>;
+    body?: string | Buffer;
+    /** Sends the body without ending the request, as a client still uploading. */
+    isBodyIncomplete?: boolean;
+};
 
 function recordingOperation(name: string, run: (input: unknown) => Promise<unknown>): AnyOperation<TestContext> {
     return defineOperation<TestContext, unknown, unknown>({
@@ -65,7 +71,8 @@ async function startFront(
                 },
             );
             req.on("error", reject);
-            req.end(callOptions.body);
+            if (callOptions.isBodyIncomplete) req.write(callOptions.body ?? "");
+            else req.end(callOptions.body);
         });
     }
 
@@ -104,5 +111,87 @@ describe("http front: operation calls", () => {
         });
 
         assert.deepEqual(harness.context.calls[0]?.caller, { actor: { kind: "team_member", wayIn: "web interface" } });
+    });
+});
+
+function assertError(reply: Reply, status: number, code: string): string {
+    assert.equal(reply.status, status);
+    const error = (reply.body as { error: { code: string; message: string } }).error;
+    assert.equal(error.code, code);
+    assert.equal(typeof error.message, "string");
+    return error.message;
+}
+
+/** A JSON string literal whose encoding is exactly `bytes` long. */
+function jsonStringOfBytes(bytes: number): string {
+    return `"${"a".repeat(bytes - 2)}"`;
+}
+
+describe("http front: request validation", () => {
+    let harness: Harness;
+    beforeEach(async () => {
+        harness = await startFront([echo]);
+    });
+    afterEach(() => harness.close());
+
+    const refusedRequests: { label: string; options: CallOptions }[] = [
+        { label: "a text/plain body", options: { headers: { "content-type": "text/plain" }, body: '{"a":1}' } },
+        {
+            label: "a form body",
+            options: { headers: { "content-type": "application/x-www-form-urlencoded" }, body: "a=1" },
+        },
+        { label: "an empty body with no content type", options: {} },
+        { label: "a JSON body with no content type", options: { body: '{"a":1}' } },
+        { label: "malformed JSON", options: { headers: JSON_TYPE, body: '{"a":' } },
+        {
+            label: "a body of 10 MiB plus one byte",
+            options: { headers: JSON_TYPE, body: jsonStringOfBytes(MAX_BODY_BYTES + 1) },
+        },
+        {
+            label: "a chunked body of 10 MiB plus one byte",
+            options: {
+                headers: { ...JSON_TYPE, "transfer-encoding": "chunked" },
+                body: jsonStringOfBytes(MAX_BODY_BYTES + 1),
+            },
+        },
+    ];
+
+    for (const { label, options } of refusedRequests) {
+        it(`refuses ${label} with 400 invalid_input without calling the operation`, async () => {
+            const reply = await harness.call("/operations/test.echo", options);
+
+            assertError(reply, 400, "invalid_input");
+            assert.deepEqual(harness.context.calls, []);
+        });
+    }
+
+    it("refuses a body declared larger than 10 MiB before the rest of it is sent", async () => {
+        const reply = await harness.call("/operations/test.echo", {
+            headers: { ...JSON_TYPE, "content-length": MAX_BODY_BYTES + 1 },
+            body: '"a',
+            isBodyIncomplete: true,
+        });
+
+        assertError(reply, 400, "invalid_input");
+        assert.deepEqual(harness.context.calls, []);
+    });
+
+    it("accepts a JSON body of exactly 10 MiB", async () => {
+        const body = jsonStringOfBytes(MAX_BODY_BYTES);
+
+        const reply = await harness.call("/operations/test.echo", { headers: JSON_TYPE, body });
+
+        assert.equal(reply.status, 200);
+        assert.equal(harness.context.calls[0]?.input, JSON.parse(body));
+    });
+
+    it("calls the operation with no input for an empty body declared application/json with a charset", async () => {
+        const reply = await harness.call("/operations/test.echo", {
+            headers: { "content-type": "application/json; charset=utf-8" },
+        });
+
+        assert.equal(reply.status, 200);
+        assert.equal(harness.context.calls.length, 1);
+        assert.equal(harness.context.calls[0]?.input, undefined);
     });
 });
