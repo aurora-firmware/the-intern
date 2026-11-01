@@ -151,7 +151,15 @@ describe("kill -9 while a conversation is parked", () => {
             !workerThreads.waiting.some((waiter) => waiter.conversationId === leadId),
             "the parked lead does not wait for a worker thread",
         );
-        assert.ok(workerThreads.inUse <= 2, "only the invoked agents hold worker threads");
+        const invokedListings = await Promise.all(
+            (await invokedOf(second, leadId)).map((conversationId) => listingOf(second, conversationId)),
+        );
+        const runningInvoked = invokedListings.filter((listing) => listing.status === "running").length;
+        assert.equal(
+            workerThreads.inUse,
+            runningInvoked,
+            "every worker thread in use belongs to a running invoked agent",
+        );
         await assertEachReportReachedLeadOnce(second, leadId);
     });
 });
