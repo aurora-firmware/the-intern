@@ -31,6 +31,7 @@ const IN_PROCESS: Caller = { actor: { kind: "team_member" } };
 const quietLogger = createLogger({ stream: { write: () => true } });
 const LISTENERS = ["local socket", "network listener"] as const;
 const UNKNOWN_CONVERSATION = { conversationId: "999" };
+const UNKNOWN_CONVERSATION_FEED = { scope: "conversation", conversationId: "999" } as const;
 const INSTANCE_FEED = { scope: "instance" } as const;
 const WATCHED_ROLE = { name: "watched", instructions: "Watch.", tools: ["read"], skills: [] };
 
@@ -146,6 +147,23 @@ describe("calls through the client over each listener", { timeout: TEST_TIMEOUT_
             );
 
             assert.ok(error instanceof ClientError, `the call fails with ClientError, not ${error}`);
+            assert.equal(inProcess.code, "not_found");
+            assert.deepEqual(
+                { code: error.code, message: error.message },
+                { code: inProcess.code, message: inProcess.message },
+            );
+        });
+
+        it(`fails a refused subscription over the ${listener} with the in-process code and message`, async () => {
+            const fixture = await startFixture();
+            const inProcess = (await rejection(fixture.invoke("feed.subscribe", UNKNOWN_CONVERSATION_FEED))) as Error & {
+                code: string;
+            };
+
+            const feed = fixture.clientOver(listener).subscribe(UNKNOWN_CONVERSATION_FEED);
+            const error = await rejection(feed.next());
+
+            assert.ok(error instanceof ClientError, `the subscription fails with ClientError, not ${error}`);
             assert.equal(inProcess.code, "not_found");
             assert.deepEqual(
                 { code: error.code, message: error.message },
