@@ -5,8 +5,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import type { Logger } from "../../src/daemon/logger.ts";
-import { createHttpFront, type Fallback, MAX_BODY_BYTES, type WayIn } from "../../src/listeners/http_front.ts";
-import { type AnyOperation, type Caller, createCatalogue, defineOperation } from "../../src/service/operations.ts";
+import {
+    createHttpFront,
+    type Fallback,
+    MAX_BODY_BYTES,
+    STATUS_BY_CODE,
+    type WayIn,
+} from "../../src/listeners/http_front.ts";
+import {
+    type AnyOperation,
+    type Caller,
+    type Catalogue,
+    createCatalogue,
+    defineOperation,
+    ServiceError,
+    type ServiceErrorCode,
+} from "../../src/service/operations.ts";
 
 const SILENT_LOGGER: Logger = { error: () => {}, info: () => {}, debug: () => {} };
 const JSON_TYPE = { "content-type": "application/json" };
@@ -44,10 +58,11 @@ type Harness = {
 
 async function startFront(
     operations: AnyOperation<TestContext>[],
-    options: { wayIn?: WayIn; fallback?: Fallback } = {},
+    options: { wayIn?: WayIn; fallback?: Fallback; catalogue?: Catalogue } = {},
 ): Promise<Harness> {
     const context: TestContext = { calls: [] };
-    const catalogue = createCatalogue(operations, { context, phase: () => "ready", logger: SILENT_LOGGER });
+    const catalogue =
+        options.catalogue ?? createCatalogue(operations, { context, phase: () => "ready", logger: SILENT_LOGGER });
     const front = createHttpFront({ catalogue, wayIn: options.wayIn ?? "command line", fallback: options.fallback });
     const abort = new AbortController();
     const server: Server = createServer((req, res) => {
@@ -193,5 +208,54 @@ describe("http front: request validation", () => {
         assert.equal(reply.status, 200);
         assert.equal(harness.context.calls.length, 1);
         assert.equal(harness.context.calls[0]?.input, undefined);
+    });
+});
+
+describe("http front: error outcomes", () => {
+    const expectedStatuses: [ServiceErrorCode, number][] = [
+        ["invalid_input", 400],
+        ["not_found", 404],
+        ["busy", 409],
+        ["conflict", 409],
+        ["unavailable", 503],
+        ["internal", 500],
+    ];
+
+    it("maps every service error code to its HTTP status", () => {
+        assert.deepEqual(Object.entries(STATUS_BY_CODE).sort(), [...expectedStatuses].sort());
+    });
+
+    for (const [code, status] of expectedStatuses) {
+        it(`answers ${status} with the code ${code} and the message unchanged`, async () => {
+            const message = `the operation failed with ${code}: "quoted" détails`;
+            const failing = recordingOperation("test.fail", async () => {
+                throw new ServiceError(code, message);
+            });
+            const harness = await startFront([failing]);
+            try {
+                const reply = await harness.call("/operations/test.fail", { headers: JSON_TYPE });
+
+                assert.equal(assertError(reply, status, code), message);
+            } finally {
+                await harness.close();
+            }
+        });
+    }
+
+    it("answers 500 internal when the catalogue fails with something other than a service error", async () => {
+        const brokenCatalogue: Catalogue = {
+            list: () => [],
+            invoke: async () => {
+                throw new Error("catalogue broke");
+            },
+        };
+        const harness = await startFront([], { catalogue: brokenCatalogue });
+        try {
+            const reply = await harness.call("/operations/test.any", { headers: JSON_TYPE });
+
+            assertError(reply, 500, "internal");
+        } finally {
+            await harness.close();
+        }
     });
 });

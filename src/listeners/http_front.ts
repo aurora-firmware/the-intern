@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { type Caller, type Catalogue, ServiceError } from "../service/operations.ts";
+import { type Caller, type Catalogue, ServiceError, type ServiceErrorCode } from "../service/operations.ts";
 
 export type WayIn = "command line" | "web interface";
 
@@ -16,6 +16,15 @@ export type HttpFrontOptions = { catalogue: Catalogue; wayIn: WayIn; fallback?: 
 
 export const MAX_BODY_BYTES = 10 * 1024 * 1024;
 
+export const STATUS_BY_CODE: Record<ServiceErrorCode, number> = {
+    invalid_input: 400,
+    not_found: 404,
+    busy: 409,
+    conflict: 409,
+    unavailable: 503,
+    internal: 500,
+};
+
 const OPERATION_ROUTE = /^\/operations\/([^/]+)$/;
 const JSON_MEDIA_TYPE = "application/json";
 
@@ -29,7 +38,12 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 }
 
 function sendError(res: ServerResponse, error: ServiceError): void {
-    sendJson(res, 400, { error: { code: error.code, message: error.message } });
+    sendJson(res, STATUS_BY_CODE[error.code], { error: { code: error.code, message: error.message } });
+}
+
+function asServiceError(error: unknown, operationName: string): ServiceError {
+    if (error instanceof ServiceError) return error;
+    return new ServiceError("internal", `Operation ${operationName} failed unexpectedly`);
 }
 
 function isJsonMediaType(contentType: string | undefined): boolean {
@@ -114,10 +128,9 @@ export function createHttpFront(options: HttpFrontOptions): HttpFront {
                 const result = await options.catalogue.invoke(name, input, caller);
                 sendJson(res, 200, { result });
             } catch (error) {
-                if (!(error instanceof ServiceError)) throw error;
                 // A refusal that leaves the body unread can't keep the connection for another request.
                 if (!req.complete) res.shouldKeepAlive = false;
-                sendError(res, error);
+                sendError(res, asServiceError(error, name));
             }
         },
     };
