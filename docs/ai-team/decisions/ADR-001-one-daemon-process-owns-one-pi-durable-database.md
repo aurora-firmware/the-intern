@@ -48,10 +48,20 @@ three (spec-truth reconciliation of S-001, finding F6):
   created, written in the commit that creates or forks it, so a repeated invocation creates nothing twice (T-071).
   `intern.idempotency` does the same for service operations that create a conversation (S-002 R-13, T-034).
 
-Sources: S-002 Design Principles, R-1, R-7, R-8, R-9, R-10 and Exclusions; S-001 Definitions (worker thread), R-8a,
-R-10, R-10a and R-17; `docs/research/pi-durable-knowledge.md` (sections 1.4, 5.5 and 7.2);
-`docs/development/coding_guidelines.md` (Module structure); `src/host/invocation.ts`, `src/host/reports.ts` and
-`src/host/steering.ts`.
+The same document also holds the conversation's parked state (`parked`, T-071), which report delivery and held
+messages read to decide whether the conversation continues.
+
+S-001 v0.3 adds one more need (R-8, R-8a, product owner decision F3 of 2026-11-01). An invoked conversation aborted on
+its own, not by a cascade from its invoker or by a job abort, sends its invoker an "aborted" report with its last
+answer. When it was idle or parked, no run ends, so the live event that starts report delivery never comes. A crash
+between the abort and the delivery must not lose the report (R-17). pi-durable records the abort, but not that it was
+a lone one with a report owed (T-085). An abort also withdraws the aborted conversation's held messages and awaiting
+links, as pi-durable abort withdraws queued input (R-8, T-084).
+
+Sources: S-002 Design Principles, R-1, R-7, R-8, R-9, R-10 and Exclusions; S-001 Definitions (worker thread), R-8,
+R-8a, R-10, R-10a and R-17; `docs/research/pi-durable-knowledge.md` (sections 1.4, 5.5 and 7.2);
+`docs/development/coding_guidelines.md` (Module structure); `src/host/invocation.ts`, `src/host/reports.ts`,
+`src/host/steering.ts` and `src/host/host_observation.ts` (`watchConversationMeta`); T-084 and T-085.
 
 ## Decision
 
@@ -81,17 +91,35 @@ behind a narrow host module, and durability comes from pi-durable, not from code
    task until `Harness.retryTask()`, needs an S-002 amendment first.
 
    **Bounded exception: the-intern's own facts, and redelivery from them.**
-   - Facts the-intern owns about a conversation live in its own pi-durable documents: held messages (`held`) and
-     awaiting links (`awaiting`) in the conversation's `intern.conversation` document, and creation keys in
-     `intern.invocations` and `intern.idempotency`. Each is written in the commit that changes it, together with the
-     change it describes.
+   - Facts the-intern owns about a conversation live in its own pi-durable documents: held messages (`held`),
+     awaiting links (`awaiting`), the parked state (`parked`) and the abort mark (`aborted`) in the conversation's
+     `intern.conversation` document, and creation keys in `intern.invocations` and `intern.idempotency`. Each is
+     written in the commit that changes it, together with the change it describes.
+   - The abort mark records that a conversation's invoker is owed an "aborted" report (S-001 R-8a). It is set only
+     on the conversation an abort names, never on one a cascade or a job abort reaches, and only when the
+     conversation was invoked and its invoker still awaits it. It is set in the abort's own commit: the one
+     commit that, before pi-durable's abort, sets `parked` to `null` and empties `awaiting` and `held` (S-001 R-8).
+     A document written without the field reads as not marked. The mark is spent once the invoker's `awaiting` no
+     longer lists the conversation; it has no effect after that.
    - The only recovery the daemon does is redelivery worked out from those facts. The daemon submits the input the
-     facts show as undelivered: a conversation's held messages when it continues, and, at start, the report of each
-     awaited conversation whose run has finished. A creation key turns a repeated invocation or create operation into
-     the conversation it already created.
+     facts show as undelivered: a conversation's held messages when it continues; the report of each awaited
+     conversation whose run has finished, at start and when its run ends; and the "aborted" report of each awaited
+     conversation that carries the abort mark, at start, when its run ends, and when the commit that sets the mark is
+     published. That last trigger delivers the report of an idle or parked conversation, which has no run to end.
+     Report delivery hears those commits through `watchConversationMeta` and handles them in its one serial queue,
+     like the end of a run; the abort itself never calls delivery. A creation key turns a repeated invocation or create
+     operation into the conversation it already created.
    - Every redelivered input carries a request id fixed by the fact: the held message's own request id, or
-     `report:<invokedId>:<entryId>` for a report. pi-durable's exactly-once admission makes a repeat harmless. A fact
-     is cleared only after its input is admitted, so a crash in between repeats the submission and loses nothing.
+     `report:<invokedId>:<entryId>` for a report, where the entry holds the invoked conversation's last answer. An
+     "aborted" report uses the same id as the report of that last answer, or `report:<invokedId>:aborted` when the
+     conversation has no last answer. A report admitted just before a lone abort, with a crash before `awaiting` was
+     cleared, is therefore not delivered a second time as an "aborted" report. pi-durable's exactly-once admission
+     makes a repeat harmless.
+   - A fact is cleared only after its input is admitted, so a crash in between repeats the submission and loses
+     nothing. The one other way a fact is cleared is an abort: its commit withdraws the conversation's held messages
+     and awaiting links, as pi-durable abort withdraws queued input (S-001 R-8). A crash after that commit and before
+     pi-durable's abort leaves the abort undone: the operation that asked for it fails, and repeating it is safe. The
+     daemon doesn't finish the abort on its own.
    - Nothing else is allowed: no retry of a failed call, no timer that tries again, no list that holds input for a
      conversation that can take it, and no repair of state pi-durable owns. A new kind of fact or a new redelivery
      path amends this decision first.
@@ -129,6 +157,9 @@ behind a narrow host module, and durability comes from pi-durable, not from code
   the daemon in a restart loop, stopping every job, until someone stops the service or removes the cause.
 - Redelivery from the-intern's own facts is code of our own that a crash exercises: report delivery at start and the
   delivery of held messages need kill tests (S-001 R-17), and each new kind of fact needs this record amended.
+- An abort that a crash cuts off after its commit and before pi-durable's abort leaves the abort mark set on a
+  conversation that wasn't aborted. If no one repeats the abort, a running conversation resumes, and when its run ends
+  its invoker gets an "aborted" report with that run's last answer.
 
 ### Neutral
 
@@ -189,3 +220,4 @@ between the run's end and the report's submission would lose the report, which S
 |---|---|---|
 | 2026-10-30 | Clarified for pi 1.4.0: storage errors from `commit()` and `mintId()` (Context, decision 5); the crash-loop guard is turned off with `settings.restartLimit: Infinity` (Context, decision 4, Negative); the one-way SQLite schema migration (Context, Neutral); `onReport` reports are logged diagnostics (decision 5). Fixed the coding-guidelines path in Sources. No decision changes. | Architecture consistency review of ADR-001 against the pinned pi 1.4.0 packages, S-000, S-001, S-002 and ADR-002. |
 | 2026-11-01 | Added a bounded exception to decision 4: the-intern's own facts about a conversation (`held`, `awaiting`, the creation keys in `intern.invocations` and `intern.idempotency`) live in its own documents, written in the commit that changes them, and the only recovery is redelivery worked out from them, made safe to repeat by pi-durable request ids (Context, Sources, decision 4, Positive, Negative, Alternative F). | Spec-truth reconciliation of S-001, finding F6: T-071, T-073 and T-075 built these facts and this redelivery, and the work is right. |
+| 2026-11-01 | Decision 4: named the parked state (`parked`) among the-intern's facts; added the abort mark (`aborted`), set in the abort's own commit on a lone abort of an awaited invoked conversation, and the redelivery of the "aborted" report it drives, started also by the commit that sets the mark; an "aborted" report reuses the last answer's report id, or `report:<invokedId>:aborted`; an abort's commit clears held messages and awaiting links without admitting them (Context, Sources, decision 4, Negative). | S-001 v0.3 R-8 and R-8a and product owner decision F3: a lone abort reports "aborted" to the invoker, a cascade reports nothing, and an abort withdraws held messages. Needed by T-084 and T-085. |
