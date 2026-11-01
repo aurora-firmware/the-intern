@@ -252,3 +252,36 @@ describe("feed stream: the client leaves", () => {
         assert.deepEqual(await harness.feed.subscription.next(), { closed: "unsubscribed" });
     });
 });
+
+const LARGE_TEXT = "x".repeat(64 * 1024);
+
+describe("feed stream: a client that doesn't read", () => {
+    let harness: Harness;
+    beforeEach(async () => {
+        harness = await startFront({ maxPending: 10 });
+    });
+    afterEach(() => harness.close());
+
+    it("pulls no further delta until the response drains, so the subscription closes lagging", async () => {
+        const res = await harness.open("/feed?scope=instance");
+        const events = eventReader(res);
+        await events.next();
+        res.pause();
+
+        // 300 deltas of 64 KiB are far more than the socket buffers hold; a yield lets the stream pull between them.
+        for (let seq = 1; seq <= 300; seq++) {
+            harness.feed.push({ seq, text: LARGE_TEXT });
+            await new Promise((resolve) => setImmediate(resolve));
+        }
+        res.resume();
+        const rest = await events.rest();
+
+        const deltaIds = rest.filter((event) => event.event === "delta").map((event) => Number(event.id));
+        assert.ok(deltaIds.length < 300 - 10, `the stream wrote ${deltaIds.length} deltas`);
+        assert.deepEqual(
+            deltaIds,
+            deltaIds.map((_, index) => index + 1),
+        );
+        assert.deepEqual(rest.at(-1), { event: "end", data: '{"reason":"lagging"}' });
+    });
+});
