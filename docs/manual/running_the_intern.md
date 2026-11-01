@@ -106,7 +106,7 @@ On the machine, the command line reaches the service through the local socket `b
 needs no setting.
 
 Other computers reach The Intern through the network listener, which serves the web interface. The network listener is
-off until you add a `[network]` section to `config.toml`. To open it to the computers on your LAN, add:
+off until you add a `[network]` section to `config.toml`. To open it to the computers on your local network (LAN), add:
 
 ```toml
 [network]
