@@ -60,6 +60,55 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null;
 }
 
+export function feedPath(scope: FeedScope): string {
+    const query =
+        scope.scope === "instance"
+            ? new URLSearchParams({ scope: "instance" })
+            : new URLSearchParams({ scope: "conversation", id: scope.conversationId });
+    return `/feed?${query}`;
+}
+
+type PendingEvent = { event?: string; id?: string; dataLines: string[] };
+
+/** Adds one field line to the pending event; a line starting with a colon is a comment. */
+function addField(pending: PendingEvent, line: string): void {
+    if (line.startsWith(":")) return;
+    const colon = line.indexOf(":");
+    const name = colon < 0 ? line : line.slice(0, colon);
+    const value = colon < 0 ? "" : line.slice(colon + 1).replace(/^ /, "");
+    if (name === "event") pending.event = value;
+    else if (name === "id") pending.id = value;
+    else if (name === "data") pending.dataLines.push(value);
+}
+
+/** The event a blank line completes; an event with no data is not dispatched, as in the Server-Sent Events format. */
+function completed(pending: PendingEvent): StreamEvent | undefined {
+    if (pending.dataLines.length === 0) return undefined;
+    const data = pending.dataLines.join("\n");
+    const event = pending.event ?? "message";
+    return pending.id === undefined ? { event, data } : { event, id: pending.id, data };
+}
+
+/** Parses Server-Sent Events from text chunks split anywhere, even inside a line. */
+export async function* parseEventStream(chunks: AsyncIterable<string>): AsyncIterable<StreamEvent> {
+    let buffered = "";
+    let pending: PendingEvent = { dataLines: [] };
+    for await (const chunk of chunks) {
+        const lines = (buffered + chunk).split("\n");
+        buffered = lines.pop() ?? "";
+        for (const rawLine of lines) {
+            const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+            if (line !== "") {
+                addField(pending, line);
+                continue;
+            }
+            const event = completed(pending);
+            pending = { dataLines: [] };
+            if (event) yield event;
+        }
+    }
+}
+
 /** The error a refused answer carries, `{"error": {"code", "message"}}`, as a `ClientError`. */
 export function answerError(body: unknown): Error {
     const error = isRecord(body) ? body.error : undefined;
@@ -75,11 +124,22 @@ export function decodeAnswer(body: unknown): unknown {
     throw answerError(body);
 }
 
+/**
+ * Yields the snapshot, then the deltas, and returns the reason of the `end` event. It opens one stream only: a stream
+ * that ends or breaks is never reopened, so a reader never misses deltas without knowing (S-003 REQ-009).
+ */
+async function* subscribe(transport: Transport, scope: FeedScope): AsyncGenerator<FeedItem, { end: string }> {
+    for await (const event of transport.stream(feedPath(scope))) {
+        if (event.event === "end") return { end: (JSON.parse(event.data) as { reason: string }).reason };
+        if (event.event === "snapshot") yield { snapshot: JSON.parse(event.data) };
+        else if (event.event === "delta") yield { delta: JSON.parse(event.data) };
+    }
+    throw new Error(`The feed ${feedPath(scope)} closed without an end event`);
+}
+
 export function createClient(transport: Transport): Client {
     return {
         invoke: async (name, input) => decodeAnswer(await transport.call(name, input)),
-        subscribe: () => {
-            throw new Error("Feed subscriptions are not available yet");
-        },
+        subscribe: (scope) => subscribe(transport, scope),
     };
 }

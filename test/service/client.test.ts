@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, describe, it, mock } from "node:test";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
@@ -19,7 +19,7 @@ import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts"
 import { createNetworkListenerComponent } from "../../src/listeners/network_listener.ts";
 import { networkSection } from "../../src/listeners/network_section.ts";
 import { localSocketPath } from "../../src/listeners/socket_path.ts";
-import type { Caller } from "../../src/service/operations.ts";
+import type { Caller, Catalogue } from "../../src/service/operations.ts";
 import { createFakeModel, type FakeTranscript } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -31,6 +31,8 @@ const IN_PROCESS: Caller = { actor: { kind: "team_member" } };
 const quietLogger = createLogger({ stream: { write: () => true } });
 const LISTENERS = ["local socket", "network listener"] as const;
 const UNKNOWN_CONVERSATION = { conversationId: "999" };
+const INSTANCE_FEED = { scope: "instance" } as const;
+const WATCHED_ROLE = { name: "watched", instructions: "Watch.", tools: ["read"], skills: [] };
 
 type Listener = (typeof LISTENERS)[number];
 
@@ -39,6 +41,7 @@ const daemons: RunningDaemon[] = [];
 const fakes: { unregister(): void }[] = [];
 
 afterEach(async () => {
+    mock.restoreAll();
     for (const daemon of daemons.splice(0)) await Promise.race([daemon.stop(), sleep(STOP_BOUND_MS)]);
     for (const fake of fakes.splice(0)) fake.unregister();
     for (const env of envs.splice(0)) await env.dispose();
@@ -148,6 +151,65 @@ describe("calls through the client over each listener", { timeout: TEST_TIMEOUT_
                 { code: error.code, message: error.message },
                 { code: inProcess.code, message: inProcess.message },
             );
+        });
+    }
+});
+
+type InstanceDelta = { seq: number; type: string };
+
+/** Counts the feed subscriptions the listeners open, from the moment it is called. */
+function countSubscriptions(catalogue: Catalogue): { count: number } {
+    const counted = { count: 0 };
+    const invoke = catalogue.invoke.bind(catalogue);
+    mock.method(catalogue, "invoke", (name: string, input: unknown, caller: Caller) => {
+        if (name === "feed.subscribe") counted.count += 1;
+        return invoke(name, input, caller);
+    });
+    return counted;
+}
+
+/** Reads the subscription to its end, after the daemon has been told to stop. */
+async function readUntilEnd(feed: AsyncGenerator<unknown, { end: string }>) {
+    const items: unknown[] = [];
+    for (;;) {
+        const read = await feed.next();
+        if (read.done) return { items, end: read.value };
+        items.push(read.value);
+    }
+}
+
+describe("a subscription through the client over each listener", { timeout: TEST_TIMEOUT_MS }, () => {
+    for (const listener of LISTENERS) {
+        it(`yields the snapshot, then the deltas in order, and ends stopped over the ${listener}`, async () => {
+            const fixture = await startFixture();
+            const inProcess = (await fixture.invoke("feed.subscribe", INSTANCE_FEED)) as {
+                snapshot: unknown;
+                close(): void;
+            };
+            inProcess.close();
+            const subscriptions = countSubscriptions(fixture.daemon.catalogue);
+            const feed = fixture.clientOver(listener).subscribe(INSTANCE_FEED);
+
+            const first = await feed.next();
+            await fixture.invoke("roles.create", WATCHED_ROLE);
+            const deltas: InstanceDelta[] = [];
+            while (deltas.at(-1)?.type !== "settings_changed") {
+                const read = await feed.next();
+                assert.ok(!read.done && "delta" in read.value, `a delta follows, not ${JSON.stringify(read)}`);
+                deltas.push(read.value.delta as InstanceDelta);
+            }
+            const [rest] = await Promise.all([readUntilEnd(feed), fixture.daemon.stop()]);
+            const afterEnd = await feed.next();
+
+            assert.deepEqual(first, { done: false, value: { snapshot: inProcess.snapshot } });
+            assert.deepEqual(
+                deltas.map((delta) => delta.seq),
+                deltas.map((_, index) => index + 1),
+            );
+            assert.ok(rest.items.every((item) => typeof item === "object" && item !== null && "delta" in item));
+            assert.deepEqual(rest.end, { end: "stopped" });
+            assert.deepEqual(afterEnd, { done: true, value: undefined }, "the ended subscription stays ended");
+            assert.equal(subscriptions.count, 1, "the client opened one subscription and no other");
         });
     }
 });

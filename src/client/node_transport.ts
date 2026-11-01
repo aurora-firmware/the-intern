@@ -5,7 +5,16 @@
 import { type ClientRequest, type IncomingMessage, type RequestOptions, request } from "node:http";
 import { resolveInstanceDirs } from "../daemon/state_layout.ts";
 import { localSocketPath } from "../listeners/socket_path.ts";
-import { encodeInput, JSON_CONTENT_TYPE, operationPath, type Transport, UnreachableError } from "./client.ts";
+import {
+    answerError,
+    encodeInput,
+    JSON_CONTENT_TYPE,
+    operationPath,
+    parseEventStream,
+    type StreamEvent,
+    type Transport,
+    UnreachableError,
+} from "./client.ts";
 
 export type NodeTarget = { socketPath: string } | { baseUrl: string };
 
@@ -37,17 +46,21 @@ function responseOf(req: ClientRequest, body: string, target: string): Promise<I
     });
 }
 
-/** Reads the whole response body; a connection that closes before the body is complete rejects as unreachable. */
 async function readText(response: IncomingMessage, target: string): Promise<string> {
-    response.setEncoding("utf8");
     let text = "";
+    for await (const chunk of chunksOf(response, target)) text += chunk;
+    return text;
+}
+
+/** The response's text chunks; a connection that closes before the response is complete throws as unreachable. */
+async function* chunksOf(response: IncomingMessage, target: string): AsyncIterable<string> {
+    response.setEncoding("utf8");
     try {
-        for await (const chunk of response) text += chunk;
+        for await (const chunk of response) yield chunk as string;
     } catch (error) {
         throw new UnreachableError(target, error instanceof Error ? error.message : String(error));
     }
     if (!response.complete) throw new UnreachableError(target, "the connection closed before the answer was complete");
-    return text;
 }
 
 function parseAnswer(text: string, status: number | undefined, target: string): unknown {
@@ -55,6 +68,20 @@ function parseAnswer(text: string, status: number | undefined, target: string): 
         return JSON.parse(text);
     } catch {
         throw new Error(`The answer from ${target} is not JSON (status ${status}): ${text.slice(0, 200)}`);
+    }
+}
+
+/** Opens the feed route and yields its events; the request is closed when the reader stops or the stream ends. */
+async function* streamEvents(target: NodeTarget, described: string, path: string): AsyncIterable<StreamEvent> {
+    const req = openRequest(target, { method: "GET", path });
+    try {
+        const response = await responseOf(req, "", described);
+        if (response.statusCode !== 200) {
+            throw answerError(parseAnswer(await readText(response, described), response.statusCode, described));
+        }
+        yield* parseEventStream(chunksOf(response, described));
+    } finally {
+        req.destroy();
     }
 }
 
@@ -72,8 +99,6 @@ export function nodeTransport(target: NodeTarget): Transport {
                 req.destroy();
             }
         },
-        stream: () => {
-            throw new Error("Feed streams are not available yet");
-        },
+        stream: (path) => streamEvents(target, described, path),
     };
 }
