@@ -1,6 +1,6 @@
 ---
 title: Agent roles and conversations
-version: '0.4'
+version: '0.5'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-15'
 author: planner
@@ -11,26 +11,12 @@ id: S-001
 
 ## Purpose
 
-This spec covers the **Agents and roles** component of S-000. The-intern is a single daemon that runs every
-conversation in one pi-durable database. All of its work is organised as jobs (S-000), and the work on a job is done
-by agents working in conversations. Before any way in, schedule or client can be built, we need to define what a
-conversation is, what the agent working in it is, and how agents share the work of a job.
-That needs **roles** that agents are made from: each role brings its own instructions, tools and default model,
-thinking level and workspace. Each job has exactly one lead agent at a time. The lead can pass the job's conversation
-to an agent of another role whenever the state of the job calls for it, and can invoke agents of specialist roles to
-work on parts of the job in parallel.
-
-When this spec is done:
-
-- the-intern ships two roles, `bob` (the default lead) and `gp` (a general-purpose executor), and team members can
-  create, edit and remove their own roles.
-- Every conversation has one agent at a time, and each agent has one role.
-- Every job has one lead conversation, whose current agent is the job's lead agent.
-- A team member or an agent can pass a conversation to an agent of another role at any time.
-- Any agent can invoke other agents of any role, and either keep working and steer them, or park until they report.
-- A waiting conversation, including one whose job is blocked, doesn't hold a worker thread.
-- Every job source (a request, a schedule fire, a trigger, a follow-up) starts a job's lead conversation with a role.
-- Team members can see which role is working where, and for which job.
+This spec covers the **Agents and roles** component of S-000. The-intern runs every conversation in one pi-durable
+database, and all of its work is organised as jobs (S-000) that agents carry out in conversations. Before any way in,
+schedule or client can be built, it has to be fixed what a conversation is, what the agent working in it is, and how
+agents share the work of a job. This spec defines roles that agents are made from, one lead agent per job that can pass
+the job's conversation to another role or invoke specialist agents to work on parts of the job in parallel, and the
+monitoring that shows which role works where. Success Criteria lists the observable outcomes.
 
 ## Definitions
 
@@ -39,7 +25,7 @@ When this spec is done:
 | Term | Meaning in this spec |
 |---|---|
 | the-intern | The product. It runs as a daemon. |
-| bob | The name of the default lead role (R-1) and of the CLI. |
+| bob | The name of the default lead role (REQ-001) and of the CLI. |
 | Team member | Anyone who can reach one of the-intern's ways in (S-000). All team members are equal: each can give jobs, follow and steer work, and configure the-intern. |
 | Role | A set of parameters that an agent is made from: instructions (system prompt), tools and skills, plus default values for the pi-durable agent parameters: model, thinking level and workspace (the pi-durable `cwd`). If a role is a class, an agent is an object of that class. |
 | Agent | The actor that interacts with the model and carries out a conversation. A conversation has one agent at a time and can be a succession of agents: each role change ends the current agent and seats a new one in the same conversation. An agent keeps its role for its whole life. It is not an operating-system process: the daemon runs every agent, and the current agent's configuration is the pi-durable agent of its conversation. |
@@ -54,7 +40,7 @@ When this spec is done:
 | Clean-up step | What runs when an agent decides its part is done: report a summary back to the invoking conversation, do nothing, and/or release the worker thread. Chosen programmatically by the type of conversation. |
 | Agent run | The model turns an agent takes from picking up an input until its conversation is idle or parked. One agent run uses one worker thread. |
 | Model turn | One model request and the tool calls it makes. A seat change applies from the next model turn, so it can take effect during an agent run. |
-| Worker thread | A logical unit of capacity: one active agent run uses one. Their number is S-000's limit on how many agents work at once (R-10). Whether they are operating-system threads is the daemon spec's choice. |
+| Worker thread | A logical unit of capacity: one active agent run uses one. Their number is S-000's limit on how many agents work at once (REQ-010). Whether they are operating-system threads is the daemon spec's choice. |
 | Thread | Only in the multi-threading sense. |
 | Reset | Clears what the model sees of a conversation. The conversation, its id and its stored entries stay. |
 | Transcript, context | The transcript is every stored entry of a conversation. The context is what the model receives on the next request, after resets and compactions. |
@@ -72,51 +58,73 @@ models, login, settings, skills and context files. Where a term exists in both, 
 | Session | One transcript: a JSONL file in pi agent's sessions folder | The whole store: one database with every conversation, task and document | Not used. A transcript is a conversation; the store is "the database". |
 | Conversation | No separate term; the pi agent session plays this part | An ordered transcript of entries with its own pi-durable agent | The pi-durable meaning. |
 | Agent | The agent loop running in the `pi` process, set up from flags and settings | What a conversation runs with: model, thinking level, extensions, tools, instructions, cwd. Stored in the conversation's `pi.agent` document and resolved before every model request. The harness runs it; no process belongs to it. | The current agent's seat is written into the pi-durable agent of its conversation. |
-| Subagent | None built in; extensions provide it | A conversation owned by a task of its caller, aborted with it | Not used. Agent invocation replaces it. Whether invocation is built on pi-durable task-owned conversations is an implementation choice. |
+| Subagent | None built in; extensions provide it | A conversation owned by a task of its caller, aborted with it | Not used. Agent invocation replaces it (Alternatives Considered). |
 | Root conversation | None | Conversation 1, created by the host's first `root()` call. Not a parent of other conversations. | Not used by the-intern. Every conversation belongs to a job. |
 | Turn, run | A turn is one assistant message and its tool calls; a prompt runs until the agent ends | A turn is one model response and its tool calls; a run is the turns from an input to its final answer | Model turn and agent run, as defined above. |
 | Task | Not a pi agent concept | A durable state machine: generation, tool call, compaction | Only the pi-durable meaning. The work the-intern does is a job. |
-| Extension | A module pi agent loads from its agent folder, a trusted project's `.pi/extensions` or a flag | Tools, prompt sections and hooks that the host installs in its registry | Only the-intern's own pi-durable extensions. pi agent extensions are not loaded, neither the account's nor a workspace's, so an agent is offered exactly its role's tools (R-5). |
+| Extension | A module pi agent loads from its agent folder, a trusted project's `.pi/extensions` or a flag | Tools, prompt sections and hooks that the host installs in its registry | Only the-intern's own pi-durable extensions. pi agent extensions are not loaded, neither the account's nor a workspace's, so an agent is offered exactly its role's tools (REQ-005). |
 | Skills | Loaded from pi agent's agent folder, `~/.agents/skills` and trusted project folders. The prompt lists name and description, and the model reads the file when needed. | No skill loading of its own | The role's skills plus the workspace skills, listed the same way as in pi agent. The account's own pi agent skills are not loaded. |
 | Context files | `AGENTS.md`/`CLAUDE.md` from pi agent's agent folder, the cwd and its parent directories | None; the host supplies prompt sections | Those of the workspace and its parent directories. |
 | cwd | The working directory of the `pi` process | The `cwd` of the pi-durable agent | The seat's workspace. |
 | New, fork, reset | `/new` starts a new pi agent session file; `/fork` copies one | A reset entry clears the model's context inside the same conversation; creating a conversation starts an empty one; a fork copies entries up to a point | A Clean handoff and a reset stay in the same conversation. Only job sources and agent invocations create conversations. A Full-context invocation may be built on a pi-durable fork. |
 | Compaction | Summarises older messages near the context limit, or on `/compact` | The same, as a pi-durable task, on by default | Automatic compaction is unchanged by this spec. The Compact context mode is an extra compaction guided by the agent's note. |
-| Steer, follow-up | Messages queued during a run: a steer arrives after the current tool calls, a follow-up after the run ends. Held in memory. | The same, through a durable inbox | The same meanings (R-10a), and durable. |
-| Default model, thinking level | Chosen by pi agent's settings | None; the host passes them | "pi agent's default" (R-3) is what the pi agent settings of the account the-intern runs as select. |
+| Steer, follow-up | Messages queued during a run: a steer arrives after the current tool calls, a follow-up after the run ends. Held in memory. | The same, through a durable inbox | The same meanings (REQ-020), and durable. |
+| Default model, thinking level | Chosen by pi agent's settings | None; the host passes them | "pi agent's default" (REQ-003) is what the pi agent settings of the account the-intern runs as select. |
+
+## Users and Journeys
+
+| Actor | Goal |
+|---|---|
+| Team member | Gives jobs, shapes the roles and workspaces agents are made from, follows which role works where, and steers, reseats or resets any conversation. |
+| Lead agent | Carries its job from definition to verification, doing the work itself, handing the conversation to a better-suited role or invoking specialist agents. |
+| Specialist (invoked) agent | Does one part of a job in its own conversation and reports back. It never closes the job. |
+| Job sources (downstream systems) | The Jobs component, schedule fires and triggers start a job's lead conversation with a role and an origin. |
+| Client specs (downstream systems) | The command line and the web interface build their views on the monitoring read operations. |
+
+Journeys, in priority order:
+
+1. **A job gets its lead.** A job source starts the job's lead conversation with the named role, or `bob`, its first
+   input and its origin, and the lead works on it unattended. Delivered by REQ-012, REQ-013, REQ-014.
+2. **The lead shares the work.** The lead hands its conversation to another role, or invokes agents that work in
+   parallel and report back, steerable or parked, within the depth cap and the worker threads. Delivered by REQ-006,
+   REQ-007, REQ-008, REQ-019, REQ-009, REQ-010, REQ-020.
+3. **A team member follows and steers.** A team member lists conversations by job, reads transcripts with seat records,
+   follows a run live, and steers, reseats or resets any conversation. Delivered by REQ-016, REQ-004, REQ-005, REQ-011,
+   REQ-020.
+4. **The team shapes roles and workspaces.** A team member creates, changes and removes roles, changes and restores the
+   shipped roles, and registers and unregisters workspaces. Delivered by REQ-001, REQ-002, REQ-003, REQ-018.
+5. **A blocked job waits without cost.** The lead conversation of a blocked job parks without a worker thread and
+   continues when the answer arrives. Delivered by REQ-014, REQ-010.
+6. **Nothing is lost on a crash.** Seats, links, parked state and reports survive a kill and restart. Delivered by
+   REQ-017.
 
 ## Exclusions
 
 What this specification explicitly does NOT cover:
 
-- **An overlord across jobs.** A single long-lived coordinator conversation that owns every job, or a `bob` that
-  owns the agents it invokes, is rejected. Each job has its own lead conversation. The lead owns its job, not the
-  agents it invokes: invoked agents follow every rule in this spec and are peers in how they work.
-- **A new conversation per handoff.** A handoff never creates a conversation. A clean start inside the same
-  conversation is the Clean context mode. Only job sources and agent invocations create conversations.
 - **The job record and the job's steps.** What a job records, its statuses, when it counts as blocked, how an answer
   resumes it, how the lead verifies and closes it, follow-up jobs, and export and import belong to the Jobs spec. This
-  spec requires only that every conversation knows its job (R-12), that the lead conversation parks while its job is
-  blocked (R-14), and the report-back clean-up step (R-8a).
+  spec requires only that every conversation knows its job (REQ-012), that the lead conversation parks while its job is
+  blocked (REQ-014), and the report-back clean-up step (REQ-019).
 - **How a parked agent's continue rule is chosen.** Whether a parked agent continues on each report as it arrives, or
-  stays parked until every agent it invoked has reported, and who chooses, is decided later. Both must be possible.
-  Until then a parked agent continues on each report (R-8a).
+  stays parked until every agent it invoked has reported, and who chooses, is decided later (Open Questions). Both must
+  be possible. Until then a parked agent continues on each report (REQ-019).
 - **Approval rules for actions.** S-000 excludes per-action rules: what an agent can do is bounded by the account
   the-intern runs as and the tools its role is offered.
 - **The mailbox, schedules and triggers themselves.** Reading the-intern's own mailbox belongs to the Email spec.
   When schedules and triggers fire, what their store accepts, the run history an entry passes on and when a fire is
   skipped belong to the schedules and triggers spec. This spec defines only the lead conversation each of them starts
-  (R-13).
+  (REQ-013).
 - **Command-line views and the job abort operation.** This spec delivers the read operations that monitoring needs
-  (R-16). The command-line views built on them belong to the command-line spec. It delivers the capability that aborts
-  every conversation of a job (R-8); the operation that aborts a job belongs to the Jobs spec.
+  (REQ-016). The command-line views built on them belong to the command-line spec. It delivers the capability that
+  aborts every conversation of a job (REQ-008); the operation that aborts a job belongs to the Jobs spec.
 - **Interactive chat.** There is no chat window and no root conversation. Team members follow, answer and steer jobs
   through the command line, the web interface and email.
 - **Model, thinking level or workspace per schedule entry.** Whether a schedule entry can name values other than its
-  role's defaults is an open question, deferred. In v1 a fire runs with the named role's defaults.
+  role's defaults is deferred (Open Questions). In v1 a fire runs with the named role's defaults.
 - **Process and concurrency model.** Whether worker threads are operating-system threads, share one event loop or
   are spread over several processes belongs to the daemon and host-runtime spec. This spec uses worker threads only
-  as a logical unit of capacity and states the observable caps (R-9, R-10).
+  as a logical unit of capacity and states the observable caps (REQ-009, REQ-010).
 - **Technology choices.** The control protocol, client transport, storage layout, config file format and process
   model belong to the daemon and control-endpoint specs and to S-000's Installation and service setup. This spec
   states behaviour only.
@@ -152,6 +160,20 @@ What this specification explicitly does NOT cover:
 - **Bounded delegation.** Invocation depth and the number of worker threads are capped, so no chain of unattended
   agents can grow without limit. The worker-thread count also bounds how wide delegation can spread.
 
+### Alternatives Considered
+
+- **An overlord across jobs.** A single long-lived coordinator conversation that owns every job, or a `bob` that owns
+  the agents it invokes. Rejected: each job has its own lead conversation, and the lead owns its job, not the agents
+  it invokes. Invoked agents follow every rule in this spec and are peers in how they work.
+- **A new conversation per handoff.** Rejected: a handoff never creates a conversation. A clean start inside the same
+  conversation is the Clean context mode, and only job sources and agent invocations create conversations.
+- **pi-durable subagents (task-owned conversations).** Rejected as the product concept: agent invocation replaces
+  them, because an invoked agent is a peer that its invoker doesn't own. Whether invocation is built on pi-durable
+  task-owned conversations is an implementation choice.
+- **Loading pi agent extensions and the account's skills.** Rejected: neither the account's nor a workspace's pi agent
+  extensions are loaded, nor the account's own pi agent skills, so an agent is offered exactly its role's tools and
+  skills plus the workspace's (REQ-005).
+
 ### System Diagram
 
 ```
@@ -181,304 +203,929 @@ What this specification explicitly does NOT cover:
 
 | Component | Responsibility | Notes |
 |---|---|---|
-| Role catalog | Holds the shipped roles, the team's own roles, their defaults, and the registered workspaces | Changed by team members through settings operations (R-3) |
-| Seating | Seats an agent of a role in a conversation, with optional model, thinking level and workspace overrides, and records who seated it | The only path that changes a conversation's seat |
-| Role prompt | Builds what the model sees: the-intern's preamble, role instructions, role skills, workspace instructions and workspace skills | Must stay byte-stable while the seat and the role are unchanged |
-| Agent coordination | Agent-callable handoff, agent invocation and steer capabilities; parking; the report-back clean-up step; the depth cap and the worker threads | Every role is offered the same coordination capabilities |
-| Entry routing | Starts a job's lead conversation for each job source, and handles reset requests from team members | Holds no channel knowledge beyond choosing the role and recording the origin |
-| Monitoring | Lists conversations with their job, seats, origins, status, invocation links and live transcripts | Read-only. Abort, reset and steer go through other components |
+| Role catalog | Holds the shipped roles (`bob`, `gp`), the team's own roles, their instructions, tools, skills and defaults, and the registered workspaces, each checked when it is registered | Changed by team members through settings operations (REQ-003, REQ-018). Consumes the-intern's settings, its shipped tools and pi agent's default model and thinking level |
+| Seating | Seats an agent of a role in a conversation, with optional model, thinking level and workspace overrides, so that later turns use that seat, and records who seated it | The only path that changes a conversation's seat. Consumes the role catalog and the pi-durable agent of each conversation |
+| Role prompt | Builds what the model sees: the-intern's preamble, role instructions, role skills, workspace instructions (`AGENTS.md`/`CLAUDE.md`) and workspace skills | Must stay byte-stable while the seat and the role are unchanged (AC-005.4) |
+| Agent coordination | Agent-callable handoff, agent invocation and steer capabilities; parking and continuing invoking conversations; the report-back clean-up step; the depth cap and the worker threads | Every role is offered the same coordination capabilities. Consumes seating, conversation reset, compaction and fork, conversation creation, the inbox of the target conversation, and each conversation's own `intern.conversation` document (below) |
+| Entry routing | Starts a job's lead conversation for each job source with the role it names (`bob` when it names none) and records its origin; serves team members' requests to reset conversations | Holds no channel knowledge beyond choosing the role and recording the origin. Called by the Jobs component when a job is created |
+| Monitoring | Lists conversations with their job, lead flag, seats, origins, status, invocation links and live transcripts | Read-only. Abort, reset and steer go through other components |
 
-## Components
+**The conversation's own document.** Each conversation's `intern.conversation` document holds the conversation's
+parked state, the messages held for it while it is parked, the invoked conversations whose reports it awaits, and its
+abort mark, which records that its invoker is owed an "aborted" report (REQ-019). They are facts the-intern owns,
+written in the commit that changes them, and the only recovery from them is redelivery (ADR-001 decision 4). An
+abort's facts are written in one commit just before pi-durable's abort. The document is internal to the daemon, not an
+external contract.
 
-### Component 1: Role catalog
+## Interfaces
 
-**Purpose:** Hold the shipped roles (`bob`, `gp`) and the roles team members create, with their instructions, tools,
-skills, default model, thinking level and workspace, and the registered workspaces, each checked when it is
-registered.
-**Estimated size:** Small to medium.
-**Interfaces:** Exposes role lookup, listing, creation, change and removal, and workspace lookup and listing.
-Consumes the-intern's settings, its shipped tools and pi agent's default model and thinking level.
+This spec's external contracts are the agent tools the model is offered, the service operations it contributes to the
+S-002 catalogue, and the transcript entries clients read. The service-layer conventions (callers, actors, error
+outcomes, idempotency keys) are S-002's (S-002 REQ-012, REQ-013).
 
-### Component 2: Seating
+### Exposed: agent tools
 
-**Purpose:** Seat an agent of a role in a conversation, with optional model, thinking level and workspace
-overrides, so that later turns use that seat, and record the change.
-**Estimated size:** Small to medium.
-**Interfaces:** Exposes "seat an agent of role R in conversation C, by actor A, optionally with model M, thinking
-level T and workspace W". Consumes the role catalog and the pi-durable agent of each conversation.
+Every seat is offered these three coordination tools, whatever its role's tool set names (REQ-003, REQ-005).
+**Contract** (tool names and parameters as the model sees them):
 
-### Component 3: Role prompt
+| Tool | Parameters | Result |
+|---|---|---|
+| `handoff` | `role`; optional `model`, `thinkingLevel`, `workspace`; `contextMode` (`full`, `compact`, `clean`); `note` (required for `compact` and `clean`) | The handing-off agent's work ends; an error result leaves the seat unchanged (REQ-006) |
+| `invoke` | `agents`: one or more of { `role`; optional `model`, `thinkingLevel`, `workspace`; `contextMode`; `jobPrompt` }; `then` (`steerable`, `parked`) | The invoked conversation ids when steerable; the run ends when parked; an error result for a refused invocation, and the run continues (REQ-008, REQ-009) |
+| `steer` | `conversationId`; `message`; `mode` (`steer`, `followUp`) | The message is injected or queued; an error result for an unknown conversation (REQ-020) |
 
-**Purpose:** Render the system prompt for the current seat: the-intern's preamble, the role's instructions, the
-role's skills, plus the workspace's `AGENTS.md`/`CLAUDE.md` and the workspace's skills.
-**Estimated size:** Medium.
-**Interfaces:** Exposes prompt sections to the harness. Consumes the role catalog and the files in the workspace.
+The tools the-intern ships for a role's tool set are `read`, `write`, `edit` and `bash`; a tool set naming anything
+else is refused (REQ-003).
 
-### Component 4: Agent coordination
+### Exposed: service operations
 
-**Purpose:** Give every role three agent-callable capabilities (hand off the current conversation, invoke other
-agents, steer another conversation). Park and continue invoking conversations, run the report-back clean-up step,
-and enforce the depth cap and the number of worker threads.
-**Estimated size:** Medium to large. The worker threads depend on the process model the daemon spec chooses.
-**Interfaces:** Exposes agent tools. Consumes seating, conversation reset, compaction and fork, conversation
-creation, the inbox of the target conversation, and each conversation's own `intern.conversation` document. That
-document holds the conversation's parked state, the messages held for it while it is parked, the invoked
-conversations whose reports it awaits, and its abort mark, which records that its invoker is owed an "aborted" report
-(R-8a). They are facts the-intern owns, written in the commit that changes them, and the only recovery from them is
-redelivery (ADR-001 decision 4). An abort's facts are written in one commit just before pi-durable's abort.
+These operations of the S-002 catalogue carry this spec's behaviour (S-002 REQ-012 lists the whole catalogue):
 
-### Component 5: Entry routing
+| Operation | Kind | Requirement |
+|---|---|---|
+| `jobs.startLead` | control | Start a job's lead conversation with a role, optional overrides, a first input and an origin (REQ-012) |
+| `conversations.seat` | control | Change a conversation's seat, optionally with a reset and a note (REQ-004, REQ-011) |
+| `conversations.reset` | control | Reset a conversation and keep its seat (REQ-011) |
+| `conversations.abort` | control | Abort a conversation and the invoked conversations it awaits (REQ-008) |
+| `conversations.submit` | control | Steer or queue input, including to a parked conversation (REQ-020) |
+| `roles.list`, `roles.create`, `roles.change`, `roles.restore`, `roles.remove` | read, control | Role settings (REQ-003) |
+| `workspaces.list`, `workspaces.register`, `workspaces.unregister` | read, control | Workspace registration (REQ-018) |
+| `conversations.list`, `conversations.get`, `conversations.invocations`, `conversations.entries`, `feed.subscribe` | read | Monitoring (REQ-016) |
 
-**Purpose:** For each job source, start the job's lead conversation with the role the source names (`bob` when it
-names none) and record its origin. Serve team members' requests to reset conversations.
-**Estimated size:** Small.
-**Interfaces:** Exposes "start the lead conversation of job J with role R, origin O" and "reset conversation C".
-Consumes seating and the role catalog. Called by the Jobs component when a job is created.
+The capability that aborts every conversation of a job is offered in-process for the Jobs spec's job abort operation
+(REQ-008).
 
-### Component 6: Monitoring
+### Exposed: transcript entries
 
-**Purpose:** Let team members see every conversation: its job and whether it is the job's lead conversation, its
-current seat (role, model, thinking level, workspace), origin, status, the conversation that invoked it and the ones
-it invoked, and its transcript, live while it runs.
-**Estimated size:** Medium.
-**Interfaces:** Exposes list, invocations, transcript and live-follow read operations of the service layer (S-002
-R-12, R-14). The command line and the web interface build their views on them; the command-line views belong to the
-command-line spec. Consumes the conversation store and its observation streams.
+Clients read these entry kinds through `conversations.entries` and the conversation feed (REQ-016):
 
-## Behavioural Requirements
+- **`intern.seat`**, the seat record: previous and new seat, actor, and for a handoff the context mode and note
+  (REQ-007).
+- **`intern.report`**, a report from an invoked agent: the invoked conversation, its role and the text (REQ-019;
+  ADR-004).
+- **`intern.steer`**, a steer or held message: its sender, mode and text (REQ-020; ADR-004).
 
-Each requirement is checked as described in **Verification** below.
+Each assistant entry is returned with the seat that produced it (REQ-007).
 
-### Roles and workspaces
+### Consumed
 
-- **R-1 Shipped roles.** the-intern ships two roles, `bob` and `gp`. Every role, shipped or created by a team member,
-  has a name, instructions, a tool set, a skill set (possibly empty), a default model, a default thinking level and
-  a default workspace. `bob` is the default lead role.
-- **R-2 What the shipped roles are for.**
-  - **`bob`** leads jobs. Its instructions direct the agent to define the job (goal, needs, plan and definition of
-    done), ask for what is missing, then do the work itself, hand it to a better-suited role or invoke other agents
-    for parts of it, and finally verify the result against the definition of done.
-  - **`gp`** is a general-purpose executor. Its instructions and shipped skills describe how to carry out a part of a
-    job to completion and report back.
-  - Both roles are offered the coordination capabilities (R-6 to R-8a). The shipped text of the instructions, the tool
-    lists and `gp`'s skill content are set during implementation and may change in later versions without amending
-    this spec. They must satisfy the descriptions above.
-- **R-3 Role settings.** A team member can, in the-intern's configuration or while the daemon runs (S-002 R-22):
-  - **create** a role with a name, instructions, a tool set chosen from the tools the-intern ships, skills, and
-    optionally a default model, thinking level and workspace
-  - **change** any role's instructions, tool set, skills, default model, thinking level and workspace, including the
-    shipped roles'. A change to a shipped role is kept in the-intern's settings and never edits the installed copy, and
-    it can be undone to restore the shipped role.
-  - **remove** a role the team created. Removing a shipped role is refused. Removing a role that a schedule entry or
-    trigger names is refused, with an error naming them.
-  - **register and unregister** workspaces (R-3a)
-
-  Defaults and changes follow these rules:
-  - A role without a configured default model uses pi agent's default model, and one without a configured default
-    thinking level uses pi agent's default thinking level.
-  - A role without a configured default workspace uses a default workspace that the-intern creates and registers for
-    that role, owner-only, under the-intern's own data location.
-  - A tool set can name only tools the-intern ships. A change naming an unknown tool is refused.
-  - The coordination capabilities (R-6 to R-8a, R-10a) are part of every role. A tool set can't leave them out.
-  - A change to a role, or its removal, affects only agents seated after the change. Agents already seated keep
-    their instructions, tools, skills, model, thinking level and workspace until their seat changes.
-- **R-3a Workspace registration.** A workspace is a local folder: the files an agent works on, extra instructions
-  (`AGENTS.md`), workspace skills and scratch space. A folder can be used as a workspace only after a team member
-  registers it.
-  - Registration checks that the path is absolute, exists, is a directory and is accessible only to the account
-    the-intern runs as.
-  - A registration that fails the check is refused with an error naming the path and the reason. If the failure
-    comes from configuration loaded at startup, the daemon doesn't start.
-  - A role's default workspace must be a registered workspace.
-  - **Unregistering** a workspace is refused while a role's default workspace is that workspace, with an error
-    naming the role. The per-role default workspaces the-intern creates can't be unregistered.
-  - After unregistering, agents already seated in the workspace keep working there until their seat changes. New
-    seats, whether set by a team member, a handoff or an agent invocation, can't name it, and a seat change that
-    names it is refused, leaving the seat unchanged.
-
-### Seating, overrides and handoff
-
-- **R-4 Role change by a team member.** A team member can change the seat of any conversation at any time.
-  - The new seat names a role, and may name a model, a thinking level and a registered workspace other than that
-    role's defaults. A new agent of that role is seated, with the Full context mode.
-  - The change applies from the next model turn. A model turn already running finishes with the seat it started
-    with, unless the team member also aborts or steers it.
-  - Changing the seat of a job's lead conversation changes the job's lead agent.
-- **R-5 Seat effects.** After a seat is applied, every model turn in that conversation:
-  - uses the seat's model and thinking level
-  - sees the role's instructions and skills
-  - is offered exactly the role's tools and the coordination capabilities
-  - runs its tools in the seat's workspace
-  - sees that workspace's instructions and skills
-
-  Nothing of the previous seat's instructions, skills or workspace stays in the system prompt. The transcript
-  stays visible to the new agent unless a Clean handoff or a reset (R-11) cleared the context.
-- **R-6 Handoff by an agent.** The current agent can hand its conversation to a new agent of another role, and its
-  own work ends there. A handoff happens because a team member or another agent asked for it in a prompt, or because
-  the agent decides to. No human confirms it. A handoff in a job's lead conversation passes the lead to the new
-  agent.
-  - The handing-off agent may name a model, a thinking level and a registered workspace other than the target
-    role's defaults.
-  - It chooses a context mode. In every mode the conversation stays the same; only the agent, its seat and the
-    context change:
-    1. **Full.** The new agent processes the full context.
-    2. **Compact.** The context is compacted using a handoff note the agent writes, and the new agent continues from
-       the compacted context.
-    3. **Clean.** The conversation's context is reset, and the model gets a clean context whose only input is the
-       agent's handoff note. Earlier entries stay in the stored transcript and in monitoring, but the model no
-       longer sees them.
-  - In every mode the new agent starts working without any new input from outside the conversation, on the worker
-    thread the conversation already holds.
-- **R-7 Seat records.** Every seat change shows in the transcript. The record names:
-  - the previous seat and the new seat (role, model, thinking level, workspace)
-  - the actor: a team member (with the way in they used), the agent that handed off (with its role), or a job source
-  - for a handoff, the context mode, and the handoff note when there is one
-
-  Every assistant message is attributed to the seat that produced it.
-
-### Agent invocation, caps and steering
-
-- **R-8 Agent invocation.** Any agent can invoke one or more agents for parts of its job. Each invoked agent gets a
-  new conversation of the same job, a role, optionally a model, a thinking level and a registered workspace other
-  than the role's defaults, and a job prompt for its part.
-  - The invoking agent chooses a context mode for each invoked conversation: **Full** (a copy of the invoking
-    conversation's context, then the job prompt), **Compact** (a compaction of that context guided by the job prompt,
-    then the job prompt) or **Clean** (only the job prompt).
-  - Invoked agents follow every rule in this spec, so they can hand off and invoke agents of their own. They run in
-    parallel, each on its own worker thread. An invoked agent finishes its part and reports; it never closes the job.
-  - The invoking agent then chooses how it carries on:
-    1. **Steerable.** It keeps running on its worker thread and can steer the agents it invoked (R-10a).
-    2. **Parked.** Its conversation is parked: pi-durable keeps the state of the conversation and its agent, and the
-       worker thread is freed. A parked agent can't steer. It continues as R-8a describes.
-  - An invocation that parks must be the only tool call of its model turn. One that shares its model turn with other
-    tool calls is refused like an invocation past the depth cap (R-9): the invoking agent gets an error result that
-    says why, no conversation is created, and its run continues.
-  - Aborting a conversation also aborts the invoked conversations whose report it is still waiting for, whether it
-    is steerable or parked. Each of those aborts the conversations it waits for in turn. Aborting a job aborts every
-    conversation of the job; the operation that does it belongs to the Jobs spec, and this spec delivers the capability
-    it calls.
-  - An abort leaves no aborted conversation parked or waiting for a report. Its held messages (R-10a) are withdrawn,
-    as an abort withdraws queued input. Whether its invoking conversation gets a report follows R-8a.
-- **R-8a Clean-up step and reports.** When an invoked agent decides its part is done, the report-back clean-up step
-  runs:
-  - An invoked agent's part is done when its agent run ends while its conversation is not parked and waits for no
-    report from a conversation it invoked. A run that ends while either holds doesn't end the part; the report goes
-    back when a later run ends that way.
-  - The invoked agent's summary, its last answer, is delivered into the invoking conversation as a new input the
-    moment the invoked agent finishes.
-  - If the invoking conversation is running, the report arrives like a follow-up (R-10a). If it is idle or parked, the
-    conversation becomes ready, takes a free worker thread and continues with the report.
-  - The transcript records which invoked agent sent each report: the report is placed as an `intern.report` entry
-    whose data names the invoked conversation and its role and carries the text (ADR-004).
-  - A parked conversation continues either on each report as it arrives or only when every agent it invoked has
-    reported. Both behaviours must be possible. How the choice is made is decided later. Until then the continue rule
-    is "continue on each report" (product owner ruling, 2026-10-31).
-  - When an invoked conversation is aborted on its own, not by an abort that cascades from its invoking conversation,
-    the invoking conversation gets a report that says the invoked conversation was aborted, with the invoked agent's
-    last answer when there is one. A parked invoking conversation then continues under its continue rule. An abort
-    that cascades from the invoking conversation (R-8), or that aborts the whole job, delivers no report.
-
-  When the lead agent decides the job is done, closing the job follows the Jobs spec.
-- **R-9 Depth cap.** Agent invocations may chain only to a maximum depth. A job's lead conversation has depth 0, and
-  an invoked conversation has the invoking conversation's depth plus one.
-  - An invocation that would exceed the cap is refused. The invoking agent gets an error result that names the cap,
-    and its run continues.
-  - Handoffs, role changes by a team member and resets don't change depth.
-- **R-10 Worker threads.** At most a fixed number of agent runs are active at the same time, one per worker thread,
-  counted across every job and every conversation. This is S-000's limit on how many agents work at once, and it
-  also bounds how wide invocations spread.
-  - Work beyond the cap waits in arrival order and starts when a worker thread frees. It is not dropped.
-  - A parked or idle conversation holds no worker thread, so the cap can never deadlock an invoking agent against
-    the agents it waits for, and a blocked job never counts against it.
-  - A parked conversation that a report or an answer makes ready waits for a worker thread like any other work.
-  - Monitoring shows waiting work as "waiting for a worker thread".
-- **R-10a Steering.** A team member, and any agent, can steer a running conversation by injecting a message that the
-  running model turn picks up after its current tool round. The message can be queued as a follow-up instead. An
-  agent steers through a coordination capability that names the target conversation. A message sent to a parked
-  conversation waits until it continues, whatever its busy mode: a message sent with the mode that refuses input while
-  a run is active (reject, S-002 R-12) is held like any other message, not refused, and the conversation takes it as a
-  follow-up when it continues. The transcript records who steered.
-
-### Job sources
-
-- **R-11 Reset by a team member.** A team member can reset any conversation: its context is cleared for the model,
-  earlier entries stay in the stored transcript, and the seat is kept unless the reset names a new one.
-- **R-12 Lead conversation of a job.** When a job is created (Jobs spec), entry routing starts its lead conversation:
-  - with the role the job source names, or `bob` when it names none, with that role's defaults unless a team member's
-    request names a model, a thinking level or a registered workspace
-  - with the job's first input as its first input
-  - with an origin that records the job source: the team member's request and its way in, the schedule entry and fire
-    time, the trigger and its event, or the conversation that created the follow-up job
-
-  Every conversation records the job it belongs to and whether it is the job's lead conversation.
-- **R-13 Schedule fires and triggers.** Each fire of a schedule entry or of a trigger creates a new job and so a new
-  lead conversation (R-12). The schedule entry or trigger may name a role, and the lead conversation starts with it.
-  The schedules and triggers spec defines the rest of a fire's behaviour (product owner ruling, 2026-10-31): refusing
-  an entry that names an unknown role when it is loaded or created, the history of its last runs an entry passes to
-  its next run, skipping a fire whose seat workspace folder no longer exists, and skipping a fire while the entry's
-  previous job still works.
-- **R-14 Unattended runs and blocked jobs.** No conversation waits for a human, except a job's lead conversation while
-  its job is blocked. Then the lead conversation is parked: it holds no worker thread, and the answer to the job's
-  question arrives as a new input that makes it ready again. Handoffs and agent invocations have no confirmation
-  step. Parking for reports waits for agents, not for a human.
-- **R-15 Missing workspace during a run.** If a seat's workspace folder disappears while a conversation uses it,
-  tool calls that need the workspace fail as ordinary tool errors that the agent sees. The daemon keeps running.
-
-### Monitoring and durability
-
-- **R-16 Monitoring.** A team member can do all of the following through the read operations of the service layer
-  (S-002 R-12, R-14), without the daemon interrupting any running work. The command-line views of them belong to the
-  command-line spec (product owner ruling, 2026-10-31).
-  - list all conversations with id, job, whether it is the job's lead conversation, seat (role, model, thinking
-    level, workspace), origin (job source or invoking conversation), status (running, idle, parked or waiting for a
-    worker thread) and last activity
-  - list the conversations of a job
-  - show the conversations a conversation invoked, recursively
-  - read a transcript with seat records and attribution (R-7), including entries from before a reset
-  - follow a running conversation live
-- **R-17 Durability.** Seats, seat records, resets, job links, invocation links, depth, origins, parked state and
-  undelivered reports survive a daemon kill and restart. A seat change, handoff, reset, invocation, park or report
-  interrupted by a crash either completed before the crash or completes on resume. It is never half-applied: never a
-  new seat without its record, never an invoked conversation without its invocation link, never a lead conversation
-  without its job, and never a report lost or delivered twice. Work waiting for a worker thread is still waiting after
-  the restart, in the same order.
+- The configuration file's `[roles.<name>]` and `[workspaces]` tables, through S-002's configuration component (S-002
+  REQ-021, REQ-022). The keys are documented in the user manual (`docs/manual/roles_and_agents.md`).
+- The pi agent login, model registry and default model and thinking level of the account the-intern runs as (S-002
+  REQ-018).
+- A workspace's `AGENTS.md`/`CLAUDE.md` files, from the workspace and its parent directories, and its skills.
+- Admission and worker threads from S-002 (S-002 REQ-010).
 
 ## Workflow
 
 A job, from its source to delegated work:
 
 ```
-Job source: request, schedule fire, trigger or follow-up (role named, default bob)
+Job source: request, schedule fire, trigger or follow-up (role named, default bob)          REQ-012, REQ-013
   ↓
 Schedule fire skipped or refused? → the schedules and triggers spec; stop
   ↓
-Jobs creates the job → entry routing starts its lead conversation, origin = job source
+Unknown role or unresolvable override? → refused, nothing created                           REQ-012
   ↓
-Waits for a worker thread if all are busy
+Jobs creates the job → entry routing starts its lead conversation, origin = job source      REQ-012
+  ↓
+Waits for a worker thread if all are busy (arrival order)                                   REQ-010
   ↓
 The lead agent defines the job (Jobs spec)
   ↓
-Information missing? → job blocked, lead conversation parked (no worker thread) → answer arrives → continues
+Information missing? → job blocked, lead conversation parked (no worker thread)             REQ-014
+                       → answer arrives → continues on a free worker thread
   ↓
 Either: does the work itself
-    or: hands off (full / compact / clean) to another role   → the new agent leads, on the same worker thread
-    or: invokes agent(s) (full / compact / clean context)    → they run in parallel on their own worker threads
-          ├─ steerable: keeps running, may steer them
+    or: hands off (full / compact / clean) to another role                                  REQ-006, REQ-007
+          → the new agent leads, on the same worker thread
+          (unknown role, unregistered workspace or bad override → error result, seat unchanged)
+    or: invokes agent(s) (full / compact / clean context)                                   REQ-008
+          → they run in parallel on their own worker threads
+          (beyond the depth cap, or a parked invoke sharing its turn → refused, run goes on)  REQ-009, REQ-008
+          ├─ steerable: keeps running, may steer them                                       REQ-020
           └─ parked:    frees its worker thread
-        each invoked agent finishes its part → report-back   → report arrives as new input; a parked agent
-                                                               continues on a free worker thread
-                                                               (invocations refused beyond the depth cap)
+        each invoked agent finishes its part → report-back                                  REQ-019
+          → report arrives as new input; a parked agent continues on a free worker thread
+        an invoked conversation aborted on its own → "aborted" report;
+        a cascading abort → no report, nothing left parked or awaiting                      REQ-008, REQ-019
+  ↓
+At any time: a team member reseats, resets or steers any conversation                       REQ-004, REQ-011, REQ-020
+A seat's workspace folder disappears → tool errors, the daemon keeps running                REQ-015
   ↓
 The lead verifies against the definition of done and closes the job (Jobs spec)
 ```
+
+## Behavioral Requirements
+
+Requirement identifiers before v0.5 were `R-n`. The number is kept, so `R-4` is now `REQ-004`, except for the three
+suffixed identifiers:
+
+| Before v0.5 | Now |
+|---|---|
+| R-1 to R-17 | REQ-001 to REQ-017 |
+| R-3a | REQ-018 |
+| R-8a | REQ-019 |
+| R-10a | REQ-020 |
+
+Requirements appear in reading order, so REQ-018 to REQ-020 follow the requirement they used to extend. REQ-017 is
+under Quality Requirements. The deterministic tests run on the fake model (S-002 Definitions), whose replies are a pure
+function of the transcript.
+
+### REQ-001 — Shipped roles
+
+The-intern SHALL ship two roles, `bob` and `gp`, and `bob` SHALL be the default lead role. Every role, shipped or
+created by a team member, MUST have a name, instructions, a tool set, a skill set (possibly empty), a default model, a
+default thinking level and a default workspace.
+
+#### AC-001.1 — The shipped roles are bob and gp
+
+- **Given:** a daemon with no configuration file
+- **When:** the roles are listed
+- **Then:** exactly `bob` and `gp` are listed, each valid with non-empty instructions, and `bob` is the default lead
+
+**Verification:** test — `test/unit/shipped_roles.test.ts`, `test/service/agents_startup.test.ts`,
+`test/service/role_operations.test.ts` ("lists the shipped roles bob and gp through roles.list").
+
+### REQ-002 — What the shipped roles are for
+
+The shipped roles' instructions MUST satisfy these descriptions:
+
+- **`bob`** leads jobs. Its instructions direct the agent to define the job (goal, needs, plan and definition of
+  done), ask for what is missing, then do the work itself, hand it to a better-suited role or invoke other agents
+  for parts of it, and finally verify the result against the definition of done.
+- **`gp`** is a general-purpose executor. Its instructions and shipped skills describe how to carry out a part of a
+  job to completion and report back.
+- Both roles are offered the coordination capabilities (REQ-006 to REQ-008, REQ-019).
+
+The shipped text of the instructions, the tool lists and `gp`'s skill content are set during implementation and may
+change in later versions without amending this spec.
+
+#### AC-002.1 — The shipped instructions match the descriptions
+
+- **Given:** the shipped `bob` and `gp` instruction files and `gp`'s skill
+- **When:** a reviewer reads them against this requirement
+- **Then:** `bob`'s text covers defining, asking, doing, delegating and verifying, and `gp`'s text and skill cover
+  carrying out a part to completion and reporting back
+
+**Verification:** inspection — the shipped role files under `src/roles/shipped/`; `test/unit/shipped_roles.test.ts` checks
+that `gp` has its skill folder and `bob` none.
+
+### REQ-003 — Role settings
+
+The-intern SHALL let a team member, in its configuration or while the daemon runs (S-002 REQ-022):
+
+- **create** a role with a name, instructions, a tool set chosen from the tools the-intern ships, skills, and
+  optionally a default model, thinking level and workspace
+- **change** any role's instructions, tool set, skills, default model, thinking level and workspace, including the
+  shipped roles'. A change to a shipped role is kept in the-intern's settings and never edits the installed copy, and
+  it can be undone to restore the shipped role.
+- **remove** a role the team created. Removing a shipped role is refused. Removing a role that a schedule entry or
+  trigger names is refused, with an error naming them.
+- **register and unregister** workspaces (REQ-018)
+
+Defaults and changes MUST follow these rules:
+
+- A role without a configured default model uses pi agent's default model, and one without a configured default
+  thinking level uses pi agent's default thinking level.
+- A role without a configured default workspace uses a default workspace that the-intern creates and registers for
+  that role, owner-only, under the-intern's own data location.
+- A tool set can name only tools the-intern ships. A change naming an unknown tool is refused.
+- The coordination capabilities (REQ-006 to REQ-008, REQ-019, REQ-020) are part of every role. A tool set can't leave
+  them out.
+- A change to a role, or its removal, affects only agents seated after the change. Agents already seated keep
+  their instructions, tools, skills, model, thinking level and workspace until their seat changes.
+
+#### AC-003.1 — Create, change and remove a team role
+
+- **Given:** a running daemon
+- **When:** a team member creates a role, changes it and removes it
+- **Then:** each change is written to the configuration file, listed at once and kept after a restart
+
+**Verification:** test — `test/unit/role_catalog.test.ts`, `test/service/role_operations.test.ts`.
+
+#### AC-003.2 — Change a shipped role and restore it
+
+- **Given:** the shipped role `bob`
+- **When:** a team member changes it, then restores it
+- **Then:** the changed values are listed, the installed copy is untouched, and after the restore the shipped values
+  are listed and the change is gone from the file
+
+**Verification:** test — `test/unit/role_catalog.test.ts`, `test/service/role_operations.test.ts`.
+
+#### AC-003.3 — Removals that are refused
+
+- **Given:** a shipped role, and a team role that a schedule entry or trigger names
+- **When:** a team member removes either
+- **Then:** the removal is refused, the file is unchanged, and the refusal of the referenced role names the referrers
+
+**Verification:** test — `test/unit/role_catalog.test.ts`, `test/service/role_operations.test.ts`.
+
+#### AC-003.4 — An unknown tool is refused
+
+- **Given:** a role definition whose tool set names a tool the-intern doesn't ship
+- **When:** it is created or changed
+- **Then:** the change is refused with an error naming the role, the field and the value, and nothing changes
+
+**Verification:** test — `test/unit/role_catalog.test.ts`, `test/unit/role_model.test.ts`,
+`test/service/role_operations.test.ts`.
+
+#### AC-003.5 — Defaults
+
+- **Given:** a role without a default model, thinking level or workspace
+- **When:** an agent of it is seated
+- **Then:** it runs with pi agent's default model and thinking level and with the role's own default workspace, which
+  the-intern created owner-only
+
+**Verification:** test — `test/unit/role_catalog.test.ts` ("seats a role without defaults on pi agent", "gives a
+created role without a workspace its per-role default workspace"), `test/service/agents_startup.test.ts`.
+
+#### AC-003.6 — The coordination capabilities can't be left out
+
+- **Given:** a role whose tool set lists none of `handoff`, `invoke` and `steer`
+- **When:** an agent of it is seated
+- **Then:** the agent is offered all three coordination tools
+
+**Verification:** test — `test/service/steer.test.ts` ("offers steer, handoff and invoke to an agent of a role that
+lists none of them"), `test/unit/role_model.test.ts`.
+
+#### AC-003.7 — Seated agents keep their role
+
+- **Given:** an agent seated in a conversation
+- **When:** a team member changes or removes its role
+- **Then:** the agent keeps the instructions, tools, skills, model, thinking level and workspace it was seated with
+
+**Verification:** test — `test/unit/role_catalog.test.ts` ("leaves a seat already resolved unchanged by a later role
+change"), `test/service/role_prompt_extension.test.ts`.
+
+### REQ-018 — Workspace registration
+
+A folder MUST be usable as a workspace only after a team member registers it. A workspace is a local folder: the
+files an agent works on, extra instructions (`AGENTS.md`), workspace skills and scratch space.
+
+- Registration checks that the path is absolute, exists, is a directory and is accessible only to the account
+  the-intern runs as.
+- A registration that fails the check is refused with an error naming the path and the reason. If the failure
+  comes from configuration loaded at startup, the daemon doesn't start.
+- A role's default workspace must be a registered workspace.
+- **Unregistering** a workspace is refused while a role's default workspace is that workspace, with an error
+  naming the role. The per-role default workspaces the-intern creates can't be unregistered.
+- After unregistering, agents already seated in the workspace keep working there until their seat changes. New
+  seats, whether set by a team member, a handoff or an agent invocation, can't name it, and a seat change that
+  names it is refused, leaving the seat unchanged.
+
+#### AC-018.1 — Registration accepts a valid folder and refuses invalid ones
+
+- **Given:** a valid owner-only folder, and a relative, missing, non-directory, and group- or world-accessible path
+- **When:** each is registered
+- **Then:** the valid folder is registered and usable at once; each other one is refused naming the path and the
+  reason, and the file is unchanged
+
+**Verification:** test — `test/unit/workspace_folder.test.ts`, `test/unit/workspace_registry.test.ts`,
+`test/service/workspace_operations.test.ts`.
+
+#### AC-018.2 — A failing registration at startup stops the daemon
+
+- **Given:** a configuration file whose registered workspace fails the check, or a role naming an unregistered
+  workspace
+- **When:** the daemon starts
+- **Then:** startup stops at step 6 naming the path and the reason or the role
+
+**Verification:** test — `test/service/agents_startup.test.ts`.
+
+#### AC-018.3 — Unregistering is refused for default workspaces
+
+- **Given:** a workspace that is a role's default workspace, and a per-role default workspace the-intern created
+- **When:** a team member unregisters either
+- **Then:** the first is refused naming the role, the second is refused naming the reason, and the file is unchanged
+
+**Verification:** test — `test/unit/workspace_registry.test.ts`, `test/service/workspace_operations.test.ts`.
+
+#### AC-018.4 — After unregistering
+
+- **Given:** an agent seated in a registered workspace
+- **When:** the workspace is unregistered
+- **Then:** the seated agent keeps running its tools there, the unregistration survives a restart, and a new seat
+  naming the workspace is refused with the seat unchanged
+
+**Verification:** test — `test/service/seat_operations.test.ts` ("keeps running the tools of a conversation in a
+workspace that is then unregistered until its seat changes"), `test/service/workspace_operations.test.ts`.
+
+### REQ-004 — Role change by a team member
+
+The-intern SHALL let a team member change the seat of any conversation at any time.
+
+- The new seat names a role, and may name a model, a thinking level and a registered workspace other than that
+  role's defaults. A new agent of that role is seated, with the Full context mode.
+- The change applies from the next model turn. A model turn already running finishes with the seat it started
+  with, unless the team member also aborts or steers it.
+- Changing the seat of a job's lead conversation changes the job's lead agent.
+
+#### AC-004.1 — The next turn runs with the new seat
+
+- **Given:** a conversation seated as `bob`
+- **When:** a team member seats `gp`, with or without a model, thinking level and workspace override
+- **Then:** the next turn runs as `gp` with the named values, and a turn already running finishes with the old seat
+
+**Verification:** test — `test/service/seat_operations.test.ts`, `test/service/seating.test.ts` ("lets a running
+model turn finish with the old seat and runs the next turn with the new one").
+
+#### AC-004.2 — Invalid seat changes are refused
+
+- **Given:** a conversation
+- **When:** a seat change names an unknown role, model, thinking level, workspace or conversation
+- **Then:** it is refused and the seat is unchanged
+
+**Verification:** test — `test/service/seat_operations.test.ts`.
+
+#### AC-004.3 — Reseating a lead conversation changes the job's lead
+
+- **Given:** a job's lead conversation seated as `bob`
+- **When:** a team member seats `gp`
+- **Then:** the conversation stays the job's lead conversation, and its agent, now `gp`, is the job's lead
+
+**Verification:** test — `test/service/seat_operations.test.ts` ("keeps the lead conversation the job").
+
+### REQ-005 — Seat effects
+
+After a seat is applied, every model turn in that conversation MUST:
+
+- use the seat's model and thinking level
+- see the role's instructions and skills
+- be offered exactly the role's tools and the coordination capabilities
+- run its tools in the seat's workspace
+- see that workspace's instructions and skills
+
+Nothing of the previous seat's instructions, skills or workspace stays in the system prompt. The transcript stays
+visible to the new agent unless a Clean handoff or a reset (REQ-011) cleared the context.
+
+#### AC-005.1 — The prompt carries the new seat only
+
+- **Given:** a conversation seated as one role in one workspace
+- **When:** it is reseated as another role in another workspace
+- **Then:** the next system prompt holds the new role's instructions and skills and the new workspace's context files
+  and skills, and nothing of the previous seat
+
+**Verification:** test — `test/service/role_prompt_extension.test.ts`, `test/unit/role_prompt.test.ts`,
+`test/unit/workspace_context.test.ts`.
+
+#### AC-005.2 — Exactly the role's tools are offered
+
+- **Given:** a role whose tool set is `read` plus the coordination tools
+- **When:** an agent of it takes a turn
+- **Then:** the model is offered `read` and the coordination tools, and none of `write`, `edit` and `bash`; nothing
+  is loaded from the pi agent folder
+
+**Verification:** test — `test/service/shipped_tools.test.ts`, `test/unit/workspace_context.test.ts` ("returns no
+context file or skill from the pi agent folder").
+
+#### AC-005.3 — Tools run in the seat's workspace
+
+- **Given:** a conversation seated in a workspace
+- **When:** the agent calls `bash`
+- **Then:** the command runs in that workspace
+
+**Verification:** test — `test/service/shipped_tools.test.ts` ("runs bash in the workspace the conversation is seated
+in").
+
+#### AC-005.4 — The prompt is byte-stable
+
+- **Given:** a conversation whose seat and role don't change
+- **When:** it takes two consecutive turns
+- **Then:** both turns send byte-identical system prompt sections
+
+**Verification:** test — `test/service/role_prompt_extension.test.ts` ("sends the same system prompt on two
+consecutive turns while the seat is unchanged"), `test/unit/role_prompt.test.ts`.
+
+### REQ-006 — Handoff by an agent
+
+The current agent SHALL be able to hand its conversation to a new agent of another role, and its own work ends there.
+A handoff happens because a team member or another agent asked for it in a prompt, or because the agent decides to. No
+human confirms it. A handoff in a job's lead conversation passes the lead to the new agent.
+
+- The handing-off agent may name a model, a thinking level and a registered workspace other than the target
+  role's defaults.
+- It chooses a context mode. In every mode the conversation stays the same; only the agent, its seat and the
+  context change:
+  1. **Full.** The new agent processes the full context.
+  2. **Compact.** The context is compacted using a handoff note the agent writes, and the new agent continues from
+     the compacted context.
+  3. **Clean.** The conversation's context is reset, and the model gets a clean context whose only input is the
+     agent's handoff note. Earlier entries stay in the stored transcript and in monitoring, but the model no
+     longer sees them.
+- In every mode the new agent starts working without any new input from outside the conversation, on the worker
+  thread the conversation already holds.
+
+#### AC-006.1 — Full handoff
+
+- **Given:** an agent in a conversation
+- **When:** it hands off to another role with the Full context mode
+- **Then:** the next turn runs in the same conversation with the new seat, the full context and no new input
+
+**Verification:** test — `test/service/handoff.test.ts`.
+
+#### AC-006.2 — Compact handoff
+
+- **Given:** an agent in a conversation
+- **When:** it hands off with the Compact context mode and a note
+- **Then:** the context is compacted guided by the note before the new seat continues
+
+**Verification:** test — `test/service/handoff.test.ts`.
+
+#### AC-006.3 — Clean handoff
+
+- **Given:** an agent in a conversation with earlier entries
+- **When:** it hands off with the Clean context mode and a note
+- **Then:** the model's context holds only the note, the stored transcript keeps every earlier entry, and the new
+  agent runs on the same worker thread
+
+**Verification:** test — `test/service/handoff.test.ts`.
+
+#### AC-006.4 — A refused handoff leaves the seat unchanged
+
+- **Given:** an agent in a conversation
+- **When:** it hands off naming an unknown role, an unregistered workspace, an unresolvable override, or no note for
+  Compact or Clean
+- **Then:** it gets an error result and the seat is unchanged
+
+**Verification:** test — `test/service/handoff.test.ts`.
+
+### REQ-007 — Seat records
+
+Every seat change MUST show in the transcript. The record names:
+
+- the previous seat and the new seat (role, model, thinking level, workspace)
+- the actor: a team member (with the way in they used), the agent that handed off (with its role), or a job source
+- for a handoff, the context mode, and the handoff note when there is one
+
+Every assistant message MUST be attributed to the seat that produced it.
+
+#### AC-007.1 — The seat record
+
+- **Given:** a conversation
+- **When:** its seat changes by a team member, a handoff or a job source
+- **Then:** an `intern.seat` record names the previous and new seat, the actor (the team member's way in, or
+  in-process when none is named; the agent's role; or the job source), and for a handoff the context mode and note
+
+**Verification:** test — `test/service/seating.test.ts`, `test/service/seat_operations.test.ts` ("records the agent
+with the role its own conversation is seated in", "seatActorFor").
+
+#### AC-007.2 — Attribution
+
+- **Given:** a transcript with several seat records and a reset
+- **When:** it is read
+- **Then:** each assistant entry carries the seat of the latest seat record before it, across pages and resets
+
+**Verification:** test — `test/unit/attribution.test.ts`, `test/service/conversation_read_operations.test.ts`.
+
+### REQ-008 — Agent invocation
+
+Any agent SHALL be able to invoke one or more agents for parts of its job. Each invoked agent gets a new conversation
+of the same job, a role, optionally a model, a thinking level and a registered workspace other than the role's
+defaults, and a job prompt for its part.
+
+- The invoking agent chooses a context mode for each invoked conversation: **Full** (a copy of the invoking
+  conversation's context, then the job prompt), **Compact** (a compaction of that context guided by the job prompt,
+  then the job prompt) or **Clean** (only the job prompt).
+- Invoked agents follow every rule in this spec, so they can hand off and invoke agents of their own. They run in
+  parallel, each on its own worker thread. An invoked agent finishes its part and reports; it never closes the job.
+- The invoking agent then chooses how it carries on:
+  1. **Steerable.** It keeps running on its worker thread and can steer the agents it invoked (REQ-020).
+  2. **Parked.** Its conversation is parked: pi-durable keeps the state of the conversation and its agent, and the
+     worker thread is freed. A parked agent can't steer. It continues as REQ-019 describes.
+- An invocation that parks must be the only tool call of its model turn. One that shares its model turn with other
+  tool calls is refused like an invocation past the depth cap (REQ-009): the invoking agent gets an error result that
+  says why, no conversation is created, and its run continues.
+- Aborting a conversation also aborts the invoked conversations whose report it is still waiting for, whether it
+  is steerable or parked. Each of those aborts the conversations it waits for in turn. Aborting a job aborts every
+  conversation of the job; the operation that does it belongs to the Jobs spec, and this spec delivers the capability
+  it calls.
+- An abort leaves no aborted conversation parked or waiting for a report. Its held messages (REQ-020) are withdrawn,
+  as an abort withdraws queued input. Whether its invoking conversation gets a report follows REQ-019.
+
+#### AC-008.1 — Each context mode
+
+- **Given:** an invoking conversation with a context
+- **When:** it invokes agents with the Full, Compact and Clean context modes
+- **Then:** the Full context is a copy of the invoking context then the job prompt, the Compact context is a
+  compaction of it then the job prompt, and the Clean context is only the job prompt
+
+**Verification:** test — `test/service/invocation.test.ts`.
+
+#### AC-008.2 — Invoked agents run in parallel in the same job
+
+- **Given:** an agent
+- **When:** it invokes two agents
+- **Then:** two seated conversations of the same job are created and run in parallel, each linked to the invoker
+
+**Verification:** test — `test/service/invoke.test.ts`, `test/service/invocation.test.ts`.
+
+#### AC-008.3 — Steerable and parked
+
+- **Given:** an agent invoking agents
+- **When:** it chooses steerable, or parked
+- **Then:** steerable returns the invoked conversation ids and the run continues and can steer them; parked ends the
+  run, parks the conversation and frees its worker thread
+
+**Verification:** test — `test/service/invoke.test.ts`, `test/service/steer.test.ts`.
+
+#### AC-008.4 — A parked invocation sharing its model turn is refused
+
+- **Given:** a model turn with a parked `invoke` and another tool call
+- **When:** the turn runs
+- **Then:** the invocation gets an error result saying why, no conversation is created, and the run continues
+
+**Verification:** test — `test/service/invoke.test.ts` ("refuses a parked invoke that shares its model turn").
+
+#### AC-008.5 — Aborts cascade to awaited conversations
+
+- **Given:** a steerable or parked conversation awaiting invoked conversations, which await their own
+- **When:** it is aborted
+- **Then:** every awaited conversation is aborted in turn, and one that has already reported is untouched
+
+**Verification:** test — `test/service/abort_cascade.test.ts`.
+
+#### AC-008.6 — Aborting a job's conversations
+
+- **Given:** two jobs with several conversations each
+- **When:** the job abort capability runs for one job
+- **Then:** every conversation of that job is aborted and none of the other job
+
+**Verification:** test — `test/service/abort_cascade.test.ts` ("abortJobConversations").
+
+#### AC-008.7 — An abort leaves nothing parked or awaiting
+
+- **Given:** a steerable or a parked invoker with report delivery running
+- **When:** it is aborted, or its job's conversations are
+- **Then:** no aborted conversation is parked, awaiting a report or holding messages
+
+**Verification:** test — `test/service/abort_cascade.test.ts` ("an abort with report delivery running").
+
+### REQ-019 — Clean-up step and reports
+
+When an invoked agent decides its part is done, the report-back clean-up step SHALL run:
+
+- An invoked agent's part is done when its agent run ends while its conversation is not parked and waits for no
+  report from a conversation it invoked. A run that ends while either holds doesn't end the part; the report goes
+  back when a later run ends that way.
+- The invoked agent's summary, its last answer, is delivered into the invoking conversation as a new input the
+  moment the invoked agent finishes.
+- If the invoking conversation is running, the report arrives like a follow-up (REQ-020). If it is idle or parked, the
+  conversation becomes ready, takes a free worker thread and continues with the report.
+- The transcript records which invoked agent sent each report: the report is placed as an `intern.report` entry
+  whose data names the invoked conversation and its role and carries the text (ADR-004).
+- A parked conversation continues either on each report as it arrives or only when every agent it invoked has
+  reported. Both behaviours must be possible. How the choice is made is decided later. Until then the continue rule
+  is "continue on each report" (product owner ruling, 2026-10-31).
+- When an invoked conversation is aborted on its own, not by an abort that cascades from its invoking conversation,
+  the invoking conversation gets a report that says the invoked conversation was aborted, with the invoked agent's
+  last answer when there is one. A parked invoking conversation then continues under its continue rule. An abort
+  that cascades from the invoking conversation (REQ-008), or that aborts the whole job, delivers no report.
+
+When the lead agent decides the job is done, closing the job follows the Jobs spec.
+
+#### AC-019.1 — A report arrives as new input
+
+- **Given:** an invoking conversation that is running, idle or parked
+- **When:** an invoked agent finishes its part
+- **Then:** its last answer arrives as a follow-up in the running one, and makes the idle or parked one run on it
+
+**Verification:** test — `test/service/reports.test.ts`.
+
+#### AC-019.2 — The report entry names its sender
+
+- **Given:** a report delivered to a running, an idle or a parked invoker
+- **When:** the transcript is read
+- **Then:** the report is an `intern.report` entry naming the invoked conversation and its role, and several reports
+  each name their own agent, in arrival order
+
+**Verification:** test — `test/service/reports.test.ts` ("report entries").
+
+#### AC-019.3 — Both continue rules
+
+- **Given:** a parked invoker awaiting two reports
+- **When:** the reports arrive
+- **Then:** under "continue on each" it runs on each report; under "after every report" it runs only after the last
+
+**Verification:** test — `test/service/reports.test.ts`.
+
+#### AC-019.4 — A nested agent reports only when its part is done
+
+- **Given:** an invoked agent that parks on, or steerably awaits, agents of its own
+- **When:** its runs end while it still awaits a report
+- **Then:** it reports only after its run on the last awaited report ends
+
+**Verification:** test — `test/service/reports.test.ts`.
+
+#### AC-019.5 — The "aborted" report
+
+- **Given:** an invoked conversation, running, idle or parked
+- **When:** it is aborted on its own
+- **Then:** its invoker gets one report saying it was aborted, with its last answer when there is one, and a parked
+  invoker continues; an invoked conversation aborted by the cascade from its invoker reports nothing
+
+**Verification:** test — `test/service/abort_cascade.test.ts` ("a lone abort of an invoked conversation with report
+delivery running").
+
+### REQ-009 — Depth cap
+
+Agent invocations MUST chain only to a maximum depth. A job's lead conversation has depth 0, and an invoked
+conversation has the invoking conversation's depth plus one.
+
+- An invocation that would exceed the cap is refused. The invoking agent gets an error result that names the cap,
+  and its run continues.
+- Handoffs, role changes by a team member and resets don't change depth.
+
+#### AC-009.1 — An invocation past the cap is refused
+
+- **Given:** an agent in a conversation at the depth cap
+- **When:** it invokes an agent
+- **Then:** it gets an error result naming the cap, nothing is created, and its run continues
+
+**Verification:** test — `test/service/invoke.test.ts`, `test/service/invocation.test.ts`.
+
+#### AC-009.2 — Seat changes keep the depth
+
+- **Given:** an invoked conversation with a depth
+- **When:** it is reseated with a reset
+- **Then:** its depth and job links are unchanged
+
+**Verification:** test — `test/service/seat_operations.test.ts` ("keeps the depth and the job links of the
+conversation").
+
+### REQ-010 — Worker threads
+
+At most a fixed number of agent runs SHALL be active at the same time, one per worker thread, counted across every job
+and every conversation. This is S-000's limit on how many agents work at once, and it also bounds how wide invocations
+spread.
+
+- Work beyond the cap waits in arrival order and starts when a worker thread frees. It is not dropped.
+- A parked or idle conversation holds no worker thread, so the cap can never deadlock an invoking agent against
+  the agents it waits for, and a blocked job never counts against it.
+- A parked conversation that a report or an answer makes ready waits for a worker thread like any other work.
+- Monitoring shows waiting work as "waiting for a worker thread".
+
+#### AC-010.1 — A parked agent frees its worker thread
+
+- **Given:** one worker thread
+- **When:** an agent invokes an agent and parks
+- **Then:** the invoked agent runs, and the parked agent then continues
+
+**Verification:** test — `test/service/agents_capacity.test.ts` ("runs a parked agent").
+
+#### AC-010.2 — Waiting work starts in arrival order
+
+- **Given:** every worker thread busy
+- **When:** more work arrives
+- **Then:** it is reported as waiting for a worker thread and starts in arrival order as threads free
+
+**Verification:** test — `test/service/agents_capacity.test.ts`, `test/service/admission.test.ts`.
+
+### REQ-020 — Steering
+
+The-intern SHALL let a team member, and any agent, steer a running conversation by injecting a message that the
+running model turn picks up after its current tool round. The message can be queued as a follow-up instead.
+
+- An agent steers through a coordination capability that names the target conversation.
+- A message sent to a parked conversation waits until it continues, whatever its busy mode: a message sent with the
+  mode that refuses input while a run is active (reject, S-002 REQ-012) is held like any other message, not refused,
+  and the conversation takes it as a follow-up when it continues.
+- The transcript records who steered.
+
+#### AC-020.1 — Steer and follow-up
+
+- **Given:** a running conversation
+- **When:** an agent steers it, or queues a follow-up
+- **Then:** the steer is delivered after the current tool round and the follow-up only after the run ends, each
+  recorded with the agent that sent it
+
+**Verification:** test — `test/service/steer.test.ts`.
+
+#### AC-020.2 — Steering by a team member
+
+- **Given:** an idle conversation
+- **When:** a team member steers it
+- **Then:** the message is recorded with the team member and their way in
+
+**Verification:** test — `test/service/steer.test.ts`.
+
+#### AC-020.3 — An unknown target
+
+- **Given:** a running agent
+- **When:** it steers a conversation that doesn't exist
+- **Then:** it gets an error result and its run continues
+
+**Verification:** test — `test/service/steer.test.ts`.
+
+#### AC-020.4 — Messages to a parked conversation are held
+
+- **Given:** a parked conversation
+- **When:** a team member and an agent send it messages, in each busy mode including reject, and one request twice
+- **Then:** each message is held once without a run and delivered as its own `intern.steer` entry with its sender when
+  the conversation continues
+
+**Verification:** test — `test/service/steer.test.ts` ("a parked conversation").
+
+### REQ-011 — Reset by a team member
+
+The-intern SHALL let a team member reset any conversation: its context is cleared for the model, earlier entries stay
+in the stored transcript, and the seat is kept unless the reset names a new one.
+
+#### AC-011.1 — Reset keeps the seat and the entries
+
+- **Given:** a conversation with entries
+- **When:** a team member resets it
+- **Then:** the next context is empty, every earlier entry is stored, and the seat is kept
+
+**Verification:** test — `test/service/seat_operations.test.ts` ("conversations.reset"),
+`test/service/conversation_control_operations.test.ts`.
+
+#### AC-011.2 — Reset with a new seat
+
+- **Given:** a conversation
+- **When:** a team member reseats it with a reset and a note
+- **Then:** the context is cleared for the new seat, the note starts the new context, the earlier entries are kept and
+  a clean seat change is recorded; a seat that doesn't resolve is refused and neither resets nor reseats
+
+**Verification:** test — `test/service/seat_operations.test.ts` ("conversations.seat with a reset").
+
+### REQ-012 — Lead conversation of a job
+
+When a job is created (Jobs spec), entry routing SHALL start its lead conversation:
+
+- with the role the job source names, or `bob` when it names none, with that role's defaults unless a team member's
+  request names a model, a thinking level or a registered workspace
+- with the job's first input as its first input
+- with an origin that records the job source: the team member's request and its way in, the schedule entry and fire
+  time, the trigger and its event, or the conversation that created the follow-up job
+
+Every conversation MUST record the job it belongs to and whether it is the job's lead conversation.
+
+#### AC-012.1 — Role, first input and job links
+
+- **Given:** a new job
+- **When:** its lead conversation starts with no role named, and with a role and overrides a request names
+- **Then:** it is seated as `bob` with its defaults, or as the named role with the named values, carries its job links
+  and the first input
+
+**Verification:** test — `test/service/job_operations.test.ts`.
+
+#### AC-012.2 — The origin of each job source
+
+- **Given:** each job source kind
+- **When:** a lead conversation starts for it
+- **Then:** its origin records the job source, and the job source is the seat actor
+
+**Verification:** test — `test/service/job_operations.test.ts`.
+
+#### AC-012.3 — Refusals create nothing
+
+- **Given:** a start that names an unknown role, an unresolvable override, an override from a source other than a
+  request, or a follow-up origin naming no existing conversation
+- **When:** it is called
+- **Then:** it is refused and nothing is created
+
+**Verification:** test — `test/service/job_operations.test.ts`.
+
+#### AC-012.4 — A repeated start creates one lead
+
+- **Given:** a start that is repeated, or one interrupted by a crash
+- **When:** it is called again
+- **Then:** the original conversation is returned and the first input is submitted once
+
+**Verification:** test — `test/service/job_operations.test.ts`, `test/service/agents_crash.test.ts`.
+
+### REQ-013 — Schedule fires and triggers
+
+Each fire of a schedule entry or of a trigger SHALL create a new job and so a new lead conversation (REQ-012). The
+schedule entry or trigger may name a role, and the lead conversation starts with it. The schedules and triggers spec
+defines the rest of a fire's behaviour (product owner ruling, 2026-10-31): refusing an entry that names an unknown
+role when it is loaded or created, the history of its last runs an entry passes to its next run, skipping a fire whose
+seat workspace folder no longer exists, and skipping a fire while the entry's previous job still works.
+
+#### AC-013.1 — A fire starts a lead conversation with its role
+
+- **Given:** a schedule fire or a trigger origin naming a role
+- **When:** the lead conversation of its job starts
+- **Then:** it is seated as the named role, with its defaults, and its origin records the fire or the trigger
+
+**Verification:** test — `test/service/job_operations.test.ts` ("records the origin of each job source kind").
+
+### REQ-014 — Unattended runs and blocked jobs
+
+No conversation SHALL wait for a human, except a job's lead conversation while its job is blocked. Then the lead
+conversation is parked: it holds no worker thread, and the answer to the job's question arrives as a new input that
+makes it ready again. Handoffs and agent invocations have no confirmation step. Parking for reports waits for agents,
+not for a human.
+
+#### AC-014.1 — A blocked job holds no worker thread
+
+- **Given:** one worker thread and a job whose lead conversation is parked
+- **When:** another conversation has work, and later the answer arrives
+- **Then:** the other conversation runs, and the lead continues once a worker thread is free
+
+**Verification:** test — `test/service/agents_capacity.test.ts` ("a job").
+
+### REQ-015 — Missing workspace during a run
+
+If a seat's workspace folder disappears while a conversation uses it, tool calls that need the workspace MUST fail as
+ordinary tool errors that the agent sees. The daemon keeps running.
+
+#### AC-015.1 — A removed workspace gives a tool error
+
+- **Given:** a conversation seated in a workspace
+- **When:** the folder is removed and the agent calls a tool
+- **Then:** the tool returns an error result, and the conversation answers the next input
+
+**Verification:** test — `test/service/shipped_tools.test.ts` ("returns an error result and answers the next input
+when the workspace folder is removed").
+
+### REQ-016 — Monitoring
+
+The-intern SHALL let a team member do all of the following through the read operations of the service layer (S-002
+REQ-012, REQ-014), without the daemon interrupting any running work. The command-line views of them belong to the
+command-line spec (product owner ruling, 2026-10-31).
+
+- list all conversations with id, job, whether it is the job's lead conversation, seat (role, model, thinking
+  level, workspace), origin (job source or invoking conversation), status (running, idle, parked or waiting for a
+  worker thread) and last activity
+- list the conversations of a job
+- show the conversations a conversation invoked, recursively
+- read a transcript with seat records and attribution (REQ-007), including entries from before a reset
+- follow a running conversation live
+
+#### AC-016.1 — List and filter by job
+
+- **Given:** conversations of several jobs, in each status
+- **When:** a team member lists them, and lists one job's
+- **Then:** each is returned with its job, lead flag, seat, origin, status, last activity and depth, and the job filter
+  returns only that job's
+
+**Verification:** test — `test/service/conversation_read_operations.test.ts`.
+
+#### AC-016.2 — Invocations
+
+- **Given:** a conversation that invoked agents that invoked their own
+- **When:** a team member reads its invocations
+- **Then:** the invoked conversations are returned recursively
+
+**Verification:** test — `test/service/conversation_read_operations.test.ts`.
+
+#### AC-016.3 — Transcript content
+
+- **Given:** a transcript with seat records, a reset, reports and steers
+- **When:** a team member reads it
+- **Then:** it holds the seat records, the entries before the reset, each assistant entry with its seat, and report
+  and steer entries by their own data
+
+**Verification:** test — `test/service/conversation_read_operations.test.ts`.
+
+#### AC-016.4 — Follow live
+
+- **Given:** a running conversation
+- **When:** a team member subscribes to it
+- **Then:** they get a snapshot and then each change, with seat changes and report and steer entries by their own data
+
+**Verification:** test — `test/service/conversation_feed.test.ts`, `test/service/instance_feed.test.ts`.
+
+## Quality Requirements
+
+### REQ-017 — Durability
+
+Seats, seat records, resets, job links, invocation links, depth, origins, parked state and undelivered reports MUST
+survive a daemon kill and restart. A seat change, handoff, reset, invocation, park or report interrupted by a crash
+either completed before the crash or completes on resume. It is never half-applied: never a new seat without its
+record, never an invoked conversation without its invocation link, never a lead conversation without its job, and
+never a report lost or delivered twice. Work waiting for a worker thread is still waiting after the restart, in the
+same order.
+
+#### AC-017.1 — Kill during a seat change, a handoff, an invocation and a lead start
+
+- **Given:** a daemon in the middle of a seat change, a Clean handoff, an agent invocation or a lead start
+- **When:** it is killed with `kill -9` and restarted
+- **Then:** each change is either complete with its record and links or not applied, and each first input and job
+  prompt runs once
+
+**Verification:** test — `test/service/agents_crash.test.ts`.
+
+#### AC-017.2 — Kill while parked, delivering or waiting
+
+- **Given:** a daemon with a parked conversation, a report being delivered, a held message, or work waiting for a
+  worker thread
+- **When:** it is killed with `kill -9` and restarted
+- **Then:** the conversation stays parked without a worker thread and continues on its reports, each report and held
+  message is delivered exactly once, and the waiting work keeps its order and runs once
+
+**Verification:** test — `test/service/agents_crash_reports.test.ts`, `test/service/reports.test.ts` ("delivers a
+report exactly once when the host closed before it was delivered").
 
 ## Configuration Requirements
 
 - **Roles.**
   - **What:** the team's own roles, and the changes made to the shipped roles: instructions, tool set, skills,
-    default model, thinking level and workspace (R-3).
+    default model, thinking level and workspace (REQ-003).
   - **Where:** the-intern's configuration (described in the daemon spec), also changeable while the daemon runs
-    (R-3, S-002 R-22).
+    (REQ-003, S-002 REQ-022).
   - **Constraints:** role names are unique; a tool set names only shipped tools; a model must be one that the pi
     agent login and model registry can resolve; a thinking level must be one pi-durable accepts; a default workspace
     must be registered.
@@ -489,95 +1136,81 @@ The lead verifies against the definition of done and closes the job (Jobs spec)
 - **Registered workspaces.**
   - **What:** the folders that may be used as workspaces.
   - **Where:** the-intern's configuration, plus the per-role default workspaces the-intern creates. Registrations
-    and unregistrations can also be made while the daemon runs (R-3a, S-002 R-22).
+    and unregistrations can also be made while the daemon runs (REQ-018, S-002 REQ-022).
   - **Constraints:** an absolute, existing directory accessible only to the account the-intern runs as (trusted
-    input), checked at registration (R-3a). Team members are responsible for what parent directories contribute,
+    input), checked at registration (REQ-018). Team members are responsible for what parent directories contribute,
     because `AGENTS.md` files are also read from parent directories.
   - **Missing:** only the per-role default workspaces exist. A registration that fails the check stops the daemon
     at startup.
 
 A change to one of the settings above made while the daemon runs is checked as at startup. Where an invalid value in
 the file stops the daemon at startup, an invalid runtime change is refused with the reason and nothing changes
-(S-002 R-22).
+(S-002 REQ-022).
 
 - **Role in a schedule entry or trigger.**
   - **What:** an optional role name per schedule entry or trigger.
   - **Where:** the schedule and trigger store, which the schedules and triggers spec defines, together with each
-    entry's run history (R-13).
+    entry's run history (REQ-013).
   - **Constraints:** an existing role.
-  - **Missing:** `bob` (R-12).
+  - **Missing:** `bob` (REQ-012).
 - **Invocation depth cap.**
-  - **What:** the maximum invocation depth (R-9). It bounds runaway invocation chains that no human is watching.
-  - **Where:** a built-in constant of the daemon (S-002 R-9), not a setting.
+  - **What:** the maximum invocation depth (REQ-009). It bounds runaway invocation chains that no human is watching.
+  - **Where:** a built-in constant of the daemon (S-002 REQ-009), not a setting.
   - **Constraints:** **10**. It changes only with a release.
   - **Missing:** not applicable; the constant always applies.
 - **Worker threads.**
-  - **What:** the number of worker threads, which is the maximum number of active agent runs (R-10). It bounds
+  - **What:** the number of worker threads, which is the maximum number of active agent runs (REQ-010). It bounds
     local load.
-  - **Where:** a built-in constant of the daemon (S-002 R-9), not a setting. Tests may set a smaller count
+  - **Where:** a built-in constant of the daemon (S-002 REQ-009), not a setting. Tests may set a smaller count
     through a test-only switch.
   - **Constraints:** **32**, the most concurrent agent runs the daemon is tested with. It changes only with a
     release, after load tests.
   - **Missing:** not applicable; the constant always applies.
 - **Live test model.**
-  - **What:** the model used by the live acceptance tests.
+  - **What:** the model used by the live acceptance tests (Success Criteria).
   - **Where:** a test-only setting.
   - **Constraints:** a low-cost OpenAI model available through the existing pi agent login of the account running
     the tests. No credentials are stored in the repository or the state dir.
   - **Missing:** live tests are skipped with a visible notice. Deterministic tests still run.
 
-## Verification
+## Assumptions and Dependencies
 
-- **Deterministic tests** use a fake model whose replies are a pure function of the transcript. They cover:
-  - R-3: creating, changing and removing a role; changing a shipped role and restoring it; removing a shipped role,
-    or a role a schedule entry names, is refused; an unknown tool is refused; an agent of a role whose tool set
-    leaves out a coordination capability is still offered every coordination capability; seated agents keep their
-    role as it was when they were seated
-  - seat effects (R-4, R-5), including overrides of model, thinking level and workspace, and a seat change of a lead
-    conversation changing the job's lead
-  - each handoff context mode (R-6): after Clean, the model's context contains only the handoff note while the
-    stored transcript keeps every entry; the new agent runs on the same worker thread
-  - seat records (R-7)
-  - agent invocation (R-8): each context mode; several invoked agents running in parallel in conversations of the
-    same job; steerable with steering of an invoked agent; parked, with the worker thread freed; a parked invocation
-    that shares its model turn with another tool call is refused while the run continues; an abort reaches the
-    invoked agents whose report is awaited, recursively; aborting a job aborts all its conversations; after an
-    abort, with report delivery running, no aborted conversation is parked or waiting for a report, for a steerable
-    and for a parked invoking conversation
-  - reports (R-8a): a report arrives as new input in a running, an idle and a parked invoking conversation, as an
-    `intern.report` entry naming the invoked conversation and its role; a parked conversation continues on each
-    report, and in the other behaviour only after the last report; an invoked agent that parks on two agents of its
-    own reports only after its own last run ends; an invoked conversation aborted on its own delivers an "aborted"
-    report with its last answer, and one aborted by its invoker's cascade delivers none
-  - steering (R-10a), including a message sent to a parked conversation, with each busy mode
-  - R-9 and R-10: an invocation at the depth cap is refused while the invoking agent continues; with one worker
-    thread, a parked agent's invoked agent runs and the parked agent then continues; waiting work starts in arrival
-    order
-  - R-3a: registration accepts a valid folder and refuses a relative, missing, non-directory or group- or
-    world-accessible path; unregistering is refused for a role's default workspace and for a per-role default
-    workspace the-intern created; after unregistering, a seated agent keeps working there and a new seat naming it
-    is refused
-  - R-11 to R-13: reset; a new job's lead conversation gets the named role (or `bob`), its first input and its
-    origin for each job source. The tests of a fire's history and skips belong to the schedules and triggers spec.
-  - R-14: a blocked job's lead conversation holds no worker thread, and an answer makes it continue
-  - R-15: a removed workspace produces a tool error and the daemon keeps running
-  - R-16: list, job links, statuses, invocations and transcript content
-  - R-17: a test kills the daemon during a seat change, a Clean handoff, an agent invocation, while a conversation is
-    parked, while a report is being delivered and while work waits for a worker thread, then checks the invariants
-    after restart
-- **Live acceptance tests** run against the pi agent-configured OpenAI account of the account running the tests,
-  with a low-cost model:
-  1. Moved to the schedules and triggers spec (product owner ruling, 2026-10-31): a scheduled job for the `bob` role
-     that asks for a simple file task in `gp`'s workspace. The lead hands off to `gp` or invokes a `gp` agent, the
-     file appears in `gp`'s workspace, and the transcript shows the seat change or the invocation.
-  2. Through the seat change operation (`conversations.seat`), change the seat of a job's lead conversation from
-     `bob` to `gp`. The next answer is attributed to `gp`, and `gp`'s tools run in `gp`'s workspace. The command line
-     comes with its own spec (product owner ruling, 2026-10-31).
-  3. A `gp` agent invokes two `bob` agents and parks. Both reports arrive as new input, and the `gp` agent continues.
-- **Prompt stability:** with the seat and the role unchanged, two consecutive turns produce byte-identical system
-  prompt sections.
+- **S-002, Daemon and host runtime.** Provides the database, startup, configuration file, service layer, admission
+  and observation feed this spec builds on. Its built-in constants fix the depth cap and the worker-thread count.
+- **The Jobs spec (not yet written).** Creates jobs and calls `jobs.startLead` (REQ-012), decides when a job is blocked
+  and delivers its answer (REQ-014), closes jobs, and offers the job abort operation that calls this spec's capability
+  (REQ-008). Until it exists, the operations are called by tests and the live checks.
+- **The schedules and triggers spec, the command-line spec and the Email spec (not yet written).** They own the fire
+  behaviour (REQ-013), the monitoring views (REQ-016) and the mailbox. This spec's live acceptance test 1 moved to the
+  schedules and triggers spec (product owner ruling, 2026-10-31).
+- **pi-durable** (the pinned version in `README.md`). Provides the durable conversations, inbox, reset, compaction,
+  fork and task-owned abort that seating, handoff, invocation and steering use. The-intern's own facts about a
+  conversation live in its own document, with redelivery as the only recovery (ADR-001 decision 4); host writes during
+  a running turn are queued (ADR-003); inputs sent on someone's behalf are their own entry kinds (ADR-004). A pi-durable
+  upgrade that changes these behaviours needs a review of REQ-006, REQ-008, REQ-019, REQ-020 and REQ-017.
+- **pi agent login and settings** of the account the-intern runs as. They give the models, the default model and the
+  default thinking level (REQ-003). A missing login fails model requests, not the daemon (S-002).
+- **Assumption, confirmed by the implementation:** the account the-intern runs as is the boundary of what agents can
+  reach; workspaces don't confine agents (S-000, ADR-002).
+
+## Success Criteria
+
+1. With no configuration file, the daemon starts with exactly the roles `bob` and `gp`, and a team member can create,
+   change, restore and remove roles and register and unregister workspaces through the service operations, each change
+   surviving a restart (REQ-001, REQ-003, REQ-018). Measured by `npm test`.
+2. Live acceptance test 2: through `conversations.seat`, the seat of a job's lead conversation changes from `bob` to
+   `gp`; the next answer is attributed to `gp`, and `gp`'s tools run in `gp`'s workspace (REQ-004, REQ-005, REQ-007).
+   Measured by `npm run test:live:agents` (`test/live/live_agents.ts`) against a real model.
+3. Live acceptance test 3: a `gp` agent invokes two `bob` agents and parks; both reports arrive as new input, and the
+   `gp` agent continues (REQ-008, REQ-019). Measured by `npm run test:live:agents`.
+4. Every requirement's acceptance scenarios pass in `npm test` on the fake model, with no network, including the
+   kill-and-restart scenarios of REQ-017.
+5. Every conversation the daemon lists shows its job, lead flag, seat, origin and status, and a parked conversation
+   never holds a worker thread (REQ-010, REQ-014, REQ-016). Measured by `npm test`.
 
 ## Implementation Order
+
+Delivered: every phase below is implemented (tasks up to T-091).
 
 This spec relies on the daemon and host-runtime spec for the database, startup, configuration and process model,
 on the control-endpoint spec for the surfaces the command line, the web interface and monitoring use, and on the
@@ -591,6 +1224,17 @@ Jobs spec for creating jobs. Its phases can be developed against a minimal host 
 | 4 | Worker threads, and parked conversations freeing them | Phase 3, daemon spec's process model |
 | 5 | Job sources: the operation that starts a job's lead conversation for requests, schedule fires, triggers and follow-ups; the parking and continuing that blocked jobs use; the capability that aborts every conversation of a job. Monitoring read operations: list, job links, statuses, invocations, live transcript. The schedule behaviour, the command-line views and the job abort operation come with their own specs | Phases 1–3, S-002 phase 3 |
 
+## Open Questions
+
+Both questions are deferred decisions with a specified interim behaviour, so neither blocks the implemented
+behaviour. Deciding either one is a scope amendment of this spec.
+
+- **How a parked agent's continue rule is chosen.** Owner: product owner. Interim: continue on each report (REQ-019);
+  the "after every report" behaviour exists in the host and is tested. Resolved when the choice and who makes it are
+  decided.
+- **Model, thinking level or workspace per schedule entry.** Owner: product owner, with the schedules and triggers
+  spec. Interim: a fire runs with the named role's defaults (REQ-013). Resolved when that spec is written.
+
 ## Amendment Log
 
 | Date | What changed | Why | Affected tasks |
@@ -603,3 +1247,4 @@ Jobs spec for creating jobs. Its phases can be developed against a minimal host 
 | 2026-11-01 | Component 4 Interfaces: the conversation's `intern.conversation` document also holds its parked state and its abort mark, which records that its invoker is owed an "aborted" report (R-8a); an abort's facts are written in one commit just before pi-durable's abort. | R-8 and R-8a as amended in v0.3 (product owner decision F3) need the abort recorded as a fact, so an idle or parked conversation's "aborted" report is delivered and a crash doesn't lose it (R-17). Driving ADR: ADR-001 decision 4, amended 2026-11-01. | T-084, T-085 |
 | 2026-11-01 | spec-truth reconciliation — FAIL | Re-run after T-083 to T-089: the earlier findings are closed; the transcript read operations drop the sender of `intern.report` and `intern.steer` entries (R-16 with R-8a, R-10a) | none |
 | 2026-11-01 | spec-truth reconciliation — PASS | Re-run after T-090 and T-091: finding N1 is closed; the transcript read and the conversation feed show `intern.report` and `intern.steer` by their own data, and the context read keeps the model message by product owner decision; ADR-004 amended | none |
+| 2026-11-01 | v0.5, format only; no requirement changed meaning. Restructured to the ai-team 0.18.0 spec format: requirements renumbered `R-n` → `REQ-00n`, with R-3a → REQ-018, R-8a → REQ-019 and R-10a → REQ-020 (mapping table in Behavioral Requirements); each requirement got acceptance scenarios with a Verification method, taken from the former Verification section and naming the tests that cover them; Prompt stability became AC-005.4; R-17 moved to Quality Requirements; Components merged into Responsibility Separation; added Users and Journeys, Alternatives Considered (from Exclusions and Definitions), Interfaces (from the shipped tools and operations), Assumptions and Dependencies, Success Criteria (from the Purpose outcomes and the live acceptance tests) and Open Questions (the two deferred decisions already recorded). Earlier rows keep their `R-n` identifiers. | Product owner request: S-001 must match the ai-team 0.18.0 format, keeping its meaning so the implementation stays valid. | None; references in code, docs and ADRs updated to the new identifiers |
