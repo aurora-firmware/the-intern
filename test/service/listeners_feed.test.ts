@@ -8,7 +8,8 @@ import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import { writeFile } from "node:fs/promises";
 import { type IncomingMessage, type OutgoingHttpHeaders, request, type Server } from "node:http";
 import { join } from "node:path";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, describe, it, mock } from "node:test";
+import { isDeepStrictEqual } from "node:util";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
@@ -20,7 +21,7 @@ import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts"
 import { createNetworkListenerComponent } from "../../src/listeners/network_listener.ts";
 import { networkSection } from "../../src/listeners/network_section.ts";
 import { localSocketPath } from "../../src/listeners/socket_path.ts";
-import type { Caller } from "../../src/service/operations.ts";
+import type { Caller, Catalogue } from "../../src/service/operations.ts";
 import { createFakeModel, type FakeModelOptions, type FakeReply, type FakeTranscript } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -70,6 +71,7 @@ const streams: FeedStream[] = [];
 const recorders: { stop(): void }[] = [];
 
 afterEach(async () => {
+    mock.restoreAll();
     for (const recorder of recorders.splice(0)) recorder.stop();
     for (const stream of streams.splice(0)) stream.close();
     for (const daemon of daemons.splice(0)) await Promise.race([daemon.stop(), sleep(STOP_BOUND_MS)]);
@@ -218,6 +220,8 @@ function loopingReply(transcript: FakeTranscript): FakeReply {
 }
 
 type Fixture = {
+    /** The catalogue both listeners call. */
+    catalogue: Catalogue;
     invoke(name: string, input: unknown): Promise<unknown>;
     openFeed(listener: Listener, query: string, headers?: OutgoingHttpHeaders): Promise<FeedStream>;
     post(listener: Listener, name: string, input: unknown, headers?: OutgoingHttpHeaders): Promise<Answer>;
@@ -320,7 +324,8 @@ async function startFixture(
     const postTo = (listener: Listener, name: string, input: unknown, headers: OutgoingHttpHeaders = {}) =>
         post(targetOf(listener), name, input, headers);
 
-    return { invoke, openFeed, post: postTo, idleConversation, submitAndSettle, entries };
+    const fixture = { catalogue: daemon.catalogue, invoke, openFeed, post: postTo, idleConversation, submitAndSettle };
+    return { ...fixture, entries };
 }
 
 async function nextEvent(stream: FeedStream): Promise<FeedEvent> {
@@ -587,5 +592,85 @@ describe("long calls through each listener", { timeout: TEST_TIMEOUT_MS }, () =>
             assert.equal(server.timeout, LISTENER_TIMEOUT_MS, `the ${way}'s idle timeout`);
         }
         assert.notEqual(recorded.serverOf("wait local socket"), recorded.serverOf("wait network listener"));
+    });
+});
+
+type Subscription = { next(): Promise<unknown>; close(): void };
+
+/** Records what each subscription `feed.subscribe` hands a listener last read: a delta or the reason it closed. */
+function recordSubscriptionReads(catalogue: Catalogue): unknown[][] {
+    const readsBySubscription: unknown[][] = [];
+    const invoke = catalogue.invoke.bind(catalogue);
+    mock.method(catalogue, "invoke", async (name: string, input: unknown, caller: Caller) => {
+        const result = await invoke(name, input, caller);
+        if (name !== "feed.subscribe") return result;
+        const subscription = result as Subscription;
+        const reads: unknown[] = [];
+        readsBySubscription.push(reads);
+        const next = subscription.next;
+        subscription.next = async () => {
+            const read = await next();
+            reads.push(read);
+            return read;
+        };
+        return subscription;
+    });
+    return readsBySubscription;
+}
+
+/** Polls `read` until it equals `expected` or the wait ends, then asserts it does. */
+async function eventuallyEqual(read: () => Promise<unknown>, expected: unknown, what: string): Promise<void> {
+    const deadline = Date.now() + WAIT_TIMEOUT_MS;
+    let actual = await read();
+    while (!isDeepStrictEqual(actual, expected) && Date.now() < deadline) {
+        await sleep(POLL_INTERVAL_MS);
+        actual = await read();
+    }
+    assert.deepEqual(actual, expected, what);
+}
+
+function openConnections(server: Server): Promise<number> {
+    return new Promise((resolve, reject) =>
+        server.getConnections((error, count) => (error ? reject(error) : resolve(count))),
+    );
+}
+
+describe("refused and closed feeds through each listener", { timeout: TEST_TIMEOUT_MS }, () => {
+    it("refuses a feed with no scope as invalid_input and an unknown conversation as not_found", async () => {
+        const fixture = await startFixture();
+        const unknown = { scope: "conversation", conversationId: "999" };
+        const inProcess = await fixture.invoke("feed.subscribe", unknown).then(
+            () => assert.fail("subscribing to an unknown conversation in-process is refused"),
+            (error: { code: string; message: string }) => ({ code: error.code, message: error.message }),
+        );
+
+        for (const listener of LISTENERS) {
+            const noScope = await fixture.openFeed(listener, "");
+            const unknownId = await fixture.openFeed(listener, "?scope=conversation&id=999");
+
+            assert.equal(noScope.status, 400, `no scope over the ${listener}`);
+            assert.equal((await noScope.refusal()).error?.code, "invalid_input");
+            assert.equal(unknownId.status, 404, `an unknown conversation over the ${listener}`);
+            assert.deepEqual((await unknownId.refusal()).error, inProcess);
+        }
+    });
+
+    it("ends the subscription as unsubscribed and holds no connection once the client closes", async () => {
+        const recorded = recordServers();
+        const fixture = await startFixture();
+        const conversationId = await fixture.idleConversation("closed");
+        const reads = recordSubscriptionReads(fixture.catalogue);
+
+        for (const [index, listener] of LISTENERS.entries()) {
+            const query = `?scope=conversation&id=${conversationId}`;
+            const stream = await fixture.openFeed(listener, query, tagged(`closed ${listener}`));
+            assert.equal((await nextEvent(stream)).name, "snapshot");
+            stream.close();
+
+            const server = recorded.serverOf(`closed ${listener}`);
+            const lastRead = async () => reads[index]?.at(-1);
+            await eventuallyEqual(lastRead, { closed: "unsubscribed" }, `the ${listener}'s subscription ends`);
+            await eventuallyEqual(() => openConnections(server), 0, `the ${listener} holds no connection`);
+        }
     });
 });
