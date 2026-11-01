@@ -134,7 +134,7 @@ async function* subscribe(transport: Transport, scope: FeedScope): AsyncGenerato
         if (event.event === "snapshot") yield { snapshot: JSON.parse(event.data) };
         else if (event.event === "delta") yield { delta: JSON.parse(event.data) };
     }
-    return { end: "" };
+    throw new Error(`The feed ${feedPath(scope)} closed without an end event`);
 }
 
 export function createClient(transport: Transport): Client {
