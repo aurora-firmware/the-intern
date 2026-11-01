@@ -41,9 +41,10 @@ error exit, and unfinished work resumes from its checkpoints.
   configuration file has a `[network]` section; it then listens on the configured address and fixed port, in plain
   HTTP, and serves the web interface. Both expose every catalogue operation at `POST /operations/<name>`, with the
   routes derived from the catalogue so a new operation needs no listener change, and the observation feed as
-  Server-Sent Events at `GET /feed`. Only the network listener serves the web interface files, under `/ui/`. No
-  listener authenticates callers, checks request headers or encrypts traffic: whoever reaches a listener is a team
-  member ([ADR-002](../ai-team/decisions/ADR-002-equal-team-members-bounded-by-the-service-account.md)). Each
+  Server-Sent Events at `GET /feed`. Operation calls must send a JSON body (`Content-Type: application/json`, at
+  most 10 MiB). Only the network listener serves the web interface files, under `/ui/`. No listener authenticates
+  callers, refuses a call because of its `Origin`, `Host` or `Referer` header, or encrypts traffic: whoever reaches a
+  listener is a team member ([ADR-002](../ai-team/decisions/ADR-002-equal-team-members-bounded-by-the-service-account.md)). Each
   listener stamps the way in itself: it calls the service layer as a team member with the way in `command line` on
   the local socket and `web interface` on the network listener, and nothing in a request changes the caller (S-003
   REQ-007).
