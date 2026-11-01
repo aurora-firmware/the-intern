@@ -7,6 +7,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { CommitChange, ConversationId, EntryRecord, JsonObject, TaskId } from "@earendil-works/pi-durable";
 import { HostNotFoundError } from "./conversation_control.ts";
 import { type HarnessHost, type HostEntry, internalHarness } from "./harness_host.ts";
+import { CONVERSATION_META_KIND, type ConversationMeta } from "./seating.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -157,4 +158,32 @@ export async function watchInstance(
 ): Promise<{ snapshot: { conversations: { id: string; busy: boolean }[] }; stop(): void }> {
     const tracker = await trackCommits(host, listener);
     return { snapshot: { conversations: tracker.conversations() }, stop: () => tracker.stop() };
+}
+
+/**
+ * Reports each committed write of a conversation's `intern.conversation` document, with the document's new value, in
+ * commit order. A write of the unset placeholder, which no seated conversation keeps, is not reported. Nothing is
+ * replayed: `listener` hears only commits after the call returns.
+ */
+export async function watchConversationMeta(
+    host: HarnessHost,
+    listener: (change: { conversationId: string; meta: ConversationMeta }) => void,
+): Promise<{ stop(): void }> {
+    let isStopped = false;
+    const unsubscribe = internalHarness(host).subscribeCommits((publication) => {
+        if (isStopped) return;
+        for (const change of publication.changes) {
+            if (change.type !== "document" || change.record.kind !== CONVERSATION_META_KIND) continue;
+            if (change.conversationId === undefined || change.value === null) continue;
+            const meta = change.value as unknown as ConversationMeta;
+            if (meta.jobId === "") continue;
+            listener({ conversationId: String(change.conversationId), meta });
+        }
+    });
+    return {
+        stop() {
+            isStopped = true;
+            unsubscribe();
+        },
+    };
 }

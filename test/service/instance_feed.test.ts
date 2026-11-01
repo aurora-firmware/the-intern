@@ -20,6 +20,9 @@ import {
 import { createObservationFeed, type ObservationFeed, type Subscription } from "../../src/feed/observation_feed.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
+import { continueParked, parkConversation } from "../../src/host/invocation.ts";
+import { changeSeat, createSeatedConversation, SEAT_RECORD_KIND, type SeatActor } from "../../src/host/seating.ts";
+import type { Seat } from "../../src/roles/role_model.ts";
 import { feedOperations } from "../../src/service/feed_operations.ts";
 import { type Caller, ServiceError } from "../../src/service/operations.ts";
 import { createFakeModel } from "../support/fake_model.ts";
@@ -30,6 +33,7 @@ const NEXT_TIMEOUT_MS = 5000;
 const SUBMISSION_TIMEOUT_MS = 10_000;
 const RUN_DELAY_MS = 100;
 const MAX_OPENING_MICROTASKS = 1000;
+const ACTOR: SeatActor = { kind: "team_member", wayIn: "cli" };
 
 type FakeModel = ReturnType<typeof createFakeModel>;
 type Sub = Subscription<InstanceSnapshot, InstanceDelta>;
@@ -133,6 +137,28 @@ async function collectUntil(subscription: Sub, isDone: (deltas: InstanceDelta[])
     const deltas: InstanceDelta[] = [];
     while (!isDone(deltas)) deltas.push(await nextDelta(subscription));
     return deltas;
+}
+
+function seatFor(fixture: Fixture, role: string): Seat {
+    return {
+        role,
+        model: fixture.modelId,
+        workspace: process.cwd(),
+        instructions: "Work.",
+        tools: [],
+        skills: [],
+    };
+}
+
+async function createSeated(fixture: Fixture, key: string, role = "developer"): Promise<string> {
+    const { conversationId } = await createSeatedConversation(fixture.host, {
+        scope: "instance-feed-test",
+        key,
+        job: { jobId: "job-1", isLead: true, origin: { kind: "request", wayIn: "cli" }, depth: 0 },
+        seat: seatFor(fixture, role),
+        actor: ACTOR,
+    });
+    return conversationId;
 }
 
 async function send(fixture: Fixture, conversationId: string): Promise<void> {
@@ -328,6 +354,112 @@ describe("the instance feed", () => {
 
         assert.deepEqual(await subscription.next(), { closed: "stopped" });
         assert.throws(() => feed.subscribe(), /closed/);
+    });
+});
+
+describe("the instance feed seats and parked status", () => {
+    it("snapshots the job, lead flag, seat and status of a seated conversation and null seat data for others", async () => {
+        const fixture = await openFixture();
+        const seated = await createSeated(fixture, "k1");
+        const plain = await fixture.host.createConversation({ agent: { model: fixture.modelId } });
+        const feed = await fixture.open();
+
+        const { snapshot } = feed.subscribe();
+
+        const find = (id: string) => snapshot.conversations.find((conversation) => conversation.id === id);
+        assert.deepEqual(find(seated), {
+            id: seated,
+            jobId: "job-1",
+            isLead: true,
+            seat: { role: "developer", model: fixture.modelId, workspace: process.cwd() },
+            status: "idle",
+        });
+        assert.deepEqual(find(plain), { id: plain, jobId: null, isLead: false, seat: null, status: "idle" });
+    });
+
+    it("snapshots a parked conversation with status parked", async () => {
+        const fixture = await openFixture();
+        const id = await createSeated(fixture, "k1");
+        await parkConversation(fixture.host, id, { waitingFor: "reports", continueOn: "all" });
+        const feed = await fixture.open();
+
+        const { snapshot } = feed.subscribe();
+
+        assert.equal(snapshot.conversations.find((conversation) => conversation.id === id)?.status, "parked");
+    });
+
+    it("publishes seat_changed with the new seat when a conversation's seat changes", async () => {
+        const fixture = await openFixture();
+        const id = await createSeated(fixture, "k1");
+        const feed = await fixture.open();
+        const subscription = feed.subscribe();
+
+        await changeSeat(fixture.host, id, { seat: seatFor(fixture, "reviewer"), actor: ACTOR });
+
+        const deltas = await collectUntil(subscription, (all) => all.some((delta) => delta.type === "seat_changed"));
+        assert.deepEqual(deltas.at(-1), {
+            seq: deltas.length,
+            type: "seat_changed",
+            conversationId: id,
+            seat: { role: "reviewer", model: fixture.modelId, workspace: process.cwd() },
+        });
+    });
+
+    it("publishes no seat_changed for a document change that keeps the seat", async () => {
+        const fixture = await openFixture();
+        const id = await createSeated(fixture, "k1");
+        const feed = await fixture.open();
+        const subscription = feed.subscribe();
+
+        await parkConversation(fixture.host, id, { waitingFor: "answer", continueOn: "each" });
+        await fixture.config.change(labelSection, { label: "marker" });
+
+        const deltas = await collectUntil(subscription, (all) =>
+            all.some((delta) => delta.type === "settings_changed"),
+        );
+        assert.equal(
+            deltas.some((delta) => delta.type === "seat_changed"),
+            false,
+        );
+    });
+
+    it("publishes status_changed when a conversation is parked and when it continues", async () => {
+        const fixture = await openFixture();
+        const id = await createSeated(fixture, "k1");
+        const feed = await fixture.open();
+        const subscription = feed.subscribe();
+
+        await parkConversation(fixture.host, id, { waitingFor: "reports", continueOn: "all" });
+        await continueParked(fixture.host, id, { content: "go on", requestId: "continue-1" });
+
+        const deltas = await collectUntil(
+            subscription,
+            (all) => all.filter((delta) => delta.type === "status_changed").length === 2,
+        );
+        const changes = deltas.filter((delta) => delta.type === "status_changed");
+        assert.deepEqual(
+            changes.map((delta) => ({ type: delta.type, conversationId: delta.conversationId, status: delta.status })),
+            [
+                { type: "status_changed", conversationId: id, status: "parked" },
+                { type: "status_changed", conversationId: id, status: "idle" },
+            ],
+        );
+    });
+
+    it("delivers the seat record of a seat change through the conversation scope", async () => {
+        const fixture = await openFixture();
+        const id = await createSeated(fixture, "k1");
+        const observation = createObservationFeed({ host: fixture.host });
+        feeds.push(observation);
+        const subscription = await observation.subscribeConversation(id);
+
+        await changeSeat(fixture.host, id, { seat: seatFor(fixture, "reviewer"), actor: ACTOR });
+
+        const result = await subscription.next();
+        assert.ok("delta" in result);
+        const record = result.delta.view.entries.findLast((entry) => entry.kind === SEAT_RECORD_KIND);
+        assert.ok(record, "the seat record is in the delta's view");
+        assert.equal((record.data as { next: { role: string } }).next.role, "reviewer");
     });
 });
 
