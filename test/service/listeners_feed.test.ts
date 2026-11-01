@@ -32,6 +32,16 @@ const LOOPBACK = "127.0.0.1";
 const IN_PROCESS: Caller = { actor: { kind: "team_member" } };
 const quietLogger = createLogger({ stream: { write: () => true } });
 const LISTENERS = ["local socket", "network listener"] as const;
+/** About three commits per step, so a run of this many steps produces well over the 1000 deltas of the bound. */
+const LOOP_STEPS = 450;
+const LOOP_INPUT = "loop";
+/**
+ * The bound a run with a stalled subscriber must finish in, relative to the same run with none: generous enough for a
+ * loaded machine, far below a run that waits on its subscriber.
+ */
+const RUN_TIME_FACTOR = 2;
+const RUN_TIME_MARGIN_MS = 2000;
+const LAGGING_END: FeedEvent = { name: "end", data: { reason: "lagging" } };
 
 type Listener = (typeof LISTENERS)[number];
 type HttpTarget = { socketPath: string } | { host: string; port: number };
@@ -76,12 +86,15 @@ function parseEvent(block: string): FeedEvent {
     };
 }
 
-/** A `GET /feed` stream read event by event; `next` resolves undefined once the server has ended the stream. */
+/** What `FeedStream.next` resolves: an event, the server having ended the stream, or no event within the wait. */
+type FeedRead = FeedEvent | "ended" | "silent";
+
+/** A `GET /feed` stream read event by event. */
 type FeedStream = {
     status: number;
     /** The JSON body of a refused subscription. */
     refusal(): Promise<{ error?: { code: string } }>;
-    next(): Promise<FeedEvent | undefined>;
+    next(): Promise<FeedRead>;
     pause(): void;
     resume(): void;
     close(): void;
@@ -97,20 +110,31 @@ function openFeedAt(target: HttpTarget, query: string): Promise<FeedStream> {
     });
 }
 
+function readJson(response: IncomingMessage): Promise<{ error?: { code: string } }> {
+    return new Promise((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.once("end", () => resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))));
+        response.once("error", reject);
+    });
+}
+
 function readFeed(response: IncomingMessage, destroy: () => void): FeedStream {
+    const status = response.statusCode ?? 0;
+    const refusal = status === 200 ? undefined : readJson(response);
     const events: FeedEvent[] = [];
     let buffered = "";
     let hasEnded = false;
     let wake: (() => void) | undefined;
-    const bodyChunks: Buffer[] = [];
-    response.on("data", (chunk: Buffer) => {
-        bodyChunks.push(chunk);
-        buffered += chunk.toString("utf8");
-        const blocks = buffered.split("\n\n");
-        buffered = blocks.pop() ?? "";
-        for (const block of blocks) events.push(parseEvent(block));
-        wake?.();
-    });
+    if (refusal === undefined) {
+        response.on("data", (chunk: Buffer) => {
+            buffered += chunk.toString("utf8");
+            const blocks = buffered.split("\n\n");
+            buffered = blocks.pop() ?? "";
+            for (const block of blocks) events.push(parseEvent(block));
+            wake?.();
+        });
+    }
     const markEnded = () => {
         hasEnded = true;
         wake?.();
@@ -118,31 +142,43 @@ function readFeed(response: IncomingMessage, destroy: () => void): FeedStream {
     response.once("end", markEnded);
     response.once("close", markEnded);
 
-    async function next(): Promise<FeedEvent | undefined> {
-        const deadline = Date.now() + EVENT_TIMEOUT_MS;
-        while (events.length === 0 && !hasEnded) {
-            if (Date.now() > deadline) throw new Error("timed out waiting for the next feed event");
-            await new Promise<void>((resolve) => {
-                wake = resolve;
-                setTimeout(resolve, POLL_INTERVAL_MS * 10);
-            });
-        }
-        return events.shift();
+    function waitForData(ms: number): Promise<void> {
+        return new Promise((resolve) => {
+            const timer = setTimeout(settle, ms);
+            function settle(): void {
+                clearTimeout(timer);
+                wake = undefined;
+                resolve();
+            }
+            wake = settle;
+        });
     }
 
-    async function refusal() {
-        await until(async () => hasEnded, "the refusal body");
-        return JSON.parse(Buffer.concat(bodyChunks).toString("utf8"));
+    async function next(): Promise<FeedRead> {
+        const deadline = Date.now() + EVENT_TIMEOUT_MS;
+        while (events.length === 0 && !hasEnded && Date.now() < deadline) await waitForData(deadline - Date.now());
+        return events.shift() ?? (hasEnded ? "ended" : "silent");
     }
 
     return {
-        status: response.statusCode ?? 0,
-        refusal,
+        status,
+        refusal: () => refusal ?? Promise.reject(new Error(`the feed was not refused: status ${status}`)),
         next,
         pause: () => response.pause(),
         resume: () => response.resume(),
         close: destroy,
     };
+}
+
+/**
+ * Answers `LOOP_INPUT` with `LOOP_STEPS` calls to a tool that does not exist, each answered by an error result, and
+ * then with text; any other input is answered with text at once.
+ */
+function loopingReply(transcript: FakeTranscript): FakeReply {
+    const userIndex = transcript.findLastIndex((message) => message.role === "user");
+    if (transcript[userIndex]?.text !== LOOP_INPUT) return "ok";
+    const step = transcript.slice(userIndex).filter((message) => message.role === "toolResult").length;
+    return step < LOOP_STEPS ? { toolCall: { name: "no_such_tool", arguments: { step } } } : "ok";
 }
 
 type Fixture = {
@@ -210,7 +246,7 @@ async function startFixture(reply: (transcript: FakeTranscript) => FakeReply = (
     }
 
     async function submitAndSettle(conversationId: string, content: string): Promise<void> {
-        const submit = { conversationId, content, requestId: `${content}-request` };
+        const submit = { conversationId, content, requestId: `${conversationId}-${content}` };
         const { submissionId } = (await invoke("conversations.submit", submit)) as { submissionId: string };
         const waited = (await invoke("submissions.wait", { submissionId, timeoutMs: SETTLE_WAIT_MS })) as {
             state: string;
@@ -245,9 +281,9 @@ async function startFixture(reply: (transcript: FakeTranscript) => FakeReply = (
 }
 
 async function nextEvent(stream: FeedStream): Promise<FeedEvent> {
-    const event = await stream.next();
-    assert.ok(event, "the stream is still open");
-    return event;
+    const read = await stream.next();
+    assert.ok(typeof read === "object", `the stream gives a next event, not ${read}`);
+    return read;
 }
 
 /** Reads `delta` events until one shows the conversation idle with `content` in its entries. */
@@ -385,3 +421,55 @@ function assertInstanceDeltas(events: readonly FeedEvent[], ids: { gamma: string
     assert.equal(deltas[indexOf("seat_changed", ids.alpha)]?.seat?.role, "gp");
     assert.equal(indexOf("settings_changed"), deltas.length - 1);
 }
+
+async function timed(action: () => Promise<void>): Promise<number> {
+    const startedAt = performance.now();
+    await action();
+    return performance.now() - startedAt;
+}
+
+/** Reads the rest of a stream; returns its last event and whether the server ended it or it fell silent. */
+async function readToEnd(stream: FeedStream): Promise<{ last?: FeedEvent; how: "ended" | "silent" }> {
+    let last: FeedEvent | undefined;
+    for (;;) {
+        const read = await stream.next();
+        if (typeof read !== "object") return { last, how: read };
+        last = read;
+    }
+}
+
+/** The entries from the loop's input on, without what differs between two runs: times, ids and usage. */
+function loopShape(entries: readonly Entry[]): unknown[] {
+    const loopStart = entries.findIndex((entry) => JSON.stringify(entry.data).includes(`"${LOOP_INPUT}"`));
+    assert.ok(loopStart >= 0, "the conversation holds the loop's input");
+    return entries
+        .slice(loopStart)
+        .map((entry) => [entry.kind, JSON.stringify(entry.data).match(/"(text|arguments)":("[^"]*"|\{[^}]*\})/g)]);
+}
+
+describe("a feed client that stops reading", { timeout: TEST_TIMEOUT_MS }, () => {
+    it("ends the stalled stream over each listener with lagging and leaves the run's time and entries alone", async () => {
+        const fixture = await startFixture(loopingReply);
+        const control = await fixture.idleConversation("control");
+        const observed = await fixture.idleConversation("observed");
+        const controlTime = await timed(() => fixture.submitAndSettle(control, LOOP_INPUT));
+
+        const query = `?scope=conversation&id=${observed}`;
+        const stalled = await Promise.all(LISTENERS.map((listener) => fixture.openFeed(listener, query)));
+        for (const stream of stalled) {
+            assert.equal((await nextEvent(stream)).name, "snapshot");
+            stream.pause();
+        }
+        const observedTime = await timed(() => fixture.submitAndSettle(observed, LOOP_INPUT));
+        for (const stream of stalled) stream.resume();
+        const endings = await Promise.all(stalled.map(readToEnd));
+
+        assert.deepEqual(endings, [
+            { last: LAGGING_END, how: "ended" },
+            { last: LAGGING_END, how: "ended" },
+        ]);
+        const bound = controlTime * RUN_TIME_FACTOR + RUN_TIME_MARGIN_MS;
+        assert.ok(observedTime <= bound, `the run took ${observedTime} ms, the bound is ${bound} ms`);
+        assert.deepEqual(loopShape(await fixture.entries(observed)), loopShape(await fixture.entries(control)));
+    });
+});
