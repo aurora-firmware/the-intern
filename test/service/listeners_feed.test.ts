@@ -389,11 +389,11 @@ describe("the instance feed through each listener", { timeout: TEST_TIMEOUT_MS }
             assert.equal(snapshot.name, "snapshot");
             assert.deepEqual(snapshot.data, inProcess.snapshot);
         }
-        const conversations = (snapshots[0]?.data as InstanceSnapshot).conversations;
+        const { conversations, workerThreads } = inProcess.snapshot;
         const byJob = Object.fromEntries(conversations.map(({ id, jobId, isLead }) => [jobId, { id, isLead }]));
         assert.deepEqual(byJob, { alpha: { id: alpha, isLead: true }, beta: { id: beta, isLead: true } });
         assert.ok(conversations.every(({ seat, status }) => seat?.role === "bob" && status === "idle"));
-        assert.equal((snapshots[0]?.data as InstanceSnapshot).workerThreads.inUse, 0);
+        assert.equal(workerThreads.inUse, 0);
         assert.deepEqual(overNetwork, overSocket, "both listeners deliver the same deltas");
         assertInstanceDeltas(overSocket ?? [], { gamma, alpha });
     });
