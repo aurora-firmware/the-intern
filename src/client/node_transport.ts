@@ -6,6 +6,7 @@ import { type ClientRequest, type IncomingMessage, type RequestOptions, request 
 import { resolveInstanceDirs } from "../daemon/state_layout.ts";
 import { localSocketPath } from "../listeners/socket_path.ts";
 import {
+    answerError,
     encodeInput,
     JSON_CONTENT_TYPE,
     operationPath,
@@ -58,6 +59,7 @@ async function* streamEvents(target: NodeTarget, path: string): AsyncIterable<St
     const req = openRequest(target, { method: "GET", path });
     try {
         const response = await responseOf(req, "");
+        if (response.statusCode !== 200) throw answerError(JSON.parse(await readText(response)));
         yield* parseEventStream(chunksOf(response));
     } finally {
         req.destroy();
