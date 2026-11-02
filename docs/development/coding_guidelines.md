@@ -48,16 +48,28 @@ accepted ADRs win over this document; when they disagree, fix this document. The
 - **Every job source ends in the same service operation.** A way in or a job source (a team member, a schedule, a
   trigger, a follow-up) submits through the service layer. Knowledge of one source stays in that source; the core
   never learns source names.
-- **One source of truth per fact.** Runtime state (conversations, jobs, memos) lives in the one pi-durable database
-  as documents. Team-edited inputs (configuration, skills, instructions) stay files. Never copy a fact between the
-  two.
+- **One source of truth per fact.** Runtime state lives in the one database file. Conversations, memos and the
+  daemon's own facts about a conversation are pi-durable documents. Jobs live in the job store's `intern_` tables,
+  never in pi-durable documents, and the job store never reads or writes pi-durable's tables (ADR-001 decision 1).
+  Team-edited inputs (configuration, skills, instructions) stay files. Never copy a fact between these places.
+- **The job model and the job store stay free of pi packages.** `src/jobs/job_model.ts` imports nothing, and
+  `src/jobs/job_store.ts` reaches the database only through the host's `HostDatabase`. A job store write never runs
+  inside a pi-durable `commit()`, and a pi-durable commit never runs inside a job store transaction.
 - **Release-owned content loads by path from inside the package** (shipped skills, prompt text). No copy or install
   step. Team customisation goes in an overlay loaded after the shipped content.
 
 ## Durability rules (pi-durable)
 
 - **Don't write recovery or retry code** (ADR-001). Resume, `requestId` dedup and the follow-up queue are library
-  features. If you find yourself writing a retry loop or an intake table, check the library first.
+  features. If you find yourself writing a retry loop or an intake table, check the library first. Decision 4 allows
+  two bounded exceptions, and nothing else:
+  - The-intern's own facts about a conversation (held messages, awaiting links, parked state, the abort mark, creation
+    keys) are pi-durable documents committed with the change they describe, and the only recovery is redelivering the
+    input they show as undelivered, made safe to repeat by request ids.
+  - A job write is committed before the pi-durable change it goes with, and the four startup repair rules of S-004
+    REQ-018 (`src/jobs/job_repair.ts`) are the only job recovery. Rule 3 also covers input the lead took since the job
+    blocked, read from the entry the block recorded in `blockedAfterEntry`. A fifth rule, a retry of a failed job
+    write or a timer that checks jobs amends ADR-001 first.
 - **Effect sandwich.** Commit the intent, perform the effect, commit the outcome. A handler reopened in an intent phase
   must assume the effect may have happened.
 - **Never mark an effectful tool `replay: "safe"`.** Effects are checkpointed, not exactly-once.
