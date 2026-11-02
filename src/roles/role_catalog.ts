@@ -1,5 +1,6 @@
 import { isAbsolute } from "node:path";
 import type { ConfigStore } from "../config/config_writer.ts";
+import { JOB_TOOL_NAMES } from "../jobs/job_model.ts";
 import type { InternModels } from "../models/model_runtime.ts";
 import { roleWorkspacePath } from "../workspaces/workspace_folder.ts";
 import type { WorkspaceRegistry } from "../workspaces/workspace_registry.ts";
@@ -71,7 +72,7 @@ const describeValue = (value: unknown): string | undefined => {
     return Array.isArray(value) ? value.join(", ") : String(value);
 };
 
-const KNOWN_TOOLS: readonly string[] = [...SHIPPED_TOOL_NAMES, ...COORDINATION_TOOL_NAMES];
+const KNOWN_TOOLS: readonly string[] = [...SHIPPED_TOOL_NAMES, ...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES];
 
 // For a list field the value is the offending entry, so the refusal names what to fix.
 const offendingValue = (role: RoleDefinition, field: string): string | undefined => {

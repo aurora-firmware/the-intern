@@ -1,4 +1,5 @@
 import { isAbsolute } from "node:path";
+import { JOB_TOOL_NAMES } from "../jobs/job_model.ts";
 
 export const SHIPPED_TOOL_NAMES = ["read", "write", "edit", "bash"] as const;
 export const COORDINATION_TOOL_NAMES = ["handoff", "invoke", "steer"] as const;
@@ -47,7 +48,8 @@ export class RoleInvalidError extends Error {
 
 const isKnownTool = (tool: string): boolean =>
     (SHIPPED_TOOL_NAMES as readonly string[]).includes(tool) ||
-    (COORDINATION_TOOL_NAMES as readonly string[]).includes(tool);
+    (COORDINATION_TOOL_NAMES as readonly string[]).includes(tool) ||
+    (JOB_TOOL_NAMES as readonly string[]).includes(tool);
 
 export const validateRoleDefinition = (role: RoleDefinition): void => {
     if (!ROLE_NAME_PATTERN.test(role.name)) {
@@ -58,7 +60,7 @@ export const validateRoleDefinition = (role: RoleDefinition): void => {
     }
     const unknownTool = role.tools.find((tool) => !isKnownTool(tool));
     if (unknownTool !== undefined) {
-        throw new RoleInvalidError(role.name, "tools", `"${unknownTool}" is not a shipped or coordination tool`);
+        throw new RoleInvalidError(role.name, "tools", `"${unknownTool}" is not a shipped, coordination or job tool`);
     }
     const relativeSkill = role.skills.find((skill) => !isAbsolute(skill));
     if (relativeSkill !== undefined) {
@@ -82,7 +84,7 @@ export const resolveSeat = (role: RoleDefinition, defaults: SeatDefaults, overri
         thinkingLevel: overrides.thinkingLevel ?? role.thinkingLevel ?? defaults.thinkingLevel,
         workspace: overrides.workspace ?? role.workspace ?? defaults.workspace,
         instructions: role.instructions,
-        tools: [...new Set([...role.tools, ...COORDINATION_TOOL_NAMES])],
+        tools: [...new Set([...role.tools, ...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES])],
         skills: [...role.skills],
     };
 };

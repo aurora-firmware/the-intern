@@ -10,14 +10,18 @@ import {
 } from "@earendil-works/pi-ai";
 import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
+import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { type HarnessHost, openHarnessHost } from "../../src/host/harness_host.ts";
 import { createSeatedConversation, type JobLinks, type SeatActor } from "../../src/host/seating.ts";
-import { COORDINATION_TOOL_NAMES, SHIPPED_TOOL_NAMES } from "../../src/roles/role_model.ts";
+import { JOB_TOOL_NAMES } from "../../src/jobs/job_model.ts";
+import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
+import { COORDINATION_TOOL_NAMES, resolveSeat, SHIPPED_TOOL_NAMES } from "../../src/roles/role_model.ts";
 import { SHIPPED_TOOLS_EXTENSION_NAME, shippedToolsExtension } from "../../src/tools/shipped_tools_extension.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
+const quietLogger = createLogger({ stream: { write: () => true } });
 const WAIT_MS = 10_000;
 const job: JobLinks = { jobId: "job-1", isLead: true, origin: { kind: "request", wayIn: "cli" }, depth: 0 };
 const actor: SeatActor = { kind: "team_member", wayIn: "cli" };
@@ -91,11 +95,13 @@ async function createFixture(steps: Step[]) {
             api: { stream: implementation.stream, streamSimple: implementation.streamSimple },
         }),
     );
+    const agents = await createAgentsComponent({ logger: quietLogger });
+    const jobs = await createJobsComponent({ agents, logger: quietLogger });
     const host = await openHarnessHost({
         databaseFile: join(env.root, "state.sqlite"),
         models,
         harnessSettings: {},
-        extensions: [shippedToolsExtension],
+        extensions: [...(agents.component.extensions ?? []), ...(jobs.component.extensions ?? [])],
         defaultCwd: process.cwd(),
         logger: createLogger({ stream: { write: () => true } }),
     });
@@ -122,7 +128,10 @@ async function createFixture(steps: Step[]) {
         });
         return waitForSubmission(host, submission.submissionId, WAIT_MS);
     };
-    return { offered, results, workspace, seatConversation, say };
+    const jobToolsRegistered = (jobs.component.extensions ?? []).flatMap((extension) =>
+        (extension.tools ?? []).map((tool) => tool.name),
+    );
+    return { offered, results, workspace, seatConversation, say, jobToolsRegistered };
 }
 
 describe("the shipped tools extension", () => {
@@ -132,13 +141,23 @@ describe("the shipped tools extension", () => {
         assert.deepEqual(shippedToolsExtension.tools?.map((tool) => tool.name).sort(), [...SHIPPED_TOOL_NAMES].sort());
     });
 
-    it("offers the model read and none of write, edit and bash when the agent tools are read and the coordination names", async () => {
-        const { offered, seatConversation, say } = await createFixture([]);
-        const id = await seatConversation(["read", ...COORDINATION_TOOL_NAMES]);
+    it("offers a read-only role read, the coordination tools and the job tools, not write, edit or bash", async () => {
+        const { offered, seatConversation, say, jobToolsRegistered } = await createFixture([]);
+        const { tools } = resolveSeat(
+            { name: "reader", instructions: "Read.", tools: ["read"], skills: [] },
+            {
+                model: "m",
+                workspace: "/w",
+            },
+        );
+        const id = await seatConversation(tools);
 
         await say(id);
 
-        assert.ok(offered[0].includes("read"));
+        assert.deepEqual(tools, ["read", ...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES]);
+        // The Jobs component registers the job tools it has so far; the lead-only ones follow in a later task.
+        assert.ok(jobToolsRegistered.every((name) => (JOB_TOOL_NAMES as readonly string[]).includes(name)));
+        assert.deepEqual([...offered[0]].sort(), ["read", ...COORDINATION_TOOL_NAMES, ...jobToolsRegistered].sort());
         for (const absent of ["write", "edit", "bash"]) assert.equal(offered[0].includes(absent), false, absent);
     });
 
