@@ -7,14 +7,19 @@ import { type Models, Type } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createLogger } from "../../src/daemon/logger.ts";
 import {
     type Extension,
     type HarnessHost,
+    type HostDatabase,
+    hostDatabase,
+    internalDatabase,
     internalHarness,
     openHarnessHost,
+    openHostDatabase,
     resolveHarnessSettings,
+    type SqliteDatabase,
     type Storage,
 } from "../../src/host/harness_host.ts";
 import { createFakeModel, type FakeReply, type FakeTranscript } from "../support/fake_model.ts";
@@ -83,7 +88,8 @@ type OpenOptions = {
     fake: FakeModel;
     defaultCwd?: string;
     extensions?: readonly Extension[];
-    openStorage?: (file: string) => Promise<Storage>;
+    openStorage?: (database: SqliteDatabase) => Promise<Storage>;
+    beforeStorageOpen?: (database: HostDatabase) => Promise<void>;
 };
 
 async function openHost(options: OpenOptions): Promise<HarnessHost> {
@@ -95,6 +101,7 @@ async function openHost(options: OpenOptions): Promise<HarnessHost> {
         defaultCwd: options.defaultCwd ?? process.cwd(),
         logger: silentLogger,
         ...(options.openStorage ? { openStorage: options.openStorage } : {}),
+        ...(options.beforeStorageOpen ? { beforeStorageOpen: options.beforeStorageOpen } : {}),
     });
     hosts.push(host);
     return host;
@@ -156,6 +163,62 @@ describe("openHarnessHost", () => {
         }
     });
 
+    it("shares one connection: a table written through hostDatabase sits beside pi-durable's tables", async () => {
+        const env = await makeEnv();
+        const databaseFile = join(env.root, "state.sqlite");
+        const host = await openHost({ databaseFile, fake: makeFake(() => "hello") });
+        const database = hostDatabase(host);
+
+        await database.exec("CREATE TABLE intern_probe (name TEXT NOT NULL)");
+        await database.run("INSERT INTO intern_probe (name) VALUES (?)", "alpha");
+
+        assert.deepEqual(plain(await database.all("SELECT name FROM intern_probe")), [{ name: "alpha" }]);
+        const tables = internalDatabase(host)
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .all() as { name: string }[];
+        assert.ok(tables.some((table) => table.name === "intern_probe"));
+        assert.ok(tables.some((table) => table.name !== "intern_probe" && !table.name.startsWith("sqlite_")));
+    });
+
+    it("calls beforeStorageOpen with the database before pi-durable creates its tables", async () => {
+        const env = await makeEnv();
+        const seen: string[][] = [];
+        const host = await openHost({
+            databaseFile: join(env.root, "state.sqlite"),
+            fake: makeFake(() => "hello"),
+            beforeStorageOpen: async (database) => {
+                seen.push((await database.all<{ name: string }>("SELECT name FROM sqlite_master")).map((r) => r.name));
+                await database.exec("CREATE TABLE intern_early (id INTEGER)");
+            },
+        });
+
+        assert.deepEqual(seen, [[]]);
+        assert.deepEqual(await hostDatabase(host).all("SELECT id FROM intern_early"), []);
+    });
+
+    it("rejects the open with the beforeStorageOpen error and leaves no pi-durable table in a new file", async () => {
+        const env = await makeEnv();
+        const databaseFile = join(env.root, "state.sqlite");
+
+        await assert.rejects(
+            openHost({
+                databaseFile,
+                fake: makeFake(() => "hello"),
+                beforeStorageOpen: async () => {
+                    throw new Error("import refused");
+                },
+            }),
+            /import refused/,
+        );
+
+        const database = await openHostDatabase(databaseFile, { readOnly: true });
+        try {
+            assert.deepEqual(await database.all("SELECT name FROM sqlite_master WHERE type = 'table'"), []);
+        } finally {
+            await database.close();
+        }
+    });
+
     it("installs every given extension into the default selection", async () => {
         const env = await makeEnv();
         const fake = makeFake(() => "hello");
@@ -189,7 +252,7 @@ describe("openHarnessHost", () => {
             const host = await openHost({
                 databaseFile,
                 fake,
-                openStorage: async (file) => failingOnDemand(await openNodeSqliteStorage(file), failing),
+                openStorage: async (database) => failingOnDemand(await SqliteStorage.open(database), failing),
             });
             const harness = internalHarness(host);
             if (round === 0) {
@@ -220,7 +283,7 @@ describe("openHarnessHost", () => {
         const host = await openHost({
             databaseFile: join(env.root, "state.sqlite"),
             fake: makeFake(() => "hello"),
-            openStorage: async (file) => failingOnDemand(await openNodeSqliteStorage(file), failing),
+            openStorage: async (database) => failingOnDemand(await SqliteStorage.open(database), failing),
         });
 
         await assert.rejects(host.createConversation({ agent: { model: "faux/faux-1" } }));
@@ -258,6 +321,52 @@ function failingOnDemand(storage: Storage, switchBox: { isFailing: boolean }): S
         },
     });
 }
+
+describe("openHostDatabase", () => {
+    it("creates an absent file owner-only and runs, rolls back and closes a transaction", async () => {
+        const env = await makeEnv();
+        const file = join(env.root, "job.sqlite");
+        const database = await openHostDatabase(file);
+        await database.exec("CREATE TABLE intern_t (n INTEGER)");
+
+        await database.transaction(async (tx) => tx.run("INSERT INTO intern_t (n) VALUES (?)", 1));
+        await assert.rejects(
+            database.transaction(async (tx) => {
+                await tx.run("INSERT INTO intern_t (n) VALUES (?)", 2);
+                throw new Error("callback failed");
+            }),
+            /callback failed/,
+        );
+
+        assert.deepEqual(plain(await database.all("SELECT n FROM intern_t")), [{ n: 1 }]);
+        await database.close();
+        for (const path of [file, `${file}-wal`, `${file}-shm`]) {
+            try {
+                assert.equal((await stat(path)).mode & 0o777, OWNER_ONLY_FILE_MODE, path);
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            }
+        }
+    });
+
+    it("opens an existing file read-only without changing it, and does not create an absent one", async () => {
+        const env = await makeEnv();
+        const file = join(env.root, "existing.sqlite");
+        const writer = await openHostDatabase(file);
+        await writer.exec("CREATE TABLE intern_t (n INTEGER)");
+        await writer.close();
+        const before = await stat(file);
+
+        const reader = await openHostDatabase(file, { readOnly: true });
+        assert.deepEqual(await reader.all("SELECT n FROM intern_t"), []);
+        await assert.rejects(reader.exec("CREATE TABLE intern_u (n INTEGER)"));
+        await reader.close();
+
+        assert.equal((await stat(file)).mtimeMs, before.mtimeMs);
+        await assert.rejects(openHostDatabase(join(env.root, "absent.sqlite"), { readOnly: true }));
+        await assert.rejects(stat(join(env.root, "absent.sqlite")));
+    });
+});
 
 describe("conversations", () => {
     it("lists the same conversation with the same entries after the host is closed and opened again", async () => {
@@ -391,3 +500,8 @@ describe("tool calls", () => {
         assert.match(await toolResultText(host, id), new RegExp(`cwd=${env.stateDir}`));
     });
 });
+
+// node:sqlite returns rows with a null prototype, which deepEqual tells apart from plain objects.
+function plain(rows: object[]): object[] {
+    return rows.map((row) => ({ ...row }));
+}

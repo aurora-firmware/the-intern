@@ -6,7 +6,7 @@ import { type Models, Type } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { STOP_BOUND_MS } from "../../src/daemon/constants.ts";
 import {
     type DaemonComponent,
@@ -320,9 +320,9 @@ describe("runDaemon storage failure", () => {
                 },
                 capture.component,
             ],
-            openStorage: async (file) => {
+            openStorage: async (database) => {
                 openCount += 1;
-                return failingOnDemand(await openNodeSqliteStorage(file), storageSwitch);
+                return failingOnDemand(await SqliteStorage.open(database), storageSwitch);
             },
         });
         await until(() => daemon.phase() === "ready", "the daemon to be ready");
@@ -363,7 +363,7 @@ describe("runDaemon storage failure during a requested stop", () => {
         };
         const daemon = fixture.start({
             components: [slow, capture.component],
-            openStorage: async (file) => failingOnDemand(await openNodeSqliteStorage(file), storageSwitch),
+            openStorage: async (database) => failingOnDemand(await SqliteStorage.open(database), storageSwitch),
         });
         await until(() => daemon.phase() === "ready", "the daemon to be ready");
         const { host } = capture.context();
