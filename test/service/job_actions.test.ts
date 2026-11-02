@@ -177,7 +177,7 @@ const failingHook = () => {
 };
 
 describe("blockJob", () => {
-    it("commits Blocked with its reason before the lead parks, and the parked lead holds no worker thread", async () => {
+    it("commits Blocked before the lead parks, and the parked lead holds no worker thread", async () => {
         const started = await start();
         const job = await started.create();
         await startJob(started.deps, job.id);
@@ -211,7 +211,7 @@ describe("blockJob", () => {
         assert.equal((await started.ctx.jobStore.getJob(job.id)).status, "in_progress");
     });
 
-    it("refuses invalid_input naming an invoked conversation of the job that runs, though none is awaited", async () => {
+    it("refuses invalid_input naming a running invoked conversation of the job that is not awaited", async () => {
         const started = await start();
         const job = await started.create();
         await startJob(started.deps, job.id);
@@ -244,7 +244,7 @@ describe("completeJob and cancelJob", () => {
     ] as const) {
         const point = kind === "completed" ? "job-completed" : "job-cancelled";
 
-        it(`${name} commits Done with the resolution before aborting, and then nothing of the job is left`, async () => {
+        it(`${name} commits Done before aborting, and then nothing of the job is left`, async () => {
             const started = await start();
             const job = await started.create();
             await started.ctx.jobStore.updateFields(job.id, { definitionOfDone: "it is done" }, author);
