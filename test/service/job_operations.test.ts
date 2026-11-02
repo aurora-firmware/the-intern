@@ -10,6 +10,7 @@ import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContex
 import { createLogger } from "../../src/daemon/logger.ts";
 import { createSeatedConversation, readConversationMeta, SEAT_RECORD_KIND } from "../../src/host/seating.ts";
 import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_component.ts";
+import { LEAD_DUTY } from "../../src/prompt/role_prompt.ts";
 import { type Caller, ServiceError } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -465,6 +466,7 @@ describe("jobs.create", () => {
         const inputs = await waitForInputs(started, job.leadConversation, 1);
         assert.match(inputs[0] ?? "", /C-1/);
         assert.match(inputs[0] ?? "", /rotate the staging TLS certificate/);
+        assert.ok((inputs[0] ?? "").includes(LEAD_DUTY));
     });
 
     it("numbers jobs per letter of their way in", async () => {
