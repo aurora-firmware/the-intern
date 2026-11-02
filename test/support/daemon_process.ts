@@ -32,6 +32,8 @@ export type StartDaemonOptions = {
     model?: string;
     checkModel?: string;
     holdStart?: boolean;
+    /** `false` applies no turn-end rule to leads (`true` by default), for tests about conversations, not jobs. */
+    turnEndRule?: boolean;
 };
 
 export type DaemonProcess = {

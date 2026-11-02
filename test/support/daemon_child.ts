@@ -16,6 +16,7 @@ import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import type { Models, Storage } from "../../src/host/harness_host.ts";
+import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
 import type { InternModels } from "../../src/models/model_runtime.ts";
 import { type Caller, ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
@@ -23,7 +24,7 @@ import type { StartDaemonOptions } from "./daemon_process.ts";
 import { createFakeModel, type FakeReply, type FakeTranscript } from "./fake_model.ts";
 import { createTestOperations, type StorageSwitch } from "./test_operations.ts";
 
-const TEAM_MEMBER: Caller = { actor: { kind: "team_member" } };
+const TEAM_MEMBER: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
 const READY_POLL_INTERVAL_MS = 10;
 const DEFAULT_SLOW_DELAY_MS = 1_000;
 const DEFAULT_SLEEP_SECONDS = "1";
@@ -206,16 +207,27 @@ async function main(): Promise<void> {
 
     const logger = createLogger({ verbose: false });
     const agents = await createAgentsComponent({ logger });
+    const jobs = await createJobsComponent({
+        agents,
+        logger,
+        ...(switches.turnEndRule !== undefined && { turnEndRule: switches.turnEndRule }),
+    });
     const daemon = runDaemon({
         flags: parseFlags(process.argv.slice(3)),
         env: process.env,
         homeDir: process.env.HOME ?? "",
         logger,
         sections: agents.sections,
-        // The local socket follows the agents component, as in `src/cli/bob.ts`, so it opens once the agents are ready.
-        components: [agents.component, createLocalSocketComponent(), ...createComponents(switches, hold.promise)],
+        // The jobs component and the local socket follow the agents component, as in `src/cli/bob.ts`.
+        components: [
+            agents.component,
+            jobs.component,
+            createLocalSocketComponent(),
+            ...createComponents(switches, hold.promise),
+        ],
         operations: [
             ...agents.operations,
+            ...jobs.operations,
             ...createTestOperations({
                 storageSwitch,
                 modelFor: (ctx) => modelFor(ctx, fakeModelId, switches.model),

@@ -13,9 +13,9 @@ const SLOW_DELAY_MS = 4_000;
 const SEAT_RECORD_KIND = "intern.seat";
 const FAKE_PROVIDER = "faux";
 const FAKE_MODEL = "faux-1";
-const REQUEST_ORIGIN = { kind: "request", wayIn: "cli" };
-// The child daemon calls as a team member who names no way in, so the stored origin carries the in-process one.
-const RECORDED_ORIGIN = { kind: "request", wayIn: "in-process" };
+// The child daemon calls as a team member at the command line, so the job and its lead record that way in.
+const RECORDED_ORIGIN = { kind: "request", wayIn: "command line" };
+const IDEMPOTENCY_KEY = "crash-key";
 const JOB_PROMPTS = ["job A", "job B"];
 
 type Entry = { kind: string; data: unknown };
@@ -56,7 +56,7 @@ async function hermetic(): Promise<HermeticEnv> {
 }
 
 function start(env: HermeticEnv, script: FakeScript): DaemonProcess {
-    const daemon = startDaemon({ hermetic: env, script, delayMs: SLOW_DELAY_MS });
+    const daemon = startDaemon({ hermetic: env, script, delayMs: SLOW_DELAY_MS, turnEndRule: false });
     daemons.push(daemon);
     return daemon;
 }
@@ -75,13 +75,18 @@ async function untilTrue(isWanted: () => Promise<boolean>, description: string):
     assert.fail(`Timed out waiting for ${description}`);
 }
 
-const startLeadInput = (jobId: string, firstInput: string) => ({ jobId, firstInput, origin: REQUEST_ORIGIN });
+type CreatedJob = { id: string; leadConversation?: string };
 
-async function startLead(daemon: DaemonProcess, jobId: string, firstInput: string): Promise<string> {
-    const { conversationId } = (await daemon.invoke("jobs.startLead", startLeadInput(jobId, firstInput))) as {
-        conversationId: string;
-    };
-    return conversationId;
+const createJobInput = (text: string, idempotencyKey?: string) => ({
+    text,
+    ...(idempotencyKey !== undefined && { idempotencyKey }),
+});
+
+/** Creates a job with `jobs.create`; the daemon runs without the turn-end rule, so no stop blocks the job. */
+async function createJob(daemon: DaemonProcess, text: string): Promise<{ jobId: string; leadId: string }> {
+    const job = (await daemon.invoke("jobs.create", createJobInput(text))) as CreatedJob;
+    assert.ok(job.leadConversation, "the created job names its lead conversation");
+    return { jobId: job.id, leadId: job.leadConversation };
 }
 
 /** Sends a call without waiting for it. IPC messages are handled in order, so once the status answers, the call began. */
@@ -113,6 +118,21 @@ const mentions = (text: string) => (entry: Entry) =>
     entry.kind === "pi.assistant" && JSON.stringify(entry.data).includes(text);
 const takesInput = (text: string) => (entry: Entry) =>
     entry.kind === "pi.user" && JSON.stringify(entry.data).includes(text);
+
+// The lead's first input is the job's number, its Request text and the lead's duty, so the echo holds the text inside.
+const answers = (requestText: string) => (entry: Entry) =>
+    entry.kind === "pi.assistant" && JSON.stringify(entry.data).includes("echo: ") && mentions(requestText)(entry);
+
+async function conversationsAcrossJobs(daemon: DaemonProcess, jobs: CreatedJob[]): Promise<Listing[]> {
+    return (await Promise.all(jobs.map((job) => conversationsOfJob(daemon, job.id)))).flat();
+}
+
+async function untilRequestAnswered(daemon: DaemonProcess, conversationId: string, requestText: string): Promise<void> {
+    await untilTrue(
+        async () => (await entriesOf(daemon, conversationId)).some(answers(requestText)),
+        `the answer to ${requestText}`,
+    );
+}
 
 async function untilAnswered(daemon: DaemonProcess, conversationId: string, text: string): Promise<void> {
     await untilTrue(
@@ -147,8 +167,8 @@ describe("kill -9 during a seat change", () => {
         const env = await hermetic();
         const first = start(env, "echo");
         await first.ready;
-        const leadId = await startLead(first, "seat-job", "lead work");
-        await untilAnswered(first, leadId, "lead work");
+        const { jobId, leadId } = await createJob(first, "lead work");
+        await untilRequestAnswered(first, leadId, "lead work");
         await untilIdle(first, [leadId]);
         const seatChange = await beginCall(first, "conversations.seat", { conversationId: leadId, role: "gp" });
         await crash(first);
@@ -165,7 +185,7 @@ describe("kill -9 during a seat change", () => {
             "either the old seat with no new record or the new seat with its record",
         );
         const listing = await listingOf(second, leadId);
-        assert.equal(listing.jobId, "seat-job");
+        assert.equal(listing.jobId, jobId);
         assert.equal(listing.isLead, true);
         assert.deepEqual(listing.origin, RECORDED_ORIGIN);
         assert.equal(listing.depth, 0);
@@ -177,7 +197,7 @@ describe("kill -9 during a Clean handoff", () => {
         const env = await hermetic();
         const first = start(env, "handoff-clean");
         await first.ready;
-        const leadId = await startLead(first, "handoff-job", "first input");
+        const { jobId, leadId } = await createJob(first, "first input");
         await untilTrue(async () => (await listingOf(first, leadId)).seat?.role === "gp", "the handoff to apply");
         await crash(first);
 
@@ -193,7 +213,7 @@ describe("kill -9 during a Clean handoff", () => {
         const entries = await entriesOf(second, leadId);
         assert.equal(entries.filter(mentions("echo: CLEAN-NOTE")).length, 1, "the new agent answered the note once");
         const listing = await listingOf(second, leadId);
-        assert.equal(listing.jobId, "handoff-job");
+        assert.equal(listing.jobId, jobId);
         assert.equal(listing.depth, 0);
     });
 });
@@ -205,14 +225,14 @@ describe("kill -9 during an agent invocation", () => {
         const env = await hermetic();
         const first = start(env, "invoke-parked");
         await first.ready;
-        const leadId = await startLead(first, "invoke-job", "lead work");
-        await untilTrue(async () => (await conversationsOfJob(first, "invoke-job")).length === 3, "both invocations");
+        const { jobId, leadId } = await createJob(first, "lead work");
+        await untilTrue(async () => (await conversationsOfJob(first, jobId)).length === 3, "both invocations");
         await crash(first);
 
         const second = start(env, "invoke-parked");
         await second.ready;
 
-        const conversations = await conversationsOfJob(second, "invoke-job");
+        const conversations = await conversationsOfJob(second, jobId);
         const invoked = conversations.filter((conversation) => conversation.id !== leadId);
         assert.equal(invoked.length, 2, "both invoked conversations survive");
         for (const conversation of invoked) {
@@ -236,7 +256,7 @@ describe("kill -9 during an agent invocation", () => {
             second,
             conversations.map((conversation) => conversation.id),
         );
-        assert.equal((await conversationsOfJob(second, "invoke-job")).length, 3, "no conversation was added");
+        assert.equal((await conversationsOfJob(second, jobId)).length, 3, "no conversation was added");
         for (const prompt of JOB_PROMPTS) {
             let promptInputs = 0;
             let promptAnswers = 0;
@@ -251,39 +271,49 @@ describe("kill -9 during an agent invocation", () => {
     });
 });
 
-describe("kill -9 during jobs.startLead", () => {
-    it("shows no conversation for the job or its lead with the first input once after a repeated call", {
+describe("kill -9 during jobs.create", () => {
+    it("shows one job with one lead conversation that took the first input once after a repeated call", {
         timeout: TEST_TIMEOUT_MS,
     }, async () => {
         const env = await hermetic();
         const first = start(env, "echo");
         await first.ready;
-        const interrupted = await beginCall(first, "jobs.startLead", startLeadInput("lead-job", "first input"));
+        const input = createJobInput("first input", IDEMPOTENCY_KEY);
+        const interrupted = await beginCall(first, "jobs.create", input);
         await crash(first);
         await interrupted;
 
         const second = start(env, "echo");
         await second.ready;
 
-        const survivors = await conversationsOfJob(second, "lead-job");
-        assert.ok(survivors.length <= 1, "at most one lead conversation exists for the job");
-        for (const survivor of survivors) {
-            assert.equal(survivor.jobId, "lead-job");
+        const jobsBefore = ((await second.invoke("jobs.list", {})) as { jobs: CreatedJob[] }).jobs;
+        assert.ok(jobsBefore.length <= 1, "at most one job exists");
+        for (const survivor of await conversationsAcrossJobs(second, jobsBefore)) {
             assert.equal(survivor.isLead, true);
             assert.deepEqual(survivor.origin, RECORDED_ORIGIN);
         }
-        const leadId = await startLead(second, "lead-job", "first input");
-        await untilAnswered(second, leadId, "first input");
+        const repeated = (await second.invoke("jobs.create", input)) as CreatedJob;
+        const leadId = repeated.leadConversation;
+        assert.ok(leadId, "the repeated call names the lead conversation");
+        await untilRequestAnswered(second, leadId, "first input");
         await untilIdle(second, [leadId]);
 
-        const lead = await conversationsOfJob(second, "lead-job");
+        const { jobs } = (await second.invoke("jobs.list", {})) as { jobs: CreatedJob[] };
+        assert.deepEqual(
+            jobs.map((job) => job.id),
+            [repeated.id],
+            "one job",
+        );
+        const lead = await conversationsOfJob(second, repeated.id);
         assert.deepEqual(
             lead.map((conversation) => conversation.id),
             [leadId],
+            "one lead conversation",
         );
         const entries = await entriesOf(second, leadId);
         assert.equal(entries.filter(takesInput("first input")).length, 1, "the first input was taken once");
-        assert.equal(entries.filter(mentions("echo: first input")).length, 1, "the first input was answered once");
-        assert.equal(await startLead(second, "lead-job", "first input"), leadId, "a further repeat finds the lead");
+        assert.equal(entries.filter(answers("first input")).length, 1, "the first input was answered once");
+        const again = (await second.invoke("jobs.create", input)) as CreatedJob;
+        assert.deepEqual([again.id, again.leadConversation], [repeated.id, leadId], "a further repeat finds the lead");
     });
 });
