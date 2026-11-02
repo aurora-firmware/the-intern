@@ -221,6 +221,49 @@ describe("admission with one worker thread", () => {
         assert.deepEqual(fixture.admission.state().waiting, [{ conversationId: third, position: 1 }]);
         assert.deepEqual(fixture.requests, ["message-0"]);
     });
+
+    it("awaits a granted listener, with the conversation's id, before the model request is made", async () => {
+        const fixture = await openFixture({ env: await newEnv(), capacity: 1 });
+        await fixture.admission.restore();
+        fixture.host.resume();
+        const conversation = await fixture.newConversation();
+        const granted: string[] = [];
+        let finishListener = (): void => {};
+        fixture.admission.onGranted(async (conversationId) => {
+            granted.push(conversationId);
+            await new Promise<void>((resolve) => {
+                finishListener = resolve;
+            });
+        });
+
+        const submission = await fixture.submit(conversation, "message-0");
+        await pollUntil(() => granted.length === 1);
+        await new Promise((resolve) => setTimeout(resolve, REPLY_DELAY_MS));
+
+        assert.deepEqual(granted, [conversation]);
+        assert.deepEqual(fixture.requests, []);
+        finishListener();
+        await settle(fixture.host, submission);
+        assert.deepEqual(fixture.requests, ["message-0"]);
+    });
+
+    it("rejects acquire with a granted listener's error, and stops calling a removed listener", async () => {
+        const fixture = await openFixture({ env: await newEnv(), capacity: 1 });
+        await fixture.admission.restore();
+        const conversation = await fixture.newConversation();
+        const { signal } = new AbortController();
+        let calls = 0;
+        const remove = fixture.admission.onGranted(async () => {
+            calls++;
+            throw new Error("listener failed");
+        });
+
+        await assert.rejects(fixture.admission.acquire(conversation, signal), /listener failed/);
+        remove();
+        await fixture.admission.acquire(conversation, signal);
+
+        assert.equal(calls, 1);
+    });
 });
 
 async function closeFixture(fixture: Fixture): Promise<void> {

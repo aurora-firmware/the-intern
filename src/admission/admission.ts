@@ -27,6 +27,11 @@ export type Admission = {
     release(conversationId: string): Promise<void>;
     state(): AdmissionSnapshot;
     onChange(listener: (snapshot: AdmissionSnapshot) => void): () => void;
+    /**
+     * Registers a listener that `acquire` awaits after the grant is stored and before it returns, so the model request
+     * waits for it. A listener's error rejects `acquire`.
+     */
+    onGranted(listener: (conversationId: string) => Promise<void>): () => void;
     stop(): void;
 };
 
@@ -72,6 +77,7 @@ export function createAdmission(options: AdmissionOptions): Admission {
     const gate = options.gate ?? createAdmissionGate();
     const waiters = new Map<string, Waiter>();
     const listeners = new Set<(snapshot: AdmissionSnapshot) => void>();
+    const grantedListeners = new Set<(conversationId: string) => Promise<void>>();
     let current: AdmissionState = { active: [], waiting: [] };
     let pendingChange: Promise<unknown> = Promise.resolve();
     let stopWatching: (() => void) | undefined;
@@ -149,6 +155,7 @@ export function createAdmission(options: AdmissionOptions): Admission {
         try {
             const waiter = await Promise.race([enqueue(conversationId), aborted]);
             if (waiter) await Promise.race([waiter.promise, aborted]);
+            for (const listener of [...grantedListeners]) await Promise.race([listener(conversationId), aborted]);
         } finally {
             dispose();
         }
@@ -194,9 +201,14 @@ export function createAdmission(options: AdmissionOptions): Admission {
             listeners.add(listener);
             return () => listeners.delete(listener);
         },
+        onGranted(listener) {
+            grantedListeners.add(listener);
+            return () => grantedListeners.delete(listener);
+        },
         stop() {
             stopWatching?.();
             listeners.clear();
+            grantedListeners.clear();
         },
     };
 }
