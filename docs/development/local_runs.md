@@ -22,7 +22,9 @@ node src/cli/bob.ts serve \
 The daemon runs in the foreground and writes its log to standard error (S-002 REQ-004). `--verbose` adds the debug
 lines. Stop it with Ctrl-C. For a second instance, use another folder under `.tmp/`.
 
-Run the live checks, which start the daemon over your own pi login, with `npm run test:live`.
+Run the live checks, which start the daemon over your own pi login, with `npm run test:live`, `npm run test:live:agents`
+and `npm run test:live:jobs`. Each takes `--model <provider/id>` after `--`, and each runs in a short folder under the
+system temp folder, since a socket path over 107 bytes fails.
 
 ## Checking the network listener from the LAN
 
