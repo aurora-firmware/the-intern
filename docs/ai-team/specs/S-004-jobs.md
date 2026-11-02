@@ -654,8 +654,8 @@ correction is a new entry. Each entry records its time and author (Interfaces).
 The daemon SHALL write one history entry for every change to a job's editable fields, status, Blocked reason,
 resolution and Related links, in the same write as the change, with the old value, the new value, the author and the
 time. Each repair of REQ-018 writes one `repair` entry (Interfaces); the changes it makes to the status, the Blocked
-reason or the resolution are recorded as any change is. The history is append-only and separate from the worklog. Creating a job writes no history entry; its creation
-time and Request are on the job.
+reason or the resolution are recorded as any change is. The history is append-only and separate from the worklog.
+Creating a job writes no history entry; its creation time and Request are on the job.
 
 #### AC-011.1 — Every change, nothing else
 
