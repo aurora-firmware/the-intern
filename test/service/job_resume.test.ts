@@ -206,6 +206,41 @@ describe("input to a Blocked job's lead", () => {
         await waitFor(() => isIdle(started.ctx, job.leadConversation), "the lead's run to end");
     });
 
+    it("leaves the lead unparked when the input is read as Blocked before the park and resumes after it", async () => {
+        const started = await start();
+        const job = await started.create();
+        await startJob(started.deps, job.id);
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        let signalRead: () => void = () => undefined;
+        const listenerRead = new Promise<void>((resolve) => {
+            signalRead = resolve;
+        });
+        started.deps.options.afterWrite = async (point) => {
+            if (point !== "lead-input") return;
+            signalRead();
+            await gate;
+        };
+        let submitted: Promise<unknown> = Promise.resolve();
+        const deps = started.depsWith(async (point) => {
+            if (point !== "job-blocked") return;
+            submitted = started.submit(job.leadConversation, "answer-1");
+            await listenerRead;
+        });
+
+        await blockJob(deps, job.id, BLOCKED_REASON, author);
+        assert.equal((await started.ctx.jobStore.getJob(job.id)).status, "blocked");
+        assert.notEqual((await readConversationMeta(started.ctx.host, job.leadConversation))?.parked, null);
+        release();
+        await submitted;
+
+        assert.equal((await started.ctx.jobStore.getJob(job.id)).status, "in_progress");
+        assert.equal((await readConversationMeta(started.ctx.host, job.leadConversation))?.parked, null);
+        await waitFor(() => hasReceived(started, ANSWER), "the lead to receive the answer");
+    });
+
     it("resumes the job when an agent steers its lead", async () => {
         const started = await start();
         const job = await blockedJob(started);

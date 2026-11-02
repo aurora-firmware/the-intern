@@ -81,6 +81,10 @@ export async function resumeAfterLeadInput(deps: JobActionDeps, input: Submitted
         if (job.status !== "blocked") return;
         await options.afterWrite?.("lead-input", job.id);
         await resumeJob(deps, job.id, { kind: "daemon" });
+        // A park that landed after the read above: the input is already in the lead, so it must not stay parked.
+        if ((await readConversationMeta(ctx.host, input.conversationId))?.parked) {
+            await unparkConversation(ctx.host, input.conversationId);
+        }
     } catch (error) {
         if (!(error instanceof JobNotFoundError)) throw error;
     }
