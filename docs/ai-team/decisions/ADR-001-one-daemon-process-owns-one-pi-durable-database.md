@@ -192,9 +192,16 @@ code of our own, apart from the two bounded exceptions in decision 4.
      S-001 REQ-012 with the job ID as its idempotency key and `lead:<jobId>` as the first input's request id, so a
      start that a crash cut short returns the conversation it created and submits nothing twice. A repeated park, or
      a repeated abort, changes nothing.
+   - After the four rules, and still before work resumes, the daemon checks S-004 REQ-008's turn-end rule for each
+     In progress job whose lead is idle and waits for nothing. It is the rule a lead's turn end runs, applied to saved
+     state, so a crash between the end of a lead's turn and the daemon handling it loses nothing; it isn't a fifth
+     repair rule (product owner decision, 2026-11-02).
+   - A reminder is spent when pi-durable holds its input. The reminder's request id is `reminder:<jobId>:<n>`, where
+     `n` counts the job's blocks and resumes in its history, so whether it is spent survives a restart without a fact
+     of its own, and a repeated check submits it once.
    - Nothing else is allowed: no rule that rebuilds job fields from conversation state, no retry of a failed job
-     write, and no timer that checks jobs. A fifth rule, or a new pairing of a job write with a pi-durable change that
-     the four rules don't repair, amends this decision first.
+     write, and no timer that checks jobs. A fifth rule, another startup check, or a new pairing of a job write with a
+     pi-durable change that the four rules don't repair, amends this decision first.
 5. **A storage error ends the process.** When a storage error closes the harness, the daemon logs it, stops accepting
    calls and exits with a non-zero status within the 10-second stop bound. It never reopens the database itself. The
    operating system's supervisor (systemd on Linux, launchd on macOS) restarts it, and unfinished work resumes from its
@@ -212,8 +219,8 @@ code of our own, apart from the two bounded exceptions in decision 4.
 - One source of truth: every conversation, pi-durable task, job and daemon-owned fact lives in one database with one
   writer, so there is no locking or merging between processes.
 - A crash or kill is a resume, not a loss: work restarts from pi-durable's checkpoints. The daemon's own recovery is
-  limited to redelivery from its own facts, which pi-durable request ids make safe to repeat, and to the four job
-  repair rules.
+  limited to redelivery from its own facts, which pi-durable request ids make safe to repeat, to the four job repair
+  rules, and to checking the turn-end rule at startup.
 - The job record is in plain SQL tables of its own: indexed, readable with standard SQLite tools, and independent of
   pi-durable's stored format. One file holds the whole instance, so one copy backs it up or moves it.
 - An upgrade of the pi packages touches a few files: the host module and the-intern's extensions.
@@ -240,10 +247,8 @@ code of our own, apart from the two bounded exceptions in decision 4.
 - Every job action that pairs a job write with a pi-durable change has a crash window between its two commits. The
   four repair rules are code of our own that only a crash exercises, and each needs a test that injects the crash
   between the two writes (S-004 AC-018.1).
-- The rules repair only those windows. A crash between the end of a lead's turn and the daemon's handling of it
-  (S-004 REQ-008) leaves an In progress job with an idle lead, and no rule picks it up. The S-004 architecture
-  consistency review of 2026-11-02 raised this to the product owner; covering it is a new recovery path and amends
-  this decision first.
+- The startup check of S-004 REQ-008 is more job code that only a crash exercises; it needs the kill test of S-004
+  AC-008.4, which kills the daemon at the end of a lead's turn.
 - Job store transactions share one connection queue with pi-durable's commits, so a slow job store transaction delays
   every agent run that commits meanwhile.
 - An imported copy opens only on a version whose pi-durable can read the file. Export and import don't carry the job
@@ -331,3 +336,4 @@ second connection open. One shared handle orders every transaction and closes wi
 | 2026-11-01 | Added a bounded exception to decision 4: the-intern's own facts about a conversation (`held`, `awaiting`, the creation keys in `intern.invocations` and `intern.idempotency`) live in its own documents, written in the commit that changes them, and the only recovery is redelivery worked out from them, made safe to repeat by pi-durable request ids (Context, Sources, decision 4, Positive, Negative, Alternative F). | Spec-truth reconciliation of S-001, finding F6: T-071, T-073 and T-075 built these facts and this redelivery, and the work is right. |
 | 2026-11-01 | Decision 4: named the parked state (`parked`) among the-intern's facts; added the abort mark (`aborted`), set in the abort's own commit on a lone abort of an awaited invoked conversation, and the redelivery of the "aborted" report it drives, started also by the commit that sets the mark; an "aborted" report reuses the last answer's report id, or `report:<invokedId>:aborted`; an abort's commit clears held messages and awaiting links without admitting them (Context, Sources, decision 4, Negative). | S-001 v0.3 R-8 and R-8a and product owner decision F3: a lone abort reports "aborted" to the invoker, a cascade reports nothing, and an abort withdraws held messages. Needed by T-084 and T-085. |
 | 2026-11-02 | Decision 1: the job store's `intern_` tables share the instance's SQLite file and its one connection; the job schema version is read before pi-durable opens the file; export copies the whole file, and the import step places a copy while the daemon is stopped, under the single-owner lock, without converting it. Decision 4: a second bounded exception, ordered job writes and the four startup repair rules of S-004 REQ-018, with input to a Blocked job's lead as the one change that comes before its job write. Decision 5: a failed job store write is a storage error (Context, Sources, preamble, decisions 1, 4 and 5, Positive, Negative, Neutral, Alternatives G to I). | S-004 architecture consistency review. Product owner decision of 2026-11-02: the job record lives in the-intern's own tables in the same file, not in pi-durable documents, and export and import copy the whole file. Pinned pi-durable 1.4.0 runs each commit in its own transaction, so a job write can't join it. |
+| 2026-11-02 | Decision 4: after the four repair rules, the daemon checks S-004 REQ-008's turn-end rule for each In progress job whose lead is idle and waits for nothing, as the same rule applied to saved state, not a fifth rule; a reminder is spent when pi-durable holds its input, whose request id `reminder:<jobId>:<n>` makes the check safe to repeat. Negative: the open turn-end gap is replaced by the kill test of S-004 AC-008.4. | Product owner decision of 2026-11-02 on the S-004 escalation (option A), applied in S-004 v0.2 REQ-008 and REQ-018. |
