@@ -484,6 +484,17 @@ describe("jobs.create", () => {
         assert.deepEqual(numbers, ["C-1", "C-2", "E-1", "C-3"]);
     });
 
+    it("records the message ID and sender an email way in observes in the origin and numbers the job E", async () => {
+        const started = await start();
+        const observed = { messageId: "<m1@example.org>", sender: "ana@example.org" };
+        const email: Caller = { actor: { kind: "team_member", wayIn: "email", observed } };
+
+        const job = await started.create({ text }, email);
+
+        assert.equal(job.number, "E-1");
+        assert.deepEqual(job.request.origin, { kind: "request", wayIn: "email", observed });
+    });
+
     it("refuses an unknown role, a way in without a letter and a caller-named origin, using no number", async () => {
         const started = await start();
         const parent = await started.create({ text }, cliCaller);
