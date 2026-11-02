@@ -6,7 +6,7 @@
  * before its change lets the rule apply again at the next start, and each rule is safe to repeat.
  */
 import type { ServiceContext } from "../daemon/daemon.ts";
-import { hasQueuedInput } from "../host/conversation_control.ts";
+import { hasInputSince, hasQueuedInput } from "../host/conversation_control.ts";
 import { abortJobConversations, continueWithHeld, parkConversation } from "../host/invocation.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import {
@@ -43,19 +43,29 @@ async function leadHoldsInput(ctx: ServiceContext, leadId: string): Promise<bool
     return hasQueuedInput(ctx.host, leadId);
 }
 
-/** Rule 3: a Blocked job whose lead holds input is set In progress, and the lead continues with that input. */
+// Input the lead took since the job blocked: an input entry after the one the block recorded (ADR-001 decision 4).
+// A job blocked before that entry was recorded has none, so the scan does not apply to it.
+async function leadTookInput(ctx: ServiceContext, leadId: string, jobId: string): Promise<boolean> {
+    const blockedAfterEntry = await ctx.jobStore.blockedAfterEntryOf(jobId);
+    return blockedAfterEntry !== null && hasInputSince(ctx.host, leadId, blockedAfterEntry);
+}
+
+/** Rule 3: a Blocked job whose lead holds or took input is set In progress, and the lead continues with that input. */
 async function applyRule3(deps: JobActionDeps, jobId: string): Promise<void> {
     const { ctx } = deps;
     const job = await ctx.jobStore.getJob(jobId);
     if (job.status !== "blocked") return;
     const leadId = await leadConversationOf(ctx.host, job.id);
-    if (leadId === undefined || !(await leadHoldsInput(ctx, leadId))) return;
+    if (leadId === undefined) return;
+    const holds = await leadHoldsInput(ctx, leadId);
+    if (!holds && !(await leadTookInput(ctx, leadId, job.id))) return;
     await ctx.jobStore.recordRepair(job.id, {
         rule: 3,
-        did: "Set the job In progress: its lead held input it had not taken since the job blocked",
+        did: "Set the job In progress: its lead held or had taken input since the job blocked",
     });
-    // The lead takes the input first and the resume follows it, as when the input arrives (S-004 REQ-006).
-    await continueWithHeld(ctx.host, leadId);
+    // The lead takes the input first and the resume follows it, as when the input arrives (S-004 REQ-006). Input the
+    // lead already took leaves nothing to deliver.
+    if ((await readConversationMeta(ctx.host, leadId))?.held.length) await continueWithHeld(ctx.host, leadId);
     await resumeJob(deps, job.id, DAEMON);
 }
 

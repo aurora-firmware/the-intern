@@ -146,6 +146,28 @@ export async function hasQueuedInput(host: HarnessHost, conversationId: string):
     return (inbox?.items.length ?? 0) > 0;
 }
 
+// The kinds a transcript places an input as: plain `pi.user`, and the kinds ADR-004 gives inputs sent on behalf.
+const INPUT_ENTRY_KINDS: ReadonlySet<string> = new Set(["pi.user", "intern.steer", "intern.report"]);
+const SCAN_PAGE_SIZE = 20;
+
+/**
+ * Whether the conversation took an input after the entry `afterEntryId`: an input entry newer than it in the
+ * transcript. The entries are read newest first and the scan stops at that entry.
+ */
+export async function hasInputSince(host: HarnessHost, conversationId: string, afterEntryId: string): Promise<boolean> {
+    const conversation = await requireConversation(host, conversationId);
+    let cursor: Awaited<ReturnType<Conversation["entries"]>>["next"];
+    do {
+        const page = await conversation.entries({ order: "descending" }, SCAN_PAGE_SIZE, cursor, context);
+        for (const entry of page.items) {
+            if (String(entry.id) === afterEntryId) return false;
+            if (INPUT_ENTRY_KINDS.has(entry.kind)) return true;
+        }
+        cursor = page.next;
+    } while (cursor !== undefined);
+    return false;
+}
+
 /** Withdraws a queued input, which settles `unanswered`. Input already placed in the transcript cannot be withdrawn. */
 export async function withdrawInput(host: HarnessHost, submissionId: string): Promise<void> {
     const submission = await requireSubmission(host, submissionId);

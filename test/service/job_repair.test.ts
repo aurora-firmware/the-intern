@@ -395,6 +395,39 @@ describe("rule 3: input the lead has not taken", () => {
     });
 });
 
+describe("rule 3: input the lead took since the job blocked", () => {
+    it("resumes the job when an idle parked lead took the answer before the crash", async () => {
+        const rig = await createRig();
+        const first = await rig.boot({ afterWrite: crashAt("lead-input") });
+        const job = await first.createJob();
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        await blockJob(first.deps, job.id, REASON, teamMember);
+        // The answer reaches the idle lead and is taken; the crash comes before the job's resume is written.
+        await assert.rejects(
+            steerConversation(first.ctx.host, job.leadConversation, {
+                content: HELD_TEXT,
+                mode: "followUp",
+                actor: teamMember,
+                requestId: "answer-1",
+            }),
+            /crash at lead-input/,
+        );
+        assert.equal((await first.ctx.jobStore.getJob(job.id)).status, "blocked");
+        assert.equal(await hasQueuedInput(first.ctx.host, job.leadConversation), false);
+        assert.equal((await readConversationMeta(first.ctx.host, job.leadConversation))?.held.length, 0);
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle again");
+        await first.stop();
+
+        const second = await rig.boot();
+
+        const stored = await second.ctx.jobStore.getJob(job.id);
+        assert.equal(stored.status, "in_progress");
+        assert.equal(stored.blockedReason, undefined);
+        assert.equal((await readConversationMeta(second.ctx.host, job.leadConversation))?.parked, null);
+        assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [3]);
+    });
+});
+
 describe("rule 4: a Done job with active conversations", () => {
     it("aborts a parked lead and writes one repair entry", async () => {
         const rig = await createRig();
