@@ -183,7 +183,9 @@ code of our own, apart from the two bounded exceptions in decision 4.
      first model request; after a crash before that write, the run resumes, takes a worker thread again and writes it.
    - At startup, after admission is restored and before work resumes (S-002 REQ-002 step 7), the daemon applies
      exactly the four repair rules of S-004 REQ-018, and no other recovery to jobs:
-     1. A job that isn't Done and has no lead conversation gets it started.
+     1. A job whose start is missing or was cut short gets its start completed: a job that isn't Done and has no
+        lead conversation, or a To do job whose lead conversation holds no submission with request id
+        `lead:<jobId>`, gets its lead conversation started and its first input submitted.
      2. A Blocked job whose lead conversation isn't parked gets it parked.
      3. A job whose lead conversation holds input it hasn't taken since the job blocked (queued input, or held
         messages), or has taken input since the job blocked (an input entry in its transcript after the entry the
@@ -196,6 +198,12 @@ code of our own, apart from the two bounded exceptions in decision 4.
      submits (the steer record and the ADR-004 kinds). Rule 3 reads the lead's transcript newest first, back to the
      recorded entry. This is pi-durable's own order, the same read `src/host/reports.ts` `readLastAnswer` makes. It
      decides whether the rule applies and rebuilds no job field.
+   - Creating the lead conversation and submitting its first input are two pi-durable commits; pi-durable can't
+     submit input in the creation commit. For each To do job whose lead conversation is known, rule 1 reads whether
+     pi-durable holds a submission with request id `lead:<jobId>` for that conversation
+     (`src/host/conversation_control.ts` `hasSubmissionWithRequestId`). This read decides whether the rule applies
+     and rebuilds no job field. It runs only for To do jobs, so a startup doesn't read the conversations of every job
+     the instance has run.
    - Each repair is written to the job's history with the daemon as author, and each is safe to repeat. Rule 1 calls
      S-001 REQ-012 with the job ID as its idempotency key and `lead:<jobId>` as the first input's request id, so a
      start that a crash cut short returns the conversation it created and submits nothing twice. A repeated park, or
@@ -346,3 +354,4 @@ second connection open. One shared handle orders every transaction and closes wi
 | 2026-11-02 | Decision 1: the job store's `intern_` tables share the instance's SQLite file and its one connection; the job schema version is read before pi-durable opens the file; export copies the whole file, and the import step places a copy while the daemon is stopped, under the single-owner lock, without converting it. Decision 4: a second bounded exception, ordered job writes and the four startup repair rules of S-004 REQ-018, with input to a Blocked job's lead as the one change that comes before its job write. Decision 5: a failed job store write is a storage error (Context, Sources, preamble, decisions 1, 4 and 5, Positive, Negative, Neutral, Alternatives G to I). | S-004 architecture consistency review. Product owner decision of 2026-11-02: the job record lives in the-intern's own tables in the same file, not in pi-durable documents, and export and import copy the whole file. Pinned pi-durable 1.4.0 runs each commit in its own transaction, so a job write can't join it. |
 | 2026-11-02 | Decision 4: after the four repair rules, the daemon checks S-004 REQ-008's turn-end rule for each In progress job whose lead is idle and waits for nothing, as the same rule applied to saved state, not a fifth rule; a reminder is spent when pi-durable holds its input, whose request id `reminder:<jobId>:<n>` makes the check safe to repeat. Negative: the open turn-end gap is replaced by the kill test of S-004 AC-008.4. | Product owner decision of 2026-11-02 on the S-004 escalation (option A), applied in S-004 v0.2 REQ-008 and REQ-018. |
 | 2026-11-02 | Decision 4, second bounded exception: rule 3 also covers a lead that has taken input since the job blocked, shown by an input entry (`pi.user`, the steer record or an ADR-004 kind) in its transcript after the entry the block recorded in the job's internal `blockedAfterEntry`; the block sets it and the resume clears it in the same write. Rule 3 reads the transcript newest first, back to that entry, as `readLastAnswer` does; it decides whether the rule applies and rebuilds no job field. Matches S-004 v0.4 REQ-006, REQ-018 and Interfaces. | T-129 F1 escalation: an answer the lead took after its park was cleared, before the resume was written, left the job Blocked with no rule to repair it. Architect escalation review; product owner decision of 2026-11-02 (option A). |
+| 2026-11-02 | Decision 4, second bounded exception: rule 1 also covers a To do job whose lead conversation holds no submission with request id `lead:<jobId>`, and completes the start; the startup read of that submission, made only for To do jobs with a known lead, decides whether the rule applies and rebuilds no job field. Matches S-004 v0.5 REQ-018 and AC-018.2. | PR 147 review, finding 4: a crash after the lead conversation is created and before its first input left the job To do with no agent working on it. pi-durable can't submit input in the creation commit. Product owner decision of 2026-11-02 (option A); an upstream pi-durable change and accepting the gap were rejected. |
