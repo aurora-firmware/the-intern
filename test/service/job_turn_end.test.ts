@@ -364,7 +364,7 @@ describe("the turn-end rule beside other actors", () => {
         assert.deepEqual(started.userMessages["with definition"]?.slice(1), [TEAM_TEXT, REMINDER_TEXT]);
     });
 
-    it("does nothing for a lead that still has a run, with or without queued input", async () => {
+    it("does nothing for a lead that still has a run", async () => {
         const gate = deferred();
         let isHolding = false;
         const started = await start(
@@ -385,17 +385,52 @@ describe("the turn-end rule beside other actors", () => {
         await waitFor(() => isHolding, "the lead to hold its run");
 
         await checkTurnEnd(started.jobDeps, job.id);
-        assert.equal(await hasQueuedInput(started.ctx.host, job.leadConversation), false);
+
+        assert.equal(await started.status(job.id), "in_progress");
+        assert.deepEqual(await started.steersOf(job.leadConversation), []);
+        gate.release();
+    });
+
+    it("does nothing for a lead that reads as not running while input is queued for it", async () => {
+        const gate = deferred();
+        let isHolding = false;
+        const started = await start(
+            {
+                "queued lead": [
+                    setDefinitionOfDone,
+                    {
+                        hold: gate.promise,
+                        onEntered: () => {
+                            isHolding = true;
+                        },
+                    },
+                ],
+            },
+            { turnEndRule: false },
+        );
+        const job = await started.createJob("queued lead");
+        await waitFor(() => isHolding, "the lead to hold its run");
+        // The lead really has a run, so pi-durable keeps the input queued; the stub below reports the lead as not
+        // running, which leaves the queued input as the only reason for the rule to wait.
         await submitInput(started.ctx.host, job.leadConversation, {
             content: TEAM_TEXT,
             requestId: "team-1",
             busyMode: "followUp",
         });
         assert.equal(await hasQueuedInput(started.ctx.host, job.leadConversation), true);
-        await checkTurnEnd(started.jobDeps, job.id);
+        const host = started.ctx.host;
+        const realInfo = host.conversationInfo;
+        host.conversationInfo = async () => ({ busy: false }) as Awaited<ReturnType<typeof realInfo>>;
+        try {
+            await checkTurnEnd(started.jobDeps, job.id);
+        } finally {
+            host.conversationInfo = realInfo;
+        }
 
         assert.equal(await started.status(job.id), "in_progress");
-        assert.deepEqual(await started.steersOf(job.leadConversation), []);
+        // The held run keeps a reminder out of the transcript, so look for its submission instead.
+        const reminderId = reminderRequestId(job.id, 0);
+        assert.equal(await hasSubmissionWithRequestId(started.ctx.host, job.leadConversation, reminderId), false);
         gate.release();
     });
 
