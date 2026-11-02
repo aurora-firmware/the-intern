@@ -9,6 +9,7 @@ import type { Logger } from "../../src/daemon/logger.ts";
 import {
     createHttpFront,
     type Fallback,
+    type HttpFrontOptions,
     MAX_BODY_BYTES,
     STATUS_BY_CODE,
     STREAM_ROUTES,
@@ -62,12 +63,22 @@ type Harness = {
 
 async function startFront(
     operations: AnyOperation<TestContext>[],
-    options: { wayIn?: WayIn; fallback?: Fallback; catalogue?: Catalogue } = {},
+    options: {
+        wayIn?: WayIn;
+        fallback?: Fallback;
+        catalogue?: Catalogue;
+        observe?: HttpFrontOptions["observe"];
+    } = {},
 ): Promise<Harness> {
     const context: TestContext = { calls: [] };
     const catalogue =
         options.catalogue ?? createCatalogue(operations, { context, phase: () => "ready", logger: SILENT_LOGGER });
-    const front = createHttpFront({ catalogue, wayIn: options.wayIn ?? "command line", fallback: options.fallback });
+    const front = createHttpFront({
+        catalogue,
+        wayIn: options.wayIn ?? "command line",
+        fallback: options.fallback,
+        observe: options.observe,
+    });
     const abort = new AbortController();
     const server: Server = createServer((req, res) => {
         void front.handle(req, res, { signal: abort.signal });
@@ -155,6 +166,36 @@ function assertError(reply: Reply, status: number, code: string): string {
 function jsonStringOfBytes(bytes: number): string {
     return `"${"a".repeat(bytes - 2)}"`;
 }
+
+describe("http front: observed caller details", () => {
+    let harness: Harness | undefined;
+    afterEach(() => harness?.close());
+
+    it("passes the details the listener observes with the way in", async () => {
+        harness = await startFront([echo], {
+            wayIn: "web interface",
+            observe: () => ({ remoteAddress: "192.0.2.7", remotePort: 4242 }),
+        });
+
+        await harness.call("/operations/test.echo", { headers: JSON_TYPE, body: "{}" });
+
+        assert.deepEqual(harness.context.calls[0]?.caller, {
+            actor: {
+                kind: "team_member",
+                wayIn: "web interface",
+                observed: { remoteAddress: "192.0.2.7", remotePort: 4242 },
+            },
+        });
+    });
+
+    it("passes no observed details when the listener observes none", async () => {
+        harness = await startFront([echo], { wayIn: "command line" });
+
+        await harness.call("/operations/test.echo", { headers: JSON_TYPE, body: "{}" });
+
+        assert.deepEqual(harness.context.calls[0]?.caller, { actor: { kind: "team_member", wayIn: "command line" } });
+    });
+});
 
 describe("http front: request validation", () => {
     let harness: Harness;

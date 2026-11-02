@@ -14,8 +14,11 @@ export class ServiceError extends Error {
 
 export type DaemonPhase = "starting" | "ready" | "stopping";
 
+/** What a listener observes about the caller beyond the way in; recorded only, never used to decide an outcome. */
+export type ObservedDetails = { remoteAddress?: string; remotePort?: number; messageId?: string; sender?: string };
+
 export type Actor =
-    | { kind: "team_member"; wayIn?: string }
+    | { kind: "team_member"; wayIn?: string; observed?: ObservedDetails }
     | { kind: "agent"; conversationId: string }
     | { kind: "job_source"; source: string };
 
