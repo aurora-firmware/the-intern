@@ -1,7 +1,7 @@
 ---
 id: S-004
 title: Jobs
-version: '0.2'
+version: '0.3'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-02'
 author: planner
@@ -39,7 +39,7 @@ source, origin, way in, caller, service operation, observation feed) and the sha
 | Resolution | How a Done job ended: `completed` or `cancelled`, with a short justification. |
 | Action | One of the five named moves of a job's status: start, block, resume, complete, cancel (REQ-005). |
 | Worklog | The notes agents and team members write on a job: what was tried, what was done, what is left. It lets another agent take over without the conversation history (REQ-010). |
-| History | The automatic, append-only record of every change to a job's fields, status and resolution (REQ-011). |
+| History | The automatic, append-only record of every change to a job's fields, status and resolution, and of every repair (REQ-011, REQ-018). |
 | Related | An undirected link between two jobs (REQ-009). |
 | Follow-up job | A job an agent creates while it works on another job; its origin letter is `A`. |
 | Repair rule | One of the four startup checks that bring a job and its lead conversation back in step after a crash (REQ-018). |
@@ -166,11 +166,12 @@ What this specification explicitly does NOT cover:
 Worklog and history entries are returned by `jobs.get` and paged by `jobs.worklog.list` and `jobs.history.list`.
 
 **Contract** (worklog entry): `at`, `author`, `text`. **History entry:** `at`, `author`, `field` (a field name,
-`status` or `resolution`), `old`, `new`.
+`status`, `resolution`, or `repair` for a repair of REQ-018), `old`, `new`. A `repair` entry has `old` null and `new`
+naming the rule and what it did, as `{ "rule": <1 to 4>, "did": <text> }`.
 
 **Contract** (author of a worklog or history entry): an agent, with its conversation and seated role; a team member,
-with the way in and the observed details of REQ-003; or the daemon, for automatic changes (start, the reminder rule,
-repair).
+with the way in and the observed details of REQ-003; or the daemon, for automatic changes (start, a resume on input to
+the lead, the reminder rule, a cancel after a refused start, and repair).
 
 ### Exposed: job operations
 
@@ -226,7 +227,7 @@ with its short number, title and status, and these deltas (REQ-015):
 | job created | the job without worklog and history |
 | job changed | the short number and the changed editable fields |
 | worklog entry added | the short number and the entry |
-| status changed | the short number, old and new status, and the Blocked reason when it blocks |
+| status changed | the short number, old and new status, and the Blocked reason when it blocks. A change to Done publishes "job done" instead |
 | job done | the short number and the resolution |
 
 ### Consumed
@@ -652,8 +653,9 @@ correction is a new entry. Each entry records its time and author (Interfaces).
 
 The daemon SHALL write one history entry for every change to a job's editable fields, status, Blocked reason,
 resolution and Related links, in the same write as the change, with the old value, the new value, the author and the
-time. The history is append-only and separate from the worklog. Creating a job writes no history entry; its creation
-time and Request are on the job.
+time. Each repair of REQ-018 writes one `repair` entry (Interfaces); the changes it makes to the status, the Blocked
+reason or the resolution are recorded as any change is. The history is append-only and separate from the worklog.
+Creating a job writes no history entry; its creation time and Request are on the job.
 
 #### AC-011.1 — Every change, nothing else
 
@@ -717,9 +719,10 @@ resolution, which triggers can listen for (Schedules and triggers spec).
 #### AC-015.1 — A subscriber sees the lifecycle
 
 - **Given:** a subscriber to the instance scope
-- **When:** a job is created, edited, blocked, resumed and completed
-- **Then:** it receives "job created", "job changed", "status changed" twice with the Blocked reason on the first, and
-  one "job done" with resolution `completed`, in that order
+- **When:** a job is created, its lead's first run starts, and the job is edited, blocked, resumed and completed
+- **Then:** it receives "job created"; "status changed" from To do to In progress; "job changed"; "status changed" to
+  Blocked with the Blocked reason; "status changed" back to In progress; and one "job done" with resolution `completed`,
+  in that order
 
 **Verification:** test — a service test on the fake model.
 
@@ -778,8 +781,8 @@ Each job write that goes with a pi-durable change the daemon makes SHALL be comm
 its lead conversation starts, a block before the lead conversation parks, a complete or cancel before the
 conversations are aborted. Input to a Blocked job's lead reaches the lead conversation first, and the resume follows
 it (REQ-006). At startup, after the database opens and before work resumes (S-002 REQ-002 step 7, amended), the daemon
-SHALL apply exactly these repair rules, write each repair to the history with the daemon as author, and apply no
-other recovery to jobs:
+SHALL apply exactly these repair rules, write each repair to the history as one `repair` entry with the daemon as
+author (Interfaces), and apply no other recovery to jobs:
 
 1. a job that isn't Done and has no lead conversation (no conversation records the job as its lead) gets it started
    (S-001 REQ-012 is safe to repeat for the same job); if S-001 REQ-012 refuses the start, the job is cancelled as
@@ -905,3 +908,4 @@ None.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-11-02 | REQ-007 and AC-007.2: `jobs.create` checks the role and overrides first and refuses a bad one with no job and no number, then writes the job and starts the lead; a start still refused after the write cancels the job (new AC-007.5); an optional `idempotencyKey` returns the original job, and the create job tool keys each call by its tool call id (new AC-007.4); a lead completing through its tool has its own run aborted at that call. REQ-018: the ordering names each write and its pi-durable change; rule 1 covers a job that isn't Done with no conversation recording it as its lead, and cancels the job when the start is refused; rule 3 covers input the lead hasn't taken since the job blocked and is applied before rule 2. REQ-008: the first duty includes checking the result against the definition of done and stating the evidence; whether a reminder is spent survives a restart, and the rule is checked at startup for each idle In progress job after the repair rules (new AC-008.4). REQ-005: the start is written when the lead's first run takes a worker thread; complete aborts the lead's own run. REQ-006: any input while the job is Blocked resumes it, parked or not; an invoked agent's report is no longer listed. REQ-003, AC-003.1, AC-003.2 and the `jobs.create` input: no OS account on the local socket; Email is a way in that passes the message ID and sender it observes; `origin` is refused from any caller but a job source. REQ-001: the job schema version is read before pi-durable opens the database. REQ-016 and AC-016.1: the export is owner-only and holds the database only. REQ-017 and AC-017.2: the import holds the single-owner lock, refuses leftover `-wal` and `-shm` files and a newer pi-durable schema, and creates the database owner-only. AC-013.1: the coordination tools are offered too. The term "Agent-created job" became "Follow-up job" (Definitions, REQ-002, REQ-003, REQ-009, job tools). Interfaces: `leadConversation` is read from the conversation that records the job as its lead. Users and Journeys, Workflow, Assumptions and Dependencies (S-000, S-001, S-002, S-003 amendments, ADR-004) follow. Version 0.2. | S-004 architecture consistency review (findings F1 to F18); product owner decisions 2026-11-02: F13 option A, the S-000 amendment, the OS account dropped. Driving ADRs: ADR-001, amended 2026-11-02 for the job store; ADR-004, to be amended for the new entry kinds. | None; S-004 isn't broken down yet |
+| 2026-11-02 | v0.3. AC-015.1 and the feed events table: the start publishes "status changed" like any status change, so the lifecycle has three; a change to Done publishes "job done" instead. Definitions (History), Interfaces (history entry, author), REQ-011 and REQ-018: each repair writes one `repair` history entry naming the rule and what it did; the daemon authors a resume on input and the cancel after a refused start. | Gate 2 review of the S-004 task plan (questions on T-128 and T-129). | T-128, T-129 |
