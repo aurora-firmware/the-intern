@@ -5,9 +5,12 @@
 import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
+import { readConversationMeta } from "../host/seating.ts";
 import { createJobOperation } from "../service/job_operations.ts";
 import { jobRecordOperations } from "../service/job_record_operations.ts";
 import type { Operation } from "../service/operations.ts";
+import { startJob } from "./job_actions.ts";
+import { JobNotFoundError } from "./job_store.ts";
 
 export type WritePoint =
     | "job-created"
@@ -31,9 +34,37 @@ export type JobsComponent = {
     options: JobsComponentOptions;
 };
 
+/**
+ * Writes the job's start when its lead takes a worker thread (S-004 REQ-005). The lead's job ID may be absent from the
+ * job store (tests seat leads directly), and then the grant writes nothing.
+ */
+async function startJobOfLead(ctx: ServiceContext, options: JobsComponentOptions, conversationId: string) {
+    const meta = await readConversationMeta(ctx.host, conversationId);
+    if (!meta?.isLead) return;
+    try {
+        const job = await ctx.jobStore.getJob(meta.jobId);
+        if (job.status === "to_do") await startJob({ ctx, options }, job.id);
+    } catch (error) {
+        if (!(error instanceof JobNotFoundError)) throw error;
+    }
+}
+
 export async function createJobsComponent(options: JobsComponentOptions): Promise<JobsComponent> {
+    let stopListening: (() => void) | undefined;
     return {
-        component: { name: "jobs" },
+        component: {
+            name: "jobs",
+            // Step 5 comes before work resumes, so runs that resume after a restart are covered.
+            async checkModels(ctx) {
+                stopListening = ctx.admission.onGranted((conversationId) =>
+                    startJobOfLead(ctx, options, conversationId),
+                );
+            },
+            async stop() {
+                stopListening?.();
+                stopListening = undefined;
+            },
+        },
         operations: [createJobOperation(options), ...jobRecordOperations(options)],
         options,
     };
