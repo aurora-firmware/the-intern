@@ -128,7 +128,7 @@ Each job has two records. You read both with `jobs.get`, or page them with `jobs
   `{ "rule": <1 to 4>, "did": <text> }`. The four rules are: 1, a job that isn't Done and has no lead conversation gets
   it started (or is cancelled if that start is refused); 2, a Blocked job whose lead isn't parked gets it parked;
   3, a Blocked job whose lead holds or took input since the block is set In progress and the lead continues with that
-  input; 4, a Done job with conversations still running gets them aborted.
+  input; 4, a Done job with conversations still running, parked, or waiting for a report gets them aborted.
 
 ## Related jobs and follow-up jobs
 
