@@ -5,7 +5,13 @@
 import { randomUUID } from "node:crypto";
 import type { HostDatabase, HostSqlExecutor, HostSqlValue } from "../host/harness_host.ts";
 import {
+    type ActionInput,
+    checkAction,
+    checkEdit,
+    type EditableField,
     formatNumber,
+    type JobAction,
+    type JobAuthor,
     type JobOrigin,
     type JobStatus,
     type Letter,
@@ -43,6 +49,19 @@ export class JobNotFoundError extends Error {
     }
 }
 
+/** A refused write: `conflict` for a status that doesn't allow it, `invalid_input` for a bad value. Nothing changed. */
+export class JobRefusedError extends Error {
+    readonly code: "conflict" | "invalid_input";
+    readonly field?: string;
+
+    constructor(code: "conflict" | "invalid_input", message: string, field?: string) {
+        super(message);
+        this.name = "JobRefusedError";
+        this.code = code;
+        if (field !== undefined) this.field = field;
+    }
+}
+
 export type Job = {
     id: string;
     number: string;
@@ -67,6 +86,10 @@ export type NewJob = {
     title?: string;
     statedBy?: string;
     idempotencyKey?: string;
+    /** A job to relate the new one to, written in the insert's own transaction. */
+    relatedTo?: string;
+    /** Who authors that Related link in the history. The daemon when omitted. */
+    author?: JobAuthor;
     /** The role, model, thinking level and workspace overrides and the seat actor the lead starts with. Opaque here. */
     leadStart: unknown;
 };
@@ -79,13 +102,32 @@ export type JobListFilter = {
     cursor?: string;
 };
 
-export type JobChange = { type: "job_created"; job: Job };
+export type WorklogEntry = { at: string; author: JobAuthor; text: string };
+export type HistoryEntry = { at: string; author: JobAuthor; field: string; old: unknown; new: unknown };
+export type EntryPage = { limit?: number; cursor?: string };
+
+export type JobChange =
+    | { type: "job_created"; job: Job }
+    | { type: "job_changed"; number: string; fields: Partial<Record<EditableField, string>> }
+    | { type: "worklog_added"; number: string; entry: WorklogEntry }
+    | { type: "status_changed"; number: string; old: JobStatus; new: JobStatus; blockedReason?: string }
+    | { type: "job_done"; number: string; resolution: Resolution }
+    | { type: "related_changed"; numbers: [string, string] };
 
 export type JobStore = {
     insertJob(input: NewJob): Promise<{ job: Job; created: boolean }>;
     getJob(ref: string): Promise<Job>;
     listJobs(filter: JobListFilter): Promise<{ jobs: Job[]; cursor?: string }>;
     leadStartOf(ref: string): Promise<unknown>;
+    updateFields(ref: string, fields: Partial<Record<EditableField, string>>, author: JobAuthor): Promise<Job>;
+    addWorklog(ref: string, text: string, author: JobAuthor): Promise<WorklogEntry>;
+    listWorklog(ref: string, page: EntryPage): Promise<{ entries: WorklogEntry[]; cursor?: string }>;
+    listHistory(ref: string, page: EntryPage): Promise<{ entries: HistoryEntry[]; cursor?: string }>;
+    relate(a: string, b: string, author: JobAuthor): Promise<{ a: Job; b: Job }>;
+    unrelate(a: string, b: string, author: JobAuthor): Promise<{ a: Job; b: Job }>;
+    applyAction(ref: string, action: JobAction, input: ActionInput, author: JobAuthor): Promise<Job>;
+    /** Appends one `repair` history entry by the daemon. Reports no change. */
+    recordRepair(ref: string, repair: { rule: 1 | 2 | 3 | 4; did: string }): Promise<void>;
     /** Reports each change after its transaction commits. Returns the function that removes the listener. */
     onCommit(listener: (change: JobChange) => void): () => void;
 };
@@ -351,13 +393,15 @@ async function allocateNumber(tx: HostSqlExecutor, letter: Letter): Promise<numb
     return row.last_value;
 }
 
-async function insertIn(tx: HostSqlExecutor, input: NewJob): Promise<{ job: Job; created: boolean }> {
+type Inserted = { job: Job; created: boolean; changes: JobChange[] };
+
+async function insertIn(tx: HostSqlExecutor, input: NewJob): Promise<Inserted> {
     if (input.idempotencyKey !== undefined) {
         const existing = await tx.get<JobRow>(
             `SELECT ${JOB_COLUMNS} FROM intern_jobs WHERE idempotency_key = ?`,
             input.idempotencyKey,
         );
-        if (existing) return { job: await toJob(tx, existing), created: false };
+        if (existing) return { job: await toJob(tx, existing), created: false, changes: [] };
     }
     const n = await allocateNumber(tx, input.letter);
     const id = randomUUID();
@@ -378,7 +422,252 @@ async function insertIn(tx: HostSqlExecutor, input: NewJob): Promise<{ job: Job;
         now,
         now,
     );
-    return { job: await toJob(tx, await findRow(tx, id)), created: true };
+    const changes: JobChange[] = [];
+    if (input.relatedTo !== undefined) {
+        const other = await findRow(tx, input.relatedTo);
+        const linked = await setLinkIn(tx, await findRow(tx, id), other, true, input.author ?? DAEMON, now);
+        if (linked) changes.push(linked);
+    }
+    const job = await toJob(tx, await findRow(tx, id));
+    return { job, created: true, changes: [{ type: "job_created", job }, ...changes] };
+}
+
+const DAEMON: JobAuthor = { kind: "daemon" };
+
+async function addHistory(tx: HostSqlExecutor, jobId: string, entry: HistoryEntry): Promise<void> {
+    await tx.run(
+        `INSERT INTO intern_history (job, sequence, at, author, field, old_value, new_value)
+         VALUES (?, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM intern_history WHERE job = ?), ?, ?, ?, ?, ?)`,
+        jobId,
+        jobId,
+        entry.at,
+        JSON.stringify(entry.author),
+        entry.field,
+        JSON.stringify(entry.old ?? null),
+        JSON.stringify(entry.new ?? null),
+    );
+}
+
+function refuse(check: { code: "conflict" | "invalid_input"; field?: string; message: string }): never {
+    throw new JobRefusedError(check.code, check.message, check.field);
+}
+
+const FIELD_COLUMNS: Readonly<Record<EditableField, string>> = {
+    title: "title",
+    description: "description",
+    definitionOfDone: "definition_of_done",
+};
+
+const STORED_VALUES: Readonly<Record<EditableField, (row: JobRow) => string>> = {
+    title: (row) => row.title,
+    description: (row) => row.description,
+    definitionOfDone: (row) => row.definition_of_done,
+};
+
+/** What a write returns, and the changes to report once its transaction has committed. */
+type Written<T> = { value: T; changes: JobChange[] };
+
+async function updateFieldsIn(
+    tx: HostSqlExecutor,
+    ref: string,
+    fields: Partial<Record<EditableField, string>>,
+    author: JobAuthor,
+): Promise<Written<Job>> {
+    const row = await findRow(tx, ref);
+    const check = checkEdit(row.status, Object.keys(fields));
+    if (!check.ok) refuse(check);
+    const at = new Date().toISOString();
+    const changed: Partial<Record<EditableField, string>> = {};
+    for (const name of Object.keys(fields) as EditableField[]) {
+        const next = fields[name];
+        const old = STORED_VALUES[name](row);
+        if (next === undefined || next === old) continue;
+        await tx.run(`UPDATE intern_jobs SET ${FIELD_COLUMNS[name]} = ? WHERE id = ?`, next, row.id);
+        await addHistory(tx, row.id, { at, author, field: name, old, new: next });
+        changed[name] = next;
+    }
+    if (Object.keys(changed).length === 0) return { value: await toJob(tx, row), changes: [] };
+    await tx.run("UPDATE intern_jobs SET updated_at = ? WHERE id = ?", at, row.id);
+    const job = await toJob(tx, await findRow(tx, row.id));
+    return { value: job, changes: [{ type: "job_changed", number: job.number, fields: changed }] };
+}
+
+async function addWorklogIn(
+    tx: HostSqlExecutor,
+    ref: string,
+    text: string,
+    author: JobAuthor,
+): Promise<Written<WorklogEntry>> {
+    const row = await findRow(tx, ref);
+    if (row.status === "done") {
+        refuse({ code: "conflict", message: "worklog refused: the job is Done and Done is final" });
+    }
+    if (text.trim() === "") refuse({ code: "invalid_input", field: "text", message: "a worklog entry needs text" });
+    const entry: WorklogEntry = { at: new Date().toISOString(), author, text };
+    await tx.run(
+        `INSERT INTO intern_worklog (job, sequence, at, author, text)
+         VALUES (?, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM intern_worklog WHERE job = ?), ?, ?, ?)`,
+        row.id,
+        row.id,
+        entry.at,
+        JSON.stringify(author),
+        text,
+    );
+    return { value: entry, changes: [{ type: "worklog_added", number: formatNumber(row.letter, row.n), entry }] };
+}
+
+function decodeSequenceCursor(text: string): number {
+    try {
+        const value = JSON.parse(Buffer.from(text, "base64url").toString("utf8")) as { after?: unknown };
+        if (typeof value.after === "number" && Number.isInteger(value.after)) return value.after;
+    } catch {
+        // Falls through to the error below.
+    }
+    throw new RangeError("cursor is not one this job store returned");
+}
+
+async function listEntries<Row extends { sequence: number }, Entry>(
+    executor: HostSqlExecutor,
+    table: "intern_worklog" | "intern_history",
+    columns: string,
+    ref: string,
+    page: EntryPage,
+    toEntry: (row: Row) => Entry,
+): Promise<{ entries: Entry[]; cursor?: string }> {
+    const limit = checkLimit(page.limit);
+    const after = page.cursor === undefined ? 0 : decodeSequenceCursor(page.cursor);
+    const { id } = await findRow(executor, ref);
+    const rows = await executor.all<Row>(
+        `SELECT sequence, ${columns} FROM ${table} WHERE job = ? AND sequence > ? ORDER BY sequence LIMIT ?`,
+        id,
+        after,
+        limit + 1,
+    );
+    const shown = rows.slice(0, limit);
+    const last = shown[shown.length - 1];
+    const entries = shown.map(toEntry);
+    if (rows.length > limit && last) {
+        return { entries, cursor: Buffer.from(JSON.stringify({ after: last.sequence })).toString("base64url") };
+    }
+    return { entries };
+}
+
+type WorklogRow = { sequence: number; at: string; author: string; text: string };
+type HistoryRow = { sequence: number; at: string; author: string; field: string; old_value: string; new_value: string };
+
+const toWorklogEntry = (row: WorklogRow): WorklogEntry => ({
+    at: row.at,
+    author: JSON.parse(row.author) as JobAuthor,
+    text: row.text,
+});
+
+const toHistoryEntry = (row: HistoryRow): HistoryEntry => ({
+    at: row.at,
+    author: JSON.parse(row.author) as JobAuthor,
+    field: row.field,
+    old: JSON.parse(row.old_value),
+    new: JSON.parse(row.new_value),
+});
+
+const orderedPair = (a: string, b: string): [string, string] => (a < b ? [a, b] : [b, a]);
+
+/** Adds or removes the link and writes both jobs' history. Returns the change, or undefined when nothing changed. */
+async function setLinkIn(
+    tx: HostSqlExecutor,
+    a: JobRow,
+    b: JobRow,
+    isLinking: boolean,
+    author: JobAuthor,
+    at: string,
+): Promise<JobChange | undefined> {
+    if (a.id === b.id) {
+        refuse({ code: "invalid_input", field: "jobs", message: "a job can't be related to itself" });
+    }
+    const [low, high] = orderedPair(a.id, b.id);
+    const existing = await tx.get<{ job_a: string }>(
+        "SELECT job_a FROM intern_related WHERE job_a = ? AND job_b = ?",
+        low,
+        high,
+    );
+    if ((existing !== undefined) === isLinking) return undefined;
+    if (isLinking) await tx.run("INSERT INTO intern_related (job_a, job_b) VALUES (?, ?)", low, high);
+    else await tx.run("DELETE FROM intern_related WHERE job_a = ? AND job_b = ?", low, high);
+    const numberA = formatNumber(a.letter, a.n);
+    const numberB = formatNumber(b.letter, b.n);
+    const entryFor = (other: string): HistoryEntry => ({
+        at,
+        author,
+        field: "related",
+        old: isLinking ? null : other,
+        new: isLinking ? other : null,
+    });
+    await addHistory(tx, a.id, entryFor(numberB));
+    await addHistory(tx, b.id, entryFor(numberA));
+    await tx.run("UPDATE intern_jobs SET updated_at = ? WHERE id IN (?, ?)", at, a.id, b.id);
+    return { type: "related_changed", numbers: [numberA, numberB] };
+}
+
+async function setLinkByRef(
+    tx: HostSqlExecutor,
+    refA: string,
+    refB: string,
+    isLinking: boolean,
+    author: JobAuthor,
+): Promise<Written<{ a: Job; b: Job }>> {
+    const rowA = await findRow(tx, refA);
+    const rowB = await findRow(tx, refB);
+    const change = await setLinkIn(tx, rowA, rowB, isLinking, author, new Date().toISOString());
+    const a = await toJob(tx, await findRow(tx, rowA.id));
+    const b = await toJob(tx, await findRow(tx, rowB.id));
+    return { value: { a, b }, changes: change ? [change] : [] };
+}
+
+const ACTION_RESOLUTIONS: Readonly<Partial<Record<JobAction, Resolution["kind"]>>> = {
+    complete: "completed",
+    cancel: "cancelled",
+};
+
+async function applyActionIn(
+    tx: HostSqlExecutor,
+    ref: string,
+    action: JobAction,
+    input: ActionInput,
+    author: JobAuthor,
+): Promise<Written<Job>> {
+    const row = await findRow(tx, ref);
+    // The definition of done is a stored field, so a complete that doesn't pass one is judged on the stored one.
+    const check = checkAction(row.status, action, {
+        ...input,
+        definitionOfDone: input.definitionOfDone ?? row.definition_of_done,
+    });
+    if (!check.ok) refuse(check);
+    const at = new Date().toISOString();
+    const number = formatNumber(row.letter, row.n);
+    await tx.run("UPDATE intern_jobs SET status = ?, updated_at = ? WHERE id = ?", check.to, at, row.id);
+    await addHistory(tx, row.id, { at, author, field: "status", old: row.status, new: check.to });
+    const reason = action === "block" ? (input.blockedReason as string) : null;
+    if (reason !== row.blocked_reason) {
+        await tx.run("UPDATE intern_jobs SET blocked_reason = ? WHERE id = ?", reason, row.id);
+        await addHistory(tx, row.id, { at, author, field: "blockedReason", old: row.blocked_reason, new: reason });
+    }
+    const kind = ACTION_RESOLUTIONS[action];
+    let change: JobChange;
+    if (kind === undefined) {
+        change = { type: "status_changed", number, old: row.status, new: check.to };
+        if (reason !== null) change.blockedReason = reason;
+    } else {
+        const resolution: Resolution = { kind, justification: input.justification as string };
+        await tx.run(
+            "UPDATE intern_jobs SET resolution_kind = ?, resolution_justification = ?, done_at = ? WHERE id = ?",
+            kind,
+            resolution.justification,
+            at,
+            row.id,
+        );
+        await addHistory(tx, row.id, { at, author, field: "resolution", old: null, new: resolution });
+        change = { type: "job_done", number, resolution };
+    }
+    return { value: await toJob(tx, await findRow(tx, row.id)), changes: [change] };
 }
 
 export function createJobStore(db: HostDatabase, options: JobStoreOptions = {}): JobStore {
@@ -395,11 +684,17 @@ export function createJobStore(db: HostDatabase, options: JobStoreOptions = {}):
         }
     };
 
+    const write = async <T>(body: (tx: HostSqlExecutor) => Promise<Written<T>>): Promise<T> => {
+        const { value, changes } = await db.transaction(body);
+        for (const change of changes) report(change);
+        return value;
+    };
+
     return {
         async insertJob(input) {
-            const result = await db.transaction((tx) => insertIn(tx, input));
-            if (result.created) report({ type: "job_created", job: result.job });
-            return result;
+            const { job, created, changes } = await db.transaction((tx) => insertIn(tx, input));
+            for (const change of changes) report(change);
+            return { job, created };
         },
         async getJob(ref) {
             return toJob(db, await findRow(db, ref));
@@ -409,6 +704,29 @@ export function createJobStore(db: HostDatabase, options: JobStoreOptions = {}):
             const { id } = await findRow(db, ref);
             const row = await db.get<{ lead_start: string }>("SELECT lead_start FROM intern_jobs WHERE id = ?", id);
             return JSON.parse(row?.lead_start ?? "null");
+        },
+        updateFields: (ref, fields, author) => write((tx) => updateFieldsIn(tx, ref, fields, author)),
+        addWorklog: (ref, text, author) => write((tx) => addWorklogIn(tx, ref, text, author)),
+        listWorklog: (ref, page) =>
+            listEntries<WorklogRow, WorklogEntry>(db, "intern_worklog", "at, author, text", ref, page, toWorklogEntry),
+        listHistory: (ref, page) =>
+            listEntries<HistoryRow, HistoryEntry>(
+                db,
+                "intern_history",
+                "at, author, field, old_value, new_value",
+                ref,
+                page,
+                toHistoryEntry,
+            ),
+        relate: (a, b, author) => write((tx) => setLinkByRef(tx, a, b, true, author)),
+        unrelate: (a, b, author) => write((tx) => setLinkByRef(tx, a, b, false, author)),
+        applyAction: (ref, action, input, author) => write((tx) => applyActionIn(tx, ref, action, input, author)),
+        async recordRepair(ref, repair) {
+            await db.transaction(async (tx) => {
+                const { id } = await findRow(tx, ref);
+                const at = new Date().toISOString();
+                await addHistory(tx, id, { at, author: DAEMON, field: "repair", old: null, new: repair });
+            });
         },
         onCommit(listener) {
             listeners.add(listener);

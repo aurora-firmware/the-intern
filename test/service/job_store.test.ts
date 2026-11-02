@@ -6,7 +6,9 @@ import {
     checkJobSchemaVersion,
     createJobStore,
     JOB_SCHEMA_VERSION,
+    type JobChange,
     JobNotFoundError,
+    JobRefusedError,
     JobSchemaTooNewError,
     migrateJobStore,
     type NewJob,
@@ -85,7 +87,7 @@ describe("job store inserts", () => {
     it("numbers jobs per letter and uses no number for a repeated idempotency key", async () => {
         const { store } = await openMigrated();
         const seen: string[] = [];
-        store.onCommit((change) => seen.push(change.job.number));
+        store.onCommit((change) => change.type === "job_created" && seen.push(change.job.number));
         const made = [];
         for (const letter of ["C", "C", "E"] as const) made.push((await store.insertJob(newJob(letter))).job);
         const first = await store.insertJob(newJob("C", { idempotencyKey: "k1", leadStart: { role: "x", n: 1 } }));
@@ -152,5 +154,207 @@ describe("job store reads", () => {
         await db.run("INSERT INTO intern_related (job_a, job_b) VALUES (?, ?)", low, high);
         assert.deepEqual(numbersOf((await store.listJobs({ relatedTo: "c-1" })).jobs), ["E-1"]);
         assert.deepEqual((await store.getJob(a.id)).related, ["E-1"]);
+    });
+});
+
+const lead = { kind: "agent", conversationId: "conv-1", role: "lead" } as const;
+const member = { kind: "team_member", wayIn: "command line" } as const;
+const daemon = { kind: "daemon" } as const;
+
+async function openWithJob(extra: Partial<NewJob> = {}) {
+    const { db, store } = await openMigrated();
+    const changes: JobChange[] = [];
+    const job = (await store.insertJob(newJob("C", extra))).job;
+    store.onCommit((change) => changes.push(change));
+    return { db, store, job, changes };
+}
+
+const refusal = (code: "conflict" | "invalid_input", field?: string) => (error: unknown) => {
+    assert.ok(error instanceof JobRefusedError, String(error));
+    assert.equal(error.code, code);
+    assert.equal(error.field, field);
+    return true;
+};
+
+describe("job store writes and history", () => {
+    it("holds exactly the changes of an edited, blocked, resumed and completed job", async () => {
+        const { store, job } = await openWithJob();
+        await store.updateFields(job.number, { title: "First" }, member);
+        await store.updateFields(job.number, { title: "Second", definitionOfDone: "tests pass" }, lead);
+        await store.applyAction(job.number, "start", {}, daemon);
+        await store.applyAction(job.number, "block", { blockedReason: "need a key" }, lead);
+        await store.applyAction(job.number, "resume", {}, daemon);
+        const done = await store.applyAction(job.number, "complete", { justification: "all green" }, lead);
+        assert.equal(done.title, "Second");
+        assert.equal(done.status, "done");
+        assert.equal(done.blockedReason, undefined);
+        assert.deepEqual(done.resolution, { kind: "completed", justification: "all green" });
+        assert.ok(done.doneAt);
+        const { entries } = await store.listHistory(job.number, {});
+        const shape = entries.map((e) => [e.field, e.old, e.new, e.author.kind]);
+        assert.deepEqual(shape, [
+            ["title", "", "First", "team_member"],
+            ["title", "First", "Second", "agent"],
+            ["definitionOfDone", "", "tests pass", "agent"],
+            ["status", "to_do", "in_progress", "daemon"],
+            ["status", "in_progress", "blocked", "agent"],
+            ["blockedReason", null, "need a key", "agent"],
+            ["status", "blocked", "in_progress", "daemon"],
+            ["blockedReason", "need a key", null, "daemon"],
+            ["status", "in_progress", "done", "agent"],
+            ["resolution", null, { kind: "completed", justification: "all green" }, "agent"],
+        ]);
+        for (const entry of entries) assert.ok(entry.at);
+    });
+
+    it("refuses fields that aren't editable and changes nothing", async () => {
+        const { store, job, changes } = await openWithJob();
+        for (const name of ["number", "status", "resolution", "blockedReason", "request", "createdAt"]) {
+            await assert.rejects(
+                store.updateFields(job.number, { title: "x", [name]: "y" }, member),
+                refusal("invalid_input", name),
+            );
+        }
+        assert.deepEqual(await store.getJob(job.number), job);
+        assert.deepEqual((await store.listHistory(job.number, {})).entries, []);
+        assert.deepEqual(changes, []);
+    });
+
+    it("refuses what a Done job or a wrong status doesn't allow, but relates a Done job", async () => {
+        const { store, job, changes } = await openWithJob();
+        const other = (await store.insertJob(newJob("E"))).job;
+        changes.length = 0;
+        await assert.rejects(store.applyAction(job.number, "resume", {}, lead), refusal("conflict"));
+        await assert.rejects(store.applyAction(job.number, "block", { blockedReason: "x" }, lead), refusal("conflict"));
+        await store.applyAction(job.number, "cancel", { justification: "not needed" }, member);
+        const finalState = await store.getJob(job.number);
+        assert.deepEqual(finalState.resolution, { kind: "cancelled", justification: "not needed" });
+        const before = (await store.listHistory(job.number, {})).entries.length;
+        await assert.rejects(store.updateFields(job.number, { title: "x" }, member), refusal("conflict"));
+        await assert.rejects(store.addWorklog(job.number, "late", member), refusal("conflict"));
+        await assert.rejects(store.applyAction(job.number, "start", {}, daemon), refusal("conflict"));
+        assert.deepEqual(await store.getJob(job.number), finalState);
+        assert.equal((await store.listHistory(job.number, {})).entries.length, before);
+        assert.deepEqual((await store.listWorklog(job.number, {})).entries, []);
+        const related = await store.relate(job.number, other.number, member);
+        assert.deepEqual(related.a.related, [other.number]);
+        const unrelated = await store.unrelate(job.number, other.number, member);
+        assert.deepEqual(unrelated.a.related, []);
+        assert.deepEqual(
+            changes.map((c) => c.type),
+            ["job_done", "related_changed", "related_changed"],
+        );
+    });
+
+    it("judges a complete by the stored definition of done", async () => {
+        const { store, job } = await openWithJob();
+        await store.applyAction(job.number, "start", {}, daemon);
+        await assert.rejects(
+            store.applyAction(job.number, "complete", { justification: "x" }, lead),
+            refusal("invalid_input", "definitionOfDone"),
+        );
+        await store.updateFields(job.number, { definitionOfDone: "done when X" }, lead);
+        const done = await store.applyAction(job.number, "complete", { justification: "X holds" }, lead);
+        assert.equal(done.status, "done");
+    });
+
+    it("relates two jobs once, in both directions, and refuses a job related to itself", async () => {
+        const { store, job, changes } = await openWithJob();
+        const other = (await store.insertJob(newJob("E"))).job;
+        changes.length = 0;
+        await store.relate(job.number, other.number, lead);
+        const again = await store.relate(other.number, job.number, lead);
+        assert.deepEqual(again.a.related, [job.number]);
+        assert.deepEqual(again.b.related, [other.number]);
+        await assert.rejects(store.relate(job.number, job.id, lead), refusal("invalid_input", "jobs"));
+        for (const number of [job.number, other.number]) {
+            const { entries } = await store.listHistory(number, {});
+            assert.equal(entries.length, 1);
+            assert.equal(entries[0]?.field, "related");
+        }
+        assert.deepEqual(changes, [{ type: "related_changed", numbers: [job.number, other.number] }]);
+    });
+
+    it("writes the Related link of an insert in the insert's own transaction", async () => {
+        const { db, store, job } = await openWithJob();
+        const added = (await store.insertJob(newJob("W", { relatedTo: job.number, author: lead }))).job;
+        assert.deepEqual(added.related, [job.number]);
+        assert.deepEqual((await store.getJob(job.number)).related, [added.number]);
+        for (const number of [job.number, added.number]) {
+            const { entries } = await store.listHistory(number, {});
+            assert.deepEqual(
+                entries.map((e) => e.field),
+                ["related"],
+            );
+        }
+        await assert.rejects(store.insertJob(newJob("W", { relatedTo: "C-99" })), JobNotFoundError);
+        assert.equal((await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM intern_jobs"))?.n, 2);
+        assert.equal((await store.insertJob(newJob("W"))).job.number, "W-2");
+    });
+
+    it("pages the worklog and the history oldest first", async () => {
+        const { store, job } = await openWithJob();
+        for (const text of ["one", "two", "three"]) await store.addWorklog(job.number, text, lead);
+        await assert.rejects(store.addWorklog(job.number, "  ", lead), refusal("invalid_input", "text"));
+        const first = await store.listWorklog(job.number, { limit: 2 });
+        assert.deepEqual(
+            first.entries.map((e) => e.text),
+            ["one", "two"],
+        );
+        assert.ok(first.cursor);
+        const second = await store.listWorklog(job.number, { limit: 2, cursor: first.cursor });
+        assert.deepEqual(
+            second.entries.map((e) => e.text),
+            ["three"],
+        );
+        assert.equal(second.cursor, undefined);
+        assert.deepEqual(second.entries[0]?.author, lead);
+        for (const title of ["a", "b", "c"]) await store.updateFields(job.number, { title }, member);
+        const page = await store.listHistory(job.number, { limit: 2 });
+        const rest = await store.listHistory(job.number, { cursor: page.cursor });
+        assert.deepEqual(
+            [...page.entries, ...rest.entries].map((e) => e.new),
+            ["a", "b", "c"],
+        );
+        await assert.rejects(store.listHistory(job.number, { cursor: "nope" }), RangeError);
+    });
+
+    it("reports each committed change after the commit, and nothing for a refusal or a repair", async () => {
+        const { store, job, changes } = await openWithJob();
+        await store.updateFields(job.number, { description: "d" }, member);
+        await store.addWorklog(job.number, "note", lead);
+        await store.applyAction(job.number, "start", {}, daemon);
+        await store.applyAction(job.number, "block", { blockedReason: "why" }, lead);
+        await store.applyAction(job.number, "resume", {}, daemon);
+        assert.deepEqual(
+            changes.map((c) => c.type),
+            ["job_changed", "worklog_added", "status_changed", "status_changed", "status_changed"],
+        );
+        assert.deepEqual(changes[0], { type: "job_changed", number: job.number, fields: { description: "d" } });
+        assert.deepEqual(changes[3], {
+            type: "status_changed",
+            number: job.number,
+            old: "in_progress",
+            new: "blocked",
+            blockedReason: "why",
+        });
+        const count = changes.length;
+        await assert.rejects(store.updateFields(job.number, { status: "x" } as never, member), JobRefusedError);
+        await store.recordRepair(job.number, { rule: 2, did: "resumed" });
+        assert.equal(changes.length, count);
+        const last = (await store.listHistory(job.number, {})).entries.at(-1);
+        assert.deepEqual(last && [last.author, last.field, last.old, last.new], [
+            daemon,
+            "repair",
+            null,
+            { rule: 2, did: "resumed" },
+        ]);
+        await store.applyAction(job.number, "cancel", { justification: "no" }, member);
+        assert.deepEqual(changes.at(-1), {
+            type: "job_done",
+            number: job.number,
+            resolution: { kind: "cancelled", justification: "no" },
+        });
+        assert.equal(changes.length, count + 1);
     });
 });
