@@ -12,7 +12,6 @@ import {
     type Job,
     JobNotFoundError,
     JobRefusedError,
-    type JobStore,
     type WorklogEntry,
 } from "../jobs/job_store.ts";
 import type { JobsComponentOptions } from "../jobs/jobs_component.ts";
@@ -146,10 +145,10 @@ async function readJob(ctx: ServiceContext, ref: string): Promise<JobDetail> {
     return { ...job, ...(leadConversation !== undefined && { leadConversation }), worklog, history };
 }
 
-function pagedEntries(store: JobStore, method: "listWorklog" | "listHistory", input: PageInput) {
-    const { job, ...page } = input;
-    return store[method](job, page);
-}
+const pageOf = ({ limit, cursor }: PageInput) => ({
+    ...(limit !== undefined && { limit }),
+    ...(cursor !== undefined && { cursor }),
+});
 
 export function jobRecordOperations(_options: JobsComponentOptions) {
     const get = defineOperation<ServiceContext, { job: string }, JobDetail>({
@@ -189,13 +188,13 @@ export function jobRecordOperations(_options: JobsComponentOptions) {
         name: "jobs.worklog.list",
         kind: "read",
         parse: parsePage,
-        run: (ctx, input) => refusing(pagedEntries(ctx.jobStore, "listWorklog", input)),
+        run: (ctx, input) => refusing(ctx.jobStore.listWorklog(input.job, pageOf(input))),
     });
     const historyList = defineOperation<ServiceContext, PageInput, { entries: HistoryEntry[]; cursor?: string }>({
         name: "jobs.history.list",
         kind: "read",
         parse: parsePage,
-        run: (ctx, input) => refusing(pagedEntries(ctx.jobStore, "listHistory", input)),
+        run: (ctx, input) => refusing(ctx.jobStore.listHistory(input.job, pageOf(input))),
     });
     const link = (name: "jobs.relate" | "jobs.unrelate", method: "relate" | "unrelate") =>
         defineOperation<ServiceContext, PairInput, { a: Job; b: Job }>({

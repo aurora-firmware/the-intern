@@ -225,7 +225,7 @@ describe("job record operations", () => {
         assert.equal(await refusalCode(started.invoke("jobs.list", { cursor: "garbage" })), "invalid_input");
     });
 
-    it("jobs.relate lists each job in the other's related, repeats change nothing, and refuses a self link", async () => {
+    it("jobs.relate links both ways, repeats change nothing, and refuses a self link", async () => {
         const started = await start();
         const c = await started.seed("C");
         const w = await started.seed("W");
