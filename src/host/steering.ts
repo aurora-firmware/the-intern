@@ -6,7 +6,7 @@
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type ConversationId, defineEntry } from "@earendil-works/pi-durable";
-import { HostNotFoundError, notifyInputSubmitted } from "./conversation_control.ts";
+import { HostNotFoundError, notifyInputSubmitted, submissionIdFor } from "./conversation_control.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { continueParked } from "./invocation.ts";
 import { conversationMetaDoc, type HeldMessage, readConversationMeta, type SeatActor } from "./seating.ts";
@@ -73,6 +73,8 @@ export async function steerConversation(
     if ((await readConversationMeta(host, String(conversation.id)))?.parked?.waitingFor === "answer") {
         return { held: false, ...(await continueParked(host, String(conversation.id), { ...input, entry })) };
     }
+    // A repeated request id places nothing, so no input listener hears of it.
+    const isRepeat = (await submissionIdFor(host, String(conversation.id), input.requestId)) !== undefined;
     const submission = await conversation.submit(
         {
             type: "input",
@@ -83,6 +85,8 @@ export async function steerConversation(
         },
         context,
     );
-    await notifyInputSubmitted(host, { conversationId: String(conversation.id), requestId: input.requestId });
+    if (!isRepeat) {
+        await notifyInputSubmitted(host, { conversationId: String(conversation.id), requestId: input.requestId });
+    }
     return { held: false, submissionId: String(submission.id) };
 }

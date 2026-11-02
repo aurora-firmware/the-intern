@@ -312,6 +312,37 @@ describe("input to a Blocked job's lead", () => {
         assert.equal((await started.ctx.jobStore.listJobs({})).jobs.length, 1);
     });
 
+    it("leaves the job Blocked and the lead parked when a repeated jobs.create resubmits the first input", async () => {
+        const started = await start();
+        const request = { text: "do it", idempotencyKey: "create-once" };
+        const job = (await started.ctx.catalogue.invoke("jobs.create", request, webCaller)) as CreatedJob;
+        await waitFor(() => isIdle(started.ctx, job.leadConversation), "the lead's first run to end");
+        await startJob(started.deps, job.id);
+        await blockJob(started.deps, job.id, BLOCKED_REASON, author);
+
+        await started.ctx.catalogue.invoke("jobs.create", request, webCaller);
+
+        const stored = await started.ctx.jobStore.getJob(job.id);
+        assert.equal(stored.status, "blocked");
+        assert.equal(stored.blockedReason, BLOCKED_REASON);
+        assert.notEqual((await readConversationMeta(started.ctx.host, job.leadConversation))?.parked, null);
+    });
+
+    it("leaves the job Blocked when a client repeats a submission the lead took before the block", async () => {
+        const started = await start();
+        const job = await started.create();
+        await startJob(started.deps, job.id);
+        await started.submit(job.leadConversation, "answer-1");
+        await waitFor(() => hasReceived(started, ANSWER), "the lead to receive the input");
+        await waitFor(() => isIdle(started.ctx, job.leadConversation), "the lead's run to end");
+        await blockJob(started.deps, job.id, BLOCKED_REASON, author);
+
+        await started.submit(job.leadConversation, "answer-1");
+
+        assert.equal((await started.ctx.jobStore.getJob(job.id)).status, "blocked");
+        assert.notEqual((await readConversationMeta(started.ctx.host, job.leadConversation))?.parked, null);
+    });
+
     it("skips an input whose request id starts with resume:, which jobs.resume writes itself", async () => {
         const started = await start();
         const job = await blockedJob(started);

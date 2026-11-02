@@ -93,7 +93,8 @@ so Blocked never means a pause that you asked for. The lead can't block while an
 To answer, send the lead a message. Any message that reaches the lead of a Blocked job resumes the job: it becomes In
 progress, the Blocked reason is cleared, and the lead continues with your message as its input. The old reason stays in
 the job's history. You can send the message with `jobs.resume`, as shown below, or with any other operation that sends
-input to the lead conversation.
+input to the lead conversation. A repeat of a message the lead already has, sent with the same `requestId`, reaches
+the lead no second time, so it doesn't resume the job. Use a new `requestId` for a new answer.
 
 The Intern blocks a job on the lead's behalf in two cases, with the daemon as author in the history:
 
@@ -127,7 +128,7 @@ Each job has two records. You read both with `jobs.get`, or page them with `jobs
   `{ "rule": <1 to 4>, "did": <text> }`. The four rules are: 1, a job that isn't Done and has no lead conversation gets
   it started (or is cancelled if that start is refused); 2, a Blocked job whose lead isn't parked gets it parked;
   3, a Blocked job whose lead holds or took input since the block is set In progress and the lead continues with that
-  input; 4, a Done job with conversations still running gets them aborted.
+  input; 4, a Done job with conversations still running, parked, or waiting for a report gets them aborted.
 
 ## Related jobs and follow-up jobs
 
@@ -273,7 +274,8 @@ stopped and has no `bob` command yet; the command line documentation names it wh
 - **No assignees, watchers, votes, labels or attachments.** Every team member is equal, and the lead conversation is
   the only owner a job has.
 - **No reopening.** A Done job stays Done.
-- **No sub-tasks or dependencies.** Related is the only link, and agents the lead invokes take the place of sub-tasks.
+- **No sub-jobs and no dependencies between jobs.** Related is the only link. To split work, the lead invokes
+  other agents.
 - **No blocking by a team member.** Only the lead blocks a job.
 - **No permissions per field or per person.** Anyone who reaches The Intern can change any editable field.
 - **No syncing with outside ticket trackers.**

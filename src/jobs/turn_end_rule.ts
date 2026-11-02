@@ -35,16 +35,17 @@ async function isLeadWaiting(deps: JobActionDeps, jobId: string, leadId: string)
 /**
  * Applies the rule to the job once its lead has stopped. It acts only for a job that the job store holds, that is In
  * progress, and whose lead waits for nothing. A reminder is spent when pi-durable already holds a submission with its
- * request id, which names the number of times the job has blocked or resumed.
+ * request id, which names the number of times the job has blocked or resumed. A caller that already knows the job's
+ * lead conversation passes it, so the check does not look it up again.
  */
-export async function checkTurnEnd(deps: JobActionDeps, jobId: string): Promise<void> {
+export async function checkTurnEnd(deps: JobActionDeps, jobId: string, knownLeadId?: string): Promise<void> {
     const { ctx } = deps;
     const job = await ctx.jobStore.getJob(jobId).catch((error: unknown) => {
         if (error instanceof JobNotFoundError) return undefined;
         throw error;
     });
     if (job === undefined || job.status !== "in_progress") return;
-    const leadId = await leadConversationOf(ctx.host, job.id);
+    const leadId = knownLeadId ?? (await leadConversationOf(ctx.host, job.id));
     if (leadId === undefined || (await isLeadWaiting(deps, job.id, leadId))) return;
 
     const history = await allEntries((cursor) =>

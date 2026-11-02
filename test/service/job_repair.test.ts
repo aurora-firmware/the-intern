@@ -16,6 +16,7 @@ import { conversationMetaDoc, readConversationMeta } from "../../src/host/seatin
 import { steerConversation } from "../../src/host/steering.ts";
 import { blockJob, cancelJob, type JobActionDeps } from "../../src/jobs/job_actions.ts";
 import { type JobAuthor, reminderRequestId } from "../../src/jobs/job_model.ts";
+import { repairJobs } from "../../src/jobs/job_repair.ts";
 import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import { REMINDER_TEXT } from "../../src/jobs/turn_end_rule.ts";
 import type { Caller } from "../../src/service/operations.ts";
@@ -393,6 +394,44 @@ describe("rule 3: input the lead has not taken", () => {
         heldCall.release();
         await waitFor(() => rig.modelInputs.some((users) => users.includes(HELD_TEXT)), "the lead to take the answer");
     });
+
+    it("unparks the lead when the input queued before the park and the crash came before the resume", async () => {
+        const rig = await createRig();
+        const steerAnswer = (ctx: ServiceContext, leadId: string) =>
+            steerConversation(ctx.host, leadId, {
+                content: HELD_TEXT,
+                mode: "followUp",
+                actor: teamMember,
+                requestId: "answer-1",
+            });
+        let leadId = "";
+        let ctxOfFirst: ServiceContext | undefined;
+        const first = await rig.boot({
+            afterWrite: async (point) => {
+                // The answer queues for the running lead after the block is written and before the lead parks.
+                if (point === "job-blocked") await assert.rejects(steerAnswer(ctxOfFirst as ServiceContext, leadId));
+                if (point === "lead-input") throw new Error("crash at lead-input");
+            },
+        });
+        ctxOfFirst = first.ctx;
+        const heldCall = rig.hold();
+        const job = await first.createJob();
+        leadId = job.leadConversation;
+        await waitFor(() => rig.modelInputs.length === 1, "the lead's run to be in its model call");
+        await blockJob(first.deps, job.id, REASON, teamMember);
+        assert.equal((await first.ctx.jobStore.getJob(job.id)).status, "blocked");
+        assert.equal(await hasQueuedInput(first.ctx.host, job.leadConversation), true);
+        assert.notEqual((await readConversationMeta(first.ctx.host, job.leadConversation))?.parked, null);
+        await first.stop();
+
+        const second = await rig.boot();
+
+        assert.equal((await second.ctx.jobStore.getJob(job.id)).status, "in_progress");
+        assert.equal((await readConversationMeta(second.ctx.host, job.leadConversation))?.parked, null);
+        assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [3]);
+        heldCall.release();
+        await waitFor(() => rig.modelInputs.some((users) => users.includes(HELD_TEXT)), "the lead to take the answer");
+    });
 });
 
 describe("rule 3: input the lead took since the job blocked", () => {
@@ -484,6 +523,33 @@ describe("rules 3 and 4: jobs with nothing to repair", () => {
         const second = await rig.boot();
 
         assert.deepEqual(await repairsOf(second.ctx, job.id), []);
+    });
+});
+
+describe("the cost of the repair", () => {
+    it("lists the conversations once, however many Done jobs the instance holds", async () => {
+        const rig = await createRig();
+        const booted = await rig.boot({ turnEndRule: true });
+        for (let count = 0; count < 5; count += 1) {
+            const job = await booted.createJob();
+            await waitFor(() => isIdle(booted.ctx, job.leadConversation), "the lead to be idle");
+            await cancelJob(booted.deps, job.id, "no longer needed", teamMember);
+        }
+        const { host } = booted.ctx;
+        const listConversations = host.listConversations;
+        let listings = 0;
+        host.listConversations = () => {
+            listings += 1;
+            return listConversations();
+        };
+
+        try {
+            await repairJobs(booted.deps);
+        } finally {
+            host.listConversations = listConversations;
+        }
+
+        assert.equal(listings, 1);
     });
 });
 
