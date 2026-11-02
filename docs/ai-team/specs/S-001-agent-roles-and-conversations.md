@@ -1,6 +1,6 @@
 ---
 title: Agent roles and conversations
-version: '0.6'
+version: '0.7'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-15'
 author: planner
@@ -30,7 +30,7 @@ monitoring that shows which role works where. Success Criteria lists the observa
 | Role | A set of parameters that an agent is made from: instructions (system prompt), tools and skills, plus default values for the pi-durable agent parameters: model, thinking level and workspace (the pi-durable `cwd`). If a role is a class, an agent is an object of that class. |
 | Agent | The actor that interacts with the model and carries out a conversation. A conversation has one agent at a time and can be a succession of agents: each role change ends the current agent and seats a new one in the same conversation. An agent keeps its role for its whole life. It is not an operating-system process: the daemon runs every agent, and the current agent's configuration is the pi-durable agent of its conversation. |
 | Seat | The place of the current agent in a conversation, with the role, model, thinking level and workspace it runs with: the role's defaults, or overrides given when the agent was seated or invoked. |
-| Job | The product's unit of work (S-000): it has a definition, a status, open questions, evidence and follow-up jobs, kept in the job record. The job record and the job's steps belong to the Jobs component and its own spec. This spec defines only how agents and conversations work on a job. |
+| Job | The product's unit of work (S-000): it has a description, a definition of done, a status, a Blocked reason while blocked, a resolution with its justification, a worklog, a history and Related jobs (S-004), kept in the job record. The job record and the job's steps belong to the Jobs component and its own spec. This spec defines only how agents and conversations work on a job. |
 | Lead conversation, lead agent | Each job has one lead conversation. Its current agent is the job's lead agent, which carries the job from definition to verification and is the only agent that closes it. A handoff in the lead conversation passes the lead to the new agent, so a job has exactly one lead at a time. |
 | Specialist agent | An agent invoked for a part of a job. It works in its own conversation, finishes its part and reports back. It never closes the job. |
 | Handoff | The current agent passes its conversation to a new agent of another role. Same conversation, same worker thread. |
@@ -225,7 +225,8 @@ outcomes, idempotency keys) are S-002's (S-002 REQ-012, REQ-013).
 
 ### Exposed: agent tools
 
-Every seat is offered these three coordination tools, whatever its role's tool set names (REQ-003, REQ-005).
+Every seat is offered these three coordination tools and the job tools (S-004 REQ-013), whatever its role's tool set
+names (REQ-003, REQ-005).
 **Contract** (tool names and parameters as the model sees them):
 
 | Tool | Parameters | Result |
@@ -243,7 +244,6 @@ These operations of the S-002 catalogue carry this spec's behaviour (S-002 REQ-0
 
 | Operation | Kind | Requirement |
 |---|---|---|
-| `jobs.startLead` | control | Start a job's lead conversation with a role, optional overrides, a first input and an origin (REQ-012) |
 | `conversations.seat` | control | Change a conversation's seat, optionally with a reset and a note (REQ-004, REQ-011) |
 | `conversations.reset` | control | Reset a conversation and keep its seat (REQ-011) |
 | `conversations.abort` | control | Abort a conversation and the invoked conversations it awaits (REQ-008) |
@@ -252,8 +252,9 @@ These operations of the S-002 catalogue carry this spec's behaviour (S-002 REQ-0
 | `workspaces.list`, `workspaces.register`, `workspaces.unregister` | read, control | Workspace registration (REQ-018) |
 | `conversations.list`, `conversations.get`, `conversations.invocations`, `conversations.entries`, `feed.subscribe` | read | Monitoring (REQ-016) |
 
-The capability that aborts every conversation of a job is offered in-process for the Jobs spec's job abort operation
-(REQ-008).
+Two capabilities are offered in-process only, for S-004: `jobs.startLead`, which starts a job's lead conversation
+with a role, optional overrides, a first input and an origin and is called by `jobs.create` (REQ-012); and the
+capability that aborts every conversation of a job, for S-004's complete and cancel actions (REQ-008).
 
 ### Exposed: transcript entries
 
@@ -391,8 +392,8 @@ Defaults and changes MUST follow these rules:
 - A role without a configured default workspace uses a default workspace that the-intern creates and registers for
   that role, owner-only, under the-intern's own data location.
 - A tool set can name only tools the-intern ships. A change naming an unknown tool is refused.
-- The coordination capabilities (REQ-006 to REQ-008, REQ-019, REQ-020) are part of every role. A tool set can't leave
-  them out.
+- The coordination capabilities (REQ-006 to REQ-008, REQ-019, REQ-020) and the job tools (S-004 REQ-013) are part of
+  every role. A tool set can't leave them out.
 - A change to a role, or its removal, affects only agents seated after the change. Agents already seated keep
   their instructions, tools, skills, model, thinking level and workspace until their seat changes.
 
@@ -552,7 +553,7 @@ After a seat is applied, every model turn in that conversation MUST:
 
 - use the seat's model and thinking level
 - see the role's instructions and skills
-- be offered exactly the role's tools and the coordination capabilities
+- be offered exactly the role's tools, the coordination capabilities and the job tools (S-004 REQ-013)
 - run its tools in the seat's workspace
 - see that workspace's instructions and skills
 
@@ -573,8 +574,8 @@ visible to the new agent unless a Clean handoff or a reset (REQ-011) cleared the
 
 - **Given:** a role whose tool set is `read` plus the coordination tools
 - **When:** an agent of it takes a turn
-- **Then:** the model is offered `read` and the coordination tools, and none of `write`, `edit` and `bash`; nothing
-  is loaded from the pi agent folder
+- **Then:** the model is offered `read`, the coordination tools and the job tools (S-004 REQ-013), and none of
+  `write`, `edit` and `bash`; nothing is loaded from the pi agent folder
 
 **Verification:** test — `test/service/shipped_tools.test.ts`, `test/unit/workspace_context.test.ts` ("returns no
 context file or skill from the pi agent folder").
@@ -655,7 +656,8 @@ human confirms it. A handoff in a job's lead conversation passes the lead to the
 Every seat change MUST show in the transcript. The record names:
 
 - the previous seat and the new seat (role, model, thinking level, workspace)
-- the actor: a team member (with the way in they used), the agent that handed off (with its role), or a job source
+- the actor: a team member (with the way in they used), the agent that handed off (with its role), a job source, or
+  the daemon, for input it sends under a job's rules (S-004 REQ-008)
 - for a handoff, the context mode, and the handoff note when there is one
 
 Every assistant message MUST be attributed to the seat that produced it.
@@ -887,9 +889,10 @@ The-intern SHALL let a team member, and any agent, steer a running conversation 
 running model turn picks up after its current tool round. The message can be queued as a follow-up instead.
 
 - An agent steers through a coordination capability that names the target conversation.
-- A message sent to a parked conversation waits until it continues, whatever its busy mode: a message sent with the
-  mode that refuses input while a run is active (reject, S-002 REQ-012) is held like any other message, not refused,
-  and the conversation takes it as a follow-up when it continues.
+- A message sent to a conversation parked for reports waits until it continues, whatever its busy mode: a message
+  sent with the mode that refuses input while a run is active (reject, S-002 REQ-012) is held like any other message,
+  not refused, and the conversation takes it as a follow-up when it continues. A message sent to a job's lead
+  conversation parked because its job is Blocked continues it with that message (REQ-014; S-004 REQ-006).
 - The transcript records who steered.
 
 #### AC-020.1 — Steer and follow-up
@@ -919,7 +922,7 @@ running model turn picks up after its current tool round. The message can be que
 
 #### AC-020.4 — Messages to a parked conversation are held
 
-- **Given:** a parked conversation
+- **Given:** a conversation parked for reports
 - **When:** a team member and an agent send it messages, in each busy mode including reject, and one request twice
 - **Then:** each message is held once without a run and delivered as its own `intern.steer` entry with its sender when
   the conversation continues
@@ -1026,6 +1029,14 @@ not for a human.
 - **Then:** the other conversation runs, and the lead continues once a worker thread is free
 
 **Verification:** test — `test/service/agents_capacity.test.ts` ("a job").
+
+#### AC-014.2 — Input continues a lead parked for its Blocked job
+
+- **Given:** a lead conversation parked because its job is Blocked
+- **When:** a team member submits input to it
+- **Then:** it continues with that input on a free worker thread
+
+**Verification:** test — a service test on the fake model.
 
 ### REQ-015 — Missing workspace during a run
 
@@ -1178,9 +1189,9 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
 
 - **S-002, Daemon and host runtime.** Provides the database, startup, configuration file, service layer, admission
   and observation feed this spec builds on. Its built-in constants fix the depth cap and the worker-thread count.
-- **The Jobs spec (not yet written).** Creates jobs and calls `jobs.startLead` (REQ-012), decides when a job is blocked
-  and delivers its answer (REQ-014), closes jobs, and offers the job abort operation that calls this spec's capability
-  (REQ-008). Until it exists, the operations are called by tests and the live checks.
+- **S-004 (Jobs).** Creates jobs and calls `jobs.startLead`, which is in-process only, from `jobs.create` (REQ-012);
+  decides when a job is blocked and delivers its answer (REQ-014); closes jobs, and its complete and cancel actions
+  call this spec's abort capability (REQ-008); adds the job tools to every role (REQ-003, REQ-005).
 - **The schedules and triggers spec, the command-line spec and the Email spec (not yet written).** They own the fire
   behaviour (REQ-013), the monitoring views (REQ-016) and the mailbox. This spec's live acceptance test 1 moved to the
   schedules and triggers spec (product owner ruling, 2026-10-31).
@@ -1251,3 +1262,4 @@ behaviour. Deciding either one is a scope amendment of this spec.
 | 2026-11-01 | v0.5, format only; no requirement changed meaning. Restructured to the ai-team 0.18.0 spec format: requirements renumbered `R-n` → `REQ-00n`, with R-3a → REQ-018, R-8a → REQ-019 and R-10a → REQ-020 (mapping table in Behavioral Requirements); each requirement got acceptance scenarios with a Verification method, taken from the former Verification section and naming the tests that cover them; Prompt stability became AC-005.4; R-17 moved to Quality Requirements; Components merged into Responsibility Separation; added Users and Journeys, Alternatives Considered (from Exclusions and Definitions), Interfaces (from the shipped tools and operations), Assumptions and Dependencies, Success Criteria (from the Purpose outcomes and the live acceptance tests) and Open Questions (the two deferred decisions already recorded). Earlier rows keep their `R-n` identifiers. | Product owner request: S-001 must match the ai-team 0.18.0 format, keeping its meaning so the implementation stays valid. | None; references in code, docs and ADRs updated to the new identifiers |
 | 2026-11-01 | Gate 5 sign-off — product owner. No scope change. | The spec-truth reconciliation of 2026-11-01 passed against v0.4; v0.5 changed the format only, so the verdict carries over. Two accepted limits stay open as follow-up tasks and don't block the sign-off: T-092 (a Compact invocation repeated after a crash compacts again) and T-093 (`lastActivity` reads the whole transcript). | none |
 | 2026-11-01 | v0.6. AC-012.3: the refused follow-up is one from an agent whose conversation doesn't exist, and an origin of another kind than the caller's is refused. | S-002 v0.7 builds a lead conversation's origin from the caller (S-002 AC-012.5); S-003 architecture consistency review, finding A. | Investigation task for the S-002 v0.7 deviations |
+| 2026-11-02 | v0.7. REQ-020 and AC-020.4: only a message sent to a conversation parked for reports is held; a message sent to a job's lead conversation parked because its job is Blocked continues it (new AC-014.2). REQ-003, REQ-005, AC-005.2 and the agent tools in Interfaces: the job tools (S-004 REQ-013) are offered with the coordination tools whatever the tool set names. REQ-007: the daemon is a seat actor for input it sends under a job's rules. Definitions, Job: the fields S-004 defines. Interfaces: `jobs.startLead` leaves the service operations table and is offered in-process only, called by `jobs.create`. Assumptions: the Jobs spec is S-004. | S-004 architecture consistency review; product owner decisions 2026-11-02. Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None yet; the code changes (the held-message rule in `src/host/steering.ts`, the job tools, `jobs.startLead` off the listeners) come in the S-004 breakdown |
