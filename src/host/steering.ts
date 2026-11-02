@@ -1,8 +1,8 @@
 /**
  * Steering (S-001 REQ-020, REQ-017): a team member or an agent injects a message into a conversation, and the
  * transcript records who steered. A running conversation picks the message up after its current tool round (steer) or
- * after its run ends (follow-up); an idle one takes it as input; one parked for reports holds it in its `intern.conversation`
- * document, so the message survives a restart, and `continueParked` delivers it.
+ * after its run ends (follow-up); an idle one takes it as input; one parked for reports holds it in its
+ * `intern.conversation` document, so the message survives a restart, and `continueParked` delivers it.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type ConversationId, defineEntry } from "@earendil-works/pi-durable";
@@ -47,8 +47,8 @@ async function holdIfParked(host: HarnessHost, conversationId: ConversationId, i
 }
 
 /**
- * Holds the message when the target conversation is parked for reports, whatever busy mode the caller chose. Returns `false` and
- * writes nothing when the target is not parked for reports, so the caller submits the message as input.
+ * Holds the message when the target conversation is parked for reports, whatever busy mode the caller chose. Returns
+ * `false` and writes nothing when the target is not parked for reports, so the caller submits the message as input.
  */
 export async function holdForParked(host: HarnessHost, targetId: string, input: SteerInput): Promise<boolean> {
     const conversation = await requireConversation(host, targetId);
@@ -57,9 +57,9 @@ export async function holdForParked(host: HarnessHost, targetId: string, input: 
 
 /**
  * Steers the target conversation. Returns `held: true` when the target is parked and the message waits for it to
- * continue, with no submission. A target parked for an answer (its job is Blocked) continues with the message. Otherwise
- * the message is submitted as input. Either way it is placed as the `intern.steer` entry itself (its data names the
- * actor and keeps the text), so the record and the message are one commit.
+ * continue, with no submission. A target parked for an answer (its job is Blocked) continues with the message.
+ * Otherwise the message is submitted as input. Either way it is placed as the `intern.steer` entry itself (its data
+ * names the actor and keeps the text), so the record and the message are one commit.
  */
 export async function steerConversation(
     host: HarnessHost,

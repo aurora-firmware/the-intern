@@ -98,7 +98,8 @@ async function submitOrSteer(host: HarnessHost, input: SubmitInput, caller: Call
     const message = { content, mode: busyMode, actor: await actorOf(host, caller), requestId };
     const isParkedForAnswer = (await readConversationMeta(host, conversationId))?.parked?.waitingFor === "answer";
     if (busyMode === "reject" && !isParkedForAnswer) {
-        // A conversation parked for reports holds a reject input as a follow-up; a running one still refuses it with busy.
+        // A conversation parked for reports holds a reject input as a follow-up; a running one still refuses it
+        // with busy.
         const isHeld = await holdForParked(host, conversationId, { ...message, mode: "followUp" });
         return isHeld ? { held: true } : submitInput(host, conversationId, input);
     }
