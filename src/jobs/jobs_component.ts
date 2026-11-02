@@ -12,6 +12,7 @@ import { createJob, createJobOperation } from "../service/job_operations.ts";
 import { jobRecordOperations } from "../service/job_record_operations.ts";
 import type { Operation } from "../service/operations.ts";
 import { resumeAfterLeadInput, startJob } from "./job_actions.ts";
+import { repairJobs } from "./job_repair.ts";
 import { JobNotFoundError } from "./job_store.ts";
 import { createJobToolsExtension } from "./job_tools_extension.ts";
 import { startTurnEndRule } from "./turn_end_rule.ts";
@@ -89,6 +90,10 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
                     stopTurnEndRule = rule.stop;
                     await rule.ready;
                 }
+            },
+            // Step 7: after admission is restored and before work resumes (S-004 REQ-018).
+            async repair(ctx) {
+                await repairJobs({ ctx, options });
             },
             async stop() {
                 stopListening?.();

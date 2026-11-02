@@ -308,6 +308,10 @@ export async function leadStartFor(ctx: ServiceContext, job: Job): Promise<LeadS
     };
 }
 
+/** The justification of the cancel that follows a lead start the role catalogue refused (S-004 REQ-007). */
+export const leadRefusedJustification = (error: ServiceError): string =>
+    `The lead could not be started: ${error.message}`;
+
 function viewOf(job: Job, leadConversation: string | undefined): JobView {
     return leadConversation === undefined ? job : { ...job, leadConversation };
 }
@@ -386,7 +390,7 @@ export async function createJob(
         return viewOf(await jobStore.getJob(job.id), conversationId);
     } catch (error) {
         if (!(error instanceof ServiceError)) throw error;
-        const justification = `The lead could not be started: ${error.message}`;
+        const justification = leadRefusedJustification(error);
         try {
             return await jobStore.applyAction(job.id, "cancel", { justification }, { kind: "daemon" });
         } catch (cancelError) {
