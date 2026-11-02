@@ -496,8 +496,7 @@ describe("jobs.create", () => {
             started.create({ text, origin }, agent),
         ];
 
-        for (const call of refused)
-            assert.equal(await refusalCode(call), call === refused[0] ? "not_found" : "invalid_input");
+        for (const call of refused) assert.equal(await refusalCode(call), "invalid_input");
         assert.equal(await started.conversationCount(), before);
         assert.equal((await started.create({ text }, cliCaller)).number, "C-2");
     });

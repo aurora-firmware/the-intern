@@ -340,7 +340,8 @@ function checkBeforeWrite(
     try {
         options.agents.runtime().catalog.seatFor(request.role ?? DEFAULT_LEAD_ROLE, overrides);
     } catch (error) {
-        if (error instanceof RoleRefusedError) throw new ServiceError(refusalCode(error), error.message);
+        // S-004 REQ-007: an unknown role or an unresolvable override is invalid input, whatever the catalog calls it.
+        if (error instanceof RoleRefusedError) throw new ServiceError("invalid_input", error.message);
         throw error;
     }
     return { letter, overrides };
