@@ -65,8 +65,8 @@ A job has one of four statuses and moves between them only through five actions.
 | complete | In progress to Done, `completed`       | The lead agent, or you with `jobs.complete`. It needs a definition of done and a justification. |
 | cancel   | To do, In progress or Blocked to Done, `cancelled` | You, with `jobs.cancel`. It needs a justification. |
 
-An action from a status that doesn't allow it is refused as `conflict`. An action with a missing reason or justification,
-or a complete with no definition of done, is refused as `invalid_input` and names the field.
+An action from a status that doesn't allow it is refused as `conflict`. An action with a missing reason or
+justification, or a complete with no definition of done, is refused as `invalid_input` and names the field.
 
 A job never goes back to To do. Done is final: you can't edit a Done job, add to its worklog, resume, complete or cancel
 it. The one change still allowed is relating it to another job. More work on a finished job becomes a new job, Related
