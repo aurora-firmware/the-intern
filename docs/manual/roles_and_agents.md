@@ -45,8 +45,10 @@ and hyphens, in at most 40 characters in all.
 | `thinking_level` | The role's default thinking level. It must be one the model supports.          | The default thinking level of the pi login. |
 | `workspace`      | The absolute path of the role's default workspace. It must be registered.      | The role's own workspace, described below. |
 
-Every role is also offered `handoff`, `invoke` and `steer` (see [Sharing a job](#sharing-a-job)). A tool list can't
-leave them out, so you don't list them.
+Every role is also offered `handoff`, `invoke` and `steer` (see [Sharing a job](#sharing-a-job)) and the job tools
+`read_job`, `update_job`, `add_worklog`, `create_job`, `relate_jobs`, `block_job` and `complete_job`. A tool list can't
+leave them out, so you don't list them. An agent seated before the job tools existed keeps its tools until its seat
+changes.
 
 For a shipped role, set only the keys you want to change. Any key you leave out keeps its shipped value. For your own
 role, `instructions` and `tools` are required.

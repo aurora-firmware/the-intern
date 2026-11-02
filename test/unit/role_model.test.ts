@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { JOB_TOOL_NAMES } from "../../src/jobs/job_model.ts";
 import {
     applyRoleChange,
     COORDINATION_TOOL_NAMES,
@@ -50,7 +51,7 @@ describe("resolveSeat", () => {
         assert.equal(seat.workspace, "/o/ws");
         assert.equal(seat.instructions, "Write things.");
         assert.deepEqual(seat.skills, ["/skills/style"]);
-        assert.deepEqual(seat.tools, ["read", "write", "handoff", "invoke", "steer"]);
+        assert.deepEqual(seat.tools, ["read", "write", ...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES]);
     });
 
     it("prefers the role's defaults over the defaults argument", () => {
@@ -79,20 +80,27 @@ describe("resolveSeat", () => {
         );
     });
 
-    it("includes every coordination tool for a role with an empty tool set", () => {
+    it("includes every coordination and job tool for a role with an empty tool set", () => {
         const seat = resolveSeat(role({ tools: [] }), defaults);
-        assert.deepEqual(seat.tools, ["handoff", "invoke", "steer"]);
+        assert.deepEqual(seat.tools, [...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES]);
     });
 
-    it("does not duplicate coordination tools the role already names", () => {
-        const seat = resolveSeat(role({ tools: ["invoke", "read"] }), defaults);
-        assert.deepEqual(seat.tools, ["invoke", "read", "handoff", "steer"]);
+    it("does not duplicate coordination or job tools the role already names", () => {
+        const seat = resolveSeat(role({ tools: ["invoke", "read", "read_job"] }), defaults);
+        assert.deepEqual(seat.tools, [
+            "invoke",
+            "read",
+            "read_job",
+            "handoff",
+            "steer",
+            ...JOB_TOOL_NAMES.filter((name) => name !== "read_job"),
+        ]);
     });
 });
 
 describe("validateRoleDefinition", () => {
-    it("accepts a valid role, including coordination tool names", () => {
-        validateRoleDefinition(role({ tools: ["read", "bash", "edit", "handoff"] }));
+    it("accepts a valid role, including coordination and job tool names", () => {
+        validateRoleDefinition(role({ tools: ["read", "bash", "edit", "handoff", ...JOB_TOOL_NAMES] }));
     });
 
     it("refuses a tool outside both lists, naming role, field and reason", () => {
