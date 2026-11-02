@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { access, chmod, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { ServiceError } from "../../src/service/operations.ts";
+import { type DaemonComponent, type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
+import { createLogger } from "../../src/daemon/logger.ts";
+import { type Caller, ServiceError } from "../../src/service/operations.ts";
 import type { DaemonStatus } from "../../src/service/status_operation.ts";
 import { type DaemonProcess, type StartDaemonOptions, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
@@ -16,8 +18,10 @@ const OWNER_ONLY_FILE_MODE = 0o600;
 
 const envs: HermeticEnv[] = [];
 const daemons: DaemonProcess[] = [];
+const inProcessDaemons: RunningDaemon[] = [];
 
 afterEach(async () => {
+    for (const daemon of inProcessDaemons.splice(0)) await daemon.stop();
     for (const daemon of daemons.splice(0)) {
         daemon.kill9();
         await daemon.exited;
@@ -178,5 +182,40 @@ describe("private permissions", () => {
             assert.equal(await modeOf(dir), OWNER_ONLY_DIRECTORY_MODE, dir);
         }
         assert.equal(await modeOf(join(fresh.stateDir, DATABASE_FILE_NAME)), OWNER_ONLY_FILE_MODE);
+    });
+});
+
+describe("component start", () => {
+    it("gives a starting component the catalogue, through which it invokes daemon.status", async () => {
+        const env = await hermetic();
+        const caller: Caller = { actor: { kind: "team_member" } };
+        const { promise: statusSeen, resolve, reject } = Promise.withResolvers<DaemonStatus>();
+        const probe: DaemonComponent = {
+            name: "probe",
+            async start(ctx) {
+                try {
+                    resolve((await ctx.catalogue.invoke("daemon.status", {}, caller)) as DaemonStatus);
+                } catch (error) {
+                    reject(error);
+                }
+            },
+        };
+        const daemon = runDaemon({
+            flags: {
+                configDir: env.configDir,
+                stateDir: env.stateDir,
+                dataDir: env.dataDir,
+                runtimeDir: env.runtimeDir,
+            },
+            env: env.env,
+            homeDir: env.root,
+            logger: createLogger({ stream: { write: () => true } }),
+            components: [probe],
+        });
+        inProcessDaemons.push(daemon);
+
+        const status = await statusSeen;
+
+        assert.equal(status.phase, "starting");
     });
 });

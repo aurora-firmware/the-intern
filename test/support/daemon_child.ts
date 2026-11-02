@@ -2,7 +2,8 @@
  * A daemon for the process-level tests. `startDaemon` (daemon_process.ts) runs it as a child process: argv[2] holds the
  * test-only switches as JSON, the rest are the four directory flags. It answers `{ id, op, input }` messages on Node's
  * IPC channel with `{ id, result }` or `{ id, error: { code, message } }`, posts `{ ready: true }` once the daemon is
- * ready, and stops on SIGTERM as `src/cli/bob.ts` does.
+ * ready, and stops on SIGTERM as `src/cli/bob.ts` does. It opens the local socket as `bob serve` does, so a client can
+ * reach it over `bob.sock` too.
  */
 import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
@@ -15,6 +16,7 @@ import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import type { Models, Storage } from "../../src/host/harness_host.ts";
+import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
 import type { InternModels } from "../../src/models/model_runtime.ts";
 import { type Caller, ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
 import type { StartDaemonOptions } from "./daemon_process.ts";
@@ -210,7 +212,8 @@ async function main(): Promise<void> {
         homeDir: process.env.HOME ?? "",
         logger,
         sections: agents.sections,
-        components: [agents.component, ...createComponents(switches, hold.promise)],
+        // The local socket follows the agents component, as in `src/cli/bob.ts`, so it opens once the agents are ready.
+        components: [agents.component, createLocalSocketComponent(), ...createComponents(switches, hold.promise)],
         operations: [
             ...agents.operations,
             ...createTestOperations({

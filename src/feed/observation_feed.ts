@@ -15,6 +15,8 @@ export type Subscription<S, D> = {
     snapshot: S;
     next(): Promise<NextResult<D>>;
     close(): void;
+    /** Settles with the reason once the subscription closes, without taking a delta. */
+    closed: Promise<CloseReason>;
 };
 export type ConversationDelta = { seq: number; view: ConversationView; ops: unknown[] };
 export type ObservationFeed = {
@@ -42,10 +44,12 @@ function createReleasingSubscription<S, D>(
     const pending: D[] = [];
     let closedReason: CloseReason | undefined;
     let waiting: ((result: NextResult<D>) => void) | undefined;
+    const { promise: closed, resolve: resolveClosed } = Promise.withResolvers<CloseReason>();
 
     function end(reason: CloseReason): void {
         if (closedReason) return;
         closedReason = reason;
+        resolveClosed(reason);
         pending.length = 0;
         waiting?.({ closed: reason });
         waiting = undefined;
@@ -73,6 +77,7 @@ function createReleasingSubscription<S, D>(
             });
         },
         close: () => end("unsubscribed"),
+        closed,
     };
     return { subscription, push, end };
 }

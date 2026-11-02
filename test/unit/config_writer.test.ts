@@ -197,6 +197,17 @@ describe("createConfigStore", () => {
         assert.deepEqual(store.current(limitsSection), { max: 2 });
     });
 
+    it("keeps another registered section from the file when it writes a change to one section", async () => {
+        await writeFile(file, '[label]\nlabel = "kept"\n');
+        const store = await openStore();
+
+        await store.change(limitsSection, { max: 5 });
+
+        const reloaded = await loadConfig(file, sections);
+        assert.deepEqual(reloaded.values.get("label"), { label: "kept" });
+        assert.deepEqual(reloaded.values.get("limits"), { max: 5 });
+    });
+
     it("lets loadConfig return the changed value as after a restart", async () => {
         const store = await openStore();
         await store.change(limitsSection, { max: 5 });

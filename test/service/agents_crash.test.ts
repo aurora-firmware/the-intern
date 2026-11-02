@@ -14,6 +14,8 @@ const SEAT_RECORD_KIND = "intern.seat";
 const FAKE_PROVIDER = "faux";
 const FAKE_MODEL = "faux-1";
 const REQUEST_ORIGIN = { kind: "request", wayIn: "cli" };
+// The child daemon calls as a team member who names no way in, so the stored origin carries the in-process one.
+const RECORDED_ORIGIN = { kind: "request", wayIn: "in-process" };
 const JOB_PROMPTS = ["job A", "job B"];
 
 type Entry = { kind: string; data: unknown };
@@ -165,7 +167,7 @@ describe("kill -9 during a seat change", () => {
         const listing = await listingOf(second, leadId);
         assert.equal(listing.jobId, "seat-job");
         assert.equal(listing.isLead, true);
-        assert.deepEqual(listing.origin, REQUEST_ORIGIN);
+        assert.deepEqual(listing.origin, RECORDED_ORIGIN);
         assert.equal(listing.depth, 0);
     });
 });
@@ -268,7 +270,7 @@ describe("kill -9 during jobs.startLead", () => {
         for (const survivor of survivors) {
             assert.equal(survivor.jobId, "lead-job");
             assert.equal(survivor.isLead, true);
-            assert.deepEqual(survivor.origin, REQUEST_ORIGIN);
+            assert.deepEqual(survivor.origin, RECORDED_ORIGIN);
         }
         const leadId = await startLead(second, "lead-job", "first input");
         await untilAnswered(second, leadId, "first input");
