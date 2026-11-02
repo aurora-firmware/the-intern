@@ -18,6 +18,7 @@ import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { internalHarness } from "../../src/host/harness_host.ts";
+import { parkConversation } from "../../src/host/invocation.ts";
 import { readConversationMeta, type SeatActor } from "../../src/host/seating.ts";
 import { STEER_RECORD_KIND, steerConversation } from "../../src/host/steering.ts";
 import type { Caller } from "../../src/service/operations.ts";
@@ -473,6 +474,80 @@ describe("the steer tool and steering a conversation", () => {
                 assert.ok(users.includes(expected), `the lead's context holds "${expected}"`);
             }
             assert.deepEqual((await readConversationMeta(started.ctx.host, leadId))?.held, []);
+        });
+    });
+
+    describe("a conversation parked for an answer", () => {
+        async function startAnswerParked() {
+            const started = await start(() => undefined);
+            const leadId = await started.startLead("lead work", "job-lead");
+            await waitFor(async () => !(await isBusy(started.ctx, leadId)), "the lead to go idle");
+            await parkConversation(started.ctx.host, leadId, { waitingFor: "answer", continueOn: "each" });
+            return { started, leadId };
+        }
+
+        const continuedWith = async (started: Awaited<ReturnType<typeof start>>, text: string) =>
+            waitFor(
+                () => started.callsOf("lead work").some((call) => usersOf(call.messages).includes(text)),
+                `the lead to continue with "${text}"`,
+            );
+
+        it("continues with a team member's submit as an intern.steer entry and returns a submission id", async () => {
+            const { started, leadId } = await startAnswerParked();
+
+            const result = (await started.submit(leadId, "the answer", "answer-1", "steer")) as Record<string, unknown>;
+
+            assert.equal(typeof result.submissionId, "string");
+            assert.equal(result.held, undefined);
+            await continuedWith(started, "the answer");
+            const meta = await readConversationMeta(started.ctx.host, leadId);
+            assert.equal(meta?.parked, null);
+            assert.deepEqual(meta?.held, []);
+            assert.deepEqual(await steerEntriesOf(started.ctx, leadId), [{ actor: CLI_ACTOR, mode: "steer" }]);
+            await assertPlacedAsSteerEntry(started.ctx, leadId, "the answer");
+        });
+
+        it("continues with a reject input instead of refusing it busy", async () => {
+            const { started, leadId } = await startAnswerParked();
+
+            const result = (await started.submit(leadId, "rejected answer", "answer-2", "reject")) as Record<
+                string,
+                unknown
+            >;
+
+            assert.equal(typeof result.submissionId, "string");
+            await continuedWith(started, "rejected answer");
+            assert.equal((await readConversationMeta(started.ctx.host, leadId))?.parked, null);
+            assert.deepEqual(await steerEntriesOf(started.ctx, leadId), [{ actor: CLI_ACTOR, mode: "followUp" }]);
+        });
+
+        it("continues with an agent's steer, naming the agent", async () => {
+            const { started, leadId } = await startAnswerParked();
+            const agentActor: SeatActor = { kind: "agent", conversationId: "7", role: "gp" };
+
+            const result = await steerConversation(started.ctx.host, leadId, {
+                content: "from the agent",
+                mode: "followUp",
+                actor: agentActor,
+                requestId: "agent-1",
+            });
+
+            assert.equal(result.held, false);
+            await continuedWith(started, "from the agent");
+            assert.deepEqual(await steerEntriesOf(started.ctx, leadId), [{ actor: agentActor, mode: "followUp" }]);
+        });
+
+        it("takes the input once when the same request id is submitted twice", async () => {
+            const { started, leadId } = await startAnswerParked();
+
+            await started.submit(leadId, "only once", "answer-3", "steer");
+            await started.submit(leadId, "only once", "answer-3", "steer");
+
+            await continuedWith(started, "only once");
+            await waitFor(async () => !(await isBusy(started.ctx, leadId)), "the lead to finish");
+            const carriers = (await transcriptOf(started.ctx, leadId)).filter((entry) => entry.text === "only once");
+            assert.equal(carriers.length, 1);
+            assert.equal((await steerEntriesOf(started.ctx, leadId)).length, 1);
         });
     });
 });
