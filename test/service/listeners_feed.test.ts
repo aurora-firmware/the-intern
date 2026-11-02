@@ -16,6 +16,7 @@ import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { MAX_SUBMISSION_WAIT_MS, STOP_BOUND_MS } from "../../src/daemon/constants.ts";
 import { type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
+import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import { LISTENER_TIMEOUT_MS } from "../../src/listeners/listener_server.ts";
 import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
 import { createNetworkListenerComponent } from "../../src/listeners/network_listener.ts";
@@ -33,6 +34,8 @@ const TEST_TIMEOUT_MS = 90_000;
 const ENTRIES_PAGE_LIMIT = 500;
 const LOOPBACK = "127.0.0.1";
 const IN_PROCESS: Caller = { actor: { kind: "team_member" } };
+/** `jobs.create` refuses the in-process way in, so the leads are created as a team member at the command line. */
+const COMMAND_LINE: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
 const quietLogger = createLogger({ stream: { write: () => true } });
 const LISTENERS = ["local socket", "network listener"] as const;
 /** About three commits per step, so a run of this many steps produces well over the 1000 deltas of the bound. */
@@ -230,8 +233,10 @@ type Fixture = {
     invoke(name: string, input: unknown): Promise<unknown>;
     openFeed(listener: Listener, query: string, headers?: OutgoingHttpHeaders): Promise<FeedStream>;
     post(listener: Listener, name: string, input: unknown, headers?: OutgoingHttpHeaders): Promise<Answer>;
-    /** Starts a job in-process and waits until its lead conversation is idle. */
-    idleConversation(jobId: string): Promise<string>;
+    /** Creates a job as a team member at the command line and waits until its lead conversation is idle. */
+    idleConversation(label: string): Promise<string>;
+    /** The ID of the job whose lead is the conversation `idleConversation` returned. */
+    jobIdOf(conversationId: string): string;
     /** Submits input in-process and waits until it is done and the conversation idle again. */
     submitAndSettle(conversationId: string, content: string): Promise<void>;
     entries(conversationId: string): Promise<Entry[]>;
@@ -252,6 +257,7 @@ async function startFixture(
     );
     await writeFile(join(env.configDir, "config.toml"), `[network]\naddress = "${LOOPBACK}"\nport = 8080\n`);
     const agents = await createAgentsComponent({ logger: quietLogger });
+    const jobs = await createJobsComponent({ agents, logger: quietLogger, turnEndRule: false });
     const network = createNetworkListenerComponent({ freePort: true });
     const daemon = runDaemon({
         flags: { configDir: env.configDir, stateDir: env.stateDir, dataDir: env.dataDir, runtimeDir: env.runtimeDir },
@@ -259,8 +265,8 @@ async function startFixture(
         homeDir: env.root,
         logger: quietLogger,
         sections: [...agents.sections, networkSection],
-        components: [agents.component, createLocalSocketComponent(), network],
-        operations: agents.operations,
+        components: [agents.component, jobs.component, createLocalSocketComponent(), network],
+        operations: [...agents.operations, ...jobs.operations],
         prepareModels: (runtime) => {
             const implementation = getApiProvider(fake.api);
             assert.ok(implementation, "the fake model's api is registered");
@@ -306,12 +312,23 @@ async function startFixture(
         await until(isIdle, `conversation ${conversationId} to be idle`);
     }
 
-    async function idleConversation(jobId: string): Promise<string> {
-        const { conversationId } = (await invoke("jobs.startLead", { jobId, firstInput: "hello" })) as {
-            conversationId: string;
+    const jobIds = new Map<string, string>();
+
+    async function idleConversation(label: string): Promise<string> {
+        const created = (await daemon.catalogue.invoke("jobs.create", { text: `hello ${label}` }, COMMAND_LINE)) as {
+            id: string;
+            leadConversation: string;
         };
-        await submitAndSettle(conversationId, `settle-${jobId}`);
+        const conversationId = created.leadConversation;
+        jobIds.set(conversationId, created.id);
+        await submitAndSettle(conversationId, `settle-${label}`);
         return conversationId;
+    }
+
+    function jobIdOf(conversationId: string): string {
+        const jobId = jobIds.get(conversationId);
+        assert.ok(jobId, `conversation ${conversationId} is the lead of a created job`);
+        return jobId;
     }
 
     async function entries(conversationId: string): Promise<Entry[]> {
@@ -335,6 +352,7 @@ async function startFixture(
         openFeed,
         post: postTo,
         idleConversation,
+        jobIdOf,
         submitAndSettle,
         entries,
     };
@@ -451,7 +469,10 @@ describe("the instance feed through each listener", { timeout: TEST_TIMEOUT_MS }
         }
         const { conversations, workerThreads } = inProcess.snapshot;
         const byJob = Object.fromEntries(conversations.map(({ id, jobId, isLead }) => [jobId, { id, isLead }]));
-        assert.deepEqual(byJob, { alpha: { id: alpha, isLead: true }, beta: { id: beta, isLead: true } });
+        assert.deepEqual(byJob, {
+            [fixture.jobIdOf(alpha)]: { id: alpha, isLead: true },
+            [fixture.jobIdOf(beta)]: { id: beta, isLead: true },
+        });
         assert.ok(conversations.every(({ seat, status }) => seat?.role === "bob" && status === "idle"));
         assert.equal(workerThreads.inUse, 0);
         assert.deepEqual(overNetwork, overSocket, "both listeners deliver the same deltas");
