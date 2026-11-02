@@ -5,7 +5,7 @@
 import { lstat } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 import type { ServiceContext } from "../daemon/daemon.ts";
-import { backupDatabase } from "../host/database_copy.ts";
+import { backupDatabase, DatabaseInUseError } from "../host/database_copy.ts";
 import { asRecord, requireString } from "./job_record_operations.ts";
 import { defineOperation, ServiceError } from "./operations.ts";
 
@@ -42,7 +42,14 @@ export const jobExportOperation = defineOperation<ServiceContext, ExportInput, E
         if (!(await exists(dirname(input.path)))) {
             throw new ServiceError("invalid_input", `path ${input.path} is in a folder that doesn't exist`);
         }
-        const { size } = await backupDatabase(ctx.host, input.path);
-        return { path: input.path, size };
+        try {
+            const { size } = await backupDatabase(ctx.host, input.path);
+            return { path: input.path, size };
+        } catch (error) {
+            if (error instanceof DatabaseInUseError) {
+                throw new ServiceError("busy", `${error.message}; the database is in use, export again in a moment`);
+            }
+            throw error;
+        }
     },
 });

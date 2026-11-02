@@ -16,10 +16,20 @@ const ALL_PAGES_IN_ONE_STEP = 0x7fffffff;
 const DEFAULT_ATTEMPTS = 100;
 const DEFAULT_RETRY_DELAY_MS = 50;
 
+/** The copy could not be taken because a transaction stayed open, or opened, on the connection. Export again. */
+export class DatabaseInUseError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "DatabaseInUseError";
+    }
+}
+
 export type BackupOptions = {
     /** How often to start the copy while a transaction is open on the connection. */
     attempts?: number;
     retryDelayMs?: number;
+    /** Test-only: runs after the check finds no transaction and before the copy step starts. */
+    afterCheck?: () => Promise<void> | void;
 };
 
 /**
@@ -33,7 +43,11 @@ export type BackupOptions = {
  * open transaction, which would otherwise put uncommitted pages in the copy. So the copy starts only when no
  * transaction is open, in a single step, and starts again after a short wait when one is. Commits that arrive during
  * the step wait for it; runs go on. A transaction that opens after the check but before the step makes SQLite refuse
- * the copy, and the call fails; the team member exports again.
+ * the copy, and the call fails with `DatabaseInUseError`; the team member exports again.
+ *
+ * The wait is a poll because neither chord's `NodeSqliteDatabase` nor pi-durable offers a way to run work after the
+ * queued commits: `runOperation` is protected and holds no barrier for async work, and `transaction()` is the only
+ * barrier but SQLite refuses `backup()` inside it.
  */
 export async function backupDatabase(
     host: HarnessHost,
@@ -53,14 +67,20 @@ export async function backupDatabase(
 }
 
 async function copyWhenNoTransactionIsOpen(host: HarnessHost, staged: string, options: BackupOptions): Promise<void> {
-    const { attempts = DEFAULT_ATTEMPTS, retryDelayMs = DEFAULT_RETRY_DELAY_MS } = options;
+    const { attempts = DEFAULT_ATTEMPTS, retryDelayMs = DEFAULT_RETRY_DELAY_MS, afterCheck } = options;
     const database = internalDatabase(host);
     for (let attempt = 1; attempt <= attempts; attempt++) {
         if (!database.isTransaction) {
-            await backup(database, staged, { rate: ALL_PAGES_IN_ONE_STEP });
+            await afterCheck?.();
+            try {
+                await backup(database, staged, { rate: ALL_PAGES_IN_ONE_STEP });
+            } catch (error) {
+                if (database.isTransaction) throw new DatabaseInUseError("A transaction opened as the copy started");
+                throw error;
+            }
             return;
         }
         await sleep(retryDelayMs);
     }
-    throw new Error(`The database stayed in a transaction for ${attempts} attempts, so it was not copied`);
+    throw new DatabaseInUseError(`The database stayed in a transaction for ${attempts} attempts, so it was not copied`);
 }

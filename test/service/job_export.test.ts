@@ -8,7 +8,7 @@ import { createProvider } from "@earendil-works/pi-ai/models";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
-import { backupDatabase } from "../../src/host/database_copy.ts";
+import { backupDatabase, DatabaseInUseError } from "../../src/host/database_copy.ts";
 import { type HostDatabase, hostDatabase, openHostDatabase } from "../../src/host/harness_host.ts";
 import { steerConversation } from "../../src/host/steering.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
@@ -227,12 +227,55 @@ describe("jobs.export", () => {
         const transaction = hostDatabase(started.ctx.host).transaction(() => finish.promise);
         const target = join(started.env.root, "gave_up.sqlite");
 
-        await assert.rejects(backupDatabase(started.ctx.host, target, { attempts: 3, retryDelayMs: 1 }), /transaction/);
+        await assert.rejects(
+            backupDatabase(started.ctx.host, target, { attempts: 3, retryDelayMs: 1 }),
+            DatabaseInUseError,
+        );
 
         finish.resolve();
         await transaction;
         assert.deepEqual(await namesStarting(started.env.root, "gave_up"), []);
         assert.deepEqual(await namesStarting(started.env.root, ".gave_up"), []);
+    });
+
+    it("fails with busy, saying the database is in use, when a transaction outlasts the wait", async () => {
+        const started = await start();
+        const finish = Promise.withResolvers<void>();
+        const transaction = hostDatabase(started.ctx.host).transaction(() => finish.promise);
+        const target = join(started.env.root, "busy.sqlite");
+
+        await assert.rejects(started.invoke("jobs.export", { path: target }), (error) => {
+            assert.ok(error instanceof ServiceError);
+            assert.equal(error.code, "busy");
+            assert.match(error.message, /in use/);
+            return true;
+        });
+
+        finish.resolve();
+        await transaction;
+        assert.deepEqual(await namesStarting(started.env.root, "busy"), []);
+        assert.deepEqual(await namesStarting(started.env.root, ".busy"), []);
+    });
+
+    it("fails as database in use when a transaction opens between the check and the copy", async () => {
+        const started = await start();
+        const finish = Promise.withResolvers<void>();
+        let transaction: Promise<void> | undefined;
+        const target = join(started.env.root, "raced.sqlite");
+
+        await assert.rejects(
+            backupDatabase(started.ctx.host, target, {
+                afterCheck: () => {
+                    transaction = hostDatabase(started.ctx.host).transaction(() => finish.promise);
+                },
+            }),
+            DatabaseInUseError,
+        );
+
+        finish.resolve();
+        await transaction;
+        assert.deepEqual(await namesStarting(started.env.root, "raced"), []);
+        assert.deepEqual(await namesStarting(started.env.root, ".raced"), []);
     });
 
     it("refuses a relative path, naming path, and writes nothing", async () => {

@@ -62,10 +62,14 @@ The `jobs.export` operation writes a copy of the whole database to a new file wh
 written.
 
 - The copy holds the jobs, their worklogs and histories, and the conversations and queued work, as committed when the
-  copy began. It doesn't hold `config.toml`, so back that up on its own.
+  copy started. It doesn't hold `config.toml`, so back that up on its own.
 - The copy is readable only by the service account, and it never exists under its final name with wider access, not
   even while it is written.
 - Running agents carry on. A write that arrives during the copy waits for it to finish.
+- The copy starts when the database has no write in progress. If one is in progress, the service waits for it, up to
+  about 5 seconds, so the copy can hold what was committed up to that long after the call. If the database is still in
+  use then, or a write begins just as the copy starts, the call fails as `busy` saying the database is in use and
+  writes nothing. Export again.
 - A relative path, a path that already exists and a path in a folder that doesn't exist are refused as `invalid_input`
   naming `path`, and nothing is written.
 
