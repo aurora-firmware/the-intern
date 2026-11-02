@@ -288,7 +288,9 @@ describe("kill -9 during jobs.create", () => {
 
         const jobsBefore = ((await second.invoke("jobs.list", {})) as { jobs: CreatedJob[] }).jobs;
         assert.ok(jobsBefore.length <= 1, "at most one job exists");
-        for (const survivor of await conversationsAcrossJobs(second, jobsBefore)) {
+        const survivors = await conversationsAcrossJobs(second, jobsBefore);
+        assert.ok(survivors.length <= 1, "at most one lead conversation exists for the job");
+        for (const survivor of survivors) {
             assert.equal(survivor.isLead, true);
             assert.deepEqual(survivor.origin, RECORDED_ORIGIN);
         }
