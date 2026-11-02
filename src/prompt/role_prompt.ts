@@ -1,4 +1,5 @@
 import { formatSkillsForPrompt, type Skill } from "@earendil-works/pi-coding-agent";
+import type { JOB_TOOL_NAMES } from "../jobs/job_model.ts";
 import type { Seat } from "../roles/role_model.ts";
 
 export type PromptSection = { key: string; text: string };
@@ -12,12 +13,17 @@ export type RolePromptInput = {
     workspaceSkills: Skill[];
 };
 
+type JobToolName = (typeof JOB_TOOL_NAMES)[number];
+const UPDATE_JOB: JobToolName = "update_job";
+const BLOCK_JOB: JobToolName = "block_job";
+const COMPLETE_JOB: JobToolName = "complete_job";
+
 // The lead's first duty (S-004 REQ-008). One constant, so the prompt section and the lead's first input say the same.
 export const LEAD_DUTY = [
     "You are the lead of this job. Your first duty is to make sure the job has a definition of done.",
-    "If it has none, write one with update_job.",
-    "If you can't write one, block the job with block_job and give the reason.",
-    "Before you complete the job with complete_job, check the result against the definition of done",
+    `If it has none, write one with ${UPDATE_JOB}.`,
+    `If you can't write one, block the job with ${BLOCK_JOB} and give the reason.`,
+    `Before you complete the job with ${COMPLETE_JOB}, check the result against the definition of done`,
     "and state the evidence in the justification.",
 ].join(" ");
 

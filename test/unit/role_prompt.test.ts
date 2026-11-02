@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Skill } from "@earendil-works/pi-coding-agent";
+import { JOB_TOOL_NAMES } from "../../src/jobs/job_model.ts";
 import { LEAD_DUTY, type RolePromptInput, renderRolePrompt } from "../../src/prompt/role_prompt.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 
@@ -102,7 +103,10 @@ describe("renderRolePrompt", () => {
         assert.match(LEAD_DUTY, /reason/);
         assert.match(LEAD_DUTY, /evidence/);
         assert.match(LEAD_DUTY, /justification/);
-        for (const tool of ["update_job", "block_job", "complete_job"]) assert.ok(LEAD_DUTY.includes(tool), tool);
+        for (const tool of ["update_job", "block_job", "complete_job"] as const) {
+            assert.ok(JOB_TOOL_NAMES.includes(tool), `${tool} is a job tool`);
+            assert.ok(LEAD_DUTY.includes(tool), tool);
+        }
     });
 
     it("renders the lead duty byte-identically on every request", () => {
