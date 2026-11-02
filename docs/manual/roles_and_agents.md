@@ -47,8 +47,9 @@ and hyphens, in at most 40 characters in all.
 
 Every role is also offered `handoff`, `invoke` and `steer` (see [Sharing a job](#sharing-a-job)) and the job tools
 `read_job`, `update_job`, `add_worklog`, `create_job`, `relate_jobs`, `block_job` and `complete_job`. A tool list can't
-leave them out, so you don't list them. An agent seated before the job tools existed keeps its tools until its seat
-changes.
+leave them out, so you don't list them. Only a job's lead can use `block_job` and `complete_job`: an agent it invoked
+gets an error result from either, and its run goes on. An agent seated before the job tools existed keeps its tools
+until its seat changes.
 
 For a shipped role, set only the keys you want to change. Any key you leave out keeps its shipped value. For your own
 role, `instructions` and `tools` are required.
