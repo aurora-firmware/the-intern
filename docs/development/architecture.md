@@ -83,7 +83,8 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   short: starting a lead is two pi-durable commits (the seated conversation, then the first input with request id
   `lead:<jobId>`), with the `"lead-created"` write point between them. For a To do job whose lead is known, rule 1
   reads whether that lead holds a submission with that request id (`hasSubmissionWithRequestId`), and submits the
-  input when it doesn't. That read is the only per-job conversation read at startup, and no other job is read.
+  input when it doesn't. That read is made only for To do jobs with a known lead, so it adds nothing for a job in any
+  other status. Rules 2 and 3 and the turn-end check read the lead of each Blocked or In progress job in their own way.
 - **Job operations and tools.** The catalogue carries the `jobs.*` operations: `create`, `get`, `list`, `update`,
   `worklog.add`, `worklog.list`, `history.list`, `relate`, `unrelate`, `resume`, `complete`, `cancel` and `export`.
   `jobs.startLead` is no longer an operation: `jobs.create` starts the lead in-process
