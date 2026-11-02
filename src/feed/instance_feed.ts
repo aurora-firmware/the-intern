@@ -11,6 +11,8 @@ import type { HarnessHost } from "../host/harness_host.ts";
 import { type InstanceEvent, watchConversationMeta, watchInstance } from "../host/host_observation.ts";
 import type { ConversationMeta, SeatSummary } from "../host/seating.ts";
 import { readConversationMeta } from "../host/seating.ts";
+import type { JobStatus } from "../jobs/job_model.ts";
+import type { Job, JobChange, JobStore } from "../jobs/job_store.ts";
 import { type ConversationListing, conversationStatus } from "../service/conversation_read_operations.ts";
 import { createSubscription, FEED_MAX_PENDING, type Subscription } from "./observation_feed.ts";
 
@@ -18,6 +20,7 @@ export type InstanceSnapshot = {
     conversations: Pick<ConversationListing, "id" | "jobId" | "isLead" | "seat" | "status">[];
     admission: AdmissionSnapshot;
     workerThreads: { count: number; inUse: number };
+    jobs: { number: string; title: string; status: JobStatus }[];
 };
 
 export type InstanceDelta = { seq: number } & (
@@ -26,6 +29,11 @@ export type InstanceDelta = { seq: number } & (
     | { type: "status_changed"; conversationId: string; status: ConversationListing["status"] }
     | { type: "admission_changed"; admission: AdmissionSnapshot }
     | { type: "settings_changed"; section: string }
+    | { type: "job_created"; job: Job }
+    | { type: "job_changed"; number: string; fields: Extract<JobChange, { type: "job_changed" }>["fields"] }
+    | { type: "job_worklog_added"; number: string; entry: Extract<JobChange, { type: "worklog_added" }>["entry"] }
+    | { type: "job_status_changed"; number: string; old: JobStatus; new: JobStatus; blockedReason?: string }
+    | { type: "job_done"; number: string; resolution: Extract<JobChange, { type: "job_done" }>["resolution"] }
 );
 
 export type InstanceFeed = {
@@ -51,9 +59,10 @@ export async function createInstanceFeed(options: {
     host: HarnessHost;
     admission: Admission;
     config: ConfigStore;
+    jobStore: JobStore;
     maxPending?: number;
 }): Promise<InstanceFeed> {
-    const { host, admission, config, maxPending = FEED_MAX_PENDING } = options;
+    const { host, admission, config, jobStore, maxPending = FEED_MAX_PENDING } = options;
     const sinks = new Set<Sink & { nextSeq(): number }>();
     const busyById = new Map<string, boolean>();
     const factsById = new Map<string, ConversationFacts>();
@@ -117,6 +126,62 @@ export async function createInstanceFeed(options: {
     for (const event of early.splice(0)) applyEvent(event);
     for (const { conversationId, meta } of earlyMeta.splice(0)) applyMeta(conversationId, meta);
 
+    // Jobs that aren't Done, by short number. Commits that arrive while the store is read are replayed in order.
+    const jobsByNumber = new Map<string, { title: string; status: JobStatus }>();
+    function applyJobChange(change: JobChange): void {
+        switch (change.type) {
+            case "job_created":
+                jobsByNumber.set(change.job.number, { title: change.job.title, status: change.job.status });
+                publish({ type: "job_created", job: change.job });
+                return;
+            case "job_changed": {
+                const known = jobsByNumber.get(change.number);
+                if (known && change.fields.title !== undefined) known.title = change.fields.title;
+                publish({ type: "job_changed", number: change.number, fields: change.fields });
+                return;
+            }
+            case "worklog_added":
+                publish({ type: "job_worklog_added", number: change.number, entry: change.entry });
+                return;
+            case "status_changed": {
+                const known = jobsByNumber.get(change.number);
+                if (known) known.status = change.new;
+                const { type: _type, ...body } = change;
+                publish({ type: "job_status_changed", ...body });
+                return;
+            }
+            case "job_done":
+                jobsByNumber.delete(change.number);
+                publish({ type: "job_done", number: change.number, resolution: change.resolution });
+                return;
+            case "related_changed":
+                return;
+        }
+    }
+    const earlyJobChanges: JobChange[] = [];
+    let isJobsReady = false;
+    const stopJobs = jobStore.onCommit((change) => {
+        if (isJobsReady) applyJobChange(change);
+        else earlyJobChanges.push(change);
+    });
+    try {
+        for (const status of ["to_do", "in_progress", "blocked"] as const) {
+            let cursor: string | undefined;
+            do {
+                const page = await jobStore.listJobs({ status, ...(cursor !== undefined && { cursor }) });
+                for (const job of page.jobs) jobsByNumber.set(job.number, { title: job.title, status: job.status });
+                cursor = page.cursor;
+            } while (cursor !== undefined);
+        }
+    } catch (error) {
+        stopJobs();
+        watch.stop();
+        metaWatch.stop();
+        throw error;
+    }
+    isJobsReady = true;
+    for (const change of earlyJobChanges.splice(0)) applyJobChange(change);
+
     const stopAdmission = admission.onChange((snapshot) => publish({ type: "admission_changed", admission: snapshot }));
     const stopConfig = config.onChange(({ section }) => publish({ type: "settings_changed", section }));
     let isClosed = false;
@@ -139,6 +204,7 @@ export async function createInstanceFeed(options: {
             }),
             admission: state,
             workerThreads: { count: state.capacity, inUse: state.active.length },
+            jobs: [...jobsByNumber].map(([number, { title, status }]) => ({ number, title, status })),
         };
     }
 
@@ -189,6 +255,7 @@ export async function createInstanceFeed(options: {
             metaWatch.stop();
             stopAdmission();
             stopConfig();
+            stopJobs();
             for (const sink of [...sinks]) sink.end("stopped");
             sinks.clear();
         },

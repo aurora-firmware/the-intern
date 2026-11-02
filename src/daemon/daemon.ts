@@ -244,6 +244,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
                 host: runtime.host,
                 admission: runtime.gateAdmission,
                 config: store,
+                jobStore: runtime.jobStore,
             });
             undoStack.push(async () => instanceFeed.close());
             Object.assign(context, {
