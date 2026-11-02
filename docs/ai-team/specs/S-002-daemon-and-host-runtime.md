@@ -1,6 +1,6 @@
 ---
 title: Daemon and host runtime
-version: '0.7'
+version: '0.8'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-16'
 author: planner
@@ -26,7 +26,7 @@ This spec uses S-001's Definitions. It adds these terms:
 | Term | Meaning in this spec |
 |---|---|
 | Daemon | The single long-running process of the-intern (`bob serve`). It owns the database and runs every agent run. |
-| Database | The one pi-durable store (S-001) holding every conversation, entry, pi-durable task, submission and document, plus the daemon's own documents. |
+| Database | The one pi-durable store (S-001) holding every conversation, entry, pi-durable task, submission and document, plus the daemon's own documents and the job store's `intern_` tables (S-004 REQ-001). |
 | Instance | One daemon together with its state directory. Two instances share nothing. A second instance with its own state directory is the only hard wall between sets of conversations. |
 | Service layer | The set of service operations. It is the only way to read or change the daemon's state from outside the harness. |
 | Service operation | One named capability of the daemon, such as "submit input" or "reset a conversation". It is either a **read** operation (it observes) or a **control** operation (it changes state or starts work). |
@@ -95,8 +95,9 @@ What this specification explicitly does NOT cover:
 - **Approval rules for actions.** S-000 excludes them; no policy component exists.
 - **Retention and archiving of old conversations.** Storage only grows. A retention policy is a later decision.
 - **Compatibility across pi-durable versions.** The pi packages are pinned, and no backwards compatibility of the
-  database is promised (AGENTS.md). The daemon records the versions that opened the database (REQ-020) but doesn't
-  migrate. The job record is carried to a new version by export and import (S-000, Jobs spec).
+  database is promised (AGENTS.md). The daemon records the versions that opened the database (REQ-020) and migrates
+  only the job store's own tables (S-004 REQ-001), never pi-durable's; export and import copy the whole database and
+  don't convert it (S-004).
 - **Windows, Linux arm64 and Intel macOS.** These remain unsupported.
 
 ## Architecture
@@ -104,14 +105,17 @@ What this specification explicitly does NOT cover:
 ### Design Principles
 
 - **One owner per database.** At most one daemon process opens an instance's database. Nothing but the daemon reads
-  or writes it, including history, which clients read through the service layer.
+  or writes it, including history, which clients read through the service layer, apart from the import step, run
+  while the daemon is stopped, under the single-owner lock (S-004 REQ-017).
 - **Durability belongs to the runtime.** Recovery, exactly-once admission of input, queued input and checkpoints come
-  from pi-durable. The daemon adds no retry loops, intake tables or recovery code of its own, except one bounded
-  exception (ADR-001 decision 4): the facts the-intern owns about a conversation (held messages, awaiting links,
-  parked state, the abort mark and creation keys) live in its own documents, and the only recovery is redelivering
-  the input those facts show as undelivered, made safe to repeat by pi-durable request ids. Each daemon-owned fact is
-  committed in the same atomic commit as the change it describes, except for an abort. An abort's facts are written
-  in one commit just before pi-durable's abort, not in pi-durable's abort commit.
+  from pi-durable. The daemon adds no retry loops, intake tables or recovery code of its own, except two bounded
+  exceptions (ADR-001 decision 4). The first: the facts the-intern owns about a conversation (held messages, awaiting
+  links, parked state, the abort mark and creation keys) live in its own documents, and the only recovery is
+  redelivering the input those facts show as undelivered, made safe to repeat by pi-durable request ids. Each
+  daemon-owned fact is committed in the same atomic commit as the change it describes, except for an abort. An
+  abort's facts are written in one commit just before pi-durable's abort, not in pi-durable's abort commit. The
+  second: job writes are committed before their pi-durable change, and four startup repair rules are the only job
+  recovery (S-004 REQ-018).
 - **The service layer is free of transport.** Every service operation can be called in-process with no request,
   connection or listener in scope. Neither authorization nor the choice of which operations a listener exposes lives
   in the service layer. Adding a listener never changes a service operation.
@@ -140,7 +144,7 @@ What this specification explicitly does NOT cover:
 - **Several processes sharing one database, or operating-system threads or worker processes per agent run.**
   Rejected: pi-durable allows one owner per storage. Worker threads stay a logical capacity unit (REQ-009).
 - **A retry loop, intake table or recovery code of the daemon's own.** Rejected: durability belongs to pi-durable,
-  with the one bounded exception in Design Principles (ADR-001 decision 4).
+  with the two bounded exceptions in Design Principles (ADR-001 decision 4).
 
 ### System Diagram
 
@@ -211,7 +215,11 @@ failed (REQ-013). **Contract** (operation names and kinds):
 | `usage.get` | read | Usage per conversation and in total |
 | `tasks.live` | read | Live pi-durable tasks per conversation |
 | `feed.subscribe` | read | Subscribe to the instance or a conversation (REQ-014) |
-| `jobs.startLead` | control | Start the lead conversation of a job (S-001 REQ-012) |
+| `jobs.get`, `jobs.list`, `jobs.worklog.list`, `jobs.history.list` | read | Jobs, their worklogs and their histories (S-004 REQ-010, REQ-011, REQ-014) |
+| `jobs.create` | control | Create a job and start its lead conversation (S-004 REQ-007; S-001 REQ-012) |
+| `jobs.update`, `jobs.worklog.add`, `jobs.relate`, `jobs.unrelate` | control | Edit a job, add to its worklog, relate or unrelate two jobs (S-004 REQ-004, REQ-009, REQ-010) |
+| `jobs.resume`, `jobs.complete`, `jobs.cancel` | control | A job's actions open to team members (S-004 REQ-005) |
+| `jobs.export` | control | Export the whole database to a new file (S-004 REQ-016) |
 | `conversations.submit` | control | Submit input with a request id and a busy mode (`followUp`, `steer`, `reject`) |
 | `submissions.withdraw` | control | Withdraw a queued input |
 | `conversations.abort`, `conversations.reset`, `conversations.compact` | control | Abort (with S-001's cascade), reset or compact a conversation |
@@ -227,7 +235,9 @@ A subscription names the scope `instance` or one conversation. Each delivers a s
 sequence numbers in commit order, and ends with a reason (`lagging`, `unsubscribed`, `stopped`) (REQ-014, REQ-015). The
 instance scope carries every conversation with its job, lead flag, seat, status and the worker threads, and the
 deltas `conversation_created`, `run_started`, `run_finished`, `seat_changed`, `status_changed`, `admission_changed` and
-`settings_changed`. The conversation scope carries its live view and entries.
+`settings_changed`. It also carries the jobs that aren't Done and S-004's job deltas, each published after its job
+store commit and numbered in the same sequence (S-004 REQ-015). The conversation scope carries its live view and
+entries.
 
 ### Consumed
 
@@ -253,13 +263,16 @@ Resolve directories, check permissions → unsafe? exit non-zero, naming path,  
 Take single ownership → another live owner? exit non-zero, naming state dir     REQ-001
   and pid; a stale owner is taken over
   ↓
-Open database, install extensions → check configured models and thinking        REQ-002
-  levels → unresolvable? exit non-zero, naming the role and value
+Read job schema version → newer? exit non-zero, naming both versions            REQ-002
+  ↓
+Open database, create or migrate job store, install extensions → check          REQ-002
+  configured models and thinking levels → unresolvable? exit non-zero, naming
+  the role and value
   ↓
 Ensure per-role default workspaces
   ↓
-Restore admission order, resume unfinished work (held worker threads first,     REQ-010
-  then the queue)
+Restore admission order, apply the job repair rules (S-004 REQ-018), resume     REQ-010
+  unfinished work (held worker threads first, then the queue)
   ↓
 Start listeners and scheduler → status "ready"                                  REQ-003
 ```
@@ -273,7 +286,7 @@ Service layer validates input, records the caller's actor                       
   → invalid? error outcome, nothing changes; not ready? unavailable
   ↓
 Submission committed (idempotent by request id); conversation becomes ready
-  (parked conversation? the message is held, { held: true })                    REQ-012
+  (parked for reports? the message is held, { held: true })                     REQ-012
   ↓
 Admission: free worker thread? → run starts; else waits in arrival order        REQ-010, REQ-011
   ("waiting for a worker thread")
@@ -313,10 +326,11 @@ cause:
 1. load and validate configuration (REQ-021)
 2. resolve the instance directories and check or create them (REQ-006)
 3. take single ownership (REQ-001)
-4. open the database and install the-intern's extensions, before anything resumes
+4. read the job schema version, open the database through pi-durable, create or migrate the job store's tables, and
+   install the-intern's extensions, before anything resumes
 5. check that every configured model and thinking level resolves (S-001 Configuration Requirements)
 6. ensure the per-role default workspaces (S-001 REQ-003)
-7. restore admission (REQ-010), then resume unfinished work
+7. restore admission (REQ-010), apply the job repair rules (S-004 REQ-018), then resume unfinished work
 8. start the components that registered a start hook (listeners, scheduler), then report ready
 
 #### AC-002.1 — The steps run in order
@@ -330,7 +344,8 @@ cause:
 #### AC-002.2 — Each step fails with its name
 
 - **Given:** an invalid configuration file, an unknown key, an unsafe directory, a relative directory flag, a live
-  owner, an unopenable database, an unresolvable configured model, a failing workspace or a failing later start hook
+  owner, an unopenable database, a newer job schema, an unresolvable configured model, a failing workspace or a
+  failing later start hook
 - **When:** the daemon starts
 - **Then:** it exits non-zero naming the failing step and its cause, creates no database file where the step precedes
   step 4, releases ownership it took, and stops the components already started
@@ -553,26 +568,31 @@ names):
   minutes; list roles with their instructions, tools, skills and defaults; list registered workspaces; list available
   models and thinking levels; read usage per conversation and in total; inspect live pi-durable tasks per
   conversation; subscribe to the observation feed (REQ-014).
-- Control: start the lead conversation of a job (S-001 REQ-012), called when a job is created (Jobs spec); submit input
-  with a request id and a busy mode (follow-up, steer or reject); withdraw a queued input; abort a conversation (with
-  S-001's cascade); reset a conversation; compact a conversation; change a conversation's seat (S-001 REQ-004); create,
-  change, restore and remove a role (S-001 REQ-003); register a workspace and unregister one (S-001 REQ-018). The
-  settings operations follow REQ-022.
+- Control: submit input with a request id and a busy mode (follow-up, steer or reject); withdraw a queued input;
+  abort a conversation (with S-001's cascade); reset a conversation; compact a conversation; change a conversation's
+  seat (S-001 REQ-004); create, change, restore and remove a role (S-001 REQ-003); register a workspace and unregister
+  one (S-001 REQ-018). The settings operations follow REQ-022.
+- Jobs: the `jobs.*` operations of S-004, read and control as Interfaces marks them. Starting a job's lead
+  conversation (S-001 REQ-012) isn't a catalogue operation: `jobs.create` calls it in-process.
 
-A submit to a parked conversation holds the message until the conversation continues (S-001 REQ-020), whatever its
-busy mode, and returns `{ held: true }` with no submission id. The submission read, wait and withdraw operations
-take a submission id, so they don't apply to a held message. The message shows in the conversation's transcript as
-its hold record, and once the conversation continues it is an input like any other. A repeated submit with the same
-request id while the message is held returns `{ held: true }` again and holds nothing twice.
+A submit to a conversation parked for reports holds the message until the conversation continues (S-001 REQ-020),
+whatever its busy mode, and returns `{ held: true }` with no submission id. A submit to a job's lead conversation
+parked because its job is Blocked isn't held: the lead continues with it (S-001 REQ-020; S-004 REQ-006). The
+submission read, wait and withdraw operations take a submission id, so they don't apply to a held message. The
+message shows in the conversation's transcript as its hold record, and once the conversation continues it is an input
+like any other. A repeated submit with the same request id while the message is held returns `{ held: true }` again
+and holds nothing twice.
 
 S-001's agent coordination capabilities (handoff, invoke, steer) are control operations of the same service layer.
-Later specs add theirs the same way (for example creating and answering jobs in the Jobs spec and running a schedule
-now in the schedules and triggers spec).
+Later specs add theirs the same way (for example creating and answering jobs in S-004 and running a schedule now in
+the schedules and triggers spec).
 
-Starting a job's lead conversation SHALL record an origin built from the caller, never taken from a team member or an
+Creating a job (`jobs.create`) SHALL record an origin built from the caller, never taken from a team member or an
 agent: a team member's call records a request with the caller's way in, an agent's call records a follow-up of the
-agent's own conversation, and only a job source (a schedule fire, a trigger) states its own origin details. A call
-whose input names an origin of another kind than its caller's is refused as `invalid_input`.
+agent's own conversation, and only a job source (a schedule fire, a trigger) states its own origin details. A team
+member's request records the details its way in observes, which the caller carries: the remote address and port for
+the network listener, the message ID and sender for Email. A call whose input names an origin of another kind than
+its caller's is refused as `invalid_input`.
 
 #### AC-012.1 — Every operation is callable in-process
 
@@ -597,9 +617,9 @@ whose input names an origin of another kind than its caller's is refused as `inv
 **Verification:** test — `test/service/conversation_control_operations.test.ts`,
 `test/service/conversation_control.test.ts`, `test/service/runtime_read_operations.test.ts`.
 
-#### AC-012.3 — A submit to a parked conversation is held
+#### AC-012.3 — A submit to a conversation parked for reports is held
 
-- **Given:** a parked conversation
+- **Given:** a conversation parked for reports
 - **When:** input is submitted in each busy mode, and one request twice
 - **Then:** each returns `{ held: true }` with no submission id, holds the message once, and delivers it when the
   conversation continues
@@ -619,12 +639,13 @@ whose input names an origin of another kind than its caller's is refused as `inv
 
 - **Given:** callers of each kind: a team member with a way in, a team member with none named, an agent, and a job
   source
-- **When:** each starts a job's lead conversation; a team member's call names a request origin with another way in;
+- **When:** each creates a job with `jobs.create`; a team member's call names a request origin with another way in;
   and a team member's call names a schedule, trigger or follow-up origin
-- **Then:** the team member's job records a request with the caller's way in (`in-process` when none is named, S-001
-  AC-007.1), also when the input named another; the agent's job a follow-up of its own conversation; the job
-  source's job the origin it states; the team member's call naming another origin kind is refused `invalid_input`
-  and creates nothing
+- **Then:** the team member's job records a request with the caller's way in, also when the input named another; the
+  team member's call with no way in named, whose way in is `in-process` (S-001 AC-007.1), is refused `invalid_input`
+  (S-004 REQ-002); the agent's job a follow-up of
+  its own conversation; the job source's job the origin it states; the team member's call naming another origin kind
+  is refused `invalid_input` and creates nothing
 
 **Verification:** test — `test/service/job_operations.test.ts`.
 
@@ -633,12 +654,13 @@ whose input names an origin of another kind than its caller's is refused as `inv
 Every operation MUST:
 
 - validate its input and refuse an invalid call without changing state
-- name its caller's actor, which S-001 records where it requires attribution
+- name its caller's actor and, for a team member, the details its way in observed, which S-001 records where it
+  requires attribution
 - end with a result or one of a fixed set of error outcomes: not found, invalid input, busy (a reject-if-busy
   submit), conflict, unavailable (the daemon isn't ready or is stopping), internal. Each outcome carries a message
   that names what failed.
 
-A control operation that creates something (a lead conversation, a role, a workspace registration) accepts an
+A control operation that creates something (a job, a role, a workspace registration) accepts an
 idempotency key. A repeated call with the same key returns the original result and creates nothing. Submits are
 idempotent through their request id (pi-durable). Read operations never change state.
 
@@ -665,8 +687,9 @@ operation test in `test/service/`.
 ### REQ-014 — Snapshot, then deltas
 
 A subscription SHALL name a scope: the instance (conversations with seat, status and admission state, plus started
-and finished events), or one conversation (its live view, events and queued input). It first gets a snapshot, then
-deltas in commit order. A new subscription never replays earlier deltas. A subscriber that reconnects starts from a
+and finished events, and S-004's jobs and job deltas, each published after its job store commit and numbered in the
+same sequence), or one conversation (its live view, events and queued input). It first gets a snapshot, then deltas
+in commit order. A new subscription never replays earlier deltas. A subscriber that reconnects starts from a
 fresh snapshot.
 
 #### AC-014.1 — Conversation scope
@@ -698,8 +721,8 @@ Which operations a listener exposes is the listener's choice (S-003).
 
 - **Given:** the service layer's code and the operation tests
 - **When:** a reviewer checks them
-- **Then:** every operation is called in-process in the tests, and no operation takes a request, connection or caller
-  machine as input
+- **Then:** every operation is called in-process in the tests, and no operation takes a request or connection as
+  input; observed caller details are recorded only, and no outcome depends on them
 
 **Verification:** inspection — `src/service/`; test — AC-012.1's tests.
 
@@ -862,9 +885,9 @@ recorded owner is no longer alive, the new daemon takes ownership and starts nor
 
 ### REQ-007 — Storage failure
 
-When the harness closes because of a storage error, the daemon MUST log the error, stop accepting calls and exit with
-a non-zero status within the stop bound (REQ-005). It doesn't try to reopen the database itself. After the supervisor
-restarts it, unfinished work resumes from its last checkpoint.
+When the harness closes because of a storage error, or a job store write fails (S-004 REQ-020), the daemon MUST log
+the error, stop accepting calls and exit with a non-zero status within the stop bound (REQ-005). It doesn't try to
+reopen the database itself. After the supervisor restarts it, unfinished work resumes from its last checkpoint.
 
 #### AC-007.1 — Exit and resume
 
@@ -884,7 +907,8 @@ operation, the next start MUST:
 - resume every unfinished agent run
 - keep every queued input, parked conversation and waiting run
 - leave every service operation that changes state either completed or not applied, never half-applied (S-001
-  REQ-017)
+  REQ-017); a job operation cut off between its job write and its pi-durable change is completed by S-004 REQ-018
+  before work resumes
 
 #### AC-008.1 — Kill at each point
 
@@ -978,6 +1002,8 @@ records the two capacity constants by amendment.
 - **S-001** defines the conversations, roles, seats and coordination this daemon runs, and the settings the
   configuration file holds.
 - **S-003, the control-endpoint spec**, defines the listeners that expose the catalogue.
+- **S-004, the Jobs spec**, defines the job store in the same database, the `jobs.*` operations, the job deltas on the
+  instance feed and the job repair rules that startup step 7 applies.
 - **Assumption, confirmed by ADR-002:** the team members who can reach a listener are trusted equally, and the service
   account bounds what agents can do, so no listener authenticates callers.
 
@@ -1025,3 +1051,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-01 | Design Principles, "Durability belongs to the runtime": the-intern's own facts also include a conversation's parked state and its abort mark; an abort's facts are written in one commit just before pi-durable's abort, not in pi-durable's abort commit. | S-001 v0.3 R-8 and R-8a (product owner decision F3): a lone abort owes the invoker an "aborted" report, and an abort withdraws held messages and awaiting links. Driving ADR: ADR-001 decision 4, amended 2026-11-01. | T-084, T-085 |
 | 2026-11-01 | v0.6, format only; no requirement changed meaning. Restructured to the ai-team 0.18.0 spec format: requirements renumbered `R-n` → `REQ-00n`/`REQ-0nn` with the same number; each requirement got acceptance scenarios with a Verification method, taken from the former Verification section and naming the tests that cover them; R-1, R-7, R-8, R-15 and R-18 moved to Quality Requirements; R-15's "bounded amount" names the implemented bound of 1000 undelivered deltas; Components merged into Responsibility Separation; rejected designs moved from Exclusions to Alternatives Considered; added Users and Journeys, Interfaces (the `bob serve` command, the operation catalogue's names and kinds and the feed, from the shipped code), Assumptions and Dependencies, Success Criteria (from the Purpose outcomes and the live acceptance tests) and Open Questions. Earlier rows keep their `R-n` identifiers. | Product owner request: S-002 must match the ai-team 0.18.0 format, keeping its meaning so the implementation stays valid. | None; references in code, docs and ADRs updated to the new identifiers |
 | 2026-11-01 | v0.7. REQ-003: listeners open in step 8 and refuse every call but status as `unavailable` until ready. REQ-012 and new AC-012.5: a lead conversation's origin is built from the caller; only job sources state their own. REQ-021: the configuration file also holds sections later specs add. REQ-022: a settings write keeps sections it doesn't change. Assumptions: S-003 exists. | S-003 architecture consistency review (findings 2, 3, 6, 7, 13; re-run finding B); product owner decision 2026-11-01: the origin is built in the service from the caller. The current code takes the origin from the input and may drop unknown sections; a task investigates the deviations. | Investigation task to be created in the S-003 breakdown |
+| 2026-11-02 | v0.8. Definitions, Database: the job store's `intern_` tables. Design Principles: "Durability belongs to the runtime" has two bounded exceptions, the second being ordered job writes and the four startup repair rules (S-004 REQ-018); "One owner per database" allows the import step under the single-owner lock (S-004 REQ-017). Exclusions: only the job store's tables migrate, and export and import copy the whole database without converting it. REQ-002 and AC-002.2: step 4 reads the job schema version first and creates or migrates the job store; step 7 applies the job repair rules before resuming work. REQ-007: a failed job store write is handled as a storage error. REQ-008: a job operation cut off between its job write and its pi-durable change is completed by S-004 REQ-018. REQ-012 and Interfaces: `jobs.startLead` leaves the catalogue and the `jobs.*` operations join it; creating a job records the origin, with the details a team member's way in observes; only a conversation parked for reports holds a submitted message (AC-012.3), and a lead parked for its Blocked job continues on the submit. AC-012.5: callers create jobs with `jobs.create`, and a call naming no way in is refused. REQ-013: the actor carries the observed way-in details; a job is the create example. REQ-014 and the feed in Interfaces: S-004's job deltas, published after their job store commit, in the same sequence. AC-016.1: observed caller details are recorded only. Assumptions: S-004. | S-004 architecture consistency review; product owner decisions 2026-11-02. Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None yet; the code changes (startup steps 4 and 7, the catalogue, the held-message rule, the job deltas) come in the S-004 breakdown |
