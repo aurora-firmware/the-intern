@@ -9,6 +9,7 @@ import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { createSeatedConversation, readConversationMeta, SEAT_RECORD_KIND } from "../../src/host/seating.ts";
+import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import { type Caller, ServiceError } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -17,6 +18,7 @@ const POLL_MS = 10;
 const SETTLE_MS = 400;
 const quietLogger = createLogger({ stream: { write: () => true } });
 const caller: Caller = { actor: { kind: "team_member", wayIn: "cli" } };
+const cliCaller: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
 const requestOrigin = { kind: "request", wayIn: "cli" } as const;
 
 const envs: HermeticEnv[] = [];
@@ -29,10 +31,23 @@ afterEach(async () => {
     for (const env of envs.splice(0)) await env.dispose();
 });
 
+type JobResult = {
+    id: string;
+    number: string;
+    status: string;
+    statedBy?: string;
+    request: { text: string; origin: unknown };
+    resolution?: { kind: string; justification: string };
+    leadConversation?: string;
+};
+type AfterWrite = (point: WritePoint, jobId: string) => void | Promise<void>;
+
 type Started = {
     ctx: ServiceContext;
     provider: string;
     startLead(input: Record<string, unknown>, as?: Caller): Promise<{ conversationId: string; created: boolean }>;
+    create(input: Record<string, unknown>, as?: Caller): Promise<JobResult>;
+    invoke(name: string, input: unknown): Promise<unknown>;
     folder(name: string): Promise<string>;
     seatConversation(slot?: { scope: string; key: string }): Promise<string>;
     answerCount(conversationId: string): Promise<number>;
@@ -41,7 +56,7 @@ type Started = {
     conversationCount(): Promise<number>;
 };
 
-async function start(): Promise<Started> {
+async function start(afterWrite?: (started: Started) => AfterWrite): Promise<Started> {
     const env = await createHermeticEnv();
     envs.push(env);
     const fake = registerFauxProvider({
@@ -62,6 +77,12 @@ async function start(): Promise<Started> {
         JSON.stringify({ defaultProvider: provider, defaultModel: "model-one" }),
     );
     const agents = await createAgentsComponent({ logger: quietLogger });
+    let started: Started | undefined;
+    const jobs = await createJobsComponent({
+        agents,
+        logger: quietLogger,
+        ...(afterWrite && { afterWrite: (point, jobId) => afterWrite(started as Started)(point, jobId) }),
+    });
     let captured: ServiceContext | undefined;
     const probe: DaemonComponent = {
         name: "probe",
@@ -75,8 +96,8 @@ async function start(): Promise<Started> {
         homeDir: env.root,
         logger: quietLogger,
         sections: agents.sections,
-        components: [agents.component, probe],
-        operations: agents.operations,
+        components: [agents.component, jobs.component, probe],
+        operations: [...agents.operations, ...jobs.operations],
         prepareModels: (runtime) => {
             const implementation = getApiProvider(fake.api);
             if (!implementation) throw new Error("the fake model's api is not registered");
@@ -98,9 +119,11 @@ async function start(): Promise<Started> {
         await new Promise((resolve) => setTimeout(resolve, POLL_MS));
     }
     const ctx = captured as ServiceContext;
-    return {
+    started = {
         ctx,
         provider,
+        create: (input, as = caller) => daemon.catalogue.invoke("jobs.create", input, as) as never,
+        invoke: (name, input) => daemon.catalogue.invoke(name, input, caller),
         startLead: (input, as = caller) => daemon.catalogue.invoke("jobs.startLead", input, as) as never,
         async folder(name) {
             const path = join(env.root, name);
@@ -134,6 +157,7 @@ async function start(): Promise<Started> {
             return (await ctx.host.listConversations()).length;
         },
     };
+    return started;
 }
 
 async function refusalCode(action: Promise<unknown>): Promise<string> {
@@ -421,5 +445,132 @@ describe("jobs.startLead", () => {
 
         assert.equal(code, "not_found");
         assert.equal(await started.conversationCount(), before);
+    });
+});
+
+describe("jobs.create", () => {
+    const text = "rotate the staging TLS certificate";
+
+    it("seats the lead as bob with a first input carrying the number and the text", async () => {
+        const started = await start();
+
+        const job = await started.create({ text }, cliCaller);
+
+        assert.equal(job.number, "C-1");
+        assert.ok(job.status === "to_do" || job.status === "in_progress");
+        assert.ok(job.leadConversation);
+        const meta = await readConversationMeta(started.ctx.host, job.leadConversation);
+        assert.equal(meta?.seat.role, "bob");
+        assert.equal(meta?.jobId, job.id);
+        const inputs = await waitForInputs(started, job.leadConversation, 1);
+        assert.match(inputs[0] ?? "", /C-1/);
+        assert.match(inputs[0] ?? "", /rotate the staging TLS certificate/);
+    });
+
+    it("numbers jobs per letter of their way in", async () => {
+        const started = await start();
+        const email: Caller = { actor: { kind: "team_member", wayIn: "email" } };
+
+        const numbers = [
+            (await started.create({ text }, cliCaller)).number,
+            (await started.create({ text }, cliCaller)).number,
+            (await started.create({ text }, email)).number,
+            (await started.create({ text }, cliCaller)).number,
+        ];
+
+        assert.deepEqual(numbers, ["C-1", "C-2", "E-1", "C-3"]);
+    });
+
+    it("refuses an unknown role, a way in without a letter and a caller-named origin, using no number", async () => {
+        const started = await start();
+        const parent = await started.create({ text }, cliCaller);
+        const agent: Caller = { actor: { kind: "agent", conversationId: parent.leadConversation as string } };
+        const before = await started.conversationCount();
+        const origin = { kind: "request", wayIn: "email" };
+
+        const refused = [
+            started.create({ text, role: "nobody" }, cliCaller),
+            started.create({ text }, caller),
+            started.create({ text }, { actor: { kind: "team_member" } }),
+            started.create({ text, origin }, cliCaller),
+            started.create({ text, origin }, agent),
+        ];
+
+        for (const call of refused) assert.equal(await refusalCode(call), "invalid_input");
+        assert.equal(await started.conversationCount(), before);
+        assert.equal((await started.create({ text }, cliCaller)).number, "C-2");
+    });
+
+    it("records an agent's job as a follow-up of its own conversation and a job source's stated origin", async () => {
+        const started = await start();
+        const parent = await started.create({ text }, cliCaller);
+        const agent: Caller = { actor: { kind: "agent", conversationId: parent.leadConversation as string } };
+        const schedule = { kind: "schedule", entry: "nightly", fireTime: "2026-10-31T02:00:00Z" };
+        const trigger = { kind: "trigger", trigger: "ci", event: "build-failed" };
+
+        const followUp = await started.create({ text }, agent);
+        const scheduled = await started.create(
+            { text, origin: schedule },
+            { actor: { kind: "job_source", source: "s" } },
+        );
+        const triggered = await started.create(
+            { text, origin: trigger },
+            { actor: { kind: "job_source", source: "t" } },
+        );
+
+        assert.equal(followUp.number, "A-1");
+        assert.deepEqual(followUp.request.origin, {
+            kind: "follow_up",
+            jobId: parent.id,
+            conversationId: parent.leadConversation,
+        });
+        assert.equal(scheduled.number, "S-1");
+        assert.deepEqual(scheduled.request.origin, schedule);
+        assert.equal(triggered.number, "T-1");
+        assert.deepEqual(triggered.request.origin, trigger);
+    });
+
+    it("records statedBy apart from the origin", async () => {
+        const started = await start();
+
+        const job = await started.create({ text, statedBy: "Ana" }, cliCaller);
+
+        assert.equal(job.statedBy, "Ana");
+        assert.deepEqual(job.request.origin, { kind: "request", wayIn: "command line" });
+    });
+
+    it("returns the original job when an idempotency key repeats", async () => {
+        const started = await start();
+
+        const first = await started.create({ text, idempotencyKey: "k-1" }, cliCaller);
+        const repeat = await started.create({ text, idempotencyKey: "k-1" }, cliCaller);
+
+        assert.equal(repeat.id, first.id);
+        assert.equal(repeat.number, "C-1");
+        assert.equal(repeat.leadConversation, first.leadConversation);
+        assert.equal(await started.conversationCount(), 1);
+        assert.equal((await started.create({ text }, cliCaller)).number, "C-2");
+    });
+
+    it("sets the job Done as cancelled, by the daemon, when the lead's start is refused after the write", async () => {
+        const started = await start((self) => async (point) => {
+            if (point === "job-created") await self.invoke("roles.remove", { name: "reviewer" });
+        });
+        await started.invoke("roles.create", {
+            name: "reviewer",
+            instructions: "Review the work.",
+            tools: ["read"],
+            skills: [],
+        });
+
+        const job = await started.create({ text, role: "reviewer" }, cliCaller);
+
+        assert.equal(job.status, "done");
+        assert.equal(job.resolution?.kind, "cancelled");
+        assert.match(job.resolution?.justification ?? "", /reviewer/);
+        assert.equal(job.leadConversation, undefined);
+        const history = await started.ctx.jobStore.listHistory(job.id, {});
+        assert.ok(history.entries.some((entry) => entry.field === "status" && entry.author.kind === "daemon"));
+        assert.equal(await started.conversationCount(), 0);
     });
 });
