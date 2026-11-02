@@ -173,7 +173,7 @@ describe("the start action", () => {
         );
     });
 
-    it("leaves the status unchanged when a lead's later run or an invoked conversation takes a worker thread", async () => {
+    it("leaves the status unchanged when a later run or an invoked conversation takes a worker thread", async () => {
         const fake = newFake();
         const { ctx, create, agents } = await boot(await hermetic(fake), fake);
         fake.setResponses([async () => fauxAssistantMessage("done")]);
