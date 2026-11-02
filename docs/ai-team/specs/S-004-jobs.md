@@ -2,7 +2,7 @@
 id: S-004
 title: Jobs
 version: '0.1'
-status: draft  # draft | review | approved | superseded
+status: approved  # draft | review | approved | superseded
 created: '2026-11-02'
 author: planner
 ---
@@ -32,7 +32,7 @@ source, origin, way in, caller, service operation, observation feed) and the sha
 | Job store | The-intern's own tables in the instance's SQLite file that hold the job record (REQ-001). |
 | Job ID | The internal unique identifier of a job. Opaque; never shown as the job's name. |
 | Short number | The name people use for a job: its origin letter, a hyphen and a counter per letter, such as `E-14` (REQ-002). |
-| Origin letter | One letter naming where a job came from: `C` command line, `W` web interface, `E` email, `S` schedule, `T` trigger, `A` agent, `I` in-process. |
+| Origin letter | One letter naming where a job came from: `C` command line, `W` web interface, `E` email, `S` schedule, `T` trigger, `A` agent. |
 | Request | The text a job was created with, exactly as received, and everything known about where it came from (REQ-003). |
 | Definition of done | A clear deliverable, action or end state that decides whether the job is done. Goal, needs, plan and analysis belong in the description. |
 | Blocked reason | What the job lacks to go on: missing information, a decision, or access the service account doesn't have. Set when the job blocks, cleared when it resumes. |
@@ -243,6 +243,8 @@ with its short number, title and status, and these deltas (REQ-015):
 
 ## Workflow
 
+The life of a job from its source to Done, with its refusals, the reminder rule, crash repair, and export and import:
+
 ```
 Job source: team member (any way in), schedule fire, trigger, agent                       REQ-003
   ↓
@@ -313,10 +315,12 @@ reused or skipped. The origin letter follows the job's origin (REQ-003):
 | request through the local socket (way in `command line`) | `C` |
 | request through the network listener (way in `web interface`) | `W` |
 | request by email (way in `email`) | `E` |
-| request in-process with no other way in (way in `in-process`) | `I` |
 | schedule fire | `S` |
 | trigger | `T` |
 | agent-created job | `A` |
+
+A request whose way in is `in-process`, the way in S-002 records when a caller names none (S-002 AC-012.5), has no
+letter: `jobs.create` SHALL refuse it with `invalid_input`. Tests and the live checks name a real way in.
 
 Every operation that names a job SHALL accept its job ID or its short number in any letter case.
 
@@ -324,7 +328,8 @@ Every operation that names a job SHALL accept its job ID or its short number in 
 
 - **Given:** a new instance
 - **When:** two jobs are created over the local socket, then one by email, then one more over the local socket
-- **Then:** their numbers are `C-1`, `C-2`, `E-1` and `C-3`
+- **Then:** their numbers are `C-1`, `C-2`, `E-1` and `C-3`, and a `jobs.create` call in-process naming no way in
+  is refused `invalid_input` and uses no number
 
 **Verification:** test — a service test creating jobs with each way in.
 
@@ -737,10 +742,10 @@ rules, write each repair to the history with the daemon as author, and apply no 
 
 ### REQ-019 — Reference timings
 
-The daemon SHOULD answer `jobs.list` with a status or letter filter over 10,000 jobs within 200 ms, and `jobs.get` for
-a job with 1,000 worklog entries within 100 ms, on the reference machine of the live checks. These are reference
-targets, not acceptance thresholds (product owner, 2026-11-02): a test measures and reports them, and a miss is
-reported, not failed.
+A timing test SHALL measure and report `jobs.list` with a status or letter filter over 10,000 jobs, and `jobs.get` for
+a job with 1,000 worklog entries, on the reference machine of the live checks, beside the reference targets of 200 ms
+and 100 ms. The targets are references, not acceptance thresholds (product owner, 2026-11-02): a miss is reported,
+not failed.
 
 #### AC-019.1 — Measured and reported
 
@@ -775,7 +780,8 @@ setting changes the statuses, the actions or the letters.
 
 - **ADR-001, amended with this spec.** Decision 1 gains the job store as the-intern's own `intern_` tables in the same
   SQLite file; decision 4 gains a second bounded exception: ordered job writes and the four repair rules of REQ-018.
-  The amendment is raised by this spec's architecture consistency review and must be accepted before Gate 1.
+  The amendment is raised by this spec's architecture consistency review and must be accepted before the task
+  breakdown passes Gate 2. The product owner approved this spec at Gate 1 on 2026-11-02, before that review.
 - **pi-durable shares its SQLite file.** Confirmed in the pinned pi-durable 1.4.0: its SQLite storage opens on a
   database the host can open itself and names its own tables, so other tables can live in the same file; its commits
   run in their own transactions, which is why job writes are ordered and repaired instead of joined.
@@ -783,7 +789,8 @@ setting changes the statuses, the actions or the letters.
   complete are lead-only; the lead's role prompt states the first duty (REQ-008); a lead's turn end is observable for
   the reminder rule; `jobs.startLead` is in-process only; a job with letter `A` is S-001's follow-up job source.
 - **S-002 amendments.** The job operations join the catalogue (REQ-012); startup step 4 opens the job store and step 7
-  runs the repair before resuming work (REQ-002); the instance scope of the feed carries jobs (REQ-014).
+  runs the repair before resuming work (REQ-002); the instance scope of the feed carries jobs (REQ-014); the
+  `in-process` way in, recorded when a caller names none (AC-012.5), is refused by `jobs.create` (REQ-002).
 - **S-003 amendment.** Each listener passes its observed caller details (the OS account on the local socket where the
   platform reports it, the remote address and port on the network listener) with the way in (REQ-007), and the
   `jobs.startLead` mentions in S-003 AC-007.2 move to `jobs.create`.
