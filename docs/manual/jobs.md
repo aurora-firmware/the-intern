@@ -274,7 +274,8 @@ stopped and has no `bob` command yet; the command line documentation names it wh
 - **No assignees, watchers, votes, labels or attachments.** Every team member is equal, and the lead conversation is
   the only owner a job has.
 - **No reopening.** A Done job stays Done.
-- **No sub-tasks or dependencies.** Related is the only link, and agents the lead invokes take the place of sub-tasks.
+- **No sub-jobs and no dependencies between jobs.** Related is the only link. To split work, the lead invokes
+  other agents.
 - **No blocking by a team member.** Only the lead blocks a job.
 - **No permissions per field or per person.** Anyone who reaches The Intern can change any editable field.
 - **No syncing with outside ticket trackers.**
