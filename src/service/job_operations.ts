@@ -69,14 +69,19 @@ export type LeadStart = {
     actor: SeatActor;
 };
 
+/** The request id of a lead's first input; repair rule 1 looks for the submission that carries it. */
+export const leadStartRequestId = (jobId: string): string => `lead:${jobId}`;
+
 /**
  * Seats the job's lead conversation and submits its first input (S-002 REQ-013). The job id is the idempotency key, so
- * a repeat returns the conversation, and the request id derived from it makes the first input go in once.
+ * a repeat returns the conversation, and the request id derived from it makes the first input go in once. The two
+ * are separate commits, and `afterWrite` is awaited between them.
  */
 export async function startLeadConversation(
     ctx: ServiceContext,
     agents: AgentsComponent,
     input: LeadStart,
+    afterWrite?: JobsComponentOptions["afterWrite"],
 ): Promise<StartLeadResult> {
     const { host } = ctx;
     const { jobId, firstInput, origin, role, overrides, actor } = input;
@@ -94,10 +99,11 @@ export async function startLeadConversation(
         seat,
         actor,
     });
+    await afterWrite?.("lead-created", jobId);
     // Every call submits: pi-durable deduplicates the request id, so a repeat repairs a crash before this point.
     await submitInput(host, result.conversationId, {
         content: firstInput,
-        requestId: `lead:${jobId}`,
+        requestId: leadStartRequestId(jobId),
         busyMode: "followUp",
     });
     return result;
@@ -297,7 +303,12 @@ export async function createJob(
     if (job.status === "done") return viewOf(job, await leadConversationOf(host, job.id));
     if (created) await options.afterWrite?.("job-created", job.id);
     try {
-        const { conversationId } = await startLeadConversation(ctx, options.agents, await leadStartFor(ctx, job));
+        const { conversationId } = await startLeadConversation(
+            ctx,
+            options.agents,
+            await leadStartFor(ctx, job),
+            options.afterWrite,
+        );
         return viewOf(await jobStore.getJob(job.id), conversationId);
     } catch (error) {
         if (!(error instanceof ServiceError)) throw error;

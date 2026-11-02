@@ -6,10 +6,15 @@
  * before its change lets the rule apply again at the next start, and each rule is safe to repeat.
  */
 import type { ServiceContext } from "../daemon/daemon.ts";
-import { hasInputSince, hasQueuedInput } from "../host/conversation_control.ts";
+import { hasInputSince, hasQueuedInput, hasSubmissionWithRequestId } from "../host/conversation_control.ts";
 import { abortJobConversations, continueWithHeld, parkConversation, unparkConversation } from "../host/invocation.ts";
 import { readConversationMeta } from "../host/seating.ts";
-import { leadRefusedJustification, leadStartFor, startLeadConversation } from "../service/job_operations.ts";
+import {
+    leadRefusedJustification,
+    leadStartFor,
+    leadStartRequestId,
+    startLeadConversation,
+} from "../service/job_operations.ts";
 import { ServiceError } from "../service/operations.ts";
 import { cancelJob, type JobActionDeps, resumeJob } from "./job_actions.ts";
 import type { Job } from "./job_store.ts";
@@ -85,16 +90,34 @@ async function applyRule3(deps: JobActionDeps, jobId: string, leadId: string | u
 }
 
 /**
- * Rule 1: a job that isn't Done and has no lead conversation gets it started, or is cancelled when that is refused.
+ * Whether rule 1 applies: the job isn't Done and has no lead conversation, or it is To do and its lead conversation
+ * holds no submission with the first input's request id (a start cut short between the two commits). Only a To do job
+ * with a known lead costs the submission read.
+ */
+async function needsLeadStart(ctx: ServiceContext, job: Job, leadId: string | undefined): Promise<boolean> {
+    if (job.status === "done") return false;
+    if (leadId === undefined) return true;
+    if (job.status !== "to_do") return false;
+    return !(await hasSubmissionWithRequestId(ctx.host, leadId, leadStartRequestId(job.id)));
+}
+
+/**
+ * Rule 1: a job that isn't Done and has no lead conversation gets it started, and a To do job whose lead never
+ * received its first input gets that input submitted. A refused start cancels the job.
  * Returns the job's lead conversation after the rule.
  */
 async function applyRule1(deps: JobActionDeps, jobId: string, leadId: string | undefined) {
     const { ctx, options } = deps;
     const job = await ctx.jobStore.getJob(jobId);
-    if (job.status === "done" || leadId !== undefined) return leadId;
-    await ctx.jobStore.recordRepair(job.id, { rule: 1, did: "Started the lead conversation, which the job lacked" });
+    if (!(await needsLeadStart(ctx, job, leadId))) return leadId;
+    const did =
+        leadId === undefined
+            ? "Started the lead conversation, which the job lacked"
+            : "Submitted the first input of the lead conversation, whose start was cut short";
+    await ctx.jobStore.recordRepair(job.id, { rule: 1, did });
     try {
-        return (await startLeadConversation(ctx, options.agents, await leadStartFor(ctx, job))).conversationId;
+        const start = await leadStartFor(ctx, job);
+        return (await startLeadConversation(ctx, options.agents, start, options.afterWrite)).conversationId;
     } catch (error) {
         if (!(error instanceof ServiceError)) throw error;
         await cancelJob(deps, job.id, leadRefusedJustification(error), DAEMON);
