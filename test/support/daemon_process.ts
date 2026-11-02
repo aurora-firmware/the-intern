@@ -5,6 +5,7 @@
  */
 import { fork } from "node:child_process";
 import { join } from "node:path";
+import type { WritePoint } from "../../src/jobs/jobs_component.ts";
 import { ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
 import type { DaemonStatus } from "../../src/service/status_operation.ts";
 import type { HermeticEnv } from "./hermetic_env.ts";
@@ -34,6 +35,8 @@ export type StartDaemonOptions = {
     holdStart?: boolean;
     /** `false` applies no turn-end rule to leads (`true` by default), for tests about conversations, not jobs. */
     turnEndRule?: boolean;
+    /** The child kills itself with `SIGKILL` the first time the Jobs component reaches this write point. */
+    jobCrashAt?: WritePoint;
 };
 
 export type DaemonProcess = {

@@ -16,10 +16,11 @@ import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import type { Models, Storage } from "../../src/host/harness_host.ts";
-import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
+import { blockJob } from "../../src/jobs/job_actions.ts";
+import { createJobsComponent, type JobsComponentOptions, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
 import type { InternModels } from "../../src/models/model_runtime.ts";
-import { type Caller, ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
+import { type Caller, defineOperation, ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
 import type { StartDaemonOptions } from "./daemon_process.ts";
 import { createFakeModel, type FakeReply, type FakeTranscript } from "./fake_model.ts";
 import { createTestOperations, type StorageSwitch } from "./test_operations.ts";
@@ -168,6 +169,28 @@ function createComponents(switches: Switches, release: Promise<void>): DaemonCom
     return components;
 }
 
+/** Kills the process the first time the Jobs component reaches `crashAt`, and never lets the work after it run. */
+function killingAt(crashAt: WritePoint): NonNullable<JobsComponentOptions["afterWrite"]> {
+    return (point) => {
+        if (point !== crashAt) return undefined;
+        process.kill(process.pid, "SIGKILL");
+        return new Promise<void>(() => undefined);
+    };
+}
+
+/** Blocks a job as a team member at the command line, so a test drives a block without scripting the model. */
+function blockJobOperation(jobs: { options: JobsComponentOptions }) {
+    return defineOperation<ServiceContext, { job: string; reason: string }, Record<string, never>>({
+        name: "test.blockJob",
+        kind: "control",
+        parse: (raw) => raw as { job: string; reason: string },
+        async run(ctx, { job, reason }) {
+            await blockJob({ ctx, options: jobs.options }, job, reason, { kind: "team_member", wayIn: "command line" });
+            return {};
+        },
+    });
+}
+
 function errorFields(error: unknown): { code: ServiceErrorCode; message: string } {
     if (error instanceof ServiceError) return { code: error.code, message: error.message };
     return { code: "internal", message: error instanceof Error ? error.message : String(error) };
@@ -211,6 +234,7 @@ async function main(): Promise<void> {
         agents,
         logger,
         ...(switches.turnEndRule !== undefined && { turnEndRule: switches.turnEndRule }),
+        ...(switches.jobCrashAt !== undefined && { afterWrite: killingAt(switches.jobCrashAt) }),
     });
     const daemon = runDaemon({
         flags: parseFlags(process.argv.slice(3)),
@@ -228,6 +252,7 @@ async function main(): Promise<void> {
         operations: [
             ...agents.operations,
             ...jobs.operations,
+            blockJobOperation(jobs),
             ...createTestOperations({
                 storageSwitch,
                 modelFor: (ctx) => modelFor(ctx, fakeModelId, switches.model),
