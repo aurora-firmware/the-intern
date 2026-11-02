@@ -16,14 +16,14 @@ import { INVOCATION_DEPTH_CAP } from "../../src/daemon/constants.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { readConversationMeta } from "../../src/host/seating.ts";
+import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const WAIT_MS = 20_000;
 const POLL_MS = 10;
 const quietLogger = createLogger({ stream: { write: () => true } });
-const caller: Caller = { actor: { kind: "team_member", wayIn: "cli" } };
-const requestOrigin = { kind: "request", wayIn: "cli" } as const;
+const caller: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
 
 const envs: HermeticEnv[] = [];
 const daemons: RunningDaemon[] = [];
@@ -58,6 +58,8 @@ const invokeCall = (spec: { agents: readonly unknown[]; mode: "steerable" | "par
 
 const invokedAgent = (jobPrompt: string, role = "gp") => ({ role, contextMode: "clean", jobPrompt });
 
+const requestTextOf = (input: string | undefined): string | undefined => input?.split("\n\n")[1] ?? input;
+
 async function start(options: StartOptions) {
     const env = await createHermeticEnv();
     envs.push(env);
@@ -73,7 +75,8 @@ async function start(options: StartOptions) {
     const answer = async (context: { messages: Message[] }) => {
         fake.appendResponses([answer]);
         const users = context.messages.filter((message) => message.role === "user").map(textOf);
-        const last = users.at(-1) ?? "";
+        // A lead's input is the job's number, the Request text and the lead's duty; an invoked agent's is its job prompt.
+        const last = requestTextOf(users.at(-1)) ?? "";
         const results = context.messages.filter((message) => message.role === "toolResult").map(textOf);
         if (results.length > 0) toolResults.push(...results);
         if (last.startsWith("lead")) {
@@ -98,6 +101,7 @@ async function start(options: StartOptions) {
         JSON.stringify({ defaultProvider: provider, defaultModel: "model-one" }),
     );
     const agents = await createAgentsComponent({ logger: quietLogger });
+    const jobs = await createJobsComponent({ agents, logger: quietLogger, turnEndRule: false });
     let captured: ServiceContext | undefined;
     const probe: DaemonComponent = {
         name: "probe",
@@ -111,8 +115,8 @@ async function start(options: StartOptions) {
         homeDir: env.root,
         logger: quietLogger,
         sections: agents.sections,
-        components: [agents.component, probe],
-        operations: agents.operations,
+        components: [agents.component, jobs.component, probe],
+        operations: [...agents.operations, ...jobs.operations],
         ...(options.workerThreadCount !== undefined && { workerThreadCount: options.workerThreadCount }),
         prepareModels: (runtime) => {
             const implementation = getApiProvider(fake.api);
@@ -141,10 +145,14 @@ async function start(options: StartOptions) {
         leadRequests,
         release,
         arrivals: () => arrivals,
-        startLead: (firstInput: string, jobId = "job-1") =>
-            daemon.catalogue.invoke("jobs.startLead", { jobId, firstInput, origin: requestOrigin }, caller) as Promise<{
-                conversationId: string;
-            }>,
+        /** Creates a job with `jobs.create`; the daemon runs without the turn-end rule, so no stop blocks the job. */
+        createJob: async (text: string) => {
+            const job = (await daemon.catalogue.invoke("jobs.create", { text }, caller)) as {
+                id: string;
+                leadConversation: string;
+            };
+            return { jobId: job.id, conversationId: job.leadConversation };
+        },
         status: () =>
             daemon.catalogue.invoke("daemon.status", {}, caller) as Promise<{ workerThreads: { inUse: number } }>,
     };
@@ -169,7 +177,7 @@ describe("the invoke tool", () => {
             isInvokedHeld: true,
         });
 
-        const { conversationId } = await started.startLead("lead work");
+        const { conversationId, jobId } = await started.createJob("lead work");
 
         // Both invoked agents' requests are in flight at once, each held on a worker thread of its own.
         await waitFor(() => started.arrivals() === 2, "both invoked agents to start");
@@ -178,7 +186,7 @@ describe("the invoke tool", () => {
         const invokedIds = (await conversationIds(started.ctx)).filter((id) => id !== conversationId);
         for (const id of invokedIds) {
             const meta = await readConversationMeta(started.ctx.host, id);
-            assert.equal(meta?.jobId, "job-1");
+            assert.equal(meta?.jobId, jobId);
             assert.equal(meta?.invokedBy, conversationId);
             assert.equal(meta?.depth, 1);
         }
@@ -191,7 +199,7 @@ describe("the invoke tool", () => {
             leadCalls: [{ agents: [invokedAgent("job A"), invokedAgent("job B")], mode: "steerable" }],
         });
 
-        const { conversationId } = await started.startLead("lead work");
+        const { conversationId } = await started.createJob("lead work");
         await waitFor(() => started.leadRequests.length >= 2, "the lead's request after the tool result");
 
         const invokedIds = (await conversationIds(started.ctx)).filter((id) => id !== conversationId);
@@ -208,7 +216,7 @@ describe("the invoke tool", () => {
             isInvokedHeld: true,
         });
 
-        const { conversationId } = await started.startLead("lead work");
+        const { conversationId } = await started.createJob("lead work");
 
         // With one worker thread, the invoked agent can only run once the parked lead has freed it. It is held, so its
         // report has not yet continued the lead.
@@ -225,7 +233,7 @@ describe("the invoke tool", () => {
     it("refuses an invocation past the depth cap with an error naming the cap and continues the run", async () => {
         const started = await start({ leadCalls: [{ agents: [invokedAgent("dive deeper")], mode: "steerable" }] });
 
-        await started.startLead("lead work");
+        await started.createJob("lead work");
 
         await waitFor(() => started.toolResults.some((text) => text.includes("cap")), "the cap error");
         const refusal = started.toolResults.find((text) => text.includes("cap")) as string;
@@ -239,7 +247,7 @@ describe("the invoke tool", () => {
             leadCalls: [{ agents: [invokedAgent("job A"), invokedAgent("job B", "nobody")], mode: "steerable" }],
         });
 
-        const { conversationId } = await started.startLead("lead work");
+        const { conversationId } = await started.createJob("lead work");
 
         await waitFor(() => started.leadRequests.length >= 2, "the lead to continue");
         assert.match(started.toolResults.join("\n"), /nobody/);
@@ -254,7 +262,7 @@ describe("the invoke tool", () => {
             ],
         });
 
-        const { conversationId } = await started.startLead("lead work");
+        const { conversationId } = await started.createJob("lead work");
 
         await waitFor(() => started.leadRequests.length >= 2, "the lead to continue");
         assert.equal(started.toolResults.filter((text) => /only tool call/.test(text)).length, 2);
