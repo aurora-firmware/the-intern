@@ -1,6 +1,6 @@
 ---
 title: Daemon and host runtime
-version: '0.8'
+version: '0.9'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-16'
 author: planner
@@ -591,8 +591,8 @@ Creating a job (`jobs.create`) SHALL record an origin built from the caller, nev
 agent: a team member's call records a request with the caller's way in, an agent's call records a follow-up of the
 agent's own conversation, and only a job source (a schedule fire, a trigger) states its own origin details. A team
 member's request records the details its way in observes, which the caller carries: the remote address and port for
-the network listener, the message ID and sender for Email. A call whose input names an origin of another kind than
-its caller's is refused as `invalid_input`.
+the network listener, the message ID and sender for Email. A call from a team member or an agent whose input
+names an origin is refused as `invalid_input` (S-004 Interfaces, `jobs.create`).
 
 #### AC-012.1 — Every operation is callable in-process
 
@@ -639,13 +639,12 @@ its caller's is refused as `invalid_input`.
 
 - **Given:** callers of each kind: a team member with a way in, a team member with none named, an agent, and a job
   source
-- **When:** each creates a job with `jobs.create`; a team member's call names a request origin with another way in;
-  and a team member's call names a schedule, trigger or follow-up origin
-- **Then:** the team member's job records a request with the caller's way in, also when the input named another; the
-  team member's call with no way in named, whose way in is `in-process` (S-001 AC-007.1), is refused `invalid_input`
-  (S-004 REQ-002); the agent's job a follow-up of
-  its own conversation; the job source's job the origin it states; the team member's call naming another origin kind
-  is refused `invalid_input` and creates nothing
+- **When:** each creates a job with `jobs.create`; one team member's call names a request origin with another way in,
+  and another names a schedule, trigger or follow-up origin
+- **Then:** the team member's job records a request with the caller's way in; the team member's call with no way in
+  named, whose way in is `in-process` (S-001 AC-007.1), is refused `invalid_input` (S-004 REQ-002); the agent's job
+  records a follow-up of its own conversation; the job source's job records the origin it states; and each team
+  member's call that names an origin, of any kind, is refused `invalid_input` and creates nothing
 
 **Verification:** test — `test/service/job_operations.test.ts`.
 
@@ -1052,3 +1051,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-01 | v0.6, format only; no requirement changed meaning. Restructured to the ai-team 0.18.0 spec format: requirements renumbered `R-n` → `REQ-00n`/`REQ-0nn` with the same number; each requirement got acceptance scenarios with a Verification method, taken from the former Verification section and naming the tests that cover them; R-1, R-7, R-8, R-15 and R-18 moved to Quality Requirements; R-15's "bounded amount" names the implemented bound of 1000 undelivered deltas; Components merged into Responsibility Separation; rejected designs moved from Exclusions to Alternatives Considered; added Users and Journeys, Interfaces (the `bob serve` command, the operation catalogue's names and kinds and the feed, from the shipped code), Assumptions and Dependencies, Success Criteria (from the Purpose outcomes and the live acceptance tests) and Open Questions. Earlier rows keep their `R-n` identifiers. | Product owner request: S-002 must match the ai-team 0.18.0 format, keeping its meaning so the implementation stays valid. | None; references in code, docs and ADRs updated to the new identifiers |
 | 2026-11-01 | v0.7. REQ-003: listeners open in step 8 and refuse every call but status as `unavailable` until ready. REQ-012 and new AC-012.5: a lead conversation's origin is built from the caller; only job sources state their own. REQ-021: the configuration file also holds sections later specs add. REQ-022: a settings write keeps sections it doesn't change. Assumptions: S-003 exists. | S-003 architecture consistency review (findings 2, 3, 6, 7, 13; re-run finding B); product owner decision 2026-11-01: the origin is built in the service from the caller. The current code takes the origin from the input and may drop unknown sections; a task investigates the deviations. | Investigation task to be created in the S-003 breakdown |
 | 2026-11-02 | v0.8. Definitions, Database: the job store's `intern_` tables. Design Principles: "Durability belongs to the runtime" has two bounded exceptions, the second being ordered job writes and the four startup repair rules (S-004 REQ-018); "One owner per database" allows the import step under the single-owner lock (S-004 REQ-017). Exclusions: only the job store's tables migrate, and export and import copy the whole database without converting it. REQ-002 and AC-002.2: step 4 reads the job schema version first and creates or migrates the job store; step 7 applies the job repair rules before resuming work. REQ-007: a failed job store write is handled as a storage error. REQ-008: a job operation cut off between its job write and its pi-durable change is completed by S-004 REQ-018. REQ-012 and Interfaces: `jobs.startLead` leaves the catalogue and the `jobs.*` operations join it; creating a job records the origin, with the details a team member's way in observes; only a conversation parked for reports holds a submitted message (AC-012.3), and a lead parked for its Blocked job continues on the submit. AC-012.5: callers create jobs with `jobs.create`, and a call naming no way in is refused. REQ-013: the actor carries the observed way-in details; a job is the create example. REQ-014 and the feed in Interfaces: S-004's job deltas, published after their job store commit, in the same sequence. AC-016.1: observed caller details are recorded only. Assumptions: S-004. | S-004 architecture consistency review; product owner decisions 2026-11-02. Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None yet; the code changes (startup steps 4 and 7, the catalogue, the held-message rule, the job deltas) come in the S-004 breakdown |
+| 2026-11-02 | v0.9. REQ-012 and AC-012.5: a team member's or an agent's `jobs.create` call that names an origin of any kind is refused `invalid_input`, as S-004 Interfaces states. | Gate 2 review of the S-004 task plan. | T-117 |
