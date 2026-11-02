@@ -11,6 +11,7 @@ const PREAMBLE_KEY = "intern.preamble";
 const SECTION_KEYS = [
     PREAMBLE_KEY,
     "intern.role",
+    "intern.lead-duty",
     "intern.role-skills",
     "intern.workspace-context",
     "intern.workspace-skills",
@@ -23,9 +24,9 @@ export type RolePromptExtensionOptions = {
 
 // The seat comes from the conversation's own document, never from the catalog, so a seated agent keeps the role it was
 // seated with and a seat change replaces every part of the previous seat.
-async function readSeat(input: PromptInput, context: Context): Promise<Seat | undefined> {
+async function readSeat(input: PromptInput, context: Context): Promise<{ seat: Seat; isLead: boolean } | undefined> {
     const meta = await input.read.snapshot(conversationMetaDoc, input.conversationId, context);
-    return meta === undefined || meta.jobId === "" ? undefined : meta.seat;
+    return meta === undefined || meta.jobId === "" ? undefined : { seat: meta.seat, isLead: meta.isLead };
 }
 
 export function createRolePromptExtension(options: RolePromptExtensionOptions): Extension {
@@ -37,8 +38,8 @@ export function createRolePromptExtension(options: RolePromptExtensionOptions): 
     const renderRequest = (input: PromptInput, context: Context): Promise<PromptSection[] | undefined> => {
         const cached = renderedByRequest.get(input);
         if (cached) return cached;
-        const rendered = readSeat(input, context).then((seat) =>
-            seat === undefined ? undefined : renderRolePrompt({ preamble, seat, ...loader.load(seat) }),
+        const rendered = readSeat(input, context).then((seated) =>
+            seated === undefined ? undefined : renderRolePrompt({ preamble, ...seated, ...loader.load(seated.seat) }),
         );
         renderedByRequest.set(input, rendered);
         return rendered;

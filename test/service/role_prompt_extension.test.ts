@@ -157,8 +157,8 @@ async function createFixture() {
         });
         await waitForSubmission(host, submission.submissionId, WAIT_MS);
     };
-    const seatConversation = async (seat: Seat, key = "k1") =>
-        (await createSeatedConversation(host, { scope: "start-job", key, job, seat, actor })).conversationId;
+    const seatConversation = async (seat: Seat, key = "k1", links: JobLinks = job) =>
+        (await createSeatedConversation(host, { scope: "start-job", key, job: links, seat, actor })).conversationId;
     const model = `${fake.getModel().provider}/${fake.getModel().id}`;
     return { host, prompts, loadedSeats, model, root: env.root, seatFor, say, seatConversation };
 }
@@ -260,7 +260,7 @@ describe("the role prompt extension", () => {
         assert.equal(seatedPrompt.includes("edited-role-skill"), false);
     });
 
-    it("loads the seat's workspace once for the five sections of one request", async () => {
+    it("loads the seat's workspace once for the sections of one request", async () => {
         const { loadedSeats, seatFor, say, seatConversation } = await createFixture();
         const id = await seatConversation(await seatFor("developer"));
 
@@ -277,5 +277,29 @@ describe("the role prompt extension", () => {
         await say(id);
 
         assert.equal(loadedSeats.length, 2);
+    });
+
+    it("sends the lead duty to a lead whatever role is seated, and keeps it after a reseat", async () => {
+        const { host, prompts, seatFor, say, seatConversation } = await createFixture();
+        const id = await seatConversation(await seatFor("developer"));
+        await say(id);
+
+        await changeSeat(host, id, { seat: await seatFor("reviewer"), actor });
+        await say(id);
+
+        assert.match(prompts[0], /intern-lead-duty/);
+        assert.match(prompts[0], /definition of done/);
+        assert.match(prompts[1], /intern-lead-duty/);
+        assert.match(prompts[1], /Instructions of reviewer\./);
+    });
+
+    it("leaves the lead duty out of an invoked conversation", async () => {
+        const { prompts, seatFor, say, seatConversation } = await createFixture();
+        const id = await seatConversation(await seatFor("developer"), "invoked", { ...job, isLead: false, depth: 1 });
+
+        await say(id);
+
+        assert.match(prompts[0], /Instructions of developer\./);
+        assert.equal(prompts[0].includes("intern-lead-duty"), false);
     });
 });

@@ -11,6 +11,7 @@ import { createSeatedConversation, type Origin, readConversationMeta, type SeatA
 import { type JobAuthor, type JobOrigin, letterFor } from "../jobs/job_model.ts";
 import { type Job, JobNotFoundError, JobRefusedError } from "../jobs/job_store.ts";
 import type { JobsComponentOptions } from "../jobs/jobs_component.ts";
+import { LEAD_DUTY } from "../prompt/role_prompt.ts";
 import { RoleRefusedError } from "../roles/role_catalog.ts";
 import type { Seat } from "../roles/role_model.ts";
 import { DEFAULT_LEAD_ROLE } from "../roles/shipped_roles.ts";
@@ -299,7 +300,7 @@ export async function leadStartFor(ctx: ServiceContext, job: Job): Promise<LeadS
     const stored = (await ctx.jobStore.leadStartOf(job.id)) as StoredLeadStart;
     return {
         jobId: job.id,
-        firstInput: `${job.number}\n\n${job.request.text}`,
+        firstInput: `${job.number}\n\n${job.request.text}\n\n${LEAD_DUTY}`,
         origin: leadOrigin(job.request.origin),
         ...(stored.role !== undefined && { role: stored.role }),
         overrides: stored.overrides,
