@@ -6,11 +6,12 @@ import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import { readConversationMeta } from "../host/seating.ts";
-import { createJobOperation } from "../service/job_operations.ts";
+import { createJob, createJobOperation } from "../service/job_operations.ts";
 import { jobRecordOperations } from "../service/job_record_operations.ts";
 import type { Operation } from "../service/operations.ts";
 import { startJob } from "./job_actions.ts";
 import { JobNotFoundError } from "./job_store.ts";
+import { createJobToolsExtension } from "./job_tools_extension.ts";
 
 export type WritePoint =
     | "job-created"
@@ -51,11 +52,25 @@ async function startJobOfLead(ctx: ServiceContext, options: JobsComponentOptions
 
 export async function createJobsComponent(options: JobsComponentOptions): Promise<JobsComponent> {
     let stopListening: (() => void) | undefined;
+    let context: ServiceContext | undefined;
+    // The job tools are built before the host opens, so they reach the service context once startup has bound it.
+    const requireContext = (): ServiceContext => {
+        if (context === undefined) throw new Error("The service context exists only after startup step 4");
+        return context;
+    };
+    const jobTools = createJobToolsExtension({
+        host: () => requireContext().host,
+        jobStore: () => requireContext().jobStore,
+        createJob: (request, caller) => createJob(requireContext(), options, request, caller),
+        actions: () => ({ ctx: requireContext(), options }),
+    });
     return {
         component: {
             name: "jobs",
+            extensions: [jobTools],
             // Step 5 comes before work resumes, so runs that resume after a restart are covered.
             async checkModels(ctx) {
+                context = ctx;
                 stopListening = ctx.admission.onGranted((conversationId) =>
                     startJobOfLead(ctx, options, conversationId),
                 );
@@ -63,6 +78,7 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
             async stop() {
                 stopListening?.();
                 stopListening = undefined;
+                context = undefined;
             },
         },
         operations: [createJobOperation(options), ...jobRecordOperations(options)],

@@ -135,7 +135,7 @@ async function allEntries<T>(
     return entries;
 }
 
-async function readJob(ctx: ServiceContext, ref: string): Promise<JobDetail> {
+export async function readJob(ctx: Pick<ServiceContext, "host" | "jobStore">, ref: string): Promise<JobDetail> {
     const { jobStore, host } = ctx;
     const job = await jobStore.getJob(ref);
     const pageAt = (cursor: string | undefined) => ({ limit: STORE_PAGE_SIZE, ...(cursor && { cursor }) });

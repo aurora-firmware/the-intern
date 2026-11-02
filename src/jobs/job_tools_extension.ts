@@ -1,0 +1,167 @@
+/**
+ * The job tools extension (S-004 Interfaces, job tools): the tools an agent uses to read and change the job of its own
+ * conversation, to create a follow-up job and to relate two jobs. It is built before the host opens, like the
+ * coordination extension, so it takes the host, the job store, the create function and the job actions as functions
+ * that are bound once startup has reached them.
+ */
+import { type Static, Type } from "@earendil-works/pi-ai";
+import {
+    defineExtension,
+    defineTool,
+    type Extension,
+    type ToolExecutionApi,
+    type ToolExecutionResult,
+} from "@earendil-works/pi-durable";
+import type { HarnessHost } from "../host/harness_host.ts";
+import { readConversationMeta } from "../host/seating.ts";
+import type { CreateJobRequest, JobView } from "../service/job_operations.ts";
+import { readJob } from "../service/job_record_operations.ts";
+import { type Caller, ServiceError } from "../service/operations.ts";
+import type { JobActionDeps } from "./job_actions.ts";
+import { EDITABLE_FIELDS, type JobAuthor } from "./job_model.ts";
+import { JobNotFoundError, JobRefusedError, type JobStore } from "./job_store.ts";
+
+export const JOB_TOOLS_EXTENSION_NAME = "intern.jobs";
+
+export type JobToolsOptions = {
+    host(): HarnessHost;
+    jobStore(): JobStore;
+    createJob(request: CreateJobRequest, caller: Caller): Promise<JobView>;
+    actions(): JobActionDeps;
+};
+
+/** The job of a tool's conversation and the author its writes carry. */
+type ToolSeat = { jobId: string; conversationId: string; author: Extract<JobAuthor, { kind: "agent" }> };
+
+const textResult = (text: string, isError = false): ToolExecutionResult => ({
+    output: [{ type: "text", text }],
+    ...(isError && { isError }),
+});
+
+const jsonResult = (value: unknown): ToolExecutionResult => textResult(JSON.stringify(value, null, 2));
+
+async function seatOf(options: JobToolsOptions, api: ToolExecutionApi): Promise<ToolSeat> {
+    const conversationId = String(api.conversationId);
+    const meta = await readConversationMeta(options.host(), conversationId);
+    if (meta === undefined) throw new Error(`Conversation ${conversationId} is not a seated conversation`);
+    return { jobId: meta.jobId, conversationId, author: { kind: "agent", conversationId, role: meta.seat.role } };
+}
+
+// A refused call is an error result for the agent and its run goes on; anything else is a real failure.
+async function refusable(tool: string, action: () => Promise<ToolExecutionResult>): Promise<ToolExecutionResult> {
+    try {
+        return await action();
+    } catch (error) {
+        if (error instanceof JobRefusedError || error instanceof JobNotFoundError || error instanceof ServiceError) {
+            return textResult(`${tool} was refused: ${error.message}`, true);
+        }
+        throw error;
+    }
+}
+
+const readJobTool = (options: JobToolsOptions) =>
+    defineTool({
+        name: "read_job",
+        description: "Read the job of this conversation with its worklog and its history.",
+        parameters: Type.Object({}),
+        async execute(_args, api) {
+            const { jobId } = await seatOf(options, api);
+            return refusable("read_job", async () => jsonResult(await readJob(options.actions().ctx, jobId)));
+        },
+    });
+
+const updateJobParameters = Type.Object({
+    title: Type.Optional(Type.String({ description: "The new title." })),
+    description: Type.Optional(Type.String({ description: "The new description: goal, needs, plan and analysis." })),
+    definitionOfDone: Type.Optional(Type.String({ description: "The new definition of done." })),
+});
+
+const updateJobTool = (options: JobToolsOptions) =>
+    defineTool({
+        name: "update_job",
+        description: "Change the title, the description or the definition of done of the job of this conversation.",
+        parameters: updateJobParameters,
+        async execute(args: Static<typeof updateJobParameters>, api) {
+            const { jobId, author } = await seatOf(options, api);
+            const fields = Object.fromEntries(
+                EDITABLE_FIELDS.flatMap((name) => (name in args ? [[name, args[name]]] : [])),
+            );
+            if (Object.keys(fields).length === 0) {
+                return textResult(`update_job was refused: name at least one of ${EDITABLE_FIELDS.join(", ")}.`, true);
+            }
+            return refusable("update_job", async () =>
+                jsonResult(await options.jobStore().updateFields(jobId, fields, author)),
+            );
+        },
+    });
+
+const addWorklogTool = (options: JobToolsOptions) =>
+    defineTool({
+        name: "add_worklog",
+        description: "Add a note to the worklog of the job of this conversation: what you tried, did or left.",
+        parameters: Type.Object({ text: Type.String({ description: "The worklog entry." }) }),
+        async execute(args, api) {
+            const { jobId, author } = await seatOf(options, api);
+            return refusable("add_worklog", async () =>
+                jsonResult(await options.jobStore().addWorklog(jobId, args.text, author)),
+            );
+        },
+    });
+
+const createJobTool = (options: JobToolsOptions) =>
+    defineTool({
+        name: "create_job",
+        description:
+            "Create a follow-up job, Related to the job of this conversation. Repeating the same call returns the " +
+            "same job.",
+        parameters: Type.Object({
+            text: Type.String({ description: "The request of the new job." }),
+            title: Type.Optional(Type.String({ description: "A title for the new job." })),
+            role: Type.Optional(
+                Type.String({ description: "The role of the new job's lead, instead of the default." }),
+            ),
+        }),
+        async execute(args, api) {
+            const { conversationId } = await seatOf(options, api);
+            const request: CreateJobRequest = {
+                ...args,
+                idempotencyKey: `create_job:${conversationId}:${api.callId}`,
+            };
+            const caller: Caller = { actor: { kind: "agent", conversationId } };
+            return refusable("create_job", async () => jsonResult(await options.createJob(request, caller)));
+        },
+    });
+
+const relateJobsTool = (options: JobToolsOptions) =>
+    defineTool({
+        name: "relate_jobs",
+        description: "Relate the job of this conversation and another job, or unrelate them.",
+        parameters: Type.Object({
+            job: Type.String({ description: "The other job, by ID or short number such as E-14." }),
+            unrelate: Type.Optional(Type.Boolean({ description: "True to remove the link instead of adding it." })),
+        }),
+        async execute(args, api) {
+            const { jobId, author } = await seatOf(options, api);
+            const store = options.jobStore();
+            return refusable("relate_jobs", async () => {
+                const change = args.unrelate === true ? store.unrelate : store.relate;
+                const { a, b } = await change.call(store, jobId, args.job, author);
+                return textResult(
+                    `${a.number} and ${b.number} are ${args.unrelate === true ? "no longer " : ""}related.`,
+                );
+            });
+        },
+    });
+
+export function createJobToolsExtension(options: JobToolsOptions): Extension {
+    return defineExtension({
+        name: JOB_TOOLS_EXTENSION_NAME,
+        tools: [
+            readJobTool(options),
+            updateJobTool(options),
+            addWorklogTool(options),
+            createJobTool(options),
+            relateJobsTool(options),
+        ],
+    });
+}
