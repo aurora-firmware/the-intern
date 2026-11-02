@@ -154,7 +154,13 @@ invoked agent of the job running or reporting. The Intern then acts for the job:
 The reminder shows in the lead's conversation as a steer from the daemon, and the block shows in the job's history with
 the daemon as author. A job that is blocked and then resumed gets a new reminder at the lead's next stop.
 
-Every role is offered three capabilities for sharing the work.
+Every role carries the job tools, whatever its tool list says. They read the job, edit its title, description and
+definition of done, add to its worklog, create a follow-up job and relate jobs. Only the job's lead can block and
+complete the job. An agent the lead invoked gets an error result
+from either, and its run goes on. A message sent to a lead that is parked for its Blocked job continues it and resumes
+the job. [Giving, following and answering jobs](jobs.md) describes jobs in full.
+
+Every role is also offered three capabilities for sharing the work.
 
 ### Handoff
 

@@ -43,8 +43,10 @@ This page comes with its feature.
 
 ## Giving and following jobs
 
-This page comes with its feature.
+See [Giving, following and answering jobs](jobs.md): what a job is, its short number, statuses and actions, and how
+to create, follow, edit, complete, cancel and export a job.
 
 ## Answering questions
 
-This page comes with its feature.
+See [Giving, following and answering jobs](jobs.md#a-blocked-job): a Blocked job waits for your answer, and any
+message to its lead resumes it.
