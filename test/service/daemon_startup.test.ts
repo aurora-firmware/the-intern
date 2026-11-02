@@ -397,6 +397,45 @@ describe("runDaemon startup failures", () => {
         assert.equal(await exists(join(fixture.env.stateDir, "owner.lock")), false);
     });
 
+    it("calls repair in step 7, after admission is restored and before work resumes", async () => {
+        const fixture = await createFixture();
+        const seen: string[] = [];
+        const component: DaemonComponent = {
+            name: "repairer",
+            async repair(ctx) {
+                seen.push(`repair: admission restored ${ctx.admission.state().capacity > 0}`);
+                seen.push(`repair: phase ${daemon.phase()}`);
+            },
+            async start() {
+                seen.push("start");
+            },
+        };
+        const daemon = fixture.start({ components: [component] });
+
+        await until(() => daemon.phase() === "ready", "the daemon to become ready");
+
+        assert.deepEqual(seen, ["repair: admission restored true", "repair: phase starting", "start"]);
+        const stepLines = linesMatching(fixture.lines, "startup step").map((line) => /step=(\d)/.exec(line)?.[1]);
+        assert.deepEqual(stepLines, ["1", "2", "3", "4", "5", "6", "7", "8"]);
+    });
+
+    it("names step 7 and settles with 1 when a component's repair fails", async () => {
+        const fixture = await createFixture();
+        const component: DaemonComponent = {
+            name: "broken-repairer",
+            async repair() {
+                throw new Error("repair refused");
+            },
+        };
+        const daemon = fixture.start({ components: [component] });
+
+        assert.equal(await daemon.exited, 1);
+
+        const failure = linesMatching(fixture.lines, "startup failed");
+        assert.match(failure[0], /step=7/);
+        assert.match(failure[0], /repair refused/);
+    });
+
     it("names step 7, releases ownership and settles with 1 when recording the versions fails", async () => {
         const fixture = await createFixture();
         const storageSwitch = { isFailing: false };

@@ -219,16 +219,9 @@ function heldEntryOf(message: HeldMessage): InputRecord {
     return { kind: STEER_RECORD_KIND, data: { actor, mode, content } };
 }
 
-/**
- * Clears the parked state, then submits the held messages in order and the input after them, as follow-ups: the first
- * starts a run on a free worker thread. The held messages are cleared only once submitted, so a crash in between
- * loses none; their request ids make a repeated call safe.
- */
-export async function continueParked(
-    host: HarnessHost,
-    conversationId: string,
-    input: { content: string; requestId: string; entry?: InputRecord },
-): Promise<{ submissionId: string }> {
+// Clears the parked state, then submits the held messages in order, as the request ids make a repeat safe. The held
+// list is cleared by the caller once everything that goes with it is submitted, so a crash in between loses none.
+async function releaseHeld(host: HarnessHost, conversationId: string): Promise<void> {
     await updateMeta(host, conversationId, (meta) => {
         meta.parked = null;
     });
@@ -241,11 +234,33 @@ export async function continueParked(
             entry: heldEntryOf(message),
         });
     }
-    const submitted = await submitInput(host, conversationId, { ...input, busyMode: "followUp" });
-    await updateMeta(host, conversationId, (meta) => {
+}
+
+const clearHeld = (host: HarnessHost, conversationId: string) =>
+    updateMeta(host, conversationId, (meta) => {
         meta.held = [];
     });
+
+/**
+ * Clears the parked state, then submits the held messages in order and the input after them, as follow-ups: the first
+ * starts a run on a free worker thread. The held messages are cleared only once submitted, so a crash in between
+ * loses none; their request ids make a repeated call safe.
+ */
+export async function continueParked(
+    host: HarnessHost,
+    conversationId: string,
+    input: { content: string; requestId: string; entry?: InputRecord },
+): Promise<{ submissionId: string }> {
+    await releaseHeld(host, conversationId);
+    const submitted = await submitInput(host, conversationId, { ...input, busyMode: "followUp" });
+    await clearHeld(host, conversationId);
     return submitted;
+}
+
+/** Continues a conversation that no new input reached: clears the parked state and delivers only its held messages. */
+export async function continueWithHeld(host: HarnessHost, conversationId: string): Promise<void> {
+    await releaseHeld(host, conversationId);
+    await clearHeld(host, conversationId);
 }
 
 // One commit per conversation (ADR-001 decision 4): an aborted conversation is left neither parked nor waiting for

@@ -58,6 +58,8 @@ export type DaemonComponent = {
     extensions?: readonly Extension[];
     checkModels?(ctx: ServiceContext): Promise<void>;
     ensureWorkspaces?(ctx: ServiceContext): Promise<void>;
+    /** Step 7, after admission is restored and before work resumes: brings the component's saved state in step. */
+    repair?(ctx: ServiceContext): Promise<void>;
     start?(ctx: ServiceContext): Promise<void>;
     stop?(): Promise<void>;
 };
@@ -212,7 +214,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         return { models, host, gateAdmission, jobStore };
     }
 
-    async function runComponents(hook: "checkModels" | "ensureWorkspaces"): Promise<void> {
+    async function runComponents(hook: "checkModels" | "ensureWorkspaces" | "repair"): Promise<void> {
         for (const component of components) await component[hook]?.(context);
     }
 
@@ -264,6 +266,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         await step(7, STEP_NAMES.restoreAndResume, async () => {
             await recordVersions(opened.host);
             await opened.gateAdmission.restore();
+            await runComponents("repair");
             opened.host.resume();
         });
         await step(8, STEP_NAMES.startComponents, async () => {
