@@ -11,6 +11,7 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { submitInput } from "../../src/host/conversation_control.ts";
 import { createInvokedConversations } from "../../src/host/invocation.ts";
 import { createSeatedConversation } from "../../src/host/seating.ts";
+import { RESUME_REQUEST_PREFIX } from "../../src/jobs/job_actions.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import { DEFAULT_LEAD_ROLE } from "../../src/roles/shipped_roles.ts";
 import type { Caller } from "../../src/service/operations.ts";
@@ -179,9 +180,12 @@ describe("the start action", () => {
         fake.setResponses([async () => fauxAssistantMessage("done")]);
         const job = await create();
         await waitFor(() => isIdle(ctx, job.leadConversation), "the first run to end");
-        await ctx.jobStore.applyAction(job.id, "block", { blockedReason: "waiting" }, { kind: "daemon" });
-        const before = await statusEntries(ctx, job.id);
-        fake.setResponses([async () => fauxAssistantMessage("again"), async () => fauxAssistantMessage("invoked")]);
+        fake.setResponses([
+            async () => fauxAssistantMessage("again"),
+            async () => fauxAssistantMessage("invoked"),
+            async () => fauxAssistantMessage("reported"),
+            async () => fauxAssistantMessage("later"),
+        ]);
 
         await submitInput(ctx.host, job.leadConversation, { content: "more", requestId: "r2", busyMode: "followUp" });
         await waitFor(async () => fake.state.callCount === 2 && (await isIdle(ctx, job.leadConversation)), "run 2");
@@ -198,7 +202,22 @@ describe("the start action", () => {
             actor: { kind: "team_member", wayIn: "web interface" },
             parked: { waitingFor: "reports", continueOn: "each" },
         });
-        await waitFor(async () => fake.state.callCount >= 3 && (await isIdle(ctx, invoked as string)), "invoked run");
+        // The invoked conversation reports to the lead, whose run follows.
+        await waitFor(
+            async () => fake.state.callCount === 4 && (await isIdle(ctx, job.leadConversation)),
+            "the report run",
+        );
+        assert.equal(await isIdle(ctx, invoked as string), true);
+        await ctx.jobStore.applyAction(job.id, "block", { blockedReason: "waiting" }, { kind: "daemon" });
+        const before = await statusEntries(ctx, job.id);
+
+        // Input that jobs.resume writes itself doesn't resume the job here.
+        await submitInput(ctx.host, job.leadConversation, {
+            content: "later",
+            requestId: `${RESUME_REQUEST_PREFIX}r3`,
+            busyMode: "followUp",
+        });
+        await waitFor(async () => fake.state.callCount === 5 && (await isIdle(ctx, job.leadConversation)), "run 5");
 
         assert.equal(await statusOf(ctx, job.id), "blocked");
         assert.deepEqual(await statusEntries(ctx, job.id), before);

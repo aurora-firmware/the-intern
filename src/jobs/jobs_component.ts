@@ -5,11 +5,12 @@
 import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
+import { onInputSubmitted } from "../host/conversation_control.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import { createJob, createJobOperation } from "../service/job_operations.ts";
 import { jobRecordOperations } from "../service/job_record_operations.ts";
 import type { Operation } from "../service/operations.ts";
-import { startJob } from "./job_actions.ts";
+import { resumeAfterLeadInput, startJob } from "./job_actions.ts";
 import { JobNotFoundError } from "./job_store.ts";
 import { createJobToolsExtension } from "./job_tools_extension.ts";
 
@@ -52,6 +53,7 @@ async function startJobOfLead(ctx: ServiceContext, options: JobsComponentOptions
 
 export async function createJobsComponent(options: JobsComponentOptions): Promise<JobsComponent> {
     let stopListening: (() => void) | undefined;
+    let stopInputListening: (() => void) | undefined;
     let context: ServiceContext | undefined;
     // The job tools are built before the host opens, so they reach the service context once startup has bound it.
     const requireContext = (): ServiceContext => {
@@ -74,10 +76,15 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
                 stopListening = ctx.admission.onGranted((conversationId) =>
                     startJobOfLead(ctx, options, conversationId),
                 );
+                stopInputListening = onInputSubmitted(ctx.host, (input) =>
+                    resumeAfterLeadInput({ ctx, options }, input),
+                );
             },
             async stop() {
                 stopListening?.();
                 stopListening = undefined;
+                stopInputListening?.();
+                stopInputListening = undefined;
                 context = undefined;
             },
         },

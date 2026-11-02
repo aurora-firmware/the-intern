@@ -178,8 +178,9 @@ The invoking agent then carries on in one of two ways:
 - **Steerable.** It keeps running and can steer the agents it invoked.
 - **Parked.** Its run ends and frees its worker thread. The Intern keeps its state, and it continues when an invoked
   agent reports. A parked agent can't steer. A message sent to a conversation parked for reports waits until the
-  conversation continues. A lead parked because its job is Blocked continues with the message instead. When an agent
-  invokes agents and parks, the invocation must be the only tool call of that turn.
+  conversation continues. A lead parked because its job is Blocked continues with the message instead, and the job
+  becomes In progress again: any message to a Blocked job's lead resumes the job, and the Blocked reason stays in the
+  job's history. When an agent invokes agents and parks, the invocation must be the only tool call of that turn.
 
 ### Reports
 

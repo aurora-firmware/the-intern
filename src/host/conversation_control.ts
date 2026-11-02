@@ -71,6 +71,30 @@ function toSubmissionState(record: SubmissionRecord): SubmissionState {
     return { state: record.status };
 }
 
+export type SubmittedInput = { conversationId: string; requestId: string };
+type InputListener = (input: SubmittedInput) => Promise<void>;
+
+const inputListeners = new WeakMap<HarnessHost, InputListener[]>();
+
+/**
+ * Registers a listener that is awaited once pi-durable has admitted an input to a conversation, whether it was
+ * submitted or steered. A held message calls nothing until it is delivered. Returns the function that removes it.
+ */
+export function onInputSubmitted(host: HarnessHost, listener: InputListener): () => void {
+    const listeners = inputListeners.get(host) ?? [];
+    listeners.push(listener);
+    inputListeners.set(host, listeners);
+    return () => {
+        const index = listeners.indexOf(listener);
+        if (index >= 0) listeners.splice(index, 1);
+    };
+}
+
+/** Awaits the listeners in registration order with an input that pi-durable has admitted. */
+export async function notifyInputSubmitted(host: HarnessHost, input: SubmittedInput): Promise<void> {
+    for (const listener of [...(inputListeners.get(host) ?? [])]) await listener(input);
+}
+
 /** The entry an input is placed as instead of `pi.user`; its model message is still the input's user message. */
 export type InputRecord = { kind: string; data: unknown };
 
@@ -92,6 +116,7 @@ export async function submitInput(
             },
             context,
         );
+        await notifyInputSubmitted(host, { conversationId, requestId: input.requestId });
         return { submissionId: String(submission.id) };
     } catch (error) {
         if (error instanceof ConversationBusy) throw new HostBusyError(conversationId, { cause: error });
