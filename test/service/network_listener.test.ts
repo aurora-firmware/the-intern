@@ -16,6 +16,7 @@ import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts"
 import { createNetworkListenerComponent } from "../../src/listeners/network_listener.ts";
 import { networkSection } from "../../src/listeners/network_section.ts";
 import { localSocketPath } from "../../src/listeners/socket_path.ts";
+import { type AnyOperation, defineOperation } from "../../src/service/operations.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -68,7 +69,11 @@ type Fixture = {
     lines: string[];
     modelId: string;
     configure(text: string): Promise<void>;
-    start(components: readonly DaemonComponent[], agents?: Agents): RunningDaemon;
+    start(
+        components: readonly DaemonComponent[],
+        agents?: Agents,
+        extra?: readonly AnyOperation<never>[],
+    ): RunningDaemon;
 };
 
 async function createFixture(): Promise<Fixture> {
@@ -83,7 +88,7 @@ async function createFixture(): Promise<Fixture> {
         lines,
         modelId: `${fake.getModel().provider}/${fake.getModel().id}`,
         configure: (text) => writeFile(join(env.configDir, "config.toml"), text),
-        start(components, agents) {
+        start(components, agents, extra = []) {
             const daemon = runDaemon({
                 flags: {
                     configDir: env.configDir,
@@ -95,7 +100,7 @@ async function createFixture(): Promise<Fixture> {
                 homeDir: env.root,
                 logger,
                 sections: [...(agents?.sections ?? []), networkSection],
-                operations: agents?.operations ?? [],
+                operations: [...(agents?.operations ?? []), ...extra],
                 prepareModels: () => modelsFor(fake),
                 components,
             });
@@ -205,6 +210,48 @@ describe("network listener", () => {
         const logged = fixture.lines.find((line) => line.includes("network listener") && line.includes(`${port}`));
         assert.ok(logged, "a line names the port in use");
         assert.ok(logged.includes(LOOPBACK), "the line names the address");
+    });
+
+    it("passes the TCP peer's address and port as observed details, whatever X-Forwarded-For says", async () => {
+        const fixture = await createFixture();
+        await fixture.configure(`[network]\naddress = "${LOOPBACK}"\nport = 8080\n`);
+        const listener = createNetworkListenerComponent({ freePort: true });
+        const callers: unknown[] = [];
+        const probe = defineOperation<unknown, unknown, unknown>({
+            name: "test.caller",
+            kind: "read",
+            parse: (raw) => raw,
+            run: async (_ctx, _input, who) => {
+                callers.push(who);
+                return {};
+            },
+        });
+        const daemon = fixture.start([listener], undefined, [probe as AnyOperation<never>]);
+        await until(() => daemon.phase() === "ready", "the daemon to be ready");
+        const { host, port } = addressIn(listener);
+
+        const forged = request({
+            host,
+            port,
+            method: "POST",
+            path: "/operations/test.caller",
+            headers: { "content-type": "application/json", "x-forwarded-for": "198.51.100.9" },
+        });
+        const response = new Promise<IncomingMessage>((resolve, reject) => {
+            forged.once("response", resolve);
+            forged.once("error", reject);
+        });
+        forged.end("{}");
+        (await response).resume();
+
+        assert.equal(callers.length, 1);
+        const actor = (
+            callers[0] as { actor: { wayIn: string; observed: { remoteAddress: string; remotePort: number } } }
+        ).actor;
+        assert.equal(actor.wayIn, "web interface");
+        assert.equal(actor.observed.remoteAddress, LOOPBACK);
+        assert.equal(typeof actor.observed.remotePort, "number");
+        assert.notEqual(actor.observed.remotePort, port, "the peer port is the client's, not the listener's");
     });
 
     it("exits 1 naming the address, the port and the reason, with no bob.sock left, when the port is in use", async () => {

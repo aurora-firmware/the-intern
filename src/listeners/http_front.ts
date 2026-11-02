@@ -1,6 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Subscription } from "../feed/observation_feed.ts";
-import { type Caller, type Catalogue, ServiceError, type ServiceErrorCode } from "../service/operations.ts";
+import {
+    type Caller,
+    type Catalogue,
+    type ObservedDetails,
+    ServiceError,
+    type ServiceErrorCode,
+} from "../service/operations.ts";
 import { streamFeed } from "./feed_stream.ts";
 
 export type WayIn = "command line" | "web interface";
@@ -14,7 +20,13 @@ export type HttpFront = {
     handle(req: IncomingMessage, res: ServerResponse, ctx: FrontRequestContext): Promise<void>;
 };
 
-export type HttpFrontOptions = { catalogue: Catalogue; wayIn: WayIn; fallback?: Fallback };
+export type HttpFrontOptions = {
+    catalogue: Catalogue;
+    wayIn: WayIn;
+    fallback?: Fallback;
+    /** The caller details this listener observes for a request; none by default. */
+    observe?: (req: IncomingMessage) => ObservedDetails;
+};
 
 export const MAX_BODY_BYTES = 10 * 1024 * 1024;
 
@@ -187,7 +199,14 @@ function runUntilAborted<T>(start: () => Promise<T>, signal: AbortSignal, name: 
 }
 
 export function createHttpFront(options: HttpFrontOptions): HttpFront {
-    const caller: Caller = { actor: { kind: "team_member", wayIn: options.wayIn } };
+    function callerOf(req: IncomingMessage): Caller {
+        const observed = options.observe?.(req);
+        return {
+            actor: observed
+                ? { kind: "team_member", wayIn: options.wayIn, observed }
+                : { kind: "team_member", wayIn: options.wayIn },
+        };
+    }
 
     async function callOperation(
         req: IncomingMessage,
@@ -198,7 +217,7 @@ export function createHttpFront(options: HttpFrontOptions): HttpFront {
         try {
             refuseStreamOperation(name);
             const input = await readInput(req);
-            const invoke = () => options.catalogue.invoke(name, input, caller);
+            const invoke = () => options.catalogue.invoke(name, input, callerOf(req));
             const result = await runUntilAborted(invoke, signal, name);
             sendJson(res, 200, { result });
         } catch (error) {
@@ -208,11 +227,20 @@ export function createHttpFront(options: HttpFrontOptions): HttpFront {
         }
     }
 
-    async function openFeed(res: ServerResponse, query: URLSearchParams, signal: AbortSignal): Promise<void> {
+    async function openFeed(
+        req: IncomingMessage,
+        res: ServerResponse,
+        query: URLSearchParams,
+        signal: AbortSignal,
+    ): Promise<void> {
         let subscription: FeedSubscription;
         try {
             const input = subscribeInputOf(query);
-            subscription = (await options.catalogue.invoke(SUBSCRIBE_OPERATION, input, caller)) as FeedSubscription;
+            subscription = (await options.catalogue.invoke(
+                SUBSCRIBE_OPERATION,
+                input,
+                callerOf(req),
+            )) as FeedSubscription;
         } catch (error) {
             sendError(res, asServiceError(error, SUBSCRIBE_OPERATION));
             return;
@@ -231,7 +259,7 @@ export function createHttpFront(options: HttpFrontOptions): HttpFront {
             const { pathname, query } = parseTarget(req.url ?? "/");
             const name = operationNameOf(req, pathname);
             if (name !== undefined) await callOperation(req, res, name, ctx.signal);
-            else if (isFeedRoute(req, pathname)) await openFeed(res, query, ctx.signal);
+            else if (isFeedRoute(req, pathname)) await openFeed(req, res, query, ctx.signal);
             else await answerUnrouted(req, res, pathname);
         },
     };
