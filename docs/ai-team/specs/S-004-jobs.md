@@ -1,7 +1,7 @@
 ---
 id: S-004
 title: Jobs
-version: '0.1'
+version: '0.2'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-02'
 author: planner
@@ -41,7 +41,7 @@ source, origin, way in, caller, service operation, observation feed) and the sha
 | Worklog | The notes agents and team members write on a job: what was tried, what was done, what is left. It lets another agent take over without the conversation history (REQ-010). |
 | History | The automatic, append-only record of every change to a job's fields, status and resolution (REQ-011). |
 | Related | An undirected link between two jobs (REQ-009). |
-| Agent-created job | A job an agent creates while it works on another job. It is the job source S-001 calls a follow-up job; its origin letter is `A`. |
+| Follow-up job | A job an agent creates while it works on another job; its origin letter is `A`. |
 | Repair rule | One of the four startup checks that bring a job and its lead conversation back in step after a crash (REQ-018). |
 
 ## Users and Journeys
@@ -51,7 +51,7 @@ source, origin, way in, caller, service operation, observation feed) and the sha
 | Team member | Hands The Intern a job from the command line, the web interface or email, follows it, answers it when it is blocked, edits it or cancels it. |
 | Lead agent | Writes the definition of done, keeps the description and the worklog, blocks the job when it lacks something and completes it. |
 | Specialist agent | Reads the job it works on, adds to its worklog and creates new jobs it finds. |
-| Job sources (downstream systems) | Email, schedules and triggers create jobs in-process with their own origin details. |
+| Job sources and Email (downstream systems) | Schedules and triggers create jobs in-process with their own origin details; Email, a way in, passes a team member's request with the message ID and sender it observes. |
 | Later specs (downstream systems) | The Command line and Web interface specs present jobs; the Schedules and triggers spec listens for jobs ending; all call this spec's operations and follow its feed events. |
 | Developer | Tests the job lifecycle on the fake model, including crashes between a job write and its pi-durable change. |
 
@@ -157,7 +157,7 @@ What this specification explicitly does NOT cover:
 | `title` | the creator or anyone later | yes | Short name; may be empty until the lead writes one |
 | `description` | anyone | yes | Goal, needs, plan and analysis |
 | `definitionOfDone` | anyone | yes | What decides that the job is done; may be empty until the lead writes one |
-| `leadConversation` | the job store, at creation | no | The job's lead conversation (S-001 REQ-012); the lead agent is the one seated in it |
+| `leadConversation` | read from the conversation that records the job as its lead (S-001 REQ-012) | no | The job's lead conversation (S-001 REQ-012); the lead agent is the one seated in it |
 | `status` | actions only | no | `to_do`, `in_progress`, `blocked` or `done` (REQ-005) |
 | `blockedReason` | the block action | no | Present only while `status` is `blocked` |
 | `resolution` | the complete and cancel actions | no | `{ "kind": "completed" \| "cancelled", "justification": <text> }`, present only when `status` is `done` |
@@ -179,7 +179,7 @@ job accepts its job ID or its short number in any letter case (REQ-002).
 
 | Operation | Kind | Input | Result | Requirement |
 |---|---|---|---|---|
-| `jobs.create` | control | `text` (required), `title`, `statedBy`, and the role, model, thinking level and registered workspace a team member may name (S-001 REQ-012) | the new job | REQ-003, REQ-007 |
+| `jobs.create` | control | `text` (required), `title`, `statedBy`, `idempotencyKey` (S-002 REQ-013), the role, model, thinking level and registered workspace a team member may name (S-001 REQ-012), and `origin`: job sources only (a schedule's entry and fire time, a trigger and its event); refused from any other caller (S-002 AC-012.5) | the new job | REQ-003, REQ-007 |
 | `jobs.get` | read | job | the job with its worklog and history, newest last | REQ-014 |
 | `jobs.list` | read | optional `status`, `letter`, `relatedTo`, `limit`, `cursor` | jobs without worklog and history, newest first, and a cursor | REQ-014 |
 | `jobs.update` | control | job and any of `title`, `description`, `definitionOfDone` | the job | REQ-004 |
@@ -208,7 +208,7 @@ Every role carries the job tools, and a tool set can't leave them out, as with S
 | read job | every agent of the job | returns the job, its worklog and its history |
 | update job | every agent of the job | changes the editable fields (REQ-004) |
 | add to worklog | every agent of the job | adds an entry (REQ-010) |
-| create job | every agent of the job | creates an agent-created job, Related to this one (REQ-003, REQ-009) |
+| create job | every agent of the job | creates a follow-up job, Related to this one, keyed by its tool call id (REQ-003, REQ-007, REQ-009) |
 | relate jobs | every agent of the job | relates or unrelates this job and another (REQ-009) |
 | block job | the lead agent | blocks with a Blocked reason (REQ-005, REQ-006) |
 | complete job | the lead agent | completes with a justification (REQ-005) |
@@ -248,8 +248,11 @@ The life of a job from its source to Done, with its refusals, the reminder rule,
 ```
 Job source: team member (any way in), schedule fire, trigger, agent                       REQ-003
   ↓
-jobs.create → job written (To do, number allocated) → lead conversation started            REQ-001, REQ-002, REQ-007
+jobs.create → role and overrides checked                                                    REQ-007
   (unknown role or bad override → refused, no job and no number)                           REQ-007
+  (same idempotency key → the original job, no new number)                                 REQ-007
+  → job written (To do, number allocated) → lead conversation started                      REQ-001, REQ-002, REQ-007
+  (start still refused after the write → Done, cancelled, the daemon as author)            REQ-007
   ↓
 Waits for a worker thread if all are busy; still To do                                      REQ-005
   ↓
@@ -274,6 +277,7 @@ Every change → history; every change → feed delta                           
 Done → no field, worklog or action change; relate and unrelate still allowed               REQ-005
 
 Crash between a job write and its pi-durable change → startup repair, before resume        REQ-018
+Startup, after repair: the reminder rule for each idle In progress job                     REQ-008, REQ-018
 Export while running → consistent copy; import into a stopped instance only                REQ-016, REQ-017
 ```
 
@@ -285,7 +289,8 @@ The daemon SHALL keep the job record (jobs, per-letter counters, worklog entries
 in the-intern's own tables in the instance's SQLite file, named with the prefix `intern_`, with a job schema version
 of its own. At startup step 4 (S-002 REQ-002) the daemon SHALL create the tables in a new database, migrate them
 forward in an older one, and stop startup with an error naming the job schema version when the database holds a newer
-one. The job store MUST NOT read or write pi-durable's tables.
+one. The daemon SHALL read the job schema version before pi-durable opens the database, so a refused start leaves the
+file unchanged. The job store MUST NOT read or write pi-durable's tables.
 
 #### AC-001.1 — Created in a new database
 
@@ -317,7 +322,7 @@ reused or skipped. The origin letter follows the job's origin (REQ-003):
 | request by email (way in `email`) | `E` |
 | schedule fire | `S` |
 | trigger | `T` |
-| agent-created job | `A` |
+| follow-up job | `A` |
 
 A request whose way in is `in-process`, the way in S-002 records when a caller names none (S-002 AC-012.5), has no
 letter: `jobs.create` SHALL refuse it with `invalid_input`. Tests and the live checks name a real way in.
@@ -354,11 +359,12 @@ Every operation that names a job SHALL accept its job ID or its short number in 
 Creating a job SHALL record its Request: the text exactly as received and an origin that holds the job source and
 everything known about it. The origin MUST be built from the caller (S-002 AC-012.5):
 
-- a request through a listener records its way in and the details the listener observes: the calling OS account on
-  the local socket when the platform reports it, the remote address and port on the network listener
-- an in-process job source states its own details: Email the message ID and sender, a schedule its entry and fire
-  time, a trigger its trigger and event
-- an agent-created job records the job and the conversation it was created from
+- a team member's request records its way in and the details that way in observes: none beyond the way in on the
+  local socket, the remote address and port on the network listener, and the message ID and sender for Email, which
+  Email observes and passes with the caller
+- an in-process job source states its own details: a schedule its entry and fire time, a trigger its trigger and
+  event
+- a follow-up job records the job and the conversation it was created from
 
 A caller MAY add `statedBy`, a name of its own choosing; the job SHALL record it apart from the origin, labelled as
 stated and not checked. Nothing in a call's input SHALL replace an observed origin detail.
@@ -367,8 +373,8 @@ stated and not checked. Nothing in a call's input SHALL replace an observed orig
 
 - **Given:** the daemon with both listeners
 - **When:** a job is created over the local socket and another over the network listener
-- **Then:** the first records way in `command line` and the calling OS account where the platform reports it; the
-  second records way in `web interface` and the remote address and port
+- **Then:** the first records way in `command line` and no other observed detail; the second records way in
+  `web interface` and the remote address and port
 
 **Verification:** test — a service test through both listeners on a temporary socket and a loopback port.
 
@@ -377,12 +383,13 @@ stated and not checked. Nothing in a call's input SHALL replace an observed orig
 - **Given:** a `jobs.create` call over the network listener whose input carries `statedBy: "Ana"` and an origin
   naming a schedule
 - **When:** the job is created
-- **Then:** its origin is the network listener's request with the observed remote address, `statedBy` is recorded as
-  "Ana, stated, not checked", and the job's letter is `W`
+- **Then:** the call is refused `invalid_input` naming `origin`, and no job or number is used; the same call without
+  the origin creates `W-n` with the network listener's request, the observed remote address and port, and `statedBy`
+  recorded as "Ana", stated, not checked
 
 **Verification:** test — a service test.
 
-#### AC-003.3 — An agent-created job names where it came from
+#### AC-003.3 — A follow-up job names where it came from
 
 - **Given:** the lead agent of `S-12`
 - **When:** it creates a job through the job tools
@@ -420,10 +427,10 @@ A job's status SHALL be one of To do, In progress, Blocked and Done, and SHALL c
 
 | Action | From → to | Who | Guard | Side effect |
 |---|---|---|---|---|
-| start | To do → In progress | the daemon | — | runs when the lead conversation first runs |
+| start | To do → In progress | the daemon | — | written when the lead conversation's first run takes a worker thread, before its first model request; a run that resumes after a crash with the job still To do writes it then |
 | block | In progress → Blocked | the lead agent | Blocked reason not empty; no invoked conversation of the job still running or awaited | parks the lead conversation (REQ-006) |
 | resume | Blocked → In progress | the daemon, on any input to the lead conversation; a team member, through `jobs.resume` | — | clears the Blocked reason; the lead continues (REQ-006) |
-| complete | In progress → Done | the lead agent, or a team member through `jobs.complete` | definition of done not empty; justification not empty | resolution `completed`; aborts the job's remaining conversations (REQ-007) |
+| complete | In progress → Done | the lead agent, or a team member through `jobs.complete` | definition of done not empty; justification not empty | resolution `completed`; aborts the job's remaining conversations, and, when the lead completes through its tool, its own run at that call (REQ-007) |
 | cancel | To do, In progress or Blocked → Done | anyone through `jobs.cancel` | justification not empty | resolution `cancelled`; aborts every conversation of the job (REQ-007) |
 
 A job SHALL never return to To do, and Done is final: no edit, worklog entry or action changes a Done job; relate and
@@ -468,11 +475,11 @@ refused `invalid_input`. Every action is written to the history.
 ### REQ-006 — Blocking and resuming
 
 When the lead agent blocks its job, the daemon SHALL set the job Blocked with its Blocked reason and park the lead
-conversation, which then holds no worker thread (S-001 REQ-014). Any input that reaches the parked lead conversation (a
-team member's input submitted to it, an answer by email, an invoked agent's report, or the text of `jobs.resume`)
-SHALL resume the job: In progress, the Blocked reason cleared, and the lead continuing on a free worker thread.
-`jobs.resume` with no text SHALL deliver a note that a team member resumed the job. The old reason stays in the
-history.
+conversation, which then holds no worker thread (S-001 REQ-014). Any input that reaches the lead conversation while its
+job is Blocked, whether or not it has parked yet (a team member's input, an answer by email, or the text of
+`jobs.resume`), SHALL resume the job: In progress, the Blocked reason cleared, and the lead continuing on a free worker
+thread. `jobs.resume` with no text SHALL deliver a note that a team member resumed the job. The old reason stays in
+the history.
 
 #### AC-006.1 — Blocked holds no worker thread
 
@@ -501,11 +508,18 @@ history.
 
 ### REQ-007 — Creating, completing and cancelling
 
-`jobs.create` SHALL write the job and then start its lead conversation through S-001 REQ-012, with the role and
-overrides the request names and a first input that carries the job's short number and Request. A creation refused by
-S-001 REQ-012 (an unknown role, an unresolvable override) SHALL leave no job and use no number. Completing or
-cancelling SHALL abort every conversation of the job that still runs, is parked or awaits a report (S-001 REQ-008),
-leaving nothing parked or awaited.
+`jobs.create` SHALL first check the role and overrides as S-001 REQ-012 does, and refuse a bad one (an unknown role,
+an unresolvable override) with `invalid_input`, leaving no job and using no number. It then writes the job and starts
+the lead conversation through S-001 REQ-012, with the role and overrides the request names and a first input that
+carries the job's short number and Request. If S-001 REQ-012 still refuses after the job is written, the daemon sets
+the job Done, resolution `cancelled`, with a justification naming the refusal and the daemon as author.
+
+`jobs.create` SHALL accept an optional `idempotencyKey` (S-002 REQ-013): a repeated call with the same key returns the
+original job and uses no number. The create job tool keys each call by its tool call id.
+
+Completing or cancelling SHALL abort every conversation of the job that still runs, is parked or awaits a report
+(S-001 REQ-008), leaving nothing parked or awaited. When the lead completes the job through its tool, its own run is
+aborted at that call along with the job's other conversations.
 
 #### AC-007.1 — Creation starts the lead
 
@@ -534,18 +548,41 @@ leaving nothing parked or awaited.
 
 **Verification:** test — a service test on the fake model.
 
+#### AC-007.4 — A repeated creation makes one job
+
+- **Given:** a `jobs.create` call with an `idempotencyKey`
+- **When:** it is repeated, and once more after a crash between the job write and the start of the lead conversation
+- **Then:** one job, one number and one lead conversation exist, and each repeat returns that job
+
+**Verification:** test — a service test on the fake model, injecting the crash between the two writes.
+
+#### AC-007.5 — A start refused after the write cancels the job
+
+- **Given:** a `jobs.create` call that passes the check, and a lead conversation start that S-001 REQ-012 refuses
+  after the job is written
+- **When:** the job is created
+- **Then:** the job is Done with resolution `cancelled`, its justification names the refusal, and the history names
+  the daemon as author
+
+**Verification:** test — a service test with the refusal injected after the job write.
+
 ### REQ-008 — The lead's first duty and the reminder rule
 
 The lead's first input and the role prompt of every lead SHALL state that the lead first makes sure the job has a
-definition of done and, if it can't write one, blocks the job with a reason. When a lead's turn ends with its job In
-progress and nothing left to wait for (no input queued, no invoked conversation running or awaited), the daemon SHALL:
+definition of done and, if it can't write one, blocks the job with a reason, and that before it completes the job it
+checks the result against the definition of done and states the evidence in the justification. When a lead's turn
+ends with its job In progress and nothing left to wait for (no input queued, no invoked conversation running or
+awaited), the daemon SHALL:
 
 - block the job with the reason "no definition of done" if the definition of done is empty
 - otherwise, the first time, send the lead one reminder to continue, block or complete
 - otherwise, when the turn after a reminder ends the same way, block the job with the reason "the lead stopped without
   completing or blocking"
 
-A reminder is spent once the job blocks or resumes, so the next stop gets one again.
+A reminder is spent once the job blocks or resumes, so the next stop gets one again. Whether a lead's reminder is
+spent SHALL survive a restart. At startup, after the repair rules of REQ-018, the daemon SHALL check this rule for
+each In progress job whose lead is idle and waits for nothing. This is the same rule applied to saved state, not a
+repair rule.
 
 #### AC-008.1 — No definition of done blocks
 
@@ -572,11 +609,20 @@ A reminder is spent once the job blocks or resumes, so the next stop gets one ag
 
 **Verification:** test — a service test on the fake model.
 
+#### AC-008.4 — The rule is checked at startup
+
+- **Given:** a daemon killed after a lead's turn ended with its job In progress and nothing to wait for
+- **When:** it starts again
+- **Then:** the rule is applied to that job (a reminder, or a block if the reminder was already spent or the
+  definition of done is empty) before listeners answer calls other than `daemon.status`
+
+**Verification:** test — a service test on the fake model, killing the daemon at the end of the lead's turn.
+
 ### REQ-009 — Related jobs
 
 `jobs.relate` and `jobs.unrelate` and the relate tool SHALL add and remove an undirected link between two different
 jobs in any status. A job SHALL NOT be related to itself, and relating two jobs already related changes nothing.
-Creating an agent-created job SHALL relate it to the job it was created from. Both jobs' history records each change.
+Creating a follow-up job SHALL relate it to the job it was created from. Both jobs' history records each change.
 
 #### AC-009.1 — Related both ways
 
@@ -644,7 +690,7 @@ names a second one. The block and complete tools SHALL be refused for any agent 
 
 - **Given:** a team role whose tool set names only `read`
 - **When:** an agent of that role is seated in a job's conversation
-- **Then:** it is offered `read` and the job tools
+- **Then:** it is offered `read`, the coordination tools (S-001 REQ-003) and the job tools
 
 **Verification:** test — a service test.
 
@@ -681,24 +727,29 @@ resolution, which triggers can listen for (Schedules and triggers spec).
 
 `jobs.export` SHALL write a consistent copy of the instance's whole database (the job store and pi-durable's data) to
 the given absolute path while the daemon keeps working, and refuse a relative path or an existing file with
-`invalid_input`. Work in progress SHALL go on during the export.
+`invalid_input`. Work in progress SHALL go on during the export. The copy SHALL be created owner-only (S-002 REQ-006;
+ADR-002 decision 6). It holds the database only; the configuration file (roles, registered workspaces, `[network]`)
+isn't in it.
 
 #### AC-016.1 — A copy while working
 
 - **Given:** a daemon with jobs running on the fake model
 - **When:** a team member exports to a new file
-- **Then:** the call returns the path and size, the jobs go on, and the file opens as a database holding every job,
-  worklog entry, history entry and conversation committed before the export began
+- **Then:** the call returns the path and size, the jobs go on, the file is owner-only, and it opens as a database
+  holding every job, worklog entry, history entry and conversation committed before the export began
 
 **Verification:** test — a service test.
 
 ### REQ-017 — Import
 
 The package SHALL offer an import step, run by the command line while the instance's daemon is stopped, that places an
-exported file as the instance's database. It SHALL refuse when a database already exists in the instance's state
-directory, when the instance's daemon is running, or when the file's job schema version is newer than the running
-version's. An older job schema is migrated at the next start (REQ-001). The import step never replaces the database of
-a running daemon.
+exported file as the instance's database. The import step SHALL hold the instance's single-owner lock while it runs
+(S-002 REQ-001), so it never replaces the database of a running daemon and no daemon starts while it runs. It SHALL
+refuse when the instance's daemon is running, when the state directory holds the database file or its `-wal` or
+`-shm` file, when the file's job schema version is newer than the running version's, and when the file's pi-durable
+schema is newer than the running version's. It SHALL create the database owner-only. An older job schema is migrated
+at the next start (REQ-001). The first start on an imported copy applies REQ-018 and resumes unfinished work (S-002
+REQ-008), so importing a copy of an instance that is still running does that work twice.
 
 #### AC-017.1 — Moving to another computer
 
@@ -711,9 +762,11 @@ a running daemon.
 
 #### AC-017.2 — Refusals
 
-- **Given:** an instance with a database; a running daemon; a file with a newer job schema
+- **Given:** an instance with a database; an instance with only a `-wal` file left; a running daemon; a file with a
+  newer job schema; a file with a newer pi-durable schema
 - **When:** each is imported
-- **Then:** each is refused with a message naming the reason, and nothing changes
+- **Then:** each is refused with a message naming the reason, nothing changes, and a daemon started while the import
+  runs is refused
 
 **Verification:** test — a service test.
 
@@ -721,15 +774,23 @@ a running daemon.
 
 ### REQ-018 — Ordered writes and startup repair
 
-Each job write that goes with a pi-durable change SHALL be committed before that change. At startup, after the
-database opens and before work resumes (S-002 REQ-002 step 7, amended), the daemon SHALL apply exactly these repair
-rules, write each repair to the history with the daemon as author, and apply no other recovery to jobs:
+Each job write that goes with a pi-durable change the daemon makes SHALL be committed before that change: a job before
+its lead conversation starts, a block before the lead conversation parks, a complete or cancel before the
+conversations are aborted. Input to a Blocked job's lead reaches the lead conversation first, and the resume follows
+it (REQ-006). At startup, after the database opens and before work resumes (S-002 REQ-002 step 7, amended), the daemon
+SHALL apply exactly these repair rules, write each repair to the history with the daemon as author, and apply no
+other recovery to jobs:
 
-1. a job with no lead conversation gets it started (S-001 REQ-012 is safe to repeat for the same job)
+1. a job that isn't Done and has no lead conversation (no conversation records the job as its lead) gets it started
+   (S-001 REQ-012 is safe to repeat for the same job); if S-001 REQ-012 refuses the start, the job is cancelled as
+   REQ-007 states
 2. a Blocked job whose lead conversation isn't parked gets it parked
-3. a Blocked job whose lead conversation received input after it blocked is set In progress, with the Blocked reason
-   cleared
+3. a job whose lead conversation holds input it hasn't taken since the job blocked is set In progress if it is still
+   Blocked, with the Blocked reason cleared, and the lead continues with that input
 4. a Done job with conversations still running, parked or awaited gets them aborted
+
+Rule 3 is applied before rule 2. After the repair rules, the daemon checks REQ-008's rule for each In progress job
+whose lead is idle and waits for nothing; this is REQ-008 applied to saved state, not a repair rule.
 
 #### AC-018.1 — One crash per rule
 
@@ -785,18 +846,32 @@ setting changes the statuses, the actions or the letters.
 - **pi-durable shares its SQLite file.** Confirmed in the pinned pi-durable 1.4.0: its SQLite storage opens on a
   database the host can open itself and names its own tables, so other tables can live in the same file; its commits
   run in their own transactions, which is why job writes are ordered and repaired instead of joined.
-- **S-001 amendments.** The job tools are part of every role like the coordination capabilities (REQ-003); block and
-  complete are lead-only; the lead's role prompt states the first duty (REQ-008); a lead's turn end is observable for
-  the reminder rule; `jobs.startLead` is in-process only; a job with letter `A` is S-001's follow-up job source.
-- **S-002 amendments.** The job operations join the catalogue (REQ-012); startup step 4 opens the job store and step 7
-  runs the repair before resuming work (REQ-002); the instance scope of the feed carries jobs (REQ-014); the
-  `in-process` way in, recorded when a caller names none (AC-012.5), is refused by `jobs.create` (REQ-002).
-- **S-003 amendment.** Each listener passes its observed caller details (the OS account on the local socket where the
-  platform reports it, the remote address and port on the network listener) with the way in (REQ-007), and the
-  `jobs.startLead` mentions in S-003 AC-007.2 move to `jobs.create`.
-- **Later specs.** Email states a message ID and sender; schedules and triggers state their entry, fire time, trigger
-  and event; the Command line spec names the import command; the Web interface spec presents the board. Until they
-  exist, tests and the live checks call the operations.
+- **ADR-004, amended with this spec.** Decision 5 gains entry kinds for the text of `jobs.resume`, the default resume
+  note and the reminder (REQ-006, REQ-008), each carrying its actor. The Architect amends ADR-004 before the task
+  breakdown passes Gate 2.
+- **S-000 amendment.** The job record keeps its own format in tables of its own, which each version migrates forward;
+  export and import copy the whole saved state for backups, moving to another computer and upgrades, and don't
+  convert it (Solution overview, Jobs, Project exclusions; REQ-001, REQ-016, REQ-017).
+- **S-001 amendments.** The job tools are part of every role like the coordination capabilities (REQ-003, REQ-005);
+  block and complete are lead-only; the lead's role prompt states the first duty (REQ-008); a lead's turn end is
+  observable for the reminder rule; the daemon is an actor for input it sends under a job's rules (REQ-007); a message
+  sent to a lead conversation parked because its job is Blocked continues it (REQ-014, REQ-020); the Job definition
+  names this spec's fields; `jobs.startLead` is in-process only, called by `jobs.create`; a job with letter `A` is
+  S-001's follow-up job source.
+- **S-002 amendments.** The job operations replace `jobs.startLead` in the catalogue, and creating a job records the
+  origin (REQ-012); startup step 4 reads the job schema version and opens the job store and step 7 runs the repair
+  before resuming work (REQ-002); the instance scope of the feed carries the job deltas in its sequence (REQ-014); the
+  `in-process` way in, recorded when a caller names none (AC-012.5), is refused by `jobs.create` (REQ-002); a team
+  member's request records the details its way in observes (REQ-012, REQ-013); a job store write failure is handled
+  as a storage error (REQ-007); a held message waits only for a conversation parked for reports (REQ-012); the
+  Durability principle names job writes and repair as its second exception, and the One-owner principle names the
+  import step.
+- **S-003 amendment.** Each listener passes its observed caller details with the way in (REQ-007): none beyond the way
+  in on the local socket, and on the network listener the TCP peer's remote address and port, never a header such as
+  `X-Forwarded-For`. The `jobs.startLead` mentions in S-003 AC-007.2 move to `jobs.create`.
+- **Later specs.** Email passes the message ID and sender it observes; schedules and triggers state their entry, fire
+  time, trigger and event; the Command line spec names the import command; the Web interface spec presents the board.
+  Until they exist, tests and the live checks call the operations.
 - **Node's SQLite.** The daemon's Node 24 SQLite support provides the online backup that REQ-016 uses.
 
 ## Success Criteria
@@ -826,3 +901,7 @@ setting changes the statuses, the actions or the letters.
 None.
 
 ## Amendment Log
+
+| Date | What changed | Why | Affected tasks |
+|------|-------------|-----|----------------|
+| 2026-11-02 | REQ-007 and AC-007.2: `jobs.create` checks the role and overrides first and refuses a bad one with no job and no number, then writes the job and starts the lead; a start still refused after the write cancels the job (new AC-007.5); an optional `idempotencyKey` returns the original job, and the create job tool keys each call by its tool call id (new AC-007.4); a lead completing through its tool has its own run aborted at that call. REQ-018: the ordering names each write and its pi-durable change; rule 1 covers a job that isn't Done with no conversation recording it as its lead, and cancels the job when the start is refused; rule 3 covers input the lead hasn't taken since the job blocked and is applied before rule 2. REQ-008: the first duty includes checking the result against the definition of done and stating the evidence; whether a reminder is spent survives a restart, and the rule is checked at startup for each idle In progress job after the repair rules (new AC-008.4). REQ-005: the start is written when the lead's first run takes a worker thread; complete aborts the lead's own run. REQ-006: any input while the job is Blocked resumes it, parked or not; an invoked agent's report is no longer listed. REQ-003, AC-003.1, AC-003.2 and the `jobs.create` input: no OS account on the local socket; Email is a way in that passes the message ID and sender it observes; `origin` is refused from any caller but a job source. REQ-001: the job schema version is read before pi-durable opens the database. REQ-016 and AC-016.1: the export is owner-only and holds the database only. REQ-017 and AC-017.2: the import holds the single-owner lock, refuses leftover `-wal` and `-shm` files and a newer pi-durable schema, and creates the database owner-only. AC-013.1: the coordination tools are offered too. The term "Agent-created job" became "Follow-up job" (Definitions, REQ-002, REQ-003, REQ-009, job tools). Interfaces: `leadConversation` is read from the conversation that records the job as its lead. Users and Journeys, Workflow, Assumptions and Dependencies (S-000, S-001, S-002, S-003 amendments, ADR-004) follow. Version 0.2. | S-004 architecture consistency review (findings F1 to F18); product owner decisions 2026-11-02: F13 option A, the S-000 amendment, the OS account dropped. Driving ADRs: ADR-001, amended 2026-11-02 for the job store; ADR-004, to be amended for the new entry kinds. | None; S-004 isn't broken down yet |
