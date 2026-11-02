@@ -122,6 +122,13 @@ Each job has two records. You read both with `jobs.get`, or page them with `jobs
   author and the time. An author is an agent (with its conversation and role), a team member (with the way in), or the
   daemon.
 
+  When The Intern starts, it checks each job against its conversations and repairs what a crash left out of step. Each
+  repair is one history entry with the field `repair`, the daemon as author, an old value of null, and a new value
+  `{ "rule": <1 to 4>, "did": <text> }`. The four rules are: 1, a job that isn't Done and has no lead conversation gets
+  it started (or is cancelled if that start is refused); 2, a Blocked job whose lead isn't parked gets it parked;
+  3, a Blocked job whose lead holds or took input since the block is set In progress and the lead continues with that
+  input; 4, a Done job with conversations still running gets them aborted.
+
 ## Related jobs and follow-up jobs
 
 Related is a link between two different jobs of any status, in both directions. It is the only link between jobs;
