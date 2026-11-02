@@ -191,6 +191,42 @@ describe("kill -9 after the job write and before its lead starts", () => {
     });
 });
 
+describe("kill -9 after the lead conversation is created and before its first input", () => {
+    it("submits the first input once to the same lead at the next start, and a third start repairs nothing", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const env = await hermetic();
+        const first = start(env, "echo", "lead-created");
+        await first.ready;
+        await assert.rejects(createJob(first, "crash after the lead", "key-2"));
+        await untilKilled(first);
+
+        const second = start(env, "echo");
+        await second.ready;
+
+        const [job] = ((await second.invoke("jobs.list", {})) as { jobs: JobView[] }).jobs;
+        assert.ok(job);
+        const leads = (await conversationsOf(second, job.id)).filter((conversation) => conversation.isLead);
+        assert.equal(leads.length, 1);
+        assert.deepEqual(await repairsOf(second, job.id), [1]);
+        const leadId = (leads[0] as Listing).id;
+        await untilLeadAnswered(second, leadId);
+        assert.equal((await jobOf(second, job.id)).status, "in_progress");
+        assert.equal(await userInputsWith(second, leadId, "crash after the lead"), 1);
+        const historyLength = (await historyOf(second, job.id)).length;
+        second.kill9();
+        await second.exited;
+
+        const third = start(env, "echo");
+        await third.ready;
+
+        assert.deepEqual(await repairsOf(third, job.id), [1]);
+        assert.equal((await historyOf(third, job.id)).length, historyLength);
+        assert.equal((await conversationsOf(third, job.id)).length, 1);
+        assert.equal(await userInputsWith(third, leadId, "crash after the lead"), 1);
+    });
+});
+
 describe("kill -9 after the block write and before the park", () => {
     it("parks the lead for an answer at the next start", { timeout: TEST_TIMEOUT_MS }, async () => {
         const env = await hermetic();
