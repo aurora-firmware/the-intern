@@ -402,6 +402,13 @@ describe("runDaemon startup failures", () => {
         const seen: string[] = [];
         const component: DaemonComponent = {
             name: "repairer",
+            async checkModels(ctx) {
+                const resume = ctx.host.resume.bind(ctx.host);
+                ctx.host.resume = () => {
+                    seen.push("resume");
+                    resume();
+                };
+            },
             async repair(ctx) {
                 seen.push(`repair: admission restored ${ctx.admission.state().capacity > 0}`);
                 seen.push(`repair: phase ${daemon.phase()}`);
@@ -414,7 +421,7 @@ describe("runDaemon startup failures", () => {
 
         await until(() => daemon.phase() === "ready", "the daemon to become ready");
 
-        assert.deepEqual(seen, ["repair: admission restored true", "repair: phase starting", "start"]);
+        assert.deepEqual(seen, ["repair: admission restored true", "repair: phase starting", "resume", "start"]);
         const stepLines = linesMatching(fixture.lines, "startup step").map((line) => /step=(\d)/.exec(line)?.[1]);
         assert.deepEqual(stepLines, ["1", "2", "3", "4", "5", "6", "7", "8"]);
     });

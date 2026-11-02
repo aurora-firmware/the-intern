@@ -52,6 +52,8 @@ type Booted = {
 type BootOptions = {
     afterWrite?: (point: WritePoint, jobId: string) => void | Promise<void>;
     turnEndRule?: boolean;
+    /** Waits for the daemon to leave the starting phase, ready or not. */
+    isStartupExpectedToFail?: boolean;
     workerThreadCount?: number;
 };
 type Rig = {
@@ -158,7 +160,11 @@ async function createRig(): Promise<Rig> {
                 },
             });
             daemons.push(daemon);
-            await waitFor(() => daemon.phase() === "ready", "the daemon to become ready");
+            if (options.isStartupExpectedToFail) {
+                await waitFor(() => daemon.phase() !== "starting", "the daemon to finish starting");
+            } else {
+                await waitFor(() => daemon.phase() === "ready", "the daemon to become ready");
+            }
             return {
                 daemon,
                 ctx: captured as ServiceContext,
@@ -260,6 +266,25 @@ describe("rule 1: a job with no lead conversation", () => {
         const third = await rig.boot();
 
         assert.equal((await historyOf(third.ctx, job.id)).length, length);
+    });
+});
+
+describe("rule 1: a start that fails for another reason than a refusal", () => {
+    it("fails the startup instead of cancelling the job", async () => {
+        const rig = await createRig();
+        const first = await rig.boot();
+        await first.ctx.jobStore.insertJob({
+            letter: "W",
+            requestText: "do it",
+            origin: { kind: "request", wayIn: "web interface" },
+            leadStart: null,
+        });
+        await first.stop();
+
+        const second = await rig.boot({ isStartupExpectedToFail: true });
+
+        assert.equal(second.daemon.phase(), "stopping");
+        assert.equal(await second.daemon.exited, 1);
     });
 });
 
