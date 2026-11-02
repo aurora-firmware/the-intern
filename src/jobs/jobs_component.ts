@@ -6,6 +6,7 @@ import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import { createJobOperation } from "../service/job_operations.ts";
+import { jobRecordOperations } from "../service/job_record_operations.ts";
 import type { Operation } from "../service/operations.ts";
 
 export type WritePoint =
@@ -33,7 +34,7 @@ export type JobsComponent = {
 export async function createJobsComponent(options: JobsComponentOptions): Promise<JobsComponent> {
     return {
         component: { name: "jobs" },
-        operations: [createJobOperation(options)],
+        operations: [createJobOperation(options), ...jobRecordOperations(options)],
         options,
     };
 }
