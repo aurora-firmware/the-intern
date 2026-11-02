@@ -11,6 +11,7 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { createSeatedConversation, readConversationMeta, SEAT_RECORD_KIND } from "../../src/host/seating.ts";
 import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import { LEAD_DUTY } from "../../src/prompt/role_prompt.ts";
+import { type LeadStart, startLeadConversation } from "../../src/service/job_operations.ts";
 import { type Caller, ServiceError } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -43,10 +44,13 @@ type JobResult = {
 };
 type AfterWrite = (point: WritePoint, jobId: string) => void | Promise<void>;
 
+// What the tests name of a lead's start; the rest is the default of a team member's request over the command line.
+type LeadStartInput = Pick<LeadStart, "jobId" | "firstInput"> & Partial<LeadStart>;
+
 type Started = {
     ctx: ServiceContext;
     provider: string;
-    startLead(input: Record<string, unknown>, as?: Caller): Promise<{ conversationId: string; created: boolean }>;
+    startLead(input: LeadStartInput): Promise<{ conversationId: string; created: boolean }>;
     create(input: Record<string, unknown>, as?: Caller): Promise<JobResult>;
     invoke(name: string, input: unknown): Promise<unknown>;
     folder(name: string): Promise<string>;
@@ -126,7 +130,13 @@ async function start(afterWrite?: (started: Started) => AfterWrite): Promise<Sta
         provider,
         create: (input, as = caller) => daemon.catalogue.invoke("jobs.create", input, as) as never,
         invoke: (name, input) => daemon.catalogue.invoke(name, input, caller),
-        startLead: (input, as = caller) => daemon.catalogue.invoke("jobs.startLead", input, as) as never,
+        startLead: (input) =>
+            startLeadConversation(ctx, agents, {
+                origin: requestOrigin,
+                overrides: {},
+                actor: { kind: "team_member", wayIn: "cli" },
+                ...input,
+            }),
         async folder(name) {
             const path = join(env.root, name);
             await mkdir(path);
@@ -191,14 +201,13 @@ async function waitForAnswers(started: Started, conversationId: string, count: n
     }
 }
 
-describe("jobs.startLead", () => {
+describe("startLeadConversation", () => {
     it("seats the lead conversation as bob with its defaults, its job links and the first input", async () => {
         const started = await start();
 
         const result = await started.startLead({
             jobId: "job-1",
             firstInput: "plan the release",
-            origin: requestOrigin,
         });
 
         assert.equal(result.created, true);
@@ -220,11 +229,8 @@ describe("jobs.startLead", () => {
         const { conversationId } = await started.startLead({
             jobId: "job-2",
             firstInput: "go",
-            origin: requestOrigin,
             role: "gp",
-            model: `${started.provider}/model-two`,
-            thinkingLevel: "low",
-            workspace,
+            overrides: { model: `${started.provider}/model-two`, thinkingLevel: "low", workspace },
         });
 
         const meta = await readConversationMeta(started.ctx.host, conversationId);
@@ -234,52 +240,18 @@ describe("jobs.startLead", () => {
         assert.equal(meta?.seat.workspace, workspace);
     });
 
-    it("records a team member's request with the caller's way in, also when the input names another", async () => {
-        const started = await start();
-
-        const named = await started.startLead({
-            jobId: "way-in",
-            firstInput: "go",
-            origin: { kind: "request", wayIn: "telegram" },
-        });
-        const omitted = await started.startLead({ jobId: "no-origin", firstInput: "go" });
-
-        const namedMeta = await readConversationMeta(started.ctx.host, named.conversationId);
-        const omittedMeta = await readConversationMeta(started.ctx.host, omitted.conversationId);
-        assert.deepEqual(namedMeta?.origin, { kind: "request", wayIn: "cli" });
-        assert.deepEqual(omittedMeta?.origin, { kind: "request", wayIn: "cli" });
-    });
-
-    it("records the in-process way in for a team member who names none", async () => {
-        const started = await start();
-        const inProcess: Caller = { actor: { kind: "team_member" } };
-
-        const { conversationId } = await started.startLead(
-            { jobId: "in-process", firstInput: "go", origin: { kind: "request", wayIn: "web" } },
-            inProcess,
-        );
-
-        const meta = await readConversationMeta(started.ctx.host, conversationId);
-        assert.deepEqual(meta?.origin, { kind: "request", wayIn: "in-process" });
-    });
-
     it("records an agent's job as a follow-up of the agent's own conversation, with the agent as seat actor", async () => {
         const started = await start();
         const own = await started.seatConversation();
-        const agent: Caller = { actor: { kind: "agent", conversationId: own } };
+        const origin = { kind: "follow_up", conversationId: own } as const;
+        const actor = { kind: "agent", conversationId: own, role: "gp" } as const;
 
-        const { conversationId } = await started.startLead(
-            { jobId: "follow-up", firstInput: "go", origin: { kind: "follow_up", conversationId: "999999" } },
-            agent,
-        );
-        const omitted = await started.startLead({ jobId: "follow-up-2", firstInput: "go" }, agent);
+        const { conversationId } = await started.startLead({ jobId: "follow-up", firstInput: "go", origin, actor });
 
         const meta = await readConversationMeta(started.ctx.host, conversationId);
-        const omittedMeta = await readConversationMeta(started.ctx.host, omitted.conversationId);
-        assert.deepEqual(meta?.origin, { kind: "follow_up", conversationId: own });
-        assert.deepEqual(omittedMeta?.origin, { kind: "follow_up", conversationId: own });
+        assert.deepEqual(meta?.origin, origin);
         const [record] = (await started.seatRecords(conversationId)) as { actor: unknown }[];
-        assert.deepEqual(record?.actor, { kind: "agent", conversationId: own, role: "gp" });
+        assert.deepEqual(record?.actor, actor);
     });
 
     it("records the origin of each job source kind, seats the role it names with its defaults, and the job source as the seat actor", async () => {
@@ -289,30 +261,33 @@ describe("jobs.startLead", () => {
             { kind: "schedule", entry: "nightly", fireTime: "2026-10-31T02:00:00Z" },
             { kind: "trigger", trigger: "ci", event: "build-failed" },
         ];
-        const source: Caller = { actor: { kind: "job_source", source: "schedule" } };
+        const actor = { kind: "job_source", source: "schedule" } as const;
 
         for (const [index, origin] of origins.entries()) {
-            const { conversationId } = await started.startLead(
-                { jobId: `source-${index}`, firstInput: "go", origin, role: "gp" },
-                source,
-            );
+            const { conversationId } = await started.startLead({
+                jobId: `source-${index}`,
+                firstInput: "go",
+                origin: origin as LeadStart["origin"],
+                role: "gp",
+                actor,
+            });
             const meta = await readConversationMeta(started.ctx.host, conversationId);
             assert.deepEqual(meta?.origin, origin);
             assert.deepEqual(meta?.seat, gpDefaults?.seat);
             const [record] = (await started.seatRecords(conversationId)) as { actor: unknown }[];
-            assert.deepEqual(record?.actor, { kind: "job_source", source: "schedule" });
+            assert.deepEqual(record?.actor, actor);
         }
     });
 
     it("returns the original conversation on a repeat and submits the first input once", async () => {
         const started = await start();
-        const first = await started.startLead({ jobId: "job-3", firstInput: "only once", origin: requestOrigin });
+        const first = await started.startLead({ jobId: "job-3", firstInput: "only once" });
         await waitForInputs(started, first.conversationId, 1);
         const before = await started.conversationCount();
 
         await waitForAnswers(started, first.conversationId, 1);
 
-        const repeat = await started.startLead({ jobId: "job-3", firstInput: "only once", origin: requestOrigin });
+        const repeat = await started.startLead({ jobId: "job-3", firstInput: "only once" });
         // A second submission would start another turn; give it time to show before counting.
         const duplicateAnswers = await waitForAnswers(started, first.conversationId, 2, SETTLE_MS);
 
@@ -324,21 +299,21 @@ describe("jobs.startLead", () => {
 
     it("submits the first input to a conversation created before a crash, once", async () => {
         const started = await start();
-        const existing = await started.seatConversation({ scope: "jobs.startLead", key: "job-9" });
+        const existing = await started.seatConversation({ scope: "job.lead", key: "job-9" });
 
-        await started.startLead({ jobId: "job-9", firstInput: "repair me", origin: requestOrigin });
-        await started.startLead({ jobId: "job-9", firstInput: "repair me", origin: requestOrigin });
+        await started.startLead({ jobId: "job-9", firstInput: "repair me" });
+        await started.startLead({ jobId: "job-9", firstInput: "repair me" });
 
         const inputs = await waitForInputs(started, existing, 1);
         assert.equal(inputs.length, 1);
         assert.match(inputs[0] ?? "", /repair me/);
     });
 
-    it("returns the conversation that holds the job's key in the jobs.startLead scope", async () => {
+    it("returns the conversation that holds the job's key in the job.lead scope", async () => {
         const started = await start();
-        const existing = await started.seatConversation({ scope: "jobs.startLead", key: "job-8" });
+        const existing = await started.seatConversation({ scope: "job.lead", key: "job-8" });
 
-        const result = await started.startLead({ jobId: "job-8", firstInput: "go", origin: requestOrigin });
+        const result = await started.startLead({ jobId: "job-8", firstInput: "go" });
 
         assert.deepEqual(result, { conversationId: existing, created: false });
     });
@@ -347,9 +322,7 @@ describe("jobs.startLead", () => {
         const started = await start();
         const before = await started.conversationCount();
 
-        const code = await refusalCode(
-            started.startLead({ jobId: "job-4", firstInput: "go", origin: requestOrigin, role: "nobody" }),
-        );
+        const code = await refusalCode(started.startLead({ jobId: "job-4", firstInput: "go", role: "nobody" }));
 
         assert.equal(code, "not_found");
         assert.equal(await started.conversationCount(), before);
@@ -360,92 +333,10 @@ describe("jobs.startLead", () => {
         const before = await started.conversationCount();
 
         const code = await refusalCode(
-            started.startLead({ jobId: "job-5", firstInput: "go", origin: requestOrigin, model: "nope/none" }),
+            started.startLead({ jobId: "job-5", firstInput: "go", overrides: { model: "nope/none" } }),
         );
 
         assert.ok(code === "not_found" || code === "invalid_input");
-        assert.equal(await started.conversationCount(), before);
-    });
-
-    it("refuses an override named by a source other than a request and creates nothing", async () => {
-        const started = await start();
-        const own = await started.seatConversation();
-        const before = await started.conversationCount();
-        const source: Caller = { actor: { kind: "job_source", source: "schedule" } };
-        const agent: Caller = { actor: { kind: "agent", conversationId: own } };
-        const schedule = { kind: "schedule", entry: "nightly", fireTime: "2026-10-31T02:00:00Z" };
-
-        const sourceCode = await refusalCode(
-            started.startLead({ jobId: "job-6", firstInput: "go", origin: schedule, thinkingLevel: "low" }, source),
-        );
-        const agentCode = await refusalCode(
-            started.startLead({ jobId: "job-6b", firstInput: "go", model: "x" }, agent),
-        );
-
-        assert.equal(sourceCode, "invalid_input");
-        assert.equal(agentCode, "invalid_input");
-        assert.equal(await started.conversationCount(), before);
-    });
-
-    it("refuses a team member's input naming another origin kind than a request and creates nothing", async () => {
-        const started = await start();
-        const existing = await started.seatConversation();
-        const before = await started.conversationCount();
-        const origins = [
-            { kind: "schedule", entry: "nightly", fireTime: "2026-10-31T02:00:00Z" },
-            { kind: "trigger", trigger: "ci", event: "build-failed" },
-            { kind: "follow_up", conversationId: existing },
-        ];
-
-        for (const [index, origin] of origins.entries()) {
-            const code = await refusalCode(started.startLead({ jobId: `wrong-${index}`, firstInput: "go", origin }));
-            assert.equal(code, "invalid_input", `origin ${origin.kind}`);
-        }
-        assert.equal(await started.conversationCount(), before);
-    });
-
-    it("refuses an agent's input naming another origin kind than a follow-up and creates nothing", async () => {
-        const started = await start();
-        const own = await started.seatConversation();
-        const before = await started.conversationCount();
-        const agent: Caller = { actor: { kind: "agent", conversationId: own } };
-        const origins = [
-            { kind: "request", wayIn: "cli" },
-            { kind: "schedule", entry: "nightly", fireTime: "2026-10-31T02:00:00Z" },
-        ];
-
-        for (const [index, origin] of origins.entries()) {
-            const code = await refusalCode(
-                started.startLead({ jobId: `agent-wrong-${index}`, firstInput: "go", origin }, agent),
-            );
-            assert.equal(code, "invalid_input", `origin ${origin.kind}`);
-        }
-        assert.equal(await started.conversationCount(), before);
-    });
-
-    it("refuses a job source's input naming no origin, a request or a follow-up and creates nothing", async () => {
-        const started = await start();
-        const existing = await started.seatConversation();
-        const before = await started.conversationCount();
-        const source: Caller = { actor: { kind: "job_source", source: "trigger" } };
-        const origins = [undefined, { kind: "request", wayIn: "cli" }, { kind: "follow_up", conversationId: existing }];
-
-        for (const [index, origin] of origins.entries()) {
-            const input = { jobId: `source-wrong-${index}`, firstInput: "go", ...(origin && { origin }) };
-            const code = await refusalCode(started.startLead(input, source));
-            assert.equal(code, "invalid_input", `origin ${origin?.kind ?? "none"}`);
-        }
-        assert.equal(await started.conversationCount(), before);
-    });
-
-    it("refuses an agent caller whose conversation doesn't exist and creates nothing", async () => {
-        const started = await start();
-        const before = await started.conversationCount();
-        const agent: Caller = { actor: { kind: "agent", conversationId: "999999" } };
-
-        const code = await refusalCode(started.startLead({ jobId: "job-7", firstInput: "go" }, agent));
-
-        assert.equal(code, "not_found");
         assert.equal(await started.conversationCount(), before);
     });
 });
@@ -513,6 +404,49 @@ describe("jobs.create", () => {
         for (const call of refused) assert.equal(await refusalCode(call), "invalid_input");
         assert.equal(await started.conversationCount(), before);
         assert.equal((await started.create({ text }, cliCaller)).number, "C-2");
+    });
+
+    it("refuses an override named by a job source or an agent, using no number", async () => {
+        const started = await start();
+        const parent = await started.create({ text }, cliCaller);
+        const agent: Caller = { actor: { kind: "agent", conversationId: parent.leadConversation as string } };
+        const source: Caller = { actor: { kind: "job_source", source: "s" } };
+        const schedule = { kind: "schedule", entry: "nightly", fireTime: "2026-10-31T02:00:00Z" };
+        const before = await started.conversationCount();
+
+        const refused = [
+            started.create({ text, thinkingLevel: "low", origin: schedule }, source),
+            started.create({ text, model: "x" }, agent),
+        ];
+
+        for (const call of refused) assert.equal(await refusalCode(call), "invalid_input");
+        assert.equal(await started.conversationCount(), before);
+        assert.equal((await started.create({ text, origin: schedule }, source)).number, "S-1");
+    });
+
+    it("refuses a job source naming no origin, a request or a follow-up, using no number", async () => {
+        const started = await start();
+        const source: Caller = { actor: { kind: "job_source", source: "t" } };
+        const origins = [undefined, { kind: "request", wayIn: "cli" }, { kind: "follow_up", conversationId: "1" }];
+        const trigger = { kind: "trigger", trigger: "ci", event: "build-failed" };
+
+        for (const origin of origins) {
+            const code = await refusalCode(started.create({ text, ...(origin && { origin }) }, source));
+            assert.equal(code, "invalid_input", `origin ${origin?.kind ?? "none"}`);
+        }
+
+        assert.equal(await started.conversationCount(), 0);
+        assert.equal((await started.create({ text, origin: trigger }, source)).number, "T-1");
+    });
+
+    it("refuses an agent caller whose conversation doesn't exist, creating nothing", async () => {
+        const started = await start();
+        const agent: Caller = { actor: { kind: "agent", conversationId: "999999" } };
+
+        assert.equal(await refusalCode(started.create({ text }, agent)), "not_found");
+
+        assert.equal(await started.conversationCount(), 0);
+        assert.equal((await started.create({ text }, cliCaller)).number, "C-1");
     });
 
     it("records an agent's job as a follow-up of its own conversation and a job source's stated origin", async () => {
