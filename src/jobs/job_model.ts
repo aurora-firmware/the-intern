@@ -52,6 +52,8 @@ export type ActionInput = {
     justification?: string;
     definitionOfDone?: string;
     activeInvocation?: string;
+    /** The ID of the lead's newest transcript entry when the block is written. */
+    blockedAfterEntry?: string;
 };
 
 export type JobCheck =

@@ -1,7 +1,7 @@
 ---
 id: S-004
 title: Jobs
-version: '0.3'
+version: '0.4'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-02'
 author: planner
@@ -162,6 +162,10 @@ What this specification explicitly does NOT cover:
 | `blockedReason` | the block action | no | Present only while `status` is `blocked` |
 | `resolution` | the complete and cancel actions | no | `{ "kind": "completed" \| "cancelled", "justification": <text> }`, present only when `status` is `done` |
 | `related` | relate and unrelate | through those operations | The short numbers of the Related jobs |
+
+The job also holds an internal `blockedAfterEntry`: the ID of the lead conversation's newest transcript entry when the
+job blocked, or null (REQ-006, REQ-018). The block sets it and the resume clears it, each in the same write as the
+status change. It is not part of the job fields that `jobs.get` returns, and the history doesn't record it.
 
 Worklog and history entries are returned by `jobs.get` and paged by `jobs.worklog.list` and `jobs.history.list`.
 
@@ -476,11 +480,11 @@ refused `invalid_input`. Every action is written to the history.
 ### REQ-006 — Blocking and resuming
 
 When the lead agent blocks its job, the daemon SHALL set the job Blocked with its Blocked reason and park the lead
-conversation, which then holds no worker thread (S-001 REQ-014). Any input that reaches the lead conversation while its
-job is Blocked, whether or not it has parked yet (a team member's input, an answer by email, or the text of
-`jobs.resume`), SHALL resume the job: In progress, the Blocked reason cleared, and the lead continuing on a free worker
-thread. `jobs.resume` with no text SHALL deliver a note that a team member resumed the job. The old reason stays in
-the history.
+conversation, which then holds no worker thread (S-001 REQ-014). The block records the ID of the lead conversation's
+newest transcript entry at the time of the block. Any input that reaches the lead conversation while its job is Blocked,
+whether or not it has parked yet (a team member's input, an answer by email, or the text of `jobs.resume`), SHALL resume
+the job: In progress, the Blocked reason cleared, and the lead continuing on a free worker thread. `jobs.resume` with no
+text SHALL deliver a note that a team member resumed the job. The old reason stays in the history.
 
 #### AC-006.1 — Blocked holds no worker thread
 
@@ -788,16 +792,19 @@ author (Interfaces), and apply no other recovery to jobs:
    (S-001 REQ-012 is safe to repeat for the same job); if S-001 REQ-012 refuses the start, the job is cancelled as
    REQ-007 states
 2. a Blocked job whose lead conversation isn't parked gets it parked
-3. a job whose lead conversation holds input it hasn't taken since the job blocked is set In progress if it is still
-   Blocked, with the Blocked reason cleared, and the lead continues with that input
+3. a job whose lead conversation holds input it hasn't taken since the job blocked (queued input, or held messages),
+   or has taken input since the job blocked (an input entry in its transcript after the entry the block recorded), is
+   set In progress if it is still Blocked, with the Blocked reason cleared, and the lead continues with that input
 4. a Done job with conversations still running, parked or awaited gets them aborted
 
-Rule 3 is applied before rule 2. After the repair rules, the daemon checks REQ-008's rule for each In progress job
-whose lead is idle and waits for nothing; this is REQ-008 applied to saved state, not a repair rule.
+An input entry is an entry of kind `pi.user`, or one of the input entry kinds the daemon submits (the steer record and
+the ADR-004 kinds). Rule 3 is applied before rule 2. After the repair rules, the daemon checks REQ-008's rule for each
+In progress job whose lead is idle and waits for nothing; this is REQ-008 applied to saved state, not a repair rule.
 
 #### AC-018.1 — One crash per rule
 
-- **Given:** for each rule, a daemon killed between the job write and its pi-durable change
+- **Given:** for each rule, a daemon killed between the job write and its pi-durable change, including a lead that
+  took an answer after the park was cleared, before the resume was written
 - **When:** the daemon starts again
 - **Then:** before any listener answers a call other than `daemon.status`, the job and its conversations are in the
   state the rule names, and the history records the repair
@@ -909,3 +916,4 @@ None.
 |------|-------------|-----|----------------|
 | 2026-11-02 | REQ-007 and AC-007.2: `jobs.create` checks the role and overrides first and refuses a bad one with no job and no number, then writes the job and starts the lead; a start still refused after the write cancels the job (new AC-007.5); an optional `idempotencyKey` returns the original job, and the create job tool keys each call by its tool call id (new AC-007.4); a lead completing through its tool has its own run aborted at that call. REQ-018: the ordering names each write and its pi-durable change; rule 1 covers a job that isn't Done with no conversation recording it as its lead, and cancels the job when the start is refused; rule 3 covers input the lead hasn't taken since the job blocked and is applied before rule 2. REQ-008: the first duty includes checking the result against the definition of done and stating the evidence; whether a reminder is spent survives a restart, and the rule is checked at startup for each idle In progress job after the repair rules (new AC-008.4). REQ-005: the start is written when the lead's first run takes a worker thread; complete aborts the lead's own run. REQ-006: any input while the job is Blocked resumes it, parked or not; an invoked agent's report is no longer listed. REQ-003, AC-003.1, AC-003.2 and the `jobs.create` input: no OS account on the local socket; Email is a way in that passes the message ID and sender it observes; `origin` is refused from any caller but a job source. REQ-001: the job schema version is read before pi-durable opens the database. REQ-016 and AC-016.1: the export is owner-only and holds the database only. REQ-017 and AC-017.2: the import holds the single-owner lock, refuses leftover `-wal` and `-shm` files and a newer pi-durable schema, and creates the database owner-only. AC-013.1: the coordination tools are offered too. The term "Agent-created job" became "Follow-up job" (Definitions, REQ-002, REQ-003, REQ-009, job tools). Interfaces: `leadConversation` is read from the conversation that records the job as its lead. Users and Journeys, Workflow, Assumptions and Dependencies (S-000, S-001, S-002, S-003 amendments, ADR-004) follow. Version 0.2. | S-004 architecture consistency review (findings F1 to F18); product owner decisions 2026-11-02: F13 option A, the S-000 amendment, the OS account dropped. Driving ADRs: ADR-001, amended 2026-11-02 for the job store; ADR-004, to be amended for the new entry kinds. | None; S-004 isn't broken down yet |
 | 2026-11-02 | v0.3. AC-015.1 and the feed events table: the start publishes "status changed" like any status change, so the lifecycle has three; a change to Done publishes "job done" instead. Definitions (History), Interfaces (history entry, author), REQ-011 and REQ-018: each repair writes one `repair` history entry naming the rule and what it did; the daemon authors a resume on input and the cancel after a refused start. | Gate 2 review of the S-004 task plan (questions on T-128 and T-129). | T-128, T-129 |
+| 2026-11-02 | v0.4. REQ-006: the block records the ID of the lead conversation's newest transcript entry at the time of the block. REQ-018: rule 3 also covers a lead that has taken input since the job blocked, shown by an input entry in its transcript after the entry the block recorded; an input entry is a `pi.user` entry or an input entry kind the daemon submits (the steer record and the ADR-004 kinds). AC-018.1: the crash cases include a lead that took an answer after the park was cleared, before the resume was written. Interfaces: the job's internal `blockedAfterEntry`, set by the block and cleared by the resume in the same write, not returned by `jobs.get` and not recorded in the history. | T-129 F1 escalation; Architect escalation review; product owner decision 2026-11-02 (option A); ADR-001 decision 4 amended. | T-143, T-129, T-136 |
