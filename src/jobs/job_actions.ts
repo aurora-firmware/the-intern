@@ -43,14 +43,20 @@ export async function blockJob(deps: JobActionDeps, jobId: string, reason: strin
     const { ctx, options } = deps;
     const job = await ctx.jobStore.getJob(jobId);
     const activeInvocation = await activeInvocationOf(ctx, job.id);
+    const leadId = await leadConversationOf(ctx.host, job.id);
+    // Read before the block write, so input the lead takes after it is after this entry (S-004 REQ-018 rule 3).
+    const blockedAfterEntry = leadId === undefined ? null : await ctx.host.readNewestEntryId(leadId);
     const blocked = await ctx.jobStore.applyAction(
         job.id,
         "block",
-        { blockedReason: reason, ...(activeInvocation !== undefined && { activeInvocation }) },
+        {
+            blockedReason: reason,
+            ...(activeInvocation !== undefined && { activeInvocation }),
+            ...(blockedAfterEntry !== null && { blockedAfterEntry }),
+        },
         author,
     );
     await options.afterWrite?.("job-blocked", job.id);
-    const leadId = await leadConversationOf(ctx.host, job.id);
     if (leadId === undefined) return blocked;
     await parkConversation(ctx.host, leadId, { waitingFor: "answer", continueOn: "each" });
     // Input that reached the lead between the block and the park has resumed the job and started the lead's run, so
