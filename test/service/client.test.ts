@@ -15,6 +15,7 @@ import { nodeTransport } from "../../src/client/node_transport.ts";
 import { STOP_BOUND_MS } from "../../src/daemon/constants.ts";
 import { type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
+import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
 import { createNetworkListenerComponent } from "../../src/listeners/network_listener.ts";
 import { networkSection } from "../../src/listeners/network_section.ts";
@@ -85,6 +86,7 @@ async function startFixture(delayMs: (transcript: FakeTranscript) => number = ()
     );
     await writeFile(join(env.configDir, "config.toml"), `[network]\naddress = "${LOOPBACK}"\nport = 8080\n`);
     const agents = await createAgentsComponent({ logger: quietLogger });
+    const jobs = await createJobsComponent({ agents, logger: quietLogger, turnEndRule: false });
     const network = createNetworkListenerComponent({ freePort: true });
     const daemon = runDaemon({
         flags: { configDir: env.configDir, stateDir: env.stateDir, dataDir: env.dataDir, runtimeDir: env.runtimeDir },
@@ -92,8 +94,8 @@ async function startFixture(delayMs: (transcript: FakeTranscript) => number = ()
         homeDir: env.root,
         logger: quietLogger,
         sections: [...agents.sections, networkSection],
-        components: [agents.component, createLocalSocketComponent(), network],
-        operations: agents.operations,
+        components: [agents.component, jobs.component, createLocalSocketComponent(), network],
+        operations: [...agents.operations, ...jobs.operations],
         prepareModels: (runtime) => {
             const implementation = getApiProvider(fake.api);
             assert.ok(implementation, "the fake model's api is registered");
@@ -245,11 +247,15 @@ function holdingDelay(transcript: FakeTranscript): number {
     return transcript.findLast((message) => message.role === "user")?.text === HOLD_INPUT ? HOLD_DELAY_MS : 0;
 }
 
-/** Starts a job, waits until its lead conversation is idle, then submits the held input and returns its id. */
-async function heldSubmission(fixture: Fixture): Promise<string> {
-    const { conversationId } = (await fixture.invoke("jobs.startLead", { jobId: "held", firstInput: "hello" })) as {
-        conversationId: string;
+/**
+ * Creates a job over the listener, waits until its lead conversation is idle, then submits the held input and returns
+ * its id.
+ */
+async function heldSubmission(fixture: Fixture, listener: Listener): Promise<string> {
+    const created = (await fixture.clientOver(listener).invoke("jobs.create", { text: "hello" })) as {
+        leadConversation: string;
     };
+    const conversationId = created.leadConversation;
     const isIdle = async () =>
         ((await fixture.invoke("conversations.get", { conversationId })) as { status: string }).status === "idle";
     await until(isIdle, `conversation ${conversationId} to be idle`);
@@ -272,7 +278,7 @@ describe("a call waiting in submissions.wait when the daemon stops", { timeout: 
     for (const listener of LISTENERS) {
         it(`fails over the ${listener} with ClientError unavailable or UnreachableError naming the target`, async () => {
             const fixture = await startFixture(holdingDelay);
-            const submissionId = await heldSubmission(fixture);
+            const submissionId = await heldSubmission(fixture, listener);
             const reached = waitReachesCatalogue(fixture.daemon.catalogue);
 
             const waiting = rejection(
