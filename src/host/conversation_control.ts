@@ -7,6 +7,7 @@ import {
     type Conversation,
     ConversationBusy,
     type ConversationId,
+    InboxDoc,
     type InputEntry,
     type Submission,
     type SubmissionId,
@@ -122,6 +123,27 @@ export async function submitInput(
         if (error instanceof ConversationBusy) throw new HostBusyError(conversationId, { cause: error });
         throw error;
     }
+}
+
+/** Whether pi-durable holds a submission of the conversation with this request id, in any state. */
+export async function hasSubmissionWithRequestId(
+    host: HarnessHost,
+    conversationId: string,
+    requestId: string,
+): Promise<boolean> {
+    const conversation = await requireConversation(host, conversationId);
+    const found = await internalHarness(host).commit(
+        (tx) => tx.submissionByRequest(conversation.id, requestId),
+        context,
+    );
+    return found !== undefined;
+}
+
+/** Whether the conversation has input or writes queued in its inbox for the next boundary. */
+export async function hasQueuedInput(host: HarnessHost, conversationId: string): Promise<boolean> {
+    const conversation = await requireConversation(host, conversationId);
+    const inbox = await internalHarness(host).snapshot(InboxDoc, conversation.id, context);
+    return (inbox?.items.length ?? 0) > 0;
 }
 
 /** Withdraws a queued input, which settles `unanswered`. Input already placed in the transcript cannot be withdrawn. */

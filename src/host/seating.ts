@@ -25,7 +25,8 @@ export const SEAT_RECORD_KIND = "intern.seat";
 export type SeatActor =
     | { kind: "team_member"; wayIn: string }
     | { kind: "agent"; conversationId: string; role: string }
-    | { kind: "job_source"; source: string };
+    | { kind: "job_source"; source: string }
+    | { kind: "daemon" };
 
 export type Origin =
     | { kind: "request"; wayIn: string }
