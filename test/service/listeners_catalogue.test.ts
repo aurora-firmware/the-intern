@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { STOP_BOUND_MS } from "../../src/daemon/constants.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
@@ -185,7 +185,7 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
             );
             return runtime.models;
         },
-        openStorage: async (file) => failingOnDemand(await openNodeSqliteStorage(file), storageSwitch),
+        openStorage: async (database) => failingOnDemand(await SqliteStorage.open(database), storageSwitch),
     });
     daemons.push(daemon);
     await until(() => daemon.phase() === "ready", "the daemon to be ready");

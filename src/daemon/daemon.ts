@@ -10,7 +10,14 @@ import { type ConfigSection, loadConfig } from "../config/config_file.ts";
 import { type ConfigStore, createConfigStore } from "../config/config_writer.ts";
 import { createInstanceFeed, type InstanceFeed } from "../feed/instance_feed.ts";
 import { createObservationFeed, type ObservationFeed } from "../feed/observation_feed.ts";
-import { type Extension, type HarnessHost, type Models, openHarnessHost, type Storage } from "../host/harness_host.ts";
+import {
+    type Extension,
+    type HarnessHost,
+    type Models,
+    openHarnessHost,
+    type SqliteDatabase,
+    type Storage,
+} from "../host/harness_host.ts";
 import { recordOpenedVersions, runningVersions } from "../host/versions.ts";
 import { createModelRuntime, type InternModels, resolvePiAgentDir } from "../models/model_runtime.ts";
 import { conversationControlOperations } from "../service/conversation_control_operations.ts";
@@ -66,7 +73,7 @@ export type DaemonOptions = {
     /** Test-only: replaces the models handed to the harness, to use the fake model. */
     prepareModels?: (models: InternModels) => Models;
     /** Test-only: replaces the SQLite storage, to make it fail. */
-    openStorage?: (file: string) => Promise<Storage>;
+    openStorage?: (database: SqliteDatabase) => Promise<Storage>;
 };
 
 export type RunningDaemon = {

@@ -5,7 +5,7 @@ import { afterEach, describe, it } from "node:test";
 import type { Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { WORKER_THREAD_COUNT } from "../../src/daemon/constants.ts";
 import {
     type DaemonComponent,
@@ -407,7 +407,7 @@ describe("runDaemon startup failures", () => {
         };
         const daemon = fixture.start({
             components: [component],
-            openStorage: async (file) => failingOnDemand(await openNodeSqliteStorage(file), storageSwitch),
+            openStorage: async (database) => failingOnDemand(await SqliteStorage.open(database), storageSwitch),
         });
 
         assert.equal(await daemon.exited, 1);

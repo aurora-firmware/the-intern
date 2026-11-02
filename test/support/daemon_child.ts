@@ -11,7 +11,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
@@ -223,7 +223,7 @@ async function main(): Promise<void> {
         ],
         ...(switches.workerThreads !== undefined && { workerThreadCount: switches.workerThreads }),
         ...(fake && { prepareModels: (runtime: InternModels) => modelsWithFake(runtime, fake) }),
-        openStorage: async (file) => failingOnDemand(await openNodeSqliteStorage(file), storageSwitch),
+        openStorage: async (database) => failingOnDemand(await SqliteStorage.open(database), storageSwitch),
     });
 
     process.on("message", async (message: Request | { release: true }) => {
