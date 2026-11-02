@@ -58,22 +58,69 @@ between the abort and the delivery must not lose the report (REQ-017). pi-durabl
 a lone one with a report owed (T-085). An abort also withdraws the aborted conversation's held messages and awaiting
 links, as pi-durable abort withdraws queued input (REQ-008, T-084).
 
+S-004 adds the job record. On 2026-11-02 the product owner chose to keep it in the-intern's own SQL tables, named
+`intern_…`, in the instance's one SQLite file beside pi-durable's tables, with a job schema version and migrations of
+its own, and not in pi-durable document families. The job record must outlive pi-durable's stored format, which has no
+compatibility promise, and must be indexed and readable with standard SQLite tools (S-004 Alternatives Considered).
+This record was first written for a file that only pi-durable writes, and the choice meets it at three points:
+
+- **One file, two schemas.** pi-durable 1.4.0 `SqliteStorage.open(db)` takes a database the host opens itself. It
+  names its tables from a prefix (none by default) and keeps its schema version in its own `durable_schema` table, so
+  other tables can live in the same file. It closes that database when the harness closes.
+- **Two commits per change.** `SqliteStorage.commit` runs every pi-durable commit in a transaction of its own, and a
+  host `Tx` can't carry a table write of the-intern's. A job write and the pi-durable change it goes with (a lead
+  conversation started, parked or aborted) are therefore two commits, and a crash can fall between them.
+- **Export and import.** The job record leaves the instance as a copy of the whole file (S-004 REQ-016), and an
+  import step outside the daemon places such a copy while the daemon is stopped (S-004 REQ-017).
+
 Sources: S-002 Design Principles, REQ-001, REQ-007, REQ-008, REQ-009, REQ-010 and Exclusions; S-001 Definitions (worker
-thread), REQ-008, REQ-019, REQ-010, REQ-020 and REQ-017; `docs/research/pi-durable-knowledge.md` (sections 1.4, 5.5 and
-7.2); `docs/development/coding_guidelines.md` (Module structure); `src/host/invocation.ts`, `src/host/reports.ts`,
-`src/host/steering.ts` and `src/host/host_observation.ts` (`watchConversationMeta`); T-084 and T-085.
+thread), REQ-008, REQ-019, REQ-010, REQ-020 and REQ-017; S-004 Design Principles, Alternatives Considered, REQ-001,
+REQ-006, REQ-016 to REQ-018 and REQ-020; `docs/research/pi-durable-knowledge.md` (sections 1.4, 5.5 and 7.2);
+`docs/development/coding_guidelines.md` (Module structure); `src/host/invocation.ts`, `src/host/reports.ts`,
+`src/host/steering.ts` and `src/host/host_observation.ts` (`watchConversationMeta`); T-084 and T-085; pi-durable 1.4.0
+`dist/storage/sqlite/storage.js` (`SqliteStorage.open`, `commit`, `close`) and `dist/storage/sqlite/schema.js`; chord
+`dist/sqlite/node.js` (`NodeSqliteDatabase`, one queue of operations and transactions per connection).
 
 ## Decision
 
-The Intern is one daemon process that owns one pi-durable database, one SQLite file per instance. pi-durable sits
-behind a narrow host module, and durability comes from pi-durable, not from code of our own.
+The Intern is one daemon process that owns one pi-durable database, one SQLite file per instance, which also holds
+the-intern's job store. pi-durable sits behind a narrow host module, and durability comes from pi-durable, not from
+code of our own, apart from the two bounded exceptions in decision 4.
 
 1. **One process, one database per instance.** An instance is one daemon with its state directory. Its database is
    a single SQLite file in that state directory and holds every conversation, entry, pi-durable task, submission and
-   document, plus the daemon's own state as documents. Nothing but the daemon reads or writes it; clients read
-   history through the service layer. A second daemon for the same instance is refused before it opens the database;
-   a stale owner that is no longer alive is taken over (S-002 REQ-001). A second instance, with its own state directory,
-   is the only wall between sets of conversations.
+   document, plus the daemon's own state as documents, and the job store. Nothing but the daemon reads or writes it,
+   apart from the import step below; clients read history and jobs through the service layer. A second daemon for the
+   same instance is refused before it opens the database; a stale owner that is no longer alive is taken over (S-002
+   REQ-001). A second instance, with its own state directory, is the only wall between sets of conversations.
+
+   **The job store shares the file.**
+   - The job record lives in the-intern's own tables, named with the prefix `intern_`, beside pi-durable's tables
+     (S-004 REQ-001). The job schema version is kept in an `intern_` table, never in the file's `user_version`
+     header, and the job store migrates only its own tables, forward. The job store never reads or writes
+     pi-durable's tables, and no job fact is kept in a pi-durable document.
+   - The file has one connection. The host opens the database file, owner-only, and gives the same database handle
+     to pi-durable (`SqliteStorage.open(db)`) and to the job store, so every job store transaction waits in that
+     connection's one queue with pi-durable's commits. Nothing opens a second connection to the file. The job store
+     reaches the handle through the host's own interface and imports no pi package (decision 2).
+   - A job store write never runs inside a pi-durable commit, and a pi-durable commit never runs inside a job store
+     transaction. The shared queue waits for the open transaction, so the inner call would never settle.
+   - At startup step 4 (S-002 REQ-002), the host reads the job schema version before pi-durable opens the file,
+     because pi-durable may migrate its own schema in place and that can't be undone. A newer job schema stops
+     startup and leaves the file unchanged. pi-durable then opens the file, and the job store creates or migrates
+     its tables.
+
+   **Export and import copy the whole file.**
+   - `jobs.export` writes a consistent copy of the whole database to a new path, owner-only, through SQLite's online
+     backup on the daemon's connection, while work goes on (S-004 REQ-016).
+   - The import step is a separate process, run while the daemon is stopped (S-004 REQ-017). It holds the
+     instance's single-owner lock while it runs, so a daemon that starts meanwhile is refused (S-002 REQ-001). It
+     places the copy as the database file, owner-only, and only where no database file and no `-wal` or `-shm` file
+     exists. It is the only writer of the file other than the daemon.
+   - A copy is taken at a moment that may fall between a job write and its pi-durable change, so the first start on
+     an imported copy repairs it as after a crash (decision 4).
+   - Export and import move the file; they don't convert it. A version opens an imported copy only when its
+     pi-durable can open the file and the copy's job schema isn't newer than its own.
 2. **pi-durable sits behind a narrow host.** Only the harness host module and the-intern's own pi-durable extensions,
    shipped in the package, import pi-durable. The service layer and every other component depend on the host's
    interface. No other extensions are discovered or loaded at runtime.
@@ -84,13 +131,14 @@ behind a narrow host module, and durability comes from pi-durable, not from code
    the database so it survives a restart (S-002 REQ-010). CPU-heavy work runs outside the daemon process: tools run
    commands as child processes.
 4. **Durability belongs to the runtime.** Resume, exactly-once admission of input, queued input and checkpoints come
-   from pi-durable. The daemon writes no retry loops, intake tables or recovery code of its own, except for the
-   bounded exception below. Each fact the daemon owns is committed in the same atomic commit as the change it
-   describes. The host sets pi-durable's `settings.restartLimit` to `Infinity`, so every start resumes every
-   unfinished pi-durable task, however often a crash cut it off, as S-002 REQ-008 requires. A finite limit, which parks
-   a task until `Harness.retryTask()`, needs an S-002 amendment first.
+   from pi-durable. The daemon writes no retry loops, intake tables or recovery code of its own, except for the two
+   bounded exceptions below. Each fact the daemon owns about a conversation is committed in the same atomic commit as
+   the change it describes; a job write can't be, so the second exception orders it instead. The host sets
+   pi-durable's `settings.restartLimit` to `Infinity`, so every start resumes every unfinished pi-durable task, however
+   often a crash cut it off, as S-002 REQ-008 requires. A finite limit, which parks a task until `Harness.retryTask()`,
+   needs an S-002 amendment first.
 
-   **Bounded exception: the-intern's own facts, and redelivery from them.**
+   **First bounded exception: the-intern's own facts about a conversation, and redelivery from them.**
    - Facts the-intern owns about a conversation live in its own pi-durable documents: held messages (`held`),
      awaiting links (`awaiting`), the parked state (`parked`) and the abort mark (`aborted`) in the conversation's
      `intern.conversation` document, and creation keys in `intern.invocations` and `intern.idempotency`. Each is
@@ -123,23 +171,58 @@ behind a narrow host module, and durability comes from pi-durable, not from code
    - Nothing else is allowed: no retry of a failed call, no timer that tries again, no list that holds input for a
      conversation that can take it, and no repair of state pi-durable owns. A new kind of fact or a new redelivery
      path amends this decision first.
+
+   **Second bounded exception: ordered job writes, and four repair rules.**
+   - A job write and the pi-durable change it goes with are two commits (Context). The daemon commits the job write
+     first and makes the pi-durable change after it: a job is written before its lead conversation starts (S-001
+     REQ-012), a block before the lead conversation parks, and a complete or cancel before the job's conversations
+     are aborted (S-004 REQ-018).
+   - Input to a Blocked job's lead goes the other way. It reaches the lead conversation first, as a held message or a
+     pi-durable input, and the job resumes after it (S-004 REQ-006).
+   - The start action needs no repair. It is written when the lead's first run takes a worker thread, before its
+     first model request; after a crash before that write, the run resumes, takes a worker thread again and writes it.
+   - At startup, after admission is restored and before work resumes (S-002 REQ-002 step 7), the daemon applies
+     exactly the four repair rules of S-004 REQ-018, and no other recovery to jobs:
+     1. A job that isn't Done and has no lead conversation gets it started.
+     2. A Blocked job whose lead conversation isn't parked gets it parked.
+     3. A job whose lead conversation holds input it hasn't taken since the job blocked is set In progress if it is
+        still Blocked, with its Blocked reason cleared, and the lead continues with that input.
+     4. A Done job whose conversations still run, are parked or await a report gets them aborted.
+   - Each repair is written to the job's history with the daemon as author, and each is safe to repeat. Rule 1 calls
+     S-001 REQ-012 with the job ID as its idempotency key and `lead:<jobId>` as the first input's request id, so a
+     start that a crash cut short returns the conversation it created and submits nothing twice. A repeated park, or
+     a repeated abort, changes nothing.
+   - After the four rules, and still before work resumes, the daemon checks S-004 REQ-008's turn-end rule for each
+     In progress job whose lead is idle and waits for nothing. It is the rule a lead's turn end runs, applied to saved
+     state, so a crash between the end of a lead's turn and the daemon handling it loses nothing; it isn't a fifth
+     repair rule (product owner decision, 2026-11-02).
+   - A reminder is spent when pi-durable holds its input. The reminder's request id is `reminder:<jobId>:<n>`, where
+     `n` counts the job's blocks and resumes in its history, so whether it is spent survives a restart without a fact
+     of its own, and a repeated check submits it once.
+   - Nothing else is allowed: no rule that rebuilds job fields from conversation state, no retry of a failed job
+     write, and no timer that checks jobs. A fifth rule, another startup check, or a new pairing of a job write with a
+     pi-durable change that the four rules don't repair, amends this decision first.
 5. **A storage error ends the process.** When a storage error closes the harness, the daemon logs it, stops accepting
    calls and exits with a non-zero status within the 10-second stop bound. It never reopens the database itself. The
    operating system's supervisor (systemd on Linux, launchd on macOS) restarts it, and unfinished work resumes from its
    last checkpoint (S-002 REQ-004, REQ-007). An error from the daemon's own `commit()` or `mintId()` calls is a storage
    error like any other: the service operation that made the call fails, and the daemon exits. It never handles that
-   error as an ordinary operation failure and carries on. The daemon learns that the harness failed from
-   `harness.closed`; `onReport` reports, typed by `ReportInfo` since 1.4.0, are diagnostics that it logs, not the exit
-   trigger.
+   error as an ordinary operation failure and carries on. A failed job store write is a storage error too (S-004
+   REQ-020): its transaction rolls back, the operation or tool call fails with `internal`, and the daemon closes the
+   harness and exits the same way. The daemon learns that the harness failed from `harness.closed`; `onReport`
+   reports, typed by `ReportInfo` since 1.4.0, are diagnostics that it logs, not the exit trigger.
 
 ## Consequences
 
 ### Positive
 
-- One source of truth: every conversation, pi-durable task and daemon-owned fact lives in one database with one
+- One source of truth: every conversation, pi-durable task, job and daemon-owned fact lives in one database with one
   writer, so there is no locking or merging between processes.
 - A crash or kill is a resume, not a loss: work restarts from pi-durable's checkpoints. The daemon's own recovery is
-  limited to redelivery from its own facts, and pi-durable request ids make it safe to repeat.
+  limited to redelivery from its own facts, which pi-durable request ids make safe to repeat, to the four job repair
+  rules, and to checking the turn-end rule at startup.
+- The job record is in plain SQL tables of its own: indexed, readable with standard SQLite tools, and independent of
+  pi-durable's stored format. One file holds the whole instance, so one copy backs it up or moves it.
 - An upgrade of the pi packages touches a few files: the host module and the-intern's extensions.
 - The number of active agent runs is bounded and visible, including during recovery after a restart.
 - The whole daemon, with kills and restarts, can be tested in one process on a fake model.
@@ -161,14 +244,23 @@ behind a narrow host module, and durability comes from pi-durable, not from code
 - An abort that a crash cuts off after its commit and before pi-durable's abort leaves the abort mark set on a
   conversation that wasn't aborted. If no one repeats the abort, a running conversation resumes, and when its run ends
   its invoker gets an "aborted" report with that run's last answer.
+- Every job action that pairs a job write with a pi-durable change has a crash window between its two commits. The
+  four repair rules are code of our own that only a crash exercises, and each needs a test that injects the crash
+  between the two writes (S-004 AC-018.1).
+- The startup check of S-004 REQ-008 is more job code that only a crash exercises; it needs the kill test of S-004
+  AC-008.4, which kills the daemon at the end of a lead's turn.
+- Job store transactions share one connection queue with pi-durable's commits, so a slow job store transaction delays
+  every agent run that commits meanwhile.
+- An imported copy opens only on a version whose pi-durable can read the file. Export and import don't carry the job
+  record across a pi-durable format change that a newer pi-durable can't open.
 
 ### Neutral
 
 - Storage only grows; retention and archiving of old conversations are a later decision.
-- The database isn't carried across pi-durable versions; the job record moves to a new version by export and import
-  (S-000). pi-durable itself may migrate an older database when a newer version opens it, and that migration can't be
-  undone, so an upgrade that may need to go back has to export the job record before the new version first opens the
-  database.
+- No database is converted between versions. An upgrade opens the same file: pi-durable may migrate its own schema in
+  place, and that can't be undone, and the job store migrates its tables forward. An upgrade that may need to go back
+  exports the database before the new version first opens it, and goes back by importing that copy into an instance
+  of the old version (S-004 REQ-016, REQ-017).
 - Installation owns registering the daemon with the supervisor (S-000, Installation and service setup).
 
 ## Alternatives Considered
@@ -215,6 +307,27 @@ only from the live event that an invoked run finished.
 a worker thread and continue before its report arrives (S-001 REQ-019, REQ-010). A live event isn't durable: a crash
 between the run's end and the report's submission would lose the report, which S-001 REQ-017 forbids.
 
+### Alternative G: The job record in pi-durable document families
+
+**Description:** Keep jobs, counters, worklogs and history as pi-durable documents, written in the same commits as
+the conversation changes they go with.
+**Rejected because:** The product owner rejected it on 2026-11-02 (S-004 Alternatives Considered). It is atomic and
+needs no repair rules, but the job record would be stored in pi-durable's format, which has no compatibility promise,
+couldn't be indexed or read with standard SQLite tools, and every filter would scan a whole family.
+
+### Alternative H: A second SQLite file for the job store
+
+**Description:** Keep the `intern_` tables in a file of their own in the state directory.
+**Rejected because:** Two files can't be copied consistently with each other while work goes on, so an export would
+need a pause or a second repair. One file keeps one owner lock, one copy and one place to back up.
+
+### Alternative I: A second connection to the same file
+
+**Description:** Let the job store open its own connection to the database file.
+**Rejected because:** Two connections contend for SQLite's write lock: pi-durable's `BEGIN IMMEDIATE` and the job
+store's would wait on each other's busy timeout instead of queueing in call order, and a harness close would leave the
+second connection open. One shared handle orders every transaction and closes with the harness.
+
 ## Amendments
 
 | Date | Change | Reason |
@@ -222,3 +335,5 @@ between the run's end and the report's submission would lose the report, which S
 | 2026-10-30 | Clarified for pi 1.4.0: storage errors from `commit()` and `mintId()` (Context, decision 5); the crash-loop guard is turned off with `settings.restartLimit: Infinity` (Context, decision 4, Negative); the one-way SQLite schema migration (Context, Neutral); `onReport` reports are logged diagnostics (decision 5). Fixed the coding-guidelines path in Sources. No decision changes. | Architecture consistency review of ADR-001 against the pinned pi 1.4.0 packages, S-000, S-001, S-002 and ADR-002. |
 | 2026-11-01 | Added a bounded exception to decision 4: the-intern's own facts about a conversation (`held`, `awaiting`, the creation keys in `intern.invocations` and `intern.idempotency`) live in its own documents, written in the commit that changes them, and the only recovery is redelivery worked out from them, made safe to repeat by pi-durable request ids (Context, Sources, decision 4, Positive, Negative, Alternative F). | Spec-truth reconciliation of S-001, finding F6: T-071, T-073 and T-075 built these facts and this redelivery, and the work is right. |
 | 2026-11-01 | Decision 4: named the parked state (`parked`) among the-intern's facts; added the abort mark (`aborted`), set in the abort's own commit on a lone abort of an awaited invoked conversation, and the redelivery of the "aborted" report it drives, started also by the commit that sets the mark; an "aborted" report reuses the last answer's report id, or `report:<invokedId>:aborted`; an abort's commit clears held messages and awaiting links without admitting them (Context, Sources, decision 4, Negative). | S-001 v0.3 R-8 and R-8a and product owner decision F3: a lone abort reports "aborted" to the invoker, a cascade reports nothing, and an abort withdraws held messages. Needed by T-084 and T-085. |
+| 2026-11-02 | Decision 1: the job store's `intern_` tables share the instance's SQLite file and its one connection; the job schema version is read before pi-durable opens the file; export copies the whole file, and the import step places a copy while the daemon is stopped, under the single-owner lock, without converting it. Decision 4: a second bounded exception, ordered job writes and the four startup repair rules of S-004 REQ-018, with input to a Blocked job's lead as the one change that comes before its job write. Decision 5: a failed job store write is a storage error (Context, Sources, preamble, decisions 1, 4 and 5, Positive, Negative, Neutral, Alternatives G to I). | S-004 architecture consistency review. Product owner decision of 2026-11-02: the job record lives in the-intern's own tables in the same file, not in pi-durable documents, and export and import copy the whole file. Pinned pi-durable 1.4.0 runs each commit in its own transaction, so a job write can't join it. |
+| 2026-11-02 | Decision 4: after the four repair rules, the daemon checks S-004 REQ-008's turn-end rule for each In progress job whose lead is idle and waits for nothing, as the same rule applied to saved state, not a fifth rule; a reminder is spent when pi-durable holds its input, whose request id `reminder:<jobId>:<n>` makes the check safe to repeat. Negative: the open turn-end gap is replaced by the kill test of S-004 AC-008.4. | Product owner decision of 2026-11-02 on the S-004 escalation (option A), applied in S-004 v0.2 REQ-008 and REQ-018. |

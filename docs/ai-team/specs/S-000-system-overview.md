@@ -1,7 +1,7 @@
 ---
 id: S-000
 title: System Overview
-version: '0.4'
+version: '0.5'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-27'
 author: planner
@@ -89,8 +89,9 @@ every job, its questions and its evidence, follows agents live, and configures T
 skills, instructions and knowledge sources. When a job is blocked, the question waits in the web interface and the
 command line, and is also sent by email when sending is set up.
 
-The Intern keeps the history of every job as part of its job record. Saved state does not carry over to a new version
-on its own, so the job record, history included, can be exported and imported into the new version.
+The Intern keeps the history of every job as part of its job record, in tables of its own that don't depend on the
+agent runtime's stored format. The whole saved state can be exported as one copy, kept as a backup or imported on
+another computer; a version opens a copy only if it can read it.
 
 What The Intern learns about the team's systems and conventions it writes to the team's wiki, which the team runs
 separately and edits in the browser alongside it; the wiki and the team's other documents are both where The Intern
@@ -127,7 +128,8 @@ person's access.
   definition of done), its status, its open questions, the evidence it closed with, and the follow-up jobs it
   created. It defines the steps every job goes through (define, get what is missing, act, verify), when a job counts
   as blocked and how an answer resumes it, keeps the history of every job (what its agents did) in the job record,
-  and exports and imports the whole job record, history included, so it can be carried to a new version.
+  and exports and imports the whole saved state, job record included, for backups, moving to another computer and
+  upgrades.
 - **Boundary:** It does not do the work of a job (Agents and roles) or decide when recurring jobs start (Schedules and
   triggers). It does not sync with outside ticket trackers.
 - **Works with:** Intern service, Agents and roles, Schedules and triggers, Command line, Web interface, Email.
@@ -276,8 +278,8 @@ person's access.
   - How is a release triggered, built and published?
   - How is the background service registered with each supported operating system, and how does it start at boot
     without anyone logging in, on macOS in particular?
-  - How does an upgrade export the job record from the old version and import it into the new one, and what happens
-    to jobs still in progress?
+  - How does an upgrade keep a copy of the saved state from before the new version first opens it, how does it go
+    back, and what happens to jobs still in progress?
 
 #### User manual
 
@@ -334,12 +336,13 @@ person's access.
 - **Catching up on missed scheduled runs.** Runs due while the machine was off are skipped.
 - **Windows, Linux on ARM and Intel Macs.** Only Linux on x64 and macOS on Apple silicon are supported, to keep the
   test matrix small.
-- **Saved state that carries over to a new version on its own.** The underlying agent runtime is pinned to one
-  version and gives no compatibility promise for saved state; the job record is carried over by export and import
-  instead.
+- **Converting saved state between versions.** The underlying agent runtime is pinned and gives no compatibility
+  promise for its saved state. The job record keeps its own format, which each version migrates forward; export and
+  import copy the saved state, they don't convert it.
 
 ## Amendment Log
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-10-30 | The machine is one the team keeps running, not an always-on one; The Intern starts at boot without a login and is restarted after a failure; it runs as one OS account, the installing person's in v1, and acts with that account's credentials; schedules choose fresh runs or the history of their last runs; missed runs are skipped (Purpose, Users, Solution overview, Intern service, Schedules and triggers, Installation and service setup, Project exclusions). Consistency review: the Intern service makes its operations reachable for the command line on the machine and for the web interface over the network (it owns the listeners); Installation is account-neutral; version 0.4. | Decided with the product owner while aligning S-001 and S-002 with S-000. | None; S-000's bootstrap plan isn't broken down yet |
+| 2026-11-02 | The job record, history included, is kept in tables of its own that don't depend on the agent runtime's stored format; export and import copy the whole saved state, job record included, for backups, moving to another computer and upgrades, and a version opens a copy only if it can read it (Solution overview, Jobs). The last project exclusion became converting saved state between versions: the job record keeps its own format, which each version migrates forward, and export and import copy, they don't convert. Installation and service setup: the upgrade question asks how an upgrade keeps a copy of the saved state from before the new version opens it and how it goes back. Version 0.5. | S-004 architecture consistency review; product owner decisions 2026-11-02. Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None; S-000's bootstrap plan isn't broken down yet, and the S-004 breakdown updates `docs/system_overview.html` |

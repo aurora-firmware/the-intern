@@ -1,7 +1,7 @@
 ---
 id: S-003
 title: Control endpoint
-version: '0.1'
+version: '0.2'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-01'
 author: planner
@@ -89,8 +89,9 @@ What this specification explicitly does NOT cover:
   catalogue is reachable on both listeners with no listener change, and no second list of operations exists. The one
   exception is `feed.subscribe`, whose result is a stream and which is served as one (REQ-003, REQ-006).
 - **Listeners are transports only.** A listener decides no outcome: it parses the request, calls the service layer
-  with a fixed caller and returns what the service layer returned. Listeners call only the service layer and never
-  the host or pi-durable (ADR-001; REQ-013). The service layer stays free of transport (S-002 REQ-016).
+  with a caller fixed by the listener and the connection and returns what the service layer returned. Listeners call
+  only the service layer and never the host or pi-durable (ADR-001; REQ-013). The service layer stays free of
+  transport (S-002 REQ-016).
 - **Clients are viewers.** No connection or stream owns work. A slow, stalled or closed client never delays an agent
   run or holds a worker thread (S-002 REQ-015; REQ-011).
 - **Reach is decided outside The Intern.** Who reaches the local socket follows from the owner-only runtime
@@ -327,7 +328,8 @@ operation route with `invalid_input` naming its stream route.
 - **When:** each catalogue operation except `feed.subscribe` is called with a valid input in-process, over the local
   socket and over the network listener
 - **Then:** the three results are equal apart from values that differ between calls by nature (ids, times) and the
-  recorded way in (`in-process`, `command line`, `web interface`), and read operations leave state unchanged
+  recorded way in (`in-process`, `command line`, `web interface`) and observed caller details, and read operations
+  leave state unchanged
 
 **Verification:** test — one service test that enumerates the catalogue and calls every operation through both
 listeners.
@@ -429,8 +431,11 @@ event. When the client closes the connection, the subscription is ended as `unsu
 
 Each listener SHALL call every operation and subscription with the caller "team member", with the way in fixed by the
 listener: `command line` on the local socket and `web interface` on the network listener. The way in names the
-listener, so any program calling through it is recorded with that value. Nothing in the request can change the
-caller, and a job started through a listener records a request with that way in as its origin (S-002 AC-012.5).
+listener, so any program calling through it is recorded with that value. With the way in, each listener SHALL pass
+the caller details it observes: the network listener the remote address and port of the TCP peer, never taken from
+a header such as `X-Forwarded-For`, and the local socket none beyond the way in. Nothing in the request can change the
+caller or these details, and a job created through a listener (`jobs.create`) records a request with that way in and
+those details as its origin (S-002 AC-012.5; S-004 REQ-003).
 
 #### AC-007.1 — Attribution per listener
 
@@ -446,12 +451,20 @@ caller, and a job started through a listener records a request with that way in 
 
 - **Given:** a ready daemon
 - **When:** a call over the local socket sends an input or header claiming the way in `web interface` or an agent
-  actor, and a `jobs.startLead` call over it names a schedule origin
-- **Then:** the recorded actor is still a team member with the way in `command line`, and the `jobs.startLead` call is
-  refused `invalid_input` and creates nothing; the same call without an origin records a request with the way in
+  actor, and a `jobs.create` call over it names a schedule origin
+- **Then:** the recorded actor is still a team member with the way in `command line`, and the `jobs.create` call is
+  refused `invalid_input`, creating no job and using no number; without an origin it creates `C-n` with way in
   `command line`
 
 **Verification:** test — a service test.
+
+#### AC-007.3 — The remote address is the TCP peer's
+
+- **Given:** a ready daemon
+- **When:** a `jobs.create` call over the network listener carries an `X-Forwarded-For` header naming another address
+- **Then:** the job's origin records the remote address and port of the TCP connection, not the header's value
+
+**Verification:** test — a service test on a loopback port.
 
 ### REQ-008 — The web interface files
 
@@ -693,3 +706,4 @@ None affect the specified behaviour.
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
+| 2026-11-02 | v0.2. REQ-007: each listener passes the caller details it observes with the way in: the network listener the TCP peer's remote address and port, never a header such as `X-Forwarded-For`, and the local socket none beyond the way in (no OS account); a job created through a listener records them (new AC-007.3). AC-007.2: the refused origin claim is a `jobs.create` call, which creates no job and uses no number, and without the origin creates `C-n`. AC-003.1: observed caller details may differ between the three results. Design Principles, "Listeners are transports only": the caller is fixed by the listener and the connection. | S-004 architecture consistency review; product owner decisions 2026-11-02 (the OS account dropped). Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None yet; the code changes (observed caller details, `jobs.create` in place of `jobs.startLead` in the tests) come in the S-004 breakdown |
