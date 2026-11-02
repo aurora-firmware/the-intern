@@ -14,6 +14,7 @@ import type { Operation } from "../service/operations.ts";
 import { resumeAfterLeadInput, startJob } from "./job_actions.ts";
 import { JobNotFoundError } from "./job_store.ts";
 import { createJobToolsExtension } from "./job_tools_extension.ts";
+import { startTurnEndRule } from "./turn_end_rule.ts";
 
 export type WritePoint =
     | "job-created"
@@ -28,6 +29,8 @@ export type JobsComponentOptions = {
     logger: Logger;
     /** Test-only: awaited at each write point, so a test can act between a write and what follows it. */
     afterWrite?: (point: WritePoint, jobId: string) => void | Promise<void>;
+    /** Test-only, `true` by default: `false` applies no turn-end rule, for tests about conversations, not jobs. */
+    turnEndRule?: boolean;
 };
 
 export type JobsComponent = {
@@ -55,6 +58,7 @@ async function startJobOfLead(ctx: ServiceContext, options: JobsComponentOptions
 export async function createJobsComponent(options: JobsComponentOptions): Promise<JobsComponent> {
     let stopListening: (() => void) | undefined;
     let stopInputListening: (() => void) | undefined;
+    let stopTurnEndRule: (() => void) | undefined;
     let context: ServiceContext | undefined;
     // The job tools are built before the host opens, so they reach the service context once startup has bound it.
     const requireContext = (): ServiceContext => {
@@ -80,12 +84,19 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
                 stopInputListening = onInputSubmitted(ctx.host, (input) =>
                     resumeAfterLeadInput({ ctx, options }, input),
                 );
+                if (options.turnEndRule !== false) {
+                    const rule = startTurnEndRule({ ctx, options });
+                    stopTurnEndRule = rule.stop;
+                    await rule.ready;
+                }
             },
             async stop() {
                 stopListening?.();
                 stopListening = undefined;
                 stopInputListening?.();
                 stopInputListening = undefined;
+                stopTurnEndRule?.();
+                stopTurnEndRule = undefined;
                 context = undefined;
             },
         },

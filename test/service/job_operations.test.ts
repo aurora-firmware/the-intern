@@ -82,6 +82,7 @@ async function start(afterWrite?: (started: Started) => AfterWrite): Promise<Sta
     const jobs = await createJobsComponent({
         agents,
         logger: quietLogger,
+        turnEndRule: false,
         ...(afterWrite && { afterWrite: (point, jobId) => afterWrite(started as Started)(point, jobId) }),
     });
     let captured: ServiceContext | undefined;

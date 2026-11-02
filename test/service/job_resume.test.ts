@@ -80,7 +80,7 @@ async function start(): Promise<Started> {
         JSON.stringify({ defaultProvider: provider, defaultModel: "model-one" }),
     );
     const agents = await createAgentsComponent({ logger: quietLogger });
-    const jobs = await createJobsComponent({ agents, logger: quietLogger });
+    const jobs = await createJobsComponent({ agents, logger: quietLogger, turnEndRule: false });
     let captured: ServiceContext | undefined;
     const probe: DaemonComponent = {
         name: "probe",

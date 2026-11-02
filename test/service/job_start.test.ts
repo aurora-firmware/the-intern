@@ -71,7 +71,7 @@ async function boot(
     onContext: (ctx: ServiceContext) => void = () => {},
 ): Promise<Booted> {
     const agents = await createAgentsComponent({ logger: quietLogger });
-    const jobs = await createJobsComponent({ agents, logger: quietLogger });
+    const jobs = await createJobsComponent({ agents, logger: quietLogger, turnEndRule: false });
     let captured: ServiceContext | undefined;
     // The context is taken at step 5 so a model reply of a run that resumes at step 7 can already read the job store.
     const probe: DaemonComponent = {

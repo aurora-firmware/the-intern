@@ -143,6 +143,17 @@ The commands for these changes come with the command-line documentation.
 Every job has one lead agent at a time. It works in the job's lead conversation, carries the job from definition to
 verification, and is the only agent that closes it. Other agents work on parts of the job and never close it.
 
+A lead's turn can end with the job still In progress and nothing left to wait for: no input queued for it and no
+invoked agent of the job running or reporting. The Intern then acts for the job:
+
+- If the job has no definition of done, it blocks the job with the reason "no definition of done".
+- Otherwise it sends the lead one reminder, which asks it to continue, block or complete the job. If the lead stops
+  again without completing or blocking, the Intern blocks the job with the reason "the lead stopped without completing
+  or blocking".
+
+The reminder shows in the lead's conversation as a steer from the daemon, and the block shows in the job's history with
+the daemon as author. A job that is blocked and then resumed gets a new reminder at the lead's next stop.
+
 Every role is offered three capabilities for sharing the work.
 
 ### Handoff
