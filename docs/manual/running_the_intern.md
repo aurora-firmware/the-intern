@@ -73,6 +73,26 @@ written.
 - A relative path, a path that already exists and a path in a folder that doesn't exist are refused as `invalid_input`
   naming `path`, and nothing is written.
 
+## Restore a copy as the database
+
+The import step places an exported file as the database of an instance that has none. Use it to move your jobs to
+another computer running the same version, or to restore a backup. The step has no `bob` command yet; the command's
+name comes with the command line.
+
+- Stop the instance's daemon first. The step takes the instance's single-owner lock while it runs, so it can't replace
+  the database of a running daemon, and a daemon you start meanwhile refuses to start.
+- The state directory must hold no database file and no `-wal` or `-shm` file. Move the old database and those files
+  away yourself if you mean to replace it.
+- The file's job schema and its pi-durable schema must not be newer than the version you run. The refusal names the
+  schema and both versions. Use a newer release.
+- A file that doesn't exist or isn't a SQLite database is refused too.
+- Each refusal names its reason and changes nothing.
+- The imported database is readable only by the service account, whatever the access of the file you named. The file
+  you named is left as it was.
+- An older job schema is migrated at the next start. The first start on the copy repairs a write that a crash cut
+  short and resumes unfinished work, so importing a copy of an instance that is still running does that work twice.
+  Stop that instance first, or export again after you stop it.
+
 ## The configuration file
 
 The file is `config.toml` in the config directory. It is optional: without it, The Intern uses its built-in defaults.
