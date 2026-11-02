@@ -12,13 +12,14 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { hasQueuedInput, hasSubmissionWithRequestId } from "../../src/host/conversation_control.ts";
 import { internalHarness } from "../../src/host/harness_host.ts";
 import { parkConversation } from "../../src/host/invocation.ts";
-import { conversationMetaDoc, readConversationMeta } from "../../src/host/seating.ts";
+import { conversationMetaDoc, createSeatedConversation, readConversationMeta } from "../../src/host/seating.ts";
 import { steerConversation } from "../../src/host/steering.ts";
 import { blockJob, cancelJob, type JobActionDeps } from "../../src/jobs/job_actions.ts";
 import { type JobAuthor, reminderRequestId } from "../../src/jobs/job_model.ts";
 import { repairJobs } from "../../src/jobs/job_repair.ts";
 import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import { REMINDER_TEXT } from "../../src/jobs/turn_end_rule.ts";
+import { DEFAULT_LEAD_ROLE } from "../../src/roles/shipped_roles.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -267,6 +268,97 @@ describe("rule 1: a job with no lead conversation", () => {
         const third = await rig.boot();
 
         assert.equal((await historyOf(third.ctx, job.id)).length, length);
+    });
+});
+
+describe("rule 1: a lead start cut short before its first input", () => {
+    it("submits the first input once to the same lead, and a third start repairs nothing", async () => {
+        const rig = await createRig();
+        const first = await rig.boot({ afterWrite: crashAt("lead-created") });
+        await assert.rejects(first.createJob(), /failed unexpectedly/);
+        const [job] = (await first.ctx.jobStore.listJobs({})).jobs;
+        assert.ok(job);
+        const [createdLead] = await leadsOf(first.ctx, job.id);
+        assert.ok(createdLead);
+        assert.equal(await hasSubmissionWithRequestId(first.ctx.host, createdLead, `lead:${job.id}`), false);
+        assert.equal((await first.ctx.jobStore.getJob(job.id)).status, "to_do");
+        await first.stop();
+
+        const second = await rig.boot();
+
+        assert.deepEqual(await leadsOf(second.ctx, job.id), [createdLead]);
+        await waitFor(() => rig.modelInputs.length === 1, "the lead's first run");
+        assert.equal(rig.modelInputs[0]?.length, 1);
+        assert.match(rig.modelInputs[0]?.[0] ?? "", /^W-1\n\ndo it\n/);
+        await waitFor(async () => (await second.ctx.jobStore.getJob(job.id)).status === "in_progress", "In progress");
+        const repairs = await repairsOf(second.ctx, job.id);
+        assert.deepEqual(rulesOf(repairs), [1]);
+        assert.deepEqual(repairs[0]?.author, daemonAuthor);
+        await waitFor(() => isIdle(second.ctx, createdLead), "the lead to be idle");
+        const historyLength = (await historyOf(second.ctx, job.id)).length;
+        await second.stop();
+
+        const third = await rig.boot();
+
+        assert.deepEqual(await leadsOf(third.ctx, job.id), [createdLead]);
+        assert.equal((await historyOf(third.ctx, job.id)).length, historyLength);
+        assert.equal(rig.modelInputs.length, 1);
+    });
+
+    it("cancels the job with the refusal as justification when the lead's role no longer resolves", async () => {
+        const rig = await createRig();
+        const first = await rig.boot();
+        const { job } = await first.ctx.jobStore.insertJob({
+            letter: "W",
+            requestText: "do it",
+            origin: { kind: "request", wayIn: "web interface" },
+            leadStart: { role: "no-such-role", overrides: {}, actor: { kind: "team_member", wayIn: "web interface" } },
+        });
+        await createSeatedConversation(first.ctx.host, {
+            scope: "job.lead",
+            key: job.id,
+            job: { jobId: job.id, isLead: true, origin: { kind: "request", wayIn: "web interface" }, depth: 0 },
+            seat: first.deps.options.agents.runtime().catalog.seatFor(DEFAULT_LEAD_ROLE),
+            actor: { kind: "team_member", wayIn: "web interface" },
+        });
+        await first.stop();
+
+        const second = await rig.boot();
+
+        const stored = await second.ctx.jobStore.getJob(job.id);
+        assert.equal(stored.status, "done");
+        assert.equal(stored.resolution?.kind, "cancelled");
+        assert.match(stored.resolution?.justification ?? "", /^The lead could not be started: .*no-such-role/);
+        assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [1]);
+        assert.equal(rig.modelInputs.length, 0);
+    });
+
+    it("reads no pi-durable submission for a job that is not To do", async () => {
+        const rig = await createRig();
+        const first = await rig.boot();
+        const started = await first.createJob();
+        await waitFor(() => isIdle(first.ctx, started.leadConversation), "the lead to be idle");
+        const done = await first.createJob();
+        await waitFor(() => isIdle(first.ctx, done.leadConversation), "the lead to be idle");
+        await cancelJob(first.deps, done.id, "no longer needed", teamMember);
+        await first.stop();
+        const second = await rig.boot({ turnEndRule: false });
+        const harness = internalHarness(second.ctx.host);
+        const commit = harness.commit;
+        let commits = 0;
+        harness.commit = ((...args: Parameters<typeof commit>) => {
+            commits += 1;
+            return commit.apply(harness, args);
+        }) as typeof commit;
+
+        try {
+            await repairJobs(second.deps);
+        } finally {
+            harness.commit = commit;
+        }
+
+        // The one commit is the single listing of the conversations; a submission read would add one per job.
+        assert.equal(commits, 1);
     });
 });
 

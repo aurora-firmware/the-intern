@@ -20,6 +20,7 @@ import { startTurnEndRule } from "./turn_end_rule.ts";
 
 export type WritePoint =
     | "job-created"
+    | "lead-created"
     | "job-blocked"
     | "job-completed"
     | "job-cancelled"
