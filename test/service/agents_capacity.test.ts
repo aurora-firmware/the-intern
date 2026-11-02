@@ -17,6 +17,7 @@ import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContex
 import { createLogger } from "../../src/daemon/logger.ts";
 import { continueParked, parkConversation } from "../../src/host/invocation.ts";
 import { readConversationMeta } from "../../src/host/seating.ts";
+import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -24,8 +25,7 @@ const WAIT_MS = 20_000;
 const POLL_MS = 10;
 const WAITING_STATUS = "waiting for a worker thread";
 const quietLogger = createLogger({ stream: { write: () => true } });
-const caller: Caller = { actor: { kind: "team_member", wayIn: "cli" } };
-const requestOrigin = { kind: "request", wayIn: "cli" } as const;
+const caller: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
 
 const envs: HermeticEnv[] = [];
 const daemons: RunningDaemon[] = [];
@@ -48,6 +48,10 @@ type Script = (call: ModelCall) => Promise<AssistantMessage | undefined> | Assis
 
 const usersOf = (messages: Message[]): string[] => messages.filter((m) => m.role === "user").map(textOf);
 
+// A lead's first input is the job's number, the Request text and the lead's duty, in separate paragraphs. The scripts
+// key a run by its Request text, which an invoked agent's job prompt (its whole first input) also is.
+const requestKeyOf = (firstInput: string): string => firstInput.split("\n\n")[1] ?? firstInput;
+
 async function start(script: Script) {
     const env = await createHermeticEnv();
     envs.push(env);
@@ -56,7 +60,8 @@ async function start(script: Script) {
     const calls: ModelCall[] = [];
     const answer = async (context: { messages: Message[] }) => {
         fake.appendResponses([answer]);
-        const first = usersOf(context.messages)[0] ?? "";
+        const firstInput = usersOf(context.messages)[0] ?? "";
+        const first = requestKeyOf(firstInput);
         const nth = calls.filter((call) => call.first === first).length;
         const call: ModelCall = { first, nth, messages: context.messages };
         calls.push(call);
@@ -69,6 +74,7 @@ async function start(script: Script) {
         JSON.stringify({ defaultProvider: provider, defaultModel: "model-one" }),
     );
     const agents = await createAgentsComponent({ logger: quietLogger });
+    const jobs = await createJobsComponent({ agents, logger: quietLogger, turnEndRule: false });
     let captured: ServiceContext | undefined;
     const probe: DaemonComponent = {
         name: "probe",
@@ -82,8 +88,8 @@ async function start(script: Script) {
         homeDir: env.root,
         logger: quietLogger,
         sections: agents.sections,
-        components: [agents.component, probe],
-        operations: agents.operations,
+        components: [agents.component, jobs.component, probe],
+        operations: [...agents.operations, ...jobs.operations],
         workerThreadCount: 1,
         prepareModels: (runtime) => {
             const implementation = getApiProvider(fake.api);
@@ -110,14 +116,12 @@ async function start(script: Script) {
         ctx,
         callsOf: (first: string) => calls.filter((call) => call.first === first),
         order: () => calls.map((call) => call.first),
-        startLead: async (firstInput: string, jobId: string) =>
+        createLead: async (text: string) =>
             (
-                (await daemon.catalogue.invoke(
-                    "jobs.startLead",
-                    { jobId, firstInput, origin: requestOrigin },
-                    caller,
-                )) as { conversationId: string }
-            ).conversationId,
+                (await daemon.catalogue.invoke("jobs.create", { text }, caller)) as {
+                    leadConversation: string;
+                }
+            ).leadConversation,
         statusOf: async (conversationId: string) =>
             (
                 (await daemon.catalogue.invoke("conversations.get", { conversationId }, caller)) as {
@@ -170,7 +174,7 @@ describe("agent runs against the worker-thread cap", () => {
             return undefined;
         });
 
-        const leadId = await started.startLead("lead work", "job-1");
+        const leadId = await started.createLead("lead work");
 
         await waitFor(() => started.callsOf("lead work").length === 2, "the parked lead to continue");
         assert.deepEqual(started.order(), ["lead work", "invoked work", "lead work"]);
@@ -187,10 +191,10 @@ describe("agent runs against the worker-thread cap", () => {
             if (call.first === "first work") await holder.opened;
             return undefined;
         });
-        const firstId = await started.startLead("first work", "job-a");
+        const firstId = await started.createLead("first work");
         await waitFor(() => started.callsOf("first work").length === 1, "the first run to hold the worker thread");
-        const secondId = await started.startLead("second work", "job-b");
-        const thirdId = await started.startLead("third work", "job-c");
+        const secondId = await started.createLead("second work");
+        const thirdId = await started.createLead("third work");
 
         await waitFor(async () => (await started.workerThreads()).waiting.length === 2, "two runs to wait");
         assert.deepEqual((await started.workerThreads()).waiting, [
@@ -219,7 +223,7 @@ describe("a job's lead conversation parked for an answer", () => {
             if (call.first === "other work") await holder.opened;
             return undefined;
         });
-        const leadId = await started.startLead("lead work", "job-1");
+        const leadId = await started.createLead("lead work");
         await waitFor(
             async () => started.callsOf("lead work").length === 1 && (await started.workerThreads()).inUse === 0,
             "the lead run to end",
@@ -228,7 +232,7 @@ describe("a job's lead conversation parked for an answer", () => {
         await parkConversation(started.ctx.host, leadId, parkedForAnswer);
 
         assert.equal((await started.workerThreads()).inUse, 0, "the parked lead holds no worker thread");
-        const otherId = await started.startLead("other work", "job-2");
+        const otherId = await started.createLead("other work");
         await waitFor(() => started.callsOf("other work").length === 1, "the other run to start");
         assert.equal((await started.workerThreads()).inUse, 1);
         assert.equal(await started.statusOf(otherId), "running");
@@ -243,13 +247,13 @@ describe("a job's lead conversation parked for an answer", () => {
             if (call.first === "other work") await holder.opened;
             return undefined;
         });
-        const leadId = await started.startLead("lead work", "job-1");
+        const leadId = await started.createLead("lead work");
         await waitFor(
             async () => started.callsOf("lead work").length === 1 && (await started.workerThreads()).inUse === 0,
             "the lead run to end",
         );
         await parkConversation(started.ctx.host, leadId, parkedForAnswer);
-        await started.startLead("other work", "job-2");
+        await started.createLead("other work");
         await waitFor(() => started.callsOf("other work").length === 1, "the other run to hold the worker thread");
 
         await continueParked(started.ctx.host, leadId, { content: "the answer", requestId: "answer-1" });
