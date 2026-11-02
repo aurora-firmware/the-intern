@@ -8,7 +8,13 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type ConversationId, defineDoc, type Tx } from "@earendil-works/pi-durable";
 import { INVOCATION_DEPTH_CAP } from "../daemon/constants.ts";
 import type { Seat } from "../roles/role_model.ts";
-import { abortConversation, compactConversation, type InputRecord, submitInput } from "./conversation_control.ts";
+import {
+    abortConversation,
+    compactConversation,
+    type InputRecord,
+    submissionIdFor,
+    submitInput,
+} from "./conversation_control.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import {
     type ContextMode,
@@ -244,13 +250,16 @@ const clearHeld = (host: HarnessHost, conversationId: string) =>
 /**
  * Clears the parked state, then submits the held messages in order and the input after them, as follow-ups: the first
  * starts a run on a free worker thread. The held messages are cleared only once submitted, so a crash in between
- * loses none; their request ids make a repeated call safe.
+ * loses none; their request ids make a repeated call safe. A repeat of an input pi-durable already holds is no new
+ * input, so it returns that submission and leaves the conversation parked.
  */
 export async function continueParked(
     host: HarnessHost,
     conversationId: string,
     input: { content: string; requestId: string; entry?: InputRecord },
 ): Promise<{ submissionId: string }> {
+    const existing = await submissionIdFor(host, conversationId, input.requestId);
+    if (existing !== undefined) return { submissionId: existing };
     await releaseHeld(host, conversationId);
     const submitted = await submitInput(host, conversationId, { ...input, busyMode: "followUp" });
     await clearHeld(host, conversationId);

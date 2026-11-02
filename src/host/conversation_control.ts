@@ -99,13 +99,34 @@ export async function notifyInputSubmitted(host: HarnessHost, input: SubmittedIn
 /** The entry an input is placed as instead of `pi.user`; its model message is still the input's user message. */
 export type InputRecord = { kind: string; data: unknown };
 
-/** Submits input. The request id deduplicates: a known request id returns its existing submission. */
+function findSubmission(host: HarnessHost, conversation: Conversation, requestId: string) {
+    return internalHarness(host).commit((tx) => tx.submissionByRequest(conversation.id, requestId), context);
+}
+
+/**
+ * The submission pi-durable holds for the request id, in any state, or `undefined`. A caller that finds one knows a
+ * repeat of the input places nothing, so it changes nothing that only new input changes.
+ */
+export async function submissionIdFor(
+    host: HarnessHost,
+    conversationId: string,
+    requestId: string,
+): Promise<string | undefined> {
+    const found = await findSubmission(host, await requireConversation(host, conversationId), requestId);
+    return found === undefined ? undefined : String(found.id);
+}
+
+/**
+ * Submits input. The request id deduplicates: a known request id returns its existing submission, places nothing and
+ * calls no input listener, because no input reached the conversation.
+ */
 export async function submitInput(
     host: HarnessHost,
     conversationId: string,
     input: { content: string; requestId: string; busyMode: BusyMode; entry?: InputRecord },
 ): Promise<{ submissionId: string }> {
     const conversation = await requireConversation(host, conversationId);
+    const isRepeat = (await findSubmission(host, conversation, input.requestId)) !== undefined;
     try {
         const submission = await conversation.submit(
             {
@@ -117,7 +138,7 @@ export async function submitInput(
             },
             context,
         );
-        await notifyInputSubmitted(host, { conversationId, requestId: input.requestId });
+        if (!isRepeat) await notifyInputSubmitted(host, { conversationId, requestId: input.requestId });
         return { submissionId: String(submission.id) };
     } catch (error) {
         if (error instanceof ConversationBusy) throw new HostBusyError(conversationId, { cause: error });
@@ -131,12 +152,7 @@ export async function hasSubmissionWithRequestId(
     conversationId: string,
     requestId: string,
 ): Promise<boolean> {
-    const conversation = await requireConversation(host, conversationId);
-    const found = await internalHarness(host).commit(
-        (tx) => tx.submissionByRequest(conversation.id, requestId),
-        context,
-    );
-    return found !== undefined;
+    return (await submissionIdFor(host, conversationId, requestId)) !== undefined;
 }
 
 /** Whether the conversation has input or writes queued in its inbox for the next boundary. */

@@ -93,7 +93,8 @@ so Blocked never means a pause that you asked for. The lead can't block while an
 To answer, send the lead a message. Any message that reaches the lead of a Blocked job resumes the job: it becomes In
 progress, the Blocked reason is cleared, and the lead continues with your message as its input. The old reason stays in
 the job's history. You can send the message with `jobs.resume`, as shown below, or with any other operation that sends
-input to the lead conversation.
+input to the lead conversation. A repeat of a message the lead already has, sent with the same `requestId`, reaches
+the lead no second time, so it doesn't resume the job. Use a new `requestId` for a new answer.
 
 The Intern blocks a job on the lead's behalf in two cases, with the daemon as author in the history:
 
