@@ -21,7 +21,7 @@ import { type Caller, defineOperation, type Operation, ServiceError } from "./op
 const IN_PROCESS_WAY_IN = "in-process";
 const STATUSES: readonly string[] = ["to_do", "in_progress", "blocked", "done"];
 const LETTERS: readonly string[] = ["C", "W", "E", "S", "T", "A"];
-const STORE_PAGE_SIZE = 500;
+export const STORE_PAGE_SIZE = 500;
 
 type JobDetail = Job & { leadConversation?: string; worklog: WorklogEntry[]; history: HistoryEntry[] };
 type PageInput = { job: string; limit?: number; cursor?: string };
@@ -29,12 +29,12 @@ type ListInput = { status?: JobStatus; letter?: Letter; relatedTo?: string; limi
 type UpdateInput = { job: string; fields: Record<string, unknown> };
 type PairInput = { job: string; other: string };
 
-function asRecord(raw: unknown): Record<string, unknown> {
+export function asRecord(raw: unknown): Record<string, unknown> {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("input must be an object");
     return raw as Record<string, unknown>;
 }
 
-function requireString(record: Record<string, unknown>, field: string): string {
+export function requireString(record: Record<string, unknown>, field: string): string {
     const value = record[field];
     if (typeof value !== "string" || value === "") throw new Error(`${field} must be a non-empty string`);
     return value;
@@ -111,7 +111,7 @@ export async function authorOf(caller: Caller, host: HarnessHost): Promise<JobAu
 }
 
 // A store refusal is a service refusal of the same code; a bad cursor is the caller's input.
-async function refusing<T>(action: Promise<T>): Promise<T> {
+export async function refusing<T>(action: Promise<T>): Promise<T> {
     try {
         return await action;
     } catch (error) {
@@ -122,7 +122,7 @@ async function refusing<T>(action: Promise<T>): Promise<T> {
     }
 }
 
-async function allEntries<T>(
+export async function allEntries<T>(
     page: (cursor: string | undefined) => Promise<{ entries: T[]; cursor?: string }>,
 ): Promise<T[]> {
     const entries: T[] = [];
