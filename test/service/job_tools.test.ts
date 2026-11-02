@@ -15,6 +15,7 @@ import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContex
 import { createLogger } from "../../src/daemon/logger.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { createSeatedConversation } from "../../src/host/seating.ts";
+import { JOB_TOOL_NAMES } from "../../src/jobs/job_model.ts";
 import { createJobToolsExtension, JOB_TOOLS_EXTENSION_NAME } from "../../src/jobs/job_tools_extension.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import type { Caller } from "../../src/service/operations.ts";
@@ -28,7 +29,7 @@ const cliCaller: Caller = { actor: { kind: "team_member", wayIn: "command line" 
 const webCaller: Caller = { actor: { kind: "team_member", wayIn: "web interface" } };
 const sourceCaller: Caller = { actor: { kind: "job_source", source: "schedule" } };
 const schedule = { kind: "schedule", entry: "nightly", fireTime: "2026-10-31T02:00:00Z" };
-const JOB_TOOLS = ["read_job", "update_job", "add_worklog", "create_job", "relate_jobs"];
+const JOB_TOOLS = [...JOB_TOOL_NAMES];
 
 const envs: HermeticEnv[] = [];
 const daemons: RunningDaemon[] = [];
@@ -165,7 +166,7 @@ async function start() {
 const jsonOf = (result: ToolResultSeen | undefined) => JSON.parse(result?.text ?? "null");
 
 describe("the job tools extension", () => {
-    it("is named intern.jobs and brings the five job tools of this task", () => {
+    it("is named intern.jobs and brings the job tools", () => {
         const extension = createJobToolsExtension({} as never);
         assert.equal(JOB_TOOLS_EXTENSION_NAME, "intern.jobs");
         assert.equal(extension.name, JOB_TOOLS_EXTENSION_NAME);

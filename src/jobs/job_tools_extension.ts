@@ -12,12 +12,13 @@ import {
     type ToolExecutionApi,
     type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
+import { countCallsOfRound } from "../coordination/coordination_extension.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import type { CreateJobRequest, JobView } from "../service/job_operations.ts";
 import { readJob } from "../service/job_record_operations.ts";
 import { type Caller, ServiceError } from "../service/operations.ts";
-import type { JobActionDeps } from "./job_actions.ts";
+import { blockJob, completeJob, type JobActionDeps } from "./job_actions.ts";
 import { EDITABLE_FIELDS, type JobAuthor } from "./job_model.ts";
 import { JobNotFoundError, JobRefusedError, type JobStore } from "./job_store.ts";
 
@@ -31,7 +32,12 @@ export type JobToolsOptions = {
 };
 
 /** The job of a tool's conversation and the author its writes carry. */
-type ToolSeat = { jobId: string; conversationId: string; author: Extract<JobAuthor, { kind: "agent" }> };
+type ToolSeat = {
+    jobId: string;
+    conversationId: string;
+    isLead: boolean;
+    author: Extract<JobAuthor, { kind: "agent" }>;
+};
 
 const textResult = (text: string, isError = false): ToolExecutionResult => ({
     output: [{ type: "text", text }],
@@ -44,7 +50,12 @@ async function seatOf(options: JobToolsOptions, api: ToolExecutionApi): Promise<
     const conversationId = String(api.conversationId);
     const meta = await readConversationMeta(options.host(), conversationId);
     if (meta === undefined) throw new Error(`Conversation ${conversationId} is not a seated conversation`);
-    return { jobId: meta.jobId, conversationId, author: { kind: "agent", conversationId, role: meta.seat.role } };
+    return {
+        jobId: meta.jobId,
+        conversationId,
+        isLead: meta.isLead,
+        author: { kind: "agent", conversationId, role: meta.seat.role },
+    };
 }
 
 // A refused call is an error result for the agent and its run goes on; anything else is a real failure.
@@ -153,6 +164,51 @@ const relateJobsTool = (options: JobToolsOptions) =>
         },
     });
 
+// Only a job's lead blocks or completes it (S-004 REQ-013); a refused specialist's run goes on.
+const leadOnly = (tool: string, verb: string) =>
+    textResult(`${tool} was refused: only the job's lead can ${verb} the job.`, true);
+
+const blockJobTool = (options: JobToolsOptions) =>
+    defineTool({
+        name: "block_job",
+        description:
+            "Block the job of this conversation with the reason you need an answer, and end your run until one " +
+            "arrives. Only the job's lead can use it, and it must be the only tool call of its turn. It is refused " +
+            "while an agent you invoked still runs.",
+        parameters: Type.Object({ reason: Type.String({ description: "What you need answered, and why." }) }),
+        async execute(args, api, context) {
+            const { jobId, isLead, author } = await seatOf(options, api);
+            if (!isLead) return leadOnly("block_job", "block");
+            if ((await countCallsOfRound(api, context as never)) > 1) {
+                return textResult("block_job was refused: it must be the only tool call of its turn.", true);
+            }
+            const result = await refusable("block_job", async () => {
+                await blockJob(options.actions(), jobId, args.reason, author);
+                return textResult(`The job is blocked: ${args.reason}`);
+            });
+            return result.isError === true ? result : { ...result, control: { terminate: true } };
+        },
+    });
+
+const completeJobTool = (options: JobToolsOptions) =>
+    defineTool({
+        name: "complete_job",
+        description:
+            "Complete the job of this conversation, with the justification that its definition of done is met. " +
+            "Only the job's lead can use it, and the job needs a definition of done. Your run ends at this call.",
+        parameters: Type.Object({
+            justification: Type.String({ description: "Why the definition of done is met." }),
+        }),
+        async execute(args, api) {
+            const { jobId, conversationId, isLead, author } = await seatOf(options, api);
+            if (!isLead) return leadOnly("complete_job", "complete");
+            return refusable("complete_job", async () => {
+                const done = await completeJob(options.actions(), jobId, args.justification, author, conversationId);
+                return textResult(`${done.number} is Done.`);
+            });
+        },
+    });
+
 export function createJobToolsExtension(options: JobToolsOptions): Extension {
     return defineExtension({
         name: JOB_TOOLS_EXTENSION_NAME,
@@ -162,6 +218,8 @@ export function createJobToolsExtension(options: JobToolsOptions): Extension {
             addWorklogTool(options),
             createJobTool(options),
             relateJobsTool(options),
+            blockJobTool(options),
+            completeJobTool(options),
         ],
     });
 }

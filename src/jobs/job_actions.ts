@@ -65,18 +65,39 @@ async function finishJob(
     jobId: string,
     justification: string,
     author: JobAuthor,
+    ownConversationId?: string,
 ): Promise<Job> {
     const { ctx, options } = deps;
     const job = await ctx.jobStore.getJob(jobId);
     const done = await ctx.jobStore.applyAction(job.id, action, { justification }, author);
     await options.afterWrite?.(action === "complete" ? "job-completed" : "job-cancelled", job.id);
-    await abortJobConversations(ctx.host, job.id);
+    const own =
+        ownConversationId === undefined
+            ? undefined
+            : {
+                  conversationId: ownConversationId,
+                  onError: (error: unknown) =>
+                      ctx.logger.error("could not abort the conversation that ended the job", {
+                          jobId: job.id,
+                          cause: error instanceof Error ? error.message : String(error),
+                      }),
+              };
+    await abortJobConversations(ctx.host, job.id, own);
     return done;
 }
 
-/** Completes the job with its justification, then aborts every conversation of the job. */
-export function completeJob(deps: JobActionDeps, jobId: string, justification: string, author: JobAuthor) {
-    return finishJob(deps, "complete", jobId, justification, author);
+/**
+ * Completes the job with its justification, then aborts every conversation of the job. A lead that completes from its
+ * own tool call names its conversation, whose abort cannot be awaited from inside that call.
+ */
+export function completeJob(
+    deps: JobActionDeps,
+    jobId: string,
+    justification: string,
+    author: JobAuthor,
+    ownConversationId?: string,
+) {
+    return finishJob(deps, "complete", jobId, justification, author, ownConversationId);
 }
 
 /** Cancels the job with its justification, then aborts every conversation of the job. */

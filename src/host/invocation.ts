@@ -289,13 +289,24 @@ export async function abortWithAwaited(host: HarnessHost, conversationId: string
     return [...aborted];
 }
 
-/** Aborts every conversation whose `intern.conversation` document names the job, clearing them all first. */
-export async function abortJobConversations(host: HarnessHost, jobId: string): Promise<string[]> {
+/**
+ * Aborts every conversation whose `intern.conversation` document names the job, clearing them all first. An abort
+ * waits for the run to end, so the conversation of a running tool (`own`) is aborted last and its abort is not awaited
+ * here: the tool returns, and the run ends. `own.onError` gets a failed abort of it.
+ */
+export async function abortJobConversations(
+    host: HarnessHost,
+    jobId: string,
+    own?: { conversationId: string; onError(error: unknown): void },
+): Promise<string[]> {
     const ofJob: string[] = [];
     for (const { id } of await host.listConversations()) {
         if ((await readConversationMeta(host, id))?.jobId === jobId) ofJob.push(id);
     }
     for (const id of ofJob) await clearWaiting(host, id);
-    for (const id of ofJob) await abortConversation(host, id);
+    for (const id of ofJob) if (id !== own?.conversationId) await abortConversation(host, id);
+    if (own !== undefined && ofJob.includes(own.conversationId)) {
+        abortConversation(host, own.conversationId).catch(own.onError);
+    }
     return ofJob;
 }

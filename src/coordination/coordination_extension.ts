@@ -176,7 +176,7 @@ function resolveInvocationSeats(runtime: AgentsRuntime, agents: InvokedAgentArgu
 
 // In pi-durable 1.4.0 `terminate` ends the run only when every call of the round asks for it, so the round of a parked
 // invoke is read from the assistant message that holds the call.
-async function countCallsOfRound(api: ToolExecutionApi, context: never): Promise<number> {
+export async function countCallsOfRound(api: ToolExecutionApi, context: never): Promise<number> {
     const page = await api.commit((tx) => tx.scanEntries({ conversationId: api.conversationId }, 20), context);
     const assistant = page.items.find((entry) => entry.kind === AssistantEntry.kind);
     const blocks = (assistant?.model ?? []).flatMap((message) => (message.role === "assistant" ? message.content : []));
