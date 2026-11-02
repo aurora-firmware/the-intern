@@ -19,9 +19,10 @@ import {
 } from "../../src/feed/instance_feed.ts";
 import { createObservationFeed, type ObservationFeed, type Subscription } from "../../src/feed/observation_feed.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
-import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
+import { type HarnessHost, hostDatabase, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import { continueParked, parkConversation } from "../../src/host/invocation.ts";
 import { changeSeat, createSeatedConversation, SEAT_RECORD_KIND, type SeatActor } from "../../src/host/seating.ts";
+import { createJobStore, migrateJobStore } from "../../src/jobs/job_store.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 import { feedOperations } from "../../src/service/feed_operations.ts";
 import { type Caller, ServiceError } from "../../src/service/operations.ts";
@@ -105,6 +106,8 @@ async function openFixture(capacity = 2): Promise<Fixture> {
     directories.push(directory);
     const file = join(directory, "config.toml");
     const config = await createConfigStore(file, [labelSection], await loadConfig(file, [labelSection]));
+    await migrateJobStore(hostDatabase(host));
+    const jobStore = createJobStore(hostDatabase(host));
     const modelId = `${fake.getModel().provider}/${fake.getModel().id}`;
     return {
         host,
@@ -112,7 +115,13 @@ async function openFixture(capacity = 2): Promise<Fixture> {
         config,
         modelId,
         async open(maxPending) {
-            const feed = await createInstanceFeed({ host, admission, config, ...(maxPending && { maxPending }) });
+            const feed = await createInstanceFeed({
+                host,
+                admission,
+                config,
+                jobStore,
+                ...(maxPending && { maxPending }),
+            });
             feeds.push(feed);
             return feed;
         },
