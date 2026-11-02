@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import type { Logger } from "../../src/daemon/logger.ts";
-import { createSubscription, type Subscription } from "../../src/feed/observation_feed.ts";
+import { type CloseReason, createSubscription, type Subscription } from "../../src/feed/observation_feed.ts";
 import { createHttpFront } from "../../src/listeners/http_front.ts";
 import { type Caller, createCatalogue, defineOperation, ServiceError } from "../../src/service/operations.ts";
 
@@ -334,6 +334,38 @@ describe("feed stream: a client that doesn't read", () => {
             new Promise((resolve) => setTimeout(() => resolve("still open"), 3000)),
         ]);
         assert.equal(outcome, "closed");
+    });
+});
+
+describe("feed stream: a client that reads large deltas", () => {
+    let harness: Harness;
+    beforeEach(async () => {
+        harness = await startFront();
+    });
+    afterEach(() => harness.close());
+
+    it("attaches one callback to the subscription closing for the whole stream, not one per delta", async () => {
+        const subscription = harness.feed.subscription;
+        const original = subscription.closed;
+        let callbacks = 0;
+        subscription.closed = {
+            // biome-ignore lint/suspicious/noThenProperty: counts the callbacks the stream attaches to the promise.
+            then: (onFulfilled, onRejected) => {
+                callbacks += 1;
+                return original.then(onFulfilled, onRejected);
+            },
+        } as Promise<CloseReason>;
+        const res = await harness.open("/feed?scope=instance");
+        const events = eventReader(res);
+        await events.next();
+
+        // Each delta is larger than the response's high-water mark, so every write waits for `drain`.
+        for (let seq = 1; seq <= 50; seq++) {
+            harness.feed.push({ seq, text: LARGE_TEXT });
+            await events.next();
+        }
+
+        assert.ok(callbacks <= 1, `the stream attached ${callbacks} callbacks`);
     });
 });
 

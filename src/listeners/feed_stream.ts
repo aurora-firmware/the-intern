@@ -18,31 +18,23 @@ function formatEvent(event: FeedEvent): string {
 }
 
 /**
- * Resolves once the response can take more: at once, or when it drains, closes, the subscription closes or the signal
- * aborts. A client that stops reading never drains, so the subscription closing `lagging` must also end the wait
- * (S-003 REQ-011). A destroyed response refuses the write and has already closed, so it resolves at once too.
+ * Resolves once the response can take more: at once, or when it drains, closes or `wake` aborts. A client that stops
+ * reading never drains, so `wake` also aborts when the subscription closes `lagging` (S-003 REQ-011), as well as at
+ * shutdown. Every listener is removed when the wait settles, so a long stream gathers none. A destroyed response
+ * refuses the write and has already closed, so it resolves at once too.
  */
-function writeEvent(
-    res: ServerResponse,
-    event: FeedEvent,
-    signal: AbortSignal,
-    closed: Promise<CloseReason>,
-): Promise<void> {
-    if (res.write(formatEvent(event)) || res.destroyed || signal.aborted) return Promise.resolve();
+function writeEvent(res: ServerResponse, event: FeedEvent, wake: AbortSignal): Promise<void> {
+    if (res.write(formatEvent(event)) || res.destroyed || wake.aborted) return Promise.resolve();
     return new Promise((resolve) => {
-        let isSettled = false;
         const settle = () => {
-            if (isSettled) return;
-            isSettled = true;
             res.off("drain", settle);
             res.off("close", settle);
-            signal.removeEventListener("abort", settle);
+            wake.removeEventListener("abort", settle);
             resolve();
         };
         res.on("drain", settle);
         res.on("close", settle);
-        signal.addEventListener("abort", settle, { once: true });
-        void closed.then(settle);
+        wake.addEventListener("abort", settle, { once: true });
     });
 }
 
@@ -78,20 +70,19 @@ export async function streamFeed(
     res.on("close", stop);
     signal.addEventListener("abort", stop, { once: true });
     if (res.closed || signal.aborted) stop();
+    // One callback on the subscription closing for the whole stream, not one per write.
+    const subscriptionClosed = new AbortController();
+    void subscription.closed.then(() => subscriptionClosed.abort());
+    const wake = AbortSignal.any([signal, subscriptionClosed.signal]);
     try {
         // A quiet stream is still being read, so the server's idle timeout must not end it (S-003 REQ-012).
         res.setTimeout(0);
         res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
-        await writeEvent(res, { name: "snapshot", data: subscription.snapshot }, signal, subscription.closed);
+        await writeEvent(res, { name: "snapshot", data: subscription.snapshot }, wake);
         for (;;) {
             const result = await subscription.next();
             if ("closed" in result) return finish(res, result.closed, signal);
-            await writeEvent(
-                res,
-                { name: "delta", id: result.delta.seq, data: result.delta },
-                signal,
-                subscription.closed,
-            );
+            await writeEvent(res, { name: "delta", id: result.delta.seq, data: result.delta }, wake);
         }
     } finally {
         signal.removeEventListener("abort", stop);
