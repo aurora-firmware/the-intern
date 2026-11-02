@@ -19,6 +19,7 @@ import type { HermeticEnv } from "../support/hermetic_env.ts";
 const OWNER_ONLY_MODE = 0o700;
 const POLL_INTERVAL_MS = 200;
 const WAIT_BOUND_MS = 120_000;
+const STOP_BOUND_MS = 30_000;
 const SETTLE_TIMEOUT_MS = 300_000;
 const ENTRIES_LIMIT = 200;
 const AUTH_FILE = "auth.json";
@@ -136,8 +137,25 @@ function assertRunSettledOnce(entries: Entry[]): void {
 
 async function stopDaemon(daemon: DaemonProcess): Promise<void> {
     daemon.signal("SIGTERM");
-    const { code } = await daemon.exited;
-    assert.equal(code, 0, `the daemon did not stop cleanly: ${daemon.stderr()}`);
+    await expectCleanExit(daemon);
+}
+
+/** Waits for the daemon to exit after SIGTERM; a daemon that does not exit in time fails the run, never hangs it. */
+async function expectCleanExit(daemon: DaemonProcess): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<"timeout">((resolveWait) => {
+        timer = setTimeout(() => resolveWait("timeout"), STOP_BOUND_MS);
+    });
+    try {
+        const outcome = await Promise.race([daemon.exited, deadline]);
+        if (outcome === "timeout") {
+            daemon.kill9();
+            assert.fail(`the daemon did not exit within ${STOP_BOUND_MS} ms of SIGTERM: ${daemon.stderr()}`);
+        }
+        assert.equal(outcome.code, 0, `the daemon did not stop cleanly: ${daemon.stderr()}`);
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 async function withLiveEnv(run: (env: HermeticEnv) => Promise<void>): Promise<void> {
@@ -272,8 +290,7 @@ async function liveClientStreamsAnswerThenStopped(model: string): Promise<void> 
             const end = await endOf(read);
             console.log(`  live 3: the stream ended ${end}`);
             assert.equal(end, "stopped");
-            const { code } = await daemon.exited;
-            assert.equal(code, 0, `the daemon did not stop cleanly: ${daemon.stderr()}`);
+            await expectCleanExit(daemon);
         } finally {
             daemon.kill9();
             await daemon.exited;

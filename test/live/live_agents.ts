@@ -19,6 +19,7 @@ import type { HermeticEnv } from "../support/hermetic_env.ts";
 const OWNER_ONLY_MODE = 0o700;
 const POLL_INTERVAL_MS = 500;
 const WAIT_BOUND_MS = 300_000;
+const STOP_BOUND_MS = 30_000;
 const SETTLE_TIMEOUT_MS = 300_000;
 const ENTRIES_LIMIT = 200;
 const FILE_NAME = "hello.txt";
@@ -74,8 +75,25 @@ const isFinalAnswer = (entry: Entry): boolean =>
 
 async function stopDaemon(daemon: DaemonProcess): Promise<void> {
     daemon.signal("SIGTERM");
-    const { code } = await daemon.exited;
-    assert.equal(code, 0, `the daemon did not stop cleanly: ${daemon.stderr()}`);
+    await expectCleanExit(daemon);
+}
+
+/** Waits for the daemon to exit after SIGTERM; a daemon that does not exit in time fails the run, never hangs it. */
+async function expectCleanExit(daemon: DaemonProcess): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<"timeout">((resolveWait) => {
+        timer = setTimeout(() => resolveWait("timeout"), STOP_BOUND_MS);
+    });
+    try {
+        const outcome = await Promise.race([daemon.exited, deadline]);
+        if (outcome === "timeout") {
+            daemon.kill9();
+            assert.fail(`the daemon did not exit within ${STOP_BOUND_MS} ms of SIGTERM: ${daemon.stderr()}`);
+        }
+        assert.equal(outcome.code, 0, `the daemon did not stop cleanly: ${daemon.stderr()}`);
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 async function withDaemon(model: string, run: (daemon: DaemonProcess) => Promise<void>): Promise<void> {
