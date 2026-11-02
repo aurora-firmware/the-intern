@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { access, chmod, readdir, writeFile } from "node:fs/promises";
+import { access, chmod, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import type { Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { WORKER_THREAD_COUNT } from "../../src/daemon/constants.ts";
 import {
     type DaemonComponent,
@@ -15,8 +15,9 @@ import {
     type ServiceContext,
 } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
-import { openHarnessHost, type Storage } from "../../src/host/harness_host.ts";
+import { openHarnessHost, openHostDatabase, type Storage } from "../../src/host/harness_host.ts";
 import { recordOpenedVersions, runningVersions } from "../../src/host/versions.ts";
+import { JOB_SCHEMA_VERSION } from "../../src/jobs/job_store.ts";
 import { ServiceError } from "../../src/service/operations.ts";
 import type { DaemonStatus } from "../../src/service/status_operation.ts";
 import { createFakeModel } from "../support/fake_model.ts";
@@ -396,6 +397,52 @@ describe("runDaemon startup failures", () => {
         assert.equal(await exists(join(fixture.env.stateDir, "owner.lock")), false);
     });
 
+    it("calls repair in step 7, after admission is restored and before work resumes", async () => {
+        const fixture = await createFixture();
+        const seen: string[] = [];
+        const component: DaemonComponent = {
+            name: "repairer",
+            async checkModels(ctx) {
+                const resume = ctx.host.resume.bind(ctx.host);
+                ctx.host.resume = () => {
+                    seen.push("resume");
+                    resume();
+                };
+            },
+            async repair(ctx) {
+                seen.push(`repair: admission restored ${ctx.admission.state().capacity > 0}`);
+                seen.push(`repair: phase ${daemon.phase()}`);
+            },
+            async start() {
+                seen.push("start");
+            },
+        };
+        const daemon = fixture.start({ components: [component] });
+
+        await until(() => daemon.phase() === "ready", "the daemon to become ready");
+
+        assert.deepEqual(seen, ["repair: admission restored true", "repair: phase starting", "resume", "start"]);
+        const stepLines = linesMatching(fixture.lines, "startup step").map((line) => /step=(\d)/.exec(line)?.[1]);
+        assert.deepEqual(stepLines, ["1", "2", "3", "4", "5", "6", "7", "8"]);
+    });
+
+    it("names step 7 and settles with 1 when a component's repair fails", async () => {
+        const fixture = await createFixture();
+        const component: DaemonComponent = {
+            name: "broken-repairer",
+            async repair() {
+                throw new Error("repair refused");
+            },
+        };
+        const daemon = fixture.start({ components: [component] });
+
+        assert.equal(await daemon.exited, 1);
+
+        const failure = linesMatching(fixture.lines, "startup failed");
+        assert.match(failure[0], /step=7/);
+        assert.match(failure[0], /repair refused/);
+    });
+
     it("names step 7, releases ownership and settles with 1 when recording the versions fails", async () => {
         const fixture = await createFixture();
         const storageSwitch = { isFailing: false };
@@ -407,7 +454,7 @@ describe("runDaemon startup failures", () => {
         };
         const daemon = fixture.start({
             components: [component],
-            openStorage: async (file) => failingOnDemand(await openNodeSqliteStorage(file), storageSwitch),
+            openStorage: async (database) => failingOnDemand(await SqliteStorage.open(database), storageSwitch),
         });
 
         assert.equal(await daemon.exited, 1);
@@ -434,3 +481,92 @@ function failingOnDemand(storage: Storage, storageSwitch: { isFailing: boolean }
         },
     });
 }
+
+describe("runDaemon job store", () => {
+    const databaseFileOf = (fixture: Fixture) => join(fixture.env.stateDir, "the-intern.sqlite");
+
+    async function readSchemaVersion(file: string): Promise<number | undefined> {
+        const database = await openHostDatabase(file, { readOnly: true });
+        try {
+            const row = await database.get<{ version: number }>("SELECT version FROM intern_schema WHERE id = 1");
+            return row?.version;
+        } finally {
+            await database.close();
+        }
+    }
+
+    it("creates the job tables on a first start and gives the job store to the context", async () => {
+        const fixture = await createFixture();
+        let context: ServiceContext | undefined;
+        const daemon = fixture.start({
+            components: [
+                {
+                    name: "capture",
+                    async start(ctx) {
+                        context = ctx;
+                    },
+                },
+            ],
+        });
+        await until(() => daemon.phase() === "ready", "the daemon to be ready");
+
+        assert.deepEqual((await context?.jobStore.listJobs({}))?.jobs, []);
+        await daemon.stop();
+        assert.equal(await readSchemaVersion(databaseFileOf(fixture)), JOB_SCHEMA_VERSION);
+    });
+
+    it("refuses a newer job schema at step 4, naming both versions, and leaves the file unchanged", async () => {
+        const fixture = await createFixture();
+        const file = databaseFileOf(fixture);
+        const database = await openHostDatabase(file);
+        await database.exec(
+            "CREATE TABLE intern_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)",
+        );
+        await database.run("INSERT INTO intern_schema (id, version) VALUES (1, ?)", JOB_SCHEMA_VERSION + 1);
+        await database.close();
+        const before = await readFile(file);
+
+        const daemon = fixture.start();
+
+        assert.equal(await daemon.exited, 1);
+        const failure = linesMatching(fixture.lines, "ERROR");
+        assert.equal(failure.length, 1);
+        assert.match(failure[0], /step=4/);
+        assert.ok(failure[0].includes(`version ${JOB_SCHEMA_VERSION + 1}`));
+        assert.ok(failure[0].includes(`version ${JOB_SCHEMA_VERSION} `));
+        assert.ok((await readFile(file)).equals(before));
+    });
+
+    it("adds the job tables to a database that has only pi-durable's tables and keeps its conversations", async () => {
+        const fixture = await createFixture();
+        const seeding = await openHarnessHost({
+            databaseFile: databaseFileOf(fixture),
+            models: modelsFor(fakes[0]),
+            harnessSettings: {},
+            extensions: [],
+            defaultCwd: process.cwd(),
+            logger: createLogger({ stream: { write: () => true } }),
+        });
+        const conversationId = await seeding.createConversation({ agent: { model: fixture.modelId } });
+        await seeding.close();
+        assert.equal(await readSchemaVersion(databaseFileOf(fixture)).catch(() => undefined), undefined);
+
+        let context: ServiceContext | undefined;
+        const daemon = fixture.start({
+            components: [
+                {
+                    name: "capture",
+                    async start(ctx) {
+                        context = ctx;
+                    },
+                },
+            ],
+        });
+        await until(() => daemon.phase() === "ready", "the daemon to be ready");
+
+        const conversations = await context?.host.listConversations();
+        assert.ok(conversations?.some((conversation) => conversation.id === conversationId));
+        await daemon.stop();
+        assert.equal(await readSchemaVersion(databaseFileOf(fixture)), JOB_SCHEMA_VERSION);
+    });
+});

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { loadConfig } from "../../src/config/config_file.ts";
 import { createConfigStore } from "../../src/config/config_writer.ts";
+import { JOB_TOOL_NAMES } from "../../src/jobs/job_model.ts";
 import type { ModelChoice } from "../../src/models/model_runtime.ts";
 import { createRoleCatalog, type RoleCatalog, RoleRefusedError } from "../../src/roles/role_catalog.ts";
 import type { RoleDefinition } from "../../src/roles/role_model.ts";
@@ -207,6 +208,11 @@ describe("createRoleCatalog", () => {
         assert.equal(await fileText(), initialText);
         assert.equal(catalog.get("reviewer"), undefined);
         assert.equal(catalog.get("gp")?.changed, false);
+    });
+
+    it("accepts a create that names a job tool", async () => {
+        await catalog.create(teamRole({ tools: ["read", ...JOB_TOOL_NAMES] }));
+        assert.deepEqual(catalog.get("reviewer")?.tools, ["read", ...JOB_TOOL_NAMES]);
     });
 
     it("refuses a create or change that names a model or thinking level the model check refuses", async () => {

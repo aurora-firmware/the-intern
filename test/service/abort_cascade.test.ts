@@ -256,6 +256,90 @@ describe("abortJobConversations", () => {
     });
 });
 
+// Records which conversations are looked up for an abort, in order, and fails the lookup of the ones named.
+function watchLookups(host: HarnessHost, failing: string[] = []) {
+    const harness = internalHarness(host);
+    const original = harness.conversation.bind(harness);
+    const looked: string[] = [];
+    harness.conversation = (async (id: ConversationId, context: Parameters<typeof original>[1]) => {
+        looked.push(String(id));
+        if (failing.includes(String(id))) throw new Error(`lookup of ${id} failed`);
+        return original(id, context);
+    }) as typeof harness.conversation;
+    return {
+        looked,
+        restore: () => {
+            harness.conversation = original;
+        },
+    };
+}
+
+describe("abortJobConversations from the tool of a running conversation", () => {
+    it("aborts the other conversations first and the caller's own one last, without waiting for it", async () => {
+        const fixture = await openFixture();
+        const lead = await fixture.start("job-1", "lead");
+        const [child] = await fixture.invoke(lead, "c1", ["child"]);
+        await fixture.waitUntilBusy([lead, child as string]);
+        const errors: unknown[] = [];
+
+        const aborted = await abortJobConversations(fixture.host, "job-1", {
+            conversationId: lead,
+            onError: (error) => errors.push(error),
+        });
+
+        assert.deepEqual([...aborted].sort(), [lead, child as string].sort());
+        assert.equal(await fixture.busy(child as string), false);
+        await pause(SETTLE_PAUSE_MS);
+        assert.equal(await fixture.busy(lead), false);
+        assert.deepEqual(errors, []);
+    });
+
+    it("orders the own conversation after every other one", async () => {
+        const fixture = await openFixture();
+        const lead = await fixture.start("job-1", "lead");
+        const [child] = await fixture.invoke(lead, "c1", ["child"]);
+        await fixture.waitUntilBusy([lead, child as string]);
+        const watch = watchLookups(fixture.host);
+
+        await abortJobConversations(fixture.host, "job-1", { conversationId: lead, onError: () => {} });
+        watch.restore();
+
+        assert.deepEqual(watch.looked, [child as string, lead]);
+    });
+
+    it("gives a failed abort of the own conversation to onError and does not reject", async () => {
+        const fixture = await openFixture();
+        const lead = await fixture.start("job-1", "lead");
+        const [child] = await fixture.invoke(lead, "c1", ["child"]);
+        await fixture.waitUntilBusy([lead, child as string]);
+        const watch = watchLookups(fixture.host, [lead]);
+        const errors: unknown[] = [];
+
+        const aborted = await abortJobConversations(fixture.host, "job-1", {
+            conversationId: lead,
+            onError: (error) => errors.push(error),
+        });
+        await pause(SETTLE_PAUSE_MS);
+        watch.restore();
+
+        assert.deepEqual([...aborted].sort(), [lead, child as string].sort());
+        assert.equal(errors.length, 1);
+        assert.match((errors[0] as Error).message, /lookup of .* failed/);
+        assert.equal(await fixture.busy(child as string), false);
+    });
+
+    it("without an own conversation waits for each abort, so a failed one rejects", async () => {
+        const fixture = await openFixture();
+        const lead = await fixture.start("job-1", "lead");
+        const [child] = await fixture.invoke(lead, "c1", ["child"]);
+        await fixture.waitUntilBusy([lead, child as string]);
+        const watch = watchLookups(fixture.host, [lead]);
+
+        await assert.rejects(abortJobConversations(fixture.host, "job-1"), /lookup of .* failed/);
+        watch.restore();
+    });
+});
+
 async function assertNothingLeft(fixture: Fixture, ids: string[], inputsBefore: number[]) {
     await pause(SETTLE_PAUSE_MS);
     for (const [index, id] of ids.entries()) {

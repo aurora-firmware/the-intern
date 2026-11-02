@@ -8,7 +8,13 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type ConversationId, defineDoc, type Tx } from "@earendil-works/pi-durable";
 import { INVOCATION_DEPTH_CAP } from "../daemon/constants.ts";
 import type { Seat } from "../roles/role_model.ts";
-import { abortConversation, compactConversation, type InputRecord, submitInput } from "./conversation_control.ts";
+import {
+    abortConversation,
+    compactConversation,
+    type InputRecord,
+    submissionIdFor,
+    submitInput,
+} from "./conversation_control.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import {
     type ContextMode,
@@ -205,6 +211,13 @@ export async function parkConversation(host: HarnessHost, conversationId: string
     });
 }
 
+/** Clears the parked state without submitting anything, for a conversation that input already reached. */
+export async function unparkConversation(host: HarnessHost, conversationId: string): Promise<void> {
+    await updateMeta(host, conversationId, (meta) => {
+        meta.parked = null;
+    });
+}
+
 // A held message is placed as its own kind, so the transcript names its sender where it is delivered.
 function heldEntryOf(message: HeldMessage): InputRecord {
     const { actor, mode, content } = message;
@@ -212,16 +225,9 @@ function heldEntryOf(message: HeldMessage): InputRecord {
     return { kind: STEER_RECORD_KIND, data: { actor, mode, content } };
 }
 
-/**
- * Clears the parked state, then submits the held messages in order and the input after them, as follow-ups: the first
- * starts a run on a free worker thread. The held messages are cleared only once submitted, so a crash in between
- * loses none; their request ids make a repeated call safe.
- */
-export async function continueParked(
-    host: HarnessHost,
-    conversationId: string,
-    input: { content: string; requestId: string; entry?: InputRecord },
-): Promise<{ submissionId: string }> {
+// Clears the parked state, then submits the held messages in order, as the request ids make a repeat safe. The held
+// list is cleared by the caller once everything that goes with it is submitted, so a crash in between loses none.
+async function releaseHeld(host: HarnessHost, conversationId: string): Promise<void> {
     await updateMeta(host, conversationId, (meta) => {
         meta.parked = null;
     });
@@ -234,11 +240,36 @@ export async function continueParked(
             entry: heldEntryOf(message),
         });
     }
-    const submitted = await submitInput(host, conversationId, { ...input, busyMode: "followUp" });
-    await updateMeta(host, conversationId, (meta) => {
+}
+
+const clearHeld = (host: HarnessHost, conversationId: string) =>
+    updateMeta(host, conversationId, (meta) => {
         meta.held = [];
     });
+
+/**
+ * Clears the parked state, then submits the held messages in order and the input after them, as follow-ups: the first
+ * starts a run on a free worker thread. The held messages are cleared only once submitted, so a crash in between
+ * loses none; their request ids make a repeated call safe. A repeat of an input pi-durable already holds is no new
+ * input, so it returns that submission and leaves the conversation parked.
+ */
+export async function continueParked(
+    host: HarnessHost,
+    conversationId: string,
+    input: { content: string; requestId: string; entry?: InputRecord },
+): Promise<{ submissionId: string }> {
+    const existing = await submissionIdFor(host, conversationId, input.requestId);
+    if (existing !== undefined) return { submissionId: existing };
+    await releaseHeld(host, conversationId);
+    const submitted = await submitInput(host, conversationId, { ...input, busyMode: "followUp" });
+    await clearHeld(host, conversationId);
     return submitted;
+}
+
+/** Continues a conversation that no new input reached: clears the parked state and delivers only its held messages. */
+export async function continueWithHeld(host: HarnessHost, conversationId: string): Promise<void> {
+    await releaseHeld(host, conversationId);
+    await clearHeld(host, conversationId);
 }
 
 // One commit per conversation (ADR-001 decision 4): an aborted conversation is left neither parked nor waiting for
@@ -289,13 +320,24 @@ export async function abortWithAwaited(host: HarnessHost, conversationId: string
     return [...aborted];
 }
 
-/** Aborts every conversation whose `intern.conversation` document names the job, clearing them all first. */
-export async function abortJobConversations(host: HarnessHost, jobId: string): Promise<string[]> {
+/**
+ * Aborts every conversation whose `intern.conversation` document names the job, clearing them all first. An abort
+ * waits for the run to end, so the conversation of a running tool (`own`) is aborted last and its abort is not awaited
+ * here: the tool returns, and the run ends. `own.onError` gets a failed abort of it.
+ */
+export async function abortJobConversations(
+    host: HarnessHost,
+    jobId: string,
+    own?: { conversationId: string; onError(error: unknown): void },
+): Promise<string[]> {
     const ofJob: string[] = [];
     for (const { id } of await host.listConversations()) {
         if ((await readConversationMeta(host, id))?.jobId === jobId) ofJob.push(id);
     }
     for (const id of ofJob) await clearWaiting(host, id);
-    for (const id of ofJob) await abortConversation(host, id);
+    for (const id of ofJob) if (id !== own?.conversationId) await abortConversation(host, id);
+    if (own !== undefined && ofJob.includes(own.conversationId)) {
+        abortConversation(host, own.conversationId).catch(own.onError);
+    }
     return ofJob;
 }

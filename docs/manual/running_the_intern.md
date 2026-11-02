@@ -16,6 +16,10 @@ The service runs in the foreground, writes its log lines to standard error and k
 `SIGTERM` or `SIGINT` (Ctrl+C). It exits with status 0 only after a requested stop. Any other exit has a non-zero
 status, so a supervisor such as systemd or launchd can restart it.
 
+When the database refuses a write to a job, the service fails that call with `internal`, leaves the job and its
+history as they were, logs "job store write failed; the daemon exits", and stops within 10 seconds with a non-zero
+status. It doesn't reopen the database; your supervisor restarts it.
+
 Until a release provides `bob`, run it from a checkout of the project:
 
 ```
@@ -50,6 +54,44 @@ The runtime fallback matters on macOS and under launchd, which don't set `XDG_RU
 The service creates a missing directory that only its account can use. If a directory exists but isn't a directory,
 belongs to another account, or is open to the group or others, the service refuses to start and names the path and the
 reason. Run `chmod 700` on the directory, or choose another one with the flag.
+
+## Copy the database as a backup
+
+The `jobs.export` operation writes a copy of the whole database to a new file while The Intern keeps working. Give it
+`path`, an absolute path to a file that doesn't exist yet in a folder that does. It returns the path and the size
+written.
+
+- The copy holds the jobs, their worklogs and histories, and the conversations and queued work, as committed when the
+  copy started. It doesn't hold `config.toml`, so back that up on its own.
+- The copy is readable only by the service account, and it never exists under its final name with wider access, not
+  even while it is written.
+- Running agents carry on. A write that arrives during the copy waits for it to finish.
+- The copy starts when the database has no write in progress. If one is in progress, the service waits for it, up to
+  about 5 seconds, so the copy can hold what was committed up to that long after the call. If the database is still in
+  use then, or a write begins just as the copy starts, the call fails as `busy` saying the database is in use and
+  writes nothing. Export again.
+- A relative path, a path that already exists and a path in a folder that doesn't exist are refused as `invalid_input`
+  naming `path`, and nothing is written.
+
+## Restore a copy as the database
+
+The import step places an exported file as the database of an instance that has none. Use it to move your jobs to
+another computer running the same version, or to restore a backup. The step has no `bob` command yet; the command's
+name comes with the command line.
+
+- Stop the instance's daemon first. The step takes the instance's single-owner lock while it runs, so it can't replace
+  the database of a running daemon, and a daemon you start meanwhile refuses to start.
+- The state directory must hold no database file and no `-wal` or `-shm` file. Move the old database and those files
+  away yourself if you mean to replace it.
+- The file's job schema and its pi-durable schema must not be newer than the version you run. The refusal names the
+  schema and both versions. Use a newer release.
+- A file that doesn't exist or isn't a SQLite database is refused too.
+- Each refusal names its reason and changes nothing.
+- The imported database is readable only by the service account, whatever the access of the file you named. The file
+  you named is left as it was.
+- An older job schema is migrated at the next start. The first start on the copy repairs a write that a crash cut
+  short and resumes unfinished work, so importing a copy of an instance that is still running does that work twice.
+  Stop that instance first, or export again after you stop it.
 
 ## The configuration file
 

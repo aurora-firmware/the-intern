@@ -7,16 +7,19 @@
  */
 import assert from "node:assert/strict";
 import { chmod, mkdir, readFile, rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { SEAT_RECORD_KIND } from "../../src/host/seating.ts";
 import { resolvePiAgentDir } from "../../src/models/model_runtime.ts";
+import type { JobView } from "../../src/service/job_operations.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import type { HermeticEnv } from "../support/hermetic_env.ts";
 
 const OWNER_ONLY_MODE = 0o700;
 const POLL_INTERVAL_MS = 500;
 const WAIT_BOUND_MS = 300_000;
+const STOP_BOUND_MS = 30_000;
 const SETTLE_TIMEOUT_MS = 300_000;
 const ENTRIES_LIMIT = 200;
 const FILE_NAME = "hello.txt";
@@ -26,7 +29,8 @@ type Entry = { id: string; kind: string; data: unknown; seat?: { role: string } 
 type LiveTest = { name: string; run(model: string): Promise<void> };
 
 async function createLiveEnv(): Promise<HermeticEnv> {
-    const root = resolve(".tmp", `live-${new Date().toISOString().replaceAll(/[:.]/g, "-")}`);
+    // A short path under the system temp folder: a socket path over 107 bytes fails in a deep worktree.
+    const root = join(tmpdir(), `bob-live-${new Date().toISOString().replaceAll(/[:.]/g, "-")}`);
     const directories = ["config", "state", "data", "runtime"].map((name) => join(root, name));
     await mkdir(root, { recursive: true, mode: OWNER_ONLY_MODE });
     await chmod(root, OWNER_ONLY_MODE);
@@ -71,8 +75,25 @@ const isFinalAnswer = (entry: Entry): boolean =>
 
 async function stopDaemon(daemon: DaemonProcess): Promise<void> {
     daemon.signal("SIGTERM");
-    const { code } = await daemon.exited;
-    assert.equal(code, 0, `the daemon did not stop cleanly: ${daemon.stderr()}`);
+    await expectCleanExit(daemon);
+}
+
+/** Waits for the daemon to exit after SIGTERM; a daemon that does not exit in time fails the run, never hangs it. */
+async function expectCleanExit(daemon: DaemonProcess): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<"timeout">((resolveWait) => {
+        timer = setTimeout(() => resolveWait("timeout"), STOP_BOUND_MS);
+    });
+    try {
+        const outcome = await Promise.race([daemon.exited, deadline]);
+        if (outcome === "timeout") {
+            daemon.kill9();
+            assert.fail(`the daemon did not exit within ${STOP_BOUND_MS} ms of SIGTERM: ${daemon.stderr()}`);
+        }
+        assert.equal(outcome.code, 0, `the daemon did not stop cleanly: ${daemon.stderr()}`);
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 async function withDaemon(model: string, run: (daemon: DaemonProcess) => Promise<void>): Promise<void> {
@@ -89,33 +110,24 @@ async function withDaemon(model: string, run: (daemon: DaemonProcess) => Promise
     }
 }
 
-async function startLead(daemon: DaemonProcess, jobId: string, role: string, firstInput: string, model: string) {
-    const { conversationId } = (await daemon.invoke("jobs.startLead", {
-        jobId,
-        firstInput,
-        role,
-        model,
-        origin: { kind: "request", wayIn: "live" },
-    })) as { conversationId: string };
-    return conversationId;
+async function startLead(daemon: DaemonProcess, role: string, text: string, model: string) {
+    const job = (await daemon.invoke("jobs.create", { text, role, model })) as JobView;
+    assert.ok(job.leadConversation, `job ${job.number} has no lead conversation`);
+    return { number: job.number, conversationId: job.leadConversation };
 }
 
-async function untilAnswered(daemon: DaemonProcess, conversationId: string): Promise<void> {
-    await untilTrue("the lead's first answer", async () =>
-        (await entriesOf(daemon, conversationId)).some(isFinalAnswer),
-    );
+/** A lead's first turn ends with `complete_job`, not a final answer entry: the job's status tells it is over. */
+async function untilJobDone(daemon: DaemonProcess, number: string): Promise<void> {
+    await untilTrue(`job ${number} to be done`, async () => {
+        const job = (await daemon.invoke("jobs.get", { job: number })) as JobView;
+        return job.status === "done";
+    });
 }
 
 async function liveSeatChangeAttributesAnswerToGp(model: string): Promise<void> {
     await withDaemon(model, async (daemon) => {
-        const conversationId = await startLead(
-            daemon,
-            "live-job-seat",
-            "bob",
-            "Reply with the single word: ready",
-            model,
-        );
-        await untilAnswered(daemon, conversationId);
+        const { number, conversationId } = await startLead(daemon, "bob", "Reply with the single word: ready", model);
+        await untilJobDone(daemon, number);
         const seat = (await daemon.invoke("conversations.seat", { conversationId, role: "gp", model })) as {
             role: string;
             workspace: string;
@@ -153,7 +165,7 @@ type Invocations = { invoked: { role: string | null }[] };
 
 async function liveParkedInvocationDeliversBothReports(model: string): Promise<void> {
     await withDaemon(model, async (daemon) => {
-        const conversationId = await startLead(daemon, "live-job-invoke", "gp", INVOKE_PROMPT, model);
+        const { conversationId } = await startLead(daemon, "gp", INVOKE_PROMPT, model);
         await untilTrue("two invoked bob agents", async () => {
             const tree = (await daemon.invoke("conversations.invocations", { conversationId })) as Invocations;
             return tree.invoked.filter((agent) => agent.role === "bob").length === 2;
@@ -163,7 +175,12 @@ async function liveParkedInvocationDeliversBothReports(model: string): Promise<v
             const firstCall = entries.findIndex((entry) => entry.kind === "pi.assistant" && !isFinalAnswer(entry));
             const afterCall = entries.slice(firstCall + 1);
             const reports = afterCall.filter((entry) => entry.kind === "intern.report");
-            return reports.length >= 2 && afterCall.some(isFinalAnswer);
+            // The lead may end with `complete_job` instead of a final answer: any model turn after the last report
+            // shows it continued.
+            const lastReport = afterCall.findLastIndex((entry) => entry.kind === "intern.report");
+            return (
+                reports.length >= 2 && afterCall.slice(lastReport + 1).some((entry) => entry.kind === "pi.assistant")
+            );
         });
     });
 }

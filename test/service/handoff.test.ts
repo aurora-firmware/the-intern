@@ -15,14 +15,14 @@ import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { readConversationMeta, SEAT_RECORD_KIND } from "../../src/host/seating.ts";
+import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const WAIT_MS = 20_000;
 const POLL_MS = 10;
 const quietLogger = createLogger({ stream: { write: () => true } });
-const caller: Caller = { actor: { kind: "team_member", wayIn: "cli" } };
-const requestOrigin = { kind: "request", wayIn: "cli" } as const;
+const caller: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
 const SUMMARY_TEXT = "SUMMARY-OF-THE-EARLIER-WORK";
 
 const envs: HermeticEnv[] = [];
@@ -56,12 +56,15 @@ const systemText = (request: Request): string => {
     }
     return [base, ...Object.values(sections)].join("\n");
 };
+// A lead's first input is the job's number, the Request text and the lead's duty, in separate paragraphs.
+const requestTextOf = (input: string | undefined): string | undefined => input?.split("\n\n")[1] ?? input;
 const isSummarization = (request: Request): boolean => systemText(request).includes("context summarization assistant");
 
 type Started = {
     ctx: ServiceContext;
     requests: Request[];
-    startLead(input: Record<string, unknown>): Promise<{ conversationId: string }>;
+    /** Creates a job with `jobs.create` and returns its lead conversation. */
+    createLead(text: string): Promise<string>;
     status(): Promise<{ workerThreads: { inUse: number; waiting: { conversationId: string }[] } }>;
     entries(conversationId: string): Promise<{ kind: string; data: unknown }[]>;
     context(conversationId: string): Promise<{ kind: string; data: unknown }[]>;
@@ -109,6 +112,7 @@ async function start(options: StartOptions): Promise<Started & { release(): void
         }),
     );
     const agents = await createAgentsComponent({ logger: quietLogger });
+    const jobs = await createJobsComponent({ agents, logger: quietLogger, turnEndRule: false });
     let captured: ServiceContext | undefined;
     const probe: DaemonComponent = {
         name: "probe",
@@ -122,8 +126,8 @@ async function start(options: StartOptions): Promise<Started & { release(): void
         homeDir: env.root,
         logger: quietLogger,
         sections: agents.sections,
-        components: [agents.component, probe],
-        operations: agents.operations,
+        components: [agents.component, jobs.component, probe],
+        operations: [...agents.operations, ...jobs.operations],
         ...(options.workerThreadCount !== undefined && { workerThreadCount: options.workerThreadCount }),
         prepareModels: (runtime) => {
             const implementation = getApiProvider(fake.api);
@@ -152,7 +156,12 @@ async function start(options: StartOptions): Promise<Started & { release(): void
         ctx,
         requests,
         release,
-        startLead: (input) => daemon.catalogue.invoke("jobs.startLead", input, caller) as never,
+        createLead: async (text) =>
+            (
+                (await daemon.catalogue.invoke("jobs.create", { text }, caller)) as {
+                    leadConversation: string;
+                }
+            ).leadConversation,
         status: () => daemon.catalogue.invoke("daemon.status", {}, caller) as never,
         entries: readAll,
         context: (conversationId) => ctx.host.readContext(conversationId),
@@ -167,8 +176,8 @@ async function waitFor(condition: () => Promise<boolean> | boolean, what: string
     }
 }
 
-const startAndWaitForNewAgent = async (started: Started, jobId: string, firstInput = "first input") => {
-    const { conversationId } = await started.startLead({ jobId, firstInput, origin: requestOrigin });
+const startAndWaitForNewAgent = async (started: Started) => {
+    const conversationId = await started.createLead("first input");
     await waitFor(
         async () => (await readConversationMeta(started.ctx.host, conversationId))?.seat.role !== "bob",
         "the seat to change",
@@ -180,7 +189,7 @@ describe("the handoff tool", () => {
     it("runs the next turn in the same conversation with the new seat, the full context and no new input", async () => {
         const started = await start({ handoff: { role: "gp", contextMode: "full" } });
 
-        const conversationId = await startAndWaitForNewAgent(started, "full-1");
+        const conversationId = await startAndWaitForNewAgent(started);
         await waitFor(() => started.requests.length >= 2, "the new agent's request");
 
         const request = started.requests[1] as Request;
@@ -199,7 +208,7 @@ describe("the handoff tool", () => {
     it("compacts the context guided by the note before the new seat's first request", async () => {
         const started = await start({ handoff: { role: "gp", contextMode: "compact", note: "KEEP-THE-PLAN" } });
 
-        const conversationId = await startAndWaitForNewAgent(started, "compact-1");
+        const conversationId = await startAndWaitForNewAgent(started);
         await waitFor(() => started.requests.some((request) => systemText(request).includes("`gp`")), "the new seat");
 
         const summaryIndex = started.requests.findIndex(isSummarization);
@@ -217,7 +226,7 @@ describe("the handoff tool", () => {
     it("continues a clean handoff with only the note as input and keeps every earlier entry", async () => {
         const started = await start({ handoff: { role: "gp", contextMode: "clean", note: "CLEAN-NOTE" } });
 
-        const conversationId = await startAndWaitForNewAgent(started, "clean-1");
+        const conversationId = await startAndWaitForNewAgent(started);
         await waitFor(() => started.requests.length >= 2, "the new agent's request");
 
         const request = started.requests[1] as Request;
@@ -241,19 +250,22 @@ describe("the handoff tool", () => {
             handoff: { role: "gp", contextMode: "clean", note: "CLEAN-NOTE" },
             workerThreadCount: 1,
         });
-        const first = await started.startLead({ jobId: "a", firstInput: "first input held", origin: requestOrigin });
+        const first = await started.createLead("first input held");
         await waitFor(() => started.requests.length >= 1, "the first request");
-        const second = await started.startLead({ jobId: "b", firstInput: "second", origin: requestOrigin });
+        const second = await started.createLead("second");
         await waitFor(async () => (await started.status()).workerThreads.waiting.length === 1, "the second to wait");
 
         started.release();
-        await waitFor(() => started.requests.some((request) => userTexts(request).includes("second")), "second");
+        await waitFor(
+            () => started.requests.some((request) => userTexts(request).map(requestTextOf).includes("second")),
+            "second",
+        );
 
-        const order = started.requests.map((request) => userTexts(request).at(-1));
+        const order = started.requests.map((request) => requestTextOf(userTexts(request).at(-1)));
         assert.ok(order.indexOf("CLEAN-NOTE") >= 0, "the new agent ran");
         assert.ok(order.indexOf("CLEAN-NOTE") < order.indexOf("second"), `the new agent ran first: ${order}`);
-        assert.equal((await readConversationMeta(started.ctx.host, first.conversationId))?.depth, 0);
-        assert.equal((await readConversationMeta(started.ctx.host, second.conversationId))?.seat.role, "bob");
+        assert.equal((await readConversationMeta(started.ctx.host, first))?.depth, 0);
+        assert.equal((await readConversationMeta(started.ctx.host, second))?.seat.role, "bob");
     });
 
     for (const [title, handoff] of [
@@ -266,11 +278,7 @@ describe("the handoff tool", () => {
         it(`returns an error result and leaves the seat unchanged for ${title}`, async () => {
             const started = await start({ handoff });
 
-            const { conversationId } = await started.startLead({
-                jobId: "refused",
-                firstInput: "first input",
-                origin: requestOrigin,
-            });
+            const conversationId = await started.createLead("first input");
             await waitFor(() => started.requests.length >= 2, "the run to continue after the error");
 
             const result = started.requests[1]?.messages.find((message) => message.role === "toolResult");

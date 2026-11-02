@@ -14,7 +14,6 @@ import { createWorkspaceContextLoader } from "../prompt/workspace_context.ts";
 import { createRoleCatalog, type RoleCatalog } from "../roles/role_catalog.ts";
 import { rolesSection, workspacesSection } from "../roles/roles_section.ts";
 import { loadPreamble, loadShippedRoles } from "../roles/shipped_roles.ts";
-import { jobOperations } from "../service/job_operations.ts";
 import type { Operation } from "../service/operations.ts";
 import { roleOperations } from "../service/role_operations.ts";
 import { seatOperations } from "../service/seat_operations.ts";
@@ -116,11 +115,6 @@ export async function createAgentsComponent(options: { logger: Logger }): Promis
         operations: [],
         runtime: requireRuntime,
     };
-    agents.operations.push(
-        ...roleOperations(agents),
-        ...workspaceOperations(agents),
-        ...seatOperations(agents),
-        ...jobOperations(agents),
-    );
+    agents.operations.push(...roleOperations(agents), ...workspaceOperations(agents), ...seatOperations(agents));
     return agents;
 }

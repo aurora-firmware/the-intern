@@ -19,9 +19,11 @@ import {
 } from "../../src/feed/instance_feed.ts";
 import { createObservationFeed, type ObservationFeed, type Subscription } from "../../src/feed/observation_feed.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
-import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
+import { type HarnessHost, hostDatabase, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import { continueParked, parkConversation } from "../../src/host/invocation.ts";
 import { changeSeat, createSeatedConversation, SEAT_RECORD_KIND, type SeatActor } from "../../src/host/seating.ts";
+import type { JobAuthor } from "../../src/jobs/job_model.ts";
+import { createJobStore, type Job, type JobStore, migrateJobStore, type NewJob } from "../../src/jobs/job_store.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 import { feedOperations } from "../../src/service/feed_operations.ts";
 import { type Caller, ServiceError } from "../../src/service/operations.ts";
@@ -42,7 +44,8 @@ type Fixture = {
     admission: Admission;
     config: ConfigStore;
     modelId: string;
-    open(maxPending?: number): Promise<InstanceFeed>;
+    jobStore: JobStore;
+    open(maxPending?: number, store?: JobStore): Promise<InstanceFeed>;
 };
 
 const labelSection = defineConfigSection<{ label: string }>({
@@ -105,14 +108,23 @@ async function openFixture(capacity = 2): Promise<Fixture> {
     directories.push(directory);
     const file = join(directory, "config.toml");
     const config = await createConfigStore(file, [labelSection], await loadConfig(file, [labelSection]));
+    await migrateJobStore(hostDatabase(host));
+    const jobStore = createJobStore(hostDatabase(host));
     const modelId = `${fake.getModel().provider}/${fake.getModel().id}`;
     return {
         host,
         admission,
         config,
         modelId,
-        async open(maxPending) {
-            const feed = await createInstanceFeed({ host, admission, config, ...(maxPending && { maxPending }) });
+        jobStore,
+        async open(maxPending, store = jobStore) {
+            const feed = await createInstanceFeed({
+                host,
+                admission,
+                config,
+                jobStore: store,
+                ...(maxPending && { maxPending }),
+            });
             feeds.push(feed);
             return feed;
         },
@@ -515,5 +527,68 @@ describe("feed.subscribe", () => {
 
     it("rejects an input with an unknown scope", () => {
         assert.throws(() => subscribe?.parse({ scope: "galaxy" }), /scope/);
+    });
+});
+
+describe("the instance snapshot's jobs that exist when the feed opens", () => {
+    const daemon: JobAuthor = { kind: "daemon" };
+    const newJob = (title: string): NewJob => ({
+        letter: "C",
+        requestText: "do it",
+        origin: { kind: "request", wayIn: "command line" },
+        title,
+        leadStart: {},
+    });
+
+    it("lists the To do, In progress and Blocked jobs, past one page, and leaves out a Done job", async () => {
+        const fixture = await openFixture();
+        const { jobStore } = fixture;
+        const todo = (await jobStore.insertJob(newJob("Waiting"))).job;
+        const running = (await jobStore.insertJob(newJob("Running"))).job;
+        await jobStore.applyAction(running.number, "start", {}, daemon);
+        const blocked = (await jobStore.insertJob(newJob("Stuck"))).job;
+        await jobStore.applyAction(blocked.number, "start", {}, daemon);
+        await jobStore.applyAction(blocked.number, "block", { blockedReason: "need a key" }, daemon);
+        const finished = (await jobStore.insertJob(newJob("Finished"))).job;
+        await jobStore.applyAction(finished.number, "cancel", { justification: "not needed" }, daemon);
+        const extra: string[] = [];
+        for (let i = 0; i < 52; i++) extra.push((await jobStore.insertJob(newJob(`Extra ${i}`))).job.number);
+
+        const subscription = (await fixture.open()).subscribe();
+
+        const byNumber = new Map(subscription.snapshot.jobs.map((job) => [job.number, job]));
+        assert.equal(byNumber.size, 55);
+        assert.deepEqual(byNumber.get(todo.number), { number: todo.number, title: "Waiting", status: "to_do" });
+        assert.deepEqual(byNumber.get(running.number), {
+            number: running.number,
+            title: "Running",
+            status: "in_progress",
+        });
+        assert.deepEqual(byNumber.get(blocked.number), { number: blocked.number, title: "Stuck", status: "blocked" });
+        assert.equal(byNumber.has(finished.number), false);
+        for (const number of extra) assert.equal(byNumber.get(number)?.status, "to_do");
+        subscription.close();
+    });
+
+    it("keeps a job committed while the feed reads the store", async () => {
+        const fixture = await openFixture();
+        await fixture.jobStore.insertJob(newJob("Before"));
+        let late: Job | undefined;
+        const store: JobStore = {
+            ...fixture.jobStore,
+            async listJobs(filter) {
+                const page = await fixture.jobStore.listJobs(filter);
+                if (filter.status === "to_do" && late === undefined) {
+                    late = (await fixture.jobStore.insertJob(newJob("During"))).job;
+                }
+                return page;
+            },
+        };
+
+        const subscription = (await fixture.open(undefined, store)).subscribe();
+
+        assert.ok(late, "a job was committed during the read");
+        assert.deepEqual(subscription.snapshot.jobs.map((job) => job.title).sort(), ["Before", "During"]);
+        subscription.close();
     });
 });

@@ -8,10 +8,12 @@ from the [coding guidelines](coding_guidelines.md).
 
 ## Runtime shape
 
-The Intern is one daemon process (`bob serve`) that owns one pi-durable database, one SQLite file in the instance's
-state directory ([S-002](../ai-team/specs/S-002-daemon-and-host-runtime.md), [ADR-001](../ai-team/decisions/ADR-001-one-daemon-process-owns-one-pi-durable-database.md)).
-Nothing else reads or writes that file. The operating system's supervisor starts the daemon and restarts it after an
-error exit, and unfinished work resumes from its checkpoints.
+The Intern is one daemon process (`bob serve`) that owns one database, one SQLite file in the instance's state
+directory. The file holds pi-durable's tables and the job store's `intern_` tables
+([S-002](../ai-team/specs/S-002-daemon-and-host-runtime.md), [S-004](../ai-team/specs/S-004-jobs.md),
+[ADR-001](../ai-team/decisions/ADR-001-one-daemon-process-owns-one-pi-durable-database.md)).
+Nothing else reads or writes that file, except the import step while the daemon is stopped. The operating system's
+supervisor starts the daemon and restarts it after an error exit, and unfinished work resumes from its checkpoints.
 
 ```
  ways in: command line (local) · web interface (network) · email
@@ -29,7 +31,7 @@ error exit, and unfinished work resumes from its checkpoints.
  │  harness host + the-intern's pi-durable extensions ──► models    │
  └───────────────────────────────┬──────────────────────────────────┘
                                  ▼
-                      one pi-durable database
+         one database: pi-durable's tables + the job store
 ```
 
 - **Service layer.** Every capability is a named read or control operation. Listeners, job sources and agent tools all
@@ -62,8 +64,44 @@ error exit, and unfinished work resumes from its checkpoints.
   the job's lead. Roles are the configuration agents are made from; a seat is a role's place in a conversation. The
   lead can hand its conversation to an agent of another role, or invoke agents of specialist roles in conversations of
   their own that report back (S-001).
+- **Job store.** The job record (jobs, counters, worklog, history, Related links) lives in `intern_` tables in the
+  same file, kept by `src/jobs/job_store.ts` (S-004 REQ-001). The file has one connection: `openHarnessHost` opens it
+  owner-only and gives the same handle to `SqliteStorage.open` and, through `hostDatabase(host)`, to the job store, so
+  both wait in one transaction queue (`src/host/harness_host.ts`, `openOwnerOnlyDatabase`, `openStorageOnHostDatabase`
+  and `narrowToHostDatabase`). The job store never reads pi-durable's tables, and the handle it gets can't close the
+  file. Its schema version lives in the `intern_schema` table, not in the file's `user_version`.
+- **Startup steps for jobs** (`src/daemon/daemon.ts`, `startUp`). Step 4 opens the host and, before pi-durable opens
+  the file, reads the job schema version through `beforeStorageOpen: checkJobSchemaVersion`; a newer version stops
+  startup and leaves the file unchanged. It then calls `migrateJobStore`, builds the job store and binds it to the
+  service context. Step 7 restores admission, then runs each component's `repair` hook, then `host.resume()` resumes
+  work. The jobs component's hook (`src/jobs/job_repair.ts`, `repairJobs`) applies the four repair rules of S-004
+  REQ-018 to each job, writes each repair to the job's history, and then runs the turn-end check for In progress
+  jobs. These rules are the only recovery the daemon applies to jobs (ADR-001 decision 4). The hook lists the
+  conversations and reads their `intern.conversation` documents once, before the rules, and finds each job's lead and
+  whether any of its conversations runs, parks or awaits in that index. A Done job with nothing active costs no
+  conversation read, so startup does not slow down with every job the instance has run. Rule 1 also covers a start cut
+  short: starting a lead is two pi-durable commits (the seated conversation, then the first input with request id
+  `lead:<jobId>`), with the `"lead-created"` write point between them. For a To do job whose lead is known, rule 1
+  reads whether that lead holds a submission with that request id (`hasSubmissionWithRequestId`), and submits the
+  input when it doesn't. That read is made only for To do jobs with a known lead, so it adds nothing for a job in any
+  other status. Rules 2 and 3 and the turn-end check read the lead of each Blocked or In progress job in their own way.
+- **Job operations and tools.** The catalogue carries the `jobs.*` operations: `create`, `get`, `list`, `update`,
+  `worklog.add`, `worklog.list`, `history.list`, `relate`, `unrelate`, `resume`, `complete`, `cancel` and `export`.
+  `jobs.startLead` is no longer an operation: `jobs.create` starts the lead in-process
+  (`src/service/job_operations.ts`). Every role carries the `intern.jobs` extension (`src/jobs/job_tools_extension.ts`),
+  with the tools `read_job`, `update_job`, `add_worklog`, `create_job` and `relate_jobs` for every agent of the job, and
+  `block_job` and `complete_job` for its lead only. A job's status changes only through the actions in
+  `src/jobs/job_actions.ts`, and each job write is committed before the pi-durable change it goes with.
+- **Job feed deltas.** The instance scope of the observation feed carries the jobs that aren't Done in its snapshot,
+  then the deltas `job_created`, `job_changed`, `job_worklog_added`, `job_status_changed` and `job_done`, published
+  after their job store commit (`src/feed/instance_feed.ts`).
+- **Export and import.** `jobs.export` copies the whole database to a new owner-only file with SQLite's online backup
+  on the daemon's connection, while work goes on (`src/host/database_copy.ts`, `backupDatabase`). `importDatabase` in
+  `src/host/database_import.ts` places an exported file as the database of a stopped instance, under the single-owner
+  lock; it converts nothing. No `bob` command calls it yet: `bob serve` is the only command.
 - **Failure.** A storage error closes the harness; the daemon exits non-zero rather than reopening the database
-  (S-002, ADR-001).
+  (S-002, ADR-001). A failed job store write is one too: `createJobStore` reports it through `onWriteFailure`, and the
+  daemon logs it and runs the same shutdown (S-004 REQ-020).
 
 ## Components and owning specs
 
@@ -74,7 +112,7 @@ that defines it.
 |---|---|---|
 | Intern service | The one long-running process: saved state, many jobs at once, resume after a restart, models, the shared operations, the feed, the listeners | S-002 (process, service layer, feed); S-003 (listeners, client library) |
 | Agents and roles | Roles, seats, the lead and handoff, invoking specialist agents, monitoring of who works on what | S-001 |
-| Jobs | The job record and the life of a job, blocked jobs and answers, history, export and import | No spec yet |
+| Jobs | The job record and the life of a job, blocked jobs and answers, history, export and import | S-004 |
 | Schedules and triggers | Starts jobs at set times and on events, with run history and on-demand runs | No spec yet |
 | Email | The Intern's own mailbox as a way in and out | No spec yet |
 | Web interface | The team's browser view and configuration, built only on service operations | No spec yet |
@@ -88,6 +126,10 @@ are not described here.
 ## Module rule
 
 - **Pure core.** Decision logic imports neither pi-durable nor I/O and is tested without a harness.
+- **Jobs.** `src/jobs/job_model.ts` is the pure core of the job model (statuses, actions, letters, the turn-end
+  decision) and imports nothing. `src/jobs/job_store.ts` imports no pi package: it uses only the host's `HostDatabase`
+  type and never touches pi-durable's tables. Other files in `src/jobs/` reach pi-durable only through the host
+  modules, except the `intern.jobs` extension, which is one of the-intern's own pi-durable extensions.
 - **pi-durable only behind the host.** Only the harness host module and the-intern's own pi-durable extensions import
   pi-durable. The service layer and every other component depend on the host's interface, so an upgrade of the pi
   packages touches a few files.

@@ -4,6 +4,7 @@
  * and the type re-exports below.
  */
 import { chmod, open } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import {
@@ -21,15 +22,18 @@ import {
     StorageRequestError,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { type SqliteDatabase, SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { Logger } from "../daemon/logger.ts";
 import type { HarnessSettingsMapping } from "../models/settings_mapping.ts";
 
-export type { Extension, Models, Storage };
+export type { Extension, Models, SqliteDatabase, Storage };
 
 const OWNER_ONLY_FILE_MODE = 0o600;
 const SQLITE_SIBLING_SUFFIXES = ["-wal", "-shm"];
 const CONVERSATION_PAGE_SIZE = 500;
+const BUSY_TIMEOUT_MS = 5_000;
+const WAL_AUTOCHECKPOINT_PAGES = 1_000;
 const context = BACKGROUND_CONTEXT;
 
 export type AgentChoice = { model: string; thinkingLevel?: string; cwd?: string; instructions?: string };
@@ -44,6 +48,28 @@ export class HostInvalidCursorError extends Error {
     }
 }
 
+export type HostSqlValue = null | number | bigint | string | Uint8Array;
+
+/**
+ * A structural copy of chord's `SqliteExecutor`, so the job store imports no pi package (ADR-001 decisions 1 and 2).
+ * Values go in as bindings, never interpolated into the SQL text.
+ */
+export type HostSqlExecutor = {
+    exec(sql: string): Promise<void>;
+    run(sql: string, ...params: HostSqlValue[]): Promise<void>;
+    get<T extends object>(sql: string, ...params: HostSqlValue[]): Promise<T | undefined>;
+    all<T extends object>(sql: string, ...params: HostSqlValue[]): Promise<T[]>;
+};
+
+/**
+ * The instance's one SQLite connection, shared with pi-durable. Work in a transaction goes through the handle the
+ * callback receives; calling the database itself from inside the callback never settles. A job store write must never
+ * run inside a pi-durable commit, nor a commit inside a job store transaction (ADR-001 decision 1).
+ */
+export type HostDatabase = HostSqlExecutor & {
+    transaction<T>(callback: (tx: HostSqlExecutor) => Promise<T>): Promise<T>;
+};
+
 export type HarnessHost = {
     /** Starts the work the last run left unfinished. Nothing runs before this is called. */
     resume(): void;
@@ -55,6 +81,8 @@ export type HarnessHost = {
     conversationInfo(id: string): Promise<ConversationInfo | undefined>;
     /** Entries oldest first, including those before a reset or compaction. `next` is the `after` of the next page. */
     readEntries(id: string, page: { after?: string; limit: number }): Promise<{ entries: HostEntry[]; next?: string }>;
+    /** The ID of the conversation's newest entry as `readEntries` shows it, or `null` when it has none. */
+    readNewestEntryId(id: string): Promise<string | null>;
     /** The entries the model sees now. */
     readContext(id: string): Promise<HostEntry[]>;
     /** The largest `timestamp` of the model messages of the stored entries, or `null` when there is none. */
@@ -68,17 +96,35 @@ export type HarnessHostOptions = {
     extensions: readonly Extension[];
     defaultCwd: string;
     logger: Logger;
+    /** Runs on the open database before pi-durable creates its tables. A rejection rejects the open. */
+    beforeStorageOpen?: (database: HostDatabase) => Promise<void>;
     /** Test-only hook that replaces the SQLite storage, to make the storage fail. */
-    openStorage?: (file: string) => Promise<Storage>;
+    openStorage?: (database: SqliteDatabase) => Promise<Storage>;
 };
 
 const harnesses = new WeakMap<HarnessHost, Harness>();
+const hostDatabases = new WeakMap<HarnessHost, HostDatabase>();
+const nodeDatabases = new WeakMap<HarnessHost, DatabaseSync>();
 
 /** The pi-durable harness behind a host. For other modules under `src/host/` and the-intern's extensions only. */
 export function internalHarness(host: HarnessHost): Harness {
     const harness = harnesses.get(host);
     if (!harness) throw new Error("internalHarness was given an object that openHarnessHost did not return");
     return harness;
+}
+
+/** The instance's one database connection, for the job store. The harness closes it when the host closes. */
+export function hostDatabase(host: HarnessHost): HostDatabase {
+    const database = hostDatabases.get(host);
+    if (!database) throw new Error("hostDatabase was given an object that openHarnessHost did not return");
+    return database;
+}
+
+/** The `node:sqlite` handle behind `hostDatabase`. For other modules under `src/host/` only. */
+export function internalDatabase(host: HarnessHost): DatabaseSync {
+    const database = nodeDatabases.get(host);
+    if (!database) throw new Error("internalDatabase was given an object that openHarnessHost did not return");
+    return database;
 }
 
 // SQLite gives the -wal and -shm files the mode of the database file, so the file is created owner-only first.
@@ -96,6 +142,50 @@ async function restrictSiblingFiles(databaseFile: string): Promise<void> {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
     }
+}
+
+async function applyPragmas(database: NodeSqliteDatabase): Promise<void> {
+    await database.exec("PRAGMA journal_mode = WAL");
+    await database.exec("PRAGMA synchronous = NORMAL");
+    await database.exec(`PRAGMA wal_autocheckpoint = ${WAL_AUTOCHECKPOINT_PAGES}`);
+}
+
+async function closeQuietly(database: NodeSqliteDatabase): Promise<void> {
+    try {
+        await database.close();
+    } catch {
+        // The open already failed; that error is the one to report.
+    }
+}
+
+type OpenedDatabase = { node: DatabaseSync; database: NodeSqliteDatabase };
+
+async function openOwnerOnlyDatabase(databaseFile: string): Promise<OpenedDatabase> {
+    await createDatabaseFileOwnerOnly(databaseFile);
+    const node = new DatabaseSync(databaseFile, { timeout: BUSY_TIMEOUT_MS });
+    return { node, database: new NodeSqliteDatabase(node) };
+}
+
+/**
+ * Opens a database file the way the host does, without a harness: owner-only, with the same pragmas. With
+ * `readOnly` it opens an existing file, creates nothing and sets no pragma. The caller closes it.
+ */
+export async function openHostDatabase(
+    file: string,
+    options: { readOnly?: boolean } = {},
+): Promise<HostDatabase & { close(): Promise<void> }> {
+    if (options.readOnly) {
+        return new NodeSqliteDatabase(new DatabaseSync(file, { readOnly: true, timeout: BUSY_TIMEOUT_MS }));
+    }
+    const { database } = await openOwnerOnlyDatabase(file);
+    try {
+        await applyPragmas(database);
+        await restrictSiblingFiles(file);
+    } catch (error) {
+        await closeQuietly(database);
+        throw error;
+    }
+    return database;
 }
 
 /**
@@ -243,6 +333,12 @@ function createHost(harness: Harness): HarnessHost {
                 ...(result.next !== undefined && { next: JSON.stringify(result.next) }),
             };
         },
+        async readNewestEntryId(id) {
+            const conversation = await requireConversation(harness, id);
+            const newest = await conversation.entries({ order: "descending" }, 1, undefined, context);
+            const entry = newest.items[0];
+            return entry === undefined ? null : String(entry.id);
+        },
         async readContext(id) {
             const conversation = await requireConversation(harness, id);
             return (await conversation.context(context)).entries.map(toContextEntry);
@@ -267,11 +363,34 @@ function createHost(harness: Harness): HarnessHost {
     };
 }
 
+async function openStorageOnHostDatabase(options: HarnessHostOptions, opened: OpenedDatabase): Promise<Storage> {
+    await options.beforeStorageOpen?.(opened.database);
+    await applyPragmas(opened.database);
+    return options.openStorage ? options.openStorage(opened.database) : SqliteStorage.open(opened.database);
+}
+
+// The harness owns closing; the job store gets the connection without a way to close it.
+function narrowToHostDatabase(database: NodeSqliteDatabase): HostDatabase {
+    return {
+        exec: (sql) => database.exec(sql),
+        run: (sql, ...params) => database.run(sql, ...params),
+        get: (sql, ...params) => database.get(sql, ...params),
+        all: (sql, ...params) => database.all(sql, ...params),
+        transaction: (callback) => database.transaction(callback),
+    };
+}
+
 /** Opens the database, installs the extensions and returns the host. Nothing is resumed until `resume()`. */
 export async function openHarnessHost(options: HarnessHostOptions): Promise<HarnessHost> {
     const { databaseFile, logger } = options;
-    await createDatabaseFileOwnerOnly(databaseFile);
-    const storage = await (options.openStorage ?? openNodeSqliteStorage)(databaseFile);
+    const opened = await openOwnerOnlyDatabase(databaseFile);
+    let storage: Storage;
+    try {
+        storage = await openStorageOnHostDatabase(options, opened);
+    } catch (error) {
+        await closeQuietly(opened.database);
+        throw error;
+    }
     const registry = createRegistry();
     for (const extension of options.extensions) registry.install(extension);
 
@@ -291,5 +410,7 @@ export async function openHarnessHost(options: HarnessHostOptions): Promise<Harn
 
     const host = createHost(harness);
     harnesses.set(host, harness);
+    hostDatabases.set(host, narrowToHostDatabase(opened.database));
+    nodeDatabases.set(host, opened.node);
     return host;
 }

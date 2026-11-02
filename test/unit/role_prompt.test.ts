@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Skill } from "@earendil-works/pi-coding-agent";
-import { type RolePromptInput, renderRolePrompt } from "../../src/prompt/role_prompt.ts";
+import { JOB_TOOL_NAMES } from "../../src/jobs/job_model.ts";
+import { LEAD_DUTY, type RolePromptInput, renderRolePrompt } from "../../src/prompt/role_prompt.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 
 const seat: Seat = {
@@ -28,6 +29,7 @@ function makeInput(overrides: Partial<RolePromptInput> = {}): RolePromptInput {
     return {
         preamble: "You are the intern.",
         seat,
+        isLead: false,
         contextFiles: [{ path: "/work/space/AGENTS.md", content: "Be careful." }],
         roleSkills: [makeSkill("role-skill")],
         workspaceSkills: [makeSkill("workspace-skill")],
@@ -80,5 +82,38 @@ describe("renderRolePrompt", () => {
     it("renders no preamble section for an empty preamble", () => {
         const sections = renderRolePrompt(makeInput({ preamble: "" }));
         assert.equal(sections[0]?.key, "intern.role");
+    });
+
+    it("renders the lead duty right after the role for a lead, whatever role is seated", () => {
+        for (const instructions of ["Write clearly.", "Review carefully."]) {
+            const sections = renderRolePrompt(makeInput({ isLead: true, seat: { ...seat, instructions } }));
+            const keys = sections.map((section) => section.key);
+            assert.equal(keys.indexOf("intern.lead-duty"), keys.indexOf("intern.role") + 1);
+            assert.equal(sections.find((section) => section.key === "intern.lead-duty")?.text, LEAD_DUTY);
+        }
+    });
+
+    it("leaves the lead duty out when the conversation is not a lead", () => {
+        const keys = renderRolePrompt(makeInput({ isLead: false })).map((section) => section.key);
+        assert.equal(keys.includes("intern.lead-duty"), false);
+    });
+
+    it("names the definition of done, the reason, the evidence and the three tools", () => {
+        assert.match(LEAD_DUTY, /definition of done/);
+        assert.match(LEAD_DUTY, /reason/);
+        assert.match(LEAD_DUTY, /evidence/);
+        assert.match(LEAD_DUTY, /justification/);
+        for (const tool of ["update_job", "block_job", "complete_job"] as const) {
+            assert.ok(JOB_TOOL_NAMES.includes(tool), `${tool} is a job tool`);
+            assert.ok(LEAD_DUTY.includes(tool), tool);
+        }
+    });
+
+    it("renders the lead duty byte-identically on every request", () => {
+        const first = renderRolePrompt(makeInput({ isLead: true }));
+        const second = renderRolePrompt(makeInput({ isLead: true }));
+        const dutyOf = (sections: typeof first) => sections.find((section) => section.key === "intern.lead-duty")?.text;
+        assert.equal(dutyOf(first), dutyOf(second));
+        assert.equal(JSON.stringify(first), JSON.stringify(second));
     });
 });

@@ -5,6 +5,7 @@
  */
 import { fork } from "node:child_process";
 import { join } from "node:path";
+import type { WritePoint } from "../../src/jobs/jobs_component.ts";
 import { ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
 import type { DaemonStatus } from "../../src/service/status_operation.ts";
 import type { HermeticEnv } from "./hermetic_env.ts";
@@ -17,9 +18,17 @@ const READY_POLL_TIMEOUT_MS = 30_000;
  * answer is slow. `invoke-parked`: a lead's first answer is a parked invoke of two `gp` agents with the job prompts
  * `job A` and `job B`; the invoked agents' answers are slow. `invoke-parked-slow-lead`: as `invoke-parked`, but the invoked
  * agents answer at once and the lead's answer to each report is slow, so a kill lands while a report is being delivered.
- * All of them answer anything else with an echo.
+ * `gated`: every answer waits until the test calls `releaseRuns()`, so a run lasts exactly as long as the test wants.
+ * All of the others answer anything else with an echo.
  */
-export type FakeScript = "echo" | "bash-sleep" | "slow" | "handoff-clean" | "invoke-parked" | "invoke-parked-slow-lead";
+export type FakeScript =
+    | "echo"
+    | "bash-sleep"
+    | "slow"
+    | "handoff-clean"
+    | "invoke-parked"
+    | "invoke-parked-slow-lead"
+    | "gated";
 
 export type StartDaemonOptions = {
     hermetic: HermeticEnv;
@@ -32,6 +41,10 @@ export type StartDaemonOptions = {
     model?: string;
     checkModel?: string;
     holdStart?: boolean;
+    /** `false` applies no turn-end rule to leads (`true` by default), for tests about conversations, not jobs. */
+    turnEndRule?: boolean;
+    /** The child kills itself with `SIGKILL` the first time the Jobs component reaches this write point. */
+    jobCrashAt?: WritePoint;
 };
 
 export type DaemonProcess = {
@@ -39,6 +52,8 @@ export type DaemonProcess = {
     ready: Promise<void>;
     invoke(op: string, input: unknown): Promise<unknown>;
     release(): void;
+    /** Lets the answers of the `gated` script through, now and from then on. */
+    releaseRuns(): void;
     stderr(): string;
     signal(sig: NodeJS.Signals): void;
     kill9(): void;
@@ -147,6 +162,7 @@ export function startDaemon(options: StartDaemonOptions): DaemonProcess {
         ready,
         invoke,
         release: () => child.send({ release: true }),
+        releaseRuns: () => child.send({ releaseRuns: true }),
         stderr: () => stderrText,
         signal: (sig) => child.kill(sig),
         kill9: () => child.kill("SIGKILL"),

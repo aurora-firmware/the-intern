@@ -7,6 +7,7 @@ import {
     type Conversation,
     ConversationBusy,
     type ConversationId,
+    InboxDoc,
     type InputEntry,
     type Submission,
     type SubmissionId,
@@ -71,16 +72,61 @@ function toSubmissionState(record: SubmissionRecord): SubmissionState {
     return { state: record.status };
 }
 
+export type SubmittedInput = { conversationId: string; requestId: string };
+type InputListener = (input: SubmittedInput) => Promise<void>;
+
+const inputListeners = new WeakMap<HarnessHost, InputListener[]>();
+
+/**
+ * Registers a listener that is awaited once pi-durable has admitted an input to a conversation, whether it was
+ * submitted or steered. A held message calls nothing until it is delivered. Returns the function that removes it.
+ */
+export function onInputSubmitted(host: HarnessHost, listener: InputListener): () => void {
+    const listeners = inputListeners.get(host) ?? [];
+    listeners.push(listener);
+    inputListeners.set(host, listeners);
+    return () => {
+        const index = listeners.indexOf(listener);
+        if (index >= 0) listeners.splice(index, 1);
+    };
+}
+
+/** Awaits the listeners in registration order with an input that pi-durable has admitted. */
+export async function notifyInputSubmitted(host: HarnessHost, input: SubmittedInput): Promise<void> {
+    for (const listener of [...(inputListeners.get(host) ?? [])]) await listener(input);
+}
+
 /** The entry an input is placed as instead of `pi.user`; its model message is still the input's user message. */
 export type InputRecord = { kind: string; data: unknown };
 
-/** Submits input. The request id deduplicates: a known request id returns its existing submission. */
+function findSubmission(host: HarnessHost, conversation: Conversation, requestId: string) {
+    return internalHarness(host).commit((tx) => tx.submissionByRequest(conversation.id, requestId), context);
+}
+
+/**
+ * The submission pi-durable holds for the request id, in any state, or `undefined`. A caller that finds one knows a
+ * repeat of the input places nothing, so it changes nothing that only new input changes.
+ */
+export async function submissionIdFor(
+    host: HarnessHost,
+    conversationId: string,
+    requestId: string,
+): Promise<string | undefined> {
+    const found = await findSubmission(host, await requireConversation(host, conversationId), requestId);
+    return found === undefined ? undefined : String(found.id);
+}
+
+/**
+ * Submits input. The request id deduplicates: a known request id returns its existing submission, places nothing and
+ * calls no input listener, because no input reached the conversation.
+ */
 export async function submitInput(
     host: HarnessHost,
     conversationId: string,
     input: { content: string; requestId: string; busyMode: BusyMode; entry?: InputRecord },
 ): Promise<{ submissionId: string }> {
     const conversation = await requireConversation(host, conversationId);
+    const isRepeat = (await findSubmission(host, conversation, input.requestId)) !== undefined;
     try {
         const submission = await conversation.submit(
             {
@@ -92,11 +138,50 @@ export async function submitInput(
             },
             context,
         );
+        if (!isRepeat) await notifyInputSubmitted(host, { conversationId, requestId: input.requestId });
         return { submissionId: String(submission.id) };
     } catch (error) {
         if (error instanceof ConversationBusy) throw new HostBusyError(conversationId, { cause: error });
         throw error;
     }
+}
+
+/** Whether pi-durable holds a submission of the conversation with this request id, in any state. */
+export async function hasSubmissionWithRequestId(
+    host: HarnessHost,
+    conversationId: string,
+    requestId: string,
+): Promise<boolean> {
+    return (await submissionIdFor(host, conversationId, requestId)) !== undefined;
+}
+
+/** Whether the conversation has input or writes queued in its inbox for the next boundary. */
+export async function hasQueuedInput(host: HarnessHost, conversationId: string): Promise<boolean> {
+    const conversation = await requireConversation(host, conversationId);
+    const inbox = await internalHarness(host).snapshot(InboxDoc, conversation.id, context);
+    return (inbox?.items.length ?? 0) > 0;
+}
+
+// The kinds a transcript places an input as: plain `pi.user`, and the kinds ADR-004 gives inputs sent on behalf.
+const INPUT_ENTRY_KINDS: ReadonlySet<string> = new Set(["pi.user", "intern.steer", "intern.report"]);
+const SCAN_PAGE_SIZE = 20;
+
+/**
+ * Whether the conversation took an input after the entry `afterEntryId`: an input entry newer than it in the
+ * transcript. The entries are read newest first and the scan stops at that entry.
+ */
+export async function hasInputSince(host: HarnessHost, conversationId: string, afterEntryId: string): Promise<boolean> {
+    const conversation = await requireConversation(host, conversationId);
+    let cursor: Awaited<ReturnType<Conversation["entries"]>>["next"];
+    do {
+        const page = await conversation.entries({ order: "descending" }, SCAN_PAGE_SIZE, cursor, context);
+        for (const entry of page.items) {
+            if (String(entry.id) === afterEntryId) return false;
+            if (INPUT_ENTRY_KINDS.has(entry.kind)) return true;
+        }
+        cursor = page.next;
+    } while (cursor !== undefined);
+    return false;
 }
 
 /** Withdraws a queued input, which settles `unanswered`. Input already placed in the transcript cannot be withdrawn. */

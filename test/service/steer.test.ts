@@ -18,8 +18,10 @@ import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { internalHarness } from "../../src/host/harness_host.ts";
+import { parkConversation } from "../../src/host/invocation.ts";
 import { readConversationMeta, type SeatActor } from "../../src/host/seating.ts";
 import { STEER_RECORD_KIND, steerConversation } from "../../src/host/steering.ts";
+import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -27,9 +29,8 @@ const WAIT_MS = 20_000;
 const POLL_MS = 10;
 const UNKNOWN_ID = "9999";
 const quietLogger = createLogger({ stream: { write: () => true } });
-const teamMember: Caller = { actor: { kind: "team_member", wayIn: "cli" } };
-const requestOrigin = { kind: "request", wayIn: "cli" } as const;
-const CLI_ACTOR: SeatActor = { kind: "team_member", wayIn: "cli" };
+const teamMember: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
+const CLI_ACTOR: SeatActor = { kind: "team_member", wayIn: "command line" };
 
 const envs: HermeticEnv[] = [];
 const daemons: RunningDaemon[] = [];
@@ -52,6 +53,10 @@ type Script = (call: ModelCall) => Promise<AssistantMessage | undefined> | Assis
 
 const usersOf = (messages: Message[]): string[] => messages.filter((m) => m.role === "user").map(textOf);
 
+// A lead's first input is the job's number, the Request text and the lead's duty, in separate paragraphs. The scripts
+// key a run by its Request text, which an invoked agent's job prompt (its whole first input) also is.
+const requestKeyOf = (firstInput: string): string => firstInput.split("\n\n")[1] ?? firstInput;
+
 function toolNamesOf(messages: Message[]): string[] {
     const inEffect = new Set<string>();
     for (const message of messages) {
@@ -70,7 +75,7 @@ async function start(script: Script) {
     const calls: ModelCall[] = [];
     const answer = async (context: { messages: Message[] }) => {
         fake.appendResponses([answer]);
-        const first = usersOf(context.messages)[0] ?? "";
+        const first = requestKeyOf(usersOf(context.messages)[0] ?? "");
         const nth = calls.filter((call) => call.first === first).length;
         const call: ModelCall = {
             first,
@@ -88,6 +93,7 @@ async function start(script: Script) {
         JSON.stringify({ defaultProvider: provider, defaultModel: "model-one" }),
     );
     const agents = await createAgentsComponent({ logger: quietLogger });
+    const jobs = await createJobsComponent({ agents, logger: quietLogger, turnEndRule: false });
     let captured: ServiceContext | undefined;
     const probe: DaemonComponent = {
         name: "probe",
@@ -101,8 +107,8 @@ async function start(script: Script) {
         homeDir: env.root,
         logger: quietLogger,
         sections: agents.sections,
-        components: [agents.component, probe],
-        operations: agents.operations,
+        components: [agents.component, jobs.component, probe],
+        operations: [...agents.operations, ...jobs.operations],
         prepareModels: (runtime) => {
             const implementation = getApiProvider(fake.api);
             if (!implementation) throw new Error("the fake model's api is not registered");
@@ -128,14 +134,14 @@ async function start(script: Script) {
         ctx,
         calls,
         callsOf: (first: string) => calls.filter((call) => call.first === first),
-        startLead: async (firstInput: string, jobId: string, role?: string) =>
+        createLead: async (text: string, role?: string) =>
             (
                 (await daemon.catalogue.invoke(
-                    "jobs.startLead",
-                    { jobId, firstInput, origin: requestOrigin, ...(role !== undefined && { role }) },
+                    "jobs.create",
+                    { text, ...(role !== undefined && { role }) },
                     teamMember,
-                )) as { conversationId: string }
-            ).conversationId,
+                )) as { leadConversation: string }
+            ).leadConversation,
         submit: (conversationId: string, content: string, requestId: string, busyMode?: string) =>
             daemon.catalogue.invoke(
                 "conversations.submit",
@@ -239,10 +245,10 @@ describe("the steer tool and steering a conversation", () => {
             }
             return undefined;
         });
-        ids.target = await started.startLead("target work", "job-target");
+        ids.target = await started.createLead("target work");
         await waitFor(() => started.callsOf("target work").length === 1, "the target's first request");
 
-        const steererId = await started.startLead("steerer work", "job-steerer", "gp");
+        const steererId = await started.createLead("steerer work", "gp");
         await waitFor(() => started.callsOf("steerer work").length === 2, "the steerer to get the tool result");
         targetGate.release();
         await waitFor(() => started.callsOf("target work").length >= 2, "the target's request after the tool round");
@@ -274,9 +280,9 @@ describe("the steer tool and steering a conversation", () => {
             }
             return undefined;
         });
-        ids.target = await started.startLead("target work", "job-target");
+        ids.target = await started.createLead("target work");
         await waitFor(() => started.callsOf("target work").length === 1, "the target's first request");
-        await started.startLead("steerer work", "job-steerer", "gp");
+        await started.createLead("steerer work", "gp");
         await waitFor(() => started.callsOf("steerer work").length === 2, "the steerer to get the tool result");
 
         targetGate.release();
@@ -290,7 +296,7 @@ describe("the steer tool and steering a conversation", () => {
     it("offers steer, handoff and invoke to an agent of a role that lists none of them", async () => {
         const started = await start(() => undefined);
 
-        const steererId = await started.startLead("steerer work", "job-steerer", "gp");
+        const steererId = await started.createLead("steerer work", "gp");
 
         await waitFor(() => started.callsOf("steerer work").length === 1, "the steerer's request");
         const meta = await readConversationMeta(started.ctx.host, steererId);
@@ -308,7 +314,7 @@ describe("the steer tool and steering a conversation", () => {
             call.first === "steerer work" && call.nth === 0 ? steerCall(UNKNOWN_ID, "hello", "steer") : undefined,
         );
 
-        await started.startLead("steerer work", "job-steerer", "gp");
+        await started.createLead("steerer work", "gp");
 
         await waitFor(() => started.callsOf("steerer work").length === 2, "the steerer to continue");
         const result = (started.callsOf("steerer work")[1] as ModelCall).results[0];
@@ -318,7 +324,7 @@ describe("the steer tool and steering a conversation", () => {
 
     it("records the team member and their way in when steering an idle conversation", async () => {
         const started = await start(() => undefined);
-        const targetId = await started.startLead("target work", "job-target");
+        const targetId = await started.createLead("target work");
         await waitFor(
             async () => started.callsOf("target work").length === 1 && !(await isBusy(started.ctx, targetId)),
             "the run to end",
@@ -358,7 +364,7 @@ describe("the steer tool and steering a conversation", () => {
                 }
                 return extra(call);
             });
-            ids.lead = await started.startLead("lead work", "job-lead");
+            ids.lead = await started.createLead("lead work");
             await waitFor(() => started.callsOf("job A").length === 1, "the invoked agent to start");
             await waitFor(
                 async () => (await readConversationMeta(started.ctx.host, ids.lead as string))?.parked !== null,
@@ -371,7 +377,7 @@ describe("the steer tool and steering a conversation", () => {
             const { started, leadId, release } = await startParkedLead();
 
             await started.submit(leadId, "from the team member", "member-1", "steer");
-            await started.startLead("steerer work", "job-steerer", "gp");
+            await started.createLead("steerer work", "gp");
             await waitFor(() => started.callsOf("steerer work").length === 2, "the steerer to get the tool result");
 
             assert.equal(started.callsOf("lead work").length, 1, "no run started for the held messages");
@@ -403,7 +409,7 @@ describe("the steer tool and steering a conversation", () => {
         it("delivers each held message as its own intern.steer entry with its sender", async () => {
             const { started, leadId, release } = await startParkedLead();
             await started.submit(leadId, "from the team member", "member-1", "steer");
-            await started.startLead("steerer work", "job-steerer", "gp");
+            await started.createLead("steerer work", "gp");
             await waitFor(() => started.callsOf("steerer work").length === 2, "the steerer to get the tool result");
             assert.deepEqual(
                 (await rawSteerDataOf(started.ctx, leadId)).map((data) => data.content),
@@ -473,6 +479,80 @@ describe("the steer tool and steering a conversation", () => {
                 assert.ok(users.includes(expected), `the lead's context holds "${expected}"`);
             }
             assert.deepEqual((await readConversationMeta(started.ctx.host, leadId))?.held, []);
+        });
+    });
+
+    describe("a conversation parked for an answer", () => {
+        async function startAnswerParked() {
+            const started = await start(() => undefined);
+            const leadId = await started.createLead("lead work");
+            await waitFor(async () => !(await isBusy(started.ctx, leadId)), "the lead to go idle");
+            await parkConversation(started.ctx.host, leadId, { waitingFor: "answer", continueOn: "each" });
+            return { started, leadId };
+        }
+
+        const continuedWith = async (started: Awaited<ReturnType<typeof start>>, text: string) =>
+            waitFor(
+                () => started.callsOf("lead work").some((call) => usersOf(call.messages).includes(text)),
+                `the lead to continue with "${text}"`,
+            );
+
+        it("continues with a team member's submit as an intern.steer entry and returns a submission id", async () => {
+            const { started, leadId } = await startAnswerParked();
+
+            const result = (await started.submit(leadId, "the answer", "answer-1", "steer")) as Record<string, unknown>;
+
+            assert.equal(typeof result.submissionId, "string");
+            assert.equal(result.held, undefined);
+            await continuedWith(started, "the answer");
+            const meta = await readConversationMeta(started.ctx.host, leadId);
+            assert.equal(meta?.parked, null);
+            assert.deepEqual(meta?.held, []);
+            assert.deepEqual(await steerEntriesOf(started.ctx, leadId), [{ actor: CLI_ACTOR, mode: "steer" }]);
+            await assertPlacedAsSteerEntry(started.ctx, leadId, "the answer");
+        });
+
+        it("continues with a reject input instead of refusing it busy", async () => {
+            const { started, leadId } = await startAnswerParked();
+
+            const result = (await started.submit(leadId, "rejected answer", "answer-2", "reject")) as Record<
+                string,
+                unknown
+            >;
+
+            assert.equal(typeof result.submissionId, "string");
+            await continuedWith(started, "rejected answer");
+            assert.equal((await readConversationMeta(started.ctx.host, leadId))?.parked, null);
+            assert.deepEqual(await steerEntriesOf(started.ctx, leadId), [{ actor: CLI_ACTOR, mode: "followUp" }]);
+        });
+
+        it("continues with an agent's steer, naming the agent", async () => {
+            const { started, leadId } = await startAnswerParked();
+            const agentActor: SeatActor = { kind: "agent", conversationId: "7", role: "gp" };
+
+            const result = await steerConversation(started.ctx.host, leadId, {
+                content: "from the agent",
+                mode: "followUp",
+                actor: agentActor,
+                requestId: "agent-1",
+            });
+
+            assert.equal(result.held, false);
+            await continuedWith(started, "from the agent");
+            assert.deepEqual(await steerEntriesOf(started.ctx, leadId), [{ actor: agentActor, mode: "followUp" }]);
+        });
+
+        it("takes the input once when the same request id is submitted twice", async () => {
+            const { started, leadId } = await startAnswerParked();
+
+            await started.submit(leadId, "only once", "answer-3", "steer");
+            await started.submit(leadId, "only once", "answer-3", "steer");
+
+            await continuedWith(started, "only once");
+            await waitFor(async () => !(await isBusy(started.ctx, leadId)), "the lead to finish");
+            const carriers = (await transcriptOf(started.ctx, leadId)).filter((entry) => entry.text === "only once");
+            assert.equal(carriers.length, 1);
+            assert.equal((await steerEntriesOf(started.ctx, leadId)).length, 1);
         });
     });
 });

@@ -96,12 +96,16 @@ async function actorOf(host: HarnessHost, caller: Caller) {
 async function submitOrSteer(host: HarnessHost, input: SubmitInput, caller: Caller): Promise<SubmitResult> {
     const { conversationId, busyMode, content, requestId } = input;
     const message = { content, mode: busyMode, actor: await actorOf(host, caller), requestId };
-    if (busyMode === "reject") {
-        // A parked conversation holds a reject input as a follow-up; a running one still refuses it with busy.
+    const isParkedForAnswer = (await readConversationMeta(host, conversationId))?.parked?.waitingFor === "answer";
+    if (busyMode === "reject" && !isParkedForAnswer) {
+        // A conversation parked for reports holds a reject input as a follow-up; a running one still refuses it
+        // with busy.
         const isHeld = await holdForParked(host, conversationId, { ...message, mode: "followUp" });
         return isHeld ? { held: true } : submitInput(host, conversationId, input);
     }
-    const { held, submissionId } = await steerConversation(host, conversationId, { ...message, mode: busyMode });
+    // A conversation parked for an answer continues with a reject input as a follow-up.
+    const mode = busyMode === "reject" ? "followUp" : busyMode;
+    const { held, submissionId } = await steerConversation(host, conversationId, { ...message, mode });
     return held ? { held: true } : { submissionId: submissionId as string };
 }
 

@@ -10,8 +10,18 @@ import { type ConfigSection, loadConfig } from "../config/config_file.ts";
 import { type ConfigStore, createConfigStore } from "../config/config_writer.ts";
 import { createInstanceFeed, type InstanceFeed } from "../feed/instance_feed.ts";
 import { createObservationFeed, type ObservationFeed } from "../feed/observation_feed.ts";
-import { type Extension, type HarnessHost, type Models, openHarnessHost, type Storage } from "../host/harness_host.ts";
+import {
+    type Extension,
+    type HarnessHost,
+    type HostDatabase,
+    hostDatabase,
+    type Models,
+    openHarnessHost,
+    type SqliteDatabase,
+    type Storage,
+} from "../host/harness_host.ts";
 import { recordOpenedVersions, runningVersions } from "../host/versions.ts";
+import { checkJobSchemaVersion, createJobStore, type JobStore, migrateJobStore } from "../jobs/job_store.ts";
 import { createModelRuntime, type InternModels, resolvePiAgentDir } from "../models/model_runtime.ts";
 import { conversationControlOperations } from "../service/conversation_control_operations.ts";
 import { conversationReadOperations } from "../service/conversation_read_operations.ts";
@@ -41,6 +51,7 @@ export type ServiceContext = {
     dirs: InstanceDirs;
     logger: Logger;
     catalogue: Catalogue;
+    jobStore: JobStore;
 };
 
 export type DaemonComponent = {
@@ -48,6 +59,8 @@ export type DaemonComponent = {
     extensions?: readonly Extension[];
     checkModels?(ctx: ServiceContext): Promise<void>;
     ensureWorkspaces?(ctx: ServiceContext): Promise<void>;
+    /** Step 7, after admission is restored and before work resumes: brings the component's saved state in step. */
+    repair?(ctx: ServiceContext): Promise<void>;
     start?(ctx: ServiceContext): Promise<void>;
     stop?(): Promise<void>;
 };
@@ -66,7 +79,9 @@ export type DaemonOptions = {
     /** Test-only: replaces the models handed to the harness, to use the fake model. */
     prepareModels?: (models: InternModels) => Models;
     /** Test-only: replaces the SQLite storage, to make it fail. */
-    openStorage?: (file: string) => Promise<Storage>;
+    openStorage?: (database: SqliteDatabase) => Promise<Storage>;
+    /** Test-only: wraps the database the job store writes to, to make a write fail. */
+    wrapJobDatabase?: (database: HostDatabase) => HostDatabase;
 };
 
 export type RunningDaemon = {
@@ -172,7 +187,12 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         logger.error(`could not undo ${what}`, { cause: error instanceof Error ? error.message : String(error) });
     }
 
-    async function openModelRuntime(): Promise<{ models: InternModels; host: HarnessHost; gateAdmission: Admission }> {
+    async function openModelRuntime(): Promise<{
+        models: InternModels;
+        host: HarnessHost;
+        gateAdmission: Admission;
+        jobStore: JobStore;
+    }> {
         const models = await createModelRuntime({ piAgentDir: resolvePiAgentDir(options.env) });
         undoStack.push(() => models.close());
         const gate = createAdmissionGate();
@@ -183,6 +203,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
             extensions: [gate.extension, ...components.flatMap((component) => component.extensions ?? [])],
             defaultCwd: dirs.dataDir,
             logger,
+            beforeStorageOpen: checkJobSchemaVersion,
             ...(options.openStorage && { openStorage: options.openStorage }),
         });
         // After a storage failure the harness has already closed itself, and closing it again would only fail.
@@ -191,10 +212,16 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         });
         const gateAdmission = createAdmission({ host, capacity: workerThreadCount, logger, gate });
         undoStack.push(async () => gateAdmission.stop());
-        return { models, host, gateAdmission };
+        await migrateJobStore(hostDatabase(host));
+        const jobDatabase = hostDatabase(host);
+        // A failed write is a storage error: the daemon exits and the supervisor restarts it (S-002 REQ-007).
+        const jobStore = createJobStore(options.wrapJobDatabase?.(jobDatabase) ?? jobDatabase, {
+            onWriteFailure: (error) => void exitAfterFailure("job store write failed; the daemon exits", error),
+        });
+        return { models, host, gateAdmission, jobStore };
     }
 
-    async function runComponents(hook: "checkModels" | "ensureWorkspaces"): Promise<void> {
+    async function runComponents(hook: "checkModels" | "ensureWorkspaces" | "repair"): Promise<void> {
         for (const component of components) await component[hook]?.(context);
     }
 
@@ -226,12 +253,14 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
                 host: runtime.host,
                 admission: runtime.gateAdmission,
                 config: store,
+                jobStore: runtime.jobStore,
             });
             undoStack.push(async () => instanceFeed.close());
             Object.assign(context, {
                 host: runtime.host,
                 admission: runtime.gateAdmission,
                 models: runtime.models,
+                jobStore: runtime.jobStore,
                 config: store,
                 feed,
                 instanceFeed,
@@ -244,6 +273,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         await step(7, STEP_NAMES.restoreAndResume, async () => {
             await recordVersions(opened.host);
             await opened.gateAdmission.restore();
+            await runComponents("repair");
             opened.host.resume();
         });
         await step(8, STEP_NAMES.startComponents, async () => {
@@ -303,7 +333,14 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
     }
 
     startUp().then(
-        () => {
+        async () => {
+            if (shutdownInFlight) {
+                // A shutdown began during startup (a failed job store write, or a stop): never ready. Components the
+                // startup went on to start after the shutdown's undo ran are stopped here.
+                await shutdownInFlight;
+                await undoAll();
+                return;
+            }
             phase = "ready";
             logger.info("ready", {
                 stateDir: dirs.stateDir,

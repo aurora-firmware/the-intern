@@ -45,8 +45,11 @@ and hyphens, in at most 40 characters in all.
 | `thinking_level` | The role's default thinking level. It must be one the model supports.          | The default thinking level of the pi login. |
 | `workspace`      | The absolute path of the role's default workspace. It must be registered.      | The role's own workspace, described below. |
 
-Every role is also offered `handoff`, `invoke` and `steer` (see [Sharing a job](#sharing-a-job)). A tool list can't
-leave them out, so you don't list them.
+Every role is also offered `handoff`, `invoke` and `steer` (see [Sharing a job](#sharing-a-job)) and the job tools
+`read_job`, `update_job`, `add_worklog`, `create_job`, `relate_jobs`, `block_job` and `complete_job`. A tool list can't
+leave them out, so you don't list them. Only a job's lead can use `block_job` and `complete_job`: an agent it invoked
+gets an error result from either, and its run goes on. An agent seated before the job tools existed keeps its tools
+until its seat changes.
 
 For a shipped role, set only the keys you want to change. Any key you leave out keeps its shipped value. For your own
 role, `instructions` and `tools` are required.
@@ -140,7 +143,24 @@ The commands for these changes come with the command-line documentation.
 Every job has one lead agent at a time. It works in the job's lead conversation, carries the job from definition to
 verification, and is the only agent that closes it. Other agents work on parts of the job and never close it.
 
-Every role is offered three capabilities for sharing the work.
+A lead's turn can end with the job still In progress and nothing left to wait for: no input queued for it and no
+invoked agent of the job running or reporting. The Intern then acts for the job:
+
+- If the job has no definition of done, it blocks the job with the reason "no definition of done".
+- Otherwise it sends the lead one reminder, which asks it to continue, block or complete the job. If the lead stops
+  again without completing or blocking, the Intern blocks the job with the reason "the lead stopped without completing
+  or blocking".
+
+The reminder shows in the lead's conversation as a steer from the daemon, and the block shows in the job's history with
+the daemon as author. A job that is blocked and then resumed gets a new reminder at the lead's next stop.
+
+Every role carries the job tools, whatever its tool list says. They read the job, edit its title, description and
+definition of done, add to its worklog, create a follow-up job and relate jobs. Only the job's lead can block and
+complete the job. An agent the lead invoked gets an error result
+from either, and its run goes on. A message sent to a lead that is parked for its Blocked job continues it and resumes
+the job. [Giving, following and answering jobs](jobs.md) describes jobs in full.
+
+Every role is also offered three capabilities for sharing the work.
 
 ### Handoff
 
@@ -174,8 +194,10 @@ The invoking agent then carries on in one of two ways:
 
 - **Steerable.** It keeps running and can steer the agents it invoked.
 - **Parked.** Its run ends and frees its worker thread. The Intern keeps its state, and it continues when an invoked
-  agent reports. A parked agent can't steer. A message sent to a parked conversation waits until the conversation
-  continues. When an agent invokes agents and parks, the invocation must be the only tool call of that turn.
+  agent reports. A parked agent can't steer. A message sent to a conversation parked for reports waits until the
+  conversation continues. A lead parked because its job is Blocked continues with the message instead, and the job
+  becomes In progress again: any message to a Blocked job's lead resumes the job, and the Blocked reason stays in the
+  job's history. When an agent invokes agents and parks, the invocation must be the only tool call of that turn.
 
 ### Reports
 

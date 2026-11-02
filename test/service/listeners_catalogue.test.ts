@@ -9,12 +9,15 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { STOP_BOUND_MS } from "../../src/daemon/constants.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import type { Storage } from "../../src/host/harness_host.ts";
+import { blockJob, startJob } from "../../src/jobs/job_actions.ts";
+import type { JobAuthor } from "../../src/jobs/job_model.ts";
+import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
 import { createNetworkListenerComponent } from "../../src/listeners/network_listener.ts";
 import { networkSection } from "../../src/listeners/network_section.ts";
@@ -33,7 +36,8 @@ const LOOPBACK = "127.0.0.1";
 /** Input starting with this word holds the fake model's answer until the run is aborted. */
 const HOLD_WORD = "hold";
 const OWNER_ONLY_MODE = 0o700;
-const IN_PROCESS: Caller = { actor: { kind: "team_member" } };
+/** `jobs.create` refuses the in-process way in, so in-process calls are made as a team member at the command line. */
+const IN_PROCESS: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
 const quietLogger = createLogger({ stream: { write: () => true } });
 
 /** The HTTP status S-003's Interfaces table gives each code, written out so a changed mapping is caught. */
@@ -46,11 +50,20 @@ const STATUS_OF: Record<ServiceErrorCode, number> = {
     internal: 500,
 };
 /** Values that differ between calls by nature: the keys holding ids, times, and the recorded way in. */
-const ID_KEYS = new Set(["id", "conversationId", "submissionId"]);
+const ID_KEYS = new Set(["id", "conversationId", "submissionId", "jobId", "leadConversation"]);
+/** Short numbers differ by way (each way creates its own jobs), and so do the observed details and the export. */
+const SHORT_NUMBER = /\b[CWESTA]-\d+\b/g;
+/** A listener records the observed caller details of a job's origin; the in-process call has none. */
+const OBSERVED_KEY = "observed";
 const ISO_TIME = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z/g;
 const WAY_IN = /"(in-process|command line|web interface)"/g;
 /** Served as a stream, so it has no operation route (S-003 REQ-006). */
 const STREAM_OPERATION = "feed.subscribe";
+/**
+ * Not an operation any more: `jobs.create` starts the lead in-process (S-004 AC-012.1). Written in parts, so a search
+ * for the name finds only the code that still calls it.
+ */
+const REMOVED_OPERATION = ["jobs", "startLead"].join(".");
 /** The test operations are not product operations; `test.failStorage` would break storage for the rest of the run. */
 const TEST_OPERATION_PREFIX = "test.";
 
@@ -61,7 +74,12 @@ const WAYS: readonly Way[] = ["in-process", "local socket", "network listener"];
 type HttpTarget = { socketPath: string } | { host: string; port: number };
 type Answer = { status: number; headers: IncomingHttpHeaders; body: unknown };
 type Outcome = { status: number; body: unknown };
-type Built = { input: unknown; names?: string[] };
+/** `names` and `maskedKeys` are what this operation's answer holds for one way only. */
+type Built = { input: unknown; names?: string[]; maskedKeys?: string[] };
+type CreatedJob = { id: string; number: string; leadConversation: string };
+const AUTHOR: JobAuthor = { kind: "team_member", wayIn: "command line" };
+const BLOCKED_REASON = "which build is failing?";
+const DONE_WHEN = "the build is green";
 
 const envs: HermeticEnv[] = [];
 const daemons: RunningDaemon[] = [];
@@ -87,6 +105,11 @@ async function until(condition: () => boolean | Promise<boolean>, what: string):
 
 function lastUserText(transcript: FakeTranscript): string {
     return transcript.findLast((turn) => turn.role === "user")?.text ?? "";
+}
+
+/** A submitted input starting with the hold word, or a job whose request text is the hold word. */
+function isHeld(text: string): boolean {
+    return text.startsWith(HOLD_WORD) || text.split("\n\n")[1] === HOLD_WORD;
 }
 
 function failingOnDemand(storage: Storage, storageSwitch: StorageSwitch): Storage {
@@ -119,10 +142,15 @@ function send(target: HttpTarget, method: string, path: string, headers: Outgoin
 }
 
 /** Replaces the values that differ by nature, and the names a builder made for one way only. */
-function comparable(value: unknown, names: readonly string[] = []): unknown {
-    let text = JSON.stringify(value, (key, field) => (ID_KEYS.has(key) && typeof field === "string" ? "<id>" : field));
+function comparable(value: unknown, names: readonly string[] = [], maskedKeys: readonly string[] = []): unknown {
+    const masked = new Set(maskedKeys);
+    let text = JSON.stringify(value, (key, field) => {
+        if (key === OBSERVED_KEY) return undefined;
+        if (masked.has(key)) return "<masked>";
+        return ID_KEYS.has(key) && typeof field === "string" ? "<id>" : field;
+    });
     for (const name of [...names].sort((a, b) => b.length - a.length)) text = text.split(name).join("<name>");
-    return JSON.parse(text.replace(ISO_TIME, "<time>").replace(WAY_IN, '"<way in>"'));
+    return JSON.parse(text.replace(ISO_TIME, "<time>").replace(WAY_IN, '"<way in>"').replace(SHORT_NUMBER, "<number>"));
 }
 
 type Fixture = {
@@ -134,6 +162,10 @@ type Fixture = {
     call(way: Way, name: string, input: unknown): Promise<Outcome>;
     folder(name: string): Promise<string>;
     settledConversation(jobId: string): Promise<string>;
+    /** Creates a job as `jobs.create` does for a team member, and waits until its lead conversation is idle. */
+    createJob(): Promise<CreatedJob>;
+    /** A job with a definition of done, started and then blocked. */
+    blockedJob(): Promise<CreatedJob>;
     runningConversation(jobId: string): Promise<string>;
     stateSnapshot(): Promise<unknown>;
 };
@@ -144,7 +176,7 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
     const env = await createHermeticEnv();
     envs.push(env);
     const fake = createFakeModel(() => "ok", {
-        delayMs: (transcript) => (lastUserText(transcript).startsWith(HOLD_WORD) ? HOLD_DELAY_MS : 0),
+        delayMs: (transcript) => (isHeld(lastUserText(transcript)) ? HOLD_DELAY_MS : 0),
     });
     fakes.push(fake);
     const provider = fake.getModel().provider;
@@ -155,6 +187,7 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
     );
     await writeFile(join(env.configDir, "config.toml"), `[network]\naddress = "${LOOPBACK}"\nport = 8080\n`);
     const agents = await createAgentsComponent({ logger: quietLogger });
+    const jobs = await createJobsComponent({ agents, logger: quietLogger, turnEndRule: false });
     const storageSwitch: StorageSwitch = { isFailing: false };
     let captured: ServiceContext | undefined;
     const probe: DaemonComponent = {
@@ -170,8 +203,19 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
         homeDir: env.root,
         logger: quietLogger,
         sections: [...agents.sections, networkSection],
-        components: [agents.component, probe, createLocalSocketComponent(), network, ...(options.lastComponents ?? [])],
-        operations: [...agents.operations, ...createTestOperations({ storageSwitch, modelFor: () => modelId })],
+        components: [
+            agents.component,
+            jobs.component,
+            probe,
+            createLocalSocketComponent(),
+            network,
+            ...(options.lastComponents ?? []),
+        ],
+        operations: [
+            ...agents.operations,
+            ...jobs.operations,
+            ...createTestOperations({ storageSwitch, modelFor: () => modelId }),
+        ],
         prepareModels: (runtime) => {
             const implementation = getApiProvider(fake.api);
             assert.ok(implementation, "the fake model's api is registered");
@@ -185,7 +229,7 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
             );
             return runtime.models;
         },
-        openStorage: async (file) => failingOnDemand(await openNodeSqliteStorage(file), storageSwitch),
+        openStorage: async (database) => failingOnDemand(await SqliteStorage.open(database), storageSwitch),
     });
     daemons.push(daemon);
     await until(() => daemon.phase() === "ready", "the daemon to be ready");
@@ -223,10 +267,23 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
         return ((await invoke("conversations.get", { conversationId })) as { status: string }).status;
     }
 
+    async function createJob(): Promise<CreatedJob> {
+        const job = (await invoke("jobs.create", { text: "hello" })) as CreatedJob;
+        await until(async () => (await statusOf(job.leadConversation)) === "idle", "the job's lead to be idle");
+        return job;
+    }
+
+    async function blockedJob(): Promise<CreatedJob> {
+        const job = await createJob();
+        const deps = { ctx, options: jobs.options };
+        await ctx.jobStore.updateFields(job.id, { definitionOfDone: DONE_WHEN }, AUTHOR);
+        await startJob(deps, job.id);
+        await blockJob(deps, job.id, BLOCKED_REASON, AUTHOR);
+        return job;
+    }
+
     async function settledConversation(jobId: string): Promise<string> {
-        const { conversationId } = (await invoke("jobs.startLead", { jobId, firstInput: "hello" })) as {
-            conversationId: string;
-        };
+        const { leadConversation: conversationId } = await createJob();
         const settle = { conversationId, content: "settle", requestId: `settle-${jobId}` };
         const { submissionId } = (await invoke("conversations.submit", settle)) as { submissionId: string };
         const waited = (await invoke("submissions.wait", { submissionId, timeoutMs: SETTLE_WAIT_MS })) as {
@@ -238,9 +295,7 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
     }
 
     async function runningConversation(jobId: string): Promise<string> {
-        const { conversationId } = (await invoke("jobs.startLead", { jobId, firstInput: HOLD_WORD })) as {
-            conversationId: string;
-        };
+        const { leadConversation: conversationId } = (await invoke("jobs.create", { text: HOLD_WORD })) as CreatedJob;
         await until(async () => (await statusOf(conversationId)) === "running", `${jobId} to be running`);
         return conversationId;
     }
@@ -280,12 +335,14 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
         call,
         folder,
         settledConversation,
+        createJob,
+        blockedJob,
         runningConversation,
         stateSnapshot,
     };
 }
 
-type Seed = { conversationId: string; submissionId: string };
+type Seed = { conversationId: string; submissionId: string; jobNumber: string };
 type InputBuilder = (fixture: Fixture, seed: Seed, way: Way) => Promise<Built>;
 
 const label = (way: Way) => way.replace(" ", "-");
@@ -321,7 +378,41 @@ const INPUT_BUILDERS: Record<string, InputBuilder> = {
     "conversations.seat": async (fixture, _seed, way) => ({
         input: { conversationId: await fixture.settledConversation(`seat-${label(way)}`), role: "gp" },
     }),
-    "jobs.startLead": async (_f, _seed, way) => ({ input: { jobId: `job-${label(way)}`, firstInput: "start" } }),
+    "jobs.create": async () => ({ input: { text: "make the report" } }),
+    "jobs.get": async (_f, seed) => ({ input: { job: seed.jobNumber } }),
+    "jobs.list": async () => ({ input: { limit: 50 } }),
+    "jobs.worklog.list": async (_f, seed) => ({ input: { job: seed.jobNumber } }),
+    "jobs.history.list": async (_f, seed) => ({ input: { job: seed.jobNumber } }),
+    "jobs.update": async (fixture) => ({
+        input: { job: (await fixture.createJob()).number, definitionOfDone: DONE_WHEN },
+    }),
+    "jobs.worklog.add": async (fixture) => ({
+        input: { job: (await fixture.createJob()).number, text: "found the cause" },
+    }),
+    "jobs.relate": async (fixture) => ({
+        input: { job: (await fixture.createJob()).number, other: (await fixture.createJob()).number },
+    }),
+    "jobs.unrelate": async (fixture) => {
+        const job = (await fixture.createJob()).number;
+        const other = (await fixture.createJob()).number;
+        await fixture.invoke("jobs.relate", { job, other });
+        return { input: { job, other } };
+    },
+    "jobs.resume": async (fixture) => ({
+        input: { job: (await fixture.blockedJob()).number, text: "the nightly build" },
+    }),
+    "jobs.complete": async (fixture) => {
+        const job = await fixture.createJob();
+        await fixture.invoke("jobs.update", { job: job.number, definitionOfDone: DONE_WHEN });
+        return { input: { job: job.number, justification: "the build is green" } };
+    },
+    "jobs.cancel": async (fixture) => ({
+        input: { job: (await fixture.createJob()).number, justification: "no longer needed" },
+    }),
+    "jobs.export": async (fixture, _seed, way) => {
+        const path = join(fixture.env.root, `export-${label(way)}.sqlite`);
+        return { input: { path }, names: [path], maskedKeys: ["path", "size"] };
+    },
     "submissions.withdraw": async (fixture, _seed, way) => {
         const conversationId = await fixture.runningConversation(`withdraw-${label(way)}`);
         const queued = { conversationId, content: "queued", requestId: "queued" };
@@ -358,7 +449,8 @@ const INPUT_BUILDERS: Record<string, InputBuilder> = {
 };
 
 async function seedConversation(fixture: Fixture): Promise<Seed> {
-    const conversationId = await fixture.settledConversation("seed");
+    const job = await fixture.createJob();
+    const conversationId = job.leadConversation;
     const submitted = { conversationId, content: "seeded", requestId: "seeded" };
     const { submissionId } = (await fixture.invoke("conversations.submit", submitted)) as { submissionId: string };
     await fixture.invoke("submissions.wait", { submissionId, timeoutMs: SETTLE_WAIT_MS });
@@ -367,10 +459,47 @@ async function seedConversation(fixture: Fixture): Promise<Seed> {
             ((await fixture.invoke("conversations.get", { conversationId })) as { status: string }).status === "idle",
         "the seed conversation to be idle",
     );
-    return { conversationId, submissionId };
+    return { conversationId, submissionId, jobNumber: job.number };
 }
 
+/** S-004's Interfaces: the kind of each job operation. */
+const JOB_OPERATION_KINDS: Record<string, "read" | "control"> = {
+    "jobs.create": "control",
+    "jobs.get": "read",
+    "jobs.list": "read",
+    "jobs.update": "control",
+    "jobs.worklog.add": "control",
+    "jobs.worklog.list": "read",
+    "jobs.history.list": "read",
+    "jobs.relate": "control",
+    "jobs.unrelate": "control",
+    "jobs.resume": "control",
+    "jobs.complete": "control",
+    "jobs.cancel": "control",
+    "jobs.export": "control",
+};
+
 describe("catalogue through both listeners", () => {
+    it("lists every job operation with its kind", async () => {
+        const fixture = await startFixture();
+        const listed = new Map(fixture.daemon.catalogue.list().map(({ name, kind }) => [name, kind]));
+
+        for (const [name, kind] of Object.entries(JOB_OPERATION_KINDS)) {
+            assert.equal(listed.get(name), kind, `${name} is listed as ${kind}`);
+        }
+    });
+
+    it("lists no lead-start operation and refuses a call to it not_found through every way", async () => {
+        const fixture = await startFixture();
+        const input = { jobId: "job-1", firstInput: "go", origin: { kind: "request", wayIn: "cli" } };
+
+        const listed = fixture.daemon.catalogue.list().map(({ name }) => name);
+
+        assert.ok(!listed.includes(REMOVED_OPERATION), `${REMOVED_OPERATION} is not listed`);
+        await assertErrorThroughListeners((way) => fixture.call(way, REMOVED_OPERATION, input), "not_found");
+        assert.equal((await fixture.ctx.host.listConversations()).length, 0);
+    });
+
     it("answers every product operation through both listeners as in-process", {
         timeout: TEST_TIMEOUT_MS,
     }, async () => {
@@ -386,13 +515,13 @@ describe("catalogue through both listeners", () => {
             assert.ok(build, `operation ${name} has an input builder`);
             const outcomes: unknown[] = [];
             for (const way of WAYS) {
-                const { input, names } = await build(fixture, seed, way);
+                const { input, names, maskedKeys } = await build(fixture, seed, way);
                 const before = kind === "read" ? await fixture.stateSnapshot() : undefined;
                 const outcome = await fixture.call(way, name, input);
                 assert.equal(outcome.status, 200, `${name} ${way}: ${JSON.stringify(outcome.body)}`);
                 if (kind === "read")
                     assert.deepEqual(await fixture.stateSnapshot(), before, `${name} ${way} reads only`);
-                outcomes.push(comparable(outcome.body, names));
+                outcomes.push(comparable(outcome.body, names, maskedKeys));
             }
             assert.deepEqual(outcomes[1], outcomes[0], `${name} over the local socket answers as in-process`);
             assert.deepEqual(outcomes[2], outcomes[0], `${name} over the network listener answers as in-process`);
