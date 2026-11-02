@@ -79,7 +79,11 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   jobs. These rules are the only recovery the daemon applies to jobs (ADR-001 decision 4). The hook lists the
   conversations and reads their `intern.conversation` documents once, before the rules, and finds each job's lead and
   whether any of its conversations runs, parks or awaits in that index. A Done job with nothing active costs no
-  conversation read, so startup does not slow down with every job the instance has run.
+  conversation read, so startup does not slow down with every job the instance has run. Rule 1 also covers a start cut
+  short: starting a lead is two pi-durable commits (the seated conversation, then the first input with request id
+  `lead:<jobId>`), with the `"lead-created"` write point between them. For a To do job whose lead is known, rule 1
+  reads whether that lead holds a submission with that request id (`hasSubmissionWithRequestId`), and submits the
+  input when it doesn't. That read is the only per-job conversation read at startup, and no other job is read.
 - **Job operations and tools.** The catalogue carries the `jobs.*` operations: `create`, `get`, `list`, `update`,
   `worklog.add`, `worklog.list`, `history.list`, `relate`, `unrelate`, `resume`, `complete`, `cancel` and `export`.
   `jobs.startLead` is no longer an operation: `jobs.create` starts the lead in-process

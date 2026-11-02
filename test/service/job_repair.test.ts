@@ -13,13 +13,13 @@ import { hasQueuedInput, hasSubmissionWithRequestId } from "../../src/host/conve
 import { internalHarness } from "../../src/host/harness_host.ts";
 import { parkConversation } from "../../src/host/invocation.ts";
 import { conversationMetaDoc, createSeatedConversation, readConversationMeta } from "../../src/host/seating.ts";
-import { DEFAULT_LEAD_ROLE } from "../../src/roles/shipped_roles.ts";
 import { steerConversation } from "../../src/host/steering.ts";
 import { blockJob, cancelJob, type JobActionDeps } from "../../src/jobs/job_actions.ts";
 import { type JobAuthor, reminderRequestId } from "../../src/jobs/job_model.ts";
 import { repairJobs } from "../../src/jobs/job_repair.ts";
 import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import { REMINDER_TEXT } from "../../src/jobs/turn_end_rule.ts";
+import { DEFAULT_LEAD_ROLE } from "../../src/roles/shipped_roles.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -272,7 +272,7 @@ describe("rule 1: a job with no lead conversation", () => {
 });
 
 describe("rule 1: a lead start cut short before its first input", () => {
-    it("submits the first input to the same lead once, writes one repair entry and changes nothing at a third start", async () => {
+    it("submits the first input once to the same lead, and a third start repairs nothing", async () => {
         const rig = await createRig();
         const first = await rig.boot({ afterWrite: crashAt("lead-created") });
         await assert.rejects(first.createJob(), /failed unexpectedly/);
