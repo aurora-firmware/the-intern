@@ -135,7 +135,12 @@ async function untilLeadAnswered(daemon: DaemonProcess, leadId: string): Promise
 /** Sends the answer to the lead the way a team member's reply does; the request id keeps it from being a resume. */
 const answerLead = (daemon: DaemonProcess, conversationId: string) =>
     daemon
-        .invoke("conversations.submit", { conversationId, content: ANSWER, requestId: "answer-1", busyMode: "followUp" })
+        .invoke("conversations.submit", {
+            conversationId,
+            content: ANSWER,
+            requestId: "answer-1",
+            busyMode: "followUp",
+        })
         .catch(() => undefined);
 
 describe("kill -9 after the job write and before its lead starts", () => {
