@@ -81,6 +81,8 @@ export type HarnessHost = {
     conversationInfo(id: string): Promise<ConversationInfo | undefined>;
     /** Entries oldest first, including those before a reset or compaction. `next` is the `after` of the next page. */
     readEntries(id: string, page: { after?: string; limit: number }): Promise<{ entries: HostEntry[]; next?: string }>;
+    /** The ID of the conversation's newest entry as `readEntries` shows it, or `null` when it has none. */
+    readNewestEntryId(id: string): Promise<string | null>;
     /** The entries the model sees now. */
     readContext(id: string): Promise<HostEntry[]>;
     /** The largest `timestamp` of the model messages of the stored entries, or `null` when there is none. */
@@ -330,6 +332,12 @@ function createHost(harness: Harness): HarnessHost {
                 entries: result.items.map(toHostEntry),
                 ...(result.next !== undefined && { next: JSON.stringify(result.next) }),
             };
+        },
+        async readNewestEntryId(id) {
+            const conversation = await requireConversation(harness, id);
+            const newest = await conversation.entries({ order: "descending" }, 1, undefined, context);
+            const entry = newest.items[0];
+            return entry === undefined ? null : String(entry.id);
         },
         async readContext(id) {
             const conversation = await requireConversation(harness, id);

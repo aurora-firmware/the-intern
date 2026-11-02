@@ -19,7 +19,7 @@ import {
     type Resolution,
 } from "./job_model.ts";
 
-export const JOB_SCHEMA_VERSION = 1;
+export const JOB_SCHEMA_VERSION = 2;
 
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 500;
@@ -119,6 +119,8 @@ export type JobStore = {
     getJob(ref: string): Promise<Job>;
     listJobs(filter: JobListFilter): Promise<{ jobs: Job[]; cursor?: string }>;
     leadStartOf(ref: string): Promise<unknown>;
+    /** The lead's newest transcript entry ID recorded by the job's block, or null (S-004 REQ-018 rule 3). */
+    blockedAfterEntryOf(ref: string): Promise<string | null>;
     updateFields(ref: string, fields: Partial<Record<EditableField, string>>, author: JobAuthor): Promise<Job>;
     addWorklog(ref: string, text: string, author: JobAuthor): Promise<WorklogEntry>;
     listWorklog(ref: string, page: EntryPage): Promise<{ entries: WorklogEntry[]; cursor?: string }>;
@@ -137,7 +139,7 @@ export type JobStoreOptions = {
     onListenerError?: (error: unknown) => void;
 };
 
-const MIGRATIONS: readonly string[] = [
+export const JOB_MIGRATIONS: readonly string[] = [
     `
     CREATE TABLE intern_schema (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -197,9 +199,10 @@ const MIGRATIONS: readonly string[] = [
     );
     CREATE INDEX intern_related_by_b ON intern_related (job_b);
     `,
+    "ALTER TABLE intern_jobs ADD COLUMN blocked_after_entry TEXT;",
 ];
 
-if (MIGRATIONS.length !== JOB_SCHEMA_VERSION) throw new Error("JOB_SCHEMA_VERSION and MIGRATIONS are out of step");
+if (JOB_MIGRATIONS.length !== JOB_SCHEMA_VERSION) throw new Error("JOB_SCHEMA_VERSION and MIGRATIONS are out of step");
 
 async function versionIn(executor: HostSqlExecutor): Promise<number> {
     const table = await executor.get<{ name: string }>(
@@ -230,7 +233,7 @@ export async function migrateJobStore(db: HostDatabase): Promise<void> {
         const version = await versionIn(tx);
         if (version > JOB_SCHEMA_VERSION) throw new JobSchemaTooNewError(version);
         for (let next = version + 1; next <= JOB_SCHEMA_VERSION; next++) {
-            await tx.exec(MIGRATIONS[next - 1] as string);
+            await tx.exec(JOB_MIGRATIONS[next - 1] as string);
             await tx.run(SET_VERSION_SQL, next);
         }
     });
@@ -650,6 +653,11 @@ async function applyActionIn(
         await tx.run("UPDATE intern_jobs SET blocked_reason = ? WHERE id = ?", reason, row.id);
         await addHistory(tx, row.id, { at, author, field: "blockedReason", old: row.blocked_reason, new: reason });
     }
+    // Neither a history entry nor a change: the entry is the daemon's own record for rule 3 (S-004 Interfaces).
+    if (action === "block" || action === "resume") {
+        const entry = action === "block" ? (input.blockedAfterEntry ?? null) : null;
+        await tx.run("UPDATE intern_jobs SET blocked_after_entry = ? WHERE id = ?", entry, row.id);
+    }
     const kind = ACTION_RESOLUTIONS[action];
     let change: JobChange;
     if (kind === undefined) {
@@ -704,6 +712,14 @@ export function createJobStore(db: HostDatabase, options: JobStoreOptions = {}):
             const { id } = await findRow(db, ref);
             const row = await db.get<{ lead_start: string }>("SELECT lead_start FROM intern_jobs WHERE id = ?", id);
             return JSON.parse(row?.lead_start ?? "null");
+        },
+        async blockedAfterEntryOf(ref) {
+            const { id } = await findRow(db, ref);
+            const row = await db.get<{ blocked_after_entry: string | null }>(
+                "SELECT blocked_after_entry FROM intern_jobs WHERE id = ?",
+                id,
+            );
+            return row?.blocked_after_entry ?? null;
         },
         updateFields: (ref, fields, author) => write((tx) => updateFieldsIn(tx, ref, fields, author)),
         addWorklog: (ref, text, author) => write((tx) => addWorklogIn(tx, ref, text, author)),

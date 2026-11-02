@@ -5,6 +5,7 @@ import { openHostDatabase } from "../../src/host/harness_host.ts";
 import {
     checkJobSchemaVersion,
     createJobStore,
+    JOB_MIGRATIONS,
     JOB_SCHEMA_VERSION,
     type JobChange,
     JobNotFoundError,
@@ -80,6 +81,36 @@ describe("job store schema", () => {
         });
         await assert.rejects(migrateJobStore(db), JobSchemaTooNewError);
         assert.equal(await readJobSchemaVersion(db), JOB_SCHEMA_VERSION + 1);
+    });
+});
+
+describe("job store migration 2", () => {
+    it("brings a version 1 file to version 2 with blockedAfterEntry null and other columns unchanged", async () => {
+        const db = await openDb();
+        await db.exec(JOB_MIGRATIONS[0] as string);
+        await db.run("INSERT INTO intern_schema (id, version) VALUES (1, 1)");
+        const insert =
+            "INSERT INTO intern_jobs (id, letter, n, title, description, definition_of_done, status, blocked_reason, " +
+            "request_text, origin, lead_start, created_at, updated_at) VALUES (?, 'C', ?, 't', 'd', 'x', ?, ?, 'r', " +
+            "'{}', '{}', 'c', 'u')";
+        await db.run(insert, "id-1", 1, "blocked", "waiting");
+        await db.run(insert, "id-2", 2, "to_do", null);
+        const before = (await db.all("SELECT * FROM intern_jobs ORDER BY id")).map((row) => ({ ...row }));
+        assert.equal(await readJobSchemaVersion(db), 1);
+
+        await migrateJobStore(db);
+
+        assert.equal(await readJobSchemaVersion(db), 2);
+        const after = await db.all<Record<string, unknown>>("SELECT * FROM intern_jobs ORDER BY id");
+        assert.deepEqual(
+            after.map((row) => row.blocked_after_entry),
+            [null, null],
+        );
+        assert.deepEqual(
+            after.map(({ blocked_after_entry: _column, ...rest }) => ({ ...rest })),
+            before,
+        );
+        assert.equal(await createJobStore(db).blockedAfterEntryOf("id-1"), null);
     });
 });
 
@@ -175,6 +206,46 @@ const refusal = (code: "conflict" | "invalid_input", field?: string) => (error: 
     assert.equal(error.field, field);
     return true;
 };
+
+describe("blockedAfterEntry", () => {
+    it("is set by a block, cleared by a resume, and kept by other actions", async () => {
+        const { store, job } = await openWithJob();
+        assert.equal(await store.blockedAfterEntryOf(job.number), null);
+        await store.applyAction(job.number, "start", {}, daemon);
+        assert.equal(await store.blockedAfterEntryOf(job.number), null);
+        await store.applyAction(job.number, "block", { blockedReason: "need a key", blockedAfterEntry: "17" }, lead);
+        assert.equal(await store.blockedAfterEntryOf(job.id), "17");
+        await store.applyAction(job.number, "resume", {}, daemon);
+        assert.equal(await store.blockedAfterEntryOf(job.number), null);
+        await store.applyAction(job.number, "block", { blockedReason: "again" }, lead);
+        assert.equal(await store.blockedAfterEntryOf(job.number), null);
+    });
+
+    it("is not in the job, the history or the changes", async () => {
+        const plain = await openWithJob();
+        const recorded = await openWithJob();
+        const run = async (w: typeof plain, extra: { blockedAfterEntry?: string }) => {
+            await w.store.applyAction(w.job.number, "start", {}, daemon);
+            const blocked = await w.store.applyAction(w.job.number, "block", { blockedReason: "r", ...extra }, lead);
+            const resumed = await w.store.applyAction(w.job.number, "resume", {}, daemon);
+            return { blocked, resumed, history: (await w.store.listHistory(w.job.number, {})).entries };
+        };
+        const a = await run(plain, {});
+        const b = await run(recorded, { blockedAfterEntry: "9" });
+        const strip = (v: typeof a) => JSON.stringify([v.blocked, v.resumed, v.history.map(({ at: _at, ...r }) => r)]);
+        const text = JSON.stringify(b);
+        assert.ok(!text.includes("blockedAfterEntry") && !text.includes("blocked_after_entry"));
+        assert.equal(
+            strip(b).replace(/"(createdAt|updatedAt|id|number)":"[^"]*"/g, ""),
+            strip(a).replace(/"(createdAt|updatedAt|id|number)":"[^"]*"/g, ""),
+        );
+        assert.deepEqual(
+            recorded.changes.map((c) => c.type),
+            plain.changes.map((c) => c.type),
+        );
+        assert.ok(!JSON.stringify(recorded.changes).includes('9"'));
+    });
+});
 
 describe("job store writes and history", () => {
     it("holds exactly the changes of an edited, blocked, resumed and completed job", async () => {

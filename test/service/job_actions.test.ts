@@ -225,6 +225,41 @@ describe("blockJob", () => {
         assert.equal((await started.ctx.jobStore.getJob(job.id)).status, "in_progress");
     });
 
+    it("stores the lead's newest entry ID read before the block, and a resume clears it", async () => {
+        const started = await start();
+        const job = await started.create();
+        await startJob(started.deps, job.id);
+        const lastEntry = async () => {
+            let after: string | undefined;
+            let last: string | undefined;
+            do {
+                const page = await started.ctx.host.readEntries(job.leadConversation, { limit: 100, after });
+                last = page.entries.at(-1)?.id ?? last;
+                after = page.next;
+            } while (after !== undefined);
+            return last;
+        };
+        const expected = await lastEntry();
+        assert.ok(expected !== undefined);
+
+        await blockJob(started.deps, job.id, "waiting for the schema", author);
+
+        assert.equal(await started.ctx.jobStore.blockedAfterEntryOf(job.id), expected);
+        assert.equal(await started.ctx.host.readNewestEntryId(job.leadConversation), expected);
+        await resumeJob(started.deps, job.id, author);
+        assert.equal(await started.ctx.jobStore.blockedAfterEntryOf(job.id), null);
+    });
+
+    it("reads no entry for a conversation with no entries, and throws for an unknown one", async () => {
+        const started = await start();
+        const seat = started.deps.options.agents.runtime().catalog.seatFor(DEFAULT_LEAD_ROLE);
+        const empty = await started.ctx.host.createConversation({
+            agent: { model: seat.model, cwd: seat.workspace },
+        });
+        assert.equal(await started.ctx.host.readNewestEntryId(empty), null);
+        await assert.rejects(started.ctx.host.readNewestEntryId("999999"));
+    });
+
     it("leaves Blocked committed and the lead unparked when afterWrite throws", async () => {
         const started = await start();
         const job = await started.create();
