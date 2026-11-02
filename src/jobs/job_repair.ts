@@ -7,7 +7,7 @@
  */
 import type { ServiceContext } from "../daemon/daemon.ts";
 import { hasInputSince, hasQueuedInput } from "../host/conversation_control.ts";
-import { abortJobConversations, continueWithHeld, parkConversation } from "../host/invocation.ts";
+import { abortJobConversations, continueWithHeld, parkConversation, unparkConversation } from "../host/invocation.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import { leadRefusedJustification, leadStartFor, startLeadConversation } from "../service/job_operations.ts";
 import { ServiceError } from "../service/operations.ts";
@@ -76,8 +76,11 @@ async function applyRule3(deps: JobActionDeps, jobId: string, leadId: string | u
         did: "Set the job In progress: its lead held or had taken input since the job blocked",
     });
     // The lead takes the input first and the resume follows it, as when the input arrives (S-004 REQ-006). Input the
-    // lead already took leaves nothing to deliver.
-    if ((await readConversationMeta(ctx.host, leadId))?.held.length) await continueWithHeld(ctx.host, leadId);
+    // lead already took, or input queued for it, leaves nothing to deliver, but a park for the answer that the block
+    // made is cleared all the same: the lead continues, and the turn-end rule sees it as waiting for nothing.
+    const meta = await readConversationMeta(ctx.host, leadId);
+    if (meta?.held.length) await continueWithHeld(ctx.host, leadId);
+    else if (meta?.parked) await unparkConversation(ctx.host, leadId);
     await resumeJob(deps, job.id, DAEMON);
 }
 

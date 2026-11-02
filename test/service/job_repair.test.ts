@@ -394,6 +394,44 @@ describe("rule 3: input the lead has not taken", () => {
         heldCall.release();
         await waitFor(() => rig.modelInputs.some((users) => users.includes(HELD_TEXT)), "the lead to take the answer");
     });
+
+    it("unparks the lead when the input queued before the park and the crash came before the resume", async () => {
+        const rig = await createRig();
+        const steerAnswer = (ctx: ServiceContext, leadId: string) =>
+            steerConversation(ctx.host, leadId, {
+                content: HELD_TEXT,
+                mode: "followUp",
+                actor: teamMember,
+                requestId: "answer-1",
+            });
+        let leadId = "";
+        let ctxOfFirst: ServiceContext | undefined;
+        const first = await rig.boot({
+            afterWrite: async (point) => {
+                // The answer queues for the running lead after the block is written and before the lead parks.
+                if (point === "job-blocked") await assert.rejects(steerAnswer(ctxOfFirst as ServiceContext, leadId));
+                if (point === "lead-input") throw new Error("crash at lead-input");
+            },
+        });
+        ctxOfFirst = first.ctx;
+        const heldCall = rig.hold();
+        const job = await first.createJob();
+        leadId = job.leadConversation;
+        await waitFor(() => rig.modelInputs.length === 1, "the lead's run to be in its model call");
+        await blockJob(first.deps, job.id, REASON, teamMember);
+        assert.equal((await first.ctx.jobStore.getJob(job.id)).status, "blocked");
+        assert.equal(await hasQueuedInput(first.ctx.host, job.leadConversation), true);
+        assert.notEqual((await readConversationMeta(first.ctx.host, job.leadConversation))?.parked, null);
+        await first.stop();
+
+        const second = await rig.boot();
+
+        assert.equal((await second.ctx.jobStore.getJob(job.id)).status, "in_progress");
+        assert.equal((await readConversationMeta(second.ctx.host, job.leadConversation))?.parked, null);
+        assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [3]);
+        heldCall.release();
+        await waitFor(() => rig.modelInputs.some((users) => users.includes(HELD_TEXT)), "the lead to take the answer");
+    });
 });
 
 describe("rule 3: input the lead took since the job blocked", () => {

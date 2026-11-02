@@ -68,7 +68,8 @@ accepted ADRs win over this document; when they disagree, fix this document. The
     input they show as undelivered, made safe to repeat by request ids.
   - A job write is committed before the pi-durable change it goes with, and the four startup repair rules of S-004
     REQ-018 (`src/jobs/job_repair.ts`) are the only job recovery. Rule 3 also covers input the lead took since the job
-    blocked, read from the entry the block recorded in `blockedAfterEntry`. A fifth rule, a retry of a failed job
+    blocked, read from the entry the block recorded in `blockedAfterEntry`, and always clears the park the block made,
+    so the turn-end rule applies to the lead's next stop. A fifth rule, a retry of a failed job
     write or a timer that checks jobs amends ADR-001 first.
 - **Effect sandwich.** Commit the intent, perform the effect, commit the outcome. A handler reopened in an intent phase
   must assume the effect may have happened.
