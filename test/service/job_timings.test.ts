@@ -91,8 +91,9 @@ async function start(): Promise<Started> {
     };
 }
 
-type Listed = { jobs?: unknown[] };
-type Got = { worklog?: unknown[] };
+type ListedJob = { number: string; status: string };
+type Listed = { jobs: ListedJob[]; cursor?: string };
+type Got = ListedJob & { worklog: { text: string }[] };
 
 const LETTERS = ["C", "W", "E"] as const;
 const WAYS_IN = { C: "command line", W: "web interface", E: "email" } as const;
@@ -100,6 +101,12 @@ const JOB_COUNT = 10_000;
 const WORKLOG_ENTRIES = 1_000;
 const LIST_TARGET_MS = 200;
 const GET_TARGET_MS = 100;
+const DEFAULT_PAGE = 50;
+const SCAN_PAGE = 500;
+
+// What the seeding makes: job i has letter LETTERS[i % 3]; every even job is started; every fourth is then blocked.
+const expectedByLetter = { C: 3334, W: 3333, E: 3333 };
+const expectedByStatus = { to_do: 5000, in_progress: 2500, blocked: 2500, done: 0 };
 
 async function seedJobs(ctx: ServiceContext): Promise<string> {
     let heavyJobId = "";
@@ -130,28 +137,64 @@ async function timed<T>(label: string, targetMs: number, run: () => Promise<T>):
     return result;
 }
 
+// Pages the whole store (untimed) and counts it, so the timings below run over the population AC-019.1 names.
+async function assertSeededPopulation(started: Started): Promise<void> {
+    const byLetter: Record<string, number> = { C: 0, W: 0, E: 0 };
+    const byStatus: Record<string, number> = { to_do: 0, in_progress: 0, blocked: 0, done: 0 };
+    const numbers = new Set<string>();
+    let cursor: string | undefined;
+    do {
+        const page = await started.invoke<Listed>("jobs.list", { limit: SCAN_PAGE, ...(cursor && { cursor }) });
+        for (const job of page.jobs) {
+            numbers.add(job.number);
+            const letter = job.number.split("-")[0] as string;
+            byLetter[letter] = (byLetter[letter] ?? 0) + 1;
+            byStatus[job.status] = (byStatus[job.status] ?? 0) + 1;
+        }
+        cursor = page.cursor;
+    } while (cursor !== undefined);
+    assert.equal(numbers.size, JOB_COUNT);
+    assert.deepEqual(byLetter, expectedByLetter);
+    assert.deepEqual(byStatus, expectedByStatus);
+}
+
+// A filtered query is only measured as such when it returned a full page and nothing outside the filter.
+function assertFullPage(listed: Listed, matches: (job: ListedJob) => boolean): void {
+    assert.equal(listed.jobs.length, DEFAULT_PAGE);
+    assert.ok(listed.cursor !== undefined, "more jobs match than one page holds");
+    assert.deepEqual(
+        listed.jobs.filter((job) => !matches(job)),
+        [],
+    );
+}
+
 describe("jobs.list and jobs.get reference timings", () => {
     it("reports jobs.list over 10,000 jobs and jobs.get over 1,000 entries beside their references", async () => {
         const started = await start();
         const seedBegan = performance.now();
         const heavyJobId = await seedJobs(started.ctx);
         console.log(`timing seeding: ${(performance.now() - seedBegan).toFixed(0)} ms`);
+        await assertSeededPopulation(started);
 
         const blocked = await timed("jobs.list status filter", LIST_TARGET_MS, () =>
             started.invoke<Listed>("jobs.list", { status: "blocked" }),
         );
-        assert.ok((blocked.jobs?.length ?? 0) > 0);
+        assertFullPage(blocked, (job) => job.status === "blocked");
         const lettered = await timed("jobs.list letter filter", LIST_TARGET_MS, () =>
             started.invoke<Listed>("jobs.list", { letter: "E" }),
         );
-        assert.ok((lettered.jobs?.length ?? 0) > 0);
+        assertFullPage(lettered, (job) => job.number.startsWith("E-"));
         const page = await timed("jobs.list default limit", LIST_TARGET_MS, () =>
             started.invoke<Listed>("jobs.list", {}),
         );
-        assert.ok((page.jobs?.length ?? 0) > 0);
+        assertFullPage(page, () => true);
         const job = await timed("jobs.get 1,000 worklog entries", GET_TARGET_MS, () =>
             started.invoke<Got>("jobs.get", { job: heavyJobId }),
         );
-        assert.ok((job.worklog?.length ?? 0) > 0);
+        assert.equal(job.worklog.length, WORKLOG_ENTRIES);
+        assert.deepEqual(
+            job.worklog.map((entry) => entry.text),
+            Array.from({ length: WORKLOG_ENTRIES }, (_, i) => `note ${i}`),
+        );
     });
 });
