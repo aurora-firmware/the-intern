@@ -238,7 +238,7 @@ describe("add_worklog and update_job", () => {
 });
 
 describe("create_job", () => {
-    it("creates an A job whose origin names the job and conversation, Related to the job, once per call id", async () => {
+    it("creates an A job from the job and conversation, Related to the job, once per call id", async () => {
         const started = await start();
         const parent = await started.createJob(sourceCaller, { origin: schedule });
         assert.match(parent.number, /^S-/);
