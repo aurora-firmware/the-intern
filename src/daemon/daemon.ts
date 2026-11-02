@@ -13,6 +13,7 @@ import { createObservationFeed, type ObservationFeed } from "../feed/observation
 import {
     type Extension,
     type HarnessHost,
+    type HostDatabase,
     hostDatabase,
     type Models,
     openHarnessHost,
@@ -79,6 +80,8 @@ export type DaemonOptions = {
     prepareModels?: (models: InternModels) => Models;
     /** Test-only: replaces the SQLite storage, to make it fail. */
     openStorage?: (database: SqliteDatabase) => Promise<Storage>;
+    /** Test-only: wraps the database the job store writes to, to make a write fail. */
+    wrapJobDatabase?: (database: HostDatabase) => HostDatabase;
 };
 
 export type RunningDaemon = {
@@ -210,7 +213,11 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         const gateAdmission = createAdmission({ host, capacity: workerThreadCount, logger, gate });
         undoStack.push(async () => gateAdmission.stop());
         await migrateJobStore(hostDatabase(host));
-        const jobStore = createJobStore(hostDatabase(host));
+        const jobDatabase = hostDatabase(host);
+        // A failed write is a storage error: the daemon exits and the supervisor restarts it (S-002 REQ-007).
+        const jobStore = createJobStore(options.wrapJobDatabase?.(jobDatabase) ?? jobDatabase, {
+            onWriteFailure: (error) => void exitAfterFailure("job store write failed; the daemon exits", error),
+        });
         return { models, host, gateAdmission, jobStore };
     }
 
@@ -326,7 +333,14 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
     }
 
     startUp().then(
-        () => {
+        async () => {
+            if (shutdownInFlight) {
+                // A shutdown began during startup (a failed job store write, or a stop): never ready. Components the
+                // startup went on to start after the shutdown's undo ran are stopped here.
+                await shutdownInFlight;
+                await undoAll();
+                return;
+            }
             phase = "ready";
             logger.info("ready", {
                 stateDir: dirs.stateDir,

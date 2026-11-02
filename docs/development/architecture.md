@@ -63,7 +63,8 @@ error exit, and unfinished work resumes from its checkpoints.
   lead can hand its conversation to an agent of another role, or invoke agents of specialist roles in conversations of
   their own that report back (S-001).
 - **Failure.** A storage error closes the harness; the daemon exits non-zero rather than reopening the database
-  (S-002, ADR-001).
+  (S-002, ADR-001). A failed job store write is one too: `createJobStore` reports it through `onWriteFailure`, and the
+  daemon logs it and runs the same shutdown (S-004 REQ-020).
 
 ## Components and owning specs
 

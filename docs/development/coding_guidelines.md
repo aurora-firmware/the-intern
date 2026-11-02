@@ -73,7 +73,7 @@ accepted ADRs win over this document; when they disagree, fix this document. The
 - **Keep prompt sections byte-stable** across turns; unstable text defeats provider caching. Test it.
 - **Shutdown closes the Harness and cached model connections**, or the process hangs.
 - **A storage error closes the Harness.** Let the daemon exit non-zero and rely on the operating system's supervisor;
-  don't recover in-process (ADR-001).
+  don't recover in-process (ADR-001). A job store write that fails with anything but a refusal is a storage error too.
 
 ## Security and failure behaviour
 
