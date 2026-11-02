@@ -16,6 +16,7 @@ import { conversationMetaDoc, readConversationMeta } from "../../src/host/seatin
 import { steerConversation } from "../../src/host/steering.ts";
 import { blockJob, cancelJob, type JobActionDeps } from "../../src/jobs/job_actions.ts";
 import { type JobAuthor, reminderRequestId } from "../../src/jobs/job_model.ts";
+import { repairJobs } from "../../src/jobs/job_repair.ts";
 import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import { REMINDER_TEXT } from "../../src/jobs/turn_end_rule.ts";
 import type { Caller } from "../../src/service/operations.ts";
@@ -484,6 +485,33 @@ describe("rules 3 and 4: jobs with nothing to repair", () => {
         const second = await rig.boot();
 
         assert.deepEqual(await repairsOf(second.ctx, job.id), []);
+    });
+});
+
+describe("the cost of the repair", () => {
+    it("lists the conversations once, however many Done jobs the instance holds", async () => {
+        const rig = await createRig();
+        const booted = await rig.boot({ turnEndRule: true });
+        for (let count = 0; count < 5; count += 1) {
+            const job = await booted.createJob();
+            await waitFor(() => isIdle(booted.ctx, job.leadConversation), "the lead to be idle");
+            await cancelJob(booted.deps, job.id, "no longer needed", teamMember);
+        }
+        const { host } = booted.ctx;
+        const listConversations = host.listConversations;
+        let listings = 0;
+        host.listConversations = () => {
+            listings += 1;
+            return listConversations();
+        };
+
+        try {
+            await repairJobs(booted.deps);
+        } finally {
+            host.listConversations = listConversations;
+        }
+
+        assert.equal(listings, 1);
     });
 });
 

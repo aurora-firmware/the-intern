@@ -76,7 +76,10 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   service context. Step 7 restores admission, then runs each component's `repair` hook, then `host.resume()` resumes
   work. The jobs component's hook (`src/jobs/job_repair.ts`, `repairJobs`) applies the four repair rules of S-004
   REQ-018 to each job, writes each repair to the job's history, and then runs the turn-end check for In progress
-  jobs. These rules are the only recovery the daemon applies to jobs (ADR-001 decision 4).
+  jobs. These rules are the only recovery the daemon applies to jobs (ADR-001 decision 4). The hook lists the
+  conversations and reads their `intern.conversation` documents once, before the rules, and finds each job's lead and
+  whether any of its conversations runs, parks or awaits in that index. A Done job with nothing active costs no
+  conversation read, so startup does not slow down with every job the instance has run.
 - **Job operations and tools.** The catalogue carries the `jobs.*` operations: `create`, `get`, `list`, `update`,
   `worklog.add`, `worklog.list`, `history.list`, `relate`, `unrelate`, `resume`, `complete`, `cancel` and `export`.
   `jobs.startLead` is no longer an operation: `jobs.create` starts the lead in-process
