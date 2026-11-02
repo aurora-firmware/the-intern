@@ -137,6 +137,11 @@ export type JobStore = {
 export type JobStoreOptions = {
     /** Called when a commit listener throws. The write has committed and stays committed. */
     onListenerError?: (error: unknown) => void;
+    /**
+     * Called once when a write's transaction fails with anything but a refusal or an unknown job. The transaction has
+     * rolled back and the write rejects with the same error (S-004 REQ-020, ADR-001 decision 5).
+     */
+    onWriteFailure?: (error: unknown) => void;
 };
 
 export const JOB_MIGRATIONS: readonly string[] = [
@@ -692,15 +697,26 @@ export function createJobStore(db: HostDatabase, options: JobStoreOptions = {}):
         }
     };
 
+    // A refusal or an unknown job is the caller's mistake and changes nothing; any other failure is a storage error.
+    const transact = async <T>(body: (tx: HostSqlExecutor) => Promise<T>): Promise<T> => {
+        try {
+            return await db.transaction(body);
+        } catch (error) {
+            if (!(error instanceof JobRefusedError || error instanceof JobNotFoundError))
+                options.onWriteFailure?.(error);
+            throw error;
+        }
+    };
+
     const write = async <T>(body: (tx: HostSqlExecutor) => Promise<Written<T>>): Promise<T> => {
-        const { value, changes } = await db.transaction(body);
+        const { value, changes } = await transact(body);
         for (const change of changes) report(change);
         return value;
     };
 
     return {
         async insertJob(input) {
-            const { job, created, changes } = await db.transaction((tx) => insertIn(tx, input));
+            const { job, created, changes } = await transact((tx) => insertIn(tx, input));
             for (const change of changes) report(change);
             return { job, created };
         },
@@ -738,7 +754,7 @@ export function createJobStore(db: HostDatabase, options: JobStoreOptions = {}):
         unrelate: (a, b, author) => write((tx) => setLinkByRef(tx, a, b, false, author)),
         applyAction: (ref, action, input, author) => write((tx) => applyActionIn(tx, ref, action, input, author)),
         async recordRepair(ref, repair) {
-            await db.transaction(async (tx) => {
+            await transact(async (tx) => {
                 const { id } = await findRow(tx, ref);
                 const at = new Date().toISOString();
                 await addHistory(tx, id, { at, author: DAEMON, field: "repair", old: null, new: repair });

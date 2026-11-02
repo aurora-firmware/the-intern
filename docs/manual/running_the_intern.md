@@ -16,6 +16,10 @@ The service runs in the foreground, writes its log lines to standard error and k
 `SIGTERM` or `SIGINT` (Ctrl+C). It exits with status 0 only after a requested stop. Any other exit has a non-zero
 status, so a supervisor such as systemd or launchd can restart it.
 
+When the database refuses a write to a job, the service fails that call with `internal`, leaves the job and its
+history as they were, logs "job store write failed; the daemon exits", and stops within 10 seconds with a non-zero
+status. It doesn't reopen the database; your supervisor restarts it.
+
 Until a release provides `bob`, run it from a checkout of the project:
 
 ```
