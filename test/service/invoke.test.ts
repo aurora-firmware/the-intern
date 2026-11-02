@@ -75,7 +75,7 @@ async function start(options: StartOptions) {
     const answer = async (context: { messages: Message[] }) => {
         fake.appendResponses([answer]);
         const users = context.messages.filter((message) => message.role === "user").map(textOf);
-        // A lead's input is the job's number, the Request text and the lead's duty; an invoked agent's is its job prompt.
+        // A lead's input holds the job's number, the Request text and the lead's duty; an invoked agent's is its prompt.
         const last = requestTextOf(users.at(-1)) ?? "";
         const results = context.messages.filter((message) => message.role === "toolResult").map(textOf);
         if (results.length > 0) toolResults.push(...results);
