@@ -25,6 +25,7 @@ import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts"
 
 const WAIT_MS = 20_000;
 const POLL_MS = 10;
+const SHUTDOWN_SETTLE_MS = 300;
 const SCRIPT_INPUT = "script";
 const WRITE_REFUSED = "job store write refused";
 const WRITE_FAILED_LOG = "job store write failed; the daemon exits";
@@ -317,20 +318,30 @@ describe("a failed job store write in the daemon", () => {
         assert.equal(started.wrapCount(), 1);
     });
 
-    it("exits non-zero without becoming ready when a write fails during startup and the caller swallows it", async () => {
+    it("never becomes ready and stops late components when a write fails during startup", async () => {
         const failure: FailureSwitch = { shouldFail: isNoWrite };
-        const swallow: DaemonComponent = {
-            name: "swallow",
-            async repair(ctx) {
+        const stops: string[] = [];
+        const failing: DaemonComponent = {
+            name: "failing",
+            async start(ctx) {
                 failure.shouldFail = () => true;
                 await ctx.jobStore.insertJob(newJob("during startup")).catch(() => undefined);
                 failure.shouldFail = isNoWrite;
+                // Lets the shutdown finish, so the steps after the failure no longer meet a closed harness first.
+                const deadline = Date.now() + WAIT_MS;
+                while (ctx.status.phase() !== "stopping" && Date.now() < deadline) await sleep(POLL_MS);
+                await sleep(SHUTDOWN_SETTLE_MS);
             },
         };
-        const started = await start({ components: [swallow], failure });
+        const late: DaemonComponent = { name: "late", stop: async () => void stops.push("late") };
+        const started = await start({ components: [failing, late], failure });
         const since = Date.now();
 
         assert.notEqual(await exitedWithin(started.daemon, since), 0);
+        await sleep(SHUTDOWN_SETTLE_MS);
+
         assert.notEqual(started.daemon.phase(), "ready");
+        assert.equal(logged(started.lines, "ready").filter((line) => line.endsWith("ready")).length, 0);
+        assert.deepEqual(stops, ["late"]);
     });
 });

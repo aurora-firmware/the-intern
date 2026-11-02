@@ -333,7 +333,14 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
     }
 
     startUp().then(
-        () => {
+        async () => {
+            if (shutdownInFlight) {
+                // A shutdown began during startup (a failed job store write, or a stop): never ready. Components the
+                // startup went on to start after the shutdown's undo ran are stopped here.
+                await shutdownInFlight;
+                await undoAll();
+                return;
+            }
             phase = "ready";
             logger.info("ready", {
                 stateDir: dirs.stateDir,
