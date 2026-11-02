@@ -205,6 +205,13 @@ export async function parkConversation(host: HarnessHost, conversationId: string
     });
 }
 
+/** Clears the parked state without submitting anything, for a conversation that input already reached. */
+export async function unparkConversation(host: HarnessHost, conversationId: string): Promise<void> {
+    await updateMeta(host, conversationId, (meta) => {
+        meta.parked = null;
+    });
+}
+
 // A held message is placed as its own kind, so the transcript names its sender where it is delivered.
 function heldEntryOf(message: HeldMessage): InputRecord {
     const { actor, mode, content } = message;

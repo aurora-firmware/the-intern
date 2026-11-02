@@ -6,7 +6,7 @@
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type ConversationId, defineEntry } from "@earendil-works/pi-durable";
-import { HostNotFoundError } from "./conversation_control.ts";
+import { HostNotFoundError, notifyInputSubmitted } from "./conversation_control.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { continueParked } from "./invocation.ts";
 import { conversationMetaDoc, type HeldMessage, readConversationMeta, type SeatActor } from "./seating.ts";
@@ -83,5 +83,6 @@ export async function steerConversation(
         },
         context,
     );
+    await notifyInputSubmitted(host, { conversationId: String(conversation.id), requestId: input.requestId });
     return { held: false, submissionId: String(submission.id) };
 }
