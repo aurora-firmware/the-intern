@@ -13,7 +13,11 @@ export type FakeTranscript = readonly { role: "user" | "assistant" | "toolResult
 
 export type FakeReply = string | { toolCall: { name: string; arguments: Record<string, unknown> } };
 
-export type FakeModelOptions = { delayMs?: (transcript: FakeTranscript) => number };
+export type FakeModelOptions = {
+    delayMs?: (transcript: FakeTranscript) => number;
+    /** An answer waits until this promise settles (or the run is aborted), for a test that decides when a run ends. */
+    gate?: Promise<void>;
+};
 
 function textOf(content: unknown): string {
     if (typeof content === "string") return content;
@@ -36,6 +40,18 @@ function waitUnlessAborted(delayMs: number, signal: AbortSignal | undefined): Pr
             resolve();
         };
         const timer = setTimeout(finish, delayMs);
+        signal?.addEventListener("abort", finish, { once: true });
+    });
+}
+
+function untilOrAborted(gate: Promise<void>, signal: AbortSignal | undefined): Promise<void> {
+    if (signal?.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+        const finish = (): void => {
+            signal?.removeEventListener("abort", finish);
+            resolve();
+        };
+        void gate.then(finish);
         signal?.addEventListener("abort", finish, { once: true });
     });
 }
@@ -73,6 +89,7 @@ export function createFakeModel(
         registration.appendResponses([answerFromTranscript]);
         const transcript = toFakeTranscript(context);
         await waitUnlessAborted(options.delayMs?.(transcript) ?? 0, streamOptions?.signal);
+        if (options.gate) await untilOrAborted(options.gate, streamOptions?.signal);
         return messageFor(reply(transcript), transcript);
     };
     registration.setResponses([answerFromTranscript]);
