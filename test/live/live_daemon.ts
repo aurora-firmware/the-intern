@@ -6,12 +6,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, readdir, readFile, rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { type Client, createClient, type FeedItem } from "../../src/client/client.ts";
 import { defaultSocketPath, nodeTransport } from "../../src/client/node_transport.ts";
-import type { ConversationView } from "../../src/host/host_observation.ts";
 import { resolvePiAgentDir } from "../../src/models/model_runtime.ts";
+import type { JobView } from "../../src/service/job_operations.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import type { HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -27,7 +28,8 @@ type LiveTest = { name: string; run(model: string): Promise<void> };
 type Feed = AsyncGenerator<FeedItem, { end: string }>;
 
 async function createLiveEnv(): Promise<HermeticEnv> {
-    const root = resolve(".tmp", `live-${new Date().toISOString().replaceAll(/[:.]/g, "-")}`);
+    // A short path under the system temp folder: a socket path over 107 bytes fails in a deep worktree.
+    const root = join(tmpdir(), `bob-live-${new Date().toISOString().replaceAll(/[:.]/g, "-")}`);
     const directories = ["config", "state", "data", "runtime"].map((name) => join(root, name));
     await mkdir(root, { recursive: true, mode: OWNER_ONLY_MODE });
     await chmod(root, OWNER_ONLY_MODE);
@@ -124,7 +126,9 @@ function assertRunSettledOnce(entries: Entry[]): void {
     const results = entries.filter((entry) => entry.kind === "pi.tool-result");
     assert.equal(results.length, 1, `expected one tool result, found ${results.length}`);
     assert.match(JSON.stringify(results[0].data), /interrupted/);
-    assert.equal(entries.filter((entry) => entry.kind === "pi.user").length, 1, "the input was taken more than once");
+    // A conversation takes its input as an `intern.steer` entry; a `pi.user` entry would be a second take of it.
+    const inputs = entries.filter((entry) => entry.kind === "intern.steer" || entry.kind === "pi.user");
+    assert.equal(inputs.length, 1, "the input was taken more than once");
     const resultIndex = entries.indexOf(results[0]);
     const answersAfterResult = entries.slice(resultIndex).filter(isFinalAnswer);
     assert.equal(answersAfterResult.length, 1, `expected one final answer, found ${answersAfterResult.length}`);
@@ -201,42 +205,50 @@ function clientOverSocket(env: HermeticEnv): Client {
     return createClient(nodeTransport({ socketPath }));
 }
 
-function viewOf(item: FeedItem): ConversationView {
-    return "snapshot" in item ? (item.snapshot as ConversationView) : (item.delta as { view: ConversationView }).view;
+const sleep = (ms: number) => new Promise((resolveWait) => setTimeout(resolveWait, ms));
+
+/** Reads a feed one item at a time with a bound, keeping the read in flight when the bound passes. */
+function feedReader(feed: Feed) {
+    let pending: Promise<IteratorResult<FeedItem, { end: string }>> | undefined;
+    return async function next(boundMs: number): Promise<IteratorResult<FeedItem, { end: string }> | "timeout"> {
+        pending ??= feed.next();
+        const outcome = await Promise.race([pending, sleep(boundMs).then(() => "timeout" as const)]);
+        if (outcome !== "timeout") pending = undefined;
+        return outcome;
+    };
 }
 
-/** The text parts of an assistant entry's model messages. */
-function answerText(entry: Entry): string {
-    const messages = Array.isArray(entry.data) ? entry.data : [entry.data];
-    const parts = messages.flatMap((message) => (message as { content?: unknown }).content ?? []) as {
-        type?: string;
-        text?: string;
-    }[];
-    return parts
-        .filter((part) => part.type === "text")
-        .map((part) => part.text)
-        .join("");
-}
+type FeedReader = ReturnType<typeof feedReader>;
 
-/** Reads the feed until a view is idle with a final answer; returns that answer and how many deltas came first. */
-async function untilAnswered(feed: Feed): Promise<{ answer: string; deltaCount: number }> {
+/**
+ * Reads the feed until the job is Done and counts the deltas on the way. A lead's turn ends with `complete_job`, so
+ * the job's status, not a final answer entry, tells that the run finished. Fails with the job's status at the bound.
+ */
+async function untilJobDone(client: Client, read: FeedReader, jobNumber: string): Promise<number> {
+    const deadline = Date.now() + WAIT_BOUND_MS;
     let deltaCount = 0;
     for (;;) {
-        const item = await feed.next();
-        if (item.done) assert.fail(`the feed ended ${item.value.end} before the run finished`);
+        const job = (await client.invoke("jobs.get", { job: jobNumber })) as JobView;
+        if (job.status === "done") {
+            console.log(`  live 3: job ${job.number} done: ${JSON.stringify(job.resolution)}`);
+            return deltaCount;
+        }
+        assert.ok(Date.now() < deadline, `Timed out: job ${job.number} is ${job.status}, not done`);
+        const item = await read(POLL_INTERVAL_MS);
+        if (item === "timeout") continue;
+        if (item.done) assert.fail(`the feed ended ${item.value.end} before the job was done (${job.status})`);
         if ("delta" in item.value) deltaCount += 1;
-        const view = viewOf(item.value);
-        const answer = view.entries.findLast(isFinalAnswer);
-        if (!view.busy && answer) return { answer: answerText(answer), deltaCount };
     }
 }
 
-/** Reads the feed to its end and returns the end's reason. */
-async function endOf(feed: Feed): Promise<string> {
-    for (;;) {
-        const item = await feed.next();
-        if (item.done) return item.value.end;
+/** Reads the feed to its end and returns the end's reason; fails at the bound instead of waiting for ever. */
+async function endOf(read: FeedReader): Promise<string> {
+    const deadline = Date.now() + WAIT_BOUND_MS;
+    while (Date.now() < deadline) {
+        const item = await read(POLL_INTERVAL_MS);
+        if (item !== "timeout" && item.done) return item.value.end;
     }
+    return assert.fail("Timed out waiting for the feed to end");
 }
 
 async function liveClientStreamsAnswerThenStopped(model: string): Promise<void> {
@@ -245,17 +257,19 @@ async function liveClientStreamsAnswerThenStopped(model: string): Promise<void> 
         try {
             await daemon.ready;
             const client = clientOverSocket(env);
-            const { conversationId } = (await client.invoke("jobs.startLead", {
-                jobId: "live-three",
-                firstInput: "Reply with the single word: pong",
+            const job = (await client.invoke("jobs.create", {
+                text: "Reply with the single word: pong",
                 model,
-            })) as { conversationId: string };
+            })) as JobView;
+            const conversationId = job.leadConversation;
+            assert.ok(conversationId, `job ${job.number} has no lead conversation`);
             const feed = client.subscribe({ scope: "conversation", conversationId });
-            const { answer, deltaCount } = await untilAnswered(feed);
+            const read = feedReader(feed);
+            const deltaCount = await untilJobDone(client, read, job.number);
             assert.ok(deltaCount > 0, "the run finished before the feed streamed any delta");
-            console.log(`  live 3: answer after ${deltaCount} deltas over the local socket: ${JSON.stringify(answer)}`);
+            console.log(`  live 3: job done after ${deltaCount} deltas over the local socket`);
             daemon.signal("SIGTERM");
-            const end = await endOf(feed);
+            const end = await endOf(read);
             console.log(`  live 3: the stream ended ${end}`);
             assert.equal(end, "stopped");
             const { code } = await daemon.exited;
