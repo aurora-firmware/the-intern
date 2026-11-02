@@ -337,7 +337,7 @@ describe("rule 2: a Blocked job whose lead is not parked", () => {
         assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [2]);
     });
 
-    it("writes nothing for a Blocked job whose lead is parked, and a held message older than the block stays held", async () => {
+    it("writes nothing for a parked lead, and an older held message stays held", async () => {
         const rig = await createRig();
         const first = await rig.boot();
         const job = await first.createJob();
