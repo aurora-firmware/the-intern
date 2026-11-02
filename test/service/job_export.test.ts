@@ -8,6 +8,7 @@ import { createProvider } from "@earendil-works/pi-ai/models";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
+import { backupDatabase } from "../../src/host/database_copy.ts";
 import { type HostDatabase, hostDatabase, openHostDatabase } from "../../src/host/harness_host.ts";
 import { steerConversation } from "../../src/host/steering.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
@@ -191,6 +192,47 @@ describe("jobs.export", () => {
         assert.equal(after.intern_jobs, 2);
         assert.ok((after.intern_worklog ?? 0) >= 1);
         assert.ok((after.intern_history ?? 0) >= 2);
+    });
+
+    it("waits for a transaction in progress and copies nothing it didn't commit", async () => {
+        const started = await start();
+        const database = hostDatabase(started.ctx.host);
+        await database.exec("CREATE TABLE intern_probe (name TEXT NOT NULL)");
+        const finish = Promise.withResolvers<void>();
+        const transaction = database.transaction(async (tx) => {
+            await tx.run("INSERT INTO intern_probe (name) VALUES (?)", "never committed");
+            await finish.promise;
+            throw new Error("roll back");
+        });
+        transaction.catch(() => {});
+        const target = join(started.env.root, "waited.sqlite");
+        const exporting = started.invoke<{ size: number }>("jobs.export", { path: target });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        await assert.rejects(stat(target), { code: "ENOENT" });
+        finish.resolve();
+        await assert.rejects(transaction, /roll back/);
+
+        const result = await exporting;
+
+        assert.equal(result.size, (await stat(target)).size);
+        const copy = await openHostDatabase(target);
+        assert.deepEqual(await copy.all("SELECT name FROM intern_probe"), []);
+        await copy.close();
+        assert.deepEqual(await namesStarting(started.env.root, ".waited"), []);
+    });
+
+    it("gives up with an error and leaves nothing behind when a transaction outlasts the attempts", async () => {
+        const started = await start();
+        const finish = Promise.withResolvers<void>();
+        const transaction = hostDatabase(started.ctx.host).transaction(() => finish.promise);
+        const target = join(started.env.root, "gave_up.sqlite");
+
+        await assert.rejects(backupDatabase(started.ctx.host, target, { attempts: 3, retryDelayMs: 1 }), /transaction/);
+
+        finish.resolve();
+        await transaction;
+        assert.deepEqual(await namesStarting(started.env.root, "gave_up"), []);
+        assert.deepEqual(await namesStarting(started.env.root, ".gave_up"), []);
     });
 
     it("refuses a relative path, naming path, and writes nothing", async () => {

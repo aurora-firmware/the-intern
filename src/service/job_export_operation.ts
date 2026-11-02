@@ -34,7 +34,10 @@ export const jobExportOperation = defineOperation<ServiceContext, ExportInput, E
     parse: parseExport,
     async run(ctx, input) {
         if (await exists(input.path)) {
-            throw new ServiceError("invalid_input", `path ${input.path} already exists; give a file that doesn't exist`);
+            throw new ServiceError(
+                "invalid_input",
+                `path ${input.path} already exists; give a file that doesn't exist`,
+            );
         }
         if (!(await exists(dirname(input.path)))) {
             throw new ServiceError("invalid_input", `path ${input.path} is in a folder that doesn't exist`);

@@ -55,6 +55,20 @@ The service creates a missing directory that only its account can use. If a dire
 belongs to another account, or is open to the group or others, the service refuses to start and names the path and the
 reason. Run `chmod 700` on the directory, or choose another one with the flag.
 
+## Copy the database as a backup
+
+The `jobs.export` operation writes a copy of the whole database to a new file while The Intern keeps working. Give it
+`path`, an absolute path to a file that doesn't exist yet in a folder that does. It returns the path and the size
+written.
+
+- The copy holds the jobs, their worklogs and histories, and the conversations and queued work, as committed when the
+  copy began. It doesn't hold `config.toml`, so back that up on its own.
+- The copy is readable only by the service account, and it never exists under its final name with wider access, not
+  even while it is written.
+- Running agents carry on. A write that arrives during the copy waits for it to finish.
+- A relative path, a path that already exists and a path in a folder that doesn't exist are refused as `invalid_input`
+  naming `path`, and nothing is written.
+
 ## The configuration file
 
 The file is `config.toml` in the config directory. It is optional: without it, The Intern uses its built-in defaults.
