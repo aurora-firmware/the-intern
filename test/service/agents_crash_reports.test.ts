@@ -15,9 +15,7 @@ const QUEUE_DELAY_MS = 6_000;
 const FAKE_PROVIDER = "faux";
 const FAKE_MODEL = "faux-1";
 const WAITING_STATUS = "waiting for a worker thread";
-const REQUEST_ORIGIN = { kind: "request", wayIn: "cli" };
 const JOB_PROMPTS = ["job A", "job B"];
-const JOB_ID = "report-job";
 
 type Entry = { kind: string; data: unknown };
 type Listing = { id: string; status: string };
@@ -52,7 +50,7 @@ function start(
     script: FakeScript,
     options: { workerThreads?: number; delayMs?: number } = {},
 ): DaemonProcess {
-    const daemon = startDaemon({ hermetic: env, script, delayMs: SLOW_DELAY_MS, ...options });
+    const daemon = startDaemon({ hermetic: env, script, delayMs: SLOW_DELAY_MS, turnEndRule: false, ...options });
     daemons.push(daemon);
     return daemon;
 }
@@ -71,13 +69,11 @@ async function untilTrue(isWanted: () => Promise<boolean>, description: string):
     assert.fail(`Timed out waiting for ${description}`);
 }
 
-async function startLead(daemon: DaemonProcess, jobId: string, firstInput: string): Promise<string> {
-    const { conversationId } = (await daemon.invoke("jobs.startLead", {
-        jobId,
-        firstInput,
-        origin: REQUEST_ORIGIN,
-    })) as { conversationId: string };
-    return conversationId;
+/** Creates a job with `jobs.create`; the daemon runs without the turn-end rule, so no stop blocks the job. */
+async function createJob(daemon: DaemonProcess, text: string): Promise<{ jobId: string; leadId: string }> {
+    const job = (await daemon.invoke("jobs.create", { text })) as { id: string; leadConversation?: string };
+    assert.ok(job.leadConversation, "the created job names its lead conversation");
+    return { jobId: job.id, leadId: job.leadConversation };
 }
 
 const entriesOf = async (daemon: DaemonProcess, conversationId: string): Promise<Entry[]> =>
@@ -102,16 +98,19 @@ const carriesReport = (text: string) => (entry: Entry) =>
     entry.kind === "intern.report" && JSON.stringify(entry.data).includes(text);
 const mentions = (text: string) => (entry: Entry) =>
     entry.kind === "pi.assistant" && JSON.stringify(entry.data).includes(text);
+// A lead's first input is the job's number, its Request text and the lead's duty, so the echo holds the text inside.
+const answers = (requestText: string) => (entry: Entry) =>
+    entry.kind === "pi.assistant" && JSON.stringify(entry.data).includes("echo: ") && mentions(requestText)(entry);
 
-/** Starts a lead that parks on two invoked agents whose slow answers are not yet reported. Returns the lead's id. */
-async function startParkedLead(daemon: DaemonProcess): Promise<string> {
-    const leadId = await startLead(daemon, JOB_ID, "lead work");
-    await untilTrue(async () => (await listingOf(daemon, leadId)).status === "parked", "the lead to park");
-    return leadId;
+/** Creates a job whose lead parks on two invoked agents whose slow answers are not yet reported. */
+async function startParkedLead(daemon: DaemonProcess): Promise<{ jobId: string; leadId: string }> {
+    const created = await createJob(daemon, "lead work");
+    await untilTrue(async () => (await listingOf(daemon, created.leadId)).status === "parked", "the lead to park");
+    return created;
 }
 
-async function invokedOf(daemon: DaemonProcess, leadId: string): Promise<string[]> {
-    const conversations = await conversationsOfJob(daemon, JOB_ID);
+async function invokedOf(daemon: DaemonProcess, jobId: string, leadId: string): Promise<string[]> {
+    const conversations = await conversationsOfJob(daemon, jobId);
     return conversations.map((conversation) => conversation.id).filter((id) => id !== leadId);
 }
 
@@ -142,7 +141,7 @@ describe("kill -9 while a conversation is parked", () => {
         const env = await hermetic();
         const first = start(env, "invoke-parked");
         await first.ready;
-        const leadId = await startParkedLead(first);
+        const { jobId, leadId } = await startParkedLead(first);
         await crash(first);
 
         const second = start(env, "invoke-parked", { delayMs: LONG_DELAY_MS });
@@ -155,7 +154,7 @@ describe("kill -9 while a conversation is parked", () => {
             "the parked lead does not wait for a worker thread",
         );
         const invokedListings = await Promise.all(
-            (await invokedOf(second, leadId)).map((conversationId) => listingOf(second, conversationId)),
+            (await invokedOf(second, jobId, leadId)).map((conversationId) => listingOf(second, conversationId)),
         );
         const runningInvoked = invokedListings.filter((listing) => listing.status === "running").length;
         assert.equal(
@@ -172,7 +171,7 @@ describe("kill -9 while a report is being delivered", () => {
         const env = await hermetic();
         const first = start(env, "invoke-parked-slow-lead");
         await first.ready;
-        const leadId = await startLead(first, JOB_ID, "lead work");
+        const { jobId, leadId } = await createJob(first, "lead work");
         // A report in the lead's entries means delivery has started; no answer to it yet means it is not finished.
         await untilTrue(async () => {
             const entries = await entriesOf(first, leadId);
@@ -180,14 +179,14 @@ describe("kill -9 while a report is being delivered", () => {
             const hasAnswer = entries.some(mentions("echo: echo: job"));
             return hasReport && !hasAnswer && (await listingOf(first, leadId)).status === "running";
         }, "a report to be delivered to the lead and not yet answered");
-        const invokedIds = await invokedOf(first, leadId);
+        const invokedIds = await invokedOf(first, jobId, leadId);
         await crash(first);
 
         const second = start(env, "invoke-parked-slow-lead");
         await second.ready;
 
         await assertEachReportReachedLeadOnce(second, leadId);
-        assert.deepEqual((await invokedOf(second, leadId)).toSorted(), invokedIds.toSorted());
+        assert.deepEqual((await invokedOf(second, jobId, leadId)).toSorted(), invokedIds.toSorted());
     });
 });
 
@@ -199,8 +198,7 @@ describe("kill -9 while work waits for a worker thread", () => {
         const first = start(env, "slow", { workerThreads: 1, delayMs: QUEUE_DELAY_MS });
         await first.ready;
         const leadIds: string[] = [];
-        for (const name of ["one", "two", "three"])
-            leadIds.push(await startLead(first, `wait-${name}`, `work ${name}`));
+        for (const name of ["one", "two", "three"]) leadIds.push((await createJob(first, `work ${name}`)).leadId);
         await untilTrue(async () => (await statusOf(first)).workerThreads.waiting.length === 2, "two leads to wait");
         const before = (await statusOf(first)).workerThreads.waiting;
         await crash(first);
@@ -219,7 +217,7 @@ describe("kill -9 while work waits for a worker thread", () => {
         await untilIdle(second, leadIds);
         for (const [index, name] of ["one", "two", "three"].entries()) {
             const entries = await entriesOf(second, leadIds[index] as string);
-            assert.equal(entries.filter(mentions(`echo: work ${name}`)).length, 1, `work ${name} ran once`);
+            assert.equal(entries.filter(answers(`work ${name}`)).length, 1, `work ${name} ran once`);
         }
     });
 });
@@ -229,7 +227,7 @@ describe("kill -9 while a message to a parked conversation is held", () => {
         const env = await hermetic();
         const first = start(env, "invoke-parked");
         await first.ready;
-        const leadId = await startParkedLead(first);
+        const { leadId } = await startParkedLead(first);
         const submitted = await first.invoke("conversations.submit", {
             conversationId: leadId,
             content: "held note",
