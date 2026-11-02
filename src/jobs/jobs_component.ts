@@ -8,6 +8,7 @@ import type { Logger } from "../daemon/logger.ts";
 import { onInputSubmitted } from "../host/conversation_control.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import { jobActionOperations } from "../service/job_action_operations.ts";
+import { jobExportOperation } from "../service/job_export_operation.ts";
 import { createJob, createJobOperation } from "../service/job_operations.ts";
 import { jobRecordOperations } from "../service/job_record_operations.ts";
 import type { Operation } from "../service/operations.ts";
@@ -105,7 +106,12 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
                 context = undefined;
             },
         },
-        operations: [createJobOperation(options), ...jobRecordOperations(options), ...jobActionOperations(options)],
+        operations: [
+            createJobOperation(options),
+            ...jobRecordOperations(options),
+            ...jobActionOperations(options),
+            jobExportOperation,
+        ],
         options,
     };
 }
