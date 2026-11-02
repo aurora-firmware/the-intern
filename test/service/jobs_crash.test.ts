@@ -15,7 +15,6 @@ import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts"
 const POLL_INTERVAL_MS = 50;
 const WAIT_BOUND_MS = 30_000;
 const TEST_TIMEOUT_MS = 90_000;
-const SLOW_DELAY_MS = 2_000;
 const LIMIT = 200;
 const FAKE_PROVIDER = "faux";
 const FAKE_MODEL = "faux-1";
@@ -54,7 +53,6 @@ function start(env: HermeticEnv, script: FakeScript, jobCrashAt?: WritePoint, tu
     const daemon = startDaemon({
         hermetic: env,
         script,
-        delayMs: SLOW_DELAY_MS,
         turnEndRule,
         ...(jobCrashAt !== undefined && { jobCrashAt }),
     });
@@ -89,6 +87,17 @@ async function repairsOf(daemon: DaemonProcess, job: string): Promise<number[]> 
     return repairs.map((repair) => (repair.new as { rule: number }).rule);
 }
 
+/** Rule 4 leaves no conversation of the job awaiting a report or holding a message. */
+async function assertNothingWaiting(daemon: DaemonProcess, job: string): Promise<void> {
+    const waiting = (await daemon.invoke("test.waiting", { job })) as {
+        id: string;
+        awaiting: string[];
+        held: number;
+    }[];
+    assert.ok(waiting.length > 0, "the job has conversations");
+    for (const conversation of waiting) assert.deepEqual(conversation, { id: conversation.id, awaiting: [], held: 0 });
+}
+
 const entriesOf = async (daemon: DaemonProcess, conversationId: string) =>
     (
         (await daemon.invoke("conversations.entries", { conversationId, limit: LIMIT })) as {
@@ -99,6 +108,12 @@ const entriesOf = async (daemon: DaemonProcess, conversationId: string) =>
 const userInputsWith = async (daemon: DaemonProcess, conversationId: string, text: string) =>
     (await entriesOf(daemon, conversationId)).filter(
         (entry) => entry.kind === "pi.user" && JSON.stringify(entry.data).includes(text),
+    ).length;
+
+/** The steer records of the text: one per input the daemon submitted to a running or idle lead. */
+const steersWith = async (daemon: DaemonProcess, conversationId: string, text: string) =>
+    (await entriesOf(daemon, conversationId)).filter(
+        (entry) => entry.kind === "intern.steer" && JSON.stringify(entry.data).includes(text),
     ).length;
 
 /** The fake model echoes each input it takes, so one echo is one input the lead took. */
@@ -204,7 +219,7 @@ describe("kill -9 after input reached the lead of a Blocked job and before the r
         timeout: TEST_TIMEOUT_MS,
     }, async () => {
         const env = await hermetic();
-        const first = start(env, "slow", "lead-input");
+        const first = start(env, "gated", "lead-input");
         await first.ready;
         const job = await createJob(first, "block me while I run");
         const leadId = job.leadConversation as string;
@@ -214,7 +229,7 @@ describe("kill -9 after input reached the lead of a Blocked job and before the r
         await untilKilled(first);
         await answering;
 
-        const second = start(env, "slow");
+        const second = start(env, "echo");
         await second.ready;
 
         const stored = await jobOf(second, job.id);
@@ -273,6 +288,7 @@ describe("kill -9 after a complete or cancel write and before the aborts", () =>
 
         assert.equal((await jobOf(second, job.id)).status, "done");
         assert.equal((await listingOf(second, leadId)).status, "idle");
+        await assertNothingWaiting(second, job.id);
         assert.deepEqual(await repairsOf(second, job.id), [4]);
     });
 
@@ -296,6 +312,7 @@ describe("kill -9 after a complete or cancel write and before the aborts", () =>
         const conversations = await conversationsOf(second, job.id);
         assert.equal(conversations.length, 3);
         for (const conversation of conversations) assert.equal(conversation.status, "idle", conversation.id);
+        await assertNothingWaiting(second, job.id);
         assert.deepEqual(await repairsOf(second, job.id), [4]);
     });
 });
@@ -326,19 +343,21 @@ describe("kill -9 as a lead's turn ends with its job In progress", () => {
         timeout: TEST_TIMEOUT_MS,
     }, async () => {
         const env = await hermetic();
-        const first = start(env, "slow", "turn-ended", true);
+        const first = start(env, "gated", "turn-ended", true);
         await first.ready;
         const job = await createJob(first, "end the turn with a definition of done");
         const leadId = job.leadConversation as string;
         await untilStatus(first, leadId, "running");
         await first.invoke("jobs.update", { job: job.id, definitionOfDone: "the report is filed" });
+        first.releaseRuns();
         await untilKilled(first);
 
-        const second = start(env, "slow", undefined, true);
+        // The second daemon's lead is held in the reminder's run: answered at once, it would stop again and be blocked.
+        const second = start(env, "gated", undefined, true);
         await second.ready;
 
         assert.equal((await jobOf(second, job.id)).status, "in_progress");
-        await untilTrue(async () => (await echoesOf(second, leadId, REMINDER_TEXT)) === 1, "the reminder");
+        await untilTrue(async () => (await steersWith(second, leadId, REMINDER_TEXT)) === 1, "the reminder");
         assert.deepEqual(await repairsOf(second, job.id), []);
     });
 });
