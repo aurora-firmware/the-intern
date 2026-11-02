@@ -13,12 +13,14 @@ import { createObservationFeed, type ObservationFeed } from "../feed/observation
 import {
     type Extension,
     type HarnessHost,
+    hostDatabase,
     type Models,
     openHarnessHost,
     type SqliteDatabase,
     type Storage,
 } from "../host/harness_host.ts";
 import { recordOpenedVersions, runningVersions } from "../host/versions.ts";
+import { checkJobSchemaVersion, createJobStore, type JobStore, migrateJobStore } from "../jobs/job_store.ts";
 import { createModelRuntime, type InternModels, resolvePiAgentDir } from "../models/model_runtime.ts";
 import { conversationControlOperations } from "../service/conversation_control_operations.ts";
 import { conversationReadOperations } from "../service/conversation_read_operations.ts";
@@ -48,6 +50,7 @@ export type ServiceContext = {
     dirs: InstanceDirs;
     logger: Logger;
     catalogue: Catalogue;
+    jobStore: JobStore;
 };
 
 export type DaemonComponent = {
@@ -179,7 +182,12 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         logger.error(`could not undo ${what}`, { cause: error instanceof Error ? error.message : String(error) });
     }
 
-    async function openModelRuntime(): Promise<{ models: InternModels; host: HarnessHost; gateAdmission: Admission }> {
+    async function openModelRuntime(): Promise<{
+        models: InternModels;
+        host: HarnessHost;
+        gateAdmission: Admission;
+        jobStore: JobStore;
+    }> {
         const models = await createModelRuntime({ piAgentDir: resolvePiAgentDir(options.env) });
         undoStack.push(() => models.close());
         const gate = createAdmissionGate();
@@ -190,6 +198,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
             extensions: [gate.extension, ...components.flatMap((component) => component.extensions ?? [])],
             defaultCwd: dirs.dataDir,
             logger,
+            beforeStorageOpen: checkJobSchemaVersion,
             ...(options.openStorage && { openStorage: options.openStorage }),
         });
         // After a storage failure the harness has already closed itself, and closing it again would only fail.
@@ -198,7 +207,9 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         });
         const gateAdmission = createAdmission({ host, capacity: workerThreadCount, logger, gate });
         undoStack.push(async () => gateAdmission.stop());
-        return { models, host, gateAdmission };
+        await migrateJobStore(hostDatabase(host));
+        const jobStore = createJobStore(hostDatabase(host));
+        return { models, host, gateAdmission, jobStore };
     }
 
     async function runComponents(hook: "checkModels" | "ensureWorkspaces"): Promise<void> {
@@ -239,6 +250,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
                 host: runtime.host,
                 admission: runtime.gateAdmission,
                 models: runtime.models,
+                jobStore: runtime.jobStore,
                 config: store,
                 feed,
                 instanceFeed,
