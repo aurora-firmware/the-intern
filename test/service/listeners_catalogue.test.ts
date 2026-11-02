@@ -59,8 +59,11 @@ const ISO_TIME = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z/g;
 const WAY_IN = /"(in-process|command line|web interface)"/g;
 /** Served as a stream, so it has no operation route (S-003 REQ-006). */
 const STREAM_OPERATION = "feed.subscribe";
-/** Listed until the Jobs work removes it; the job operations replace it, so no test calls it. */
-const REPLACED_OPERATION = "jobs.startLead";
+/**
+ * Not an operation any more: `jobs.create` starts the lead in-process (S-004 AC-012.1). Written in parts, so a search
+ * for the name finds only the code that still calls it.
+ */
+const REMOVED_OPERATION = ["jobs", "startLead"].join(".");
 /** The test operations are not product operations; `test.failStorage` would break storage for the rest of the run. */
 const TEST_OPERATION_PREFIX = "test.";
 
@@ -486,6 +489,17 @@ describe("catalogue through both listeners", () => {
         }
     });
 
+    it("lists no lead-start operation and refuses a call to it not_found through every way", async () => {
+        const fixture = await startFixture();
+        const input = { jobId: "job-1", firstInput: "go", origin: { kind: "request", wayIn: "cli" } };
+
+        const listed = fixture.daemon.catalogue.list().map(({ name }) => name);
+
+        assert.ok(!listed.includes(REMOVED_OPERATION), `${REMOVED_OPERATION} is not listed`);
+        await assertErrorThroughListeners((way) => fixture.call(way, REMOVED_OPERATION, input), "not_found");
+        assert.equal((await fixture.ctx.host.listConversations()).length, 0);
+    });
+
     it("answers every product operation through both listeners as in-process", {
         timeout: TEST_TIMEOUT_MS,
     }, async () => {
@@ -493,10 +507,7 @@ describe("catalogue through both listeners", () => {
         const seed = await seedConversation(fixture);
         const called = fixture.daemon.catalogue
             .list()
-            .filter(
-                ({ name }) =>
-                    name !== STREAM_OPERATION && name !== REPLACED_OPERATION && !name.startsWith(TEST_OPERATION_PREFIX),
-            );
+            .filter(({ name }) => name !== STREAM_OPERATION && !name.startsWith(TEST_OPERATION_PREFIX));
         const ordered = [...called.filter((op) => op.kind === "read"), ...called.filter((op) => op.kind === "control")];
 
         for (const { name, kind } of ordered) {
