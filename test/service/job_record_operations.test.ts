@@ -197,9 +197,14 @@ describe("job record operations", () => {
         const wanted: string[] = [];
         for (let i = 0; i < 120; i++) {
             if (i % 10 === 0 && wanted.length < 12) wanted.push((await seedBlocked(started, "E")).number);
-            else if (i % 4 === 1 && i < 100) await seedBlocked(started, i % 8 === 1 ? "C" : "W");
+            else if (i % 4 === 1 && i < 72) await seedBlocked(started, i % 8 === 1 ? "C" : "W");
             else await started.seed(i % 2 === 0 ? "E" : "W");
         }
+        const allBlocked = await started.invoke<Page<{ number: string }>>("jobs.list", {
+            status: "blocked",
+            limit: 100,
+        });
+        assert.equal(allBlocked.jobs?.length, 30);
         const numbers: string[] = [];
         let pages = 0;
         let cursor: string | undefined;
