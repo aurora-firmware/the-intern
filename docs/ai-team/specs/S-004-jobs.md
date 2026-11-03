@@ -1,7 +1,7 @@
 ---
 id: S-004
 title: Jobs
-version: '0.5'
+version: '0.6'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-02'
 author: planner
@@ -23,7 +23,7 @@ ends Done with a resolution and justification that triggers and team members can
 ## Definitions
 
 This spec uses the Definitions of S-001, S-002 and S-003 (job, lead conversation, lead agent, specialist agent, job
-source, origin, way in, caller, service operation, observation feed) and the shared vocabulary of
+source, origin, front desk, way in, caller, service operation, observation feed) and the shared vocabulary of
 `docs/system_overview.html`. It adds these terms:
 
 | Term | Meaning in this spec |
@@ -48,7 +48,8 @@ source, origin, way in, caller, service operation, observation feed) and the sha
 
 | Actor | Goal |
 |---|---|
-| Team member | Hands The Intern a job from the command line, the web interface or email, follows it, answers it when it is blocked, edits it or cancels it. |
+| Team member | Hands The Intern a job from the command line, the web interface or email, directly or through the front desk, follows it, answers it when it is blocked, edits it or cancels it. |
+| Front desk agent | Creates jobs for team members, lists and reads jobs, edits them, adds to their worklog and relates them, naming each job (REQ-021). |
 | Lead agent | Writes the definition of done, keeps the description and the worklog, blocks the job when it lacks something and completes it. |
 | Specialist agent | Reads the job it works on, adds to its worklog and creates new jobs it finds. |
 | Job sources and Email (downstream systems) | Schedules and triggers create jobs in-process with their own origin details; Email, a way in, passes a team member's request with the message ID and sender it observes. |
@@ -73,6 +74,9 @@ Journeys, in priority order:
    another computer or keeps it as a backup. Delivered by REQ-016, REQ-017.
 7. **Nothing is lost in a crash.** A crash between a job write and its pi-durable change is repaired at the next
    start. Delivered by REQ-018.
+8. **Ask the front desk.** A team member asks the front desk for work from the command line or the web interface; it
+   creates a `C` or `W` job that names the front desk in its origin details, whose lead takes it as usual, and it
+   lists and reads jobs to answer what is going on. Delivered by REQ-021, REQ-022.
 
 ## Exclusions
 
@@ -96,6 +100,8 @@ What this specification explicitly does NOT cover:
 - **Reading mail, sending notices about blocked jobs, and when schedules and triggers fire.** The Email and Schedules
   and triggers specs own them. This spec records the origin details they pass and publishes the events they listen to.
 - **How agents work, hand off and invoke one another.** S-001 owns it.
+- **The front desk itself.** S-001 owns the front desk. It has no job record, so it is never on the board, has no
+  definition of done, and the reminder rule, the actions and the repair rules don't apply to it (REQ-022).
 
 ## Architecture
 
@@ -201,12 +207,13 @@ catalogue operation: `jobs.create` calls it in-process, so no lead conversation 
 
 **Contract** (refusals): an unknown job is `not_found`; a missing required input, a failed guard or an edit of a
 field that isn't editable is `invalid_input` with a message naming the field; an action not allowed from the job's
-status, or any change to a Done job other than relate and unrelate, is `conflict`.
+status, or any change to a Done job other than relate and unrelate, is `conflict`. The front desk's conversation id
+named as a job is `invalid_input`, saying the front desk is not a job conversation (REQ-022).
 
 ### Exposed: job tools
 
-Every role carries the job tools, and a tool set can't leave them out, as with S-001's coordination capabilities
-(S-001 REQ-003). A tool acts on the job of the conversation it runs in.
+Every seat in a job's conversation carries the job tools, and a tool set can't leave them out, as with S-001's
+coordination capabilities (S-001 REQ-003). A tool acts on the job of the conversation it runs in.
 
 | Tool | Who | Does |
 |---|---|---|
@@ -217,6 +224,17 @@ Every role carries the job tools, and a tool set can't leave them out, as with S
 | relate jobs | every agent of the job | relates or unrelates this job and another (REQ-009) |
 | block job | the lead agent | blocks with a Blocked reason (REQ-005, REQ-006) |
 | complete job | the lead agent | completes with a justification (REQ-005) |
+
+In the front desk, which belongs to no job, the seat carries other job tools instead, each naming the job it acts
+on (REQ-021; S-001 REQ-022):
+
+| Tool | Does |
+|---|---|
+| read job, update job, add to worklog, relate jobs | as in a job's conversation, on the job the call names |
+| create job | creates a job whose origin is the way in of the team member's input being answered, `C` or `W`, with the front desk in its origin details, keyed by its tool call id |
+| list jobs | lists jobs as `jobs.list` does, filtered by status and origin letter |
+
+Block job and complete job are never offered there.
 
 A refused tool call returns an error result to the agent and its run goes on. Tool names and parameter layouts are
 not contract; the tasks fix them.
@@ -239,7 +257,7 @@ with its short number, title and status, and these deltas (REQ-015):
 - S-001: starting a job's lead conversation (REQ-012); parking and continuing it (REQ-014); submitting input to a
   conversation and the arrival of reports as input (REQ-019); the capability that aborts every conversation of a job
   (REQ-008); the job links each conversation records (REQ-012); the coordination capabilities' place in every role
-  (REQ-003).
+  (REQ-003); the front desk, its tools and the input whose way in a front-desk job takes (REQ-021 to REQ-025).
 - S-002: the catalogue with its read and control kinds, errors and callers (REQ-012, REQ-013, REQ-017); origins built
   from the caller (AC-012.5); the observation feed (REQ-014); startup order, readiness and the database file (REQ-002,
   REQ-003, REQ-006); storage failure handling (REQ-007).
@@ -252,6 +270,7 @@ The life of a job from its source to Done, with its refusals, the reminder rule,
 
 ```
 Job source: team member (any way in), schedule fire, trigger, agent                       REQ-003
+  (through the front desk → the way in's letter, C or W, and the front desk in the origin)  REQ-021
   ↓
 jobs.create → role and overrides checked                                                    REQ-007
   (unknown role or bad override → refused, no job and no number)                           REQ-007
@@ -330,8 +349,10 @@ reused or skipped. The origin letter follows the job's origin (REQ-003):
 | trigger | `T` |
 | follow-up job | `A` |
 
-A request whose way in is `in-process`, the way in S-002 records when a caller names none (S-002 AC-012.5), has no
-letter: `jobs.create` SHALL refuse it with `invalid_input`. Tests and the live checks name a real way in.
+A job the front desk creates takes the letter of the way in of the team member's input it answers, `C` or `W`
+(REQ-021). A request whose way in is `in-process`, the way in S-002 records when a caller names none (S-002
+AC-012.5), has no letter: `jobs.create` SHALL refuse it with `invalid_input`. Tests and the live checks name a real
+way in.
 
 Every operation that names a job SHALL accept its job ID or its short number in any letter case.
 
@@ -371,6 +392,8 @@ everything known about it. The origin MUST be built from the caller (S-002 AC-01
 - an in-process job source states its own details: a schedule its entry and fire time, a trigger its trigger and
   event
 - a follow-up job records the job and the conversation it was created from
+- a job the front desk creates records a request with the way in of the team member's input the front desk answers,
+  and origin details that name the front desk (REQ-021)
 
 A caller MAY add `statedBy`, a name of its own choosing; the job SHALL record it apart from the origin, labelled as
 stated and not checked. Nothing in a call's input SHALL replace an observed origin detail.
@@ -524,7 +547,8 @@ the job Done, resolution `cancelled`, with a justification naming the refusal an
 original job and uses no number. The create job tool keys each call by its tool call id.
 
 Completing or cancelling SHALL abort every conversation of the job that still runs, is parked or awaits a report
-(S-001 REQ-008), leaving nothing parked or awaited. When the lead completes the job through its tool, its own run is
+(S-001 REQ-008), leaving nothing parked or awaited. The front desk is no conversation of any job, so they never
+abort it (REQ-022). When the lead completes the job through its tool, its own run is
 aborted at that call along with the job's other conversations.
 
 #### AC-007.1 — Creation starts the lead
@@ -585,7 +609,8 @@ awaited), the daemon SHALL:
 - otherwise, when the turn after a reminder ends the same way, block the job with the reason "the lead stopped without
   completing or blocking"
 
-A reminder is spent once the job blocks or resumes, so the next stop gets one again. Whether a lead's reminder is
+The rule applies to a job's lead only, never to the front desk (REQ-022). A reminder is spent once the job blocks
+or resumes, so the next stop gets one again. Whether a lead's reminder is
 spent SHALL survive a restart. At startup, after the repair rules of REQ-018, the daemon SHALL check this rule for
 each In progress job whose lead is idle and waits for nothing. This is the same rule applied to saved state, not a
 repair rule.
@@ -689,7 +714,8 @@ calls it in-process.
 
 ### REQ-013 — Job tools in every role
 
-Every role SHALL carry the job tools of Interfaces, and a role's tool set SHALL NOT be able to leave them out. A job
+Every seat in a job's conversation SHALL carry the job tools of Interfaces, and a role's tool set SHALL NOT be able
+to leave them out. The front desk carries the job tools of REQ-021 instead. A job
 tool SHALL act only on the job of the conversation it runs in, except that create job makes a new job and relate jobs
 names a second one. The block and complete tools SHALL be refused for any agent but the lead agent.
 
@@ -775,6 +801,95 @@ REQ-008), so importing a copy of an instance that is still running does that wor
 - **When:** each is imported
 - **Then:** each is refused with a message naming the reason, nothing changes, and a daemon started while the import
   runs is refused
+
+**Verification:** test — a service test.
+
+### REQ-021 — Job tools in the front desk
+
+In the front desk (S-001 REQ-021), the daemon SHALL offer these job tools, each naming the job it acts on by its job ID
+or short number: `read_job`, `list_jobs`, `create_job`, `update_job`, `add_worklog` and `relate_jobs`, which names
+both jobs. The block and complete tools stay with the lead agent and aren't offered there (REQ-013; S-001 REQ-022).
+
+- `list_jobs` returns jobs as `jobs.list` does (REQ-014), filtered by status and origin letter when given.
+- `create_job` creates a job as `jobs.create` does (REQ-007), keyed by its tool call id. The job's origin is a
+  request whose way in is the way in of the team member's input the front desk is answering, the latest team member
+  input it took before the call, so its letter is `C` or `W` (REQ-002). Its origin details name the front desk. It is
+  not a follow-up job and is Related to no job.
+- `read_job`, `update_job`, `add_worklog` and `relate_jobs` act as `jobs.get`, `jobs.update`, `jobs.worklog.add` and
+  `jobs.relate` do (REQ-004, REQ-009, REQ-010), with the front desk's agent, its conversation and seated role, as
+  author.
+
+A `create_job` call answering an input whose way in has no letter (`in-process`) is refused like `jobs.create`
+(REQ-002), using no number. A refused call returns an error result to the agent, and its run goes on.
+
+#### AC-021.1 — A job created through the front desk
+
+- **Given:** the front desk
+- **When:** a team member writes "please check why the nightly build is slow" to it over the local socket, its fake
+  model calls `create_job`, and the same tool call is repeated
+- **Then:** one job `C-n` exists, its request records way in `command line` with the front desk in its origin
+  details, it is Related to no job, its lead conversation starts seated as `bob`, and the repeat returns `C-n`; the
+  same through the network listener creates `W-n`
+
+**Verification:** test — a service test through both listeners on the fake model.
+
+#### AC-021.2 — Listing jobs from the front desk
+
+- **Given:** jobs in each status with several origin letters
+- **When:** the front desk's fake model calls `list_jobs` for status Blocked and letter `E`, and for no filter
+- **Then:** each result holds the jobs `jobs.list` returns for the same filter, in the same order
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-021.3 — Edits name the job and the front desk
+
+- **Given:** job `C-7` In progress and job `W-9`
+- **When:** the front desk's fake model updates `C-7`'s description, adds a worklog entry to it and relates it to
+  `W-9`
+- **Then:** `C-7` shows the change, the entry and the Related link, and its history and worklog name the front desk's
+  conversation and the role `desk` as author
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-021.4 — An input with no letter creates no job
+
+- **Given:** the front desk answering an input submitted in-process with no way in named
+- **When:** its fake model calls `create_job`
+- **Then:** the call returns an error result, no job exists, the next job uses the number this one would have had,
+  and the run goes on
+
+**Verification:** test — a service test on the fake model.
+
+### REQ-022 — The front desk has no job
+
+The front desk SHALL have no job record: it is no conversation of any job, `jobs.list` and the feed's jobs never show
+it, and it has no definition of done. The reminder rule (REQ-008) SHALL never apply to it. Completing or cancelling a
+job (REQ-007) and the repair rules (REQ-018) SHALL never abort, park or change it. A job operation given the front
+desk's conversation id where it names a job SHALL be refused `invalid_input` with a message saying the front desk is
+not a job conversation (S-001 REQ-025).
+
+#### AC-022.1 — No reminder and no block
+
+- **Given:** the front desk
+- **When:** its turn ends with nothing queued and nothing awaited
+- **Then:** no reminder is sent to it, no job changes, and no history entry is written
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-022.2 — Repair leaves the front desk alone
+
+- **Given:** a daemon killed while the front desk runs and a Done job still has a running conversation
+- **When:** the daemon starts again
+- **Then:** repair rule 4 aborts the job's conversation, and the front desk's run resumes and answers its input once
+
+**Verification:** test — a service test on the fake model, killing the daemon during both runs.
+
+#### AC-022.3 — Job operations refuse the front desk's id
+
+- **Given:** the front desk
+- **When:** `jobs.get`, `jobs.update`, `jobs.worklog.add`, `jobs.resume`, `jobs.complete` and `jobs.cancel` name the
+  front desk's conversation id as the job
+- **Then:** each is refused `invalid_input` saying the front desk is not a job conversation, and nothing changes
 
 **Verification:** test — a service test.
 
@@ -894,6 +1009,10 @@ setting changes the statuses, the actions or the letters.
 - **S-003 amendment.** Each listener passes its observed caller details with the way in (REQ-007): none beyond the way
   in on the local socket, and on the network listener the TCP peer's remote address and port, never a header such as
   `X-Forwarded-For`. The `jobs.startLead` mentions in S-003 AC-007.2 move to `jobs.create`.
+- **S-001 v0.8, the front desk.** S-001 REQ-021 to REQ-025 define the front desk, the one standing conversation of
+  an instance that belongs to no job, its `desk` role and its tools; this spec's REQ-021 and REQ-022 define the job
+  tools it carries and keep it out of the job rules. The command-line spec (`bob chat`) and the Web interface spec
+  present it.
 - **Later specs.** Email passes the message ID and sender it observes; schedules and triggers state their entry, fire
   time, trigger and event; the Command line spec names the import command; the Web interface spec presents the board.
   Until they exist, tests and the live checks call the operations.
@@ -910,6 +1029,9 @@ setting changes the statuses, the actions or the letters.
 5. An export taken while jobs run imports on a second instance with every job, worklog entry, history entry and
    conversation present (REQ-016, REQ-017).
 6. Every job operation answers through both listeners as it does in-process (REQ-012).
+7. A job created through the front desk from the command line is `C-n` and one from the web interface is `W-n`, each
+   with the front desk in its origin details, and no reminder, action or repair ever changes the front desk (REQ-021,
+   REQ-022). Measured by `npm test`.
 
 ## Implementation Order
 
@@ -920,6 +1042,7 @@ setting changes the statuses, the actions or the letters.
 | 3 | Ordered writes and the four repair rules, the ADR-001 amendment in code, and the job feed events | Phase 2 |
 | 4 | Observed origin details through both listeners and `statedBy` | Phase 1, S-003 amendment |
 | 5 | Export and import, the reference timings, the live check, and the docs (developer architecture, user manual, spec map) | Phases 1–4 |
+| 6 | The job tools in the front desk, `list_jobs`, and keeping the front desk out of the job rules | Phase 5, S-001 phase 6 |
 
 ## Open Questions
 
@@ -933,3 +1056,4 @@ None.
 | 2026-11-02 | v0.3. AC-015.1 and the feed events table: the start publishes "status changed" like any status change, so the lifecycle has three; a change to Done publishes "job done" instead. Definitions (History), Interfaces (history entry, author), REQ-011 and REQ-018: each repair writes one `repair` history entry naming the rule and what it did; the daemon authors a resume on input and the cancel after a refused start. | Gate 2 review of the S-004 task plan (questions on T-128 and T-129). | T-128, T-129 |
 | 2026-11-02 | v0.4. REQ-006: the block records the ID of the lead conversation's newest transcript entry at the time of the block. REQ-018: rule 3 also covers a lead that has taken input since the job blocked, shown by an input entry in its transcript after the entry the block recorded; an input entry is a `pi.user` entry or an input entry kind the daemon submits (the steer record and the ADR-004 kinds). AC-018.1: the crash cases include a lead that took an answer after the park was cleared, before the resume was written. Interfaces: the job's internal `blockedAfterEntry`, set by the block and cleared by the resume in the same write, not returned by `jobs.get` and not recorded in the history. | T-129 F1 escalation; Architect escalation review; product owner decision 2026-11-02 (option A); ADR-001 decision 4 amended. | T-143, T-129, T-136 |
 | 2026-11-02 | v0.5. REQ-018 rule 1: it also fires for a To do job whose lead conversation holds no submission with request id `lead:<jobId>`, and completes the start, reusing request-id deduplication so the first input goes in once; creating the lead conversation and submitting its first input are two pi-durable commits. New AC-018.2 for a crash between them. Workflow and Success Criteria 4 follow. Exclusions: "sub-tasks" became "sub-jobs". | PR 147 review, finding 4: a crash after the lead conversation is created and before its first input leaves the job To do with no agent working on it, which rule 1 didn't catch. pi-durable can't submit input in the creation commit. Product owner decision 2026-11-02 (option A); ADR-001 decision 4 amended. | T-144 |
+| 2026-11-03 | v0.6. The front desk (S-001 v0.8). New REQ-021: in the front desk the job tools name their job, block and complete aren't offered, a new `list_jobs` lists jobs as `jobs.list` does, and `create_job` makes a job whose origin is the way in of the team member's input being answered (`C` or `W`) with the front desk in its origin details (AC-021.1 to AC-021.4). New REQ-022: the front desk has no job record; the reminder rule, complete, cancel and the repair rules never touch it; a job operation given its conversation id is refused as not a job conversation (AC-022.1 to AC-022.3). REQ-002 and REQ-003: the letter and origin of a job created through the front desk. REQ-008, REQ-007 and REQ-013 point to REQ-022 and REQ-021. Definitions, Users and Journeys (journey 8), Exclusions, Interfaces (the job tools in the front desk, the refusal of its conversation id, Consumed), Workflow, Assumptions, Success Criteria 7 and Implementation Order phase 6 follow. | Product owner decisions of the front desk brainstorm, 2026-11-03. | None yet; the front desk comes in the breakdown of this amendment |
