@@ -207,6 +207,13 @@ async function leadsOf(ctx: ServiceContext, jobId: string): Promise<string[]> {
     return leads;
 }
 
+async function inboxOf(ctx: ServiceContext, conversationId: string): Promise<{ mode: string }[]> {
+    return internalHarness(ctx.host).commit(async (tx) => {
+        const { items } = await tx.doc(InboxDoc, Number(conversationId) as never);
+        return items.map((item) => ({ mode: item.mode }));
+    }, BACKGROUND_CONTEXT);
+}
+
 const isIdle = async (ctx: ServiceContext, id: string) => (await ctx.host.conversationInfo(id))?.busy === false;
 
 const crashAt =
@@ -733,6 +740,36 @@ describe("the cost of the repair", () => {
         }
 
         assert.equal(listings, 1);
+    });
+});
+
+describe("rule 4: a closed conversation of a Done job with a queued write", () => {
+    it("writes no repair over two starts for an idle closed lead whose inbox holds only a reset", async () => {
+        const rig = await createRig();
+        const first = await rig.boot();
+        const heldCall = rig.hold();
+        const job = await first.createJob();
+        await waitFor(() => rig.modelInputs.length === 1, "the lead's run to be in its model call");
+        const lead = { conversationId: job.leadConversation };
+        await first.daemon.catalogue.invoke("conversations.reset", lead, webCaller);
+        await first.daemon.catalogue.invoke(
+            "jobs.cancel",
+            { job: job.id, justification: "no longer needed" },
+            webCaller,
+        );
+        heldCall.release();
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        const modes = (await inboxOf(first.ctx, job.leadConversation)).map((item) => item.mode);
+        assert.ok(modes.includes("write"), "the reset is queued");
+        assert.ok(!modes.some((mode) => mode === "steer" || mode === "followUp"), "no input is queued");
+        assert.equal((await readConversationMeta(first.ctx.host, job.leadConversation))?.closed, true);
+        await first.stop();
+
+        for (const start of ["second", "third"]) {
+            const booted = await rig.boot();
+            assert.deepEqual(await repairsOf(booted.ctx, job.id), [], `${start} start`);
+            await booted.stop();
+        }
     });
 });
 

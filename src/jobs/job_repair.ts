@@ -6,7 +6,12 @@
  * before its change lets the rule apply again at the next start, and each rule is safe to repeat.
  */
 import type { ServiceContext } from "../daemon/daemon.ts";
-import { hasInputSince, hasQueuedInput, hasSubmissionWithRequestId } from "../host/conversation_control.ts";
+import {
+    hasInputSince,
+    hasQueuedInput,
+    hasQueuedUserInput,
+    hasSubmissionWithRequestId,
+} from "../host/conversation_control.ts";
 import { abortJobConversations, continueWithHeld, parkConversation, unparkConversation } from "../host/invocation.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import {
@@ -139,10 +144,11 @@ async function applyRule2(deps: JobActionDeps, jobId: string, leadId: string | u
     await parkConversation(ctx.host, leadId, { waitingFor: "answer", continueOn: "each" });
 }
 
-// Whether a Done job's conversations need rule 4: one isn't closed, runs, parks or awaits, or has queued input.
+// Whether a Done job's conversations need rule 4: one isn't closed, runs, parks or awaits, or has queued input. A
+// queued write is not input: a closed conversation runs nothing, so it is never placed and needs no repair.
 async function needsClosing(ctx: ServiceContext, known: JobConversations): Promise<boolean> {
     if (known.isUnsettled) return true;
-    for (const id of known.idleClosedIds) if (await hasQueuedInput(ctx.host, id)) return true;
+    for (const id of known.idleClosedIds) if (await hasQueuedUserInput(ctx.host, id)) return true;
     return false;
 }
 

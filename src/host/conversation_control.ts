@@ -166,6 +166,16 @@ export async function hasQueuedInput(host: HarnessHost, conversationId: string):
     return (inbox?.items.length ?? 0) > 0;
 }
 
+/**
+ * Whether the conversation's inbox holds input: an item submitted in a busy mode (`steer` or `followUp`). A queued
+ * entry write, such as a reset, is not input, and an abort leaves it queued.
+ */
+export async function hasQueuedUserInput(host: HarnessHost, conversationId: string): Promise<boolean> {
+    const conversation = await requireConversation(host, conversationId);
+    const inbox = await internalHarness(host).snapshot(InboxDoc, conversation.id, context);
+    return (inbox?.items ?? []).some((item) => item.mode === "steer" || item.mode === "followUp");
+}
+
 // The kinds a transcript places an input as: plain `pi.user`, and the kinds ADR-004 gives inputs sent on behalf.
 const INPUT_ENTRY_KINDS: ReadonlySet<string> = new Set(["pi.user", "intern.steer", "intern.report"]);
 const SCAN_PAGE_SIZE = 20;
