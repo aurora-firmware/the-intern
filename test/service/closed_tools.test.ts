@@ -558,3 +558,58 @@ describe("a handoff in flight as the lead calls complete_job", () => {
         ]);
     });
 });
+
+describe("the tools called from and aimed at open conversations", () => {
+    it("act as before: coordination and job tools from an agent, steering tools from the front desk", async () => {
+        const started = await start();
+        const job = await startedJob(started, "open job");
+        const lead = job.leadConversation;
+        const prompt = "use every tool";
+        const caller = await invokeGated(
+            started,
+            lead,
+            prompt,
+            [
+                { name: "handoff", arguments: { role: "gp", contextMode: "full" } },
+                { name: "invoke", arguments: invokeArguments("more work") },
+                { name: "steer", arguments: { conversationId: lead, message: "hi", mode: "followUp" } },
+                { name: "add_worklog", arguments: { text: "a note" } },
+            ],
+            Promise.resolve(),
+        );
+        const results = await resultsAfter(started, prompt, 4);
+        await waitFor(async () => (await conversationsOfJob(started, job.id)).length === 3, "the invoked agent");
+        await waitFor(
+            async () => (await readConversationMeta(started.ctx.host, caller))?.awaiting.length === 0,
+            "the invoked agent's report",
+        );
+        started.addScript(({ input, results: seen }) => {
+            if (input !== "send and stop" || seen.length > 0) return undefined;
+            return toolCalls([
+                { name: "send_to_conversation", arguments: { conversationId: lead, message: "hi", mode: "followUp" } },
+                { name: "stop_conversation", arguments: { conversationId: caller } },
+            ]);
+        });
+        await submitAndWait(started, started.deskId, "send and stop");
+
+        assert.deepEqual(
+            results.map(({ name, isError }) => [name, isError]),
+            [
+                ["handoff", false],
+                ["invoke", false],
+                ["steer", false],
+                ["add_worklog", false],
+            ],
+        );
+        assert.match(results[1]?.text ?? "", /^Invoked conversations: \d+\.$/);
+        assert.equal((await readConversationMeta(started.ctx.host, caller))?.seat.role, "gp");
+        assert.deepEqual(
+            (await started.ctx.jobStore.listWorklog(job.id, {})).entries.map((entry) => entry.text),
+            ["a note"],
+        );
+        assert.deepEqual(await resultsAfter(started, "send and stop", 2), [
+            { name: "send_to_conversation", text: `The message was sent to conversation ${lead}.`, isError: false },
+            { name: "stop_conversation", text: `Stopped conversations: ${caller}.`, isError: false },
+        ]);
+    });
+});
