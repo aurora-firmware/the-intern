@@ -22,7 +22,7 @@ import { readFrontDeskId } from "../desk/front_desk.ts";
 import { HostNotFoundError } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { createInvokedConversations, InvocationDepthError, type InvocationRequest } from "../host/invocation.ts";
-import { ConversationClosedError } from "../host/job_section.ts";
+import { ConversationClosedError, isConversationClosed } from "../host/job_section.ts";
 import {
     type ContextMode,
     type ParkedState,
@@ -66,6 +66,13 @@ const textResult = (text: string, isError = false): ToolExecutionResult => ({
     output: [{ type: "text", text }],
     ...(isError && { isError }),
 });
+
+// A tool called from a closed conversation acts on nothing (S-001 REQ-026): its refusal names the conversation.
+async function closedRefusal(options: CoordinationOptions, api: ToolExecutionApi): Promise<string | undefined> {
+    const conversationId = String(api.conversationId);
+    if (!(await isConversationClosed(options.host(), conversationId))) return undefined;
+    return new ConversationClosedError(conversationId).message;
+}
 
 const invokedAgentParameters = Type.Object({
     role: Type.String({ description: "The role of the invoked agent." }),
@@ -137,6 +144,8 @@ const handoffTool = (options: CoordinationOptions) =>
             "working at once in the same conversation.",
         parameters: handoffParameters,
         async execute(args, api, context) {
+            const closed = await closedRefusal(options, api);
+            if (closed !== undefined) return textResult(`The handoff was refused: ${closed}`, true);
             const seat = resolveSeat(options.runtime(), args);
             if (typeof seat === "string") return textResult(`The handoff was refused: ${seat}`, true);
             const conversationId = String(api.conversationId);
@@ -194,6 +203,9 @@ const invokeTool = (options: CoordinationOptions) =>
             "when they report. A parked invoke must be the only tool call of its turn.",
         parameters: invokeParameters,
         async execute(args, api, context) {
+            const closed = await closedRefusal(options, api);
+            if (closed !== undefined)
+                return textResult(`The invocation was refused: ${closed} Nothing was created.`, true);
             if (args.then === "parked" && (await countCallsOfRound(api, context as never)) > 1) {
                 return textResult(
                     "The invocation was refused: a parked invoke must be the only tool call of its turn. Nothing was created.",
@@ -244,6 +256,8 @@ const steerTool = (options: CoordinationOptions) =>
             "until it continues.",
         parameters: steerParameters,
         async execute(args, api) {
+            const closed = await closedRefusal(options, api);
+            if (closed !== undefined) return textResult(`The steer was refused: ${closed}`, true);
             const steererId = String(api.conversationId);
             const meta = await readConversationMeta(options.host(), steererId);
             if (meta === undefined) throw new Error(`Conversation ${steererId} is not a seated conversation`);

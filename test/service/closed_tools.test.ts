@@ -290,3 +290,73 @@ describe("tools aimed at a closed conversation", () => {
         assert.equal(await entryCountOf(started, target), entriesBefore);
     });
 });
+
+// Invokes one agent from the lead; its model waits for the gate, then makes the calls. It answers "done" afterwards.
+async function invokeGated(started: Started, leadId: string, prompt: string, calls: Call[], go: Promise<void>) {
+    started.setScript(async ({ input, results, signal }) => {
+        if (input !== prompt || results.length > 0) return undefined;
+        await untilOpenOrAborted(go, signal);
+        return toolCalls(calls);
+    });
+    const [id] = await createInvokedConversations(started.ctx.host, {
+        invokingId: leadId,
+        callId: `call:${prompt}`,
+        agents: [{ seat: started.seat, contextMode: "clean", jobPrompt: prompt }],
+        actor: teamMember,
+    });
+    assert.ok(id !== undefined, "an agent was invoked");
+    return id;
+}
+
+const invokeArguments = (jobPrompt: string) => ({
+    agents: [{ role: DEFAULT_LEAD_ROLE, contextMode: "clean", jobPrompt }],
+    then: "steerable",
+});
+
+describe("coordination tools called from a conversation whose job is Done", () => {
+    it("returns error results for handoff, invoke and steer, and changes no seat, creates nothing and delivers nothing", async () => {
+        const started = await start();
+        const job = await startedJob(started, "done job");
+        const other = await startedJob(started, "other job");
+        const go = gate();
+        const prompt = "hand off, invoke and steer";
+        const caller = await invokeGated(
+            started,
+            job.leadConversation,
+            prompt,
+            [
+                { name: "handoff", arguments: { role: DEFAULT_LEAD_ROLE, contextMode: "full" } },
+                { name: "invoke", arguments: invokeArguments("more work") },
+                {
+                    name: "steer",
+                    arguments: { conversationId: other.leadConversation, message: "hi", mode: "steer" },
+                },
+            ],
+            go.opened,
+        );
+        const seatBefore = (await readConversationMeta(started.ctx.host, caller))?.seat;
+        const conversationsBefore = (await started.ctx.host.listConversations()).length;
+        const steeredBefore = await entryCountOf(started, other.leadConversation);
+        let results: Result[] = [];
+        started.setAfterWrite(async (point, jobId) => {
+            if (point !== "job-completed" || jobId !== job.id) return;
+            go.open();
+            results = await resultsAfter(started, prompt, 3);
+        });
+
+        await started.invoke("jobs.complete", { job: job.number, justification: "checked by hand" });
+
+        assert.deepEqual(results, [
+            { name: "handoff", text: `The handoff was refused: ${closedMessage(caller)}`, isError: true },
+            {
+                name: "invoke",
+                text: `The invocation was refused: ${closedMessage(caller)} Nothing was created.`,
+                isError: true,
+            },
+            { name: "steer", text: `The steer was refused: ${closedMessage(caller)}`, isError: true },
+        ]);
+        assert.deepEqual((await readConversationMeta(started.ctx.host, caller))?.seat, seatBefore);
+        assert.equal((await started.ctx.host.listConversations()).length, conversationsBefore);
+        assert.equal(await entryCountOf(started, other.leadConversation), steeredBefore);
+    });
+});
