@@ -131,14 +131,26 @@ describe("usage errors", () => {
     it("returns the group usage when an option is unknown", () => {
         const result = parse("jobs", "list", "--bogus");
         assert.equal(result.kind, "usage-error");
-        assert.match(usageOf(result), /bob jobs/);
+        assert.match(usageOf(result), /Usage: bob jobs <command>/);
     });
 
     it("returns a usage error when a required argument is missing", () => {
         const result = parse("jobs", "show");
         assert.equal(result.kind, "usage-error");
-        assert.match(usageOf(result), /bob jobs/);
+        assert.match(usageOf(result), /Usage: bob jobs <command>/);
         assert.match(result.kind === "usage-error" ? result.message : "", /job/);
+    });
+
+    it("returns the usage of a top-level command when it gets an unknown option", () => {
+        const result = parse("status", "--bogus");
+        assert.equal(result.kind, "usage-error");
+        assert.match(usageOf(result), /Usage: bob status \[options\]/);
+    });
+
+    it("returns the usage of a top-level command when it gets a surplus argument", () => {
+        const result = parse("status", "extra");
+        assert.equal(result.kind, "usage-error");
+        assert.match(usageOf(result), /Usage: bob status \[options\]/);
     });
 
     it("returns a usage error when no command is given", () => {
