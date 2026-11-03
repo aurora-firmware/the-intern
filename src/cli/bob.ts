@@ -20,6 +20,14 @@ function processIo(): CommandIo {
     };
 }
 
+// Resolves once the stream has taken everything written so far, or has failed (a reader that closed early).
+function drained(stream: CommandIo["stdout"]): Promise<void> {
+    return new Promise((resolve) => {
+        stream.on("error", () => resolve());
+        stream.write("", () => resolve());
+    });
+}
+
 /** Runs the command and returns the process exit status. */
 export async function main(argv: readonly string[], io: CommandIo = processIo()): Promise<number> {
     const parsed = parseCommandLine(argv, COMMANDS);
@@ -33,8 +41,13 @@ export async function main(argv: readonly string[], io: CommandIo = processIo())
         case "reserved-group":
             io.stderr.write(`${parsed.message}\n`);
             return EXIT_CODES.usage;
-        case "command":
-            return parsed.command.run({ ...parsed.input, io });
+        case "command": {
+            const status = await parsed.command.run({ ...parsed.input, io });
+            // A piped stream holds only what the reader has taken, so exiting at once would cut data commands short.
+            // The error listener comes after the command, so `serve` reacts to a lost stderr as before.
+            if (parsed.command.isData) await Promise.all([drained(io.stdout), drained(io.stderr)]);
+            return status;
+        }
     }
 }
 
