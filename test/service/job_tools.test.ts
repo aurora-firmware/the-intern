@@ -69,12 +69,14 @@ async function start() {
     let script: Call[] = [];
     let lastResults: ToolResultSeen[] = [];
     let step = 0;
+    let beforeFirstCall: (() => Promise<void>) | undefined;
     const respond: FauxResponseFactory = async (context) => {
         fake.appendResponses([respond]);
         if (!isScripted(context)) return fauxAssistantMessage("done");
         // The conversation keeps the results of earlier runs; this run's are the last `step` of them.
         const seen = toolResultsOf(context);
         lastResults = seen.slice(seen.length - step);
+        if (step === 0) await beforeFirstCall?.();
         const call = script[step];
         step += 1;
         if (call === undefined) return fauxAssistantMessage("finished");
@@ -148,7 +150,10 @@ async function start() {
             });
             return conversationId;
         },
-        async run(conversationId: string, calls: Call[]): Promise<RunResult> {
+        // A conversation of a Done job takes no input, so a test that needs a run on a Done job ends the job
+        // in `beforeFirstCall`, after the input was admitted and before the model's first reply.
+        async run(conversationId: string, calls: Call[], beforeFirstCall_?: () => Promise<void>): Promise<RunResult> {
+            beforeFirstCall = beforeFirstCall_;
             script = calls;
             step = 0;
             turn += 1;
@@ -343,12 +348,23 @@ describe("a refused job tool", () => {
         const started = await start();
         const job = await started.createJob();
         const conversation = await started.seat(job.id);
-        await started.ctx.jobStore.applyAction(job.id, "cancel", { justification: "not needed" }, { kind: "daemon" });
+        const cancel = async () => {
+            await started.ctx.jobStore.applyAction(
+                job.id,
+                "cancel",
+                { justification: "not needed" },
+                { kind: "daemon" },
+            );
+        };
 
-        const { state, results } = await started.run(conversation, [
-            { name: "update_job", arguments: { title: "late" } },
-            { name: "add_worklog", arguments: { text: "late note" } },
-        ]);
+        const { state, results } = await started.run(
+            conversation,
+            [
+                { name: "update_job", arguments: { title: "late" } },
+                { name: "add_worklog", arguments: { text: "late note" } },
+            ],
+            cancel,
+        );
 
         assert.equal(state, "done");
         for (const result of results) {

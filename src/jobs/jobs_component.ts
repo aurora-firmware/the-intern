@@ -6,6 +6,7 @@ import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import { onInputSubmitted } from "../host/conversation_control.ts";
+import { setJobDoneCheck } from "../host/job_section.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import { jobActionOperations } from "../service/job_action_operations.ts";
 import { jobExportOperation } from "../service/job_export_operation.ts";
@@ -62,6 +63,7 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
     let stopListening: (() => void) | undefined;
     let stopInputListening: (() => void) | undefined;
     let stopTurnEndRule: (() => void) | undefined;
+    let stopJobDoneCheck: (() => void) | undefined;
     let context: ServiceContext | undefined;
     // The job tools are built before the host opens, so they reach the service context once startup has bound it.
     const requireContext = (): ServiceContext => {
@@ -81,6 +83,14 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
             // Step 5 comes before work resumes, so runs that resume after a restart are covered.
             async checkModels(ctx) {
                 context = ctx;
+                stopJobDoneCheck = setJobDoneCheck(ctx.host, async (jobId) => {
+                    try {
+                        return (await ctx.jobStore.getJob(jobId)).status === "done";
+                    } catch (error) {
+                        if (error instanceof JobNotFoundError) return false;
+                        throw error;
+                    }
+                });
                 stopListening = ctx.admission.onGranted((conversationId) =>
                     startJobOfLead(ctx, options, conversationId),
                 );
@@ -98,6 +108,8 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
                 await repairJobs({ ctx, options });
             },
             async stop() {
+                stopJobDoneCheck?.();
+                stopJobDoneCheck = undefined;
                 stopListening?.();
                 stopListening = undefined;
                 stopInputListening?.();

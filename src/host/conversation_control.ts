@@ -14,6 +14,7 @@ import {
     type SubmissionRecord,
 } from "@earendil-works/pi-durable";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
+import { inOpenConversation } from "./job_section.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -128,15 +129,18 @@ export async function submitInput(
     const conversation = await requireConversation(host, conversationId);
     const isRepeat = (await findSubmission(host, conversation, input.requestId)) !== undefined;
     try {
-        const submission = await conversation.submit(
-            {
-                type: "input",
-                content: input.content,
-                requestId: input.requestId,
-                whenBusy: input.busyMode,
-                ...(input.entry !== undefined && { entry: input.entry as InputEntry }),
-            },
-            context,
+        // The listeners run after the section is released: a listener may enter the job's section itself.
+        const submission = await inOpenConversation(host, conversationId, () =>
+            conversation.submit(
+                {
+                    type: "input",
+                    content: input.content,
+                    requestId: input.requestId,
+                    whenBusy: input.busyMode,
+                    ...(input.entry !== undefined && { entry: input.entry as InputEntry }),
+                },
+                context,
+            ),
         );
         if (!isRepeat) await notifyInputSubmitted(host, { conversationId, requestId: input.requestId });
         return { submissionId: String(submission.id) };
