@@ -4,7 +4,7 @@
  */
 import type { CommandInput, CommandSpec } from "./command_line.ts";
 import { CONVERSATIONS_COMMANDS } from "./conversations_commands.ts";
-import { statusCommand, usageCommand } from "./instance_commands.ts";
+import { exportCommand, importCommand, statusCommand, usageCommand } from "./instance_commands.ts";
 import { JOBS_COMMANDS } from "./jobs_commands.ts";
 import { ROLES_COMMANDS } from "./roles_commands.ts";
 import type { ServeFlags } from "./serve.ts";
@@ -47,6 +47,8 @@ export const COMMANDS: readonly CommandSpec[] = [
     serve,
     statusCommand,
     usageCommand,
+    exportCommand,
+    importCommand,
     ...JOBS_COMMANDS,
     ...CONVERSATIONS_COMMANDS,
     ...ROLES_COMMANDS,
