@@ -22,6 +22,7 @@ import { readFrontDeskId } from "../desk/front_desk.ts";
 import { HostNotFoundError } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { createInvokedConversations, InvocationDepthError, type InvocationRequest } from "../host/invocation.ts";
+import { ConversationClosedError } from "../host/job_section.ts";
 import {
     type ContextMode,
     type ParkedState,
@@ -262,7 +263,7 @@ const steerTool = (options: CoordinationOptions) =>
                         : `The message was sent to conversation ${conversationId}.`,
                 );
             } catch (error) {
-                if (error instanceof HostNotFoundError)
+                if (error instanceof HostNotFoundError || error instanceof ConversationClosedError)
                     return textResult(`The steer was refused: ${error.message}`, true);
                 throw error;
             }

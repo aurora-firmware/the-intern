@@ -7,6 +7,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import { HostNotFoundError } from "../host/conversation_control.ts";
 import { abortWithAwaited } from "../host/invocation.ts";
+import { ConversationClosedError } from "../host/job_section.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import { steerConversation } from "../host/steering.ts";
 import { textResult } from "./desk_state_tools.ts";
@@ -66,7 +67,7 @@ const sendToConversationTool = (options: DeskToolsOptions) =>
                         : `The message was sent to conversation ${args.conversationId}.`,
                 );
             } catch (error) {
-                if (error instanceof HostNotFoundError) {
+                if (error instanceof HostNotFoundError || error instanceof ConversationClosedError) {
                     return textResult(`send_to_conversation was refused: ${error.message}`, true);
                 }
                 throw error;
@@ -86,7 +87,7 @@ const stopConversationTool = (options: DeskToolsOptions) =>
                 const stopped = await abortWithAwaited(options.host(), args.conversationId);
                 return textResult(`Stopped conversations: ${stopped.join(", ")}.`);
             } catch (error) {
-                if (error instanceof HostNotFoundError) {
+                if (error instanceof HostNotFoundError || error instanceof ConversationClosedError) {
                     return textResult(`stop_conversation was refused: ${error.message}`, true);
                 }
                 throw error;
