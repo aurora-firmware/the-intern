@@ -7,6 +7,7 @@
 import { type Client, ClientError, type FeedItem, type FeedScope, UnreachableError } from "../client/client.ts";
 
 const DEFAULT_RETRY_DELAY_MS = 1000;
+const LAGGING_REASON = "lagging";
 const ENTRIES_PAGE_LIMIT = 500;
 
 export const UNREACHABLE_NOTICE = "The Intern isn't reachable; trying again";
@@ -54,16 +55,19 @@ function whenAborted(signal: AbortSignal): { promise: Promise<"aborted">; releas
     return { promise, release };
 }
 
-/** Reads one subscription to its end. Returns whether a snapshot arrived; stops early when the signal aborts. */
-async function readSubscription(options: FollowOptions, client: Client): Promise<{ hasSnapshot: boolean }> {
+type SubscriptionEnd = { hasSnapshot: boolean; reason?: string };
+
+/** Reads one subscription to its end. Returns whether a snapshot arrived and the end reason; none when aborted. */
+async function readSubscription(options: FollowOptions, client: Client): Promise<SubscriptionEnd> {
     const { scope, onSnapshot, onDelta, signal } = options;
     const subscription = client.subscribe(scope);
     const aborted = whenAborted(signal);
     let hasSnapshot = false;
     try {
-        while (true) {
+        while (!signal.aborted) {
             const step = await Promise.race([subscription.next(), aborted.promise]);
-            if (step === "aborted" || step.done) return { hasSnapshot };
+            if (step === "aborted") return { hasSnapshot };
+            if (step.done) return { hasSnapshot, reason: step.value.end };
             const item: FeedItem = step.value;
             if ("snapshot" in item) {
                 hasSnapshot = true;
@@ -72,6 +76,7 @@ async function readSubscription(options: FollowOptions, client: Client): Promise
                 await onDelta(item.delta);
             }
         }
+        return { hasSnapshot };
     } catch (error) {
         throw Object.assign(error instanceof Error ? error : new Error(String(error)), { hasSnapshot });
     } finally {
@@ -90,9 +95,10 @@ export async function followFeed(options: FollowOptions): Promise<void> {
     let isOutageNoticed = false;
     while (!signal.aborted) {
         try {
-            const { hasSnapshot } = await readSubscription(options, connect());
+            const { hasSnapshot, reason } = await readSubscription(options, connect());
             if (hasSnapshot) isOutageNoticed = false;
             if (signal.aborted) return;
+            if (reason !== LAGGING_REASON) await pause(retryDelayMs, signal);
         } catch (error) {
             const notice = noticeFor(error);
             if (notice === undefined) throw error;

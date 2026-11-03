@@ -156,10 +156,25 @@ describe("followFeed", () => {
         );
     });
 
-    it("closes_the_subscription_and_returns_when_the_signal_aborts_on_a_quiet_feed", async () => {
+    it("closes_the_subscription_and_returns_when_the_signal_aborts", async () => {
+        const script = scriptedConnect([{ items: [{ snapshot: "s" }, { delta: "d" }], hold: true }]);
+        const controller = new AbortController();
+        await followFeed({
+            connect: script.connect,
+            scope: { scope: "instance" },
+            onSnapshot: async () => {},
+            onDelta: async () => controller.abort(),
+            onNotice: () => {},
+            signal: controller.signal,
+        });
+        assert.deepEqual(script.closedAttempts, [0]);
+        assert.equal(script.connections(), 1);
+    });
+
+    it("returns_while_waiting_on_a_quiet_feed_when_the_signal_aborts", async () => {
         const script = scriptedConnect([{ items: [{ snapshot: "s" }], hold: true }]);
         const controller = new AbortController();
-        const following = followFeed({
+        await followFeed({
             connect: script.connect,
             scope: { scope: "instance" },
             onSnapshot: async () => {
@@ -169,8 +184,30 @@ describe("followFeed", () => {
             onNotice: () => {},
             signal: controller.signal,
         });
-        await following;
         assert.equal(script.connections(), 1);
+    });
+
+    it("waits_for_the_retry_delay_before_subscribing_again_after_an_end_other_than_lagging", async () => {
+        const script = scriptedConnect([
+            { items: [{ snapshot: "s1" }], end: "stopped" },
+            { items: [{ snapshot: "s2" }] },
+        ]);
+        const controller = new AbortController();
+        const snapshotTimes: number[] = [];
+        await followFeed({
+            connect: script.connect,
+            scope: { scope: "instance" },
+            onSnapshot: async () => {
+                snapshotTimes.push(Date.now());
+                if (snapshotTimes.length === 2) controller.abort();
+            },
+            onDelta: async () => {},
+            onNotice: () => {},
+            signal: controller.signal,
+            retryDelayMs: 50,
+        });
+        const [first, second] = snapshotTimes as [number, number];
+        assert.ok(second - first >= 40, `resubscribed after ${second - first} ms`);
     });
 
     it("returns_during_the_retry_delay_when_the_signal_aborts", async () => {
