@@ -19,26 +19,22 @@ import { EDITABLE_FIELDS, type JobAuthor, type JobStatus, type Letter } from "..
 import { JobNotFoundError, JobRefusedError, type JobStore } from "../jobs/job_store.ts";
 import type { CreateJobRequest, JobView } from "../service/job_operations.ts";
 import { readJob } from "../service/job_record_operations.ts";
-import { type Caller, ServiceError } from "../service/operations.ts";
+import { type Caller, type Catalogue, ServiceError } from "../service/operations.ts";
 import { FRONT_DESK_EXTENSION_NAME } from "./desk_model.ts";
+import { deskStateTools, jsonResult, textResult } from "./desk_state_tools.ts";
+import { deskSteeringTools } from "./desk_steering_tools.ts";
 
 export { FRONT_DESK_EXTENSION_NAME };
 
 export type DeskToolsOptions = {
     host(): HarnessHost;
     jobStore(): JobStore;
+    catalogue(): Catalogue;
     createJob(request: CreateJobRequest, caller: Caller): Promise<JobView>;
 };
 
 const ENTRY_PAGE_SIZE = 200;
 const JOB_FIELD_DESCRIPTION = "The job, by ID or short number such as C-7.";
-
-const textResult = (text: string, isError = false): ToolExecutionResult => ({
-    output: [{ type: "text", text }],
-    ...(isError && { isError }),
-});
-
-const jsonResult = (value: unknown): ToolExecutionResult => textResult(JSON.stringify(value, null, 2));
 
 async function authorOf(
     options: DeskToolsOptions,
@@ -220,6 +216,8 @@ export function createDeskToolsExtension(options: DeskToolsOptions): Extension {
             updateJobTool(options),
             addWorklogTool(options),
             relateJobsTool(options),
+            ...deskStateTools(options),
+            ...deskSteeringTools(options),
         ],
     });
 }

@@ -34,6 +34,7 @@ export async function createDeskComponent(options: {
     const deskTools = createDeskToolsExtension({
         host: () => requireContext().host,
         jobStore: () => requireContext().jobStore,
+        catalogue: () => requireContext().catalogue,
         createJob: (request, caller) => createJob(requireContext(), options.jobs.options, request, caller),
     });
     const component: DaemonComponent = {
