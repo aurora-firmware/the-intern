@@ -15,9 +15,12 @@ import { STOP_BOUND_MS } from "../../src/daemon/constants.ts";
 import { type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { createDeskComponent } from "../../src/desk/desk_component.ts";
+import { submissionIdFor } from "../../src/host/conversation_control.ts";
 import { abortJobConversations, FrontDeskNotJobError } from "../../src/host/invocation.ts";
 import { startJob } from "../../src/jobs/job_actions.ts";
+import { reminderRequestId } from "../../src/jobs/job_model.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
+import { checkTurnEnd, REMINDER_TEXT } from "../../src/jobs/turn_end_rule.ts";
 import { type Caller, ServiceError } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -138,7 +141,7 @@ async function start(options: { turnEndRule: boolean }) {
         return submissionId;
     }
     const deskEntries = async () => (await ctx.host.readEntries(deskId, { limit: 500 })).entries;
-    return { invoke, ctx, deskId, isIdle, createJob, submitToDesk, deskEntries };
+    return { invoke, ctx, options: jobs.options, deskId, isIdle, createJob, submitToDesk, deskEntries };
 }
 
 const isNotAJobRefusal = (error: unknown) =>
@@ -201,17 +204,26 @@ describe("the front desk is not a job conversation", { timeout: TEST_TIMEOUT_MS 
 
     it("sends the front desk no reminder at the end of its turn and changes no job", async () => {
         const fixture = await start({ turnEndRule: true });
+        const job = (await fixture.invoke("jobs.create", { text: "do it" }, email)) as CreatedJob;
+        await until(() => fixture.isIdle(job.leadConversation), "the lead's first run to end");
+        const historyBefore = JSON.stringify(await fixture.invoke("jobs.history.list", { job: job.id }));
         const submissionId = await fixture.submitToDesk("hello", "hello-1");
         const waited = (await fixture.invoke("submissions.wait", { submissionId, timeoutMs: WAIT_MS })) as {
             state: string;
         };
         assert.equal(waited.state, "done");
         await until(() => fixture.isIdle(fixture.deskId), "the front desk to be idle");
+
+        // The rule acts on the desk's id as it would on a job, and finds nothing to remind.
+        await checkTurnEnd({ ctx: fixture.ctx, options: fixture.options }, fixture.deskId, fixture.deskId);
         await sleep(200);
 
-        const entries = await fixture.deskEntries();
-        assert.equal(JSON.stringify(entries).includes("reminder"), false);
-        assert.equal(((await fixture.invoke("jobs.list", {})) as { jobs: unknown[] }).jobs.length, 0);
+        assert.equal(JSON.stringify(await fixture.deskEntries()).includes(REMINDER_TEXT), false);
+        for (const n of [0, 1]) {
+            const requestId = reminderRequestId(fixture.deskId, n);
+            assert.equal(await submissionIdFor(fixture.ctx.host, fixture.deskId, requestId), undefined);
+        }
         assert.equal(await fixture.isIdle(fixture.deskId), true);
+        assert.equal(JSON.stringify(await fixture.invoke("jobs.history.list", { job: job.id })), historyBefore);
     });
 });
