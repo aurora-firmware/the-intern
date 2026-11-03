@@ -20,6 +20,7 @@ export type ObservedDetails = { remoteAddress?: string; remotePort?: number; mes
 export type Actor =
     | { kind: "team_member"; wayIn?: string; observed?: ObservedDetails }
     | { kind: "agent"; conversationId: string }
+    | { kind: "front_desk"; conversationId: string; wayIn: string }
     | { kind: "job_source"; source: string };
 
 export type Caller = { actor: Actor };
