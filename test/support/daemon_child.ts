@@ -66,6 +66,16 @@ const PARKED_INVOKE_CALL = {
     },
 };
 
+const NESTED_PARENT_PROMPT = `${INVOKED_JOB_PROMPT_PREFIX} A`;
+const NESTED_INVOKE_CALL = {
+    name: "invoke",
+    arguments: {
+        agents: [{ role: "gp", contextMode: "clean", jobPrompt: `${INVOKED_JOB_PROMPT_PREFIX} A1` }],
+        // biome-ignore lint/suspicious/noThenProperty: `then` is the invoke tool's parameter name
+        then: "parked",
+    },
+};
+
 type Script = NonNullable<Switches["script"]>;
 
 /** `bash-sleep` takes its duration in seconds from the input, so a test sets how long the tool runs. */
@@ -78,6 +88,11 @@ function replyFor(script: Script, transcript: FakeTranscript): FakeReply {
     if (script === "invoke-parked" || script === "invoke-parked-slow-lead") {
         const isInvokedAgent = lastText.startsWith(INVOKED_JOB_PROMPT_PREFIX);
         return isInvokedAgent || hasToolResult(transcript) ? echo : { toolCall: PARKED_INVOKE_CALL };
+    }
+    if (script === "invoke-nested") {
+        if (hasToolResult(transcript)) return echo;
+        if (lastText === NESTED_PARENT_PROMPT) return { toolCall: NESTED_INVOKE_CALL };
+        return lastText.startsWith(INVOKED_JOB_PROMPT_PREFIX) ? echo : { toolCall: PARKED_INVOKE_CALL };
     }
     if (script === "desk-steer") {
         if (!lastText.startsWith(DESK_STEER_PREFIX) || hasToolResult(transcript)) return echo;

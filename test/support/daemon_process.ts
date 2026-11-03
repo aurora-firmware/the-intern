@@ -31,6 +31,7 @@ export type FakeScript =
     | "handoff-clean"
     | "invoke-parked"
     | "invoke-parked-slow-lead"
+    | "invoke-nested"
     | "gated"
     | "desk-steer";
 
