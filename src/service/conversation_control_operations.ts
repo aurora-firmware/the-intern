@@ -16,6 +16,7 @@ import {
 } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { abortWithAwaited } from "../host/invocation.ts";
+import { ConversationClosedError } from "../host/job_section.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import { holdForParked, steerConversation } from "../host/steering.ts";
 import { type Caller, defineOperation, type Operation, ServiceError } from "./operations.ts";
@@ -83,6 +84,7 @@ async function mappingHostErrors<T>(action: () => Promise<T>): Promise<T> {
     } catch (error) {
         if (error instanceof HostNotFoundError) throw new ServiceError("not_found", error.message);
         if (error instanceof HostBusyError) throw new ServiceError("busy", error.message);
+        if (error instanceof ConversationClosedError) throw new ServiceError("conflict", error.message);
         if (error instanceof HostConflictError) throw new ServiceError("conflict", error.message);
         throw error;
     }

@@ -16,7 +16,7 @@ import {
     waitForSubmission,
 } from "../../src/host/conversation_control.ts";
 import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
-import { createInvokedConversations, parkConversation } from "../../src/host/invocation.ts";
+import { abortJobConversations, createInvokedConversations, parkConversation } from "../../src/host/invocation.ts";
 import { REPORT_KIND, type ReportRecord } from "../../src/host/reports.ts";
 import {
     changeSeat,
@@ -213,6 +213,13 @@ describe("conversationStatus", () => {
         assert.equal(conversationStatus({ id: "a", busy: true, isParked: true }, admission), "running");
     });
 
+    it("is closed before any other status when the conversation is closed", () => {
+        assert.equal(conversationStatus({ id: "w", busy: true, isClosed: true }, admission), "closed");
+        assert.equal(conversationStatus({ id: "a", busy: true, isClosed: true }, admission), "closed");
+        assert.equal(conversationStatus({ id: "p", busy: false, isParked: true, isClosed: true }, admission), "closed");
+        assert.equal(conversationStatus({ id: "i", busy: false, isClosed: true }, admission), "closed");
+    });
+
     it("is idle when the conversation is neither busy nor waiting", () => {
         const status: ConversationStatus = conversationStatus({ id: "i", busy: false }, admission);
         assert.equal(status, "idle");
@@ -325,6 +332,62 @@ describe("conversations.list job fields", () => {
         );
         assert.deepEqual(ofUnknown, []);
         assert.notEqual(first, second);
+    });
+
+    it("returns conversations of several jobs in each status, closed included, and filters them by job", async () => {
+        const fixture = await openFixture({ capacity: 1, delayMs: BUSY_DELAY_MS });
+        const running = await fixture.seated({ jobId: "job-1" }, fixture.seatOf("lead"));
+        const waiting = await fixture.seated({ jobId: "job-1", isLead: false, depth: 1 });
+        const parked = await fixture.seated({ jobId: "job-2" }, fixture.seatOf("reviewer"));
+        const idle = await fixture.seated({ jobId: "job-2", isLead: false, depth: 1 });
+        const closed = await fixture.seated({ jobId: "job-3" }, fixture.seatOf("tester"));
+        for (const id of [parked, idle, closed]) await exchange(fixture, id, "hello");
+        await abortJobConversations(fixture.host, "job-3");
+        await parkConversation(fixture.host, parked, { waitingFor: "reports", continueOn: "all" });
+        const first = await fixture.send(running, "one");
+        await pollUntil(async () => fixture.admission.state().active.includes(running));
+        const second = await fixture.send(waiting, "two");
+        await pollUntil(async () => fixture.admission.state().waiting.some((w) => w.conversationId === waiting));
+
+        const listed = (await fixture.call("conversations.list")) as Listing[];
+        const ofJob2 = (await fixture.call("conversations.list", { jobId: "job-2" })) as Listing[];
+
+        const expected = [
+            { id: running, jobId: "job-1", isLead: true, role: "lead", status: "running", depth: 0 },
+            {
+                id: waiting,
+                jobId: "job-1",
+                isLead: false,
+                role: "developer",
+                status: "waiting for a worker thread",
+                depth: 1,
+            },
+            { id: parked, jobId: "job-2", isLead: true, role: "reviewer", status: "parked", depth: 0 },
+            { id: idle, jobId: "job-2", isLead: false, role: "developer", status: "idle", depth: 1 },
+            { id: closed, jobId: "job-3", isLead: true, role: "tester", status: "closed", depth: 0 },
+        ];
+        assert.deepEqual(
+            listed.map(({ id, jobId, isLead, seat, status, depth }) => ({
+                id,
+                jobId,
+                isLead,
+                role: seat?.role,
+                status,
+                depth,
+            })),
+            expected,
+        );
+        for (const listing of listed) {
+            assert.equal(listing.seat?.workspace, fixture.seatOf("lead").workspace);
+            assert.deepEqual(listing.origin, { kind: "request", wayIn: "cli" });
+            assert.ok(Number.isFinite(Date.parse(listing.lastActivity ?? "")), `${listing.id} has a last activity`);
+        }
+        assert.deepEqual(
+            ofJob2.map((listing) => listing.id),
+            [parked, idle],
+        );
+        await fixture.settle(first);
+        await fixture.settle(second);
     });
 
     it("rejects a job id that is not a string with invalid_input", async () => {

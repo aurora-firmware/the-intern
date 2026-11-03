@@ -42,7 +42,13 @@ export type InstanceFeed = {
 };
 
 type DeltaBody = InstanceDelta extends infer D ? (D extends unknown ? Omit<D, "seq"> : never) : never;
-type ConversationFacts = { jobId: string | null; isLead: boolean; seat: SeatSummary; isParked: boolean };
+type ConversationFacts = {
+    jobId: string | null;
+    isLead: boolean;
+    seat: SeatSummary;
+    isParked: boolean;
+    isClosed: boolean;
+};
 type Sink = { push(delta: InstanceDelta): void; end(reason: "stopped" | "unsubscribed"): void };
 
 function factsOf(meta: ConversationMeta): ConversationFacts {
@@ -52,6 +58,7 @@ function factsOf(meta: ConversationMeta): ConversationFacts {
         isLead: meta.isLead,
         seat: { role, model, ...(thinkingLevel !== undefined && { thinkingLevel }), workspace },
         isParked: meta.parked !== null,
+        isClosed: meta.closed === true,
     };
 }
 
@@ -86,8 +93,9 @@ export async function createInstanceFeed(options: {
         publish(event);
     }
 
-    function statusOf(id: string, isParked: boolean): ConversationListing["status"] {
-        return conversationStatus({ id, busy: busyById.get(id) ?? false, isParked }, admission.state());
+    function statusOf(id: string, facts: ConversationFacts): ConversationListing["status"] {
+        const { isParked, isClosed } = facts;
+        return conversationStatus({ id, busy: busyById.get(id) ?? false, isParked, isClosed }, admission.state());
     }
 
     // A change of the conversation's document publishes the seat or the status only when that part of it changed; a
@@ -100,8 +108,8 @@ export async function createInstanceFeed(options: {
         if (JSON.stringify(before.seat) !== JSON.stringify(after.seat)) {
             publish({ type: "seat_changed", conversationId, seat: after.seat });
         }
-        if (before.isParked !== after.isParked) {
-            publish({ type: "status_changed", conversationId, status: statusOf(conversationId, after.isParked) });
+        if (before.isParked !== after.isParked || before.isClosed !== after.isClosed) {
+            publish({ type: "status_changed", conversationId, status: statusOf(conversationId, after) });
         }
     }
 
@@ -197,7 +205,7 @@ export async function createInstanceFeed(options: {
                     isLead: facts?.isLead ?? false,
                     seat: facts?.seat ?? null,
                     status: conversationStatus(
-                        { id, busy: busyById.get(id) ?? false, isParked: facts?.isParked },
+                        { id, busy: busyById.get(id) ?? false, isParked: facts?.isParked, isClosed: facts?.isClosed },
                         state,
                     ),
                 };

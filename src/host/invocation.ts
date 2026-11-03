@@ -18,6 +18,7 @@ import {
 } from "./conversation_control.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { findCreatedConversation } from "./idempotency.ts";
+import { inJobSection, inOpenConversation } from "./job_section.ts";
 import {
     type ContextMode,
     type ConversationMeta,
@@ -175,7 +176,7 @@ async function invoke(
     host: HarnessHost,
     input: { invokingId: string; callId: string; agents: InvocationRequest[]; actor: SeatActor; parked?: ParkedState },
 ): Promise<string[]> {
-    const ids = await createMissing(host, input);
+    const ids = await inOpenConversation(host, input.invokingId, () => createMissing(host, input));
     await Promise.all(
         ids.map((id, index) =>
             submitJobPrompt(
@@ -301,51 +302,76 @@ async function isReportOwedTo(host: HarnessHost, meta: ConversationMeta | undefi
     return (await readConversationMeta(host, meta.invokedBy))?.awaiting.includes(id) ?? false;
 }
 
-async function abortRecursively(
+// Clears the conversation and, recursively, every conversation it awaits, and returns the ids in the order they are
+// aborted. Nothing is aborted here: the caller does that after the job's section is released.
+async function clearRecursively(
     host: HarnessHost,
     conversationId: string,
-    aborted: Set<string>,
+    cleared: Set<string>,
     isRoot = false,
 ): Promise<void> {
-    if (aborted.has(conversationId)) return;
+    if (cleared.has(conversationId)) return;
     // Read before clearing: the list is what the cascade follows. A conversation that was not seated has no
     // invocation links and awaits nothing.
     const meta = await readConversationMeta(host, conversationId);
     const isReportOwed = isRoot && (await isReportOwedTo(host, meta, conversationId));
-    aborted.add(conversationId);
-    // Cleared before the abort and before the recursion, so no cascaded run finds its invoker still waiting.
+    cleared.add(conversationId);
+    // Cleared before any abort, so no cascaded run finds its invoker still waiting.
     await clearWaiting(host, conversationId, isReportOwed);
-    await abortConversation(host, conversationId);
-    for (const awaitedId of meta?.awaiting ?? []) await abortRecursively(host, awaitedId, aborted);
+    for (const awaitedId of meta?.awaiting ?? []) await clearRecursively(host, awaitedId, cleared);
 }
 
 /**
  * Aborts the conversation, then every conversation it still awaits a report from, recursively, whether it is
  * steerable or parked. An invoked conversation that has reported has left `awaiting` and is not touched. No aborted
- * conversation stays parked, waits for a report or keeps held messages.
+ * conversation stays parked, waits for a report or keeps held messages. A closed conversation is refused with
+ * `ConversationClosedError`. The check and the clearing commits run in the job's section; the aborts wait for the
+ * runs to end, so they run after the section is released.
  */
 export async function abortWithAwaited(host: HarnessHost, conversationId: string): Promise<string[]> {
-    const aborted = new Set<string>();
-    await abortRecursively(host, conversationId, aborted, true);
-    return [...aborted];
+    const cleared = new Set<string>();
+    await inOpenConversation(host, conversationId, () => clearRecursively(host, conversationId, cleared, true));
+    const aborted = [...cleared];
+    for (const id of aborted) await abortConversation(host, id);
+    return aborted;
+}
+
+const closeConversation = (host: HarnessHost, conversationId: string) =>
+    updateMeta(host, conversationId, (meta) => {
+        meta.closed = true;
+        meta.parked = null;
+        meta.awaiting = [];
+        meta.held = [];
+    });
+
+// Lists and closes in the job's section, so no admission or creation of the job falls between the list and the marks.
+function closeJobConversations(host: HarnessHost, jobId: string): Promise<string[]> {
+    return inJobSection(host, jobId, async () => {
+        const ofJob: string[] = [];
+        for (const { id } of await host.listConversations()) {
+            if ((await readConversationMeta(host, id))?.jobId === jobId) ofJob.push(id);
+        }
+        for (const id of ofJob) await closeConversation(host, id);
+        return ofJob;
+    });
 }
 
 /**
- * Aborts every conversation whose `intern.conversation` document names the job, clearing them all first. An abort
- * waits for the run to end, so the conversation of a running tool (`own`) is aborted last and its abort is not awaited
- * here: the tool returns, and the run ends. `own.onError` gets a failed abort of it.
+ * Closes every conversation whose `intern.conversation` document names the job (closed mark set, nothing parked,
+ * awaited or held) in the job's section, awaits `afterClosed`, then aborts them. The section is released before
+ * `afterClosed` and the aborts. An abort waits for the run to end, so the conversation of a running tool (`own`) is
+ * aborted last and its abort is not awaited here: the tool returns, and the run ends. `own.onError` gets a failed
+ * abort of it. No abort mark is set, so no report is sent.
  */
 export async function abortJobConversations(
     host: HarnessHost,
     jobId: string,
     own?: { conversationId: string; onError(error: unknown): void },
+    afterClosed?: () => void | Promise<void>,
 ): Promise<string[]> {
     if (jobId === (await findCreatedConversation(host, FRONT_DESK_CREATION))) throw new FrontDeskNotJobError(jobId);
-    const ofJob: string[] = [];
-    for (const { id } of await host.listConversations()) {
-        if ((await readConversationMeta(host, id))?.jobId === jobId) ofJob.push(id);
-    }
-    for (const id of ofJob) await clearWaiting(host, id);
+    const ofJob = await closeJobConversations(host, jobId);
+    await afterClosed?.();
     for (const id of ofJob) if (id !== own?.conversationId) await abortConversation(host, id);
     if (own !== undefined && ofJob.includes(own.conversationId)) {
         abortConversation(host, own.conversationId).catch(own.onError);

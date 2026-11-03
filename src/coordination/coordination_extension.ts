@@ -22,6 +22,7 @@ import { readFrontDeskId } from "../desk/front_desk.ts";
 import { HostNotFoundError } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { createInvokedConversations, InvocationDepthError, type InvocationRequest } from "../host/invocation.ts";
+import { ConversationClosedError, inOpenConversation, isConversationClosed } from "../host/job_section.ts";
 import {
     type ContextMode,
     type ParkedState,
@@ -65,6 +66,13 @@ const textResult = (text: string, isError = false): ToolExecutionResult => ({
     output: [{ type: "text", text }],
     ...(isError && { isError }),
 });
+
+// A tool called from a closed conversation acts on nothing (S-001 REQ-026): its refusal names the conversation.
+async function closedRefusal(options: CoordinationOptions, api: ToolExecutionApi): Promise<string | undefined> {
+    const conversationId = String(api.conversationId);
+    if (!(await isConversationClosed(options.host(), conversationId))) return undefined;
+    return new ConversationClosedError(conversationId).message;
+}
 
 const invokedAgentParameters = Type.Object({
     role: Type.String({ description: "The role of the invoked agent." }),
@@ -111,21 +119,49 @@ async function queueCleanContext(tx: Tx, conversationId: ToolExecutionApi["conve
     items.push({ id: input.id, mode: "followUp", content: note } as never);
 }
 
-async function compactWithNote(api: ToolExecutionApi, change: SeatChange, context: never): Promise<string | undefined> {
-    const taskId = await api.commit(async (tx) => {
-        await seatWrites(tx, String(api.conversationId), change);
-        const input: CompactionInput = {
-            reason: "manual",
-            ...(change.note !== undefined && { instructions: change.note }),
-        };
-        return tx.createTask(CompactionTask, input, {
-            ownership: { kind: "task", taskId: api.taskId },
-            abandonOnRestart: true,
-        });
-    }, context);
+async function compactWithNote(
+    host: HarnessHost,
+    api: ToolExecutionApi,
+    change: SeatChange,
+    context: never,
+): Promise<string | undefined> {
+    const conversationId = String(api.conversationId);
+    const taskId = await inOpenConversation(host, conversationId, () =>
+        api.commit(async (tx) => {
+            await seatWrites(tx, conversationId, change);
+            const input: CompactionInput = {
+                reason: "manual",
+                ...(change.note !== undefined && { instructions: change.note }),
+            };
+            return tx.createTask(CompactionTask, input, {
+                ownership: { kind: "task", taskId: api.taskId },
+                abandonOnRestart: true,
+            });
+        }, context),
+    );
     const settled = await api.waitForTask(taskId, context);
     const { outcome } = settled.state;
     return outcome.status === "completed" ? undefined : `the compaction did not finish (${outcome.status})`;
+}
+
+// The seat commit, and for Compact the commit that creates the compaction task, run in the job's section after the
+// closed check, so the job's close never falls between the check and the commit (S-001 REQ-026). The compaction is
+// awaited after the section is released. Returns why a compaction did not finish, if it did not.
+async function commitSeatChange(
+    host: HarnessHost,
+    api: ToolExecutionApi,
+    change: SeatChange,
+    context: never,
+): Promise<string | undefined> {
+    if (change.contextMode === "compact") return compactWithNote(host, api, change, context);
+    const conversationId = String(api.conversationId);
+    await inOpenConversation(host, conversationId, () =>
+        api.commit(async (tx) => {
+            await seatWrites(tx, conversationId, change);
+            if (change.contextMode === "clean") await queueCleanContext(tx, api.conversationId, change.note as string);
+        }, context),
+    );
+    return undefined;
 }
 
 const handoffTool = (options: CoordinationOptions) =>
@@ -136,6 +172,8 @@ const handoffTool = (options: CoordinationOptions) =>
             "working at once in the same conversation.",
         parameters: handoffParameters,
         async execute(args, api, context) {
+            const closed = await closedRefusal(options, api);
+            if (closed !== undefined) return textResult(`The handoff was refused: ${closed}`, true);
             const seat = resolveSeat(options.runtime(), args);
             if (typeof seat === "string") return textResult(`The handoff was refused: ${seat}`, true);
             const conversationId = String(api.conversationId);
@@ -144,16 +182,14 @@ const handoffTool = (options: CoordinationOptions) =>
             const { contextMode, note } = args;
             const actor = { kind: "agent", conversationId, role: meta.seat.role } as const;
             const change: SeatChange = { seat, actor, contextMode, ...(note !== undefined && { note }) };
-            if (contextMode === "compact") {
-                const failure = await compactWithNote(api, change, context as never);
-                if (failure !== undefined) {
-                    return textResult(`The seat is now ${seat.role}, but ${failure}.`, true);
+            try {
+                const failure = await commitSeatChange(options.host(), api, change, context as never);
+                if (failure !== undefined) return textResult(`The seat is now ${seat.role}, but ${failure}.`, true);
+            } catch (error) {
+                if (error instanceof ConversationClosedError) {
+                    return textResult(`The handoff was refused: ${error.message}`, true);
                 }
-            } else {
-                await api.commit(async (tx) => {
-                    await seatWrites(tx, conversationId, change);
-                    if (contextMode === "clean") await queueCleanContext(tx, api.conversationId, note as string);
-                }, context);
+                throw error;
             }
             return textResult(`This conversation is now handled by a new ${seat.role} agent.`);
         },
@@ -193,6 +229,10 @@ const invokeTool = (options: CoordinationOptions) =>
             "when they report. A parked invoke must be the only tool call of its turn.",
         parameters: invokeParameters,
         async execute(args, api, context) {
+            const closed = await closedRefusal(options, api);
+            if (closed !== undefined) {
+                return textResult(`The invocation was refused: ${closed} Nothing was created.`, true);
+            }
             if (args.then === "parked" && (await countCallsOfRound(api, context as never)) > 1) {
                 return textResult(
                     "The invocation was refused: a parked invoke must be the only tool call of its turn. Nothing was created.",
@@ -219,6 +259,12 @@ const invokeTool = (options: CoordinationOptions) =>
                 if (error instanceof InvocationDepthError) {
                     return textResult(`The invocation was refused: ${error.message} Nothing was created.`, true);
                 }
+                // The invoking conversation's own check refuses before any creation; a closed invoked conversation
+                // was created and closed with the others of the job.
+                if (error instanceof ConversationClosedError) {
+                    const created = error.conversationId === invokingId ? " Nothing was created." : "";
+                    return textResult(`The invocation was refused: ${error.message}${created}`, true);
+                }
                 throw error;
             }
         },
@@ -243,6 +289,8 @@ const steerTool = (options: CoordinationOptions) =>
             "until it continues.",
         parameters: steerParameters,
         async execute(args, api) {
+            const closed = await closedRefusal(options, api);
+            if (closed !== undefined) return textResult(`The steer was refused: ${closed}`, true);
             const steererId = String(api.conversationId);
             const meta = await readConversationMeta(options.host(), steererId);
             if (meta === undefined) throw new Error(`Conversation ${steererId} is not a seated conversation`);
@@ -262,7 +310,7 @@ const steerTool = (options: CoordinationOptions) =>
                         : `The message was sent to conversation ${conversationId}.`,
                 );
             } catch (error) {
-                if (error instanceof HostNotFoundError)
+                if (error instanceof HostNotFoundError || error instanceof ConversationClosedError)
                     return textResult(`The steer was refused: ${error.message}`, true);
                 throw error;
             }

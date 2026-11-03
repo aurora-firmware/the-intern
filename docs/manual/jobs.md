@@ -69,10 +69,13 @@ An action from a status that doesn't allow it is refused as `conflict`. An actio
 justification, or a complete with no definition of done, is refused as `invalid_input` and names the field.
 
 A job never goes back to To do. Done is final: you can't edit a Done job, add to its worklog, resume, complete or cancel
-it. The one change still allowed is relating it to another job. More work on a finished job becomes a new job, Related
-to the old one.
+it. The one change still allowed is relating it to another job. More work on a finished job becomes a new job, which
+may be Related to the old one.
 
-Completing or cancelling a job aborts every conversation of the job, so nothing stays parked or waiting for a report.
+Completing or cancelling a job aborts and closes every conversation of the job, so nothing stays parked or waiting for
+a report. A closed conversation stays closed for good. It keeps its transcript as the record of the work and lists with
+status `closed`. You can read it, but input to it, withdrawing its input, and aborting, resetting, reseating or
+compacting it are refused as `conflict` and change nothing. So no answer reaches the lead of a Done job.
 
 ## The definition of done
 
@@ -130,7 +133,8 @@ Each job has two records. You read both with `jobs.get`, or page them with `jobs
   between creating the conversation and submitting the input, gets that input submitted (either is cancelled if the
   start is refused); 2, a Blocked job whose lead isn't parked gets it parked;
   3, a Blocked job whose lead holds or took input since the block is set In progress and the lead continues with that
-  input; 4, a Done job with conversations still running, parked, or waiting for a report gets them aborted.
+  input; 4, a Done job with a conversation that isn't closed, or that is closed but still runs or has queued input,
+  gets it closed and aborted.
 
 ## Related jobs and follow-up jobs
 
@@ -139,7 +143,8 @@ there are no sub-jobs or dependencies. Relate and unrelate through `jobs.relate`
 that are already related changes nothing.
 
 An agent that finds more work while it works on a job creates a follow-up job with its job tools. The new job has the
-letter `A`, records the job and conversation it came from, and is Related to the job it came from.
+letter `A` and records the job and conversation it came from. It is Related to the job it came from only when the agent
+sets the create job tool's optional `related` flag.
 
 ## Work with jobs over the local socket
 
@@ -158,7 +163,7 @@ is refused answers `{"error": {"code": …, "message": …}}`, where the code is
 | --------------- | -------------------------------------------------------------------------------- |
 | `invalid_input` | A required input is missing or wrong, a guard failed or a field can't be edited. |
 | `not_found`     | No job has that number.                                                          |
-| `conflict`      | The action isn't allowed from the job's status, or the job is Done.              |
+| `conflict`      | The action isn't allowed from the job's status, the job is Done, or the conversation is closed. |
 | `busy`          | The database is in use. Export again in a moment.                                |
 | `unavailable`   | The service is stopping.                                                         |
 | `internal`      | The service failed. After a failed database write the service stops (see [Running The Intern](running_the_intern.md#start-the-service)). |
@@ -275,7 +280,7 @@ stopped and has no `bob` command yet; the command line documentation names it wh
 - **No priorities, due dates, estimates or time tracking.** Jobs start in the order they arrive.
 - **No assignees, watchers, votes, labels or attachments.** Every team member is equal, and the lead conversation is
   the only owner a job has.
-- **No reopening.** A Done job stays Done.
+- **No reopening.** A Done job stays Done, and its conversations stay closed. More work is a new job.
 - **No sub-jobs and no dependencies between jobs.** Related is the only link. To split work, the lead invokes
   other agents.
 - **No blocking by a team member.** Only the lead blocks a job.
