@@ -1,6 +1,6 @@
 ---
 title: Agent roles and conversations
-version: '0.7'
+version: '0.8'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-15'
 author: planner
@@ -15,8 +15,9 @@ This spec covers the **Agents and roles** component of S-000. The-intern runs ev
 database, and all of its work is organised as jobs (S-000) that agents carry out in conversations. Before any way in,
 schedule or client can be built, it has to be fixed what a conversation is, what the agent working in it is, and how
 agents share the work of a job. This spec defines roles that agents are made from, one lead agent per job that can pass
-the job's conversation to another role or invoke specialist agents to work on parts of the job in parallel, and the
-monitoring that shows which role works where. Success Criteria lists the observable outcomes.
+the job's conversation to another role or invoke specialist agents to work on parts of the job in parallel, the
+monitoring that shows which role works where, and the front desk, the one standing conversation that assists team
+members and turns their requests into jobs. Success Criteria lists the observable outcomes.
 
 ## Definitions
 
@@ -45,7 +46,9 @@ monitoring that shows which role works where. Success Criteria lists the observa
 | Reset | Clears what the model sees of a conversation. The conversation, its id and its stored entries stay. |
 | Transcript, context | The transcript is every stored entry of a conversation. The context is what the model receives on the next request, after resets and compactions. |
 | Workspace | A registered local folder that an agent works in. It supplies extra instructions and skills, and is where tools start. Agents work on the OS and filesystem with the account the-intern runs as; the workspace doesn't limit what they reach. |
-| Job source, origin | A job source starts a job and its lead conversation: a request from a team member (command line, web interface, email), a schedule fire, a trigger, or a follow-up job created by an agent. The origin of a conversation records its job source, or the invoking conversation for an agent invocation. |
+| Job source, origin | A job source starts a job and its lead conversation: a request from a team member (command line, web interface, email), a schedule fire, a trigger, or a follow-up job created by an agent. The origin of a conversation records its job source, the invoking conversation for an agent invocation, or "front desk" for the front desk. |
+| Front desk | The one standing conversation of an instance that assists team members (REQ-021). It belongs to no job. Team members reach it from the command line and the web interface; it answers questions about the work, creates jobs that agents take, and passes answers and steering to a job's conversations. It never does the work itself. |
+| Front-desk tools | The tools offered only in the front desk: job tools that name the job they act on, reads of conversations, status and usage, and steering of a job's conversations (REQ-022). |
 
 ### pi agent and pi-durable terms
 
@@ -59,15 +62,15 @@ models, login, settings, skills and context files. Where a term exists in both, 
 | Conversation | No separate term; the pi agent session plays this part | An ordered transcript of entries with its own pi-durable agent | The pi-durable meaning. |
 | Agent | The agent loop running in the `pi` process, set up from flags and settings | What a conversation runs with: model, thinking level, extensions, tools, instructions, cwd. Stored in the conversation's `pi.agent` document and resolved before every model request. The harness runs it; no process belongs to it. | The current agent's seat is written into the pi-durable agent of its conversation. |
 | Subagent | None built in; extensions provide it | A conversation owned by a task of its caller, aborted with it | Not used. Agent invocation replaces it (Alternatives Considered). |
-| Root conversation | None | Conversation 1, created by the host's first `root()` call. Not a parent of other conversations. | Not used by the-intern. Every conversation belongs to a job. |
+| Root conversation | None | Conversation 1, created by the host's first `root()` call. Not a parent of other conversations. | Not used by the-intern. Every conversation belongs to a job, except the front desk (REQ-021), which is not a root conversation either. |
 | Turn, run | A turn is one assistant message and its tool calls; a prompt runs until the agent ends | A turn is one model response and its tool calls; a run is the turns from an input to its final answer | Model turn and agent run, as defined above. |
 | Task | Not a pi agent concept | A durable state machine: generation, tool call, compaction | Only the pi-durable meaning. The work the-intern does is a job. |
 | Extension | A module pi agent loads from its agent folder, a trusted project's `.pi/extensions` or a flag | Tools, prompt sections and hooks that the host installs in its registry | Only the-intern's own pi-durable extensions. pi agent extensions are not loaded, neither the account's nor a workspace's, so an agent is offered exactly its role's tools (REQ-005). |
 | Skills | Loaded from pi agent's agent folder, `~/.agents/skills` and trusted project folders. The prompt lists name and description, and the model reads the file when needed. | No skill loading of its own | The role's skills plus the workspace skills, listed the same way as in pi agent. The account's own pi agent skills are not loaded. |
 | Context files | `AGENTS.md`/`CLAUDE.md` from pi agent's agent folder, the cwd and its parent directories | None; the host supplies prompt sections | Those of the workspace and its parent directories. |
 | cwd | The working directory of the `pi` process | The `cwd` of the pi-durable agent | The seat's workspace. |
-| New, fork, reset | `/new` starts a new pi agent session file; `/fork` copies one | A reset entry clears the model's context inside the same conversation; creating a conversation starts an empty one; a fork copies entries up to a point | A Clean handoff and a reset stay in the same conversation. Only job sources and agent invocations create conversations. A Full-context invocation may be built on a pi-durable fork. |
-| Compaction | Summarises older messages near the context limit, or on `/compact` | The same, as a pi-durable task, on by default | Automatic compaction is unchanged by this spec. The Compact context mode is an extra compaction guided by the agent's note. |
+| New, fork, reset | `/new` starts a new pi agent session file; `/fork` copies one | A reset entry clears the model's context inside the same conversation; creating a conversation starts an empty one; a fork copies entries up to a point | A Clean handoff and a reset stay in the same conversation. Only job sources, agent invocations and the creation of the front desk (REQ-021) create conversations. A Full-context invocation may be built on a pi-durable fork. |
+| Compaction | Summarises older messages near the context limit, or on `/compact` | The same, as a pi-durable task, on by default | Automatic compaction is unchanged by this spec, and it is what keeps the front desk's context bounded (REQ-024). The Compact context mode is an extra compaction guided by the agent's note. |
 | Steer, follow-up | Messages queued during a run: a steer arrives after the current tool calls, a follow-up after the run ends. Held in memory. | The same, through a durable inbox | The same meanings (REQ-020), and durable. |
 | Default model, thinking level | Chosen by pi agent's settings | None; the host passes them | "pi agent's default" (REQ-003) is what the pi agent settings of the account the-intern runs as select. |
 
@@ -75,7 +78,8 @@ models, login, settings, skills and context files. Where a term exists in both, 
 
 | Actor | Goal |
 |---|---|
-| Team member | Gives jobs, shapes the roles and workspaces agents are made from, follows which role works where, and steers, reseats or resets any conversation. |
+| Team member | Gives jobs, shapes the roles and workspaces agents are made from, follows which role works where, and steers, reseats or resets any conversation. Talks to the front desk to ask for work, ask what is going on, and answer or steer jobs. |
+| Front desk agent | Assists team members in the front desk: creates jobs, reports on jobs and conversations, and passes answers and steering on. It does no work itself. |
 | Lead agent | Carries its job from definition to verification, doing the work itself, handing the conversation to a better-suited role or invoking specialist agents. |
 | Specialist (invoked) agent | Does one part of a job in its own conversation and reports back. It never closes the job. |
 | Job sources (downstream systems) | The Jobs component, schedule fires and triggers start a job's lead conversation with a role and an origin. |
@@ -97,6 +101,11 @@ Journeys, in priority order:
    continues when the answer arrives. Delivered by REQ-014, REQ-010.
 6. **Nothing is lost on a crash.** Seats, links, parked state and reports survive a kill and restart. Delivered by
    REQ-017.
+7. **A team member talks to the front desk.** From the command line or the web interface, a team member asks the
+   front desk for work and it creates a job whose lead takes it as usual; asks what is going on and it answers from
+   jobs, conversations, status and usage; asks it to pass an answer to a Blocked job or to stop or redirect a job's
+   agents; and resets it to start clean, while compaction keeps it within its context. Delivered by REQ-021, REQ-022,
+   REQ-023, REQ-024, REQ-025.
 
 ## Exclusions
 
@@ -118,8 +127,20 @@ What this specification explicitly does NOT cover:
 - **Command-line views and the job abort operation.** This spec delivers the read operations that monitoring needs
   (REQ-016). The command-line views built on them belong to the command-line spec. It delivers the capability that
   aborts every conversation of a job (REQ-008); the operation that aborts a job belongs to the Jobs spec.
-- **Interactive chat.** There is no chat window and no root conversation. Team members follow, answer and steer jobs
-  through the command line, the web interface and email.
+- **Chat beyond the front desk.** There is no root conversation and no chat per team member, per way in or per job.
+  An instance has one front desk (REQ-021), with no "new chat": a reset is how a team member starts clean (REQ-024).
+  Team members also follow, answer and steer jobs directly through the command line, the web interface and email.
+- **Email to the front desk.** Mail doesn't reach the front desk; the Email spec sorts mail into jobs and answers.
+- **Work in the front desk.** The front desk invokes no agents, hands off to no role, changes no files and is offered
+  no workspace tools (REQ-022). Real work always becomes a job. A team member who reseats the front desk with a role
+  whose tool set names more tools makes that choice; the front desk can't make it itself.
+- **A job record for the front desk.** The front desk is never on the board, has no definition of done, and the Jobs
+  spec's turn-end rule, actions and repair rules don't apply to it (REQ-025).
+- **How the front desk is presented.** `bob chat` belongs to the command-line spec, and the web chat to the Web
+  interface spec. This spec delivers the conversation and its tools; the clients reach it through the service
+  operations.
+- **Telling team members apart in the front desk.** There are no logins, so the front desk doesn't know who wrote a
+  message; each input records only its way in (REQ-023).
 - **Model, thinking level or workspace per schedule entry.** Whether a schedule entry can name values other than its
   role's defaults is deferred (Open Questions). In v1 a fire runs with the named role's defaults.
 - **Process and concurrency model.** Whether worker threads are operating-system threads, share one event loop or
@@ -157,6 +178,9 @@ What this specification explicitly does NOT cover:
   without a model having to describe it.
 - **Unattended except for a blocked job's question.** No step waits for a human, except a blocked job waiting for
   the answer to its question. Handoffs and agent invocations proceed on agent decisions alone.
+- **The front desk talks; jobs work.** The front desk assists team members and passes their requests, answers and
+  steering on, but every piece of real work becomes a job with its own lead. The front desk owns no job, never waits
+  for a job and never makes a job wait for it.
 - **Bounded delegation.** Invocation depth and the number of worker threads are capped, so no chain of unattended
   agents can grow without limit. The worker-thread count also bounds how wide delegation can spread.
 
@@ -164,9 +188,11 @@ What this specification explicitly does NOT cover:
 
 - **An overlord across jobs.** A single long-lived coordinator conversation that owns every job, or a `bob` that owns
   the agents it invokes. Rejected: each job has its own lead conversation, and the lead owns its job, not the agents
-  it invokes. Invoked agents follow every rule in this spec and are peers in how they work.
+  it invokes. Invoked agents follow every rule in this spec and are peers in how they work. The front desk
+  (REQ-021) isn't such a coordinator: it owns no job, invokes no agents and closes nothing.
 - **A new conversation per handoff.** Rejected: a handoff never creates a conversation. A clean start inside the same
-  conversation is the Clean context mode, and only job sources and agent invocations create conversations.
+  conversation is the Clean context mode, and only job sources, agent invocations and the creation of the front desk
+  create conversations.
 - **pi-durable subagents (task-owned conversations).** Rejected as the product concept: agent invocation replaces
   them, because an invoked agent is a peer that its invoker doesn't own. Whether invocation is built on pi-durable
   task-owned conversations is an implementation choice.
@@ -180,13 +206,13 @@ What this specification explicitly does NOT cover:
  job sources                        conversations (one database)                 roles (catalog)
 ┌──────────────────┐   new job   ┌────────────────────────────────────┐  seat   ┌──────────────────┐
 │ request (CLI,    ├────────────►│ job A: lead conversation [bob]     │◄────────┤ bob  (default    │
-│ web, email)      │             │   ├─ invokes #m      [role: gp]    │         │  lead), gp,      │
+│ web, email)      │             │   ├─ invokes #m      [role: gp]    │         │  lead), gp, desk,│
 ├──────────────────┤             │   │    └─ invokes …  [role: any]   │         │  team roles      │
 │ schedule fire,   │──new job───►│   ├─ steerable or parked           │         │                  │
 │ trigger          │             │   └─ handoff / reset: same conv,   │         │ each: instr.,    │
 ├──────────────────┤             │      next agent, context mode      │         │  tools, skills;  │
 │ follow-up job    │──new job───►│ job B: lead conversation [gp]      │         │  default model,  │
-│ (from an agent)  │             │                                    │         │  thinking,       │
+│ (from an agent)  │             │ front desk [desk], no job          │         │  thinking,       │
 │                  │             │ reports return as new input        │         │  workspace*      │
 └──────────────────┘             └──────┬───────────────▲─────────────┘         └──────────────────┘
                                         │ role-attributed│ seat change, reset,   * team-set; a seat
@@ -203,12 +229,13 @@ What this specification explicitly does NOT cover:
 
 | Component | Responsibility | Notes |
 |---|---|---|
-| Role catalog | Holds the shipped roles (`bob`, `gp`), the team's own roles, their instructions, tools, skills and defaults, and the registered workspaces, each checked when it is registered | Changed by team members through settings operations (REQ-003, REQ-018). Consumes the-intern's settings, its shipped tools and pi agent's default model and thinking level |
+| Role catalog | Holds the shipped roles (`bob`, `gp`, `desk`), the team's own roles, their instructions, tools, skills and defaults, and the registered workspaces, each checked when it is registered | Changed by team members through settings operations (REQ-003, REQ-018). Consumes the-intern's settings, its shipped tools and pi agent's default model and thinking level |
 | Seating | Seats an agent of a role in a conversation, with optional model, thinking level and workspace overrides, so that later turns use that seat, and records who seated it | The only path that changes a conversation's seat. Consumes the role catalog and the pi-durable agent of each conversation |
 | Role prompt | Builds what the model sees: the-intern's preamble, role instructions, role skills, workspace instructions (`AGENTS.md`/`CLAUDE.md`) and workspace skills | Must stay byte-stable while the seat and the role are unchanged (AC-005.4) |
-| Agent coordination | Agent-callable handoff, agent invocation and steer capabilities; parking and continuing invoking conversations; the report-back clean-up step; the depth cap and the worker threads | Every role is offered the same coordination capabilities. Consumes seating, conversation reset, compaction and fork, conversation creation, the inbox of the target conversation, and each conversation's own `intern.conversation` document (below) |
-| Entry routing | Starts a job's lead conversation for each job source with the role it names (`bob` when it names none) and records its origin; serves team members' requests to reset conversations | Holds no channel knowledge beyond choosing the role and recording the origin. Called by the Jobs component when a job is created |
-| Monitoring | Lists conversations with their job, lead flag, seats, origins, status, invocation links and live transcripts | Read-only. Abort, reset and steer go through other components |
+| Agent coordination | Agent-callable handoff, agent invocation and steer capabilities; parking and continuing invoking conversations; the report-back clean-up step; the depth cap and the worker threads | Every role is offered the same coordination capabilities in a job's conversations, and none in the front desk (REQ-022). Consumes seating, conversation reset, compaction and fork, conversation creation, the inbox of the target conversation, and each conversation's own `intern.conversation` document (below) |
+| Entry routing | Starts a job's lead conversation for each job source with the role it names (`bob` when it names none) and records its origin; at startup, makes sure the front desk exists and records its conversation id (REQ-021); serves team members' requests to reset conversations | Holds no channel knowledge beyond choosing the role and recording the origin. Called by the Jobs component when a job is created, and by startup for the front desk |
+| Front-desk tools | The tools offered only in the front desk: the job tools that name a job, the state reads and the steering of a job's conversations (REQ-022) | Calls the job operations (S-004) and the same paths as `conversations.submit` and `conversations.abort`, recording each change as from the front desk (REQ-023) |
+| Monitoring | Lists conversations with their job, lead flag, front-desk mark, seats, origins, status, invocation links and live transcripts | Read-only. Abort, reset and steer go through other components |
 
 **The conversation's own document.** Each conversation's `intern.conversation` document holds the conversation's
 parked state, the messages held for it while it is parked, the invoked conversations whose reports it awaits, and its
@@ -225,8 +252,9 @@ outcomes, idempotency keys) are S-002's (S-002 REQ-012, REQ-013).
 
 ### Exposed: agent tools
 
-Every seat is offered these three coordination tools and the job tools (S-004 REQ-013), whatever its role's tool set
-names (REQ-003, REQ-005).
+Every seat in a job's conversation is offered these three coordination tools and the job tools (S-004 REQ-013),
+whatever its role's tool set names (REQ-003, REQ-005). A seat in the front desk is offered none of them, and the
+front-desk tools instead (REQ-022).
 **Contract** (tool names and parameters as the model sees them):
 
 | Tool | Parameters | Result |
@@ -237,6 +265,17 @@ names (REQ-003, REQ-005).
 
 The tools the-intern ships for a role's tool set are `read`, `write`, `edit` and `bash`; a tool set naming anything
 else is refused (REQ-003).
+
+The front-desk tools (REQ-022), offered only in the front desk:
+
+| Group | Tools | Does |
+|---|---|---|
+| Jobs | `read_job`, `list_jobs`, `create_job`, `update_job`, `add_worklog`, `relate_jobs` | The job tools of S-004, each naming the job it acts on, and `list_jobs` with a status and origin-letter filter (S-004 REQ-021) |
+| State | read a conversation's status, entries and invocations; read the daemon status; read usage | The same answers as `conversations.get`, `conversations.entries`, `conversations.invocations`, `daemon.status` and `usage.get` |
+| Steering | send input to a job's conversation; stop a job's conversation | The same paths as `conversations.submit` and `conversations.abort`, recorded as from the front desk (REQ-023) |
+
+The names of the state and steering tools and the parameter layouts of all of them are not contract; the tasks fix
+them.
 
 ### Exposed: service operations
 
@@ -250,7 +289,8 @@ These operations of the S-002 catalogue carry this spec's behaviour (S-002 REQ-0
 | `conversations.submit` | control | Steer or queue input, including to a parked conversation (REQ-020) |
 | `roles.list`, `roles.create`, `roles.change`, `roles.restore`, `roles.remove` | read, control | Role settings (REQ-003) |
 | `workspaces.list`, `workspaces.register`, `workspaces.unregister` | read, control | Workspace registration (REQ-018) |
-| `conversations.list`, `conversations.get`, `conversations.invocations`, `conversations.entries`, `feed.subscribe` | read | Monitoring (REQ-016) |
+| `conversations.list`, `conversations.get`, `conversations.invocations`, `conversations.entries`, `feed.subscribe` | read | Monitoring (REQ-016); `conversations.list` marks the front desk (REQ-021) |
+| `desk.get` | read | The front desk's conversation id and seat (REQ-021) |
 
 Two capabilities are offered in-process only, for S-004: `jobs.startLead`, which starts a job's lead conversation
 with a role, optional overrides, a first input and an origin and is called by `jobs.create` (REQ-012); and the
@@ -264,7 +304,8 @@ Clients read these entry kinds through `conversations.entries` and the conversat
   (REQ-007).
 - **`intern.report`**, a report from an invoked agent: the invoked conversation, its role and the text (REQ-019;
   ADR-004).
-- **`intern.steer`**, a steer or held message: its sender, mode and text (REQ-020; ADR-004).
+- **`intern.steer`**, a steer or held message: its sender, mode and text (REQ-020; ADR-004). Input the front desk
+  sends to a job's conversation names the front desk as its sender (REQ-023).
 
 Each assistant entry is returned with the seat that produced it (REQ-007).
 
@@ -317,6 +358,28 @@ A seat's workspace folder disappears → tool errors, the daemon keeps running  
 The lead verifies against the definition of done and closes the job (Jobs spec)
 ```
 
+The front desk, from startup to a team member's request:
+
+```
+Startup: entry routing makes sure the front desk exists                                    REQ-021
+  (missing → created seated as desk, no job, origin "front desk", id recorded)              REQ-021, REQ-023
+  (crash during the creation → the next start finds or creates exactly one)                 REQ-021
+  ↓
+A team member writes from the command line or the web interface (way in C or W)            REQ-021, REQ-023
+  ↓
+Waits for a worker thread if all are busy, like any input                                   REQ-010, REQ-021
+  ↓
+The desk agent answers with the front-desk tools only                                       REQ-022
+    ├─ asks for work → creates a job (way in's letter, front-desk origin detail);
+    │                  the job's lead takes it as usual                                     REQ-022; S-004 REQ-021
+    ├─ asks what is going on → reads jobs, conversations, status and usage                  REQ-022
+    └─ answers or steers → input to a job's conversation, or a stop, from the front desk    REQ-022, REQ-023
+          (a Blocked job's lead resumes on the input)                                       REQ-020; S-004 REQ-006
+  ↓
+Context fills → pi-durable compacts it; a team member resets it → same id, clean context     REQ-024
+A job-only operation given the front desk → refused "not a job conversation"                 REQ-025
+```
+
 ## Behavioral Requirements
 
 Requirement identifiers before v0.5 were `R-n`. The number is kept, so `R-4` is now `REQ-004`, except for the three
@@ -329,21 +392,23 @@ suffixed identifiers:
 | R-8a | REQ-019 |
 | R-10a | REQ-020 |
 
-Requirements appear in reading order, so REQ-018 to REQ-020 follow the requirement they used to extend. REQ-017 is
-under Quality Requirements. The deterministic tests run on the fake model (S-002 Definitions), whose replies are a pure
-function of the transcript.
+Requirements appear in reading order, so REQ-018 to REQ-020 follow the requirement they used to extend, and REQ-021 to
+REQ-025, the front desk, follow monitoring. REQ-017 is under Quality Requirements. The deterministic tests run on
+the fake model (S-002 Definitions), whose replies are a pure function of the transcript.
 
 ### REQ-001 — Shipped roles
 
-The-intern SHALL ship two roles, `bob` and `gp`, and `bob` SHALL be the default lead role. Every role, shipped or
-created by a team member, MUST have a name, instructions, a tool set, a skill set (possibly empty), a default model, a
-default thinking level and a default workspace.
+The-intern SHALL ship three roles, `bob`, `gp` and `desk`, and `bob` SHALL be the default lead role. `desk` is the
+role the front desk is created with (REQ-021). Every role, shipped or created by a team member, MUST have a name,
+instructions, a tool set (possibly empty), a skill set (possibly empty), a default model, a default thinking level and
+a default workspace.
 
-#### AC-001.1 — The shipped roles are bob and gp
+#### AC-001.1 — The shipped roles are bob, gp and desk
 
 - **Given:** a daemon with no configuration file
 - **When:** the roles are listed
-- **Then:** exactly `bob` and `gp` are listed, each valid with non-empty instructions, and `bob` is the default lead
+- **Then:** exactly `bob`, `gp` and `desk` are listed, each valid with non-empty instructions, and `bob` is the
+  default lead
 
 **Verification:** test — `test/unit/shipped_roles.test.ts`, `test/service/agents_startup.test.ts`,
 `test/service/role_operations.test.ts` ("lists the shipped roles bob and gp through roles.list").
@@ -358,19 +423,25 @@ The shipped roles' instructions MUST satisfy these descriptions:
 - **`gp`** is a general-purpose executor. Its instructions and shipped skills describe how to carry out a part of a
   job to completion and report back.
 - Both roles are offered the coordination capabilities (REQ-006 to REQ-008, REQ-019).
+- **`desk`** assists team members in the front desk. Its instructions direct the agent to answer questions about the
+  work from jobs, conversations, status and usage, to turn every request for real work into a job instead of doing
+  it, to report the new job's short number, and to pass answers and steering to a job's conversations when a team
+  member asks. Its tool set names none of the tools the-intern ships, so in the front desk it is offered only the
+  front-desk tools (REQ-022).
 
 The shipped text of the instructions, the tool lists and `gp`'s skill content are set during implementation and may
 change in later versions without amending this spec.
 
 #### AC-002.1 — The shipped instructions match the descriptions
 
-- **Given:** the shipped `bob` and `gp` instruction files and `gp`'s skill
+- **Given:** the shipped `bob`, `gp` and `desk` instruction files and `gp`'s skill
 - **When:** a reviewer reads them against this requirement
-- **Then:** `bob`'s text covers defining, asking, doing, delegating and verifying, and `gp`'s text and skill cover
-  carrying out a part to completion and reporting back
+- **Then:** `bob`'s text covers defining, asking, doing, delegating and verifying; `gp`'s text and skill cover
+  carrying out a part to completion and reporting back; and `desk`'s text covers answering about the work, turning
+  requests for work into jobs with their number, and passing answers and steering on
 
 **Verification:** inspection — the shipped role files under `src/roles/shipped/`; `test/unit/shipped_roles.test.ts` checks
-that `gp` has its skill folder and `bob` none.
+that `gp` has its skill folder, `bob` none and `desk` none, and that `desk`'s tool set is empty.
 
 ### REQ-003 — Role settings
 
@@ -381,8 +452,8 @@ The-intern SHALL let a team member, in its configuration or while the daemon run
 - **change** any role's instructions, tool set, skills, default model, thinking level and workspace, including the
   shipped roles'. A change to a shipped role is kept in the-intern's settings and never edits the installed copy, and
   it can be undone to restore the shipped role.
-- **remove** a role the team created. Removing a shipped role is refused. Removing a role that a schedule entry or
-  trigger names is refused, with an error naming them.
+- **remove** a role the team created. Removing a shipped role, `desk` included, is refused. Removing a role that a
+  schedule entry or trigger names is refused, with an error naming them.
 - **register and unregister** workspaces (REQ-018)
 
 Defaults and changes MUST follow these rules:
@@ -393,7 +464,8 @@ Defaults and changes MUST follow these rules:
   that role, owner-only, under the-intern's own data location.
 - A tool set can name only tools the-intern ships. A change naming an unknown tool is refused.
 - The coordination capabilities (REQ-006 to REQ-008, REQ-019, REQ-020) and the job tools (S-004 REQ-013) are part of
-  every role. A tool set can't leave them out.
+  every role in a job's conversations. A tool set can't leave them out. In the front desk they are replaced by the
+  front-desk tools, whatever the role (REQ-022).
 - A change to a role, or its removal, affects only agents seated after the change. Agents already seated keep
   their instructions, tools, skills, model, thinking level and workspace until their seat changes.
 
@@ -444,7 +516,7 @@ created role without a workspace its per-role default workspace"), `test/service
 #### AC-003.6 — The coordination capabilities can't be left out
 
 - **Given:** a role whose tool set lists none of `handoff`, `invoke` and `steer`
-- **When:** an agent of it is seated
+- **When:** an agent of it is seated in a job's conversation
 - **Then:** the agent is offered all three coordination tools
 
 **Verification:** test — `test/service/steer.test.ts` ("offers steer, handoff and invoke to an agent of a role that
@@ -553,7 +625,8 @@ After a seat is applied, every model turn in that conversation MUST:
 
 - use the seat's model and thinking level
 - see the role's instructions and skills
-- be offered exactly the role's tools, the coordination capabilities and the job tools (S-004 REQ-013)
+- be offered exactly the role's tools, the coordination capabilities and the job tools (S-004 REQ-013) in a job's
+  conversation, or exactly the role's tools and the front-desk tools in the front desk (REQ-022)
 - run its tools in the seat's workspace
 - see that workspace's instructions and skills
 
@@ -962,7 +1035,8 @@ When a job is created (Jobs spec), entry routing SHALL start its lead conversati
 - with an origin that records the job source: the team member's request and its way in, the schedule entry and fire
   time, the trigger and its event, or the conversation that created the follow-up job
 
-Every conversation MUST record the job it belongs to and whether it is the job's lead conversation.
+Every conversation except the front desk (REQ-021) MUST record the job it belongs to and whether it is the job's
+lead conversation.
 
 #### AC-012.1 — Role, first input and job links
 
@@ -1058,9 +1132,9 @@ The-intern SHALL let a team member do all of the following through the read oper
 REQ-012, REQ-014), without the daemon interrupting any running work. The command-line views of them belong to the
 command-line spec (product owner ruling, 2026-10-31).
 
-- list all conversations with id, job, whether it is the job's lead conversation, seat (role, model, thinking
-  level, workspace), origin (job source or invoking conversation), status (running, idle, parked or waiting for a
-  worker thread) and last activity
+- list all conversations with id, job, whether it is the job's lead conversation, whether it is the front desk,
+  seat (role, model, thinking level, workspace), origin (job source, invoking conversation or front desk), status
+  (running, idle, parked or waiting for a worker thread) and last activity
 - list the conversations of a job
 - show the conversations a conversation invoked, recursively
 - read a transcript with seat records and attribution (REQ-007), including entries from before a reset
@@ -1100,16 +1174,257 @@ command-line spec (product owner ruling, 2026-10-31).
 
 **Verification:** test — `test/service/conversation_feed.test.ts`, `test/service/instance_feed.test.ts`.
 
+### REQ-021 — The front desk
+
+Each instance SHALL have exactly one front desk: a standing conversation that assists team members and belongs to no
+job. At startup (S-002 REQ-002 step 6), entry routing SHALL make sure it exists:
+
+- If the instance has none, entry routing creates one conversation seated as `desk` with that role's defaults, with
+  no job, no first input and the origin "front desk" (REQ-023). The seat record names the daemon as actor. Its
+  conversation id is recorded under a fixed creation key in the daemon's own creation-key record, in the commit that
+  creates the conversation (ADR-001 decision 4), so a crash leaves neither or both.
+- If the instance has one, entry routing keeps it: its id, seat and transcript are unchanged.
+- No operation or tool creates a second front desk.
+
+`desk.get` SHALL return the front desk's conversation id and seat, and `conversations.list` SHALL mark it as the
+front desk. Team members reach it from the command line and the web interface with the existing operations:
+`conversations.submit`, `conversations.entries`, the conversation feed, `conversations.abort` (which stops its current
+run), `conversations.reset` and `conversations.seat`. Input from both ways in shares one transcript, in the order
+pi-durable admits it; the daemon adds no lock of its own.
+
+The front desk's runs take worker threads like any other work and count toward their limit (REQ-010). It never
+parks, and no job waits on it. Its input, queueing, steering and crash survival come from pi-durable (ADR-001); the
+only fact the daemon adds for it is its conversation id.
+
+#### AC-021.1 — First start
+
+- **Given:** a new instance
+- **When:** the daemon starts
+- **Then:** `desk.get` returns a conversation seated as `desk` with no job and the origin "front desk", and
+  `conversations.list` lists it marked as the front desk, with no job and no lead flag
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-021.2 — The same front desk after a restart
+
+- **Given:** an instance whose front desk has entries
+- **When:** the daemon stops and starts again
+- **Then:** `desk.get` returns the same conversation id and seat, its entries are kept, and no second front desk
+  exists
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-021.3 — A kill during the creation
+
+- **Given:** a new instance whose daemon is killed with `kill -9` just before the commit that creates the front desk,
+  and another killed just after it
+- **When:** each daemon starts again, and again after that
+- **Then:** each instance has exactly one front desk, and `desk.get` returns the same conversation id on every later
+  start
+
+**Verification:** test — a service test killing the daemon at each point.
+
+#### AC-021.4 — One history for both ways in
+
+- **Given:** the daemon with both listeners
+- **When:** a team member sends a message to the front desk over the network listener, and another team member then
+  reads its entries over the local socket and sends a message there
+- **Then:** the first message is in the entries read over the local socket, and both messages are in one transcript
+  in the order they were admitted, each with its way in
+
+**Verification:** test — a service test through both listeners on the fake model.
+
+#### AC-021.5 — A kill during a turn
+
+- **Given:** the front desk in the middle of a run on a team member's message
+- **When:** the daemon is killed with `kill -9` and started again
+- **Then:** the run resumes through pi-durable and the message is answered once
+
+**Verification:** test — a service test on the fake model, killing the daemon during the run.
+
+#### AC-021.6 — The front desk doesn't hold up job work
+
+- **Given:** one worker thread and an idle front desk
+- **When:** a job is created, and later a team member writes to the front desk while the job's lead runs
+- **Then:** the lead runs at once, and the front desk's run waits for the worker thread in arrival order like any
+  other work
+
+**Verification:** test — a service test on the fake model with one worker thread.
+
+### REQ-022 — The front-desk tools
+
+In the front desk, every model turn SHALL be offered exactly the tools of its seat's role and the front-desk tools. It
+SHALL NOT be offered the coordination tools (`handoff`, `invoke`, `steer`) or the job tools that act on a
+conversation's own job (S-004 REQ-013), `block_job` and `complete_job` included. The front-desk tools are offered in no
+other conversation. They are:
+
+- **Jobs:** `read_job`, `list_jobs`, `create_job`, `update_job`, `add_worklog` and `relate_jobs`, each naming the job
+  it acts on, as S-004 REQ-021 defines.
+- **State:** read a conversation's status, entries and invocations; read the daemon status; read usage. Each returns
+  what the matching read operation returns (REQ-016; S-002 REQ-012).
+- **Steering:** send input to a conversation of a job, which acts as `conversations.submit` does: a steer or a
+  follow-up for a running conversation, a held message for one parked for reports, and the input that continues a lead
+  parked because its job is Blocked (REQ-020; S-004 REQ-006). Stop a conversation of a job, which acts as
+  `conversations.abort` does, with its cascade (REQ-008).
+
+A steering tool that names the front desk itself or a conversation that doesn't exist returns an error result, and
+the run goes on. Only a team member changes the front desk's seat (REQ-004); the agent in it can't hand off or reseat
+itself. The `desk` role's tool set names none of the tools the-intern ships (REQ-002), so an agent of it in the front
+desk changes no file and runs no command.
+
+#### AC-022.1 — Exactly the front-desk tools
+
+- **Given:** the front desk seated as `desk`
+- **When:** it takes a turn
+- **Then:** the model is offered exactly the front-desk tools, and none of `handoff`, `invoke`, `steer`, `block_job`,
+  `complete_job`, `read`, `write`, `edit` and `bash`
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-022.2 — A request for work becomes a job
+
+- **Given:** the front desk
+- **When:** a team member writes "please check why the nightly build is slow" over the local socket, and the fake
+  model calls `create_job` and then replies
+- **Then:** a job `C-n` exists with the front desk in its origin details (REQ-023; S-004 REQ-021), its lead
+  conversation starts seated as `bob` as for any job, and the front desk's reply carries `C-n`
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-022.3 — What is blocked
+
+- **Given:** jobs in each status, two of them Blocked with their reasons
+- **When:** a team member asks the front desk "what's blocked?" and the fake model calls `list_jobs` for Blocked jobs
+  and `read_job` for each
+- **Then:** the tool results hold exactly the two Blocked jobs with their Blocked reasons
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-022.4 — An answer passed to a Blocked job
+
+- **Given:** job `W-3` Blocked, its lead conversation parked
+- **When:** a team member asks the front desk "tell W-3 to use the staging database", and the fake model sends that
+  input to `W-3`'s lead conversation
+- **Then:** the lead takes the input, recorded as from the front desk, and `W-3` is In progress again (REQ-020;
+  S-004 REQ-006)
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-022.5 — A stop passed to a job
+
+- **Given:** a job whose lead runs with one invoked agent awaited
+- **When:** the front desk stops the lead conversation
+- **Then:** the lead and the invoked conversation are aborted as `conversations.abort` aborts them, and the front
+  desk's own run goes on
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-022.6 — Reseating the front desk
+
+- **Given:** the front desk seated as `desk`
+- **When:** a team member seats `gp` in it, and the agent in it calls a steering tool on the front desk itself
+- **Then:** the next turn runs as `gp`, offered `gp`'s tools and the front-desk tools and none of the coordination
+  tools, and the steering call returns an error result while the run goes on
+
+**Verification:** test — a service test on the fake model.
+
+### REQ-023 — The front desk's origin and attribution
+
+The front desk's origin SHALL be "front desk", and it SHALL record no job and no lead flag. Every input to the front
+desk SHALL record the way in it came through, as REQ-007 and REQ-020 record a team member's input: `command line` or
+`web interface`. The front desk doesn't tell team members apart. Everything the front desk passes on SHALL record that
+it came through the front desk:
+
+- a job it creates, in its origin details (S-004 REQ-003, REQ-021)
+- an input it sends to a job's conversation, as an `intern.steer` entry whose sender is the front desk (ADR-004)
+- a stop it sends, whose actor is the front desk
+
+#### AC-023.1 — Each input records its way in
+
+- **Given:** the daemon with both listeners
+- **When:** a team member submits to the front desk over the local socket and another over the network listener
+- **Then:** the front desk's entries hold both inputs, with way in `command line` and `web interface`
+
+**Verification:** test — a service test through both listeners on the fake model.
+
+#### AC-023.2 — What it passes on names the front desk
+
+- **Given:** the front desk
+- **When:** its fake model creates a job, sends input to a job's lead conversation and stops another job's
+  conversation
+- **Then:** the job's origin details, the input's `intern.steer` entry and the stop's actor each name the front desk
+
+**Verification:** test — a service test on the fake model.
+
+### REQ-024 — Compaction and reset of the front desk
+
+The front desk's context SHALL be kept within the model's window by pi-durable's automatic compaction, as for every
+conversation; the daemon starts no compaction of its own for it. A team member SHALL be able to reset the front desk
+as any conversation (REQ-011): its context is cleared, its earlier entries stay stored, its seat is kept, and its
+conversation id doesn't change, so `desk.get` keeps naming it. A reset is the only way to start the front desk clean.
+
+#### AC-024.1 — Automatic compaction
+
+- **Given:** the front desk on the fake model with a small context window and the default compaction settings
+- **When:** team members write to it until its context nears the window
+- **Then:** a `pi.compaction` entry appears, the next context starts from the summary, the next message is answered,
+  and the daemon has called no compaction itself
+
+**Verification:** test — a service test on the fake model with a small context window.
+
+#### AC-024.2 — Reset keeps the front desk
+
+- **Given:** the front desk with entries
+- **When:** a team member resets it with `conversations.reset`
+- **Then:** `desk.get` returns the same conversation id and seat, the next context is empty, and every earlier entry
+  is stored
+
+**Verification:** test — a service test on the fake model.
+
+### REQ-025 — The front desk is not a job conversation
+
+Every capability that acts on the job of a conversation SHALL refuse the front desk with an error saying that it is
+not a job conversation, and change nothing. In this spec that is the capability that aborts every conversation of a
+job (REQ-008) and the start of a job's lead conversation (REQ-012); S-004 REQ-022 applies the same refusal to the job
+operations. The front desk never becomes a job's lead conversation. Aborting a job's conversations, by a cancel, a
+complete or a repair (S-004), never reaches the front desk. Removing the `desk` role is refused like removing any
+shipped role (REQ-003), and changing it affects only seats made after the change.
+
+#### AC-025.1 — Refused as not a job conversation
+
+- **Given:** the front desk
+- **When:** the job abort capability is called with the front desk's conversation id, and a lead start names the
+  front desk's conversation
+- **Then:** each is refused with an error saying the front desk is not a job conversation, and nothing changes
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-025.2 — Job aborts don't reach the front desk
+
+- **Given:** the front desk in the middle of a run, and two jobs
+- **When:** one job is cancelled and the other completed
+- **Then:** the front desk's run goes on and its entries are unchanged
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-025.3 — The desk role can't be removed
+
+- **Given:** the front desk seated as `desk`
+- **When:** a team member removes the `desk` role
+- **Then:** the removal is refused as for a shipped role, and the front desk and its seat are unchanged
+
+**Verification:** test — a service test.
+
 ## Quality Requirements
 
 ### REQ-017 — Durability
 
-Seats, seat records, resets, job links, invocation links, depth, origins, parked state and undelivered reports MUST
-survive a daemon kill and restart. A seat change, handoff, reset, invocation, park or report interrupted by a crash
-either completed before the crash or completes on resume. It is never half-applied: never a new seat without its
-record, never an invoked conversation without its invocation link, never a lead conversation without its job, and
-never a report lost or delivered twice. Work waiting for a worker thread is still waiting after the restart, in the
-same order.
+Seats, seat records, resets, job links, invocation links, depth, origins, parked state, undelivered reports and the
+front desk's conversation id (REQ-021) MUST survive a daemon kill and restart. A seat change, handoff, reset,
+invocation, park or report interrupted by a crash either completed before the crash or completes on resume. It is
+never half-applied: never a new seat without its record, never an invoked conversation without its invocation link,
+never a lead conversation without its job, and never a report lost or delivered twice. Work waiting for a worker
+thread is still waiting after the restart, in the same order.
 
 #### AC-017.1 — Kill during a seat change, a handoff, an invocation and a lead start
 
@@ -1204,6 +1519,19 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
   default thinking level (REQ-003). A missing login fails model requests, not the daemon (S-002).
 - **Assumption, confirmed by the implementation:** the account the-intern runs as is the boundary of what agents can
   reach; workspaces don't confine agents (S-000, ADR-002).
+- **Assumption, confirmed in the pinned pi-durable 1.4.0: automatic compaction needs no job and no trigger from the
+  daemon.** Compaction is on by default (`DEFAULT_COMPACTION_POLICY.enabled` is true) and runs for any conversation
+  while a model request is prepared: in the background once the estimated context is within 32,768 tokens of the
+  blocking threshold, blocking once it passes the model's window less 16,384 tokens, and once more after a provider
+  "context too long" error. The front desk relies on it (REQ-024). The pi agent setting `compaction.enabled`, mapped
+  by S-002 REQ-019, can turn it off for every conversation of the instance; the front desk then grows until a team
+  member resets or compacts it (`conversations.compact`).
+- **Assumption, confirmed in the pinned pi-durable 1.4.0 and `src/host/conversation_control.ts`: a reset keeps the
+  conversation id.** `conversations.reset` calls the pi-durable conversation's `reset`, which writes a `pi.reset` entry
+  into the same conversation, so `desk.get` names the same front desk after a reset (REQ-024).
+- **The command-line spec and the Web interface spec (not yet written).** They present the front desk: `bob chat` and
+  the web chat call `desk.get` and then the operations of REQ-021. S-003's listeners carry `desk.get` with no change,
+  as they carry every catalogue operation.
 
 ## Success Criteria
 
@@ -1219,10 +1547,17 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
    kill-and-restart scenarios of REQ-017.
 5. Every conversation the daemon lists shows its job, lead flag, seat, origin and status, and a parked conversation
    never holds a worker thread (REQ-010, REQ-014, REQ-016). Measured by `npm test`.
+6. After any number of kills and restarts, an instance has exactly one front desk, `desk.get` names the same
+   conversation, and that conversation is offered only the front-desk tools while seated as `desk` (REQ-021, REQ-022,
+   REQ-024). Measured by `npm test`.
+7. Live acceptance test 4: a team member asks the front desk on a real model for a piece of work; it creates a job
+   with the front desk in its origin details and replies with the job's short number (REQ-022, REQ-023). Measured by
+   a live check in `test/live/` against a real model.
 
 ## Implementation Order
 
-Delivered: every phase below is implemented (tasks up to T-091).
+Delivered: phases 1 to 5 are implemented (tasks up to T-091). Phase 6, the front desk, comes with the v0.8
+amendment and isn't broken down yet.
 
 This spec relies on the daemon and host-runtime spec for the database, startup, configuration and process model,
 on the control-endpoint spec for the surfaces the command line, the web interface and monitoring use, and on the
@@ -1235,6 +1570,7 @@ Jobs spec for creating jobs. Its phases can be developed against a minimal host 
 | 3 | Agent invocation (context modes, steerable and parked), report-back step, abort of awaited invoked agents, steering by agents, depth cap | Phase 1 |
 | 4 | Worker threads, and parked conversations freeing them | Phase 3, daemon spec's process model |
 | 5 | Job sources: the operation that starts a job's lead conversation for requests, schedule fires, triggers and follow-ups; the parking and continuing that blocked jobs use; the capability that aborts every conversation of a job. Monitoring read operations: list, job links, statuses, invocations, live transcript. The schedule behaviour, the command-line views and the job abort operation come with their own specs | Phases 1–3, S-002 phase 3 |
+| 6 | The front desk: the shipped `desk` role, its creation and recovery at startup, `desk.get` and the front-desk mark in `conversations.list`, the front-desk tools, its attribution, and the refusals of REQ-025; live acceptance test 4 | Phases 1–5, S-004's job tools and `list_jobs` (S-004 REQ-021) |
 
 ## Open Questions
 
@@ -1263,3 +1599,4 @@ behaviour. Deciding either one is a scope amendment of this spec.
 | 2026-11-01 | Gate 5 sign-off — product owner. No scope change. | The spec-truth reconciliation of 2026-11-01 passed against v0.4; v0.5 changed the format only, so the verdict carries over. Two accepted limits stay open as follow-up tasks and don't block the sign-off: T-092 (a Compact invocation repeated after a crash compacts again) and T-093 (`lastActivity` reads the whole transcript). | none |
 | 2026-11-01 | v0.6. AC-012.3: the refused follow-up is one from an agent whose conversation doesn't exist, and an origin of another kind than the caller's is refused. | S-002 v0.7 builds a lead conversation's origin from the caller (S-002 AC-012.5); S-003 architecture consistency review, finding A. | Investigation task for the S-002 v0.7 deviations |
 | 2026-11-02 | v0.7. REQ-020 and AC-020.4: only a message sent to a conversation parked for reports is held; a message sent to a job's lead conversation parked because its job is Blocked continues it (new AC-014.2). REQ-003, REQ-005, AC-005.2 and the agent tools in Interfaces: the job tools (S-004 REQ-013) are offered with the coordination tools whatever the tool set names. REQ-007: the daemon is a seat actor for input it sends under a job's rules. Definitions, Job: the fields S-004 defines. Interfaces: `jobs.startLead` leaves the service operations table and is offered in-process only, called by `jobs.create`. Assumptions: the Jobs spec is S-004. | S-004 architecture consistency review; product owner decisions 2026-11-02. Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None yet; the code changes (the held-message rule in `src/host/steering.ts`, the job tools, `jobs.startLead` off the listeners) come in the S-004 breakdown |
+| 2026-11-03 | v0.8. The front desk: one standing conversation per instance that assists team members and belongs to no job. Purpose, Definitions (Front desk, Front-desk tools, Job source and origin, Root conversation, New fork and reset, Compaction), Users and Journeys (journey 7), Design Principles, Alternatives Considered, System Diagram, Responsibility Separation (Role catalog, Agent coordination, Entry routing, new Front-desk tools, Monitoring), Interfaces (the front-desk tools, `desk.get`, the front-desk mark in `conversations.list`, the `intern.steer` sender) and Workflow follow. REQ-001, AC-001.1, REQ-002 and AC-002.1: the shipped `desk` role, with an empty tool set. REQ-003 and REQ-005: in the front desk the front-desk tools replace the coordination capabilities and the job tools. REQ-012: every conversation except the front desk records its job. REQ-016: the list marks the front desk. REQ-017: the front desk's id survives a crash. New REQ-021 (the front desk, its creation and recovery), REQ-022 (the front-desk tools), REQ-023 (origin and attribution), REQ-024 (compaction and reset) and REQ-025 (refusing job-only capabilities), with AC-021.1 to AC-025.3. Exclusions: "Interactive chat" became "Chat beyond the front desk"; added email to the front desk, work in it, a job record for it, its presentation and telling team members apart. Assumptions: the two pi-durable premises, confirmed. Success Criteria 6 and 7 and Implementation Order phase 6. This deliberately reverses part of the 2026-10-30 ruling that removed the root conversation and interactive chat: one standing conversation now assists team members, though it is not a root conversation and does no work. | Product owner decisions of the front desk brainstorm, 2026-11-03, approved section by section; the command-line spec (S-005) and the web chat open the front desk. | None yet; the front desk comes in the breakdown of this amendment |
