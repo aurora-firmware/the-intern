@@ -49,7 +49,7 @@ export type JobsComponent = {
  */
 async function startJobOfLead(ctx: ServiceContext, options: JobsComponentOptions, conversationId: string) {
     const meta = await readConversationMeta(ctx.host, conversationId);
-    if (!meta?.isLead) return;
+    if (!meta?.isLead || meta.jobId === null) return;
     try {
         const job = await ctx.jobStore.getJob(meta.jobId);
         if (job.status === "to_do") await startJob({ ctx, options }, job.id);

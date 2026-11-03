@@ -19,7 +19,7 @@ import { DEFAULT_LEAD_ROLE } from "../roles/shipped_roles.ts";
 import { type Caller, defineOperation, ServiceError } from "./operations.ts";
 import { seatActorFor } from "./seat_operations.ts";
 
-type LeadOrigin = Exclude<Origin, { kind: "invocation" }>;
+type LeadOrigin = Exclude<Origin, { kind: "invocation" | "front_desk" }>;
 type SourceOrigin = Extract<LeadOrigin, { kind: "schedule" | "trigger" }>;
 type Overrides = { model?: string; thinkingLevel?: string; workspace?: string };
 type StartLeadResult = { conversationId: string; created: boolean };
@@ -180,6 +180,9 @@ async function describeCaller(host: HarnessHost, request: CreateJobRequest, call
     const meta = await readConversationMeta(host, actor.conversationId);
     if (meta === undefined) {
         throw new ServiceError("not_found", `There is no conversation ${actor.conversationId} to follow up`);
+    }
+    if (meta.jobId === null) {
+        throw new ServiceError("invalid_input", `Conversation ${actor.conversationId} has no job to follow up`);
     }
     return {
         origin: { kind: "follow_up", jobId: meta.jobId, conversationId: actor.conversationId },

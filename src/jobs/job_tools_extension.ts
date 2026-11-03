@@ -46,10 +46,19 @@ const textResult = (text: string, isError = false): ToolExecutionResult => ({
 
 const jsonResult = (value: unknown): ToolExecutionResult => textResult(JSON.stringify(value, null, 2));
 
+// A conversation with no job has nothing for a job tool to act on (S-001 REQ-021).
+class NoJobError extends Error {
+    constructor(conversationId: string) {
+        super(`Conversation ${conversationId} has no job.`);
+        this.name = "NoJobError";
+    }
+}
+
 async function seatOf(options: JobToolsOptions, api: ToolExecutionApi): Promise<ToolSeat> {
     const conversationId = String(api.conversationId);
     const meta = await readConversationMeta(options.host(), conversationId);
     if (meta === undefined) throw new Error(`Conversation ${conversationId} is not a seated conversation`);
+    if (meta.jobId === null) throw new NoJobError(conversationId);
     return {
         jobId: meta.jobId,
         conversationId,
@@ -209,6 +218,21 @@ const completeJobTool = (options: JobToolsOptions) =>
         },
     });
 
+// A job tool called in a conversation with no job is an error result for the agent and its run goes on.
+function refusingWithoutJob<T extends { name: string; execute: (...args: never[]) => Promise<ToolExecutionResult> }>(
+    tool: T,
+): T {
+    const execute = async (...args: never[]): Promise<ToolExecutionResult> => {
+        try {
+            return await tool.execute(...args);
+        } catch (error) {
+            if (error instanceof NoJobError) return textResult(`${tool.name} was refused: ${error.message}`, true);
+            throw error;
+        }
+    };
+    return { ...tool, execute };
+}
+
 export function createJobToolsExtension(options: JobToolsOptions): Extension {
     return defineExtension({
         name: JOB_TOOLS_EXTENSION_NAME,
@@ -220,6 +244,6 @@ export function createJobToolsExtension(options: JobToolsOptions): Extension {
             relateJobsTool(options),
             blockJobTool(options),
             completeJobTool(options),
-        ],
+        ].map(refusingWithoutJob),
     });
 }

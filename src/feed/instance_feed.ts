@@ -42,7 +42,7 @@ export type InstanceFeed = {
 };
 
 type DeltaBody = InstanceDelta extends infer D ? (D extends unknown ? Omit<D, "seq"> : never) : never;
-type ConversationFacts = { jobId: string; isLead: boolean; seat: SeatSummary; isParked: boolean };
+type ConversationFacts = { jobId: string | null; isLead: boolean; seat: SeatSummary; isParked: boolean };
 type Sink = { push(delta: InstanceDelta): void; end(reason: "stopped" | "unsubscribed"): void };
 
 function factsOf(meta: ConversationMeta): ConversationFacts {
