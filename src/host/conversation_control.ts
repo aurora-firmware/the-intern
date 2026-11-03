@@ -191,7 +191,8 @@ export async function hasInputSince(host: HarnessHost, conversationId: string, a
 /** Withdraws a queued input, which settles `unanswered`. Input already placed in the transcript cannot be withdrawn. */
 export async function withdrawInput(host: HarnessHost, submissionId: string): Promise<void> {
     const submission = await requireSubmission(host, submissionId);
-    const result = await submission.abort(context);
+    const record = await submission.status(context);
+    const result = await inOpenConversation(host, String(record.conversationId), () => submission.abort(context));
     if (result === "already_placed") {
         throw new HostConflictError(`Submission "${submissionId}" is already placed in the transcript.`);
     }
@@ -227,7 +228,8 @@ export async function abortConversation(host: HarnessHost, conversationId: strin
 }
 
 export async function resetConversation(host: HarnessHost, conversationId: string, note?: string): Promise<void> {
-    await (await requireConversation(host, conversationId)).reset(note, context);
+    const conversation = await requireConversation(host, conversationId);
+    await inOpenConversation(host, conversationId, () => conversation.reset(note, context));
 }
 
 export async function compactConversation(
@@ -236,6 +238,7 @@ export async function compactConversation(
     instructions?: string,
 ): Promise<void> {
     const conversation = await requireConversation(host, conversationId);
-    const taskId = await conversation.compact(instructions, context);
+    // Only the admission of the compaction task is in the section: the compaction itself runs after it.
+    const taskId = await inOpenConversation(host, conversationId, () => conversation.compact(instructions, context));
     await internalHarness(host).waitForTask(taskId, context);
 }
