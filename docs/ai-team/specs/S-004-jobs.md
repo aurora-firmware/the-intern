@@ -819,8 +819,9 @@ both jobs. The block and complete tools stay with the lead agent and aren't offe
   `jobs.relate` do (REQ-004, REQ-009, REQ-010), with the front desk's agent, its conversation and seated role, as
   author.
 
-A `create_job` call answering an input whose way in has no letter (`in-process`) is refused like `jobs.create`
-(REQ-002), using no number. A refused call returns an error result to the agent, and its run goes on.
+No agent can steer the front desk: only a team member's input, submitted with the way in `command line` or
+`web interface`, reaches it, and a submit with any other way in is refused (S-001 REQ-020). So every job the front
+desk creates has the letter `C` or `W`. A refused call returns an error result to the agent, and its run goes on.
 
 #### AC-021.1 — A job created through the front desk
 
@@ -851,12 +852,13 @@ A `create_job` call answering an input whose way in has no letter (`in-process`)
 
 **Verification:** test — a service test on the fake model.
 
-#### AC-021.4 — An input with no letter creates no job
+#### AC-021.4 — Only team members' input reaches the front desk
 
-- **Given:** the front desk answering an input submitted in-process with no way in named
-- **When:** its fake model calls `create_job`
-- **Then:** the call returns an error result, no job exists, the next job uses the number this one would have had,
-  and the run goes on
+- **Given:** the front desk, and an agent running in a job's conversation
+- **When:** an input is submitted to the front desk in-process with no way in named, and the agent calls `steer`
+  naming the front desk
+- **Then:** the submit is refused `invalid_input`, the `steer` call returns an error result, the front desk takes
+  no run, and no job or number is used
 
 **Verification:** test — a service test on the fake model.
 
@@ -1056,4 +1058,4 @@ None.
 | 2026-11-02 | v0.3. AC-015.1 and the feed events table: the start publishes "status changed" like any status change, so the lifecycle has three; a change to Done publishes "job done" instead. Definitions (History), Interfaces (history entry, author), REQ-011 and REQ-018: each repair writes one `repair` history entry naming the rule and what it did; the daemon authors a resume on input and the cancel after a refused start. | Gate 2 review of the S-004 task plan (questions on T-128 and T-129). | T-128, T-129 |
 | 2026-11-02 | v0.4. REQ-006: the block records the ID of the lead conversation's newest transcript entry at the time of the block. REQ-018: rule 3 also covers a lead that has taken input since the job blocked, shown by an input entry in its transcript after the entry the block recorded; an input entry is a `pi.user` entry or an input entry kind the daemon submits (the steer record and the ADR-004 kinds). AC-018.1: the crash cases include a lead that took an answer after the park was cleared, before the resume was written. Interfaces: the job's internal `blockedAfterEntry`, set by the block and cleared by the resume in the same write, not returned by `jobs.get` and not recorded in the history. | T-129 F1 escalation; Architect escalation review; product owner decision 2026-11-02 (option A); ADR-001 decision 4 amended. | T-143, T-129, T-136 |
 | 2026-11-02 | v0.5. REQ-018 rule 1: it also fires for a To do job whose lead conversation holds no submission with request id `lead:<jobId>`, and completes the start, reusing request-id deduplication so the first input goes in once; creating the lead conversation and submitting its first input are two pi-durable commits. New AC-018.2 for a crash between them. Workflow and Success Criteria 4 follow. Exclusions: "sub-tasks" became "sub-jobs". | PR 147 review, finding 4: a crash after the lead conversation is created and before its first input leaves the job To do with no agent working on it, which rule 1 didn't catch. pi-durable can't submit input in the creation commit. Product owner decision 2026-11-02 (option A); ADR-001 decision 4 amended. | T-144 |
-| 2026-11-03 | v0.6. The front desk (S-001 v0.8). New REQ-021: in the front desk the job tools name their job, block and complete aren't offered, a new `list_jobs` lists jobs as `jobs.list` does, and `create_job` makes a job whose origin is the way in of the team member's input being answered (`C` or `W`) with the front desk in its origin details (AC-021.1 to AC-021.4). New REQ-022: the front desk has no job record; the reminder rule, complete, cancel and the repair rules never touch it; a job operation given its conversation id is refused as not a job conversation (AC-022.1 to AC-022.3). REQ-002 and REQ-003: the letter and origin of a job created through the front desk. REQ-008, REQ-007 and REQ-013 point to REQ-022 and REQ-021. Definitions, Users and Journeys (journey 8), Exclusions, Interfaces (the job tools in the front desk, the refusal of its conversation id, Consumed), Workflow, Assumptions, Success Criteria 7 and Implementation Order phase 6 follow. | Product owner decisions of the front desk brainstorm, 2026-11-03. | None yet; the front desk comes in the breakdown of this amendment |
+| 2026-11-03 | v0.6. The front desk (S-001 v0.8). New REQ-021: in the front desk the job tools name their job, block and complete aren't offered, a new `list_jobs` lists jobs as `jobs.list` does, and `create_job` makes a job whose origin is the way in of the team member's input being answered (`C` or `W`) with the front desk in its origin details (AC-021.1 to AC-021.4). New REQ-022: the front desk has no job record; the reminder rule, complete, cancel and the repair rules never touch it; a job operation given its conversation id is refused as not a job conversation (AC-022.1 to AC-022.3). Architecture consistency review (finding F7, product owner decision), same version: REQ-021 and AC-021.4, no agent steers the front desk and only a team member's input with way in `command line` or `web interface` reaches it, so its jobs are always `C` or `W`. REQ-002 and REQ-003: the letter and origin of a job created through the front desk. REQ-008, REQ-007 and REQ-013 point to REQ-022 and REQ-021. Definitions, Users and Journeys (journey 8), Exclusions, Interfaces (the job tools in the front desk, the refusal of its conversation id, Consumed), Workflow, Assumptions, Success Criteria 7 and Implementation Order phase 6 follow. | Product owner decisions of the front desk brainstorm, 2026-11-03. | None yet; the front desk comes in the breakdown of this amendment |
