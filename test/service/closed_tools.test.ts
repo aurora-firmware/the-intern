@@ -315,6 +315,7 @@ async function invokeGated(started: Started, leadId: string, prompt: string, cal
 
 const invokeArguments = (jobPrompt: string) => ({
     agents: [{ role: DEFAULT_LEAD_ROLE, contextMode: "clean", jobPrompt }],
+    // biome-ignore lint/suspicious/noThenProperty: `then` is the invoke tool's parameter name
     then: "steerable",
 });
 

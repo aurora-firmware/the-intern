@@ -230,8 +230,9 @@ const invokeTool = (options: CoordinationOptions) =>
         parameters: invokeParameters,
         async execute(args, api, context) {
             const closed = await closedRefusal(options, api);
-            if (closed !== undefined)
+            if (closed !== undefined) {
                 return textResult(`The invocation was refused: ${closed} Nothing was created.`, true);
+            }
             if (args.then === "parked" && (await countCallsOfRound(api, context as never)) > 1) {
                 return textResult(
                     "The invocation was refused: a parked invoke must be the only tool call of its turn. Nothing was created.",
