@@ -377,6 +377,30 @@ describe("closing the conversations of a Done job", () => {
             await waitFor(() => isIdle(started.ctx, id), "the abort");
         }
     });
+
+    it("completes a job naming the lead as its own conversation, and closes the lead and an idle invoked one", async () => {
+        const started = await start();
+        const job = await started.create();
+        await started.ctx.jobStore.updateFields(job.id, { definitionOfDone: "it is done" }, author);
+        await startJob(started.deps, job.id);
+        started.fake.setResponses([async () => fauxAssistantMessage("done"), async () => fauxAssistantMessage("ok")]);
+        const seat = started.deps.options.agents.runtime().catalog.seatFor(DEFAULT_LEAD_ROLE);
+        const [idle] = await createInvokedConversations(started.ctx.host, {
+            invokingId: job.leadConversation,
+            callId: "call-1",
+            agents: [{ seat, contextMode: "clean", jobPrompt: "work" }],
+            actor: { kind: "team_member", wayIn: "web interface" },
+        });
+        const invoked = idle as string;
+        await waitFor(() => isIdle(started.ctx, invoked), "the invoked run to end");
+        await waitFor(() => isIdle(started.ctx, job.leadConversation), "the lead to be idle");
+
+        await completeJob(started.deps, job.id, "shipped", author, job.leadConversation);
+
+        for (const id of [job.leadConversation, invoked]) {
+            assert.equal((await readConversationMeta(started.ctx.host, id))?.closed, true);
+        }
+    });
 });
 
 describe("the action sequence", () => {
