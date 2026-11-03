@@ -8,7 +8,7 @@ const BLOCKED_REASON = "which build is failing?";
 const JUSTIFICATION = "the build is green";
 const EXIT_OK = 0;
 
-type JobView = { id: string; number: string; status: string };
+type JobView = { id: string; number: string; status: string; leadConversation: string };
 
 const envs: HermeticEnv[] = [];
 const daemons: DaemonProcess[] = [];
@@ -45,6 +45,18 @@ function follow(env: HermeticEnv, ...flags: string[]): BobChild {
     return child;
 }
 
+// The text output has no marker of a subscription, so probe jobs are created until one shows as a line.
+async function waitUntilFollowing(daemon: DaemonProcess, child: BobChild): Promise<void> {
+    const deadline = Date.now() + 20_000;
+    const createdLines = () => child.stdout().split(" created ").length;
+    const before = createdLines();
+    while (createdLines() === before) {
+        assert.ok(Date.now() < deadline, "timed out waiting for the follow to print a probe job");
+        await daemon.invoke("jobs.create", { text: "probe" });
+        await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+}
+
 async function waitForStatus(daemon: DaemonProcess, job: string, status: string): Promise<void> {
     const deadline = Date.now() + 20_000;
     while (((await daemon.invoke("jobs.get", { job })) as JobView).status !== status) {
@@ -65,12 +77,12 @@ describe("bob follow", () => {
         const env = await newEnv();
         const daemon = await readyDaemon(env);
         const child = follow(env);
-        await child.waitFor("stderr", "Following");
+        await waitUntilFollowing(daemon, child);
 
         const job = await createJob(daemon);
         await child.waitFor("stdout", `${job.number} created`);
-        await child.waitFor("stdout", "Agent run started");
-        await child.waitFor("stdout", "Agent run finished");
+        await child.waitFor("stdout", `Agent run started in conversation ${job.leadConversation}`);
+        await child.waitFor("stdout", `Agent run finished in conversation ${job.leadConversation}`);
 
         await daemon.invoke("test.blockJob", { job: job.id, reason: BLOCKED_REASON });
         await child.waitFor("stdout", `${job.number} blocked: ${BLOCKED_REASON}`);
@@ -86,16 +98,14 @@ describe("bob follow", () => {
         const env = await newEnv();
         const daemon = await readyDaemon(env);
         const child = follow(env);
-        await child.waitFor("stderr", "Following");
+        await waitUntilFollowing(daemon, child);
 
         daemon.kill9();
         await daemon.exited;
         await child.waitFor("stderr", "trying again");
 
         const restarted = await readyDaemon(env);
-        await child.waitFor("stderr", "trying again\nFollowing");
-        const job = (await restarted.invoke("jobs.create", { text: "after the restart" })) as JobView;
-        await child.waitFor("stdout", `${job.number} created`);
+        await waitUntilFollowing(restarted, child);
         assert.ok(!child.stdout().includes("trying again"), "the notice is not data");
     });
 
@@ -126,7 +136,7 @@ describe("bob follow", () => {
         const env = await newEnv();
         await readyDaemon(env);
         const child = follow(env);
-        await child.waitFor("stderr", "Following");
+        await waitUntilFollowing(daemon, child);
 
         child.signal("SIGINT");
 

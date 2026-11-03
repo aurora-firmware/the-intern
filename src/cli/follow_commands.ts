@@ -11,8 +11,6 @@ import { followFeed } from "./feed_follower.ts";
 import { instanceEventLine } from "./feed_text.ts";
 import { writeError, writeJson, writeLine } from "./output.ts";
 
-const FOLLOWING_HINT = "Following the instance feed; press Ctrl-C to stop";
-
 async function follow(input: CommandInput): Promise<number> {
     const { io, json } = input;
     const socketPath = socketPathFor(input);
@@ -27,7 +25,6 @@ async function follow(input: CommandInput): Promise<number> {
             onNotice: (text) => writeError(io, text),
             async onSnapshot(snapshot) {
                 if (json) writeJson(io, snapshot);
-                writeError(io, FOLLOWING_HINT);
             },
             async onDelta(delta) {
                 if (json) {
