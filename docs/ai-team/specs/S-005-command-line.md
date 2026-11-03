@@ -43,15 +43,16 @@ of `docs/system_overview.html`. It adds these terms:
 | Actor | Goal |
 |---|---|
 | Team member on the machine | Talks to The Intern, gives and manages jobs, watches work, steers agents, shapes roles and workspaces, and runs, backs up and moves the instance, all from a shell on the machine. |
-| Script or scheduled shell job | Calls `bob` with `--json` and acts on its JSON output and exit code. |
+| A script, run by hand or by cron | Calls `bob` with `--json` and acts on its JSON output and exit code. |
 | Later specs (downstream) | Schedules and triggers, Skills and instructions, Team knowledge and Email add their command groups under the names and conventions this spec reserves. |
 | Developer | Tests every command against a test daemon on the fake model, and checks the manual's command reference against `bob --help`. |
 
 Journeys, in priority order:
 
 1. **Talk to The Intern.** `bob chat` opens the front desk, shows its recent history and reads lines; a line typed
-   while it is busy queues, Ctrl-C stops the current turn, Ctrl-D leaves, and the chat reconnects when the daemon
-   restarts. Without a terminal it answers the lines piped to it and exits. Delivered by REQ-009, REQ-010, REQ-015.
+   while it is busy queues, Ctrl-C stops the current turn and drops the queued lines, naming them, Ctrl-D leaves,
+   and the chat reconnects when the daemon restarts. Without a terminal it answers the lines piped to it and exits.
+   Delivered by REQ-009, REQ-010, REQ-015.
 2. **Give and manage jobs directly.** `bob jobs create`, `list`, `show`, `update`, `answer`, `complete`, `cancel` and
    `relate`; jobs created here have the origin letter `C`. Delivered by REQ-004, REQ-005.
 3. **Watch work.** `bob jobs follow C-7` until the job is Done, `bob follow` for the whole instance, `bob status` and
@@ -97,8 +98,8 @@ What this specification explicitly does NOT cover:
   amendment of this spec. The wording of text output may change (REQ-003).
 - **Works without a terminal.** No colour, prompt or interactive step appears when standard input or output isn't a
   terminal, so every command runs in a pipe or a script (REQ-003, REQ-010).
-- **Watching survives restarts.** A following command outlives a daemon restart or a dropped feed and loses nothing the
-  service kept (REQ-015).
+- **Watching survives restarts.** A following command outlives a daemon restart or a dropped feed, and catches up
+  on the entries of the conversations it shows (REQ-015).
 - **Quick to start.** A command that only calls the service doesn't load the daemon's code (REQ-016).
 - **One noun per component.** Later specs add groups that follow the same verbs, options and exit codes (REQ-001).
 - **The vocabulary of the product.** Help and messages say team member, job and invokes, never user, subagent or task
@@ -138,10 +139,10 @@ resolved by the service, S-004 REQ-002):
 | `bob jobs follow <job>` | `jobs.get`, the instance feed filtered to the job, and the conversation feed of each of its conversations (S-002 REQ-014; S-004 REQ-015) | REQ-006 |
 | `bob follow` | the instance feed (S-002 REQ-014) | REQ-007 |
 | `bob status`, `bob usage` | `daemon.status`, `usage.get` (S-002 REQ-003, REQ-012) | REQ-008 |
-| `bob chat` | `desk.get`, `conversations.entries`, the conversation feed, `conversations.submit` for each line, `conversations.abort` on Ctrl-C, `submissions.wait` without a terminal (S-001 REQ-021; S-002 REQ-012) | REQ-009, REQ-010 |
+| `bob chat` | `desk.get`, `conversations.entries`, the conversation feed, `conversations.submit` for each line, `conversations.abort` and `submissions.get` on Ctrl-C, `submissions.wait` and `conversations.entries` without a terminal (S-001 REQ-021; S-002 REQ-012) | REQ-009, REQ-010 |
 | `bob chat --reset` | `desk.get`, `conversations.reset` (S-001 REQ-024), then as `bob chat` | REQ-009 |
 | `bob conversations list` | `conversations.list`, optionally for one job (S-001 REQ-016) | REQ-011 |
-| `bob conversations show <id>` | `conversations.get`, `conversations.entries` (S-001 REQ-016) | REQ-011 |
+| `bob conversations show <id>` | `conversations.get`, `conversations.entries`, `conversations.invocations` (S-001 REQ-016) | REQ-011 |
 | `bob conversations send <id> <text>` | `conversations.submit`, busy mode steer unless the team member names follow-up or reject (S-001 REQ-020) | REQ-011 |
 | `bob conversations stop <id>` | `conversations.abort` (S-001 REQ-008) | REQ-011 |
 | `bob conversations reset <id>` | `conversations.reset` (S-001 REQ-011) | REQ-011 |
@@ -210,11 +211,13 @@ A following command (`bob chat`, `bob follow`, `bob jobs follow`):
 ```
 Subscribe: snapshot, then deltas, printed as lines                                          REQ-006, REQ-007, REQ-009
   ├─ chat: each typed line → conversations.submit (queued while busy); Ctrl-C → abort the
-  │        turn, chat stays open; Ctrl-D → exit 0                                            REQ-009
-  ├─ chat without a terminal: submit each line, wait for its answer, exit 0 at end of input  REQ-010
+  │        turn, queued lines dropped and named, chat stays open; Ctrl-D → exit 0            REQ-009
+  ├─ chat without a terminal: submit each line, wait until it settles, print its answer,
+  │        exit 0 at end of input                                                           REQ-010
   └─ jobs follow: exits 0 when the job is Done                                               REQ-006
-Daemon lost → notice on standard error, reconnect when it is back, fresh snapshot            REQ-015
-Feed ends "lagging" → subscribe again from a fresh snapshot                                 REQ-015
+Daemon unreachable or unavailable → notice on standard error, reconnect when it is back      REQ-015
+Feed ends "lagging" → subscribe again                                                       REQ-015
+  → fresh snapshot, then entries read from the last one seen, then deltas                   REQ-015
 ```
 
 ## Behavioral Requirements
@@ -424,7 +427,9 @@ and a prompt, and then:
 - submit each line the team member types with `conversations.submit` as a follow-up, so a line typed while the front
   desk is busy queues and is answered after the current one (S-001 REQ-020)
 - print the front desk's answers from the conversation feed as they stream
-- on Ctrl-C, stop the current turn with `conversations.abort` and keep the chat open
+- on Ctrl-C, stop the current turn with `conversations.abort` and keep the chat open. The abort also withdraws the
+  input still queued (S-001 REQ-008), so `bob` reads the state of each line it submitted and not yet answered
+  (`submissions.get`) and prints on standard error each line that was dropped, so the team member can send it again
 - on Ctrl-D, exit 0
 
 `bob chat --reset` SHALL reset the front desk with `conversations.reset` (S-001 REQ-024), then open it as above.
@@ -440,9 +445,10 @@ and a prompt, and then:
 
 #### AC-009.2 — Ctrl-C and Ctrl-D
 
-- **Given:** a running `bob chat` whose front desk is answering
+- **Given:** a running `bob chat` whose front desk is answering, with a second line queued
 - **When:** the team member presses Ctrl-C, types another line, then presses Ctrl-D
-- **Then:** the turn stops and the chat stays open, the next line is answered, and `bob chat` exits 0
+- **Then:** the turn stops and the chat stays open, the queued line is not answered and `bob` names it as dropped on
+  standard error, the line typed after Ctrl-C is answered, and `bob chat` exits 0
 
 **Verification:** test — a service test driving `bob chat` on a pseudo-terminal on the fake model.
 
@@ -457,8 +463,9 @@ and a prompt, and then:
 ### REQ-010 — Chat without a terminal
 
 When standard input isn't a terminal, `bob chat` SHALL show no prompt, history or colour; it SHALL submit each line
-of standard input in turn, wait for the front desk's answer to it (`submissions.wait`), print the answer and, at the
-end of input, exit 0.
+of standard input in turn and wait for the submission to settle, calling `submissions.wait` again each time a wait
+ends with the submission still unsettled (each wait lasts at most 5 minutes, S-002 REQ-012). It SHALL then read the
+front desk's answer with `conversations.entries`, print it and, at the end of input, exit 0.
 
 #### AC-010.1 — A piped question
 
@@ -468,12 +475,22 @@ end of input, exit 0.
 
 **Verification:** test — a service test running `bob` as a child process on the fake model.
 
+#### AC-010.2 — An answer longer than one wait
+
+- **Given:** a client whose first `submissions.wait` for the piped line returns the submission unsettled, and whose
+  second returns it settled
+- **When:** `bob chat` reads "what's running?" from a pipe
+- **Then:** `bob` waits a second time, reads the answer with `conversations.entries`, prints it once, and exits 0
+
+**Verification:** test — a unit test of `bob chat` with a client whose waits are scripted.
+
 ### REQ-011 — Conversation commands
 
 `bob conversations list`, `show`, `send`, `stop`, `reset`, `seat` and `compact` SHALL call the operations of
 Interfaces and print the result: `list` one line per conversation with its id, job and lead flag or the front-desk
-mark, seat, status and last activity; `show` the conversation and its transcript with seat records and attribution;
-`send` that the message was submitted, steered or held.
+mark, seat, status and last activity; `show` the conversation, its transcript with seat records and attribution,
+and the conversations it invoked, recursively (`conversations.invocations`); `send` that the message was submitted,
+steered or held.
 
 #### AC-011.1 — Steer a conversation
 
@@ -492,6 +509,15 @@ mark, seat, status and last activity; `show` the conversation and its transcript
   more `seat` naming an unknown role
 - **Then:** the seat record names `gp` and way in `command line`, the reset and compaction appear in the transcript,
   and the unknown role is refused with exit 1 and the seat unchanged
+
+**Verification:** test — a service test running `bob` as a child process on the fake model.
+
+#### AC-011.3 — Invoked conversations
+
+- **Given:** a lead conversation that invoked two agents, one of which invoked its own
+- **When:** a team member runs `bob conversations show` on the lead conversation, also with `--json`
+- **Then:** the output lists the three invoked conversations under their invokers, and the JSON holds the answer of
+  `conversations.invocations` unchanged
 
 **Verification:** test — a service test running `bob` as a child process on the fake model.
 
@@ -562,28 +588,41 @@ output and its exit statuses. It is not a data command and takes no `--json`.
 
 ### REQ-015 — Following survives restarts and lag
 
-When the daemon can't be reached during `bob chat`, `bob follow` or `bob jobs follow`, the command SHALL print a notice
-on standard error, keep trying, and when the daemon answers again subscribe again from a fresh snapshot and go on.
-When a feed ends with `lagging` (S-002 REQ-015, 1000 undelivered deltas), the command SHALL subscribe again from a
-fresh snapshot. Lines typed into a chat and already submitted are kept by the service and answered after the
-restart.
+When the daemon can't be reached during `bob chat`, `bob follow` or `bob jobs follow`, or answers `unavailable`
+because it is starting or stopping (S-003 AC-009.2), the command SHALL print a notice on standard error, keep trying,
+and when the daemon answers again subscribe again. When a feed ends with `lagging` (S-002 REQ-015, 1000 undelivered
+deltas), the command SHALL subscribe again. Each new subscription starts from a fresh snapshot; for each conversation
+it shows, the command SHALL then read `conversations.entries` from the last entry it printed and print the entries
+it missed, before the new deltas. Events of the instance feed missed in between are not replayed: the snapshot shows
+the state they led to. A line submitted to the chat survives a restart and is answered after it (S-001 REQ-021);
+only a Ctrl-C withdraws queued lines (REQ-009).
 
 #### AC-015.1 — A restart while watching
 
 - **Given:** a running `bob chat` with a line submitted and not answered, and a running `bob follow`
 - **When:** the test daemon is killed and started again
-- **Then:** both print a notice on standard error, reconnect, the chat prints the answer to the line, and `bob follow`
-  goes on printing new events; neither exits
+- **Then:** both print a notice on standard error, reconnect, the chat prints each front-desk entry written while
+  it was away, including the answer to the line, once, and `bob follow` goes on printing new events; neither exits
 
 **Verification:** test — a service test running `bob` as a child process and restarting the test daemon.
 
 #### AC-015.2 — A lagging feed
 
-- **Given:** a running `bob follow` whose feed ends with `lagging`
-- **When:** the feed ends
-- **Then:** it subscribes again, prints from the fresh snapshot on, and doesn't exit
+- **Given:** a running `bob follow`, and a running `bob jobs follow` on a job whose conversation feed ends with
+  `lagging` after entries it hasn't printed
+- **When:** each feed ends
+- **Then:** each subscribes again without exiting; `bob jobs follow` prints the missed entries once, read from the last
+  entry it printed, then the new deltas
 
 **Verification:** test — a unit test with a client whose feed ends with `lagging`.
+
+#### AC-015.3 — A daemon that is stopping
+
+- **Given:** a running `bob follow`
+- **When:** the daemon stops and the client gets `unavailable`, then the daemon starts again
+- **Then:** `bob follow` prints a notice, waits as for an unreachable daemon, and resumes when it is ready
+
+**Verification:** test — a service test running `bob` as a child process and restarting the test daemon.
 
 ### REQ-016 — Thin and quick
 
