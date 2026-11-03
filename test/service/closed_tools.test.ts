@@ -27,10 +27,11 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { createDeskComponent } from "../../src/desk/desk_component.ts";
 import { internalHarness } from "../../src/host/harness_host.ts";
 import { createInvokedConversations } from "../../src/host/invocation.ts";
-import { setSectionHook } from "../../src/host/job_section.ts";
+import { setJobDoneCheck, setSectionHook } from "../../src/host/job_section.ts";
 import { readConversationMeta, type SeatActor } from "../../src/host/seating.ts";
 import { type JobActionDeps, startJob } from "../../src/jobs/job_actions.ts";
 import type { JobAuthor } from "../../src/jobs/job_model.ts";
+import { JobNotFoundError } from "../../src/jobs/job_store.ts";
 import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 import { DEFAULT_LEAD_ROLE } from "../../src/roles/shipped_roles.ts";
@@ -611,6 +612,91 @@ describe("the tools called from and aimed at open conversations", () => {
         assert.deepEqual(await resultsAfter(started, "send and stop", 2), [
             { name: "send_to_conversation", text: `The message was sent to conversation ${lead}.`, isError: false },
             { name: "stop_conversation", text: `Stopped conversations: ${caller}.`, isError: false },
+        ]);
+    });
+});
+
+async function isDoneInStore(started: Started, jobId: string): Promise<boolean> {
+    try {
+        return (await started.ctx.jobStore.getJob(jobId)).status === "done";
+    } catch (error) {
+        if (error instanceof JobNotFoundError) return false;
+        throw error;
+    }
+}
+
+// Replaces the job Done check. Once armed, the next check of the job reads the job, then waits for `completed` and
+// answers what it read: the job's complete falls between a tool's own closed check and the check in the job's section.
+function staleNextCheck(started: Started, jobId: string, completed: Promise<void>) {
+    const checked = gate();
+    let isArmed = false;
+    setJobDoneCheck(started.ctx.host, async (checkedJobId) => {
+        const isDone = await isDoneInStore(started, checkedJobId);
+        if (!isArmed || checkedJobId !== jobId) return isDone;
+        isArmed = false;
+        checked.open();
+        await completed;
+        return isDone;
+    });
+    return {
+        checked: checked.opened,
+        arm: () => {
+            isArmed = true;
+        },
+    };
+}
+
+// The caller's model makes the call once the stale check is armed; the job completes while that check waits.
+async function completeBetweenTheChecks(started: Started, job: CreatedJob, prompt: string, call: Call) {
+    const go = gate();
+    const caller = await invokeGated(started, job.leadConversation, prompt, [call], go.opened);
+    const completed = gate();
+    const stale = staleNextCheck(started, job.id, completed.opened);
+    let results: Result[] = [];
+    started.setAfterWrite(async (point, jobId) => {
+        if (jobId !== job.id) return;
+        if (point === "job-completed") completed.open();
+        if (point === "conversations-closed") results = await resultsAfter(started, prompt, 1);
+    });
+    stale.arm();
+    go.open();
+    await stale.checked;
+    await started.invoke("jobs.complete", { job: job.number, justification: "checked by hand" });
+    return { caller, results };
+}
+
+describe("a tool whose own check passed before the job completed", () => {
+    it("returns an error result for invoke refused by the check in the job's section, and creates nothing", async () => {
+        const started = await start();
+        const job = await startedJob(started, "racing job");
+
+        const { caller, results } = await completeBetweenTheChecks(started, job, "invoke late", {
+            name: "invoke",
+            arguments: invokeArguments("grandchild work"),
+        });
+
+        assert.deepEqual((await conversationsOfJob(started, job.id)).sort(), [job.leadConversation, caller].sort());
+        assert.deepEqual(results, [
+            {
+                name: "invoke",
+                text: `The invocation was refused: ${closedMessage(caller)} Nothing was created.`,
+                isError: true,
+            },
+        ]);
+    });
+
+    it("returns an error result for handoff refused by the check in the job's section, and changes no seat", async () => {
+        const started = await start();
+        const job = await startedJob(started, "racing job");
+
+        const { caller, results } = await completeBetweenTheChecks(started, job, "hand off late", {
+            name: "handoff",
+            arguments: { role: "gp", contextMode: "full" },
+        });
+
+        assert.equal((await readConversationMeta(started.ctx.host, caller))?.seat.role, DEFAULT_LEAD_ROLE);
+        assert.deepEqual(results, [
+            { name: "handoff", text: `The handoff was refused: ${closedMessage(caller)}`, isError: true },
         ]);
     });
 });
