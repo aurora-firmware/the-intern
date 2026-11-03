@@ -172,6 +172,21 @@ describe("bob jobs list and show", () => {
         assert.match(result.stdout, /definitionOfDone/);
     });
 
+    it("prints the latest worklog entries of a job with more entries than one page", async () => {
+        const fixture = await readyDaemon();
+        const job = await startedJob(fixture.daemon, "long worklog");
+        const entryCount = 501;
+        for (let n = 1; n <= entryCount; n++) {
+            await fixture.daemon.invoke("jobs.worklog.add", { job: job.id, text: `entry number ${n}` });
+        }
+
+        const result = await bob(fixture, ["jobs", "show", job.number]);
+
+        assert.equal(result.status, 0, result.stderr);
+        assert.ok(result.stdout.includes(`entry number ${entryCount}`), "the newest entry is missing");
+        assert.ok(!result.stdout.includes("entry number 491"), "an entry older than the latest ten is shown");
+    });
+
     it("prints one object keyed by the three operation names with --json", async () => {
         const fixture = await readyDaemon();
         const job = await startedJob(fixture.daemon, "show json");

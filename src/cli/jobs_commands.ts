@@ -5,14 +5,14 @@
  */
 
 import type { Client } from "../client/client.ts";
-import type { Job } from "../jobs/job_store.ts";
+import type { HistoryEntry, Job, WorklogEntry } from "../jobs/job_store.ts";
 import type { CommandInput, CommandSpec, OptionSpec } from "./command_line.ts";
 import { EXIT_CODES } from "./command_line.ts";
 import { withClient } from "./connection.ts";
 import { formatCreated, formatJobDetail, formatJobLine } from "./job_text.ts";
 import { writeError, writeJson, writeLine } from "./output.ts";
 
-const WORKLOG_PAGE_SIZE = 500;
+const ENTRY_PAGE_SIZE = 500;
 const FIELD_OPTIONS = {
     title: "The job's title.",
     description: "The job's description.",
@@ -122,19 +122,37 @@ const list = jobsCommand(
     },
 );
 
+type EntryPage<T> = { entries: T[]; cursor?: string };
+
+// The service pages entries oldest first, so the latest entries are on the last page.
+async function allEntries<T>(client: Client, operation: string, first: EntryPage<T>, job: string): Promise<T[]> {
+    const entries = [...first.entries];
+    let cursor = first.cursor;
+    while (cursor !== undefined) {
+        const next = (await client.invoke(operation, { job, limit: ENTRY_PAGE_SIZE, cursor })) as EntryPage<T>;
+        entries.push(...next.entries);
+        cursor = next.cursor;
+    }
+    return entries;
+}
+
 const show = jobsCommand(
     { verb: "show", summary: "Show one job.", positionals: [{ name: "job", required: true }] },
     async (client, input) => {
         const [ref] = input.positionals;
-        const page = { job: ref, limit: WORKLOG_PAGE_SIZE };
+        const page = { job: ref, limit: ENTRY_PAGE_SIZE };
         const job = (await client.invoke("jobs.get", { job: ref })) as Job;
-        const worklog = (await client.invoke("jobs.worklog.list", page)) as { entries: [] };
-        const history = (await client.invoke("jobs.history.list", page)) as { entries: [] };
+        const worklog = (await client.invoke("jobs.worklog.list", page)) as EntryPage<WorklogEntry>;
+        const history = (await client.invoke("jobs.history.list", page)) as EntryPage<HistoryEntry>;
         if (input.json) {
             writeJson(input.io, { "jobs.get": job, "jobs.worklog.list": worklog, "jobs.history.list": history });
             return EXIT_CODES.ok;
         }
-        const detail = { job, worklog: worklog.entries, history: history.entries };
+        const detail = {
+            job,
+            worklog: await allEntries(client, "jobs.worklog.list", worklog, ref),
+            history: await allEntries(client, "jobs.history.list", history, ref),
+        };
         for (const line of formatJobDetail(detail)) writeLine(input.io, line);
         return EXIT_CODES.ok;
     },
