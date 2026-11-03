@@ -14,6 +14,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { countCallsOfRound } from "../coordination/coordination_extension.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
+import { ConversationClosedError, isConversationClosed } from "../host/job_section.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import type { CreateJobRequest, JobView } from "../service/job_operations.ts";
 import { readJob } from "../service/job_record_operations.ts";
@@ -236,6 +237,21 @@ function refusingWithoutJob<T extends { name: string; execute: (...args: never[]
     return { ...tool, execute };
 }
 
+// A job tool called from a closed conversation (S-001 REQ-026) is an error result before it acts, and changes no job.
+function refusingWhenClosed(options: JobToolsOptions) {
+    return <T extends { name: string; execute: (...args: never[]) => Promise<ToolExecutionResult> }>(tool: T): T => {
+        const execute = async (...args: never[]): Promise<ToolExecutionResult> => {
+            const conversationId = String((args[1] as ToolExecutionApi).conversationId);
+            if (await isConversationClosed(options.host(), conversationId)) {
+                const { message } = new ConversationClosedError(conversationId);
+                return textResult(`${tool.name} was refused: ${message}`, true);
+            }
+            return tool.execute(...args);
+        };
+        return { ...tool, execute };
+    };
+}
+
 export function createJobToolsExtension(options: JobToolsOptions): Extension {
     return defineExtension({
         name: JOB_TOOLS_EXTENSION_NAME,
@@ -247,6 +263,8 @@ export function createJobToolsExtension(options: JobToolsOptions): Extension {
             relateJobsTool(options),
             blockJobTool(options),
             completeJobTool(options),
-        ].map(refusingWithoutJob),
+        ]
+            .map(refusingWithoutJob)
+            .map(refusingWhenClosed(options)),
     });
 }
