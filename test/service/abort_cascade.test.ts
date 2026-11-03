@@ -254,6 +254,28 @@ describe("abortJobConversations", () => {
         await pause(SETTLE_PAUSE_MS);
         assert.equal(await fixture.busy(other), true);
     });
+
+    it("closes every conversation of the job, whatever its depth or state, and none of another job", async () => {
+        const fixture = await openFixture();
+        const lead = await fixture.start("job-1", "idle lead");
+        const [child] = await fixture.invoke(lead, "c1", ["child"], true);
+        const [grandchild] = await fixture.invoke(child as string, "c2", ["grandchild"]);
+        const other = await fixture.start("job-2", "lead");
+        const ofJob = [lead, child as string, grandchild as string];
+        await fixture.waitUntilBusy([child as string, grandchild as string, other]);
+
+        await abortJobConversations(fixture.host, "job-1");
+
+        for (const id of ofJob) {
+            const meta = await readConversationMeta(fixture.host, id);
+            assert.equal(meta?.closed, true, `${id} is closed`);
+            assert.equal(meta?.parked, null, `${id} is not parked`);
+            assert.deepEqual(meta?.awaiting, [], `${id} awaits nothing`);
+            assert.deepEqual(meta?.held, [], `${id} holds nothing`);
+        }
+        const untouched = await readConversationMeta(fixture.host, other);
+        assert.notEqual(untouched?.closed, true);
+    });
 });
 
 // Records which conversations are looked up for an abort, in order, and fails the lookup of the ones named.
