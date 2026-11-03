@@ -17,7 +17,7 @@ import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
-import { createDeskComponent } from "../../src/desk/desk_component.ts";
+import { createDeskComponent, type DeskCreatePoint } from "../../src/desk/desk_component.ts";
 import type { Models, Storage } from "../../src/host/harness_host.ts";
 import { readConversationMeta } from "../../src/host/seating.ts";
 import { blockJob } from "../../src/jobs/job_actions.ts";
@@ -47,6 +47,8 @@ function hasToolResult(transcript: FakeTranscript): boolean {
     return transcript.some((turn) => turn.role === "toolResult");
 }
 
+const DESK_STEER_PREFIX = "steer ";
+const DESK_STEER_MESSAGE = "from-desk";
 const HANDOFF_NOTE = "CLEAN-NOTE";
 const INVOKED_JOB_PROMPT_PREFIX = "job";
 const HANDOFF_CALL = { name: "handoff", arguments: { role: "gp", contextMode: "clean", note: HANDOFF_NOTE } };
@@ -75,6 +77,16 @@ function replyFor(script: Script, transcript: FakeTranscript): FakeReply {
         const isInvokedAgent = lastText.startsWith(INVOKED_JOB_PROMPT_PREFIX);
         return isInvokedAgent || hasToolResult(transcript) ? echo : { toolCall: PARKED_INVOKE_CALL };
     }
+    if (script === "desk-steer") {
+        if (!lastText.startsWith(DESK_STEER_PREFIX) || hasToolResult(transcript)) return echo;
+        const conversationId = lastText.slice(DESK_STEER_PREFIX.length);
+        return {
+            toolCall: {
+                name: "send_to_conversation",
+                arguments: { conversationId, message: DESK_STEER_MESSAGE, mode: "steer" },
+            },
+        };
+    }
     if (script !== "bash-sleep") return echo;
     if (hasToolResult(transcript)) return "slept";
     const seconds = /^\d+(\.\d+)?$/.test(lastText) ? lastText : DEFAULT_SLEEP_SECONDS;
@@ -82,13 +94,14 @@ function replyFor(script: Script, transcript: FakeTranscript): FakeReply {
 }
 
 /**
- * Holds back the answers a kill is meant to interrupt: all of `slow`, the lead's answers to reports for
+ * Holds back the answers a kill is meant to interrupt: all of `slow`, the answer after the tool of `desk-steer`, the lead's answers to reports for
  * `invoke-parked-slow-lead`, and the answers after the call of the others.
  */
 function delayFor(switches: Switches, transcript: FakeTranscript): number {
     const delayMs = switches.delayMs ?? DEFAULT_SLOW_DELAY_MS;
     const lastText = lastUserText(transcript);
     if (switches.script === "slow") return delayMs;
+    if (switches.script === "desk-steer") return hasToolResult(transcript) ? delayMs : 0;
     if (switches.script === "handoff-clean") return lastText === HANDOFF_NOTE ? delayMs : 0;
     if (switches.script === "invoke-parked") return lastText.startsWith(INVOKED_JOB_PROMPT_PREFIX) ? delayMs : 0;
     if (switches.script === "invoke-parked-slow-lead")
@@ -196,6 +209,17 @@ function killingAt(crashAt: WritePoint): NonNullable<JobsComponentOptions["after
     };
 }
 
+/** Kills the process at the front desk's creation point `crashAt`, and never lets the work after it run. */
+function killingDeskAt(
+    crashAt: DeskCreatePoint,
+): NonNullable<Parameters<typeof createDeskComponent>[0]["afterCreate"]> {
+    return (point) => {
+        if (point !== crashAt) return undefined;
+        process.kill(process.pid, "SIGKILL");
+        return new Promise<void>(() => undefined);
+    };
+}
+
 /** Blocks a job as a team member at the command line, so a test drives a block without scripting the model. */
 function blockJobOperation(jobs: { options: JobsComponentOptions }) {
     return defineOperation<ServiceContext, { job: string; reason: string }, Record<string, never>>({
@@ -274,7 +298,12 @@ async function main(): Promise<void> {
         ...(switches.turnEndRule !== undefined && { turnEndRule: switches.turnEndRule }),
         ...(switches.jobCrashAt !== undefined && { afterWrite: killingAt(switches.jobCrashAt) }),
     });
-    const desk = await createDeskComponent({ agents, jobs, logger });
+    const desk = await createDeskComponent({
+        agents,
+        jobs,
+        logger,
+        ...(switches.deskCrashAt !== undefined && { afterCreate: killingDeskAt(switches.deskCrashAt) }),
+    });
     const daemon = runDaemon({
         flags: parseFlags(process.argv.slice(3)),
         env: process.env,

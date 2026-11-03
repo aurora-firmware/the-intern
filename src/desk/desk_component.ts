@@ -20,10 +20,15 @@ export type DeskComponent = {
 
 type DeskView = { conversationId: string; seat: SeatSummary };
 
+/** Where `afterCreate` is called: just before the front desk's creation commit is made, and just after it returned. */
+export type DeskCreatePoint = "before-commit" | "after-commit";
+
 export async function createDeskComponent(options: {
     agents: AgentsComponent;
     jobs: JobsComponent;
     logger: Logger;
+    /** Test-only: called around the creation of the front desk, so a test can kill the process there. */
+    afterCreate?: (point: DeskCreatePoint) => void | Promise<void>;
 }): Promise<DeskComponent> {
     let context: ServiceContext | undefined;
     // The tools are built before the host opens, so they reach the service context once startup has bound it.
@@ -42,7 +47,9 @@ export async function createDeskComponent(options: {
         optInExtensions: [deskTools],
         async ensureWorkspaces(ctx) {
             context = ctx;
+            await options.afterCreate?.("before-commit");
             await ensureFrontDesk(ctx.host, options.agents.runtime().catalog);
+            await options.afterCreate?.("after-commit");
         },
         async stop() {
             context = undefined;
