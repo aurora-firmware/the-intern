@@ -132,13 +132,16 @@ const createJobTool = (options: JobToolsOptions) =>
     defineTool({
         name: "create_job",
         description:
-            "Create a follow-up job, Related to the job of this conversation. Repeating the same call returns the " +
-            "same job.",
+            "Create a follow-up job. Set related to true to relate it to the job of this conversation; without it " +
+            "the two jobs are not related. Repeating the same call returns the same job.",
         parameters: Type.Object({
             text: Type.String({ description: "The request of the new job." }),
             title: Type.Optional(Type.String({ description: "A title for the new job." })),
             role: Type.Optional(
                 Type.String({ description: "The role of the new job's lead, instead of the default." }),
+            ),
+            related: Type.Optional(
+                Type.Boolean({ description: "True to relate the new job to the job of this conversation." }),
             ),
         }),
         async execute(args, api) {
