@@ -276,3 +276,33 @@ describe("createEntryTracker", () => {
         );
     });
 });
+
+describe("createEntryTracker when a page read fails", () => {
+    it("returns_every_entry_on_the_next_catch_up_when_the_second_page_failed", async () => {
+        const tracker = createEntryTracker("c-1");
+        let shouldFail = true;
+        const pages: Record<string, EntriesPage> = {
+            "": { entries: [{ id: "e1" }], next: "p2" },
+            p2: { entries: [{ id: "e2" }] },
+        };
+        const client: Client = {
+            invoke: async (_name, input) => {
+                const { after } = input as EntriesCall;
+                if (after === "p2" && shouldFail) throw new UnreachableError("/run/bob.sock", "gone");
+                return pages[after ?? ""];
+            },
+            subscribe: () => {
+                throw new Error("the tracker never subscribes");
+            },
+        };
+
+        await assert.rejects(tracker.catchUp(client), UnreachableError);
+        shouldFail = false;
+        const missed = await tracker.catchUp(client);
+
+        assert.deepEqual(
+            missed.map((entry) => entry.id),
+            ["e1", "e2"],
+        );
+    });
+});

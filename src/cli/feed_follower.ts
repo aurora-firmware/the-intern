@@ -133,17 +133,20 @@ export function createEntryTracker(conversationId: string): EntryTracker {
     return {
         async catchUp(client) {
             const missed: AttributedEntryLike[] = [];
+            let after = cursor;
             while (true) {
-                const page = await readPage(client, cursor);
+                const page = await readPage(client, after);
                 for (const entry of page.entries) {
-                    if (printedIds.has(entry.id)) continue;
-                    printedIds.add(entry.id);
-                    missed.push(entry);
+                    if (!printedIds.has(entry.id)) missed.push(entry);
                 }
                 // The last page has no `next`; the cursor stays on it so the next catch-up starts there.
-                if (page.next === undefined) return missed;
-                cursor = page.next;
+                if (page.next === undefined) break;
+                after = page.next;
             }
+            // Marked only once every page is read, so a read that fails midway loses no entry.
+            cursor = after;
+            for (const entry of missed) printedIds.add(entry.id);
+            return missed;
         },
         markPrinted(entryId) {
             printedIds.add(entryId);
