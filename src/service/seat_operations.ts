@@ -73,12 +73,14 @@ export function seatOperations(component: AgentsComponent) {
         kind: "control",
         parse: parseSeat,
         async run({ host }, { conversationId, role, reset, ...overrides }, caller) {
-            if ((await readConversationMeta(host, conversationId)) === undefined) {
+            const meta = await readConversationMeta(host, conversationId);
+            if (meta === undefined) {
                 throw new ServiceError("not_found", `There is no seated conversation ${conversationId}`);
             }
+            const place = meta.origin.kind === "front_desk" ? "front_desk" : "job";
             let seat: Seat;
             try {
-                seat = component.runtime().catalog.seatFor(role, overrides);
+                seat = component.runtime().catalog.seatFor(role, overrides, place);
             } catch (error) {
                 if (error instanceof RoleRefusedError) throw new ServiceError(refusalCode(error), error.message);
                 throw error;

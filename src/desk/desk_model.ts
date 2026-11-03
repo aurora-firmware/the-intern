@@ -1,5 +1,9 @@
 export const FRONT_DESK_EXTENSION_NAME = "intern.desk";
 
+// The default extensions whose tools reuse job tool names, so the front desk leaves them out. Held here because
+// `seating.ts` cannot import their modules: `job_tools_extension.ts` imports `seating.ts`.
+export const JOB_CONVERSATION_EXTENSION_NAMES = ["intern.coordination", "intern.jobs"] as const;
+
 export const FRONT_DESK_TOOL_NAMES = [
     "read_job",
     "list_jobs",
