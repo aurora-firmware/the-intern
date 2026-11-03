@@ -44,7 +44,7 @@ async function indexConversations(ctx: ServiceContext): Promise<Map<string, JobC
     const index = new Map<string, JobConversations>();
     for (const { id, busy } of await ctx.host.listConversations()) {
         const meta = await readConversationMeta(ctx.host, id);
-        if (meta === undefined) continue;
+        if (meta === undefined || meta.jobId === null) continue;
         const entry = index.get(meta.jobId) ?? { isActive: false };
         if (meta.isLead) entry.leadId = id;
         if (busy || meta.parked !== null || meta.awaiting.length > 0) entry.isActive = true;

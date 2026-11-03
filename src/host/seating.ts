@@ -33,7 +33,8 @@ export type Origin =
     | { kind: "schedule"; entry: string; fireTime: string }
     | { kind: "trigger"; trigger: string; event: string }
     | { kind: "follow_up"; conversationId: string }
-    | { kind: "invocation"; conversationId: string };
+    | { kind: "invocation"; conversationId: string }
+    | { kind: "front_desk" };
 
 export type ContextMode = "full" | "compact" | "clean";
 export type ParkedState = { waitingFor: "reports" | "answer"; continueOn: "each" | "all" };
@@ -53,7 +54,7 @@ export type SeatRecord = {
     contextMode?: ContextMode;
     note?: string;
 };
-export type JobLinks = { jobId: string; isLead: boolean; origin: Origin; depth: number; invokedBy?: string };
+export type JobLinks = { jobId: string | null; isLead: boolean; origin: Origin; depth: number; invokedBy?: string };
 export type ConversationMeta = JobLinks & {
     seat: Seat;
     awaiting: string[];

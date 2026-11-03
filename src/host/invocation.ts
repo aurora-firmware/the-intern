@@ -72,7 +72,7 @@ async function requireMeta(host: HarnessHost, conversationId: string): Promise<C
 async function createOne(
     tx: Tx,
     input: {
-        invoking: { jobId: string; depth: number };
+        invoking: { jobId: string | null; depth: number };
         invokingId: string;
         request: InvocationRequest;
         actor: SeatActor;

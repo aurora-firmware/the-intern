@@ -81,7 +81,7 @@ export async function resumeAfterLeadInput(deps: JobActionDeps, input: Submitted
     if (input.requestId.startsWith(RESUME_REQUEST_PREFIX)) return;
     const { ctx, options } = deps;
     const meta = await readConversationMeta(ctx.host, input.conversationId);
-    if (!meta?.isLead) return;
+    if (!meta?.isLead || meta.jobId === null) return;
     try {
         const job = await ctx.jobStore.getJob(meta.jobId);
         if (job.status !== "blocked") return;
