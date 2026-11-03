@@ -7,6 +7,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type ConversationId, defineDoc, type Tx } from "@earendil-works/pi-durable";
 import { INVOCATION_DEPTH_CAP } from "../daemon/constants.ts";
+import { FRONT_DESK_CREATION } from "../desk/desk_model.ts";
 import type { Seat } from "../roles/role_model.ts";
 import {
     abortConversation,
@@ -16,6 +17,7 @@ import {
     submitInput,
 } from "./conversation_control.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
+import { findCreatedConversation } from "./idempotency.ts";
 import {
     type ContextMode,
     type ConversationMeta,
@@ -32,6 +34,14 @@ import { STEER_RECORD_KIND } from "./steering.ts";
 const context = BACKGROUND_CONTEXT;
 
 export type InvocationRequest = { seat: Seat; contextMode: ContextMode; jobPrompt: string };
+
+/** The front desk has no job, so no job's conversations include it (S-001 REQ-025). */
+export class FrontDeskNotJobError extends Error {
+    constructor(conversationId: string) {
+        super(`The front desk (${conversationId}) is not a job conversation`);
+        this.name = "FrontDeskNotJobError";
+    }
+}
 
 export class InvocationDepthError extends Error {
     readonly cap: number;
@@ -330,6 +340,7 @@ export async function abortJobConversations(
     jobId: string,
     own?: { conversationId: string; onError(error: unknown): void },
 ): Promise<string[]> {
+    if (jobId === (await findCreatedConversation(host, FRONT_DESK_CREATION))) throw new FrontDeskNotJobError(jobId);
     const ofJob: string[] = [];
     for (const { id } of await host.listConversations()) {
         if ((await readConversationMeta(host, id))?.jobId === jobId) ofJob.push(id);

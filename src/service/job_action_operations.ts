@@ -9,7 +9,15 @@ import { blockResumeCount, type JobAuthor, resumeRequestId } from "../jobs/job_m
 import type { Job } from "../jobs/job_store.ts";
 import type { JobsComponentOptions } from "../jobs/jobs_component.ts";
 import { leadConversationOf } from "./job_operations.ts";
-import { allEntries, asRecord, authorOf, refusing, requireString, STORE_PAGE_SIZE } from "./job_record_operations.ts";
+import {
+    allEntries,
+    asRecord,
+    authorOf,
+    refuseFrontDesk,
+    refusing,
+    requireString,
+    STORE_PAGE_SIZE,
+} from "./job_record_operations.ts";
 import { defineOperation, type Operation, ServiceError } from "./operations.ts";
 
 /** What the lead receives when a team member resumes the job without text. */
@@ -43,6 +51,7 @@ export function jobActionOperations(options: JobsComponentOptions) {
         kind: "control",
         parse: parseResume,
         async run(ctx, input, caller) {
+            await refuseFrontDesk(ctx.host, input.job);
             const author = await authorOf(caller, ctx.host);
             const job = await refusing(ctx.jobStore.getJob(input.job));
             if (job.status !== "blocked") {
@@ -71,6 +80,7 @@ export function jobActionOperations(options: JobsComponentOptions) {
             kind: "control",
             parse: parseFinish,
             async run(ctx, input, caller) {
+                await refuseFrontDesk(ctx.host, input.job);
                 const author = await authorOf(caller, ctx.host);
                 return refusing(act({ ctx, options }, input.job, input.justification, author));
             },
