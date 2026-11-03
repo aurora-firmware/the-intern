@@ -187,8 +187,8 @@ function killOnSteerComponent(): DaemonComponent {
     return {
         name: "kill-on-steer",
         async start(ctx: ServiceContext) {
-            onInputSubmitted(ctx.host, (input) => {
-                if (!input.requestId.startsWith("steer:")) return undefined;
+            onInputSubmitted(ctx.host, async (input) => {
+                if (!input.requestId.startsWith("steer:")) return;
                 process.kill(process.pid, "SIGKILL");
                 return new Promise<void>(() => undefined);
             });
