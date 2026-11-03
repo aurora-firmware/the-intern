@@ -4,6 +4,7 @@
  */
 import type { CommandInput, CommandSpec } from "./command_line.ts";
 import { statusCommand, usageCommand } from "./instance_commands.ts";
+import { JOBS_COMMANDS } from "./jobs_commands.ts";
 import type { ServeFlags } from "./serve.ts";
 
 const DIRECTORY_FLAG_NAMES = ["config-dir", "state-dir", "data-dir"] as const;
@@ -40,4 +41,4 @@ const serve: CommandSpec = {
     },
 };
 
-export const COMMANDS: readonly CommandSpec[] = [serve, statusCommand, usageCommand];
+export const COMMANDS: readonly CommandSpec[] = [serve, statusCommand, usageCommand, ...JOBS_COMMANDS];
