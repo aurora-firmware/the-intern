@@ -94,6 +94,8 @@ export type HarnessHostOptions = {
     models: Models;
     harnessSettings: HarnessSettingsMapping;
     extensions: readonly Extension[];
+    /** Installed but not in the default selection; a conversation selects them with `configure`. */
+    optInExtensions?: readonly Extension[];
     defaultCwd: string;
     logger: Logger;
     /** Runs on the open database before pi-durable creates its tables. A rejection rejects the open. */
@@ -392,7 +394,7 @@ export async function openHarnessHost(options: HarnessHostOptions): Promise<Harn
         throw error;
     }
     const registry = createRegistry();
-    for (const extension of options.extensions) registry.install(extension);
+    for (const extension of [...options.extensions, ...(options.optInExtensions ?? [])]) registry.install(extension);
 
     const harness = await Harness.open(
         storage,

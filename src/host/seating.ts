@@ -9,12 +9,14 @@ import {
     configure,
     defineDoc,
     defineEntry,
+    type Extension,
     InboxDoc,
     LiveDoc,
     ResetEntry,
     type ToolRegistration,
     type Tx,
 } from "@earendil-works/pi-durable";
+import { FRONT_DESK_EXTENSION_NAME, JOB_CONVERSATION_EXTENSION_NAMES } from "../desk/desk_model.ts";
 import type { Seat } from "../roles/role_model.ts";
 import { type HarnessHost, internalHarness, toAgentSpec } from "./harness_host.ts";
 import { createConversationOnce } from "./idempotency.ts";
@@ -124,6 +126,14 @@ function toToolSelection(names: readonly string[]): ToolRegistration[] {
     return names.map((name) => ({ name }) as ToolRegistration);
 }
 
+// pi-durable reads only `name` from an extension in a selection. `{ add, remove }` edits the default selection, so the
+// default extensions that are not named here (admission, role prompt, tools) stay selected.
+function extensionSelectionFor(origin: Origin): { add: Extension[]; remove: Extension[] } | undefined {
+    if (origin.kind !== "front_desk") return undefined;
+    const named = (names: readonly string[]) => names.map((name) => ({ name }) as Extension);
+    return { add: named([FRONT_DESK_EXTENSION_NAME]), remove: named(JOB_CONVERSATION_EXTENSION_NAMES) };
+}
+
 async function writeSeat(
     tx: Tx,
     conversationId: string,
@@ -137,6 +147,7 @@ async function writeSeat(
         ...toAgentSpec({ model: seat.model, cwd: seat.workspace }),
         thinkingLevel: (seat.thinkingLevel ?? null) as never,
         tools: toToolSelection(seat.tools),
+        extensions: extensionSelectionFor(meta.origin) ?? null,
     });
     meta.seat = toStoredJson(seat);
     const record: SeatRecord = {
