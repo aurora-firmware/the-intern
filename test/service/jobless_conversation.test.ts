@@ -12,11 +12,12 @@ import { submitInput } from "../../src/host/conversation_control.ts";
 import { abortJobConversations } from "../../src/host/invocation.ts";
 import { createSeatedConversation, readConversationMeta } from "../../src/host/seating.ts";
 import { STEER_RECORD_KIND } from "../../src/host/steering.ts";
+import { createJobToolsExtension } from "../../src/jobs/job_tools_extension.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import { REMINDER_TEXT } from "../../src/jobs/turn_end_rule.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 import { DEFAULT_LEAD_ROLE } from "../../src/roles/shipped_roles.ts";
-import type { Caller } from "../../src/service/operations.ts";
+import { type Caller, ServiceError } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const WAIT_MS = 20_000;
@@ -237,5 +238,39 @@ describe("a conversation with no job", () => {
         const listed = snapshot.conversations.find((conversation) => conversation.id === jobless);
         assert.equal(listed?.jobId, null);
         assert.equal(listed?.isLead, false);
+    });
+
+    it("returns an error result when a job tool is called in it", async () => {
+        const booted = await (await createRig()).boot();
+        const jobless = await seatJobless(booted, "front-desk");
+        const extension = createJobToolsExtension({
+            host: () => booted.ctx.host,
+            jobStore: () => booted.ctx.jobStore,
+        } as never);
+        const readJob = extension.tools?.find((tool) => tool.name === "read_job");
+
+        const result = await (readJob as never as { execute(args: object, api: object): Promise<unknown> }).execute(
+            {},
+            { conversationId: jobless },
+        );
+
+        const { isError, output } = result as { isError?: boolean; output: { text: string }[] };
+        assert.equal(isError, true);
+        assert.match(output[0]?.text ?? "", new RegExp(`read_job was refused: Conversation ${jobless} has no job`));
+    });
+
+    it("refuses a follow-up job created from it as invalid input", async () => {
+        const booted = await (await createRig()).boot();
+        const jobless = await seatJobless(booted, "front-desk");
+        const caller: Caller = { actor: { kind: "agent", conversationId: jobless } };
+
+        const error = await booted.daemon.catalogue.invoke("jobs.create", { text: "follow up" }, caller).then(
+            () => undefined,
+            (rejection: unknown) => rejection,
+        );
+
+        assert.ok(error instanceof ServiceError, `expected ServiceError, got ${String(error)}`);
+        assert.equal(error.code, "invalid_input");
+        assert.equal((await booted.ctx.jobStore.listJobs({ limit: 100 })).jobs.length, 0);
     });
 });
