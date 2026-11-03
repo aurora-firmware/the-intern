@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -7,6 +8,7 @@ import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const OWNER_ONLY_MODE = 0o700;
+const BOB_ENTRY = join(import.meta.dirname, "..", "..", "src", "cli", "bob.ts");
 
 type Fixture = { env: HermeticEnv; daemon: DaemonProcess };
 type RoleView = { name: string; instructions: string; tools: string[]; workspace?: string; model?: string };
@@ -143,5 +145,21 @@ describe("bob roles, workspaces and models", () => {
         }
         assert.equal(json.status, 0, json.stderr);
         assert.equal(json.stdout, `${JSON.stringify(answer)}\n`);
+    });
+
+    it("exits 0 with empty standard error when the reader closes standard output early", async () => {
+        const fixture = await readyDaemon();
+        const args = [BOB_ENTRY, "models", "list", "--json", "--runtime-dir", fixture.env.runtimeDir];
+        const child = spawn(process.execPath, args, { env: fixture.env.env, stdio: ["ignore", "pipe", "pipe"] });
+        let stderr = "";
+        child.stderr.on("data", (chunk) => {
+            stderr += chunk;
+        });
+        child.stdout.once("data", () => child.stdout.destroy());
+
+        const status = await new Promise((resolve) => child.on("close", resolve));
+
+        assert.equal(status, 0);
+        assert.equal(stderr, "");
     });
 });
