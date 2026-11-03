@@ -1458,7 +1458,7 @@ any shipped role (REQ-003), and changing it affects only seats made after the ch
 Every conversation of a job SHALL close when the job becomes Done, by a complete or a cancel (S-004 REQ-007), and stay
 closed for good. A conversation belongs to at most one job for its whole life, and a Done job is never reopened, so a
 closed conversation never works again. Its transcript stays as the record of what was done. More work is a new job,
-which a team member or an agent of any job may create and relate to the first (S-004 REQ-009).
+which a team member or an agent of any job may create and may relate to the first, as it chooses (S-004 REQ-009).
 
 - Closing is part of the job abort (REQ-008): every conversation of the job, whether running, idle, parked or waiting
   for a worker thread, is aborted, with no report sent (REQ-019), its queued input and held messages are withdrawn,

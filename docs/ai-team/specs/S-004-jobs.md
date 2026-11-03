@@ -68,8 +68,8 @@ Journeys, in priority order:
    reads its worklog and history, and follows changes live. Delivered by REQ-002, REQ-010, REQ-011, REQ-014, REQ-015.
 4. **Stop a job.** A team member cancels a job with a reason; every conversation of the job stops. Delivered by
    REQ-005, REQ-007.
-5. **Work found along the way.** An agent creates a new job that is Related to the job it came from. Delivered by
-   REQ-003, REQ-009, REQ-013.
+5. **Work found along the way.** An agent creates a new job, and relates it to the job it came from when it
+   chooses. Delivered by REQ-003, REQ-009, REQ-013.
 6. **Keep and move the record.** A team member exports the whole database while The Intern works, and imports it on
    another computer or keeps it as a backup. Delivered by REQ-016, REQ-017.
 7. **Nothing is lost in a crash.** A crash between a job write and its pi-durable change is repaired at the next
@@ -87,7 +87,7 @@ What this specification explicitly does NOT cover:
 - **Assigning jobs to people, watchers, votes, labels and attachments.** All team members are equal (ADR-002), and the
   lead conversation is the only owner a job has.
 - **Reopening a Done job.** Done is final, and the job's conversations are closed for good (S-001 REQ-026); more
-  work becomes a new job, Related to the old one.
+  work becomes a new job, which may be Related to the old one.
 - **Sub-jobs and dependencies between jobs.** Related is the only link. Invoked agents take the place of sub-jobs
   (S-001 REQ-008).
 - **A team member blocking a job.** Only the lead agent blocks, so Blocked is never used as a pause.
@@ -221,7 +221,7 @@ coordination capabilities (S-001 REQ-003). A tool acts on the job of the convers
 | read job | every agent of the job | returns the job, its worklog and its history |
 | update job | every agent of the job | changes the editable fields (REQ-004) |
 | add to worklog | every agent of the job | adds an entry (REQ-010) |
-| create job | every agent of the job | creates a follow-up job, Related to this one, keyed by its tool call id (REQ-003, REQ-007, REQ-009) |
+| create job | every agent of the job | creates a follow-up job, keyed by its tool call id; an optional `related` flag, when true, relates it to this job (REQ-003, REQ-007, REQ-009) |
 | relate jobs | every agent of the job | relates or unrelates this job and another (REQ-009) |
 | block job | the lead agent | blocks with a Blocked reason (REQ-005, REQ-006) |
 | complete job | the lead agent | completes with a justification (REQ-005) |
@@ -426,7 +426,8 @@ stated and not checked. Nothing in a call's input SHALL replace an observed orig
 
 - **Given:** the lead agent of `S-12`
 - **When:** it creates a job through the job tools
-- **Then:** the new job is `A-n`, its origin names `S-12` and the lead conversation, and the two jobs are Related
+- **Then:** the new job is `A-n`, its origin names `S-12` and the lead conversation; the two jobs are Related when
+  the call sets `related`, and not Related when it doesn't
 
 **Verification:** test — a service test on the fake model.
 
@@ -663,7 +664,9 @@ repair rule.
 
 `jobs.relate` and `jobs.unrelate` and the relate tool SHALL add and remove an undirected link between two different
 jobs in any status. A job SHALL NOT be related to itself, and relating two jobs already related changes nothing.
-Creating a follow-up job SHALL relate it to the job it was created from. Both jobs' history records each change.
+Creating a follow-up job SHALL relate it to the job it was created from only when the create job call asks for it
+with its `related` flag; the agent decides each time, and a call without the flag relates nothing. The follow-up's
+origin names the conversation it came from either way (REQ-003). Both jobs' history records each change.
 
 #### AC-009.1 — Related both ways
 
@@ -1075,3 +1078,4 @@ None.
 | 2026-11-02 | v0.5. REQ-018 rule 1: it also fires for a To do job whose lead conversation holds no submission with request id `lead:<jobId>`, and completes the start, reusing request-id deduplication so the first input goes in once; creating the lead conversation and submitting its first input are two pi-durable commits. New AC-018.2 for a crash between them. Workflow and Success Criteria 4 follow. Exclusions: "sub-tasks" became "sub-jobs". | PR 147 review, finding 4: a crash after the lead conversation is created and before its first input leaves the job To do with no agent working on it, which rule 1 didn't catch. pi-durable can't submit input in the creation commit. Product owner decision 2026-11-02 (option A); ADR-001 decision 4 amended. | T-144 |
 | 2026-11-03 | v0.6. The front desk (S-001 v0.8). New REQ-021: in the front desk the job tools name their job, block and complete aren't offered, a new `list_jobs` lists jobs as `jobs.list` does, and `create_job` makes a job whose origin is the way in of the team member's input being answered (`C` or `W`) with the front desk in its origin details (AC-021.1 to AC-021.4). New REQ-022: the front desk has no job record; the reminder rule, complete, cancel and the repair rules never touch it; a job operation given its conversation id is refused as not a job conversation (AC-022.1 to AC-022.3). Architecture consistency review (finding F7, product owner decision), same version: REQ-021 and AC-021.4, no agent steers the front desk and only a team member's input with way in `command line` or `web interface` reaches it, so its jobs are always `C` or `W`. REQ-002 and REQ-003: the letter and origin of a job created through the front desk. REQ-008, REQ-007 and REQ-013 point to REQ-022 and REQ-021. Definitions, Users and Journeys (journey 8), Exclusions, Interfaces (the job tools in the front desk, the refusal of its conversation id, Consumed), Workflow, Assumptions, Success Criteria 7 and Implementation Order phase 6 follow. | Product owner decisions of the front desk brainstorm, 2026-11-03. | None yet; the front desk comes in the breakdown of this amendment |
 | 2026-11-03 | v0.7. Closed conversations (S-001 v0.9 REQ-026). REQ-005 and REQ-007: complete and cancel also close every conversation of the job, idle ones included, so input to a Done job's lead is refused `conflict`; AC-007.3 checks the conversations are closed. REQ-018: a complete or cancel is written before the conversations are aborted and closed, and repair rule 4 closes each conversation of a Done job that isn't closed, aborting it first if it still runs, is parked or is awaited. REQ-022 and AC-022.2: the front desk is never closed. Exclusions, Workflow and Consumed follow. Architecture consistency review (findings F1, F12, F13 and F15), same version: REQ-018 rule 4 also covers a closed conversation that still has an unfinished run or queued input, in one commit that sets its closed mark, clears `parked` and empties `awaiting` and `held`, then pi-durable's abort; AC-018.1 adds a crash between that commit and the abort; rule 3 applies only to a job that isn't Done; REQ-007, from the complete or cancel input to the job's conversations is refused as S-001 REQ-026 states, a lead start refused because the job is already Done doesn't cancel it again, a job completed or cancelled before its lead conversation is created gets none, and one completed or cancelled before the first input keeps a closed lead conversation with no first input (S-001 AC-026.7, AC-026.8). Long lines rewrapped. | Product owner decision of 2026-11-03, during the S-005 dev-loop (T-166): a Done job's conversations close and are kept only as the history of the work. Architecture consistency review of the amendment, 2026-11-03; ADR-001 decision 4 amended with it. | T-166 (blocked on it); new tasks for S-001 phase 7 |
+| 2026-11-03 | v0.7, same version. REQ-009, AC-003.3, the create job tool, journey 5 and the Exclusion on reopening: a follow-up job is Related to the job it came from only when the agent's create job call sets the optional `related` flag; the agent decides each time. Its origin names the conversation it came from either way. | Product owner decision of 2026-11-03 (finding F9 of the S-001 v0.9 consistency review): relating a follow-up job is the agent's choice in the moment, not a hard requirement. | The job tools (`src/jobs/job_tools_extension.ts`), a new task |
