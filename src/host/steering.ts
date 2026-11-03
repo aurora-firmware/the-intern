@@ -9,6 +9,7 @@ import { type ConversationId, defineEntry } from "@earendil-works/pi-durable";
 import { HostNotFoundError, notifyInputSubmitted, submissionIdFor } from "./conversation_control.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { continueParked } from "./invocation.ts";
+import { inOpenConversation } from "./job_section.ts";
 import { conversationMetaDoc, type HeldMessage, readConversationMeta, type SeatActor } from "./seating.ts";
 
 export const STEER_RECORD_KIND = "intern.steer";
@@ -35,6 +36,10 @@ async function requireConversation(host: HarnessHost, targetId: string) {
 // The check and the hold are one commit, so a conversation that continues in between is never left holding a message.
 // A repeated request id holds nothing twice and writes no second record.
 async function holdIfParked(host: HarnessHost, conversationId: ConversationId, input: SteerInput): Promise<boolean> {
+    return inOpenConversation(host, String(conversationId), () => holdInOneCommit(host, conversationId, input));
+}
+
+function holdInOneCommit(host: HarnessHost, conversationId: ConversationId, input: SteerInput): Promise<boolean> {
     return internalHarness(host).commit(async (tx) => {
         const meta = await tx.doc(conversationMetaDoc, conversationId);
         if (meta.parked?.waitingFor !== "reports") return false;
@@ -75,15 +80,17 @@ export async function steerConversation(
     }
     // A repeated request id places nothing, so no input listener hears of it.
     const isRepeat = (await submissionIdFor(host, String(conversation.id), input.requestId)) !== undefined;
-    const submission = await conversation.submit(
-        {
-            type: "input",
-            content: input.content,
-            requestId: input.requestId,
-            whenBusy: input.mode,
-            entry,
-        },
-        context,
+    const submission = await inOpenConversation(host, String(conversation.id), () =>
+        conversation.submit(
+            {
+                type: "input",
+                content: input.content,
+                requestId: input.requestId,
+                whenBusy: input.mode,
+                entry,
+            },
+            context,
+        ),
     );
     if (!isRepeat) {
         await notifyInputSubmitted(host, { conversationId: String(conversation.id), requestId: input.requestId });

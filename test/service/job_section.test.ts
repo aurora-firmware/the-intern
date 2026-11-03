@@ -212,7 +212,7 @@ describe("createInvokedConversations in a closed conversation", () => {
 });
 
 describe("abortJobConversations racing an invocation", () => {
-    it("closes the conversation an invocation creates after its check passed", async () => {
+    it("closes the conversation an invocation creates after its check passed and refuses its job prompt", async () => {
         const { host, start, invoke } = await openFixture();
         const lead = await start("job-1");
         const held = gate();
@@ -227,9 +227,10 @@ describe("abortJobConversations racing an invocation", () => {
         const aborting = abortJobConversations(host, "job-1");
         await pause(SETTLE_PAUSE_MS);
         held.open();
-        const [created] = await invoking;
+        await assert.rejects(invoking, ConversationClosedError);
         await aborting;
 
+        const created = (await host.listConversations()).map((info) => info.id).find((id) => id !== lead);
         const meta = await readConversationMeta(host, created as string);
         assert.equal(meta?.closed, true);
         assert.deepEqual((await readConversationMeta(host, lead))?.awaiting, []);
