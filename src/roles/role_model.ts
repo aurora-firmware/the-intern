@@ -1,4 +1,5 @@
 import { isAbsolute } from "node:path";
+import { FRONT_DESK_TOOL_NAMES, type SeatPlace } from "../desk/desk_model.ts";
 import { JOB_TOOL_NAMES } from "../jobs/job_model.ts";
 
 export const SHIPPED_TOOL_NAMES = ["read", "write", "edit", "bash"] as const;
@@ -73,7 +74,15 @@ export const validateRoleDefinition = (role: RoleDefinition): void => {
 
 export const applyRoleChange = (base: RoleDefinition, change: RoleChange): RoleDefinition => ({ ...base, ...change });
 
-export const resolveSeat = (role: RoleDefinition, defaults: SeatDefaults, overrides: SeatOverrides = {}): Seat => {
+const placeTools = (place: SeatPlace): readonly string[] =>
+    place === "front_desk" ? FRONT_DESK_TOOL_NAMES : [...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES];
+
+export const resolveSeat = (
+    role: RoleDefinition,
+    defaults: SeatDefaults,
+    overrides: SeatOverrides = {},
+    place: SeatPlace = "job",
+): Seat => {
     const model = overrides.model ?? role.model ?? defaults.model;
     if (model === undefined) {
         throw new RoleInvalidError(role.name, "model", "no override, role default or pi agent default names a model");
@@ -84,7 +93,7 @@ export const resolveSeat = (role: RoleDefinition, defaults: SeatDefaults, overri
         thinkingLevel: overrides.thinkingLevel ?? role.thinkingLevel ?? defaults.thinkingLevel,
         workspace: overrides.workspace ?? role.workspace ?? defaults.workspace,
         instructions: role.instructions,
-        tools: [...new Set([...role.tools, ...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES])],
+        tools: [...new Set([...role.tools, ...placeTools(place)])],
         skills: [...role.skills],
     };
 };
