@@ -239,27 +239,63 @@ describe("add_worklog and update_job", () => {
 });
 
 describe("create_job", () => {
-    it("creates an A job from the job and conversation, Related to the job, once per call id", async () => {
+    const followUpOrigin = (jobId: string, conversationId: string) => ({ kind: "follow_up", jobId, conversationId });
+
+    it("creates an A job Related to the job when the call sets related", async () => {
         const started = await start();
         const parent = await started.createJob(sourceCaller, { origin: schedule });
-        assert.match(parent.number, /^S-/);
         const conversation = await started.seat(parent.id);
-        const create = { name: "create_job", arguments: { text: "also rotate the keys" }, id: "call-keys" };
+        const create = {
+            name: "create_job",
+            arguments: { text: "also rotate the keys", related: true },
+            id: "call-keys",
+        };
 
-        const first = await started.run(conversation, [create]);
-        const created = jsonOf(first.results[0]);
+        const created = jsonOf((await started.run(conversation, [create])).results[0]);
 
         assert.match(created.number, /^A-\d+$/);
-        assert.deepEqual(created.request.origin, {
-            kind: "follow_up",
-            jobId: parent.id,
-            conversationId: conversation,
-        });
+        assert.deepEqual(created.request.origin, followUpOrigin(parent.id, conversation));
         assert.deepEqual(created.related, [parent.number]);
         assert.deepEqual((await started.ctx.jobStore.getJob(parent.id)).related, [created.number]);
+    });
 
-        const second = await started.run(conversation, [create]);
-        assert.equal(jsonOf(second.results[0]).id, created.id);
+    it("creates an A job that relates nothing when the call omits related or sets it false", async () => {
+        const started = await start();
+        const parent = await started.createJob(sourceCaller, { origin: schedule });
+        const conversation = await started.seat(parent.id);
+        const omitted = { name: "create_job", arguments: { text: "also rotate the keys" }, id: "call-omitted" };
+        const declined = {
+            name: "create_job",
+            arguments: { text: "also renew the cert", related: false },
+            id: "call-declined",
+        };
+
+        const { results } = await started.run(conversation, [omitted, declined]);
+
+        for (const result of results) {
+            const created = jsonOf(result);
+            assert.match(created.number, /^A-\d+$/);
+            assert.deepEqual(created.request.origin, followUpOrigin(parent.id, conversation));
+            assert.deepEqual(created.related, []);
+        }
+        assert.deepEqual((await started.ctx.jobStore.getJob(parent.id)).related, []);
+    });
+
+    it("returns the first call's job with its Related links when the call id repeats", async () => {
+        const started = await start();
+        const parent = await started.createJob(sourceCaller, { origin: schedule });
+        const conversation = await started.seat(parent.id);
+        const create = {
+            name: "create_job",
+            arguments: { text: "also rotate the keys", related: true },
+            id: "call-keys",
+        };
+        const created = jsonOf((await started.run(conversation, [create])).results[0]);
+
+        const repeated = jsonOf((await started.run(conversation, [create])).results[0]);
+
+        assert.equal(repeated.id, created.id);
+        assert.deepEqual(repeated.related, [parent.number]);
         const next = await started.run(conversation, [{ ...create, id: "call-other" }]);
         assert.equal(jsonOf(next.results[0]).number, `A-${Number(created.number.slice(2)) + 1}`);
     });

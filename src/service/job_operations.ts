@@ -121,6 +121,8 @@ export type CreateJobRequest = {
     thinkingLevel?: string;
     workspace?: string;
     origin?: unknown;
+    // Set by an agent's create job call to relate the follow-up to the job it came from; never read from jobs.create input.
+    related?: boolean;
 };
 
 const MAX_KEY_LENGTH = 200;
@@ -196,7 +198,7 @@ async function describeCaller(host: HarnessHost, request: CreateJobRequest, call
         origin: { kind: "follow_up", jobId: meta.jobId, conversationId: actor.conversationId },
         author: { kind: "agent", conversationId: actor.conversationId, role: meta.seat.role },
         actor: seatActorFor(caller, meta.seat.role),
-        relatedTo: meta.jobId,
+        ...(request.related === true && { relatedTo: meta.jobId }),
     };
 }
 
