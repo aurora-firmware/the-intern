@@ -1,5 +1,6 @@
 import { isAbsolute } from "node:path";
 import type { ConfigStore } from "../config/config_writer.ts";
+import type { SeatPlace } from "../desk/desk_model.ts";
 import { JOB_TOOL_NAMES } from "../jobs/job_model.ts";
 import type { InternModels } from "../models/model_runtime.ts";
 import { roleWorkspacePath } from "../workspaces/workspace_folder.ts";
@@ -30,7 +31,7 @@ export type RoleCatalog = {
     restore(name: string): Promise<CatalogRole>;
     remove(name: string): Promise<void>;
     addReferenceSource(source: RoleReferenceSource): void;
-    seatFor(name: string, overrides?: SeatOverrides): Seat;
+    seatFor(name: string, overrides?: SeatOverrides, place?: SeatPlace): Seat;
     defaultWorkspaceUsers(path: string): string[];
     checkConfigured(): void;
 };
@@ -205,7 +206,7 @@ export function createRoleCatalog(options: RoleCatalogOptions): RoleCatalog {
         addReferenceSource(source) {
             referenceSources.push(source);
         },
-        seatFor(name, overrides = {}) {
+        seatFor(name, overrides = {}, place = "job") {
             const { shipped: _shipped, changed: _changed, ...role } = requireRole(name);
             checkDefinition(role);
             const defaults = models.defaultChoice();
@@ -215,7 +216,12 @@ export function createRoleCatalog(options: RoleCatalogOptions): RoleCatalog {
                 workspace: overrides.workspace,
             });
             try {
-                return resolveSeat(role, { ...defaults, workspace: roleWorkspacePath(dataDir, name) }, overrides);
+                return resolveSeat(
+                    role,
+                    { ...defaults, workspace: roleWorkspacePath(dataDir, name) },
+                    overrides,
+                    place,
+                );
             } catch (error) {
                 if (!(error instanceof RoleInvalidError)) throw error;
                 throw new RoleRefusedError("invalid", name, error.reason, error.field);
