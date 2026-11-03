@@ -245,7 +245,7 @@ describe("bob conversations", () => {
 
         assert.equal(result.status, 0, result.stderr);
         const line = result.stdout.split("\n").find((candidate) => candidate.startsWith(`${desk.id}  `));
-        assert.match(line ?? "", /^\S+  front desk  /);
+        assert.match(line ?? "", /^\S+ {2}front desk {2}/);
     });
 
     it("lists a conversation of a Done job as closed and refuses send, stop, reset, seat and compact with conflict", async () => {
@@ -262,7 +262,7 @@ describe("bob conversations", () => {
         ]);
 
         const line = listed.stdout.split("\n").find((candidate) => candidate.startsWith(`${id}  `));
-        assert.match(line ?? "", /  closed  /);
+        assert.match(line ?? "", / {2}closed {2}/);
         for (const result of refusals) {
             assert.equal(result.status, 1, result.stderr);
             assert.equal(result.stdout, "");
