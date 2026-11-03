@@ -236,6 +236,11 @@ describe("kill -9 while the front desk runs and a Done job has a running convers
             ((await second.invoke("conversations.get", { conversationId: leadId })) as Listing).status,
             "closed",
         );
+        assert.deepEqual(await second.invoke("tasks.live", { conversationId: leadId }), [], "the lead runs nothing");
+        assert.notEqual(
+            ((await second.invoke("conversations.get", { conversationId: deskId })) as Listing).status,
+            "closed",
+        );
         second.releaseRuns();
         assert.deepEqual(await second.invoke("submissions.wait", { submissionId, timeoutMs: SETTLE_TIMEOUT_MS }), {
             state: "done",
