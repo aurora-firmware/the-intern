@@ -134,7 +134,7 @@ describe("bob follow", () => {
 
     it("stops following and exits 0 when interrupted", async () => {
         const env = await newEnv();
-        await readyDaemon(env);
+        const daemon = await readyDaemon(env);
         const child = follow(env);
         await waitUntilFollowing(daemon, child);
 
