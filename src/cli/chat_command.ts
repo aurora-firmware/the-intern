@@ -5,10 +5,12 @@
  */
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
-import type { Client } from "../client/client.ts";
+import { type Client, createClient } from "../client/client.ts";
+import { nodeTransport } from "../client/node_transport.ts";
+import { assistantText, runTerminalChat } from "./chat_terminal.ts";
 import type { CommandIo, CommandSpec } from "./command_line.ts";
 import { EXIT_CODES } from "./command_line.ts";
-import { withClient } from "./connection.ts";
+import { socketPathFor, withClient } from "./connection.ts";
 import { writeError, writeJson, writeLine } from "./output.ts";
 
 // The most a single submissions.wait lasts (S-002 REQ-012); an unsettled submission is waited on again.
@@ -59,19 +61,6 @@ async function readSince(
     return entries.slice(mark.skip);
 }
 
-function assistantText(entry: Entry): string {
-    const messages = Array.isArray(entry.data) ? (entry.data as { content?: unknown }[]) : [];
-    return messages
-        .flatMap(({ content }) => {
-            if (typeof content === "string") return [content];
-            if (!Array.isArray(content)) return [];
-            return content.flatMap((block: { type?: string; text?: unknown }) =>
-                block.type === "text" && typeof block.text === "string" ? [block.text] : [],
-            );
-        })
-        .join("\n");
-}
-
 async function waitUntilSettled(client: Client, submissionId: string): Promise<void> {
     for (;;) {
         const { state } = (await client.invoke("submissions.wait", { submissionId, timeoutMs: WAIT_MS })) as {
@@ -103,8 +92,9 @@ async function exchange(client: Client, io: CommandIo, conversationId: string, l
     return true;
 }
 
-export async function runPipedChat(client: Client, io: CommandIo, json: boolean): Promise<number> {
+export async function runPipedChat(client: Client, io: CommandIo, json: boolean, reset = false): Promise<number> {
     const { conversationId } = (await client.invoke("desk.get")) as { conversationId: string };
+    if (reset) await client.invoke("conversations.reset", { conversationId });
     const lines = createInterface({ input: io.stdin, crlfDelay: Number.POSITIVE_INFINITY });
     for await (const line of lines) {
         if (line.trim() === "") continue;
@@ -117,8 +107,15 @@ export const chatCommand: CommandSpec = {
     verb: "chat",
     summary: "Talk to the front desk.",
     positionals: [],
-    options: {},
+    options: { reset: { type: "boolean", description: "Empty the front desk's next context before chatting." } },
     isData: true,
     callsService: true,
-    run: (input) => withClient(input, (client) => runPipedChat(client, input.io, input.json)),
+    run: (input) => {
+        const reset = input.options.reset === true;
+        if (input.io.isStdinTerminal) {
+            const connect = () => createClient(nodeTransport({ socketPath: socketPathFor(input) }));
+            return withClient(input, () => runTerminalChat(connect, input.io, { reset, json: input.json }));
+        }
+        return withClient(input, (client) => runPipedChat(client, input.io, input.json, reset));
+    },
 };
