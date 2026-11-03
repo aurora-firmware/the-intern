@@ -1,14 +1,17 @@
 /**
- * `bob follow` (S-005 REQ-007, REQ-015): prints the instance feed until Ctrl-C. It follows through `followFeed`, so it
- * keeps going across daemon restarts and lag. Imports the client library only, never the daemon.
+ * `bob follow` (S-005 REQ-007, REQ-015) prints the instance feed until Ctrl-C. `bob jobs follow` (REQ-006) prints one
+ * job's changes and the activity of its conversations until the job is Done. Both follow through `followFeed`, so they
+ * keep going across daemon restarts and lag. Imports the client library only, never the daemon.
  */
-import { createClient } from "../client/client.ts";
+import { type Client, createClient } from "../client/client.ts";
 import { nodeTransport } from "../client/node_transport.ts";
+import type { Job } from "../jobs/job_store.ts";
 import type { CommandInput, CommandSpec } from "./command_line.ts";
 import { EXIT_CODES } from "./command_line.ts";
-import { socketPathFor } from "./connection.ts";
-import { followFeed } from "./feed_follower.ts";
-import { instanceEventLine } from "./feed_text.ts";
+import { socketPathFor, withClient } from "./connection.ts";
+import { createEntryTracker, followFeed } from "./feed_follower.ts";
+import { conversationEntryLine, doneLine, instanceEventLine, jobEventLine } from "./feed_text.ts";
+import { statusLabel } from "./job_text.ts";
 import { writeError, writeJson, writeLine } from "./output.ts";
 
 async function follow(input: CommandInput): Promise<number> {
@@ -49,4 +52,166 @@ export const followCommand: CommandSpec = {
     isData: true,
     callsService: true,
     run: follow,
+};
+
+type JobSnapshot = { jobs: { number: string }[] };
+type ConversationRef = { id: string; jobId: string | null };
+
+/** What one run of `bob jobs follow` shares between the instance feed and the feeds of the job's conversations. */
+type JobFollow = {
+    input: CommandInput;
+    socketPath: string;
+    job: Job;
+    stop: AbortController;
+    /** Resolves once the job is Done and everything it did has been printed. */
+    finished: PromiseWithResolvers<void>;
+};
+
+function isAbout(delta: Record<string, unknown>, number: string, conversationIds: ReadonlySet<string>): boolean {
+    const created = delta.job as { number?: string } | undefined;
+    return (
+        delta.number === number ||
+        created?.number === number ||
+        (typeof delta.conversationId === "string" && conversationIds.has(delta.conversationId))
+    );
+}
+
+/**
+ * Follows one conversation: each snapshot and delta of its feed triggers a catch-up of the entries not printed yet,
+ * so a restart or a lagging feed loses nothing. Catch-ups of one conversation run one at a time.
+ */
+function followConversation(follow: JobFollow, conversationId: string) {
+    const { input, socketPath, stop } = follow;
+    const tracker = createEntryTracker(conversationId);
+    let tail: Promise<void> = Promise.resolve();
+    let isCatchUpQueued = false;
+    let feedClient: Client | undefined;
+
+    async function printMissed(client: Client): Promise<void> {
+        isCatchUpQueued = false;
+        for (const entry of await tracker.catchUp(client)) {
+            const line = conversationEntryLine(entry);
+            if (line !== undefined) writeLine(input.io, line.replaceAll(/^/gm, `[${conversationId}] `));
+        }
+    }
+
+    function catchUp(client: Client | undefined = feedClient): Promise<void> {
+        if (client === undefined || isCatchUpQueued) return tail;
+        isCatchUpQueued = true;
+        tail = tail.then(() => printMissed(client));
+        return tail;
+    }
+
+    const feed = followFeed({
+        connect: () => createClient(nodeTransport({ socketPath })),
+        scope: { scope: "conversation", conversationId },
+        signal: stop.signal,
+        // The instance feed's follow reports an outage once for all the feeds.
+        onNotice: () => {},
+        async onSnapshot(snapshot, client) {
+            feedClient = client;
+            if (input.json) writeJson(input.io, snapshot);
+            else await catchUp(client);
+        },
+        async onDelta(delta) {
+            if (input.json) writeJson(input.io, delta);
+            else await catchUp();
+        },
+    });
+    return { feed, catchUp };
+}
+
+async function followJob(follow: JobFollow, client: Client): Promise<void> {
+    const { input, socketPath, job, stop, finished } = follow;
+    const conversations = new Map<string, ReturnType<typeof followConversation>>();
+    const feeds: Promise<void>[] = [];
+
+    function followNew(conversation: ConversationRef): void {
+        if (conversation.jobId !== job.id || conversations.has(conversation.id)) return;
+        const followed = followConversation(follow, conversation.id);
+        conversations.set(conversation.id, followed);
+        feeds.push(followed.feed);
+    }
+
+    async function finish(resolutionLine: string | undefined): Promise<void> {
+        if (!input.json) {
+            await Promise.all([...conversations.values()].map((followed) => followed.catchUp(client)));
+            if (resolutionLine !== undefined) writeLine(input.io, resolutionLine);
+        }
+        finished.resolve();
+    }
+
+    async function finishIfDone(): Promise<void> {
+        const current = (await client.invoke("jobs.get", { job: job.id })) as Job;
+        if (current.status === "done" && current.resolution !== undefined)
+            await finish(doneLine(current.number, current.resolution));
+    }
+
+    const instance = followFeed({
+        connect: () => createClient(nodeTransport({ socketPath })),
+        scope: { scope: "instance" },
+        signal: stop.signal,
+        onNotice: (text) => writeError(input.io, text),
+        async onSnapshot(snapshot) {
+            if (input.json) writeJson(input.io, snapshot);
+            const listed = (await client.invoke("conversations.list", { jobId: job.id })) as ConversationRef[];
+            for (const conversation of listed) followNew(conversation);
+            // A Done job is not in the snapshot: it may have ended while the feed was down.
+            if (!(snapshot as JobSnapshot).jobs.some(({ number }) => number === job.number)) await finishIfDone();
+        },
+        async onDelta(delta) {
+            const event = delta as Record<string, unknown> & { type: string; conversationId?: string };
+            if (event.type === "conversation_created" && event.conversationId !== undefined) {
+                const created = (await client.invoke("conversations.get", {
+                    conversationId: event.conversationId,
+                })) as ConversationRef;
+                followNew(created);
+            }
+            if (!isAbout(event, job.number, new Set(conversations.keys()))) return;
+            if (input.json) writeJson(input.io, delta);
+            if (event.type === "job_done") {
+                await finish(input.json ? undefined : jobEventLine(delta));
+                return;
+            }
+            const line = input.json ? undefined : jobEventLine(delta);
+            if (line !== undefined) writeLine(input.io, line);
+        },
+    });
+    await finished.promise;
+    stop.abort();
+    await Promise.all([instance, ...feeds]);
+}
+
+async function jobsFollow(input: CommandInput): Promise<number> {
+    return withClient(input, async (client) => {
+        const { io, json } = input;
+        const job = (await client.invoke("jobs.get", { job: input.positionals[0] })) as Job;
+        if (json) writeJson(io, job);
+        if (job.status === "done" && job.resolution !== undefined) {
+            if (!json) writeLine(io, doneLine(job.number, job.resolution));
+            return EXIT_CODES.ok;
+        }
+        if (!json) writeLine(io, `${job.number} ${statusLabel(job)}`);
+        const stop = new AbortController();
+        const requestStop = () => stop.abort();
+        process.once("SIGINT", requestStop);
+        try {
+            const finished = Promise.withResolvers<void>();
+            await followJob({ input, socketPath: socketPathFor(input), job, stop, finished }, client);
+        } finally {
+            process.off("SIGINT", requestStop);
+        }
+        return EXIT_CODES.ok;
+    });
+}
+
+export const jobsFollowCommand: CommandSpec = {
+    group: "jobs",
+    verb: "follow",
+    summary: "Print a job's changes and its conversations' activity until the job is Done.",
+    positionals: [{ name: "job", required: true }],
+    options: {},
+    isData: true,
+    callsService: true,
+    run: jobsFollow,
 };
