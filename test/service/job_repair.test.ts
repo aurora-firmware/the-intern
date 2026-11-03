@@ -6,6 +6,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type FauxProviderRegistration, fauxAssistantMessage, type Message } from "@earendil-works/pi-ai";
 import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
+import { InboxDoc } from "@earendil-works/pi-durable";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
@@ -14,7 +15,7 @@ import { internalHarness } from "../../src/host/harness_host.ts";
 import { parkConversation } from "../../src/host/invocation.ts";
 import { conversationMetaDoc, createSeatedConversation, readConversationMeta } from "../../src/host/seating.ts";
 import { steerConversation } from "../../src/host/steering.ts";
-import { blockJob, cancelJob, type JobActionDeps } from "../../src/jobs/job_actions.ts";
+import { blockJob, cancelJob, completeJob, type JobActionDeps } from "../../src/jobs/job_actions.ts";
 import { type JobAuthor, reminderRequestId } from "../../src/jobs/job_model.ts";
 import { repairJobs } from "../../src/jobs/job_repair.ts";
 import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_component.ts";
@@ -194,6 +195,8 @@ async function repairsOf(ctx: ServiceContext, jobId: string) {
 }
 
 const rulesOf = (repairs: { new: unknown }[]) => repairs.map((entry) => (entry.new as { rule: number }).rule);
+const didsOf = (repairs: { new: unknown }[]) => repairs.map((entry) => entry.new);
+const RULE_4 = { rule: 4, did: "Closed and aborted the conversations of the Done job" };
 
 async function leadsOf(ctx: ServiceContext, jobId: string): Promise<string[]> {
     const leads: string[] = [];
@@ -202,6 +205,13 @@ async function leadsOf(ctx: ServiceContext, jobId: string): Promise<string[]> {
         if (meta?.jobId === jobId && meta.isLead) leads.push(id);
     }
     return leads;
+}
+
+async function inboxOf(ctx: ServiceContext, conversationId: string): Promise<{ mode: string }[]> {
+    return internalHarness(ctx.host).commit(async (tx) => {
+        const { items } = await tx.doc(InboxDoc, Number(conversationId) as never);
+        return items.map((item) => ({ mode: item.mode }));
+    }, BACKGROUND_CONTEXT);
 }
 
 const isIdle = async (ctx: ServiceContext, id: string) => (await ctx.host.conversationInfo(id))?.busy === false;
@@ -559,8 +569,8 @@ describe("rule 3: input the lead took since the job blocked", () => {
     });
 });
 
-describe("rule 4: a Done job with active conversations", () => {
-    it("aborts a parked lead and writes one repair entry", async () => {
+describe("rule 4: a Done job with a conversation that isn't closed", () => {
+    it("closes and aborts a parked lead and writes one repair entry", async () => {
         const rig = await createRig();
         const first = await rig.boot({ afterWrite: crashAt("job-cancelled") });
         const job = await first.createJob();
@@ -572,14 +582,100 @@ describe("rule 4: a Done job with active conversations", () => {
 
         const second = await rig.boot();
 
-        assert.equal((await readConversationMeta(second.ctx.host, job.leadConversation))?.parked, null);
-        assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [4]);
+        const meta = await readConversationMeta(second.ctx.host, job.leadConversation);
+        assert.equal(meta?.closed, true);
+        assert.equal(meta?.parked, null);
+        assert.deepEqual(didsOf(await repairsOf(second.ctx, job.id)), [RULE_4]);
         const length = (await historyOf(second.ctx, job.id)).length;
         await second.stop();
 
         const third = await rig.boot();
 
         assert.equal((await historyOf(third.ctx, job.id)).length, length);
+    });
+
+    it("closes an idle lead that waits for nothing", async () => {
+        const rig = await createRig();
+        const first = await rig.boot({ afterWrite: crashAt("job-completed") });
+        const job = await first.createJob();
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        await first.ctx.jobStore.updateFields(job.id, { definitionOfDone: "the work is stopped" }, teamMember);
+        await assert.rejects(completeJob(first.deps, job.id, "done", teamMember), /crash at job-completed/);
+        await first.stop();
+
+        const second = await rig.boot();
+
+        assert.equal((await readConversationMeta(second.ctx.host, job.leadConversation))?.closed, true);
+        assert.equal(await isIdle(second.ctx, job.leadConversation), true);
+        assert.deepEqual(didsOf(await repairsOf(second.ctx, job.id)), [RULE_4]);
+        assert.equal(rig.modelInputs.length, 1);
+    });
+});
+
+describe("rule 4: a closed conversation of a Done job with a run or queued input", () => {
+    it("aborts a closed lead whose run was in flight when its mark was committed", async () => {
+        const rig = await createRig();
+        const first = await rig.boot({ afterWrite: crashAt("conversations-closed") });
+        const heldCall = rig.hold();
+        const job = await first.createJob();
+        await waitFor(() => rig.modelInputs.length === 1, "the lead's run to be in its model call");
+        await assert.rejects(cancelJob(first.deps, job.id, "no longer needed", teamMember), /crash at conversations/);
+        assert.equal((await readConversationMeta(first.ctx.host, job.leadConversation))?.closed, true);
+        await first.stop();
+
+        const second = await rig.boot();
+
+        assert.deepEqual(didsOf(await repairsOf(second.ctx, job.id)), [RULE_4]);
+        assert.equal((await readConversationMeta(second.ctx.host, job.leadConversation))?.closed, true);
+        assert.equal(await isIdle(second.ctx, job.leadConversation), true);
+        heldCall.release();
+        assert.equal(rig.modelInputs.length, 1);
+    });
+
+    it("aborts a closed lead with input queued for its run, which no model turn takes", async () => {
+        const rig = await createRig();
+        const first = await rig.boot({ afterWrite: crashAt("conversations-closed") });
+        const heldCall = rig.hold();
+        const job = await first.createJob();
+        await waitFor(() => rig.modelInputs.length === 1, "the lead's run to be in its model call");
+        await steerConversation(first.ctx.host, job.leadConversation, {
+            content: HELD_TEXT,
+            mode: "followUp",
+            actor: teamMember,
+            requestId: "queued-1",
+        });
+        assert.equal(await hasQueuedInput(first.ctx.host, job.leadConversation), true);
+        await assert.rejects(cancelJob(first.deps, job.id, "no longer needed", teamMember), /crash at conversations/);
+        await first.stop();
+
+        const second = await rig.boot();
+
+        assert.deepEqual(didsOf(await repairsOf(second.ctx, job.id)), [RULE_4]);
+        assert.equal(await isIdle(second.ctx, job.leadConversation), true);
+        heldCall.release();
+        await second.stop();
+        assert.equal(rig.modelInputs.length, 1);
+        assert.ok(!rig.modelInputs.flat().includes(HELD_TEXT));
+    });
+
+    it("aborts an idle closed lead whose inbox still holds an input", async () => {
+        const rig = await createRig();
+        const first = await rig.boot({ afterWrite: crashAt("conversations-closed") });
+        const job = await first.createJob();
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        await assert.rejects(cancelJob(first.deps, job.id, "no longer needed", teamMember), /crash at conversations/);
+        // No public path leaves input queued on an idle conversation, so the test places one in its inbox.
+        await internalHarness(first.ctx.host).commit(async (tx) => {
+            const inbox = await tx.doc(InboxDoc, Number(job.leadConversation) as never);
+            inbox.items.push({ id: 99 as never, mode: "followUp", content: HELD_TEXT as never });
+        }, BACKGROUND_CONTEXT);
+        await first.stop();
+
+        const second = await rig.boot();
+
+        assert.deepEqual(didsOf(await repairsOf(second.ctx, job.id)), [RULE_4]);
+        assert.equal(await isIdle(second.ctx, job.leadConversation), true);
+        assert.equal(rig.modelInputs.length, 1);
     });
 });
 
@@ -604,12 +700,14 @@ describe("rules 3 and 4: jobs with nothing to repair", () => {
         assert.equal((await readConversationMeta(second.ctx.host, job.leadConversation))?.held.length, 1);
     });
 
-    it("writes nothing for a Done job whose conversations are idle", async () => {
+    it("writes nothing for a Done job whose conversations are closed, idle and without queued input", async () => {
         const rig = await createRig();
         const first = await rig.boot();
         const job = await first.createJob();
         await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
         await cancelJob(first.deps, job.id, "no longer needed", teamMember);
+        assert.equal((await readConversationMeta(first.ctx.host, job.leadConversation))?.closed, true);
+        assert.equal(await hasQueuedInput(first.ctx.host, job.leadConversation), false);
         await first.stop();
 
         const second = await rig.boot();
@@ -645,7 +743,37 @@ describe("the cost of the repair", () => {
     });
 });
 
-describe("rule 4: conversations that run or await a report", () => {
+describe("rule 4: a closed conversation of a Done job with a queued write", () => {
+    it("writes no repair over two starts for an idle closed lead whose inbox holds only a reset", async () => {
+        const rig = await createRig();
+        const first = await rig.boot();
+        const heldCall = rig.hold();
+        const job = await first.createJob();
+        await waitFor(() => rig.modelInputs.length === 1, "the lead's run to be in its model call");
+        const lead = { conversationId: job.leadConversation };
+        await first.daemon.catalogue.invoke("conversations.reset", lead, webCaller);
+        await first.daemon.catalogue.invoke(
+            "jobs.cancel",
+            { job: job.id, justification: "no longer needed" },
+            webCaller,
+        );
+        heldCall.release();
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        const modes = (await inboxOf(first.ctx, job.leadConversation)).map((item) => item.mode);
+        assert.ok(modes.includes("write"), "the reset is queued");
+        assert.ok(!modes.some((mode) => mode === "steer" || mode === "followUp"), "no input is queued");
+        assert.equal((await readConversationMeta(first.ctx.host, job.leadConversation))?.closed, true);
+        await first.stop();
+
+        for (const start of ["second", "third"]) {
+            const booted = await rig.boot();
+            assert.deepEqual(await repairsOf(booted.ctx, job.id), [], `${start} start`);
+            await booted.stop();
+        }
+    });
+});
+
+describe("rule 4: unclosed conversations that run or await a report", () => {
     it("aborts a lead whose run was in flight", async () => {
         const rig = await createRig();
         const first = await rig.boot({ afterWrite: crashAt("job-cancelled") });
@@ -657,7 +785,8 @@ describe("rule 4: conversations that run or await a report", () => {
 
         const second = await rig.boot();
 
-        assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [4]);
+        assert.deepEqual(didsOf(await repairsOf(second.ctx, job.id)), [RULE_4]);
+        assert.equal((await readConversationMeta(second.ctx.host, job.leadConversation))?.closed, true);
         assert.equal(await isIdle(second.ctx, job.leadConversation), true);
         heldCall.release();
         assert.equal(rig.modelInputs.length, 1);
@@ -677,8 +806,10 @@ describe("rule 4: conversations that run or await a report", () => {
 
         const second = await rig.boot();
 
-        assert.deepEqual((await readConversationMeta(second.ctx.host, job.leadConversation))?.awaiting, []);
-        assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [4]);
+        const meta = await readConversationMeta(second.ctx.host, job.leadConversation);
+        assert.equal(meta?.closed, true);
+        assert.deepEqual(meta?.awaiting, []);
+        assert.deepEqual(didsOf(await repairsOf(second.ctx, job.id)), [RULE_4]);
     });
 });
 
