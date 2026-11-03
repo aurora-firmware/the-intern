@@ -32,6 +32,7 @@ export type FakeScript =
     | "invoke-parked"
     | "invoke-parked-slow-lead"
     | "invoke-nested"
+    | "invoke-and-complete"
     | "gated"
     | "desk-steer";
 
