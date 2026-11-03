@@ -21,10 +21,11 @@ import { createDeskComponent, type DeskCreatePoint } from "../../src/desk/desk_c
 import { onInputSubmitted } from "../../src/host/conversation_control.ts";
 import type { Models, Storage } from "../../src/host/harness_host.ts";
 import { readConversationMeta } from "../../src/host/seating.ts";
-import { blockJob } from "../../src/jobs/job_actions.ts";
+import { blockJob, cancelJob } from "../../src/jobs/job_actions.ts";
 import { createJobsComponent, type JobsComponentOptions, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
 import type { InternModels } from "../../src/models/model_runtime.ts";
+import { createJob, type JobView } from "../../src/service/job_operations.ts";
 import { type Caller, defineOperation, ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
 import type { StartDaemonOptions } from "./daemon_process.ts";
 import { createFakeModel, type FakeReply, type FakeTranscript } from "./fake_model.ts";
@@ -249,6 +250,23 @@ function blockJobOperation(jobs: { options: JobsComponentOptions }) {
     });
 }
 
+/** Creates a job that is cancelled before its lead conversation exists, which the service never does on its own. */
+function createJobCancelledBeforeLeadOperation(jobs: { options: JobsComponentOptions }) {
+    return defineOperation<ServiceContext, { text: string }, JobView>({
+        name: "test.createJobCancelledBeforeLead",
+        kind: "control",
+        parse: (raw) => raw as { text: string },
+        run(ctx, { text }, caller) {
+            const cancelAtCreation: NonNullable<JobsComponentOptions["afterWrite"]> = async (point, jobId) => {
+                if (point !== "job-created") return;
+                const author = { kind: "team_member", wayIn: "command line" } as const;
+                await cancelJob({ ctx, options: jobs.options }, jobId, "Cancelled before its lead", author);
+            };
+            return createJob(ctx, { ...jobs.options, afterWrite: cancelAtCreation }, { text }, caller);
+        },
+    });
+}
+
 /** Lists what each conversation of a job still waits for, which no service operation shows. */
 function waitingOperation() {
     return defineOperation<ServiceContext, { job: string }, { id: string; awaiting: string[]; held: number }[]>({
@@ -339,6 +357,7 @@ async function main(): Promise<void> {
             ...jobs.operations,
             ...desk.operations,
             blockJobOperation(jobs),
+            createJobCancelledBeforeLeadOperation(jobs),
             waitingOperation(),
             ...createTestOperations({
                 storageSwitch,

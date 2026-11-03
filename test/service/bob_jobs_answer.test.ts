@@ -98,4 +98,30 @@ describe("bob jobs answer", () => {
         assert.deepEqual(Object.keys(printed).sort(), ["submissionId"]);
         assert.equal(typeof printed.submissionId, "string");
     });
+
+    it("prints conflict and the service's message on standard error and exits 1 for a Done job", async () => {
+        const fixture = await readyDaemon();
+        const job = await startedJob(fixture.daemon);
+        await fixture.daemon.invoke("jobs.cancel", { job: job.id, justification: "Not needed" });
+
+        const result = await bob(fixture, ["jobs", "answer", job.number, ANSWER_TEXT]);
+
+        assert.equal(result.status, 1);
+        assert.equal(result.stdout, "");
+        assert.match(result.stderr, /^conflict: .+\n$/);
+    });
+
+    it("submits nothing and exits 1 saying the job has no lead conversation when it was cancelled before its lead", async () => {
+        const fixture = await readyDaemon();
+        const job = (await fixture.daemon.invoke("test.createJobCancelledBeforeLead", {
+            text: "Pick the database",
+        })) as JobView;
+        assert.equal(job.leadConversation, undefined);
+
+        const result = await bob(fixture, ["jobs", "answer", job.number, ANSWER_TEXT]);
+
+        assert.equal(result.status, 1);
+        assert.equal(result.stdout, "");
+        assert.match(result.stderr, /no lead conversation/);
+    });
 });
