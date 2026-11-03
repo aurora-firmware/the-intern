@@ -38,7 +38,10 @@ export type StartDaemonOptions = {
     hermetic: HermeticEnv;
     workerThreads?: number;
     script?: FakeScript;
-    /** How long a slow answer of the `slow`, `handoff-clean`, `invoke-parked`, `invoke-parked-slow-lead` and `desk-steer` scripts is held back. */
+    /**
+     * How long a slow answer of the `slow`, `handoff-clean`, `invoke-parked`, `invoke-parked-slow-lead` and
+     * `desk-steer` scripts is held back.
+     */
     delayMs?: number;
     realModels?: boolean;
     /** Live tests only: the model new conversations use with `realModels`, instead of the pi agent folder's default. */
@@ -51,6 +54,11 @@ export type StartDaemonOptions = {
     jobCrashAt?: WritePoint;
     /** The child kills itself with `SIGKILL` just before, or just after, the commit that creates the front desk. */
     deskCrashAt?: DeskCreatePoint;
+    /**
+     * The child kills itself with `SIGKILL` as the first steer of an agent (request id `steer:...`) has been placed
+     * and its caller is still waiting, so the kill lands inside the steering tool call, before its result is saved.
+     */
+    killOnSteer?: boolean;
 };
 
 export type DaemonProcess = {

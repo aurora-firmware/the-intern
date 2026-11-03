@@ -41,7 +41,11 @@ async function hermetic(): Promise<HermeticEnv> {
 function start(
     env: HermeticEnv,
     script: FakeScript,
-    options: { deskCrashAt?: "before-commit" | "after-commit"; jobCrashAt?: "job-completed" } = {},
+    options: {
+        deskCrashAt?: "before-commit" | "after-commit";
+        jobCrashAt?: "job-completed";
+        killOnSteer?: boolean;
+    } = {},
 ): DaemonProcess {
     const daemon = startDaemon({ hermetic: env, script, delayMs: SLOW_DELAY_MS, turnEndRule: false, ...options });
     daemons.push(daemon);
@@ -165,15 +169,12 @@ describe("kill -9 during the front desk's send_to_conversation call", () => {
         timeout: TEST_TIMEOUT_MS,
     }, async () => {
         const env = await hermetic();
-        const first = start(env, "desk-steer");
+        const first = start(env, "desk-steer", { killOnSteer: true });
         await first.ready;
         const leadId = await createJob(first);
         const { deskId, submissionId } = await submitToDesk(first, `steer ${leadId}`);
-        await untilTrue(
-            async () => (await countOf(first, leadId, ofKind("intern.steer", LEAD_MESSAGE))) > 0,
-            "the steer to reach the lead",
-        );
-        await crash(first);
+        // The child kills itself once the steer is placed, while the desk's tool call is still waiting.
+        await untilKilled(first);
 
         const second = start(env, "desk-steer");
         await second.ready;

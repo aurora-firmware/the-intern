@@ -19,6 +19,7 @@ import { type DaemonComponent, runDaemon, type ServiceContext } from "../../src/
 import { createLogger } from "../../src/daemon/logger.ts";
 import { createDeskComponent, type DeskCreatePoint } from "../../src/desk/desk_component.ts";
 import type { Models, Storage } from "../../src/host/harness_host.ts";
+import { onInputSubmitted } from "../../src/host/conversation_control.ts";
 import { readConversationMeta } from "../../src/host/seating.ts";
 import { blockJob } from "../../src/jobs/job_actions.ts";
 import { createJobsComponent, type JobsComponentOptions, type WritePoint } from "../../src/jobs/jobs_component.ts";
@@ -94,8 +95,8 @@ function replyFor(script: Script, transcript: FakeTranscript): FakeReply {
 }
 
 /**
- * Holds back the answers a kill is meant to interrupt: all of `slow`, the answer after the tool of `desk-steer`, the lead's answers to reports for
- * `invoke-parked-slow-lead`, and the answers after the call of the others.
+ * Holds back the answers a kill is meant to interrupt: all of `slow`, the answer after the tool of `desk-steer`, the
+ * lead's answers to reports for `invoke-parked-slow-lead`, and the answers after the call of the others.
  */
 function delayFor(switches: Switches, transcript: FakeTranscript): number {
     const delayMs = switches.delayMs ?? DEFAULT_SLOW_DELAY_MS;
@@ -181,6 +182,20 @@ function failingOnDemand(storage: Storage, storageSwitch: StorageSwitch): Storag
     });
 }
 
+/** Kills the process once an agent's steer is placed, and never lets the steering call return. */
+function killOnSteerComponent(): DaemonComponent {
+    return {
+        name: "kill-on-steer",
+        async start(ctx: ServiceContext) {
+            onInputSubmitted(ctx.host, (input) => {
+                if (!input.requestId.startsWith("steer:")) return undefined;
+                process.kill(process.pid, "SIGKILL");
+                return new Promise<void>(() => undefined);
+            });
+        },
+    };
+}
+
 function createComponents(switches: Switches, release: Promise<void>): DaemonComponent[] {
     const components: DaemonComponent[] = [];
     if (switches.script === "bash-sleep") {
@@ -196,6 +211,7 @@ function createComponents(switches: Switches, release: Promise<void>): DaemonCom
             },
         });
     }
+    if (switches.killOnSteer) components.push(killOnSteerComponent());
     if (switches.holdStart) components.push({ name: "hold-start", start: () => release });
     return components;
 }
