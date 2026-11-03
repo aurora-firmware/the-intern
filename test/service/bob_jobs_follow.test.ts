@@ -106,6 +106,7 @@ describe("bob jobs follow", () => {
             "calls invoke",
             "report from conversation",
             "calls complete_job",
+            `${job.number} In progress -> Done`,
             `${job.number} done (completed)`,
         ];
         const positions = positionsOf(output, markers);
@@ -134,7 +135,20 @@ describe("bob jobs follow", () => {
 
         assert.equal(await child.exited, EXIT_OK);
         assert.ok(child.stdout().includes(`${job.number} done (cancelled): ${JUSTIFICATION}`), child.stdout());
+        assert.equal(child.stdout().split(`${job.number} In progress -> Done`).length, 2, "each change once");
         assert.ok(!child.stdout().includes("other reason"), "the other job's change is not printed");
+    });
+
+    it("stops following and exits 0 when interrupted", async () => {
+        const env = await newEnv();
+        const daemon = await readyDaemon(env, "gated");
+        const job = await createJob(daemon);
+        const child = jobsFollow(env, job.number);
+        await child.waitFor("stdout", "user:");
+
+        child.signal("SIGINT");
+
+        assert.equal(await child.exited, EXIT_OK);
     });
 
     it("prints the resolution and exits 0 for a job that is already Done", { timeout: TEST_TIMEOUT_MS }, async () => {

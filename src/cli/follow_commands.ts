@@ -5,6 +5,7 @@
  */
 import { type Client, createClient } from "../client/client.ts";
 import { nodeTransport } from "../client/node_transport.ts";
+import type { JobStatus } from "../jobs/job_model.ts";
 import type { Job } from "../jobs/job_store.ts";
 import type { CommandInput, CommandSpec } from "./command_line.ts";
 import { EXIT_CODES } from "./command_line.ts";
@@ -53,6 +54,8 @@ export const followCommand: CommandSpec = {
     callsService: true,
     run: follow,
 };
+
+const HISTORY_PAGE_SIZE = 500;
 
 type JobSnapshot = { jobs: { number: string }[] };
 type ConversationRef = { id: string; jobId: string | null };
@@ -121,8 +124,36 @@ function followConversation(follow: JobFollow, conversationId: string) {
     return { feed, catchUp };
 }
 
+type StatusChange = { old: JobStatus; new: JobStatus };
+type HistoryPage = { entries: { field: string; old: JobStatus; new: JobStatus }[]; cursor?: string };
+
+/** Every status change in the job's history, oldest first. */
+async function statusChangesOf(client: Client, job: string): Promise<StatusChange[]> {
+    const changes: StatusChange[] = [];
+    let cursor: string | undefined;
+    do {
+        const page = (await client.invoke("jobs.history.list", {
+            job,
+            limit: HISTORY_PAGE_SIZE,
+            ...(cursor !== undefined && { cursor }),
+        })) as HistoryPage;
+        for (const entry of page.entries)
+            if (entry.field === "status") changes.push({ old: entry.old, new: entry.new });
+        cursor = page.cursor;
+    } while (cursor !== undefined);
+    return changes;
+}
+
+/** How a job that is Done reads: with its resolution when it has one. */
+function endLine(job: Job): string {
+    return job.resolution === undefined ? `${job.number} done` : doneLine(job.number, job.resolution);
+}
+
 async function followJob(follow: JobFollow, client: Client): Promise<void> {
     const { input, socketPath, job, stop, finished } = follow;
+    stop.signal.addEventListener("abort", () => finished.resolve(), { once: true });
+    const knownChangeCount = (await statusChangesOf(client, job.id)).length;
+    const printedChanges: StatusChange[] = [];
     const conversations = new Map<string, ReturnType<typeof followConversation>>();
     const feeds: Promise<void>[] = [];
 
@@ -133,9 +164,26 @@ async function followJob(follow: JobFollow, client: Client): Promise<void> {
         feeds.push(followed.feed);
     }
 
+    // The feed has no replay, so a change made while it was down is read from the history; the changes printed
+    // live are matched to the history in order and skipped.
+    async function printMissedChanges(): Promise<void> {
+        const changes = (await statusChangesOf(client, job.id)).slice(knownChangeCount);
+        let printedCount = 0;
+        for (const change of changes) {
+            const printed = printedChanges[printedCount];
+            if (printed?.old === change.old && printed.new === change.new) {
+                printedCount += 1;
+                continue;
+            }
+            const line = jobEventLine({ type: "job_status_changed", number: job.number, ...change });
+            if (line !== undefined) writeLine(input.io, line);
+        }
+    }
+
     async function finish(resolutionLine: string | undefined): Promise<void> {
         if (!input.json) {
             await Promise.all([...conversations.values()].map((followed) => followed.catchUp(client)));
+            await printMissedChanges();
             if (resolutionLine !== undefined) writeLine(input.io, resolutionLine);
         }
         finished.resolve();
@@ -143,8 +191,7 @@ async function followJob(follow: JobFollow, client: Client): Promise<void> {
 
     async function finishIfDone(): Promise<void> {
         const current = (await client.invoke("jobs.get", { job: job.id })) as Job;
-        if (current.status === "done" && current.resolution !== undefined)
-            await finish(doneLine(current.number, current.resolution));
+        if (current.status === "done") await finish(endLine(current));
     }
 
     const instance = followFeed({
@@ -173,6 +220,7 @@ async function followJob(follow: JobFollow, client: Client): Promise<void> {
                 await finish(input.json ? undefined : jobEventLine(delta));
                 return;
             }
+            if (event.type === "job_status_changed") printedChanges.push(event as unknown as StatusChange);
             const line = input.json ? undefined : jobEventLine(delta);
             if (line !== undefined) writeLine(input.io, line);
         },
@@ -187,8 +235,8 @@ async function jobsFollow(input: CommandInput): Promise<number> {
         const { io, json } = input;
         const job = (await client.invoke("jobs.get", { job: input.positionals[0] })) as Job;
         if (json) writeJson(io, job);
-        if (job.status === "done" && job.resolution !== undefined) {
-            if (!json) writeLine(io, doneLine(job.number, job.resolution));
+        if (job.status === "done") {
+            if (!json) writeLine(io, endLine(job));
             return EXIT_CODES.ok;
         }
         if (!json) writeLine(io, `${job.number} ${statusLabel(job)}`);
