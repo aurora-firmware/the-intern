@@ -8,7 +8,7 @@ import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { ServiceContext } from "../daemon/daemon.ts";
 import { submitInput } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
-import { ConversationClosedError, JobDoneError } from "../host/job_section.ts";
+import { ConversationClosedError, inJobSection, JobDoneError, refuseIfJobDone } from "../host/job_section.ts";
 import { createSeatedConversation, type Origin, readConversationMeta, type SeatActor } from "../host/seating.ts";
 import { type JobAuthor, type JobOrigin, letterFor } from "../jobs/job_model.ts";
 import { type Job, JobNotFoundError, JobRefusedError } from "../jobs/job_store.ts";
@@ -76,7 +76,8 @@ export const leadStartRequestId = (jobId: string): string => `lead:${jobId}`;
 /**
  * Seats the job's lead conversation and submits its first input (S-002 REQ-013). The job id is the idempotency key, so
  * a repeat returns the conversation, and the request id derived from it makes the first input go in once. The two
- * are separate commits, and `afterWrite` is awaited between them.
+ * are separate commits, and `afterWrite` is awaited between them. Either is refused when the job is Done: the creation
+ * with `JobDoneError`, the first input with `ConversationClosedError`.
  */
 export async function startLeadConversation(
     ctx: ServiceContext,
@@ -93,12 +94,17 @@ export async function startLeadConversation(
         if (error instanceof RoleRefusedError) throw new ServiceError(refusalCode(error), error.message);
         throw error;
     }
-    const result = await createSeatedConversation(host, {
-        scope: "job.lead",
-        key: jobId,
-        job: { jobId, isLead: true, origin: origin as LeadOrigin, depth: 0 },
-        seat,
-        actor,
+    // The Done check and the creation share the job's section, so the job abort can't list the job's conversations
+    // between them. `afterWrite` runs after the section is released: a cancel there enters the section itself.
+    const result = await inJobSection(host, jobId, async () => {
+        await refuseIfJobDone(host, jobId);
+        return createSeatedConversation(host, {
+            scope: "job.lead",
+            key: jobId,
+            job: { jobId, isLead: true, origin: origin as LeadOrigin, depth: 0 },
+            seat,
+            actor,
+        });
     });
     await afterWrite?.("lead-created", jobId);
     // Every call submits: pi-durable deduplicates the request id, so a repeat repairs a crash before this point.
