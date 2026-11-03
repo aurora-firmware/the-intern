@@ -6,6 +6,8 @@
  * reach it over `bob.sock` too.
  */
 import { spawn } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { Type } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
@@ -15,6 +17,7 @@ import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
+import { createDeskComponent } from "../../src/desk/desk_component.ts";
 import type { Models, Storage } from "../../src/host/harness_host.ts";
 import { readConversationMeta } from "../../src/host/seating.ts";
 import { blockJob } from "../../src/jobs/job_actions.ts";
@@ -138,6 +141,20 @@ function modelFor(ctx: ServiceContext, fakeModelId: string | undefined, requeste
     return defaultModel;
 }
 
+/**
+ * The front desk is created at startup and needs a model, so a daemon on the fake model gets the pi agent folder's
+ * default from it, unless the test wrote its own settings before starting.
+ */
+async function writeFakeModelDefault(fake: ReturnType<typeof createFakeModel>): Promise<void> {
+    const { provider, id } = fake.getModel();
+    const settings = JSON.stringify({ defaultProvider: provider, defaultModel: id });
+    try {
+        await writeFile(join(process.env.PI_CODING_AGENT_DIR ?? "", "settings.json"), settings, { flag: "wx" });
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+}
+
 function failingOnDemand(storage: Storage, storageSwitch: StorageSwitch): Storage {
     return new Proxy(storage, {
         get(target, property, receiver) {
@@ -248,6 +265,7 @@ async function main(): Promise<void> {
     const storageSwitch: StorageSwitch = { isFailing: false };
     const hold = Promise.withResolvers<void>();
 
+    if (fake) await writeFakeModelDefault(fake);
     const logger = createLogger({ verbose: false });
     const agents = await createAgentsComponent({ logger });
     const jobs = await createJobsComponent({
@@ -256,22 +274,25 @@ async function main(): Promise<void> {
         ...(switches.turnEndRule !== undefined && { turnEndRule: switches.turnEndRule }),
         ...(switches.jobCrashAt !== undefined && { afterWrite: killingAt(switches.jobCrashAt) }),
     });
+    const desk = await createDeskComponent({ agents, jobs, logger });
     const daemon = runDaemon({
         flags: parseFlags(process.argv.slice(3)),
         env: process.env,
         homeDir: process.env.HOME ?? "",
         logger,
         sections: agents.sections,
-        // The jobs component and the local socket follow the agents component, as in `src/cli/bob.ts`.
+        // The jobs and desk components and the local socket follow the agents component, as in `src/cli/bob.ts`.
         components: [
             agents.component,
             jobs.component,
+            desk.component,
             createLocalSocketComponent(),
             ...createComponents(switches, hold.promise),
         ],
         operations: [
             ...agents.operations,
             ...jobs.operations,
+            ...desk.operations,
             blockJobOperation(jobs),
             waitingOperation(),
             ...createTestOperations({

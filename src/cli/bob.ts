@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { createAgentsComponent } from "../agents/agents_component.ts";
 import { runDaemon } from "../daemon/daemon.ts";
 import { createLogger, type Logger } from "../daemon/logger.ts";
+import { createDeskComponent } from "../desk/desk_component.ts";
 import { createJobsComponent } from "../jobs/jobs_component.ts";
 import { createLocalSocketComponent } from "../listeners/local_socket.ts";
 import { createNetworkListenerComponent } from "../listeners/network_listener.ts";
@@ -59,6 +60,7 @@ async function serve(args: readonly string[]): Promise<number> {
     exitOnUncaughtFailure(logger);
     const agents = await createAgentsComponent({ logger });
     const jobs = await createJobsComponent({ agents, logger });
+    const desk = await createDeskComponent({ agents, jobs, logger });
     const daemon = runDaemon({
         flags: {
             ...(flags["config-dir"] !== undefined && { configDir: flags["config-dir"] }),
@@ -72,8 +74,14 @@ async function serve(args: readonly string[]): Promise<number> {
         logger,
         sections: [...agents.sections, networkSection],
         // The listeners follow the agents component, so they open once the agents are ready (S-003 REQ-001).
-        components: [agents.component, jobs.component, createLocalSocketComponent(), createNetworkListenerComponent()],
-        operations: [...agents.operations, ...jobs.operations],
+        components: [
+            agents.component,
+            jobs.component,
+            desk.component,
+            createLocalSocketComponent(),
+            createNetworkListenerComponent(),
+        ],
+        operations: [...agents.operations, ...jobs.operations, ...desk.operations],
     });
 
     // stop() of a running shutdown waits for it, so a repeated signal needs no handling of its own.
