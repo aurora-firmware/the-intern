@@ -34,6 +34,8 @@ Prerequisites:
   `mise.toml` pins Node, uv and Python. Any other way to get the same versions works as well.
 - The `ai-team` CLI drives the development process. `mise run setup:ai-team` installs the pinned release into
   `.tmp/tools`. A git-ignored `mise.local.toml` may override `AI_TEAM_REF` to try another version.
+- util-linux `script`, for the tests of `bob chat` on a terminal: it gives them a pseudo-terminal. Where it is missing
+  those tests are skipped, and they fail when the environment variable `CI` is set.
 - The pi CLI logged in to a model provider, only for manual runs against a real model. The test suite never calls a
   real model.
 
