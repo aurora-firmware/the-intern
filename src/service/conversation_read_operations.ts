@@ -20,6 +20,7 @@ export type ConversationListing = {
     id: string;
     jobId: string | null;
     isLead: boolean;
+    isFrontDesk: boolean;
     seat: SeatSummary | null;
     origin: Origin | null;
     status: ConversationStatus;
@@ -63,6 +64,7 @@ async function listingOf(
         id: info.id,
         jobId: meta?.jobId ?? null,
         isLead: meta?.isLead ?? false,
+        isFrontDesk: meta?.origin.kind === "front_desk",
         seat: meta === undefined ? null : summarizeSeat(meta.seat),
         origin: meta?.origin ?? null,
         status,
