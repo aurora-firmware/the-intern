@@ -13,8 +13,8 @@ author: planner
 
 The Intern is an agent that works for a team. It runs unattended on a machine the team keeps running, takes jobs from
 anyone who can reach it, and sees each one through to the end: it first defines the job properly and works out what it
-needs, asks when information is missing, then does the work and checks the result before closing the job. It exists so
-that a team can hand off work, from one-off objectives to recurring housekeeping, and trust it to get done without
+needs, asks when information is missing, then does the work and checks the result before completing the job. It exists
+so that a team can hand off work, from one-off objectives to recurring housekeeping, and trust it to get done without
 anyone driving it step by step.
 
 ## Users
@@ -45,7 +45,7 @@ anyone driving it step by step.
 1. **Hand over an objective.** A team member gives The Intern a job, such as "find out why the nightly build got
    slower and fix it". It writes down the goal, what it needs and when the job counts as done, asks back only if the
    job is unclear, then works on it for as long as it takes, splitting it among specialist agents where that helps.
-   It checks the result against its own definition of done and closes the job with the evidence. Work it notices
+   It checks the result against its own definition of done and completes the job with the evidence. Work it notices
    along the way becomes new jobs. Removes: 1, 2.
 2. **Answer a blocked job.** When a job lacks information or a decision, The Intern marks it blocked, says what it
    needs, and carries on with other jobs. The team member answers from the web interface, the command line or by
@@ -125,7 +125,7 @@ person's access.
 
 - **Name:** Jobs.
 - **Responsibility:** The job record and the life of a job: where it came from, its definition (goal, needs, plan and
-  definition of done), its status, its open questions, the evidence it closed with, and the follow-up jobs it
+  definition of done), its status, its open questions, the evidence it completed with, and the follow-up jobs it
   created. It defines the steps every job goes through (define, get what is missing, act, verify), when a job counts
   as blocked and how an answer resumes it, keeps the history of every job (what its agents did) in the job record,
   and exports and imports the whole saved state, job record included, for backups, moving to another computer and
@@ -353,3 +353,4 @@ person's access.
 | 2026-11-02 | The job record, history included, is kept in tables of its own that don't depend on the agent runtime's stored format; export and import copy the whole saved state, job record included, for backups, moving to another computer and upgrades, and a version opens a copy only if it can read it (Solution overview, Jobs). The last project exclusion became converting saved state between versions: the job record keeps its own format, which each version migrates forward, and export and import copy, they don't convert. Installation and service setup: the upgrade question asks how an upgrade keeps a copy of the saved state from before the new version opens it and how it goes back. Version 0.5. | S-004 architecture consistency review; product owner decisions 2026-11-02. Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None; S-000's bootstrap plan isn't broken down yet, and the S-004 breakdown updates `docs/system_overview.html` |
 | 2026-11-03 | Agents and roles also owns the front desk, the one standing conversation that assists team members, belongs to no job, turns their requests into jobs, tells them what is being worked on and passes their answers and steering on without doing the work; team members chat with it from the Command line and the Web interface. Version 0.6. | Product owner decisions of the front desk brainstorm, 2026-11-03, which partly reverse the 2026-10-30 removal of interactive chat; S-001 v0.8, S-002 v0.10 and S-004 v0.6 specify it. | None; S-000's bootstrap plan has no work for it, and `docs/system_overview.html` is updated with this amendment |
 | 2026-11-03 | Command line, Boundary: every command calls an operation of the Intern service, except starting the service and S-004's import step, which run while no daemon serves the instance. Still version 0.6. | Architecture consistency review of the S-005 draft, finding F1: `bob serve` and `bob import` call no operation. | None; S-005 isn't broken down yet |
+| 2026-11-03 | Wording only, no change of scope: the lead completes a job rather than closes it (Purpose, use case 1, Jobs), because a closed conversation is now the conversation of a Done job (S-001 REQ-026). Version stays 0.6. | Architecture consistency review of the closed-conversation amendment, finding F5. | None |

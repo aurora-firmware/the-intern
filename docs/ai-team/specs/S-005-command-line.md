@@ -367,7 +367,8 @@ origin letter `C`, because the local socket records way in `command line` (S-003
 `conversations.submit`, so the input is recorded with way in `command line`, and print that it was sent to the job's
 lead. Input to the lead of a Blocked job resumes it (S-001 REQ-020; S-004 REQ-006). A Done job's lead
 conversation is closed, so the service refuses the input `conflict` (S-001 REQ-026); an unknown job is refused
-`not_found`. Either way the command exits 1 and prints the service's error.
+`not_found`. Either way the command exits 1 and prints the service's error. When `jobs.get` returns no
+`leadConversation`, the command submits nothing, prints that the job has no lead conversation and exits 1.
 
 #### AC-005.1 — An answer resumes a Blocked job
 
@@ -375,6 +376,15 @@ conversation is closed, so the service refuses the input `conflict` (S-001 REQ-0
 - **When:** a team member runs `bob jobs answer W-3 "use the staging database"`
 - **Then:** it prints `sent to W-3's lead` and exits 0, the lead's transcript holds the text with way in
   `command line`, and `W-3` is In progress
+
+**Verification:** test — a service test running `bob` as a child process on the fake model.
+
+#### AC-005.2 — An answer the job can't take
+
+- **Given:** a completed job, a job cancelled before its lead started, and a job ID no job has
+- **When:** a team member runs `bob jobs answer` with each
+- **Then:** each exits 1: the completed job with `conflict`, the cancelled one with the message that the job has no
+  lead conversation, and the unknown one with `not_found`; no input is submitted
 
 **Verification:** test — a service test running `bob` as a child process on the fake model.
 
@@ -522,6 +532,14 @@ steered or held. A closed conversation (S-001 REQ-026) lists with status `closed
 - **When:** a team member runs `bob conversations show` on the lead conversation, also with `--json`
 - **Then:** the output lists the three invoked conversations under their invokers, and the JSON holds the answer of
   `conversations.invocations` unchanged
+
+**Verification:** test — a service test running `bob` as a child process on the fake model.
+
+#### AC-011.4 — A closed conversation
+
+- **Given:** a conversation of a Done job
+- **When:** a team member runs `bob conversations list`, then `send`, `stop`, `reset`, `seat` and `compact` on it
+- **Then:** the list shows it with status `closed`, and each of the other commands exits 1 with `conflict`
 
 **Verification:** test — a service test running `bob` as a child process on the fake model.
 
@@ -742,4 +760,5 @@ None.
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| 2026-11-03 | v0.2. REQ-005: a Done job's lead conversation is closed (S-001 v0.9 REQ-026), so `bob jobs answer` is refused `conflict`, and an unknown job `not_found`. REQ-011: a closed conversation lists as `closed`, and `send`, `stop`, `reset`, `seat` and `compact` on it exit 1. Clarifications, no change of scope: AC-014.1, the cases that run `bob` with no command or an unknown one expect the top-level usage (REQ-001); Interfaces, a `show` command that calls several operations prints one JSON object keyed by operation name; Design Principles, a command calls the operations Interfaces names, not "one or two". | Product owner decision of 2026-11-03 on T-166. Architect ruling on T-162 (AC-014.1). Reviews of T-165 (the keyed JSON) and of the plan (the number of operations). | T-166; T-162, T-165 (built as clarified) |
+| 2026-11-03 | v0.2. Clarifications, no change of scope: AC-014.1, the cases that run `bob` with no command or an unknown one expect the top-level usage (REQ-001); Interfaces, a `show` command that calls several operations prints one JSON object keyed by operation name; Design Principles, a command calls the operations Interfaces names, not "one or two". | Architect ruling on T-162 (AC-014.1). Reviews of T-165 (the keyed JSON) and of the plan (the number of operations). | T-162, T-165 (built as clarified) |
+| 2026-11-03 | v0.2. REQ-005: a Done job's lead conversation is closed (S-001 v0.9 REQ-026), so `bob jobs answer` is refused `conflict`, and an unknown job `not_found`. REQ-011: a closed conversation lists as `closed`, and `send`, `stop`, `reset`, `seat` and `compact` on it exit 1. Architecture consistency review (finding F10), same version: REQ-005, when `jobs.get` returns no `leadConversation` the command submits nothing, prints that the job has no lead conversation and exits 1; new AC-005.2 for a completed job, a job cancelled before its lead started and an unknown job; new AC-011.4 for a closed conversation. | Product owner decision of 2026-11-03 on T-166. Architecture consistency review of the closed-conversation amendment, 2026-11-03. | T-166, T-167 |
