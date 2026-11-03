@@ -7,7 +7,9 @@ import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import type { SeatSummary } from "../host/seating.ts";
 import type { JobsComponent } from "../jobs/jobs_component.ts";
+import { createJob } from "../service/job_operations.ts";
 import { defineOperation, type Operation, ServiceError } from "../service/operations.ts";
+import { createDeskToolsExtension } from "./desk_tools_extension.ts";
 import { ensureFrontDesk, readFrontDeskId } from "./front_desk.ts";
 
 export type DeskComponent = {
@@ -23,10 +25,26 @@ export async function createDeskComponent(options: {
     jobs: JobsComponent;
     logger: Logger;
 }): Promise<DeskComponent> {
+    let context: ServiceContext | undefined;
+    // The tools are built before the host opens, so they reach the service context once startup has bound it.
+    const requireContext = (): ServiceContext => {
+        if (context === undefined) throw new Error("The service context exists only after startup step 4");
+        return context;
+    };
+    const deskTools = createDeskToolsExtension({
+        host: () => requireContext().host,
+        jobStore: () => requireContext().jobStore,
+        createJob: (request, caller) => createJob(requireContext(), options.jobs.options, request, caller),
+    });
     const component: DaemonComponent = {
         name: "desk",
+        optInExtensions: [deskTools],
         async ensureWorkspaces(ctx) {
+            context = ctx;
             await ensureFrontDesk(ctx.host, options.agents.runtime().catalog);
+        },
+        async stop() {
+            context = undefined;
         },
     };
 
