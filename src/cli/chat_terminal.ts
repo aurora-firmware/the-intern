@@ -7,7 +7,7 @@
 import { randomUUID } from "node:crypto";
 import { clearLine, createInterface, cursorTo } from "node:readline";
 import type { Writable } from "node:stream";
-import type { Client } from "../client/client.ts";
+import { type Client, ClientError, UnreachableError } from "../client/client.ts";
 import type { CommandIo } from "./command_line.ts";
 import { EXIT_CODES } from "./command_line.ts";
 import { type AttributedEntryLike, createEntryTracker, followFeed } from "./feed_follower.ts";
@@ -63,6 +63,11 @@ async function readHistory(client: Client, conversationId: string, io: CommandIo
     return entries;
 }
 
+/** A failure the follower recovers from by subscribing again: the daemon is gone, or starting or stopping. */
+function isReconnectable(error: unknown): boolean {
+    return error instanceof UnreachableError || (error instanceof ClientError && error.code === "unavailable");
+}
+
 async function waitUntilSettled(client: Client, submissionId: string): Promise<void> {
     for (;;) {
         const { state } = (await client.invoke("submissions.wait", { submissionId, timeoutMs: WAIT_MS })) as {
@@ -113,7 +118,14 @@ export async function runTerminalChat(
 
     async function printMissed(from: Client): Promise<void> {
         isCatchUpQueued = false;
-        const missed = await tracker.catchUp(from);
+        let missed: AttributedEntryLike[];
+        try {
+            missed = await tracker.catchUp(from);
+        } catch (error) {
+            // The daemon went away mid-read; the follower's next snapshot catches up again.
+            if (isReconnectable(error)) return;
+            throw error;
+        }
         const answers = missed.filter((entry) => entry.kind === "pi.assistant").map(assistantText);
         if (answers.every((answer) => answer === "")) return;
         clearLine(io.stdout as Writable, 0);
