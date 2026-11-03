@@ -22,7 +22,7 @@ import { readFrontDeskId } from "../desk/front_desk.ts";
 import { HostNotFoundError } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { createInvokedConversations, InvocationDepthError, type InvocationRequest } from "../host/invocation.ts";
-import { ConversationClosedError, isConversationClosed } from "../host/job_section.ts";
+import { ConversationClosedError, inOpenConversation, isConversationClosed } from "../host/job_section.ts";
 import {
     type ContextMode,
     type ParkedState,
@@ -119,21 +119,49 @@ async function queueCleanContext(tx: Tx, conversationId: ToolExecutionApi["conve
     items.push({ id: input.id, mode: "followUp", content: note } as never);
 }
 
-async function compactWithNote(api: ToolExecutionApi, change: SeatChange, context: never): Promise<string | undefined> {
-    const taskId = await api.commit(async (tx) => {
-        await seatWrites(tx, String(api.conversationId), change);
-        const input: CompactionInput = {
-            reason: "manual",
-            ...(change.note !== undefined && { instructions: change.note }),
-        };
-        return tx.createTask(CompactionTask, input, {
-            ownership: { kind: "task", taskId: api.taskId },
-            abandonOnRestart: true,
-        });
-    }, context);
+async function compactWithNote(
+    host: HarnessHost,
+    api: ToolExecutionApi,
+    change: SeatChange,
+    context: never,
+): Promise<string | undefined> {
+    const conversationId = String(api.conversationId);
+    const taskId = await inOpenConversation(host, conversationId, () =>
+        api.commit(async (tx) => {
+            await seatWrites(tx, conversationId, change);
+            const input: CompactionInput = {
+                reason: "manual",
+                ...(change.note !== undefined && { instructions: change.note }),
+            };
+            return tx.createTask(CompactionTask, input, {
+                ownership: { kind: "task", taskId: api.taskId },
+                abandonOnRestart: true,
+            });
+        }, context),
+    );
     const settled = await api.waitForTask(taskId, context);
     const { outcome } = settled.state;
     return outcome.status === "completed" ? undefined : `the compaction did not finish (${outcome.status})`;
+}
+
+// The seat commit, and for Compact the commit that creates the compaction task, run in the job's section after the
+// closed check, so the job's close never falls between the check and the commit (S-001 REQ-026). The compaction is
+// awaited after the section is released. Returns why a compaction did not finish, if it did not.
+async function commitSeatChange(
+    host: HarnessHost,
+    api: ToolExecutionApi,
+    change: SeatChange,
+    context: never,
+): Promise<string | undefined> {
+    if (change.contextMode === "compact") return compactWithNote(host, api, change, context);
+    const conversationId = String(api.conversationId);
+    await inOpenConversation(host, conversationId, () =>
+        api.commit(async (tx) => {
+            await seatWrites(tx, conversationId, change);
+            if (change.contextMode === "clean") await queueCleanContext(tx, api.conversationId, change.note as string);
+        }, context),
+    );
+    return undefined;
 }
 
 const handoffTool = (options: CoordinationOptions) =>
@@ -154,16 +182,14 @@ const handoffTool = (options: CoordinationOptions) =>
             const { contextMode, note } = args;
             const actor = { kind: "agent", conversationId, role: meta.seat.role } as const;
             const change: SeatChange = { seat, actor, contextMode, ...(note !== undefined && { note }) };
-            if (contextMode === "compact") {
-                const failure = await compactWithNote(api, change, context as never);
-                if (failure !== undefined) {
-                    return textResult(`The seat is now ${seat.role}, but ${failure}.`, true);
+            try {
+                const failure = await commitSeatChange(options.host(), api, change, context as never);
+                if (failure !== undefined) return textResult(`The seat is now ${seat.role}, but ${failure}.`, true);
+            } catch (error) {
+                if (error instanceof ConversationClosedError) {
+                    return textResult(`The handoff was refused: ${error.message}`, true);
                 }
-            } else {
-                await api.commit(async (tx) => {
-                    await seatWrites(tx, conversationId, change);
-                    if (contextMode === "clean") await queueCleanContext(tx, api.conversationId, note as string);
-                }, context);
+                throw error;
             }
             return textResult(`This conversation is now handled by a new ${seat.role} agent.`);
         },

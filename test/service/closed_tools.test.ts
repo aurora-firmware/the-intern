@@ -517,3 +517,44 @@ describe("an invoke in flight as the lead calls complete_job", () => {
         ]);
     });
 });
+
+describe("a handoff in flight as the lead calls complete_job", () => {
+    it("commits its seat change before the conversation closes when its check passed first", async () => {
+        const started = await start();
+        const job = await startedJob(started, "racing job");
+        const go = gate();
+        const reached = gate();
+        const release = gate();
+        const prompt = "hand off";
+        const caller = await invokeGated(
+            started,
+            job.leadConversation,
+            prompt,
+            [{ name: "handoff", arguments: { role: "gp", contextMode: "full" } }],
+            go.opened,
+        );
+        leadCompletesWhen(started, reached.opened);
+        setSectionHook(started.ctx.host, async (conversationId) => {
+            if (conversationId !== caller) return;
+            reached.open();
+            await release.opened;
+        });
+        let results: Result[] = [];
+        started.setAfterWrite(async (point, jobId) => {
+            if (point === "conversations-closed" && jobId === job.id) results = await resultsAfter(started, prompt, 1);
+        });
+
+        await submitCompleteInput(started, job.leadConversation);
+        go.open();
+        await waitFor(async () => (await started.ctx.jobStore.getJob(job.id)).status === "done", "the job to be Done");
+        await sleep(SETTLE_PAUSE_MS);
+        release.open();
+        await waitFor(() => results.length > 0, "the handoff's result");
+
+        const meta = await readConversationMeta(started.ctx.host, caller);
+        assert.deepEqual([meta?.seat.role, meta?.closed], ["gp", true]);
+        assert.deepEqual(results, [
+            { name: "handoff", text: "This conversation is now handled by a new gp agent.", isError: false },
+        ]);
+    });
+});
