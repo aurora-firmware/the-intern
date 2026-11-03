@@ -76,6 +76,30 @@ const NESTED_INVOKE_CALL = {
     },
 };
 
+const DEFINITION_OF_DONE = "The invoked agent has reported";
+const UPDATE_JOB_CALL = { name: "update_job", arguments: { definitionOfDone: DEFINITION_OF_DONE } };
+const SINGLE_INVOKE_CALL = {
+    name: "invoke",
+    arguments: {
+        agents: [{ role: "gp", contextMode: "clean", jobPrompt: `${INVOKED_JOB_PROMPT_PREFIX} A` }],
+        // biome-ignore lint/suspicious/noThenProperty: `then` is the invoke tool's parameter name
+        then: "parked",
+    },
+};
+const COMPLETE_JOB_CALL = {
+    name: "complete_job",
+    arguments: { justification: "The invoked agent reported, so the definition of done is met" },
+};
+
+/** The lead sets its definition of done, invokes one agent (it parks), and completes the job on the report. */
+function invokeAndCompleteReply(transcript: FakeTranscript): FakeReply {
+    const lastText = lastUserText(transcript);
+    const hasReport = lastText.includes(`echo: ${INVOKED_JOB_PROMPT_PREFIX}`);
+    if (hasReport) return { toolCall: COMPLETE_JOB_CALL };
+    if (lastText.startsWith(INVOKED_JOB_PROMPT_PREFIX)) return `echo: ${lastText}`;
+    return { toolCall: hasToolResult(transcript) ? SINGLE_INVOKE_CALL : UPDATE_JOB_CALL };
+}
+
 type Script = NonNullable<Switches["script"]>;
 
 /** `bash-sleep` takes its duration in seconds from the input, so a test sets how long the tool runs. */
@@ -89,6 +113,7 @@ function replyFor(script: Script, transcript: FakeTranscript): FakeReply {
         const isInvokedAgent = lastText.startsWith(INVOKED_JOB_PROMPT_PREFIX);
         return isInvokedAgent || hasToolResult(transcript) ? echo : { toolCall: PARKED_INVOKE_CALL };
     }
+    if (script === "invoke-and-complete") return invokeAndCompleteReply(transcript);
     if (script === "invoke-nested") {
         if (hasToolResult(transcript)) return echo;
         if (lastText === NESTED_PARENT_PROMPT) return { toolCall: NESTED_INVOKE_CALL };
