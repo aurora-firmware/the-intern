@@ -87,7 +87,7 @@ async function closedConversation(fixture: Fixture): Promise<string> {
 }
 
 describe("bob conversations", () => {
-    it("lists a job's conversations, holds a steer with the command line way in, shows it and stops the run", async () => {
+    it("lists a job's conversations, holds a steer with the command line way in and shows it", async () => {
         const fixture = await readyDaemon("gated");
         const job = await startedJob(fixture.daemon);
         const id = job.leadConversation as string;
@@ -97,7 +97,6 @@ describe("bob conversations", () => {
         fixture.daemon.releaseRuns();
         await until(async () => (await transcriptOf(fixture.daemon, id)).includes(STEER_TEXT), "the steer");
         const shown = await bob(fixture, ["conversations", "show", id]);
-        const stopped = await bob(fixture, ["conversations", "stop", id]);
 
         assert.equal(listed.status, 0, listed.stderr);
         assert.equal(listed.stdout.trim().split("\n").length, 1);
@@ -106,7 +105,20 @@ describe("bob conversations", () => {
         assert.equal(sent.stdout, `steered to ${id}\n`);
         assert.equal(shown.status, 0, shown.stderr);
         assert.match(shown.stdout, new RegExp(`steer from team member via command line: ${STEER_TEXT}`));
+    });
+
+    it("aborts the run of a running conversation with stop", async () => {
+        const fixture = await readyDaemon("gated");
+        const job = await startedJob(fixture.daemon);
+        const id = job.leadConversation as string;
+        const statusOf = async () => (await listings(fixture.daemon)).find((l) => l.id === id)?.status;
+        await until(async () => (await statusOf()) === "running", "the run");
+
+        const stopped = await bob(fixture, ["conversations", "stop", id]);
+
         assert.equal(stopped.status, 0, stopped.stderr);
+        assert.equal(stopped.stdout, `stopped ${id}\n`);
+        await until(async () => (await statusOf()) === "idle", "the run to end");
     });
 
     it("prints the conversation, its transcript and its invoked conversations as one object keyed by operation with --json", async () => {
@@ -166,6 +178,17 @@ describe("bob conversations", () => {
         assert.ok(records.some((entry) => entry.kind === "pi.compaction"));
         assert.ok(records.some((entry) => entry.kind === "pi.reset"));
         assert.match(seated.stdout, new RegExp(`^${id} seated as gp `));
+    });
+
+    it("exits 1 with the service's invalid_input when seat gets no --role", async () => {
+        const fixture = await readyDaemon();
+        const { id } = await idleLead(fixture);
+
+        const result = await bob(fixture, ["conversations", "seat", id]);
+
+        assert.equal(result.status, 1);
+        assert.equal(result.stdout, "");
+        assert.match(result.stderr, /^invalid_input: .+\n$/);
     });
 
     it("writes a seat record that resets the conversation with --reset and --note", async () => {

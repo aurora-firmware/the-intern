@@ -176,23 +176,22 @@ const seat = conversationsCommand(
             thinking: { type: "string", description: "A thinking level, instead of the role's." },
             workspace: { type: "string", description: "A registered workspace, instead of the role's." },
             reset: { type: "boolean", description: "Reset the conversation to the Clean mode with the new seat." },
-            note: { type: "string", description: "The note of the reset; needs --reset." },
+            note: { type: "string", description: "The note of the reset; a note makes the seat change a reset." },
         },
     },
     async (client, input) => {
         const [conversationId] = input.positionals;
-        const role = stringOption(input, "role");
         const note = stringOption(input, "note");
         const isReset = input.options.reset === true;
-        if (role === undefined || (note !== undefined && !isReset)) {
-            writeError(input.io, role === undefined ? "Give --role." : "--note needs --reset.");
-            return EXIT_CODES.usage;
-        }
         const overrides = { model: stringOption(input, "model"), thinkingLevel: stringOption(input, "thinking") };
-        const call: Record<string, unknown> = { conversationId, role, workspace: stringOption(input, "workspace") };
+        const call: Record<string, unknown> = {
+            conversationId,
+            role: stringOption(input, "role"),
+            workspace: stringOption(input, "workspace"),
+        };
         Object.assign(call, overrides);
         for (const [field, value] of Object.entries(call)) if (value === undefined) delete call[field];
-        if (isReset) call.reset = note === undefined ? {} : { note };
+        if (isReset || note !== undefined) call.reset = note === undefined ? {} : { note };
         const seated = (await client.invoke("conversations.seat", call)) as SeatAnswer;
         return printAnswer(input, seated, `${conversationId} seated as ${formatSeat(seated)}`);
     },
