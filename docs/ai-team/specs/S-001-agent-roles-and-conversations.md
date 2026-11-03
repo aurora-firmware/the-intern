@@ -1284,8 +1284,8 @@ other conversation. They are:
 
 The front desk itself takes input only from team members (REQ-020). A steering tool that names the front desk itself
 or a conversation that doesn't exist returns an error result, and the run goes on. Only a team member changes the
-front desk's seat (REQ-004); the agent in it can't hand off or reseat itself. The `desk` role's tool set names none of the tools the-intern ships (REQ-002), so an agent of it in the front
-desk changes no file and runs no command.
+front desk's seat (REQ-004); the agent in it can't hand off or reseat itself. The `desk` role's tool set names none
+of the tools the-intern ships (REQ-002), so an agent of it in the front desk changes no file and runs no command.
 
 #### AC-022.1 — Exactly the front-desk tools
 
