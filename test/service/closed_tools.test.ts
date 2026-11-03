@@ -360,3 +360,39 @@ describe("coordination tools called from a conversation whose job is Done", () =
         assert.equal(await entryCountOf(started, other.leadConversation), steeredBefore);
     });
 });
+
+describe("job tools called from a closed conversation", () => {
+    it("returns error results naming the conversation as closed, and changes no job", async () => {
+        const started = await start();
+        const job = await startedJob(started, "closing job");
+        const go = gate();
+        const prompt = "write to the job";
+        const caller = await invokeGated(
+            started,
+            job.leadConversation,
+            prompt,
+            [
+                { name: "add_worklog", arguments: { text: "a late note" } },
+                { name: "create_job", arguments: { text: "a late follow-up", related: true } },
+            ],
+            go.opened,
+        );
+        const worklogBefore = (await started.ctx.jobStore.listWorklog(job.id, {})).entries.length;
+        const jobsBefore = (await started.ctx.jobStore.listJobs({})).jobs.length;
+        let results: Result[] = [];
+        started.setAfterWrite(async (point, jobId) => {
+            if (point !== "conversations-closed" || jobId !== job.id) return;
+            go.open();
+            results = await resultsAfter(started, prompt, 2);
+        });
+
+        await started.invoke("jobs.complete", { job: job.number, justification: "checked by hand" });
+
+        assert.deepEqual(results, [
+            { name: "add_worklog", text: `add_worklog was refused: ${closedMessage(caller)}`, isError: true },
+            { name: "create_job", text: `create_job was refused: ${closedMessage(caller)}`, isError: true },
+        ]);
+        assert.equal((await started.ctx.jobStore.listWorklog(job.id, {})).entries.length, worklogBefore);
+        assert.equal((await started.ctx.jobStore.listJobs({})).jobs.length, jobsBefore);
+    });
+});
