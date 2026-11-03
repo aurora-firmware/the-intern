@@ -169,7 +169,6 @@ async function start(options: FixtureOptions = {}) {
         heldBy.set(lastUser, held.opened);
         return held.release;
     };
-    // A run whose last message holds `fragment` calls the tool `name` once, with no arguments.
     // Each compaction task the instance created, as the reason it was created for: `manual` for one a caller asked
     // for (the daemon's only way to compact), `threshold` for pi-durable's own.
     const compactionReasons = (): string[] => {
@@ -181,6 +180,7 @@ async function start(options: FixtureOptions = {}) {
             database.close();
         }
     };
+    // A run whose last message holds `fragment` calls the tool `name` once, with no arguments.
     const requestTool = (fragment: string, name: string) => toolRequests.set(fragment, name);
     return {
         invoke,
