@@ -18,6 +18,7 @@ import {
     type Tx,
 } from "@earendil-works/pi-durable";
 import type { AgentsRuntime } from "../agents/agents_component.ts";
+import { readFrontDeskId } from "../desk/front_desk.ts";
 import { HostNotFoundError } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { createInvokedConversations, InvocationDepthError, type InvocationRequest } from "../host/invocation.ts";
@@ -246,6 +247,8 @@ const steerTool = (options: CoordinationOptions) =>
             const meta = await readConversationMeta(options.host(), steererId);
             if (meta === undefined) throw new Error(`Conversation ${steererId} is not a seated conversation`);
             const { conversationId, message, mode } = args;
+            if (conversationId === (await readFrontDeskId(options.host())))
+                return textResult("The steer was refused: no agent can steer the front desk.", true);
             try {
                 const { held } = await steerConversation(options.host(), conversationId, {
                     content: message,
