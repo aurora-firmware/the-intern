@@ -3,8 +3,7 @@
  * socket or to a base URL.
  */
 import { type ClientRequest, type IncomingMessage, type RequestOptions, request } from "node:http";
-import { resolveInstanceDirs } from "../daemon/state_layout.ts";
-import { localSocketPath } from "../listeners/socket_path.ts";
+import { localSocketPath, resolveInstanceDirs } from "../daemon/state_layout.ts";
 import {
     answerError,
     encodeInput,
