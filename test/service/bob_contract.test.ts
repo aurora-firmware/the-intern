@@ -188,6 +188,10 @@ describe("bob conversations with --json", () => {
         const seated = jsonOf(await bob(fixture, ["conversations", "seat", conversationId, "--role", "gp", "--json"]));
 
         assert.deepEqual(seated, await fixture.daemon.invoke("conversations.seat", { conversationId, role: "gp" }));
+        const read = (await fixture.daemon.invoke("conversations.get", { conversationId })) as {
+            seat: { role: string };
+        };
+        assert.equal(read.seat.role, "gp");
     });
 
     it("exits 1 with nothing on standard output for an unknown id, an unknown role and a closed conversation", async () => {
