@@ -1,7 +1,8 @@
 /**
  * The job actions (S-004 REQ-005 to REQ-007): the one place each action's job write and side effect live. A job write
  * that block, complete or cancel go with is committed first, then the `afterWrite` hook runs, then the pi-durable
- * change is made (ADR-001 decision 4, second bounded exception; S-004 REQ-018).
+ * change is made (ADR-001 decision 4, second bounded exception; S-004 REQ-018). Complete and cancel close every
+ * conversation of the job, and the hook runs again after the closed marks, before the aborts.
  */
 import type { ServiceContext } from "../daemon/daemon.ts";
 import type { SubmittedInput } from "../host/conversation_control.ts";
@@ -119,13 +120,13 @@ async function finishJob(
                           cause: error instanceof Error ? error.message : String(error),
                       }),
               };
-    await abortJobConversations(ctx.host, job.id, own);
+    await abortJobConversations(ctx.host, job.id, own, () => options.afterWrite?.("conversations-closed", job.id));
     return done;
 }
 
 /**
- * Completes the job with its justification, then aborts every conversation of the job. A lead that completes from its
- * own tool call names its conversation, whose abort cannot be awaited from inside that call.
+ * Completes the job with its justification, then closes and aborts every conversation of the job. A lead that
+ * completes from its own tool call names its conversation, whose abort cannot be awaited from inside that call.
  */
 export function completeJob(
     deps: JobActionDeps,
@@ -137,7 +138,7 @@ export function completeJob(
     return finishJob(deps, "complete", jobId, justification, author, ownConversationId);
 }
 
-/** Cancels the job with its justification, then aborts every conversation of the job. */
+/** Cancels the job with its justification, then closes and aborts every conversation of the job. */
 export function cancelJob(deps: JobActionDeps, jobId: string, justification: string, author: JobAuthor) {
     return finishJob(deps, "cancel", jobId, justification, author);
 }

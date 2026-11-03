@@ -25,6 +25,7 @@ export type WritePoint =
     | "job-blocked"
     | "job-completed"
     | "job-cancelled"
+    | "conversations-closed"
     | "lead-input"
     | "turn-ended";
 

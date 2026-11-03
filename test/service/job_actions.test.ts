@@ -310,6 +310,30 @@ describe("completeJob and cancelJob", () => {
             }
         });
 
+        it(`${name} reaches conversations-closed after every closed mark and before the first abort`, async () => {
+            const started = await start();
+            const job = await started.create();
+            await started.ctx.jobStore.updateFields(job.id, { definitionOfDone: "it is done" }, author);
+            await startJob(started.deps, job.id);
+            const invoked = await invokeRunning(started, job.leadConversation);
+            const seen: { point: WritePoint; jobId: string; closed: boolean[]; invokedBusy: boolean }[] = [];
+            const deps = started.depsWith(async (at, jobId) => {
+                if (at !== "conversations-closed") return;
+                const closed = [];
+                for (const id of [job.leadConversation, invoked]) {
+                    closed.push((await readConversationMeta(started.ctx.host, id))?.closed === true);
+                }
+                seen.push({ point: at, jobId, closed, invokedBusy: await isBusy(started.ctx, invoked) });
+            });
+
+            await act(deps, job.id, "because", author);
+
+            assert.deepEqual(seen, [
+                { point: "conversations-closed", jobId: job.id, closed: [true, true], invokedBusy: true },
+            ]);
+            await waitFor(() => isIdle(started.ctx, invoked), "the abort");
+        });
+
         it(`${name} leaves Done committed and the conversations untouched when afterWrite throws`, async () => {
             const started = await start();
             const job = await started.create();
