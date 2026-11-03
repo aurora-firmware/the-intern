@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, it } from "node:test";
 import {
     type FauxProviderRegistration,
@@ -31,7 +32,7 @@ const quietLogger = createLogger({ stream: { write: () => true } });
 const commandLine: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
 
 type ModelContext = Parameters<FauxResponseFactory>[0];
-type ModelCall = { lastUser: string; userTexts: string[]; summaryRequest: boolean };
+type ModelCall = { lastUser: string; userTexts: string[] };
 type FixtureOptions = { contextWindow?: number; workerThreadCount?: number; compaction?: object };
 
 const envs: HermeticEnv[] = [];
@@ -86,7 +87,6 @@ async function start(options: FixtureOptions = {}) {
         calls.push({
             lastUser,
             userTexts: users,
-            summaryRequest: lastUser.includes("<conversation>"),
         });
         for (const [fragment, opened] of heldBy) if (lastUser.includes(fragment)) await opened;
         const hasToolResult = context.messages.some((message) => message.role === "toolResult");
@@ -170,10 +170,22 @@ async function start(options: FixtureOptions = {}) {
         return held.release;
     };
     // A run whose last message holds `fragment` calls the tool `name` once, with no arguments.
+    // Each compaction task the instance created, as the reason it was created for: `manual` for one a caller asked
+    // for (the daemon's only way to compact), `threshold` for pi-durable's own.
+    const compactionReasons = (): string[] => {
+        const database = new DatabaseSync(join(env.stateDir, "the-intern.sqlite"), { readOnly: true });
+        try {
+            const rows = database.prepare("SELECT record FROM tasks WHERE kind LIKE '%ompaction%' ORDER BY id").all();
+            return rows.map((row) => (JSON.parse(String(row.record)) as { input: { reason: string } }).input.reason);
+        } finally {
+            database.close();
+        }
+    };
     const requestTool = (fragment: string, name: string) => toolRequests.set(fragment, name);
     return {
         invoke,
         requestTool,
+        compactionReasons,
         results,
         getDesk,
         deskId,
@@ -203,6 +215,13 @@ describe("the front desk's context", { timeout: TEST_TIMEOUT_MS }, () => {
 
         const entries = await fixture.entriesOf(fixture.deskId);
         assert.ok(entries.some((entry) => entry.kind === "pi.compaction"));
+        const reasons = fixture.compactionReasons();
+        assert.ok(reasons.length > 0, "a compaction task ran");
+        assert.deepEqual(
+            reasons.filter((reason) => reason !== "threshold"),
+            [],
+            "every compaction was pi-durable's own, none called by the daemon",
+        );
         const last = fixture.calls.at(-1);
         assert.equal(last?.lastUser, "after the compaction");
         assert.ok(
