@@ -63,6 +63,8 @@ export type ConversationMeta = JobLinks & {
     parked: ParkedState | null;
     held: HeldMessage[];
     aborted: boolean;
+    /** Set when the job is Done; a document written without it reads as not closed, and nothing clears it. */
+    closed?: boolean;
 };
 export type SeatChange = { seat: Seat; actor: SeatActor; contextMode?: ContextMode; note?: string };
 

@@ -18,6 +18,7 @@ import {
 } from "./conversation_control.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { findCreatedConversation } from "./idempotency.ts";
+import { inJobSection, inOpenConversation } from "./job_section.ts";
 import {
     type ContextMode,
     type ConversationMeta,
@@ -175,7 +176,7 @@ async function invoke(
     host: HarnessHost,
     input: { invokingId: string; callId: string; agents: InvocationRequest[]; actor: SeatActor; parked?: ParkedState },
 ): Promise<string[]> {
-    const ids = await createMissing(host, input);
+    const ids = await inOpenConversation(host, input.invokingId, () => createMissing(host, input));
     await Promise.all(
         ids.map((id, index) =>
             submitJobPrompt(
@@ -330,22 +331,42 @@ export async function abortWithAwaited(host: HarnessHost, conversationId: string
     return [...aborted];
 }
 
+const closeConversation = (host: HarnessHost, conversationId: string) =>
+    updateMeta(host, conversationId, (meta) => {
+        meta.closed = true;
+        meta.parked = null;
+        meta.awaiting = [];
+        meta.held = [];
+    });
+
+// Lists and closes in the job's section, so no admission or creation of the job falls between the list and the marks.
+function closeJobConversations(host: HarnessHost, jobId: string): Promise<string[]> {
+    return inJobSection(host, jobId, async () => {
+        const ofJob: string[] = [];
+        for (const { id } of await host.listConversations()) {
+            if ((await readConversationMeta(host, id))?.jobId === jobId) ofJob.push(id);
+        }
+        for (const id of ofJob) await closeConversation(host, id);
+        return ofJob;
+    });
+}
+
 /**
- * Aborts every conversation whose `intern.conversation` document names the job, clearing them all first. An abort
- * waits for the run to end, so the conversation of a running tool (`own`) is aborted last and its abort is not awaited
- * here: the tool returns, and the run ends. `own.onError` gets a failed abort of it.
+ * Closes every conversation whose `intern.conversation` document names the job (closed mark set, nothing parked,
+ * awaited or held) in the job's section, awaits `afterClosed`, then aborts them. The section is released before
+ * `afterClosed` and the aborts. An abort waits for the run to end, so the conversation of a running tool (`own`) is
+ * aborted last and its abort is not awaited here: the tool returns, and the run ends. `own.onError` gets a failed
+ * abort of it. No abort mark is set, so no report is sent.
  */
 export async function abortJobConversations(
     host: HarnessHost,
     jobId: string,
     own?: { conversationId: string; onError(error: unknown): void },
+    afterClosed?: () => void | Promise<void>,
 ): Promise<string[]> {
     if (jobId === (await findCreatedConversation(host, FRONT_DESK_CREATION))) throw new FrontDeskNotJobError(jobId);
-    const ofJob: string[] = [];
-    for (const { id } of await host.listConversations()) {
-        if ((await readConversationMeta(host, id))?.jobId === jobId) ofJob.push(id);
-    }
-    for (const id of ofJob) await clearWaiting(host, id);
+    const ofJob = await closeJobConversations(host, jobId);
+    await afterClosed?.();
     for (const id of ofJob) if (id !== own?.conversationId) await abortConversation(host, id);
     if (own !== undefined && ofJob.includes(own.conversationId)) {
         abortConversation(host, own.conversationId).catch(own.onError);
