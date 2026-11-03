@@ -1,7 +1,7 @@
 ---
 id: S-005
 title: Command line
-version: '0.1'
+version: '0.2'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-03'
 author: planner
@@ -93,7 +93,7 @@ What this specification explicitly does NOT cover:
   client library and prints what they return. Validation, short-number resolution and refusals come from the service;
   `bob` adds no behaviour of its own (S-000; REQ-016).
 - **Curated commands.** Each command is named for what a team member does (`bob jobs answer`), not for the operation
-  it calls, and calls one or two operations (Interfaces).
+  it calls, and calls the operations Interfaces names for it.
 - **Stable for scripts.** Command names, `--json` output and exit codes are a contract; changing them needs an
   amendment of this spec. The wording of text output may change (REQ-003).
 - **Works without a terminal.** No colour, prompt or interactive step appears when standard input or output isn't a
@@ -172,8 +172,10 @@ maps to the input of the same meaning in the operation it calls.
 - Data on standard output; errors, notices and hints on standard error.
 - Exit codes: `0` success; `1` the service refused or failed, with its error code and message on standard error; `2`
   a usage error, or a reserved group; `3` the daemon can't be reached (REQ-003).
-- With `--json`, standard output holds the service's answer unchanged; a following command prints one JSON value per
-  line: each feed snapshot or delta, or each answer it waits for.
+- With `--json`, standard output holds the service's answer unchanged. A `show` command that calls several
+  operations prints one JSON object keyed by operation name, each value that operation's answer unchanged (for
+  example `{ "jobs.get": …, "jobs.worklog.list": …, "jobs.history.list": … }`). A following command prints one JSON
+  value per line: each feed snapshot or delta, or each answer it waits for.
 - Reserved groups: `schedules`, `triggers`, `skills`, `instructions`, `knowledge`, `mail`.
 
 ### Consumed
@@ -363,8 +365,10 @@ origin letter `C`, because the local socket records way in `command line` (S-003
 
 `bob jobs answer <job> <text>` SHALL read the job with `jobs.get` and submit the text to its lead conversation with
 `conversations.submit`, so the input is recorded with way in `command line`, and print that it was sent to the job's
-lead. Input to the lead of a Blocked job resumes it (S-001 REQ-020; S-004 REQ-006). A Done job, or an unknown one, is
-refused by the service and the command exits 1.
+lead. Input to the lead of a Blocked job resumes it (S-001 REQ-020; S-004 REQ-006). A Done job's lead
+conversation is closed, so the service refuses the input `conflict` (S-001 REQ-026); an unknown job is refused
+`not_found`. Either way the command exits 1 and prints the service's error. When `jobs.get` returns no
+`leadConversation`, the command submits nothing, prints that the job has no lead conversation and exits 1.
 
 #### AC-005.1 — An answer resumes a Blocked job
 
@@ -372,6 +376,15 @@ refused by the service and the command exits 1.
 - **When:** a team member runs `bob jobs answer W-3 "use the staging database"`
 - **Then:** it prints `sent to W-3's lead` and exits 0, the lead's transcript holds the text with way in
   `command line`, and `W-3` is In progress
+
+**Verification:** test — a service test running `bob` as a child process on the fake model.
+
+#### AC-005.2 — An answer the job can't take
+
+- **Given:** a completed job, a job cancelled before its lead conversation was created, and a job ID no job has
+- **When:** a team member runs `bob jobs answer` with each
+- **Then:** each exits 1: the completed job with `conflict`, the cancelled one with the message that the job has no
+  lead conversation, and the unknown one with `not_found`; no input is submitted
 
 **Verification:** test — a service test running `bob` as a child process on the fake model.
 
@@ -490,7 +503,8 @@ front desk's answer with `conversations.entries`, print it and, at the end of in
 Interfaces and print the result: `list` one line per conversation with its id, job and lead flag or the front-desk
 mark, seat, status and last activity; `show` the conversation, its transcript with seat records and attribution,
 and the conversations it invoked, recursively (`conversations.invocations`); `send` that the message was submitted,
-steered or held.
+steered or held. A closed conversation (S-001 REQ-026) lists with status `closed`, and `send`, `stop`, `reset`,
+`seat` and `compact` on it are refused `conflict` by the service and exit 1.
 
 #### AC-011.1 — Steer a conversation
 
@@ -518,6 +532,14 @@ steered or held.
 - **When:** a team member runs `bob conversations show` on the lead conversation, also with `--json`
 - **Then:** the output lists the three invoked conversations under their invokers, and the JSON holds the answer of
   `conversations.invocations` unchanged
+
+**Verification:** test — a service test running `bob` as a child process on the fake model.
+
+#### AC-011.4 — A closed conversation
+
+- **Given:** a conversation of a Done job
+- **When:** a team member runs `bob conversations list`, then `send`, `stop`, `reset`, `seat` and `compact` on it
+- **Then:** the list shows it with status `closed`, and each of the other commands exits 1 with `conflict`
 
 **Verification:** test — a service test running `bob` as a child process on the fake model.
 
@@ -580,7 +602,8 @@ output and its exit statuses. It is not a data command and takes no `--json`.
 
 - **Given:** the existing `bob serve` tests
 - **When:** they run after the command groups are added
-- **Then:** they pass unchanged
+- **Then:** they pass unchanged, except that the cases that run `bob` with no command or an unknown one expect the
+  top-level usage, as REQ-001 and AC-001.2 require; those cases test the top level, not `bob serve`
 
 **Verification:** test — the existing `bob serve` service tests.
 
@@ -737,3 +760,6 @@ None.
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
+| 2026-11-03 | v0.2. Clarifications, no change of scope: AC-014.1, the cases that run `bob` with no command or an unknown one expect the top-level usage (REQ-001); Interfaces, a `show` command that calls several operations prints one JSON object keyed by operation name; Design Principles, a command calls the operations Interfaces names, not "one or two". | Product owner approval of the keyed `--json` shape, 2026-11-03 (finding F14 of the S-001 v0.9 consistency review). Architect ruling on T-162 (AC-014.1). Reviews of T-165 (the keyed JSON) and of the plan (the number of operations). | T-162, T-165 (built as clarified) |
+| 2026-11-03 | v0.2. REQ-005: a Done job's lead conversation is closed (S-001 v0.9 REQ-026), so `bob jobs answer` is refused `conflict`, and an unknown job `not_found`. REQ-011: a closed conversation lists as `closed`, and `send`, `stop`, `reset`, `seat` and `compact` on it exit 1. Architecture consistency review (finding F10), same version: REQ-005, when `jobs.get` returns no `leadConversation` the command submits nothing, prints that the job has no lead conversation and exits 1; new AC-005.2 for a completed job, a job cancelled before its lead started and an unknown job; new AC-011.4 for a closed conversation. | Product owner decision of 2026-11-03 on T-166. Architecture consistency review of the closed-conversation amendment, 2026-11-03. | T-166, T-167 |
+| 2026-11-03 | v0.2, still. AC-005.2: the cancelled job is one cancelled before its lead conversation was created (S-004 REQ-007, S-001 AC-026.8). | Architecture consistency review of S-001 v0.9, 2026-11-03. | T-166, T-167 |

@@ -1,6 +1,6 @@
 ---
 title: Daemon and host runtime
-version: '0.10'
+version: '0.11'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-16'
 author: planner
@@ -585,6 +585,11 @@ message shows in the conversation's transcript as its hold record, and once the 
 like any other. A repeated submit with the same request id while the message is held returns `{ held: true }` again
 and holds nothing twice.
 
+A conversation of a Done job is closed (S-001 REQ-026). `conversations.list` and `conversations.get` give it status
+`closed`, and every read operation works on it. From the job's complete or cancel, a submit in any busy mode, the
+withdrawal of one of its submissions (`submissions.withdraw`), an abort, a reset, a compaction and a seat change of a
+conversation of the job are refused `conflict`, with a message naming the conversation as closed, and change nothing.
+
 S-001's agent coordination capabilities (handoff, invoke, steer) are control operations of the same service layer.
 Later specs add theirs the same way (for example creating and answering jobs in S-004 and running a schedule now in
 the schedules and triggers spec).
@@ -661,6 +666,15 @@ Interfaces, `jobs.create`).
   and no other, as the front desk
 
 **Verification:** test — a service test through both listeners on the fake model.
+
+#### AC-012.7 — A closed conversation
+
+- **Given:** a closed conversation (S-001 REQ-026)
+- **When:** a team member submits input to it, withdraws one of its submissions, and aborts, resets, compacts and
+  reseats it
+- **Then:** each is refused `conflict` naming the conversation as closed, and the conversation is unchanged
+
+**Verification:** test — the service test of S-001 AC-026.2.
 
 ### REQ-013 — Operation contract
 
@@ -1067,3 +1081,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-02 | v0.8. Definitions, Database: the job store's `intern_` tables. Design Principles: "Durability belongs to the runtime" has two bounded exceptions, the second being ordered job writes and the four startup repair rules (S-004 REQ-018); "One owner per database" allows the import step under the single-owner lock (S-004 REQ-017). Exclusions: only the job store's tables migrate, and export and import copy the whole database without converting it. REQ-002 and AC-002.2: step 4 reads the job schema version first and creates or migrates the job store; step 7 applies the job repair rules before resuming work. REQ-007: a failed job store write is handled as a storage error. REQ-008: a job operation cut off between its job write and its pi-durable change is completed by S-004 REQ-018. REQ-012 and Interfaces: `jobs.startLead` leaves the catalogue and the `jobs.*` operations join it; creating a job records the origin, with the details a team member's way in observes; only a conversation parked for reports holds a submitted message (AC-012.3), and a lead parked for its Blocked job continues on the submit. AC-012.5: callers create jobs with `jobs.create`, and a call naming no way in is refused. REQ-013: the actor carries the observed way-in details; a job is the create example. REQ-014 and the feed in Interfaces: S-004's job deltas, published after their job store commit, in the same sequence. AC-016.1: observed caller details are recorded only. Assumptions: S-004. | S-004 architecture consistency review; product owner decisions 2026-11-02. Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None yet; the code changes (startup steps 4 and 7, the catalogue, the held-message rule, the job deltas) come in the S-004 breakdown |
 | 2026-11-02 | v0.9. REQ-012 and AC-012.5: a team member's or an agent's `jobs.create` call that names an origin of any kind is refused `invalid_input`, as S-004 Interfaces states. | Gate 2 review of the S-004 task plan. | T-117 |
 | 2026-11-03 | v0.10. The front desk (S-001 v0.8). REQ-012, Interfaces and new AC-012.6: the read operation `desk.get` returns the front desk's conversation id and seat, and `conversations.list` marks the front desk; a job the front desk creates records a request with the way in of the input it answers and the front desk in its origin details. REQ-002: step 6 also ensures the front desk. | Product owner decisions of the front desk brainstorm, 2026-11-03. S-002 owns the catalogue. | None yet; the front desk comes in the breakdown of this amendment |
+| 2026-11-03 | v0.11. REQ-012: a conversation of a Done job is closed (S-001 v0.9 REQ-026); the list and get give it status `closed`, every read works on it, and submit, abort, reset, compact and seat on it are refused `conflict`. Architecture consistency review (findings F2, F4 and F8), same version: REQ-012, the refusals apply from the job's complete or cancel and include `submissions.withdraw`; new AC-012.7, verified by the service test of S-001 AC-026.2. | Product owner decision of 2026-11-03, during the S-005 dev-loop (T-166). S-002 owns the catalogue and its error outcomes. Architecture consistency review of the amendment, 2026-11-03. | T-166 (blocked on it); new tasks for S-001 phase 7 |
