@@ -17,6 +17,7 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { createDeskComponent } from "../../src/desk/desk_component.ts";
 import { submissionIdFor } from "../../src/host/conversation_control.ts";
 import { abortJobConversations, FrontDeskNotJobError } from "../../src/host/invocation.ts";
+import { readConversationMeta } from "../../src/host/seating.ts";
 import { startJob } from "../../src/jobs/job_actions.ts";
 import { reminderRequestId } from "../../src/jobs/job_model.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
@@ -200,6 +201,9 @@ describe("the front desk is not a job conversation", { timeout: TEST_TIMEOUT_MS 
 
         assert.equal(await fixture.isIdle(fixture.deskId), false);
         assert.equal(JSON.stringify(await fixture.deskEntries()), entriesBefore);
+        const deskMeta = await readConversationMeta(fixture.ctx.host, fixture.deskId);
+        assert.ok(deskMeta, "the front desk has its conversation document");
+        assert.notEqual(deskMeta.closed, true);
     });
 
     it("sends the front desk no reminder at the end of its turn and changes no job", async () => {

@@ -131,27 +131,31 @@ async function isBusy(ctx: ServiceContext, conversationId: string): Promise<bool
     return (await ctx.host.conversationInfo(conversationId))?.busy === true;
 }
 
-// Starts a conversation the lead invokes and awaits. Its model reply stays open until the run is aborted.
-async function invokeRunning(started: Started, lead: string): Promise<string> {
-    started.fake.setResponses([
-        (_context, options) =>
-            new Promise((resolve) => {
-                const finish = () => resolve(fauxAssistantMessage("stopped"));
-                if (options?.signal?.aborted) finish();
-                options?.signal?.addEventListener("abort", finish);
-            }),
-    ]);
+// Starts the conversations the lead invokes and awaits, one per agent. Their model replies stay open until aborted.
+async function invokeRunningAgents(started: Started, lead: string, count: number): Promise<string[]> {
+    const hangUntilAborted: Parameters<FauxProviderRegistration["setResponses"]>[0][number] = (_context, options) =>
+        new Promise((resolve) => {
+            const finish = () => resolve(fauxAssistantMessage("stopped"));
+            if (options?.signal?.aborted) finish();
+            options?.signal?.addEventListener("abort", finish);
+        });
+    started.fake.setResponses(Array.from({ length: count }, () => hangUntilAborted));
     const seat = started.deps.options.agents.runtime().catalog.seatFor(DEFAULT_LEAD_ROLE);
-    const [invoked] = await createInvokedConversations(started.ctx.host, {
+    const ids = await createInvokedConversations(started.ctx.host, {
         invokingId: lead,
         callId: "call-1",
-        agents: [{ seat, contextMode: "clean", jobPrompt: "work" }],
+        agents: Array.from({ length: count }, () => ({ seat, contextMode: "clean" as const, jobPrompt: "work" })),
         actor: { kind: "team_member", wayIn: "web interface" },
         parked: { waitingFor: "reports", continueOn: "each" },
     });
-    const id = invoked as string;
-    await waitFor(() => isBusy(started.ctx, id), "the invoked run");
-    return id;
+    for (const id of ids) await waitFor(() => isBusy(started.ctx, id), "the invoked run");
+    return ids;
+}
+
+// Starts a conversation the lead invokes and awaits. Its model reply stays open until the run is aborted.
+async function invokeRunning(started: Started, lead: string): Promise<string> {
+    const [invoked] = await invokeRunningAgents(started, lead, 1);
+    return invoked as string;
 }
 
 async function stopAwaiting(ctx: ServiceContext, conversationId: string): Promise<void> {
@@ -310,6 +314,30 @@ describe("completeJob and cancelJob", () => {
             }
         });
 
+        it(`${name} reaches conversations-closed after every closed mark and before the first abort`, async () => {
+            const started = await start();
+            const job = await started.create();
+            await started.ctx.jobStore.updateFields(job.id, { definitionOfDone: "it is done" }, author);
+            await startJob(started.deps, job.id);
+            const invoked = await invokeRunning(started, job.leadConversation);
+            const seen: { point: WritePoint; jobId: string; closed: boolean[]; invokedBusy: boolean }[] = [];
+            const deps = started.depsWith(async (at, jobId) => {
+                if (at !== "conversations-closed") return;
+                const closed = [];
+                for (const id of [job.leadConversation, invoked]) {
+                    closed.push((await readConversationMeta(started.ctx.host, id))?.closed === true);
+                }
+                seen.push({ point: at, jobId, closed, invokedBusy: await isBusy(started.ctx, invoked) });
+            });
+
+            await act(deps, job.id, "because", author);
+
+            assert.deepEqual(seen, [
+                { point: "conversations-closed", jobId: job.id, closed: [true, true], invokedBusy: true },
+            ]);
+            await waitFor(() => isIdle(started.ctx, invoked), "the abort");
+        });
+
         it(`${name} leaves Done committed and the conversations untouched when afterWrite throws`, async () => {
             const started = await start();
             const job = await started.create();
@@ -325,6 +353,54 @@ describe("completeJob and cancelJob", () => {
             assert.deepEqual(lead?.awaiting, [invoked]);
         });
     }
+});
+
+describe("closing the conversations of a Done job", () => {
+    it("cancels a job whose lead awaits two running invoked agents, and closes all three", async () => {
+        const started = await start();
+        const job = await started.create();
+        await startJob(started.deps, job.id);
+        const invoked = await invokeRunningAgents(started, job.leadConversation, 2);
+        const lead = await readConversationMeta(started.ctx.host, job.leadConversation);
+        assert.deepEqual(lead?.parked, { waitingFor: "reports", continueOn: "each" });
+        assert.deepEqual(lead?.awaiting, invoked);
+
+        const done = await cancelJob(started.deps, job.id, "duplicate of C-7", author);
+
+        assert.equal(done.status, "done");
+        assert.deepEqual(done.resolution, { kind: "cancelled", justification: "duplicate of C-7" });
+        for (const id of [job.leadConversation, ...invoked]) {
+            const meta = await readConversationMeta(started.ctx.host, id);
+            assert.equal(meta?.closed, true);
+            assert.equal(meta?.parked, null);
+            assert.deepEqual(meta?.awaiting, []);
+            await waitFor(() => isIdle(started.ctx, id), "the abort");
+        }
+    });
+
+    it("completes a job naming the lead as its own conversation, and closes the lead and an idle invoked one", async () => {
+        const started = await start();
+        const job = await started.create();
+        await started.ctx.jobStore.updateFields(job.id, { definitionOfDone: "it is done" }, author);
+        await startJob(started.deps, job.id);
+        started.fake.setResponses([async () => fauxAssistantMessage("done"), async () => fauxAssistantMessage("ok")]);
+        const seat = started.deps.options.agents.runtime().catalog.seatFor(DEFAULT_LEAD_ROLE);
+        const [idle] = await createInvokedConversations(started.ctx.host, {
+            invokingId: job.leadConversation,
+            callId: "call-1",
+            agents: [{ seat, contextMode: "clean", jobPrompt: "work" }],
+            actor: { kind: "team_member", wayIn: "web interface" },
+        });
+        const invoked = idle as string;
+        await waitFor(() => isIdle(started.ctx, invoked), "the invoked run to end");
+        await waitFor(() => isIdle(started.ctx, job.leadConversation), "the lead to be idle");
+
+        await completeJob(started.deps, job.id, "shipped", author, job.leadConversation);
+
+        for (const id of [job.leadConversation, invoked]) {
+            assert.equal((await readConversationMeta(started.ctx.host, id))?.closed, true);
+        }
+    });
 });
 
 describe("the action sequence", () => {
