@@ -211,6 +211,19 @@ describe("bob conversations", () => {
         assert.ok(transcript.includes("start over"), transcript);
     });
 
+    it("exits 2 and leaves the conversation as it was when seat gets --note without --reset", async () => {
+        const fixture = await readyDaemon();
+        const { id } = await idleLead(fixture);
+        const before = await transcriptOf(fixture.daemon, id);
+
+        const result = await bob(fixture, ["conversations", "seat", id, "--role", "gp", "--note", "start over"]);
+
+        assert.equal(result.status, 2);
+        assert.equal(result.stdout, "");
+        assert.match(result.stderr, /--note needs --reset/);
+        assert.equal(await transcriptOf(fixture.daemon, id), before);
+    });
+
     it("exits 1 with the service's refusal and leaves the seat unchanged for an unknown role", async () => {
         const fixture = await readyDaemon();
         const { id } = await idleLead(fixture);
