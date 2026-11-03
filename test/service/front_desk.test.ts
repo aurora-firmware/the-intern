@@ -102,7 +102,14 @@ async function createInstance(): Promise<Instance> {
 }
 
 type DeskView = { conversationId: string; seat: { role: string; model: string; workspace: string } };
-type Listing = { id: string; jobId: string | null; isLead: boolean; origin: { kind: string }; seat: unknown };
+type Listing = {
+    id: string;
+    jobId: string | null;
+    isLead: boolean;
+    isFrontDesk: boolean;
+    origin: { kind: string } | null;
+    seat: unknown;
+};
 
 const deskOf = async (daemon: RunningDaemon) => (await daemon.catalogue.invoke("desk.get", {}, webCaller)) as DeskView;
 const listAll = async (daemon: RunningDaemon) =>
@@ -164,5 +171,49 @@ describe("the front desk", () => {
         const desk = await deskOf(daemon);
 
         assert.equal(await findCreatedConversation(instance.context().host, FRONT_DESK_CREATION), desk.conversationId);
+    });
+
+    it("marks the front desk with isFrontDesk and no other conversation", async () => {
+        const daemon = await (await createInstance()).start();
+        const desk = await deskOf(daemon);
+        await daemon.catalogue.invoke("jobs.create", { text: "do it" }, webCaller);
+
+        const all = await listAll(daemon);
+
+        assert.ok(all.length >= 2);
+        assert.deepEqual(
+            all.filter((listing) => listing.isFrontDesk).map((listing) => listing.id),
+            [desk.conversationId],
+        );
+        const listed = all.find((listing) => listing.id === desk.conversationId);
+        assert.equal(listed?.jobId, null);
+        assert.equal(listed?.isLead, false);
+        assert.deepEqual(listed?.origin, { kind: "front_desk" });
+    });
+
+    it("leaves the front desk out when listing the conversations of a job", async () => {
+        const daemon = await (await createInstance()).start();
+        const desk = await deskOf(daemon);
+        const job = (await daemon.catalogue.invoke("jobs.create", { text: "do it" }, webCaller)) as { id: string };
+
+        const listed = (await daemon.catalogue.invoke("conversations.list", { jobId: job.id }, webCaller)) as Listing[];
+
+        assert.ok(listed.length >= 1);
+        assert.ok(listed.every((listing) => listing.id !== desk.conversationId && !listing.isFrontDesk));
+    });
+
+    it("returns from conversations.get the front_desk origin, no job and the front desk mark", async () => {
+        const daemon = await (await createInstance()).start();
+        const desk = await deskOf(daemon);
+
+        const listing = (await daemon.catalogue.invoke(
+            "conversations.get",
+            { conversationId: desk.conversationId },
+            webCaller,
+        )) as Listing;
+
+        assert.deepEqual(listing.origin, { kind: "front_desk" });
+        assert.equal(listing.jobId, null);
+        assert.equal(listing.isFrontDesk, true);
     });
 });
