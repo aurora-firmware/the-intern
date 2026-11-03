@@ -34,8 +34,11 @@ async function allJobs(ctx: ServiceContext): Promise<Job[]> {
     return jobs;
 }
 
-/** What one listing of the conversations shows about a job: its lead, and whether any of them runs, parks or awaits. */
-type JobConversations = { leadId?: string; isActive: boolean };
+/**
+ * What one listing of the conversations shows about a job: its lead, whether one of them isn't closed or runs, parks
+ * or awaits, and the closed, idle ones, whose queued input only rule 4 reads, and only for a Done job.
+ */
+type JobConversations = { leadId?: string; isUnsettled: boolean; idleClosedIds: string[] };
 
 // One pass over the conversations for the whole repair, so its cost grows with the conversations and the jobs, not
 // with their product. No listener answers and no work resumes while the repair runs (S-002 REQ-002 step 7), so only
@@ -45,9 +48,10 @@ async function indexConversations(ctx: ServiceContext): Promise<Map<string, JobC
     for (const { id, busy } of await ctx.host.listConversations()) {
         const meta = await readConversationMeta(ctx.host, id);
         if (meta === undefined || meta.jobId === null) continue;
-        const entry = index.get(meta.jobId) ?? { isActive: false };
+        const entry = index.get(meta.jobId) ?? { isUnsettled: false, idleClosedIds: [] };
         if (meta.isLead) entry.leadId = id;
-        if (busy || meta.parked !== null || meta.awaiting.length > 0) entry.isActive = true;
+        if (meta.closed !== true || busy || meta.parked !== null || meta.awaiting.length > 0) entry.isUnsettled = true;
+        else entry.idleClosedIds.push(id);
         index.set(meta.jobId, entry);
     }
     return index;
@@ -135,31 +139,47 @@ async function applyRule2(deps: JobActionDeps, jobId: string, leadId: string | u
     await parkConversation(ctx.host, leadId, { waitingFor: "answer", continueOn: "each" });
 }
 
-/** Rule 4: a Done job with conversations still running, parked or awaiting a report gets them aborted. */
-async function applyRule4(deps: JobActionDeps, jobId: string, isActive: boolean): Promise<void> {
+// Whether a Done job's conversations need rule 4: one isn't closed, runs, parks or awaits, or has queued input.
+async function needsClosing(ctx: ServiceContext, known: JobConversations): Promise<boolean> {
+    if (known.isUnsettled) return true;
+    for (const id of known.idleClosedIds) if (await hasQueuedInput(ctx.host, id)) return true;
+    return false;
+}
+
+/**
+ * Rule 4: a Done job with a conversation that isn't closed, or that is closed but still runs or has queued input,
+ * gets its conversations closed and aborted: the closed marks are committed before pi-durable's aborts.
+ * `listed` is the job as listed before the rules: a job that rule 1 cancels was not Done then, and that cancel
+ * already closed its conversations, so the listing taken before it does not apply to it.
+ */
+async function applyRule4(deps: JobActionDeps, listed: Job, known: JobConversations): Promise<void> {
     const { ctx } = deps;
-    const job = await ctx.jobStore.getJob(jobId);
-    if (job.status !== "done" || !isActive) return;
-    await ctx.jobStore.recordRepair(job.id, { rule: 4, did: "Aborted the conversations of the Done job" });
-    await abortJobConversations(ctx.host, job.id);
+    if (listed.status !== "done" || !(await needsClosing(ctx, known))) return;
+    await ctx.jobStore.recordRepair(listed.id, {
+        rule: 4,
+        did: "Closed and aborted the conversations of the Done job",
+    });
+    await abortJobConversations(ctx.host, listed.id);
 }
 
 /**
  * Applies the four repair rules to every job, then the turn-end rule (S-004 REQ-008) to each In progress job whose
  * lead is idle and waits for nothing. The turn-end check is that rule applied to saved state, not a fifth repair.
- * The conversations are listed once, before the rules, so a Done job with nothing active costs no conversation read.
+ * The conversations are listed once, before the rules, so a Done job whose conversations are all closed and idle
+ * costs one queued-input read per conversation and no other conversation read.
  */
 export async function repairJobs(deps: JobActionDeps): Promise<void> {
     const jobs = await allJobs(deps.ctx);
     const index = await indexConversations(deps.ctx);
     const leads = new Map<string, string>();
-    for (const { id } of jobs) {
-        const known = index.get(id) ?? { isActive: false };
+    for (const job of jobs) {
+        const { id } = job;
+        const known = index.get(id) ?? { isUnsettled: false, idleClosedIds: [] };
         await applyRule3(deps, id, known.leadId);
         const leadId = await applyRule1(deps, id, known.leadId);
         if (leadId !== undefined) leads.set(id, leadId);
         await applyRule2(deps, id, leadId);
-        await applyRule4(deps, id, known.isActive);
+        await applyRule4(deps, job, known);
     }
     if (deps.options.turnEndRule === false) return;
     for (const { id } of jobs) await checkTurnEnd(deps, id, leads.get(id));
