@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
+import { createClient } from "../../src/client/client.ts";
+import { nodeTransport } from "../../src/client/node_transport.ts";
+import { localSocketPath } from "../../src/daemon/state_layout.ts";
 import { runBob } from "../support/bob_process.ts";
 import { type DaemonProcess, type FakeScript, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
@@ -10,6 +13,8 @@ const CTRL_D = "\x04";
 const FIRST = "what's running?";
 const SECOND = "and what is blocked?";
 const THIRD = "anything else?";
+const WAIT_MS = 20_000;
+const POLL_MS = 10;
 const PROMPT = "> ";
 const SKIP_REASON = "util-linux `script` is missing";
 
@@ -66,25 +71,62 @@ async function earlierMessages(fixture: Fixture, text: string): Promise<void> {
     assert.equal(result.status, 0, result.stderr);
 }
 
+/** The text of the front desk's inbox, read from the first snapshot of its conversation feed. */
+async function inboxOf(fixture: Fixture): Promise<string> {
+    const client = createClient(nodeTransport({ socketPath: localSocketPath(fixture.env.runtimeDir) }));
+    const subscription = client.subscribe({ scope: "conversation", conversationId: await deskId(fixture.daemon) });
+    try {
+        const first = await subscription.next();
+        const snapshot = first.done ? {} : ((first.value as { snapshot?: { inbox?: unknown } }).snapshot ?? {});
+        return JSON.stringify(snapshot.inbox ?? null);
+    } finally {
+        subscription.return({ end: "unsubscribed" }).catch(() => {});
+    }
+}
+
+async function until(isDone: () => Promise<boolean>, what: string): Promise<void> {
+    const deadline = Date.now() + WAIT_MS;
+    while (!(await isDone())) {
+        assert.ok(Date.now() < deadline, `timed out waiting for ${what}`);
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    }
+}
+
 const skip = !hasScript() && !process.env.CI ? SKIP_REASON : false;
 
 describe("bob chat on a terminal", { skip }, () => {
-    it("shows the last messages and a prompt, then answers both typed lines with the command line way in", async () => {
+    it("shows the last messages and a prompt", async () => {
         const fixture = await readyDaemon("echo");
         await earlierMessages(fixture, "earlier question");
         const session = chat(fixture);
 
         await session.waitFor("output", PROMPT);
+        session.write(CTRL_D);
+
+        assert.equal(await session.exited, 0, session.stderr());
         assert.ok(session.output().includes("user: earlier question"), session.output());
         assert.ok(session.output().includes("assistant: echo: earlier question"), session.output());
-        session.write(`${FIRST}\r${SECOND}\r`);
-        await session.waitFor("output", `echo: ${FIRST}`);
+    });
+
+    it("queues a second line behind the streaming answer, answers it next and records both with the command line way in", async () => {
+        const fixture = await readyDaemon("gated");
+        const session = chat(fixture);
+        await session.waitFor("output", PROMPT);
+
+        session.write(`${FIRST}\r`);
+        await until(async () => JSON.stringify(await entriesOf(fixture.daemon)).includes(FIRST), "the first line");
+        session.write(`${SECOND}\r`);
+        await until(async () => (await inboxOf(fixture)).includes(SECOND), "the second line queued");
+        assert.equal(session.output().includes("echo: "), false, "no answer while the run is held");
+        fixture.daemon.releaseRuns();
         await session.waitFor("output", `echo: ${SECOND}`);
         session.write(CTRL_D);
 
         assert.equal(await session.exited, 0, session.stderr());
+        const printed = session.output();
+        assert.ok(printed.indexOf(`echo: ${FIRST}`) !== -1);
+        assert.ok(printed.indexOf(`echo: ${FIRST}`) < printed.indexOf(`echo: ${SECOND}`));
         const transcript = JSON.stringify(await entriesOf(fixture.daemon));
-        assert.ok(transcript.includes(FIRST) && transcript.includes(SECOND));
         assert.ok(transcript.includes('"wayIn":"command line"'), transcript);
     });
 
@@ -105,7 +147,6 @@ describe("bob chat on a terminal", { skip }, () => {
         session.write(CTRL_D);
 
         assert.equal(await session.exited, 0, session.stderr());
-        console.log("ERR", JSON.stringify(session.stderr()));
         assert.ok(session.stderr().includes(`Dropped, not answered: ${SECOND}`), session.stderr());
         assert.ok(session.stderr().includes(`Dropped, not answered: ${FIRST}`), session.stderr());
         assert.equal(session.output().includes(`echo: ${SECOND}`), false);
@@ -158,5 +199,28 @@ describe("bob chat on a terminal", { skip }, () => {
             "a feed delta",
         );
         assert.ok(JSON.stringify(values).includes(`echo: ${FIRST}`));
+    });
+});
+
+describe("bob chat --reset without a terminal", () => {
+    it("empties the front desk's next context and keeps its conversation", async () => {
+        const fixture = await readyDaemon("echo");
+        await earlierMessages(fixture, "before the reset");
+        const idBefore = await deskId(fixture.daemon);
+
+        const result = await runBob(["chat", "--reset"], {
+            runtimeDir: fixture.env.runtimeDir,
+            env: fixture.env.env,
+            stdin: `${FIRST}\n`,
+        });
+
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout, `echo: ${FIRST}\n`);
+        assert.equal(await deskId(fixture.daemon), idBefore);
+        const context = JSON.stringify(
+            await fixture.daemon.invoke("conversations.context", { conversationId: idBefore }),
+        );
+        assert.equal(context.includes("before the reset"), false);
+        assert.ok(context.includes(FIRST));
     });
 });
