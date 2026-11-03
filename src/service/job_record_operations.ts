@@ -4,7 +4,9 @@
  * Every job is named by its ID or its short number in any letter case; the store resolves both.
  */
 import type { ServiceContext } from "../daemon/daemon.ts";
+import { FRONT_DESK_CREATION } from "../desk/desk_model.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
+import { findCreatedConversation } from "../host/idempotency.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import { EDITABLE_FIELDS, type JobAuthor, type JobStatus, type Letter } from "../jobs/job_model.ts";
 import {
@@ -135,6 +137,13 @@ export async function allEntries<T>(
     return entries;
 }
 
+/** Refuses a job reference that is the front desk's conversation id: the front desk is not a job (S-004 REQ-022). */
+export async function refuseFrontDesk(host: HarnessHost, ref: string): Promise<void> {
+    if (ref === (await findCreatedConversation(host, FRONT_DESK_CREATION))) {
+        throw new ServiceError("invalid_input", "The front desk is not a job conversation");
+    }
+}
+
 export async function readJob(ctx: Pick<ServiceContext, "host" | "jobStore">, ref: string): Promise<JobDetail> {
     const { jobStore, host } = ctx;
     const job = await jobStore.getJob(ref);
@@ -155,7 +164,10 @@ export function jobRecordOperations(_options: JobsComponentOptions) {
         name: "jobs.get",
         kind: "read",
         parse: (raw) => ({ job: requireString(asRecord(raw), "job") }),
-        run: (ctx, input) => refusing(readJob(ctx, input.job)),
+        async run(ctx, input) {
+            await refuseFrontDesk(ctx.host, input.job);
+            return refusing(readJob(ctx, input.job));
+        },
     });
     const list = defineOperation<ServiceContext, ListInput, { jobs: Job[]; cursor?: string }>({
         name: "jobs.list",
@@ -168,6 +180,7 @@ export function jobRecordOperations(_options: JobsComponentOptions) {
         kind: "control",
         parse: parseUpdate,
         async run(ctx, input, caller) {
+            await refuseFrontDesk(ctx.host, input.job);
             const author = await authorOf(caller, ctx.host);
             return refusing(ctx.jobStore.updateFields(input.job, input.fields, author));
         },
@@ -180,6 +193,7 @@ export function jobRecordOperations(_options: JobsComponentOptions) {
             return { job: requireString(record, "job"), text: requireString(record, "text") };
         },
         async run(ctx, input, caller) {
+            await refuseFrontDesk(ctx.host, input.job);
             const author = await authorOf(caller, ctx.host);
             return refusing(ctx.jobStore.addWorklog(input.job, input.text, author));
         },
