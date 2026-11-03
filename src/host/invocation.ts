@@ -302,33 +302,38 @@ async function isReportOwedTo(host: HarnessHost, meta: ConversationMeta | undefi
     return (await readConversationMeta(host, meta.invokedBy))?.awaiting.includes(id) ?? false;
 }
 
-async function abortRecursively(
+// Clears the conversation and, recursively, every conversation it awaits, and returns the ids in the order they are
+// aborted. Nothing is aborted here: the caller does that after the job's section is released.
+async function clearRecursively(
     host: HarnessHost,
     conversationId: string,
-    aborted: Set<string>,
+    cleared: Set<string>,
     isRoot = false,
 ): Promise<void> {
-    if (aborted.has(conversationId)) return;
+    if (cleared.has(conversationId)) return;
     // Read before clearing: the list is what the cascade follows. A conversation that was not seated has no
     // invocation links and awaits nothing.
     const meta = await readConversationMeta(host, conversationId);
     const isReportOwed = isRoot && (await isReportOwedTo(host, meta, conversationId));
-    aborted.add(conversationId);
-    // Cleared before the abort and before the recursion, so no cascaded run finds its invoker still waiting.
+    cleared.add(conversationId);
+    // Cleared before any abort, so no cascaded run finds its invoker still waiting.
     await clearWaiting(host, conversationId, isReportOwed);
-    await abortConversation(host, conversationId);
-    for (const awaitedId of meta?.awaiting ?? []) await abortRecursively(host, awaitedId, aborted);
+    for (const awaitedId of meta?.awaiting ?? []) await clearRecursively(host, awaitedId, cleared);
 }
 
 /**
  * Aborts the conversation, then every conversation it still awaits a report from, recursively, whether it is
  * steerable or parked. An invoked conversation that has reported has left `awaiting` and is not touched. No aborted
- * conversation stays parked, waits for a report or keeps held messages.
+ * conversation stays parked, waits for a report or keeps held messages. A closed conversation is refused with
+ * `ConversationClosedError`. The check and the clearing commits run in the job's section; the aborts wait for the
+ * runs to end, so they run after the section is released.
  */
 export async function abortWithAwaited(host: HarnessHost, conversationId: string): Promise<string[]> {
-    const aborted = new Set<string>();
-    await abortRecursively(host, conversationId, aborted, true);
-    return [...aborted];
+    const cleared = new Set<string>();
+    await inOpenConversation(host, conversationId, () => clearRecursively(host, conversationId, cleared, true));
+    const aborted = [...cleared];
+    for (const id of aborted) await abortConversation(host, id);
+    return aborted;
 }
 
 const closeConversation = (host: HarnessHost, conversationId: string) =>
