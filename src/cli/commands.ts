@@ -2,6 +2,7 @@
  * The `bob` command table (S-005 REQ-001). It imports no daemon module: a command that needs the daemon's code loads it
  * inside its `run`, so a command that only calls the service never pays for it (S-005 REQ-016).
  */
+import { chatCommand } from "./chat_command.ts";
 import type { CommandInput, CommandSpec } from "./command_line.ts";
 import { CONVERSATIONS_COMMANDS } from "./conversations_commands.ts";
 import { followCommand, jobsFollowCommand } from "./follow_commands.ts";
@@ -51,6 +52,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     exportCommand,
     importCommand,
     followCommand,
+    chatCommand,
     ...JOBS_COMMANDS,
     jobsFollowCommand,
     ...CONVERSATIONS_COMMANDS,
