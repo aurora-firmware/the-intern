@@ -140,8 +140,8 @@ code of our own, apart from the two bounded exceptions in decision 4.
 
    **First bounded exception: the-intern's own facts about a conversation, and redelivery from them.**
    - Facts the-intern owns about a conversation live in its own pi-durable documents: held messages (`held`),
-     awaiting links (`awaiting`), the parked state (`parked`) and the abort mark (`aborted`) in the conversation's
-     `intern.conversation` document, and creation keys in `intern.invocations` and `intern.idempotency`, including
+     awaiting links (`awaiting`), the parked state (`parked`), the abort mark (`aborted`) and the closed mark
+     (`closed`) in the conversation's `intern.conversation` document, and creation keys in `intern.invocations` and `intern.idempotency`, including
      the front desk's fixed key, written in the commit that creates the front desk (S-001 REQ-021). Each is written in
      the commit that changes it, together with the change it describes.
    - The abort mark records that a conversation's invoker is owed an "aborted" report (S-001 REQ-019). It is set only
@@ -150,6 +150,10 @@ code of our own, apart from the two bounded exceptions in decision 4.
      commit that, before pi-durable's abort, sets `parked` to `null` and empties `awaiting` and `held` (S-001 REQ-008).
      A document written without the field reads as not marked. The mark is spent once the invoker's `awaiting` no
      longer lists the conversation; it has no effect after that.
+   - The closed mark records that the conversation's job is Done (S-001 REQ-026). The job's abort sets it on every
+     conversation of the job, in the abort's own commit, idle conversations included, and nothing clears it. A
+     document written without the field reads as not closed. Every control operation and steering tool reads it and
+     refuses a closed conversation, and no redelivery path submits input to one.
    - The only recovery the daemon does is redelivery worked out from those facts. The daemon submits the input the
      facts show as undelivered: a conversation's held messages when it continues; the report of each awaited
      conversation whose run has finished, at start and when its run ends; and the "aborted" report of each awaited
@@ -178,7 +182,7 @@ code of our own, apart from the two bounded exceptions in decision 4.
    - A job write and the pi-durable change it goes with are two commits (Context). The daemon commits the job write
      first and makes the pi-durable change after it: a job is written before its lead conversation starts (S-001
      REQ-012), a block before the lead conversation parks, and a complete or cancel before the job's conversations
-     are aborted (S-004 REQ-018).
+     are aborted and closed (S-004 REQ-018).
    - Input to a Blocked job's lead goes the other way. It reaches the lead conversation first, as a held message or a
      pi-durable input, and the job resumes after it (S-004 REQ-006).
    - The start action needs no repair. It is written when the lead's first run takes a worker thread, before its
@@ -193,7 +197,8 @@ code of our own, apart from the two bounded exceptions in decision 4.
         messages), or has taken input since the job blocked (an input entry in its transcript after the entry the
         block recorded), is set In progress if it is still Blocked, with the Blocked reason cleared, and the lead
         continues with that input.
-     4. A Done job whose conversations still run, are parked or await a report gets them aborted.
+     4. A Done job with a conversation that isn't closed gets it closed, and aborted first if it still runs, is
+        parked or is awaited.
    - The block records the ID of the lead conversation's newest transcript entry in the job's internal
      `blockedAfterEntry`, in the same write as the status change, and the resume clears it the same way (S-004
      REQ-006, Interfaces). An input entry is an entry of kind `pi.user`, or one of the input entry kinds the daemon
@@ -358,3 +363,4 @@ second connection open. One shared handle orders every transaction and closes wi
 | 2026-11-02 | Decision 4, second bounded exception: rule 3 also covers a lead that has taken input since the job blocked, shown by an input entry (`pi.user`, the steer record or an ADR-004 kind) in its transcript after the entry the block recorded in the job's internal `blockedAfterEntry`; the block sets it and the resume clears it in the same write. Rule 3 reads the transcript newest first, back to that entry, as `readLastAnswer` does; it decides whether the rule applies and rebuilds no job field. Matches S-004 v0.4 REQ-006, REQ-018 and Interfaces. | T-129 F1 escalation: an answer the lead took after its park was cleared, before the resume was written, left the job Blocked with no rule to repair it. Architect escalation review; product owner decision of 2026-11-02 (option A). |
 | 2026-11-02 | Decision 4, second bounded exception: rule 1 also covers a To do job whose lead conversation holds no submission with request id `lead:<jobId>`, and completes the start; the startup read of that submission, made only for To do jobs with a known lead, decides whether the rule applies and rebuilds no job field. Matches S-004 v0.5 REQ-018 and AC-018.2. | PR 147 review, finding 4: a crash after the lead conversation is created and before its first input left the job To do with no agent working on it. pi-durable can't submit input in the creation commit. Product owner decision of 2026-11-02 (option A); an upstream pi-durable change and accepting the gap were rejected. |
 | 2026-11-03 | Decision 4, first bounded exception: the creation keys in `intern.idempotency` include the front desk's fixed key, written in the commit that creates the front desk, and a creation key also turns a repeated startup front-desk creation (S-002 REQ-002 step 6) into the conversation it already created; that step is a keyed create, not redelivery or repair. The front desk's id is the only fact it adds; no redelivery path or repair rule is added. | S-001 v0.8 REQ-021 and S-002 v0.10 REQ-002; front desk architecture consistency review, finding F8; product owner decisions of the front desk brainstorm, 2026-11-03. |
+| 2026-11-03 | Decision 4, first bounded exception: a new fact, the closed mark (`closed`) in the conversation's `intern.conversation` document, set by a job's abort in the abort's own commit on every conversation of the job and never cleared; every control operation and steering tool refuses a closed conversation, and no redelivery path submits to one. Second bounded exception: a complete or cancel is written before the conversations are aborted and closed, and repair rule 4 closes each conversation of a Done job that isn't closed. | Product owner decision of 2026-11-03 (S-001 v0.9 REQ-026, S-004 v0.7): a Done job's conversations close for good. The decision requires a new kind of fact to amend it first. |

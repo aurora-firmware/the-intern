@@ -1,6 +1,6 @@
 ---
 title: Agent roles and conversations
-version: '0.8'
+version: '0.9'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-15'
 author: planner
@@ -43,6 +43,7 @@ members and turns their requests into jobs. Success Criteria lists the observabl
 | Model turn | One model request and the tool calls it makes. A seat change applies from the next model turn, so it can take effect during an agent run. |
 | Worker thread | A logical unit of capacity: one active agent run uses one. Their number is S-000's limit on how many agents work at once (REQ-010). Whether they are operating-system threads is the daemon spec's choice. |
 | Thread | Only in the multi-threading sense. |
+| Closed | The final status of a job's conversation once its job is Done (REQ-026). A closed conversation keeps its transcript as the record of the work and takes no input or control; only read operations act on it. The front desk never closes. |
 | Reset | Clears what the model sees of a conversation. The conversation, its id and its stored entries stay. |
 | Transcript, context | The transcript is every stored entry of a conversation. The context is what the model receives on the next request, after resets and compactions. |
 | Workspace | A registered local folder that an agent works in. It supplies extra instructions and skills, and is where tools start. Agents work on the OS and filesystem with the account the-intern runs as; the workspace doesn't limit what they reach. |
@@ -118,6 +119,8 @@ What this specification explicitly does NOT cover:
 - **How a parked agent's continue rule is chosen.** Whether a parked agent continues on each report as it arrives, or
   stays parked until every agent it invoked has reported, and who chooses, is decided later (Open Questions). Both must
   be possible. Until then a parked agent continues on each report (REQ-019).
+- **Continuing a closed conversation.** A job's conversations close for good when the job is Done (REQ-026). More
+  work is a new job, which a team member or an agent creates and may relate to the first (S-004 REQ-009).
 - **Approval rules for actions.** S-000 excludes per-action rules: what an agent can do is bounded by the account
   the-intern runs as and the tools its role is offered.
 - **The mailbox, schedules and triggers themselves.** Reading the-intern's own mailbox belongs to the Email spec.
@@ -239,9 +242,10 @@ What this specification explicitly does NOT cover:
 
 **The conversation's own document.** Each conversation's `intern.conversation` document holds the conversation's
 parked state, the messages held for it while it is parked, the invoked conversations whose reports it awaits, and its
-abort mark, which records that its invoker is owed an "aborted" report (REQ-019). They are facts the-intern owns,
+abort mark, which records that its invoker is owed an "aborted" report (REQ-019), and its closed mark (REQ-026). They are facts the-intern owns,
 written in the commit that changes them, and the only recovery from them is redelivery (ADR-001 decision 4). An
-abort's facts are written in one commit just before pi-durable's abort. The document is internal to the daemon, not an
+abort's facts are written in one commit just before pi-durable's abort; when a job's abort closes the conversation,
+the closed mark is written in that same commit. The document is internal to the daemon, not an
 external contract.
 
 ## Interfaces
@@ -294,7 +298,8 @@ These operations of the S-002 catalogue carry this spec's behaviour (S-002 REQ-0
 
 Two capabilities are offered in-process only, for S-004: `jobs.startLead`, which starts a job's lead conversation
 with a role, optional overrides, a first input and an origin and is called by `jobs.create` (REQ-012); and the
-capability that aborts every conversation of a job, for S-004's complete and cancel actions (REQ-008).
+capability that aborts and closes every conversation of a job, for S-004's complete and cancel actions and its repair
+rule 4 (REQ-008, REQ-026).
 
 ### Exposed: transcript entries
 
@@ -355,7 +360,10 @@ Either: does the work itself
 At any time: a team member reseats, resets or steers any conversation                       REQ-004, REQ-011, REQ-020
 A seat's workspace folder disappears → tool errors, the daemon keeps running                REQ-015
   ↓
-The lead verifies against the definition of done and closes the job (Jobs spec)
+The lead verifies against the definition of done and completes the job, or anyone cancels it (Jobs spec)
+  ↓
+Job Done → every conversation of the job is aborted and closed: read only, for good          REQ-026
+  (input, abort, reset, reseat or compaction of a closed conversation → refused conflict)    REQ-026
 ```
 
 The front desk, from startup to a team member's request:
@@ -378,6 +386,7 @@ The desk agent answers with the front-desk tools only                           
   ↓
 Context fills → pi-durable compacts it; a team member resets it → same id, clean context     REQ-024
 A job-only operation given the front desk → refused "not a job conversation"                 REQ-025
+The front desk never closes; steering a closed job conversation → error result               REQ-026
 ```
 
 ## Behavioral Requirements
@@ -392,8 +401,8 @@ suffixed identifiers:
 | R-8a | REQ-019 |
 | R-10a | REQ-020 |
 
-Requirements appear in reading order, so REQ-018 to REQ-020 follow the requirement they used to extend, and REQ-021 to
-REQ-025, the front desk, follow monitoring. REQ-017 is under Quality Requirements. The deterministic tests run on
+Requirements appear in reading order, so REQ-018 to REQ-020 follow the requirement they used to extend, REQ-021 to
+REQ-025, the front desk, follow monitoring, and REQ-026, closed conversations, follows them. REQ-017 is under Quality Requirements. The deterministic tests run on
 the fake model (S-002 Definitions), whose replies are a pure function of the transcript.
 
 ### REQ-001 — Shipped roles
@@ -593,6 +602,7 @@ The-intern SHALL let a team member change the seat of any conversation at any ti
 - The change applies from the next model turn. A model turn already running finishes with the seat it started
   with, unless the team member also aborts or steers it.
 - Changing the seat of a job's lead conversation changes the job's lead agent.
+- A closed conversation can't be reseated (REQ-026).
 
 #### AC-004.1 — The next turn runs with the new seat
 
@@ -774,8 +784,8 @@ defaults, and a job prompt for its part.
   says why, no conversation is created, and its run continues.
 - Aborting a conversation also aborts the invoked conversations whose report it is still waiting for, whether it
   is steerable or parked. Each of those aborts the conversations it waits for in turn. Aborting a job aborts every
-  conversation of the job; the operation that does it belongs to the Jobs spec, and this spec delivers the capability
-  it calls.
+  conversation of the job and closes them (REQ-026); the operation that does it belongs to the Jobs spec, and this
+  spec delivers the capability it calls. A closed conversation can't be aborted (REQ-026).
 - An abort leaves no aborted conversation parked or waiting for a report. Its held messages (REQ-020) are withdrawn,
   as an abort withdraws queued input. Whether its invoking conversation gets a report follows REQ-019.
 
@@ -970,6 +980,8 @@ running model turn picks up after its current tool round. The message can be que
   sent with the mode that refuses input while a run is active (reject, S-002 REQ-012) is held like any other message,
   not refused, and the conversation takes it as a follow-up when it continues. A message sent to a job's lead
   conversation parked because its job is Blocked continues it with that message (REQ-014; S-004 REQ-006).
+- A closed conversation takes no message (REQ-026): a submit to it is refused `conflict`, and the `steer` tool or
+  the front-desk steering tool aimed at it returns an error result and the run goes on; neither delivers anything.
 - The transcript records who steered.
 
 #### AC-020.1 — Steer and follow-up
@@ -1019,7 +1031,8 @@ running model turn picks up after its current tool round. The message can be que
 ### REQ-011 — Reset by a team member
 
 The-intern SHALL let a team member reset any conversation: its context is cleared for the model, earlier entries stay
-in the stored transcript, and the seat is kept unless the reset names a new one.
+in the stored transcript, and the seat is kept unless the reset names a new one. A closed conversation can't be reset
+(REQ-026).
 
 #### AC-011.1 — Reset keeps the seat and the entries
 
@@ -1148,7 +1161,7 @@ command-line spec (product owner ruling, 2026-10-31).
 
 - list all conversations with id, job, whether it is the job's lead conversation, whether it is the front desk,
   seat (role, model, thinking level, workspace), origin (job source, invoking conversation or front desk), status
-  (running, idle, parked or waiting for a worker thread) and last activity
+  (running, idle, parked, waiting for a worker thread or closed, REQ-026) and last activity
 - list the conversations of a job
 - show the conversations a conversation invoked, recursively
 - read a transcript with seat records and attribution (REQ-007), including entries from before a reset
@@ -1411,8 +1424,8 @@ conversation id doesn't change, so `desk.get` keeps naming it. A reset is the on
 Every capability that acts on the job of a conversation SHALL refuse the front desk with an error saying that it is
 not a job conversation, and change nothing. In this spec that is the capability that aborts every conversation of a
 job (REQ-008); S-004 REQ-022 applies the same refusal to the job
-operations. The front desk never becomes a job's lead conversation. Aborting a job's conversations, by a cancel, a
-complete or a repair (S-004), never reaches the front desk. Removing the `desk` role is refused like removing any
+operations. The front desk never becomes a job's lead conversation. Aborting and closing a job's conversations, by a
+cancel, a complete or a repair (S-004), never reaches the front desk, and the front desk never closes (REQ-026). Removing the `desk` role is refused like removing any
 shipped role (REQ-003), and changing it affects only seats made after the change.
 
 #### AC-025.1 — Refused as not a job conversation
@@ -1427,7 +1440,7 @@ shipped role (REQ-003), and changing it affects only seats made after the change
 
 - **Given:** the front desk in the middle of a run, and two jobs
 - **When:** one job is cancelled and the other completed
-- **Then:** the front desk's run goes on and its entries are unchanged
+- **Then:** the front desk's run goes on, its entries are unchanged, and it isn't closed
 
 **Verification:** test — a service test on the fake model.
 
@@ -1439,12 +1452,69 @@ shipped role (REQ-003), and changing it affects only seats made after the change
 
 **Verification:** test — a service test.
 
+### REQ-026 — Closed conversations
+
+Every conversation of a job SHALL close when the job becomes Done, by a complete or a cancel (S-004 REQ-007), and stay
+closed for good. A conversation belongs to at most one job for its whole life, and a Done job is never reopened, so a
+closed conversation never works again. Its transcript stays as the record of what was done. More work is a new job,
+which a team member or an agent of any job may create and relate to the first (S-004 REQ-009).
+
+- Closing is part of the job abort (REQ-008): every conversation of the job, whether running, idle, parked or waiting
+  for a worker thread, is aborted, with no report sent (REQ-019), its queued input and held messages are withdrawn,
+  and it is marked closed in the abort's own commit. That covers the lead conversation and every conversation invoked
+  within the job, at any depth.
+- A closed conversation keeps its id, seat, origin, job links, invocation links and every stored entry. Every read
+  operation works on it (REQ-016; S-002 REQ-012), and it lists with status `closed`.
+- Every operation that would change a closed conversation SHALL refuse it with `conflict`, naming the conversation as
+  closed, and change nothing: submitting input in any busy mode, abort, reset, reseat and compaction (REQ-004,
+  REQ-008, REQ-011, REQ-020; S-002 REQ-012). The `steer` tool and the front-desk steering tools (REQ-022) aimed at a
+  closed conversation return an error result, and the run goes on.
+- A closed conversation runs no more model turns, after a restart too: it takes no automatic compaction, report or
+  held message.
+- The front desk belongs to no job and never closes (REQ-021, REQ-025).
+
+#### AC-026.1 — Done closes every conversation of the job
+
+- **Given:** job `C-4` whose lead is parked for an invoked agent that runs and has invoked its own, and job `W-5`
+  whose lead is idle
+- **When:** a team member cancels `C-4` and completes `W-5`
+- **Then:** all four conversations list with status `closed`, no report is delivered, each keeps its stored entries
+  and seat, and `conversations.get`, `conversations.entries` and `conversations.invocations` return them
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-026.2 — A closed conversation refuses changes
+
+- **Given:** a closed conversation
+- **When:** a team member submits input to it in each busy mode, and aborts, resets, reseats and compacts it
+- **Then:** each call is refused `conflict` naming the conversation as closed, and its entries, seat and status are
+  unchanged
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-026.3 — Tools aimed at a closed conversation
+
+- **Given:** a closed conversation, a running agent in another job's conversation, and the front desk
+- **When:** the agent calls `steer` naming the closed conversation, and the front desk sends input to it and stops it
+  with its steering tools
+- **Then:** each call returns an error result, both runs go on, and the closed conversation gains no entry
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-026.4 — Closed across a restart
+
+- **Given:** a job's closed conversations, one of them closed while it was running
+- **When:** the daemon is killed with `kill -9` and restarted
+- **Then:** each is still closed, runs no model turn and takes no compaction, and the front desk is not closed
+
+**Verification:** test — a service test on the fake model.
+
 ## Quality Requirements
 
 ### REQ-017 — Durability
 
-Seats, seat records, resets, job links, invocation links, depth, origins, parked state, undelivered reports and the
-front desk's conversation id (REQ-021) MUST survive a daemon kill and restart. A seat change, handoff, reset,
+Seats, seat records, resets, job links, invocation links, depth, origins, parked state, undelivered reports, the closed
+mark (REQ-026) and the front desk's conversation id (REQ-021) MUST survive a daemon kill and restart. A seat change, handoff, reset,
 invocation, park or report interrupted by a crash either completed before the crash or completes on resume. It is
 never half-applied: never a new seat without its record, never an invoked conversation without its invocation link,
 never a lead conversation without its job, and never a report lost or delivered twice. Work waiting for a worker
@@ -1581,8 +1651,9 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
 
 ## Implementation Order
 
-Delivered: phases 1 to 5 are implemented (tasks up to T-091). Phase 6, the front desk, comes with the v0.8
-amendment and isn't broken down yet.
+Delivered: phases 1 to 5 are implemented (tasks up to T-091). Phase 6, the front desk, is broken down with the
+command-line spec (S-005, tasks T-145 to T-159). Phase 7, closed conversations, comes with the v0.9 amendment and
+isn't broken down yet.
 
 This spec relies on the daemon and host-runtime spec for the database, startup, configuration and process model,
 on the control-endpoint spec for the surfaces the command line, the web interface and monitoring use, and on the
@@ -1596,6 +1667,7 @@ Jobs spec for creating jobs. Its phases can be developed against a minimal host 
 | 4 | Worker threads, and parked conversations freeing them | Phase 3, daemon spec's process model |
 | 5 | Job sources: the operation that starts a job's lead conversation for requests, schedule fires, triggers and follow-ups; the parking and continuing that blocked jobs use; the capability that aborts every conversation of a job. Monitoring read operations: list, job links, statuses, invocations, live transcript. The schedule behaviour, the command-line views and the job abort operation come with their own specs | Phases 1–3, S-002 phase 3 |
 | 6 | The front desk: the shipped `desk` role, its creation and recovery at startup, `desk.get` and the front-desk mark in `conversations.list`, the front-desk tools, its attribution, and the refusals of REQ-025; live acceptance test 4 | Phases 1–5, S-004's job tools and `list_jobs` (S-004 REQ-021) |
+| 7 | Closed conversations: the closed mark written with a job's abort, `closed` in the status, the `conflict` refusals of input and control, the error results of the steering tools, and the closed mark in repair rule 4 (S-004 REQ-018) | Phases 1–6, S-004's complete, cancel and repair rules |
 
 ## Open Questions
 
@@ -1626,3 +1698,4 @@ behaviour. Deciding either one is a scope amendment of this spec.
 | 2026-11-02 | v0.7. REQ-020 and AC-020.4: only a message sent to a conversation parked for reports is held; a message sent to a job's lead conversation parked because its job is Blocked continues it (new AC-014.2). REQ-003, REQ-005, AC-005.2 and the agent tools in Interfaces: the job tools (S-004 REQ-013) are offered with the coordination tools whatever the tool set names. REQ-007: the daemon is a seat actor for input it sends under a job's rules. Definitions, Job: the fields S-004 defines. Interfaces: `jobs.startLead` leaves the service operations table and is offered in-process only, called by `jobs.create`. Assumptions: the Jobs spec is S-004. | S-004 architecture consistency review; product owner decisions 2026-11-02. Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None yet; the code changes (the held-message rule in `src/host/steering.ts`, the job tools, `jobs.startLead` off the listeners) come in the S-004 breakdown |
 | 2026-11-03 | v0.8. The front desk: one standing conversation per instance that assists team members and belongs to no job. Purpose, Definitions (Front desk, Front-desk tools, Job source and origin, Root conversation, New fork and reset, Compaction), Users and Journeys (journey 7), Design Principles, Alternatives Considered, System Diagram, Responsibility Separation (Role catalog, Agent coordination, Entry routing, new Front-desk tools, Monitoring), Interfaces (the front-desk tools, `desk.get`, the front-desk mark in `conversations.list`, the `intern.steer` sender) and Workflow follow. REQ-001, AC-001.1, REQ-002 and AC-002.1: the shipped `desk` role, with an empty tool set. REQ-003 and REQ-005: in the front desk the front-desk tools replace the coordination capabilities and the job tools. REQ-012: every conversation except the front desk records its job. REQ-016: the list marks the front desk. REQ-017: the front desk's id survives a crash. New REQ-021 (the front desk, its creation and recovery), REQ-022 (the front-desk tools), REQ-023 (origin and attribution), REQ-024 (compaction and reset) and REQ-025 (refusing job-only capabilities), with AC-021.1 to AC-025.3. Exclusions: "Interactive chat" became "Chat beyond the front desk"; added email to the front desk, work in it, a job record for it, its presentation and telling team members apart. Assumptions: the two pi-durable premises, confirmed. Success Criteria 6 and 7 and Implementation Order phase 6. This deliberately reverses part of the 2026-10-30 ruling that removed the root conversation and interactive chat: one standing conversation now assists team members, though it is not a root conversation and does no work. Architecture consistency review (findings F1 to F7), same version: Exclusions, every conversation knows its job except the front desk; REQ-007 and AC-007.1, the daemon is the actor of the front desk's first seat; REQ-020 and new AC-020.5, no agent steers the front desk and only a team member's submit with way in `command line` or `web interface` reaches it; REQ-022 and new AC-022.7, front-desk input takes request id `steer:<frontDeskId>:<toolCallId>` and arrives once after a crash; REQ-023 and AC-023.2, a stop records no front-desk actor; REQ-025 and AC-025.1, the untestable lead-start case removed; Success Criterion 5, the front-desk mark. | Product owner decisions of the front desk brainstorm, 2026-11-03, approved section by section; the command-line spec (S-005) and the web chat open the front desk. Architecture consistency review, 2026-11-03; product owner decisions on F4 and F7. | None yet; the front desk comes in the breakdown of this amendment |
 | 2026-11-03 | v0.8, still. Success Criterion 1 names the three shipped roles `bob`, `gp` and `desk`, as REQ-001 and AC-001.1 do. | Gate 2 preflight of the S-005 plan, finding P6: the criterion still named two roles. | T-145 |
+| 2026-11-03 | v0.9. Closed conversations: every conversation of a job closes when the job is Done and stays closed for good; it keeps its transcript and every read works on it, and input, abort, reset, reseat and compaction of it are refused `conflict`; the `steer` tool and the front-desk steering tools aimed at it return an error result; it runs no more model turns, after a restart too; the front desk never closes. New REQ-026 with AC-026.1 to AC-026.4. Definitions (Closed), Exclusions (continuing a closed conversation), Responsibility Separation (the closed mark in the conversation's own document, written in the job abort's commit), Interfaces (the job abort capability closes, and serves S-004's repair rule 4), Workflow, REQ-004, REQ-008, REQ-011, REQ-016 (status `closed`), REQ-017 (the closed mark survives a crash), REQ-020, REQ-025 and AC-025.2, and Implementation Order phase 7 follow. | Product owner decision of 2026-11-03, during the S-005 dev-loop (T-166): a Done job's conversations close and are kept only as the history of the work; a conversation belongs to at most one job; more work is a new job; the front desk never closes; only read operations act on a closed conversation. | T-166 (blocked on it); new tasks for phase 7 |
