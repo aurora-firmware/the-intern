@@ -6,6 +6,7 @@
  */
 import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { ServiceContext } from "../daemon/daemon.ts";
+import { ConversationClosedError, inOpenConversation } from "../host/job_section.ts";
 import { changeSeat, readConversationMeta, resetWithSeat, type SeatActor } from "../host/seating.ts";
 import { RoleRefusedError } from "../roles/role_catalog.ts";
 import type { Seat } from "../roles/role_model.ts";
@@ -90,11 +91,18 @@ export function seatOperations(component: AgentsComponent) {
                     ? (await readConversationMeta(host, caller.actor.conversationId))?.seat.role
                     : undefined;
             const actor = seatActorFor(caller, callerRole);
-            if (reset === undefined) {
-                await changeSeat(host, conversationId, { seat, actor, contextMode: "full" });
-            } else {
-                const change = { seat, actor, contextMode: "clean" as const };
-                await resetWithSeat(host, conversationId, { ...reset, change });
+            try {
+                await inOpenConversation(host, conversationId, () =>
+                    reset === undefined
+                        ? changeSeat(host, conversationId, { seat, actor, contextMode: "full" })
+                        : resetWithSeat(host, conversationId, {
+                              ...reset,
+                              change: { seat, actor, contextMode: "clean" },
+                          }),
+                );
+            } catch (error) {
+                if (error instanceof ConversationClosedError) throw new ServiceError("conflict", error.message);
+                throw error;
             }
             const { thinkingLevel, model, workspace } = seat;
             return { role: seat.role, model, ...(thinkingLevel !== undefined && { thinkingLevel }), workspace };
