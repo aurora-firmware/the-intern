@@ -141,7 +141,7 @@ The commands for these changes come with the command-line documentation.
 ## Sharing a job
 
 Every job has one lead agent at a time. It works in the job's lead conversation, carries the job from definition to
-verification, and is the only agent that closes it. Other agents work on parts of the job and never close it.
+verification, and is the only agent that completes it. Other agents work on parts of the job and never complete it.
 
 A lead's turn can end with the job still In progress and nothing left to wait for: no input queued for it and no
 invoked agent of the job running or reporting. The Intern then acts for the job:
@@ -155,10 +155,10 @@ The reminder shows in the lead's conversation as a steer from the daemon, and th
 the daemon as author. A job that is blocked and then resumed gets a new reminder at the lead's next stop.
 
 Every role carries the job tools, whatever its tool list says. They read the job, edit its title, description and
-definition of done, add to its worklog, create a follow-up job and relate jobs. Only the job's lead can block and
-complete the job. An agent the lead invoked gets an error result
-from either, and its run goes on. A message sent to a lead that is parked for its Blocked job continues it and resumes
-the job. [Giving, following and answering jobs](jobs.md) describes jobs in full.
+definition of done, add to its worklog, create a follow-up job and relate jobs. A follow-up job is Related to the job
+only when the agent chooses to relate it. Only the job's lead can block and complete the job. An agent the lead
+invoked gets an error result from either, and its run goes on. A message sent to a lead that is parked for its Blocked
+job continues it and resumes the job. [Giving, following and answering jobs](jobs.md) describes jobs in full.
 
 Every role is also offered three capabilities for sharing the work.
 
@@ -214,11 +214,20 @@ aborted stays parked, waits for a report or keeps its held messages. An agent ab
 says so, with its last answer when it has one, and a parked agent that invoked it continues on that report. The agents
 aborted along with their invoker send no report back.
 
+When a job is completed or cancelled, every conversation of the job is aborted and closed for good, as
+[Statuses and actions](jobs.md#statuses-and-actions) describes. A closed conversation can't be aborted: the abort is
+refused as `conflict`. A coordination or job tool called from a conversation of a Done job gets an error result and
+changes nothing, and the run goes on: `invoke` creates no conversation, `handoff` changes no seat and `steer` delivers
+nothing.
+
 ### Steering
 
 You and any agent can steer a running conversation with a message. The message arrives after the current tool calls, or
 as a follow-up after the run ends. The transcript records who steered. The commands for you to steer a conversation
 come with the command-line documentation.
+
+A closed conversation, one of a Done job, can't be steered. A `steer` aimed at it gets an error result and delivers
+nothing, and the run of the agent that sent it goes on. A message you send to it is refused as `conflict`.
 
 ### Limits
 
