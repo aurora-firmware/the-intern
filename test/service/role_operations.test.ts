@@ -71,12 +71,12 @@ async function refusal(action: Promise<unknown>): Promise<ServiceError> {
 const reviewer = { name: "reviewer", instructions: "Review the work.", tools: ["read"], skills: [] };
 
 describe("the role operations", () => {
-    it("lists the shipped roles bob and gp through roles.list", async () => {
+    it("lists the shipped roles bob, gp and desk through roles.list", async () => {
         const { roles } = await start(await hermetic());
 
         assert.deepEqual(
             (await roles()).map((role) => role.name),
-            ["bob", "gp"],
+            ["bob", "gp", "desk"],
         );
     });
 
@@ -201,6 +201,18 @@ describe("the role operations", () => {
         assert.equal(error.code, "conflict");
         assert.match(error.message, /bob/);
         assert.equal(await fileText(env), "");
+    });
+
+    it("ends with conflict naming the role and leaves the file unchanged when desk is removed", async () => {
+        const env = await hermetic();
+        const { invoke, roles } = await start(env);
+
+        const error = await refusal(invoke("roles.remove", { name: "desk" }));
+
+        assert.equal(error.code, "conflict");
+        assert.match(error.message, /desk/);
+        assert.equal(await fileText(env), "");
+        assert.ok((await roles()).some((role) => role.name === "desk"));
     });
 
     it("ends with conflict naming the role and the referrer when a referenced role is removed, leaving the file unchanged", async () => {

@@ -86,7 +86,7 @@ describe("the workspace operations", () => {
         const { listed } = await start(await hermetic());
 
         const roles = (await listed()).filter((entry) => entry.kind === "role_default").map((entry) => entry.role);
-        assert.deepEqual(roles.sort(), ["bob", "gp"]);
+        assert.deepEqual(roles.sort(), ["bob", "desk", "gp"]);
     });
 
     it("writes a registered folder to the file, lists it and lets a seat name it at once", async () => {
