@@ -2,7 +2,7 @@
 id: S-005
 title: Command line
 version: '0.1'
-status: review  # draft | review | approved | superseded
+status: approved  # draft | review | approved | superseded
 created: '2026-11-03'
 author: planner
 ---

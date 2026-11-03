@@ -118,7 +118,7 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
     <span><i class="sw s2"></i>daemon and host runtime (S-002)</span>
     <span><i class="sw s3"></i>control endpoint: listeners, client library (S-003)</span>
     <span><i class="sw s4"></i>jobs: the job record and the life of a job (S-004)</span>
-    <span><i class="sw s5"></i>command line: the <code>bob</code> commands (S-005, in review)</span>
+    <span><i class="sw s5"></i>command line: the <code>bob</code> commands (S-005)</span>
     <span><i class="sw later"></i>a spec not written yet</span>
     <span><i class="sw ext"></i>outside the project</span>
   </div>
@@ -212,7 +212,7 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
         <path class="ln" d="M400 526 V556"/>
       </svg>
     </div>
-    <figcaption>Read top to bottom. Every box carries the spec that owns it, and the colour follows the same rule: teal is S-001, indigo is S-002, magenta is S-003, blue is S-004, green is S-005 (in review), dashed grey is a spec not written yet ("later" boxes are named after their S-000 component; "bootstrap" is answered by S-000's bootstrap plan). The listeners belong to the Intern service and are specified in S-003: both serve one HTTP protocol, and no listener checks who calls. Email and schedules call the service layer in the same process; the command line and the web interface go through a listener, using the client library.</figcaption>
+    <figcaption>Read top to bottom. Every box carries the spec that owns it, and the colour follows the same rule: teal is S-001, indigo is S-002, magenta is S-003, blue is S-004, green is S-005, dashed grey is a spec not written yet ("later" boxes are named after their S-000 component; "bootstrap" is answered by S-000's bootstrap plan). The listeners belong to the Intern service and are specified in S-003: both serve one HTTP protocol, and no listener checks who calls. Email and schedules call the service layer in the same process; the command line and the web interface go through a listener, using the client library.</figcaption>
   </figure>
 </section>
 
@@ -363,7 +363,7 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
 <section id="specs">
   <span class="eyebrow">5 · Spec map</span>
   <h2>Which spec owns what</h2>
-  <p class="claim">S-000 owns the decomposition into components; each later spec owns the contract of one component. Specs are written in layers, and only S-000 to S-005 exist so far, S-005 still in review.</p>
+  <p class="claim">S-000 owns the decomposition into components; each later spec owns the contract of one component. Specs are written in layers, and only S-000 to S-005 exist so far.</p>
   <figure>
     <div class="fig">
       <svg viewBox="0 0 800 340" role="img" aria-label="Spec dependency map: S-002 is the base; S-001 and S-003 build on it; S-004 Jobs builds on S-001; S-005 Command line builds on S-003; the specs for Schedules and triggers, Email, Web interface, Skills and instructions, Team knowledge and Installation build on those.">
@@ -383,7 +383,7 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
         <path class="ln dash" d="M540 38 L600 38"/><path class="ln dash" d="M540 50 L600 100"/>
       </svg>
     </div>
-    <figcaption>Arrows read "is built on". Blue is S-004, which also needs S-002 and S-003. Green is S-005, in review, which also uses S-001's front desk and S-004's job operations. Grey boxes are named after their S-000 component and get a spec number when written; their dependencies are the intended ones, and each spec confirms them. S-001 phase 1 also needs S-002 phases 1 to 3, and S-002 phase 5 needs the supervisor registration from the bootstrap plan (Installation and service setup).</figcaption>
+    <figcaption>Arrows read "is built on". Blue is S-004, which also needs S-002 and S-003. Green is S-005, which also uses S-001's front desk and S-004's job operations. Grey boxes are named after their S-000 component and get a spec number when written; their dependencies are the intended ones, and each spec confirms them. S-001 phase 1 also needs S-002 phases 1 to 3, and S-002 phase 5 needs the supervisor registration from the bootstrap plan (Installation and service setup).</figcaption>
   </figure>
   <div class="tablewrap">
     <table>
@@ -394,7 +394,7 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
         <tr><td>S-002</td><td>Intern service</td><td><span class="chip s2">approved, v0.10</span></td><td>T-017 to T-052, done; T-094 for the v0.7 amendment, done; the v0.8 amendment is in T-110 to T-143; the v0.9 amendment, which refuses a <code>jobs.create</code> call that names an origin, is in T-117; the v0.10 amendment, which adds <code>desk.get</code>, isn't broken down yet</td><td>Process, lifecycle, service account, configuration file, worker-thread capacity and queue, service layer, observation feed.</td></tr>
         <tr><td>S-003</td><td>Intern service: control endpoint</td><td><span class="chip s3">approved</span></td><td>T-095 to T-109, with T-094 for S-002 v0.7</td><td>The local socket for the command line, the network listener for the web interface, the HTTP routes for every operation and the feed, the web interface files under <code>/ui/</code>, the client library.</td></tr>
         <tr><td>S-004</td><td>Jobs</td><td><span class="chip s4">approved, v0.6</span></td><td>T-110 to T-144; the v0.6 front desk amendment isn't broken down yet</td><td>The job record in the job store, the four statuses and the five actions, blocked jobs and answers, the worklog and history, follow-up jobs and Related links, the job operations and job tools, the job tools in the front desk, the job feed events, the startup repair rules, export and the import step.</td></tr>
-        <tr><td>S-005</td><td>Command line</td><td><span class="chip s5">review, v0.1</span></td><td>none; not broken down yet</td><td>The <code>bob</code> command groups and top-level commands over the client library: jobs, answering, following, the front-desk chat, conversations, roles, workspaces, models, status, usage, export and the import command; <code>--json</code>, exit codes, <code>BOB_RUNTIME_DIR</code>, the reserved groups for later specs, and the manual's command reference.</td></tr>
+        <tr><td>S-005</td><td>Command line</td><td><span class="chip s5">approved</span></td><td>none; not broken down yet</td><td>The <code>bob</code> command groups and top-level commands over the client library: jobs, answering, following, the front-desk chat, conversations, roles, workspaces, models, status, usage, export and the import command; <code>--json</code>, exit codes, <code>BOB_RUNTIME_DIR</code>, the reserved groups for later specs, and the manual's command reference.</td></tr>
         <tr><td>—</td><td>Schedules and triggers</td><td><span class="chip later">planned</span></td><td>none</td><td>Fires and events, run history, refusing an unknown role, skipping busy runs and fires whose workspace is missing, "run now", live test 1 of S-001.</td></tr>
         <tr><td>—</td><td>Email</td><td><span class="chip later">planned</span></td><td>none</td><td>The Intern's own mailbox: sorting, requests to jobs, answers, mail events, optional sending.</td></tr>
         <tr><td>—</td><td>Web interface</td><td><span class="chip later">planned</span></td><td>none</td><td>Job board, answering, live view, configuration from the browser.</td></tr>
