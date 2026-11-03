@@ -1,7 +1,7 @@
 ---
 id: S-000
 title: System Overview
-version: '0.5'
+version: '0.6'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-27'
 author: planner
@@ -140,7 +140,9 @@ person's access.
 - **Responsibility:** What a role is and which roles ship; how the agent that leads a job is chosen and how it hands
   the job over to an agent of another role, keeping exactly one lead at a time; how the lead calls on
   agents of specialist roles, steers them and collects their reports; the limits on how deep and wide that goes; and
-  what shows which agent is working on what.
+  what shows which agent is working on what. It also owns the front desk: the one standing conversation that assists
+  team members, belongs to no job, turns their requests into jobs, tells them what is being worked on, and passes
+  their answers and steering on, without doing the work itself.
 - **Boundary:** It does not keep the job record (Jobs), run the process or queue work (Intern service), or supply the
   content of instructions and skills (Skills and instructions).
 - **Works with:** Intern service, Jobs, Skills and instructions, Team knowledge, Email, Command line, Web interface.
@@ -148,9 +150,10 @@ person's access.
 #### Command line
 
 - **Name:** Command line.
-- **Responsibility:** Commands for using and running The Intern: starting the service, creating jobs, listing them and
-  reading their history, answering blocked jobs, following and stopping work, managing schedules, triggers, roles,
-  skills, instructions and knowledge sources, and exporting and importing the job record.
+- **Responsibility:** Commands for using and running The Intern: starting the service, chatting with the front desk,
+  creating jobs, listing them and reading their history, answering blocked jobs, following and stopping work,
+  managing schedules, triggers, roles, skills, instructions and knowledge sources, and exporting and importing the job
+  record.
 - **Boundary:** It holds no state and implements no behaviour of its own; each command calls an operation of the
   Intern service, reached on the machine.
 - **Works with:** Intern service, Jobs, Schedules and triggers, Agents and roles, Skills and instructions, Team
@@ -160,8 +163,9 @@ person's access.
 
 - **Name:** Web interface.
 - **Responsibility:** The team's browser view of The Intern: a board of all jobs with their definitions, status, open
-  questions and evidence; creating jobs and answering questions; following an agent live and stopping or redirecting
-  it; and managing schedules, triggers, roles, skills, instructions and knowledge sources.
+  questions and evidence; chatting with the front desk; creating jobs and answering questions; following an agent
+  live and stopping or redirecting it; and managing schedules, triggers, roles, skills, instructions and knowledge
+  sources.
 - **Boundary:** It holds no work and no state of its own and adds no capabilities: every action calls an operation of
   the Intern service. It has no login of its own; who can reach it follows from the network setup of the machine.
 - **Works with:** Intern service, Jobs, Schedules and triggers, Agents and roles, Skills and instructions, Team
@@ -346,3 +350,4 @@ person's access.
 |------|-------------|-----|----------------|
 | 2026-10-30 | The machine is one the team keeps running, not an always-on one; The Intern starts at boot without a login and is restarted after a failure; it runs as one OS account, the installing person's in v1, and acts with that account's credentials; schedules choose fresh runs or the history of their last runs; missed runs are skipped (Purpose, Users, Solution overview, Intern service, Schedules and triggers, Installation and service setup, Project exclusions). Consistency review: the Intern service makes its operations reachable for the command line on the machine and for the web interface over the network (it owns the listeners); Installation is account-neutral; version 0.4. | Decided with the product owner while aligning S-001 and S-002 with S-000. | None; S-000's bootstrap plan isn't broken down yet |
 | 2026-11-02 | The job record, history included, is kept in tables of its own that don't depend on the agent runtime's stored format; export and import copy the whole saved state, job record included, for backups, moving to another computer and upgrades, and a version opens a copy only if it can read it (Solution overview, Jobs). The last project exclusion became converting saved state between versions: the job record keeps its own format, which each version migrates forward, and export and import copy, they don't convert. Installation and service setup: the upgrade question asks how an upgrade keeps a copy of the saved state from before the new version opens it and how it goes back. Version 0.5. | S-004 architecture consistency review; product owner decisions 2026-11-02. Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None; S-000's bootstrap plan isn't broken down yet, and the S-004 breakdown updates `docs/system_overview.html` |
+| 2026-11-03 | Agents and roles also owns the front desk, the one standing conversation that assists team members, belongs to no job, turns their requests into jobs, tells them what is being worked on and passes their answers and steering on without doing the work; team members chat with it from the Command line and the Web interface. Version 0.6. | Product owner decisions of the front desk brainstorm, 2026-11-03, which partly reverse the 2026-10-30 removal of interactive chat; S-001 v0.8, S-002 v0.10 and S-004 v0.6 specify it. | None; S-000's bootstrap plan has no work for it, and `docs/system_overview.html` is updated with this amendment |
