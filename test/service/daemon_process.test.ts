@@ -77,7 +77,11 @@ describe("DaemonProcess.invoke", () => {
         const daemon = track(startDaemon({ hermetic: await hermetic() }));
         await daemon.ready;
 
-        assert.deepEqual(await daemon.invoke("conversations.list", {}), []);
+        const listed = (await daemon.invoke("conversations.list", {})) as { isFrontDesk: boolean }[];
+        assert.deepEqual(
+            listed.filter((conversation) => !conversation.isFrontDesk),
+            [],
+        );
     });
 
     it("rejects with the ServiceError code and message of a failing operation", async () => {
@@ -153,9 +157,9 @@ describe("kill9", () => {
         const second = track(startDaemon({ hermetic: env }));
         await second.ready;
 
-        const listed = (await second.invoke("conversations.list", {})) as { id: string }[];
+        const listed = (await second.invoke("conversations.list", {})) as { id: string; isFrontDesk: boolean }[];
         assert.deepEqual(
-            listed.map((conversation) => conversation.id),
+            listed.filter((conversation) => !conversation.isFrontDesk).map((conversation) => conversation.id),
             [conversationId],
         );
     });

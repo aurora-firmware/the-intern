@@ -65,9 +65,13 @@ function directoryFlags(env: HermeticEnv): string[] {
     ];
 }
 
-async function hermetic(): Promise<HermeticEnv> {
+const DEFAULT_MODEL_SETTINGS = JSON.stringify({ defaultProvider: "openai", defaultModel: "gpt-4o-mini" });
+
+/** The pi agent default is what the front desk is seated with at startup, so every daemon needs one to be ready. */
+async function hermetic(hasDefaultModel = true): Promise<HermeticEnv> {
     const env = await createHermeticEnv();
     envs.push(env);
+    if (hasDefaultModel) await writeFile(join(env.piAgentDir, "settings.json"), DEFAULT_MODEL_SETTINGS);
     return env;
 }
 
