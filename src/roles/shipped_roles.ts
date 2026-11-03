@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { type RoleDefinition, SHIPPED_TOOL_NAMES } from "./role_model.ts";
 
-export const SHIPPED_ROLE_NAMES = ["bob", "gp"] as const;
+export const SHIPPED_ROLE_NAMES = ["bob", "gp", "desk"] as const;
 export const DEFAULT_LEAD_ROLE = "bob";
 
 const readShippedText = (relativePath: string): Promise<string> =>
@@ -14,6 +14,13 @@ const shippedSkillFolder = (name: string): string =>
 const SKILLS_BY_ROLE: Record<(typeof SHIPPED_ROLE_NAMES)[number], string[]> = {
     bob: [],
     gp: [shippedSkillFolder("carry-out-a-part")],
+    desk: [],
+};
+
+const TOOLS_BY_ROLE: Record<(typeof SHIPPED_ROLE_NAMES)[number], string[]> = {
+    bob: [...SHIPPED_TOOL_NAMES],
+    gp: [...SHIPPED_TOOL_NAMES],
+    desk: [],
 };
 
 export const loadShippedRoles = (): Promise<RoleDefinition[]> =>
@@ -22,7 +29,7 @@ export const loadShippedRoles = (): Promise<RoleDefinition[]> =>
             async (name): Promise<RoleDefinition> => ({
                 name,
                 instructions: await readShippedText(`${name}.md`),
-                tools: [...SHIPPED_TOOL_NAMES],
+                tools: TOOLS_BY_ROLE[name],
                 skills: SKILLS_BY_ROLE[name],
             }),
         ),
