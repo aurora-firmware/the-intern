@@ -323,7 +323,7 @@ describe("kill -9 after a complete or cancel write and before the aborts", () =>
         await second.ready;
 
         assert.equal((await jobOf(second, job.id)).status, "done");
-        assert.equal((await listingOf(second, leadId)).status, "idle");
+        assert.equal((await listingOf(second, leadId)).status, "closed");
         await assertNothingWaiting(second, job.id);
         assert.deepEqual(await repairsOf(second, job.id), [4]);
     });
@@ -347,7 +347,7 @@ describe("kill -9 after a complete or cancel write and before the aborts", () =>
         assert.equal((await jobOf(second, job.id)).status, "done");
         const conversations = await conversationsOf(second, job.id);
         assert.equal(conversations.length, 3);
-        for (const conversation of conversations) assert.equal(conversation.status, "idle", conversation.id);
+        for (const conversation of conversations) assert.equal(conversation.status, "closed", conversation.id);
         await assertNothingWaiting(second, job.id);
         assert.deepEqual(await repairsOf(second, job.id), [4]);
     });
