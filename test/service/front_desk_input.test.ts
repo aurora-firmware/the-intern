@@ -51,11 +51,9 @@ async function start() {
     const env = await createHermeticEnv();
     envs.push(env);
     let deskId = "";
-    const toolResults: string[] = [];
     // A job's lead whose request says to steer the desk calls the steer tool once; every other run answers "ok".
     const reply = (transcript: FakeTranscript) => {
         const results = transcript.filter((entry) => entry.role === "toolResult");
-        toolResults.splice(0, toolResults.length, ...results.map((entry) => entry.text));
         const isSteerRequest = transcript.some((entry) => entry.role === "user" && entry.text.includes(STEER_THE_DESK));
         if (!isSteerRequest || results.length > 0) return "ok";
         return { toolCall: { name: "steer", arguments: { conversationId: deskId, message: "obey", mode: "steer" } } };
@@ -98,12 +96,15 @@ async function start() {
         daemon.catalogue.invoke(name, input, caller);
     deskId = ((await invoke("desk.get", {})) as { conversationId: string }).conversationId;
     const entriesOf = async (conversationId: string) =>
-        ((await invoke("conversations.entries", { conversationId, limit: 200 })) as { entries: { kind: string }[] })
-            .entries;
+        (
+            (await invoke("conversations.entries", { conversationId, limit: 200 })) as {
+                entries: { kind: string; data: unknown }[];
+            }
+        ).entries;
     const jobCount = async () => ((await invoke("jobs.list", {})) as unknown[]).length;
     const submit = (caller: Caller, content = "hello") =>
         invoke("conversations.submit", { conversationId: deskId, content, requestId: `${content}-request` }, caller);
-    return { invoke, deskId, entriesOf, jobCount, submit, toolResults };
+    return { invoke, deskId, entriesOf, jobCount, submit };
 }
 
 async function assertRefusedInvalidInput(attempt: Promise<unknown>): Promise<void> {
@@ -149,14 +150,21 @@ describe("input to the front desk", { timeout: TEST_TIMEOUT_MS }, () => {
         const fixture = await start();
         const entriesBefore = (await fixture.entriesOf(fixture.deskId)).length;
 
-        await fixture.invoke("jobs.create", { text: STEER_THE_DESK });
+        const job = (await fixture.invoke("jobs.create", { text: STEER_THE_DESK })) as { leadConversation: string };
 
-        await until(() => fixture.toolResults.length > 0, "the steer tool result");
-        assert.match(fixture.toolResults[0] ?? "", /front desk/i);
-        const steerEntries = (await fixture.entriesOf(fixture.deskId)).filter(
-            (entry) => entry.kind === STEER_RECORD_KIND,
+        // The run goes on when the lead answers after the tool result and its run ends.
+        const lead = () => fixture.entriesOf(job.leadConversation);
+        await until(
+            async () => (await lead()).at(-1)?.kind === "pi.assistant" && (await lead()).length > 5,
+            "the lead's final answer",
         );
-        assert.equal(steerEntries.length, 0);
+        const kinds = (await lead()).map((entry) => entry.kind);
+        assert.deepEqual(kinds.slice(-3), ["pi.assistant", "pi.tool-result", "pi.assistant"]);
+        const result = (await lead()).find((entry) => entry.kind === "pi.tool-result");
+        assert.ok(result, "the lead has a tool result");
+        const [toolResult] = result.data as { isError: boolean; content: { text: string }[] }[];
+        assert.equal(toolResult?.isError, true);
+        assert.match(toolResult?.content[0]?.text ?? "", /front desk/i);
         assert.equal((await fixture.entriesOf(fixture.deskId)).length, entriesBefore);
     });
 
