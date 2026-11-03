@@ -4,6 +4,7 @@
  * daemon code.
  */
 
+import { randomUUID } from "node:crypto";
 import type { Client } from "../client/client.ts";
 import type { HistoryEntry, Job, WorklogEntry } from "../jobs/job_store.ts";
 import type { CommandInput, CommandSpec, OptionSpec } from "./command_line.ts";
@@ -223,6 +224,33 @@ function finishCommand(verb: "complete" | "cancel", summary: string): CommandSpe
     );
 }
 
+const answer = jobsCommand(
+    {
+        verb: "answer",
+        summary: "Send text to a job's lead, which resumes a Blocked job.",
+        positionals: [
+            { name: "job", required: true },
+            { name: "text", required: true },
+        ],
+    },
+    async (client, input) => {
+        const [ref, text] = input.positionals;
+        const job = (await client.invoke("jobs.get", { job: ref })) as Job & { leadConversation?: string };
+        if (job.leadConversation === undefined) {
+            writeError(input.io, `${job.number} has no lead conversation to send to.`);
+            return EXIT_CODES.refused;
+        }
+        const submitted = await client.invoke("conversations.submit", {
+            conversationId: job.leadConversation,
+            content: text,
+            requestId: randomUUID(),
+        });
+        if (input.json) writeJson(input.io, submitted);
+        else writeLine(input.io, `sent to ${job.number}'s lead`);
+        return EXIT_CODES.ok;
+    },
+);
+
 export const JOBS_COMMANDS: readonly CommandSpec[] = [
     create,
     list,
@@ -232,4 +260,5 @@ export const JOBS_COMMANDS: readonly CommandSpec[] = [
     pairCommand("unrelate", "Remove the relation between two jobs."),
     finishCommand("complete", "Complete an In-progress job, with a justification."),
     finishCommand("cancel", "Cancel a job, with a justification."),
+    answer,
 ];
