@@ -88,8 +88,8 @@ async function repairsOf(daemon: DaemonProcess, job: string): Promise<number[]> 
     return repairs.map((repair) => (repair.new as { rule: number }).rule);
 }
 
-/** The rule 4 repair entries of the job: the rule and what it did. */
-async function rule4RepairsOf(daemon: DaemonProcess, job: string): Promise<unknown[]> {
+/** Every repair entry of the job, of any rule: the rule and what it did. */
+async function repairEntriesOf(daemon: DaemonProcess, job: string): Promise<unknown[]> {
     return (await historyOf(daemon, job)).filter((entry) => entry.field === "repair").map((entry) => entry.new);
 }
 
@@ -369,7 +369,7 @@ describe("kill -9 after a complete or cancel write and before the aborts", () =>
 
         assert.equal((await jobOf(second, job.id)).status, "done");
         await assertClosedAndStopped(second, job.id, 1);
-        assert.deepEqual(await rule4RepairsOf(second, job.id), [RULE_4]);
+        assert.deepEqual(await repairEntriesOf(second, job.id), [RULE_4]);
     });
 
     it("leaves no conversation running or parked after a complete", { timeout: TEST_TIMEOUT_MS }, async () => {
@@ -426,7 +426,7 @@ describe("kill -9 between a job's closed-mark commits and the aborts", () => {
 
         assert.equal((await jobOf(second, job.id)).status, "done");
         await assertClosedAndStopped(second, job.id, 3);
-        assert.deepEqual(await rule4RepairsOf(second, job.id), [RULE_4]);
+        assert.deepEqual(await repairEntriesOf(second, job.id), [RULE_4]);
     });
 
     it("keeps each conversation closed, with no model turn or compaction, across a later kill -9", {
@@ -447,7 +447,7 @@ describe("kill -9 between a job's closed-mark commits and the aborts", () => {
 
         await assertClosedAndStopped(third, job.id, 3);
         for (const { id } of conversations) assert.deepEqual(await entriesOf(third, id), entriesBefore.get(id), id);
-        assert.deepEqual(await rule4RepairsOf(third, job.id), [RULE_4]);
+        assert.deepEqual(await repairEntriesOf(third, job.id), [RULE_4]);
         const deskId = ((await third.invoke("desk.get", {})) as { conversationId: string }).conversationId;
         assert.notEqual((await listingOf(third, deskId)).status, "closed");
     });
