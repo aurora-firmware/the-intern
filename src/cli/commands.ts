@@ -3,6 +3,7 @@
  * inside its `run`, so a command that only calls the service never pays for it (S-005 REQ-016).
  */
 import type { CommandInput, CommandSpec } from "./command_line.ts";
+import { statusCommand, usageCommand } from "./instance_commands.ts";
 import type { ServeFlags } from "./serve.ts";
 
 const DIRECTORY_FLAG_NAMES = ["config-dir", "state-dir", "data-dir"] as const;
@@ -39,4 +40,4 @@ const serve: CommandSpec = {
     },
 };
 
-export const COMMANDS: readonly CommandSpec[] = [serve];
+export const COMMANDS: readonly CommandSpec[] = [serve, statusCommand, usageCommand];
