@@ -5,6 +5,12 @@ const INSTANCE_FOLDER_NAME = "the-intern";
 const OWNER_ONLY_MODE = 0o700;
 const GROUP_AND_OTHER_BITS = 0o077;
 
+export const LOCAL_SOCKET_FILE = "bob.sock";
+
+export function localSocketPath(runtimeDir: string): string {
+    return join(runtimeDir, LOCAL_SOCKET_FILE);
+}
+
 export type InstanceDirFlags = { configDir?: string; stateDir?: string; dataDir?: string; runtimeDir?: string };
 
 export type InstanceDirs = {
