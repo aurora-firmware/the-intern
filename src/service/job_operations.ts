@@ -181,6 +181,14 @@ async function describeCaller(host: HarnessHost, request: CreateJobRequest, call
     if (meta === undefined) {
         throw new ServiceError("not_found", `There is no conversation ${actor.conversationId} to follow up`);
     }
+    if (actor.kind === "front_desk") {
+        // The front desk answers a team member's input, so the job is a request over that input's way in.
+        return {
+            origin: { kind: "request", wayIn: actor.wayIn, frontDesk: actor.conversationId },
+            author: { kind: "agent", conversationId: actor.conversationId, role: meta.seat.role },
+            actor: seatActorFor(caller, meta.seat.role),
+        };
+    }
     if (meta.jobId === null) {
         throw new ServiceError("invalid_input", `Conversation ${actor.conversationId} has no job to follow up`);
     }
