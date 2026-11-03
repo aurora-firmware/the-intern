@@ -3,6 +3,7 @@
  * inside its `run`, so a command that only calls the service never pays for it (S-005 REQ-016).
  */
 import type { CommandInput, CommandSpec } from "./command_line.ts";
+import { CONVERSATIONS_COMMANDS } from "./conversations_commands.ts";
 import { statusCommand, usageCommand } from "./instance_commands.ts";
 import { JOBS_COMMANDS } from "./jobs_commands.ts";
 import type { ServeFlags } from "./serve.ts";
@@ -41,4 +42,10 @@ const serve: CommandSpec = {
     },
 };
 
-export const COMMANDS: readonly CommandSpec[] = [serve, statusCommand, usageCommand, ...JOBS_COMMANDS];
+export const COMMANDS: readonly CommandSpec[] = [
+    serve,
+    statusCommand,
+    usageCommand,
+    ...JOBS_COMMANDS,
+    ...CONVERSATIONS_COMMANDS,
+];
