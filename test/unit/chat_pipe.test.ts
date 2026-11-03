@@ -16,10 +16,19 @@ const assistant = (text: string, id: string): Entry => ({
     data: [{ role: "assistant", content: [{ type: "text", text }] }],
 });
 
+// Pages the way the service does: `after` is an opaque cursor and `next` is present while more entries follow.
+function entriesPage(entries: Entry[], after: unknown, pageSize = entries.length) {
+    const start = typeof after === "string" ? Number(after) : 0;
+    const end = start + Math.max(pageSize, 1);
+    return { entries: entries.slice(start, end), ...(end < entries.length && { next: String(end) }) };
+}
+
 /** A client whose waits answer from the script in order and whose entries grow when a line is submitted. */
-function scriptedClient(options: { waits: string[]; answers: string[] }) {
+function scriptedClient(options: { waits: string[]; answers: string[]; pageSize?: number; held?: boolean }) {
     const calls: Call[] = [];
     const entries: Entry[] = [];
+    const preexisting = options.pageSize === undefined ? [] : [assistant("old 1", "o1"), assistant("old 2", "o2")];
+    entries.push(...preexisting);
     const waits = [...options.waits];
     const answers = [...options.answers];
     let submitted = 0;
@@ -29,13 +38,14 @@ function scriptedClient(options: { waits: string[]; answers: string[] }) {
             calls.push({ name, input: record });
             if (name === "desk.get") return { conversationId: DESK_ID };
             if (name === "conversations.submit") {
+                if (options.held === true) return { held: true };
                 submitted += 1;
                 entries.push(user(String(record.content), `u${submitted}`));
                 entries.push(assistant(answers.shift() ?? "", `a${submitted}`));
                 return { submissionId: `s${submitted}` };
             }
             if (name === "submissions.wait") return { state: waits.shift() };
-            if (name === "conversations.entries") return { entries: [...entries] };
+            if (name === "conversations.entries") return entriesPage(entries, record.after, options.pageSize);
             throw new Error(`unexpected ${name}`);
         },
         subscribe() {
@@ -110,5 +120,49 @@ describe("runPipedChat", () => {
         assert.equal(lines.length, 1);
         const answer = JSON.parse(lines[0] as string) as { entries: Entry[] };
         assert.deepEqual(answer.entries, [user("hi", "u1"), assistant("hello", "a1")]);
+    });
+
+    it("prints only the answer to the submitted line when the earlier entries span several pages", async () => {
+        const { client } = scriptedClient({ waits: ["done"], answers: ["new answer"], pageSize: 1 });
+        const piped = pipedIo(["hi"]);
+        await runPipedChat(client, piped.io, false);
+        assert.equal(piped.stdout(), "new answer\n");
+    });
+
+    it("prints every page it read for the line in json mode when the entries span several pages", async () => {
+        const { client } = scriptedClient({ waits: ["done"], answers: ["new answer"], pageSize: 1 });
+        const piped = pipedIo(["hi"]);
+        await runPipedChat(client, piped.io, true);
+        const pages = piped
+            .stdout()
+            .trimEnd()
+            .split("\n")
+            .map((line) => JSON.parse(line) as { entries: Entry[] });
+        assert.deepEqual(
+            pages.flatMap((page) => page.entries.map((entry) => entry.id)),
+            ["o2", "u1", "a1"],
+        );
+    });
+
+    it("prints the answer when the submission ends unanswered", async () => {
+        const { client } = scriptedClient({ waits: ["unanswered"], answers: ["partial"] });
+        const piped = pipedIo(["hi"]);
+        const status = await runPipedChat(client, piped.io, false);
+        assert.equal(status, 0);
+        assert.equal(piped.stdout(), "partial\n");
+    });
+
+    it("exits 1 with a notice on stderr and submits no further line when the front desk holds a line", async () => {
+        const { client, calls } = scriptedClient({ waits: [], answers: [], held: true });
+        const piped = pipedIo(["one", "two"]);
+        let notice = "";
+        piped.io.stderr.on("data", (chunk) => {
+            notice += chunk;
+        });
+        const status = await runPipedChat(client, piped.io, false);
+        assert.equal(status, 1);
+        assert.equal(piped.stdout(), "");
+        assert.ok(notice.includes("one"), notice);
+        assert.equal(calls.filter((call) => call.name === "conversations.submit").length, 1);
     });
 });
