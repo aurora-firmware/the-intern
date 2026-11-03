@@ -141,8 +141,9 @@ code of our own, apart from the two bounded exceptions in decision 4.
    **First bounded exception: the-intern's own facts about a conversation, and redelivery from them.**
    - Facts the-intern owns about a conversation live in its own pi-durable documents: held messages (`held`),
      awaiting links (`awaiting`), the parked state (`parked`) and the abort mark (`aborted`) in the conversation's
-     `intern.conversation` document, and creation keys in `intern.invocations` and `intern.idempotency`. Each is
-     written in the commit that changes it, together with the change it describes.
+     `intern.conversation` document, and creation keys in `intern.invocations` and `intern.idempotency`, including
+     the front desk's fixed key, written in the commit that creates the front desk (S-001 REQ-021). Each is written in
+     the commit that changes it, together with the change it describes.
    - The abort mark records that a conversation's invoker is owed an "aborted" report (S-001 REQ-019). It is set only
      on the conversation an abort names, never on one a cascade or a job abort reaches, and only when the
      conversation was invoked and its invoker still awaits it. It is set in the abort's own commit: the one
@@ -155,8 +156,9 @@ code of our own, apart from the two bounded exceptions in decision 4.
      conversation that carries the abort mark, at start, when its run ends, and when the commit that sets the mark is
      published. That last trigger delivers the report of an idle or parked conversation, which has no run to end.
      Report delivery hears those commits through `watchConversationMeta` and handles them in its one serial queue,
-     like the end of a run; the abort itself never calls delivery. A creation key turns a repeated invocation or create
-     operation into the conversation it already created.
+     like the end of a run; the abort itself never calls delivery. A creation key turns a repeated invocation, create
+     operation or startup front-desk creation (S-002 REQ-002 step 6) into the conversation it already created. That
+     startup step is a keyed create, not redelivery or repair: it creates the front desk only when its key is missing.
    - Every redelivered input carries a request id fixed by the fact: the held message's own request id, or
      `report:<invokedId>:<entryId>` for a report, where the entry holds the invoked conversation's last answer. An
      "aborted" report uses the same id as the report of that last answer, or `report:<invokedId>:aborted` when the
@@ -355,3 +357,4 @@ second connection open. One shared handle orders every transaction and closes wi
 | 2026-11-02 | Decision 4: after the four repair rules, the daemon checks S-004 REQ-008's turn-end rule for each In progress job whose lead is idle and waits for nothing, as the same rule applied to saved state, not a fifth rule; a reminder is spent when pi-durable holds its input, whose request id `reminder:<jobId>:<n>` makes the check safe to repeat. Negative: the open turn-end gap is replaced by the kill test of S-004 AC-008.4. | Product owner decision of 2026-11-02 on the S-004 escalation (option A), applied in S-004 v0.2 REQ-008 and REQ-018. |
 | 2026-11-02 | Decision 4, second bounded exception: rule 3 also covers a lead that has taken input since the job blocked, shown by an input entry (`pi.user`, the steer record or an ADR-004 kind) in its transcript after the entry the block recorded in the job's internal `blockedAfterEntry`; the block sets it and the resume clears it in the same write. Rule 3 reads the transcript newest first, back to that entry, as `readLastAnswer` does; it decides whether the rule applies and rebuilds no job field. Matches S-004 v0.4 REQ-006, REQ-018 and Interfaces. | T-129 F1 escalation: an answer the lead took after its park was cleared, before the resume was written, left the job Blocked with no rule to repair it. Architect escalation review; product owner decision of 2026-11-02 (option A). |
 | 2026-11-02 | Decision 4, second bounded exception: rule 1 also covers a To do job whose lead conversation holds no submission with request id `lead:<jobId>`, and completes the start; the startup read of that submission, made only for To do jobs with a known lead, decides whether the rule applies and rebuilds no job field. Matches S-004 v0.5 REQ-018 and AC-018.2. | PR 147 review, finding 4: a crash after the lead conversation is created and before its first input left the job To do with no agent working on it. pi-durable can't submit input in the creation commit. Product owner decision of 2026-11-02 (option A); an upstream pi-durable change and accepting the gap were rejected. |
+| 2026-11-03 | Decision 4, first bounded exception: the creation keys in `intern.idempotency` include the front desk's fixed key, written in the commit that creates the front desk, and a creation key also turns a repeated startup front-desk creation (S-002 REQ-002 step 6) into the conversation it already created; that step is a keyed create, not redelivery or repair. The front desk's id is the only fact it adds; no redelivery path or repair rule is added. | S-001 v0.8 REQ-021 and S-002 v0.10 REQ-002; front desk architecture consistency review, finding F8; product owner decisions of the front desk brainstorm, 2026-11-03. |
