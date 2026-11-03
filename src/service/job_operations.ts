@@ -8,6 +8,7 @@ import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { ServiceContext } from "../daemon/daemon.ts";
 import { submitInput } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
+import { ConversationClosedError, JobDoneError } from "../host/job_section.ts";
 import { createSeatedConversation, type Origin, readConversationMeta, type SeatActor } from "../host/seating.ts";
 import { type JobAuthor, type JobOrigin, letterFor } from "../jobs/job_model.ts";
 import { type Job, JobNotFoundError, JobRefusedError } from "../jobs/job_store.ts";
@@ -324,6 +325,10 @@ export async function createJob(
         );
         return viewOf(await jobStore.getJob(job.id), conversationId);
     } catch (error) {
+        // A start refused because the job is already Done must not cancel it again (S-004 REQ-007).
+        if (error instanceof JobDoneError || error instanceof ConversationClosedError) {
+            return viewOf(await jobStore.getJob(job.id), await leadConversationOf(host, job.id));
+        }
         if (!(error instanceof ServiceError)) throw error;
         const justification = leadRefusedJustification(error);
         try {
