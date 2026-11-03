@@ -120,7 +120,8 @@ async function start() {
     envs.push(env);
     const fake = registerFauxProvider({ models: [{ id: "model-one", reasoning: true }] });
     fakes.push(fake);
-    let script: Script = () => undefined;
+    // A model call follows the first script that answers it; with none it answers "done".
+    const scripts: Script[] = [];
     let afterWrite: (point: WritePoint, jobId: string) => Promise<void> = async () => {};
     // Each input's tool results as the model saw them on the call after its tool round, keyed by the input's text.
     const seen = new Map<string, Result[]>();
@@ -128,7 +129,11 @@ async function start() {
         fake.appendResponses([answer]);
         const call = modelCallOf(context.messages, options?.signal);
         if (call.results.length > 0) seen.set(call.input, call.results);
-        return (await script(call)) ?? fauxAssistantMessage("done");
+        for (const script of scripts) {
+            const reply = await script(call);
+            if (reply !== undefined) return reply;
+        }
+        return fauxAssistantMessage("done");
     };
     fake.setResponses([answer]);
     const provider = fake.getModel().provider;
@@ -192,8 +197,8 @@ async function start() {
         invoke,
         deskId,
         seen,
-        setScript: (next: Script) => {
-            script = next;
+        addScript: (script: Script) => {
+            scripts.push(script);
         },
         setAfterWrite: (next: (point: WritePoint, jobId: string) => Promise<void>) => {
             afterWrite = next;
@@ -249,7 +254,7 @@ describe("tools aimed at a closed conversation", () => {
         await started.invoke("jobs.cancel", { job: closed.number, justification: "not needed" });
         await waitFor(() => isIdle(started, target), "the cancelled lead's run to end");
         const open = await startedJob(started, "open job");
-        started.setScript(({ input, results }) => {
+        started.addScript(({ input, results }) => {
             if (results.length > 0) return undefined;
             if (input === "steer the closed one") {
                 return toolCalls([
@@ -293,7 +298,7 @@ describe("tools aimed at a closed conversation", () => {
 
 // Invokes one agent from the lead; its model waits for the gate, then makes the calls. It answers "done" afterwards.
 async function invokeGated(started: Started, leadId: string, prompt: string, calls: Call[], go: Promise<void>) {
-    started.setScript(async ({ input, results, signal }) => {
+    started.addScript(async ({ input, results, signal }) => {
         if (input !== prompt || results.length > 0) return undefined;
         await untilOpenOrAborted(go, signal);
         return toolCalls(calls);
@@ -394,5 +399,121 @@ describe("job tools called from a closed conversation", () => {
         ]);
         assert.equal((await started.ctx.jobStore.listWorklog(job.id, {})).entries.length, worklogBefore);
         assert.equal((await started.ctx.jobStore.listJobs({})).jobs.length, jobsBefore);
+    });
+});
+
+async function conversationsOfJob(started: Started, jobId: string): Promise<string[]> {
+    const ofJob: string[] = [];
+    for (const { id } of await started.ctx.host.listConversations()) {
+        if ((await readConversationMeta(started.ctx.host, id))?.jobId === jobId) ofJob.push(id);
+    }
+    return ofJob;
+}
+
+async function closedMarksOf(started: Started, ids: string[]): Promise<(boolean | undefined)[]> {
+    const marks: (boolean | undefined)[] = [];
+    for (const id of ids) marks.push((await readConversationMeta(started.ctx.host, id))?.closed);
+    return marks;
+}
+
+const COMPLETE_INPUT = "complete now";
+
+// The lead's model calls `complete_job` on the input once `ready` settles.
+function leadCompletesWhen(started: Started, ready: Promise<void>): void {
+    started.addScript(async ({ input, results, signal }) => {
+        if (input !== COMPLETE_INPUT || results.length > 0) return undefined;
+        await untilOpenOrAborted(ready, signal);
+        return toolCalls([{ name: "complete_job", arguments: { justification: "checked" } }]);
+    });
+}
+
+async function submitCompleteInput(started: Started, leadId: string): Promise<void> {
+    await started.invoke("conversations.submit", {
+        conversationId: leadId,
+        content: COMPLETE_INPUT,
+        requestId: "complete-now",
+    });
+}
+
+describe("an invoke in flight as the lead calls complete_job", () => {
+    it("closes the conversation it creates with the others when its check passed first", async () => {
+        const started = await start();
+        const job = await startedJob(started, "racing job");
+        const go = gate();
+        const reached = gate();
+        const release = gate();
+        const prompt = "invoke one more";
+        const caller = await invokeGated(
+            started,
+            job.leadConversation,
+            prompt,
+            [{ name: "invoke", arguments: invokeArguments("grandchild work") }],
+            go.opened,
+        );
+        leadCompletesWhen(started, reached.opened);
+        setSectionHook(started.ctx.host, async (conversationId) => {
+            if (conversationId !== caller) return;
+            reached.open();
+            await release.opened;
+        });
+        let results: Result[] = [];
+        started.setAfterWrite(async (point, jobId) => {
+            if (point === "conversations-closed" && jobId === job.id) results = await resultsAfter(started, prompt, 1);
+        });
+
+        await submitCompleteInput(started, job.leadConversation);
+        go.open();
+        await waitFor(async () => (await started.ctx.jobStore.getJob(job.id)).status === "done", "the job to be Done");
+        await sleep(SETTLE_PAUSE_MS);
+        release.open();
+        await waitFor(() => results.length > 0, "the invoke's result");
+
+        const ofJob = await conversationsOfJob(started, job.id);
+        const created = ofJob.find((id) => id !== job.leadConversation && id !== caller) as string;
+        assert.equal(ofJob.length, 3);
+        assert.deepEqual(await closedMarksOf(started, ofJob), [true, true, true]);
+        assert.deepEqual(results, [
+            { name: "invoke", text: `The invocation was refused: ${closedMessage(created)}`, isError: true },
+        ]);
+    });
+
+    it("creates no conversation when the job closed before its check", async () => {
+        const started = await start();
+        const job = await startedJob(started, "racing job");
+        const go = gate();
+        const prompt = "invoke one more";
+        const caller = await invokeGated(
+            started,
+            job.leadConversation,
+            prompt,
+            [{ name: "invoke", arguments: invokeArguments("grandchild work") }],
+            go.opened,
+        );
+        leadCompletesWhen(started, Promise.resolve());
+        const passedChecks: string[] = [];
+        setSectionHook(started.ctx.host, (conversationId) => {
+            if (conversationId === caller) passedChecks.push(conversationId);
+        });
+        let results: Result[] = [];
+        started.setAfterWrite(async (point, jobId) => {
+            if (point !== "conversations-closed" || jobId !== job.id) return;
+            go.open();
+            results = await resultsAfter(started, prompt, 1);
+        });
+
+        await submitCompleteInput(started, job.leadConversation);
+        await waitFor(() => results.length > 0, "the invoke's result");
+
+        const ofJob = await conversationsOfJob(started, job.id);
+        assert.deepEqual(ofJob.sort(), [job.leadConversation, caller].sort());
+        assert.deepEqual(await closedMarksOf(started, ofJob), [true, true]);
+        assert.deepEqual(passedChecks, []);
+        assert.deepEqual(results, [
+            {
+                name: "invoke",
+                text: `The invocation was refused: ${closedMessage(caller)} Nothing was created.`,
+                isError: true,
+            },
+        ]);
     });
 });

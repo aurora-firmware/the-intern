@@ -232,6 +232,12 @@ const invokeTool = (options: CoordinationOptions) =>
                 if (error instanceof InvocationDepthError) {
                     return textResult(`The invocation was refused: ${error.message} Nothing was created.`, true);
                 }
+                // The invoking conversation's own check refuses before any creation; a closed invoked conversation
+                // was created and closed with the others of the job.
+                if (error instanceof ConversationClosedError) {
+                    const created = error.conversationId === invokingId ? " Nothing was created." : "";
+                    return textResult(`The invocation was refused: ${error.message}${created}`, true);
+                }
                 throw error;
             }
         },
