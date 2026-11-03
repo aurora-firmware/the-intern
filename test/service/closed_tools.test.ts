@@ -19,12 +19,13 @@ import {
 } from "@earendil-works/pi-ai";
 import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
-import type { ConversationId } from "@earendil-works/pi-durable";
+import { type ConversationId, InboxDoc } from "@earendil-works/pi-durable";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { STOP_BOUND_MS } from "../../src/daemon/constants.ts";
 import { type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { createDeskComponent } from "../../src/desk/desk_component.ts";
+import { submissionState } from "../../src/host/conversation_control.ts";
 import { internalHarness } from "../../src/host/harness_host.ts";
 import { createInvokedConversations } from "../../src/host/invocation.ts";
 import { setJobDoneCheck, setSectionHook } from "../../src/host/job_section.ts";
@@ -698,5 +699,64 @@ describe("a tool whose own check passed before the job completed", () => {
         assert.deepEqual(results, [
             { name: "handoff", text: `The handoff was refused: ${closedMessage(caller)}`, isError: true },
         ]);
+    });
+});
+
+type InboxItem = { id: number; mode: string };
+
+async function inboxOf(started: Started, conversationId: string): Promise<InboxItem[]> {
+    return internalHarness(started.ctx.host).commit(async (tx) => {
+        const { items } = await tx.doc(InboxDoc, Number(conversationId) as ConversationId);
+        return JSON.parse(JSON.stringify(items)) as InboxItem[];
+    }, BACKGROUND_CONTEXT);
+}
+
+describe("a clean handoff committed just before the job closes", () => {
+    it("settles its queued note unanswered by the job's abort, and the note runs no model turn", async () => {
+        const started = await start();
+        const job = await startedJob(started, "racing job");
+        const go = gate();
+        const reached = gate();
+        const release = gate();
+        const note = "carry on from the note";
+        const noteTurns: string[] = [];
+        started.addScript(({ input }) => {
+            if (input === note) noteTurns.push(input);
+            return undefined;
+        });
+        const caller = await invokeGated(
+            started,
+            job.leadConversation,
+            "hand off clean",
+            [{ name: "handoff", arguments: { role: "gp", contextMode: "clean", note } }],
+            go.opened,
+        );
+        leadCompletesWhen(started, reached.opened);
+        setSectionHook(started.ctx.host, async (conversationId) => {
+            if (conversationId !== caller) return;
+            reached.open();
+            await release.opened;
+        });
+        let queued: InboxItem[] = [];
+        started.setAfterWrite(async (point, jobId) => {
+            if (point === "conversations-closed" && jobId === job.id) queued = await inboxOf(started, caller);
+        });
+
+        await submitCompleteInput(started, job.leadConversation);
+        go.open();
+        await waitFor(async () => (await started.ctx.jobStore.getJob(job.id)).status === "done", "the job to be Done");
+        await sleep(SETTLE_PAUSE_MS);
+        release.open();
+        const queuedNote = () => queued.find((item) => item.mode === "followUp");
+        await waitFor(() => queuedNote() !== undefined, "the queued note at the close");
+        const noteId = String(queuedNote()?.id);
+        await waitFor(
+            async () => (await submissionState(started.ctx.host, noteId)).state === "unanswered",
+            "the note to settle",
+        );
+
+        assert.deepEqual(await submissionState(started.ctx.host, noteId), { state: "unanswered", reason: "aborted" });
+        assert.equal((await readConversationMeta(started.ctx.host, caller))?.closed, true);
+        assert.deepEqual(noteTurns, []);
     });
 });
