@@ -11,6 +11,7 @@
 :root {
   --bg: #f6f7f9; --surface: #ffffff; --fg: #1c2230; --muted: #5b6577; --line: #9aa4b6; --rule: #dde2ea;
   --s1: #0f766e; --s1-bg: #e1f3f0; --s2: #4338ca; --s2-bg: #e8e8fb; --s3: #a21caf; --s3-bg: #f9e8fb; --s4: #0369a1; --s4-bg: #e0f0fa;
+  --s5: #4d7c0f; --s5-bg: #edf6dc;
   --later: #7b8496; --later-bg: #eef0f4; --warn: #b45309; --warn-bg: #fdf0dc;
   --font-display: "IBM Plex Serif", Georgia, serif;
   --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -21,12 +22,14 @@
   :root:not([data-theme="light"]) {
     --bg: #12151c; --surface: #1a1e28; --fg: #e6e9ef; --muted: #98a2b5; --line: #67718a; --rule: #2b3140;
     --s1: #5fd4c6; --s1-bg: #123631; --s2: #a9b0ff; --s2-bg: #23244f; --s3: #e79cf2; --s3-bg: #3b1a42; --s4: #6cc4f0; --s4-bg: #10304a;
+    --s5: #a3d65c; --s5-bg: #22331a;
     --later: #8f98ab; --later-bg: #232837; --warn: #f0b062; --warn-bg: #3a2c14; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #12151c; --surface: #1a1e28; --fg: #e6e9ef; --muted: #98a2b5; --line: #67718a; --rule: #2b3140;
   --s1: #5fd4c6; --s1-bg: #123631; --s2: #a9b0ff; --s2-bg: #23244f; --s3: #e79cf2; --s3-bg: #3b1a42; --s4: #6cc4f0; --s4-bg: #10304a;
+  --s5: #a3d65c; --s5-bg: #22331a;
   --later: #8f98ab; --later-bg: #232837; --warn: #f0b062; --warn-bg: #3a2c14; color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -49,6 +52,7 @@ section, header { display: flex; flex-direction: column; gap: 18px; }
 .chip.s2 { border-color: var(--s2); color: var(--s2); background: var(--s2-bg); }
 .chip.s3 { border-color: var(--s3); color: var(--s3); background: var(--s3-bg); }
 .chip.s4 { border-color: var(--s4); color: var(--s4); background: var(--s4-bg); }
+.chip.s5 { border-color: var(--s5); color: var(--s5); background: var(--s5-bg); }
 .chip.later { border-style: dashed; border-color: var(--later); color: var(--muted); background: var(--later-bg); }
 .chip.warn { border-color: var(--warn); color: var(--warn); background: var(--warn-bg); }
 figure { margin: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -68,11 +72,11 @@ td:first-child { white-space: nowrap; }
 .legend { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 14px; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 8px; }
 .sw { width: 18px; height: 12px; border-radius: 3px; border: 1.5px solid; display: inline-block; }
-.sw.s1 { border-color: var(--s1); background: var(--s1-bg); } .sw.s2 { border-color: var(--s2); background: var(--s2-bg); } .sw.s3 { border-color: var(--s3); background: var(--s3-bg); } .sw.s4 { border-color: var(--s4); background: var(--s4-bg); }
+.sw.s1 { border-color: var(--s1); background: var(--s1-bg); } .sw.s2 { border-color: var(--s2); background: var(--s2-bg); } .sw.s3 { border-color: var(--s3); background: var(--s3-bg); } .sw.s4 { border-color: var(--s4); background: var(--s4-bg); } .sw.s5 { border-color: var(--s5); background: var(--s5-bg); }
 .sw.later { border-color: var(--later); background: var(--later-bg); border-style: dashed; } .sw.ext { border-color: var(--line); background: var(--surface); }
 nav ol { margin: 0; padding-left: 20px; columns: 2 260px; font-size: 15px; }
 svg .b { fill: var(--surface); stroke: var(--line); stroke-width: 1.4; }
-svg .b.s1 { fill: var(--s1-bg); stroke: var(--s1); } svg .b.s2 { fill: var(--s2-bg); stroke: var(--s2); } svg .b.s3 { fill: var(--s3-bg); stroke: var(--s3); } svg .b.s4 { fill: var(--s4-bg); stroke: var(--s4); }
+svg .b.s1 { fill: var(--s1-bg); stroke: var(--s1); } svg .b.s2 { fill: var(--s2-bg); stroke: var(--s2); } svg .b.s3 { fill: var(--s3-bg); stroke: var(--s3); } svg .b.s4 { fill: var(--s4-bg); stroke: var(--s4); } svg .b.s5 { fill: var(--s5-bg); stroke: var(--s5); }
 svg .b.later { fill: var(--later-bg); stroke: var(--later); stroke-dasharray: 5 4; } svg .b.warn { fill: var(--warn-bg); stroke: var(--warn); }
 svg .cont { fill: none; stroke: var(--s2); stroke-width: 1.6; }
 svg .t { font: 500 13px var(--font-body); fill: var(--fg); } svg .tb { font: 600 13px var(--font-body); fill: var(--fg); }
@@ -114,6 +118,7 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
     <span><i class="sw s2"></i>daemon and host runtime (S-002)</span>
     <span><i class="sw s3"></i>control endpoint: listeners, client library (S-003)</span>
     <span><i class="sw s4"></i>jobs: the job record and the life of a job (S-004)</span>
+    <span><i class="sw s5"></i>command line: the <code>bob</code> commands (S-005)</span>
     <span><i class="sw later"></i>a spec not written yet</span>
     <span><i class="sw ext"></i>outside the project</span>
   </div>
@@ -170,7 +175,7 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
     <div class="fig">
       <svg viewBox="0 0 800 620" role="img" aria-label="The system in layers: ways in and job sources reach listeners or the service layer, which drives jobs and agent work on the runtime, which stores to one SQLite file. Every component is tagged with the spec that owns it.">
         <text class="tm" x="10" y="14" style="letter-spacing:.06em">WAYS IN AND JOB SOURCES</text>
-        <rect class="b later" x="10" y="22" width="189" height="52" rx="6"/><text class="tm" x="18" y="36" style="font-size:10.5px">later</text><text class="tb m" x="104" y="53">Command line</text><text class="ts m" x="104" y="68">bob commands</text>
+        <rect class="b s5" x="10" y="22" width="189" height="52" rx="6"/><text class="tm" x="18" y="36" style="font-size:10.5px">S-005</text><text class="tb m" x="104" y="53">Command line</text><text class="ts m" x="104" y="68">bob commands, chat, follow</text>
         <rect class="b later" x="207" y="22" width="189" height="52" rx="6"/><text class="tm" x="215" y="36" style="font-size:10.5px">later</text><text class="tb m" x="301" y="53">Web interface</text><text class="ts m" x="301" y="68">browser, team network</text>
         <rect class="b later" x="404" y="22" width="189" height="52" rx="6"/><text class="tm" x="412" y="36" style="font-size:10.5px">later</text><text class="tb m" x="498" y="53">Email</text><text class="ts m" x="498" y="68">own mailbox, in and out</text>
         <rect class="b later" x="601" y="22" width="189" height="52" rx="6"/><text class="tm" x="609" y="36" style="font-size:10.5px">later</text><text class="tb m" x="695" y="53">Schedules and triggers</text><text class="ts m" x="695" y="68">fires, events, run history</text>
@@ -183,7 +188,7 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
         <path class="ln" d="M104 156 V186"/><path class="ln" d="M301 156 V186"/>
         <text class="tm" x="10" y="262" style="letter-spacing:.06em">JOBS AND AGENT WORK</text>
         <rect class="b s4" x="10" y="268" width="148" height="52" rx="6"/><text class="tm" x="18" y="282" style="font-size:10.5px">S-004</text><text class="tb m" x="84" y="299">Jobs</text><text class="ts m" x="84" y="314">record, steps, blocked</text>
-        <rect class="b s1" x="168" y="268" width="148" height="52" rx="6"/><text class="tm" x="176" y="282" style="font-size:10.5px">S-001</text><text class="tb m" x="242" y="299">Role catalog</text><text class="ts m" x="242" y="314">bob, gp, team roles</text>
+        <rect class="b s1" x="168" y="268" width="148" height="52" rx="6"/><text class="tm" x="176" y="282" style="font-size:10.5px">S-001</text><text class="tb m" x="242" y="299">Role catalog</text><text class="ts m" x="242" y="314">bob, gp, desk, team roles</text>
         <rect class="b s1" x="326" y="268" width="148" height="52" rx="6"/><text class="tm" x="334" y="282" style="font-size:10.5px">S-001</text><text class="tb m" x="400" y="299">Seating</text><text class="ts m" x="400" y="314">who sits in a conversation</text>
         <rect class="b s1" x="484" y="268" width="148" height="52" rx="6"/><text class="tm" x="492" y="282" style="font-size:10.5px">S-001</text><text class="tb m" x="558" y="299">Coordination</text><text class="ts m" x="558" y="314">handoff, invoke, steer</text>
         <rect class="b s1" x="642" y="268" width="148" height="52" rx="6"/><text class="tm" x="650" y="282" style="font-size:10.5px">S-001</text><text class="tb m" x="716" y="299">Entry routing</text><text class="ts m" x="716" y="314">lead conversation per job</text>
@@ -207,16 +212,16 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
         <path class="ln" d="M400 526 V556"/>
       </svg>
     </div>
-    <figcaption>Read top to bottom. Every box carries the spec that owns it, and the colour follows the same rule: teal is S-001, indigo is S-002, magenta is S-003, blue is S-004, dashed grey is a spec not written yet ("later" boxes are named after their S-000 component; "bootstrap" is answered by S-000's bootstrap plan). The listeners belong to the Intern service and are specified in S-003: both serve one HTTP protocol, and no listener checks who calls. Email and schedules call the service layer in the same process; the command line and the web interface go through a listener, using the client library.</figcaption>
+    <figcaption>Read top to bottom. Every box carries the spec that owns it, and the colour follows the same rule: teal is S-001, indigo is S-002, magenta is S-003, blue is S-004, green is S-005, dashed grey is a spec not written yet ("later" boxes are named after their S-000 component; "bootstrap" is answered by S-000's bootstrap plan). The listeners belong to the Intern service and are specified in S-003: both serve one HTTP protocol, and no listener checks who calls. Email and schedules call the service layer in the same process; the command line and the web interface go through a listener, using the client library.</figcaption>
   </figure>
 </section>
 
 <section id="conversations">
   <span class="eyebrow">3 · Jobs, roles, agents and conversations</span>
-  <h2>A role is the base context; an agent applies it in a conversation of a job</h2>
+  <h2>A role is the base context; an agent applies it in a conversation of a job or in the front desk</h2>
   <ul class="bullets">
     <li>Every job has one lead conversation; its current agent is the job's lead.</li>
-    <li>Every conversation belongs to one job and has exactly one agent at a time.</li>
+    <li>Every conversation belongs to one job, except the front desk, and has exactly one agent at a time.</li>
     <li>A role defines the context where an agent starts. Team members shape roles.</li>
     <li>Agents change by <em>handoff</em> (same conversation; in the lead conversation it passes the lead) or spread by <em>invocation</em> (new conversations of the same job).</li>
     <li>Invoked agents do parts of the job and report back; only the lead closes the job.</li>
@@ -308,15 +313,16 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
         <tr><td>Definition of done</td><td>A clear deliverable, action or end state that decides whether a job is done. Goal, needs, plan and analysis belong in the job's description.</td></tr>
         <tr><td>Resolution, evidence</td><td>A Done job ends <code>completed</code> or <code>cancelled</code> with a short justification. The evidence is that justification with the job's worklog and conversations.</td></tr>
         <tr><td>Follow-up job</td><td>A job an agent creates while it works on another job. Its origin letter is <code>A</code>, and it is Related to the job it came from.</td></tr>
-        <tr><td>Job source, origin</td><td>What starts a job and its lead conversation: a request, a schedule fire, a trigger or a follow-up. A conversation's origin records its job source, or the invoking conversation.</td></tr>
+        <tr><td>Job source, origin</td><td>What starts a job and its lead conversation: a request, a schedule fire, a trigger or a follow-up. A conversation's origin records its job source, the invoking conversation, or "front desk" for the front desk.</td></tr>
         <tr><td>Schedule, trigger</td><td>A schedule starts jobs at set times, fresh or with the history of its last runs. A trigger starts a job when an event happens, such as a job outcome or mail arriving.</td></tr>
         <tr><td>Lead conversation, lead agent</td><td>Each job's one lead conversation; its current agent carries the job from definition to verification and is the only one that closes it.</td></tr>
+        <tr><td>Front desk</td><td>The one standing conversation of an instance that assists team members, opened by <code>bob chat</code> and the web interface's chat. It belongs to no job and runs on the shipped <code>desk</code> role. It answers what is being worked on, turns requests for work into jobs (origin letter <code>C</code> or <code>W</code>, from the way in used), and passes answers and steering to a job's conversations. It never does the work itself (S-001 REQ-021 to REQ-025).</td></tr>
         <tr><td>Specialist role, specialist agent</td><td>A role suited to a kind of work (any role a team creates); an agent of it invoked for part of a job.</td></tr>
         <tr><td>Team knowledge</td><td>The knowledge sources The Intern reads and keeps current: the team's wiki (run by the team), repository docs and other folders.</td></tr>
-        <tr><td>Role</td><td>The base context an agent starts from: instructions, tools, skills and default model, thinking level and workspace. Shipped (<code>bob</code>, <code>gp</code>) or created by the team.</td></tr>
+        <tr><td>Role</td><td>The base context an agent starts from: instructions, tools, skills and default model, thinking level and workspace. Shipped (<code>bob</code>, <code>gp</code>, <code>desk</code>) or created by the team.</td></tr>
         <tr><td>Agent</td><td>The application of a role in a conversation, and the actor that interacts with the model there. It exists only within a conversation, one at a time, and can be configured during it. Not an operating-system process.</td></tr>
         <tr><td>Seat</td><td>The place of the current agent in a conversation, with its role, model, thinking level and workspace (defaults or overrides).</td></tr>
-        <tr><td>Conversation</td><td>The pi-durable meaning: an ordered transcript of entries with its own pi-durable agent. Each belongs to one job.</td></tr>
+        <tr><td>Conversation</td><td>The pi-durable meaning: an ordered transcript of entries with its own pi-durable agent. Each belongs to one job, except the front desk.</td></tr>
         <tr><td>Transcript, context</td><td>The transcript is every stored entry. The context is what the model receives next, after resets and compactions.</td></tr>
         <tr><td>Reset</td><td>Clears what the model sees; the conversation, its id and its entries stay.</td></tr>
         <tr><td>Agent run, model turn</td><td>A run is the model turns from picking up an input until the conversation is idle or parked. A turn is one model request and its tool calls.</td></tr>
@@ -342,7 +348,7 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
         <tr><td>Session</td><td>One transcript, a JSONL file</td><td>The whole store: one database</td><td>Not used. A transcript is a conversation; the store is "the database".</td></tr>
         <tr><td>Agent</td><td>The loop in the <code>pi</code> process</td><td>What a conversation runs with: model, thinking, extensions, tools, instructions, cwd</td><td>The current agent's seat is written into the pi-durable agent of its conversation.</td></tr>
         <tr><td>Subagent</td><td>None built in</td><td>A conversation owned by a task of its caller</td><td>Not used. Agent invocation replaces it.</td></tr>
-        <tr><td>Root conversation</td><td>None</td><td>Conversation 1, from the host's first <code>root()</code></td><td>Not used. Every conversation belongs to a job.</td></tr>
+        <tr><td>Root conversation</td><td>None</td><td>Conversation 1, from the host's first <code>root()</code></td><td>Not used. Every conversation belongs to a job, except the front desk, which is not a root conversation either.</td></tr>
         <tr><td>Task</td><td>Not a concept</td><td>A durable state machine</td><td>Only the pi-durable meaning. The product's work is a job.</td></tr>
         <tr><td>Extension</td><td>A module pi loads from disk</td><td>Tools, prompt sections and hooks the host installs</td><td>Only our own pi-durable extensions. pi agent extensions are never loaded.</td></tr>
         <tr><td>Skills, context files</td><td>Loaded from the agent folder, <code>~/.agents/skills</code> and trusted projects</td><td>None of its own; the host supplies prompt sections</td><td>Role skills plus workspace skills and context files. The service account's own pi agent skills are not loaded.</td></tr>
@@ -357,10 +363,10 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
 <section id="specs">
   <span class="eyebrow">5 · Spec map</span>
   <h2>Which spec owns what</h2>
-  <p class="claim">S-000 owns the decomposition into components; each later spec owns the contract of one component. Specs are written in layers, and only S-000 to S-004 exist so far.</p>
+  <p class="claim">S-000 owns the decomposition into components; each later spec owns the contract of one component. Specs are written in layers, and only S-000 to S-005 exist so far.</p>
   <figure>
     <div class="fig">
-      <svg viewBox="0 0 800 340" role="img" aria-label="Spec dependency map: S-002 is the base; S-001 and S-003 build on it; S-004 Jobs builds on S-001; the specs for Schedules and triggers, Email, Web interface, Skills and instructions, Team knowledge and Installation build on those.">
+      <svg viewBox="0 0 800 340" role="img" aria-label="Spec dependency map: S-002 is the base; S-001 and S-003 build on it; S-004 Jobs builds on S-001; S-005 Command line builds on S-003; the specs for Schedules and triggers, Email, Web interface, Skills and instructions, Team knowledge and Installation build on those.">
         <rect class="b s2" x="10" y="130" width="140" height="70" rx="6"/><text class="tb m" x="80" y="156">S-002</text><text class="ts m" x="80" y="174">Intern service:</text><text class="ts m" x="80" y="188">daemon, host, feed</text>
         <rect class="b s1" x="200" y="40" width="140" height="70" rx="6"/><text class="tb m" x="270" y="66">S-001</text><text class="ts m" x="270" y="84">Agents and roles</text><text class="ts m" x="270" y="98">conversations</text>
         <rect class="b s3" x="200" y="220" width="140" height="70" rx="6"/><text class="tb m" x="270" y="246">S-003</text><text class="ts m" x="270" y="264">listeners and</text><text class="ts m" x="270" y="278">client library</text>
@@ -368,7 +374,7 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
         <rect class="b later" x="400" y="76" width="140" height="56" rx="6"/><text class="tb m" x="470" y="100">Skills, instructions</text><text class="ts m" x="470" y="118">shipped, overlay</text>
         <rect class="b later" x="400" y="142" width="140" height="56" rx="6"/><text class="tb m" x="470" y="166">Team knowledge</text><text class="ts m" x="470" y="184">wiki, docs</text>
         <rect class="b later" x="400" y="208" width="140" height="56" rx="6"/><text class="tb m" x="470" y="232">Web interface</text><text class="ts m" x="470" y="250">board, live, config</text>
-        <rect class="b later" x="400" y="274" width="140" height="56" rx="6"/><text class="tb m" x="470" y="298">Command line</text><text class="ts m" x="470" y="316">bob commands</text>
+        <rect class="b s5" x="400" y="274" width="140" height="56" rx="6"/><text class="tb m" x="470" y="298">S-005</text><text class="ts m" x="470" y="316">Command line</text>
         <rect class="b later" x="600" y="10" width="190" height="56" rx="6"/><text class="tb m" x="695" y="34">Schedules and triggers</text><text class="ts m" x="695" y="52">fires, events, history</text>
         <rect class="b later" x="600" y="76" width="190" height="56" rx="6"/><text class="tb m" x="695" y="100">Email</text><text class="ts m" x="695" y="118">own mailbox, in and out</text>
         <path class="ln s2" d="M150 150 L200 85"/><path class="ln s2" d="M150 180 L200 245"/>
@@ -377,18 +383,18 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
         <path class="ln dash" d="M540 38 L600 38"/><path class="ln dash" d="M540 50 L600 100"/>
       </svg>
     </div>
-    <figcaption>Arrows read "is built on". Blue is S-004, which also needs S-002 and S-003. Grey boxes are named after their S-000 component and get a spec number when written; their dependencies are the intended ones, and each spec confirms them. S-001 phase 1 also needs S-002 phases 1 to 3, and S-002 phase 5 needs the supervisor registration from the bootstrap plan (Installation and service setup).</figcaption>
+    <figcaption>Arrows read "is built on". Blue is S-004, which also needs S-002 and S-003. Green is S-005, which also uses S-001's front desk and S-004's job operations. Grey boxes are named after their S-000 component and get a spec number when written; their dependencies are the intended ones, and each spec confirms them. S-001 phase 1 also needs S-002 phases 1 to 3, and S-002 phase 5 needs the supervisor registration from the bootstrap plan (Installation and service setup).</figcaption>
   </figure>
   <div class="tablewrap">
     <table>
       <thead><tr><th>Spec</th><th>S-000 component</th><th>Status</th><th>Tasks</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td>S-000</td><td>System overview</td><td><span class="chip">approved</span></td><td>bootstrap plan T-001 to T-016, done</td><td>Purpose, users, use cases, the decomposition into components, project exclusions.</td></tr>
-        <tr><td>S-001</td><td>Agents and roles</td><td><span class="chip s1">approved</span></td><td>T-053 to T-091 done; the completion-mode spec-truth reconciliation passed on 2026-11-01</td><td>Shipped and team roles, seats, lead conversations, handoff, invocation, steering, depth cap, job sources' conversations, monitoring read operations.</td></tr>
-        <tr><td>S-002</td><td>Intern service</td><td><span class="chip s2">approved, v0.9</span></td><td>T-017 to T-052, done; T-094 for the v0.7 amendment, done; the v0.8 amendment is in T-110 to T-143; the v0.9 amendment, which refuses a <code>jobs.create</code> call that names an origin, is in T-117</td><td>Process, lifecycle, service account, configuration file, worker-thread capacity and queue, service layer, observation feed.</td></tr>
+        <tr><td>S-000</td><td>System overview</td><td><span class="chip">approved, v0.6</span></td><td>bootstrap plan T-001 to T-016, done</td><td>Purpose, users, use cases, the decomposition into components, project exclusions.</td></tr>
+        <tr><td>S-001</td><td>Agents and roles</td><td><span class="chip s1">approved, v0.8</span></td><td>T-053 to T-091 done; the completion-mode spec-truth reconciliation passed on 2026-11-01; the v0.8 front desk amendment isn't broken down yet</td><td>Shipped and team roles, seats, lead conversations, handoff, invocation, steering, depth cap, job sources' conversations, monitoring read operations, the front desk and its tools.</td></tr>
+        <tr><td>S-002</td><td>Intern service</td><td><span class="chip s2">approved, v0.10</span></td><td>T-017 to T-052, done; T-094 for the v0.7 amendment, done; the v0.8 amendment is in T-110 to T-143; the v0.9 amendment, which refuses a <code>jobs.create</code> call that names an origin, is in T-117; the v0.10 amendment, which adds <code>desk.get</code>, isn't broken down yet</td><td>Process, lifecycle, service account, configuration file, worker-thread capacity and queue, service layer, observation feed.</td></tr>
         <tr><td>S-003</td><td>Intern service: control endpoint</td><td><span class="chip s3">approved</span></td><td>T-095 to T-109, with T-094 for S-002 v0.7</td><td>The local socket for the command line, the network listener for the web interface, the HTTP routes for every operation and the feed, the web interface files under <code>/ui/</code>, the client library.</td></tr>
-        <tr><td>S-004</td><td>Jobs</td><td><span class="chip s4">approved, v0.5</span></td><td>T-110 to T-144</td><td>The job record in the job store, the four statuses and the five actions, blocked jobs and answers, the worklog and history, follow-up jobs and Related links, the job operations and job tools, the job feed events, the startup repair rules, export and the import step.</td></tr>
-        <tr><td>—</td><td>Command line</td><td><span class="chip later">planned</span></td><td>none</td><td>The <code>bob</code> commands, including the monitoring views.</td></tr>
+        <tr><td>S-004</td><td>Jobs</td><td><span class="chip s4">approved, v0.6</span></td><td>T-110 to T-144; the v0.6 front desk amendment isn't broken down yet</td><td>The job record in the job store, the four statuses and the five actions, blocked jobs and answers, the worklog and history, follow-up jobs and Related links, the job operations and job tools, the job tools in the front desk, the job feed events, the startup repair rules, export and the import step.</td></tr>
+        <tr><td>S-005</td><td>Command line</td><td><span class="chip s5">approved</span></td><td>none; not broken down yet</td><td>The <code>bob</code> command groups and top-level commands over the client library: jobs, answering, following, the front-desk chat, conversations, roles, workspaces, models, status, usage, export and the import command; <code>--json</code>, exit codes, <code>BOB_RUNTIME_DIR</code>, the reserved groups for later specs, and the manual's command reference.</td></tr>
         <tr><td>—</td><td>Schedules and triggers</td><td><span class="chip later">planned</span></td><td>none</td><td>Fires and events, run history, refusing an unknown role, skipping busy runs and fires whose workspace is missing, "run now", live test 1 of S-001.</td></tr>
         <tr><td>—</td><td>Email</td><td><span class="chip later">planned</span></td><td>none</td><td>The Intern's own mailbox: sorting, requests to jobs, answers, mail events, optional sending.</td></tr>
         <tr><td>—</td><td>Web interface</td><td><span class="chip later">planned</span></td><td>none</td><td>Job board, answering, live view, configuration from the browser.</td></tr>
@@ -402,7 +408,7 @@ svg .ln.s1 { stroke: var(--s1); } svg .ln.s2 { stroke: var(--s2); } svg .ln.dash
   <div class="panel warn">
     <h3>Open items that cross specs</h3>
     <ul>
-      <li>S-004 closes the Jobs gap: creating jobs, blocking and answering, and verification and closing. The run history a schedule passes to its next run belongs to the schedules and triggers spec. How jobs are presented, and the name of the import command, belong to the Command line and Web interface specs.</li>
+      <li>S-004 closes the Jobs gap: creating jobs, blocking and answering, and verification and closing. The run history a schedule passes to its next run belongs to the schedules and triggers spec. How jobs are presented, and the name of the import command, belong to the Command line and Web interface specs; S-005 names it <code>bob import</code>.</li>
       <li>How the choice is made between continuing a parked agent on each report or after the last: decided later. Until then a parked agent continues on each report (S-001 REQ-019).</li>
       <li>The packaging form (npm tarball or bundle with Node), starting at boot on macOS without a login, and retention of old conversations and jobs.</li>
       <li>The standing decisions in section 1 are recorded: ADR-001 (one daemon, one database that also holds the job store, pi-durable behind a host) and ADR-002 (equal team members with no logins, no approval rules, the service account as the boundary). ADR-003 and ADR-004 record how host commits and inputs sent on someone's behalf reach pi-durable.</li>
