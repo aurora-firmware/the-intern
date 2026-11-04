@@ -265,14 +265,25 @@ describe("bob roles, workspaces and models with --json", () => {
 });
 
 describe("bob status, usage and export with --json", () => {
-    it("prints the answers of daemon.status and usage.get, and exits 0", async () => {
+    it("prints the answer of daemon.status and the usage.get answers, and exits 0", async () => {
         const fixture = await readyDaemon();
 
         const status = jsonOf(await bob(fixture, ["status", "--json"]));
         const usage = jsonOf(await bob(fixture, ["usage", "--json"]));
 
         assert.deepEqual(status, await fixture.daemon.invoke("daemon.status", {}));
-        assert.deepEqual(usage, await fixture.daemon.invoke("usage.get", {}));
+        const conversations = (await fixture.daemon.invoke("conversations.list", {})) as { id: string }[];
+        assert.deepEqual(usage, {
+            total: await fixture.daemon.invoke("usage.get", {}),
+            conversations: Object.fromEntries(
+                await Promise.all(
+                    conversations.map(
+                        async ({ id }) =>
+                            [id, await fixture.daemon.invoke("usage.get", { conversationId: id })] as const,
+                    ),
+                ),
+            ),
+        });
     });
 
     it("prints the path and size of the file jobs.export wrote, and refuses a file that exists", async () => {
