@@ -666,8 +666,13 @@ describe("rule 4: a closed conversation of a Done job with a run or queued input
         await assert.rejects(cancelJob(first.deps, job.id, "no longer needed", teamMember), /crash at conversations/);
         // No public path leaves input queued on an idle conversation, so the test places one in its inbox.
         await internalHarness(first.ctx.host).commit(async (tx) => {
-            const inbox = await tx.doc(InboxDoc, Number(job.leadConversation) as never);
-            inbox.items.push({ id: 99 as never, mode: "followUp", content: HELD_TEXT as never });
+            const id = Number(job.leadConversation) as never;
+            const submission = await tx.createSubmission({ conversationId: id, type: "input", status: "queued" });
+            (await tx.doc(InboxDoc, id)).items.push({
+                id: submission.id,
+                mode: "followUp",
+                content: HELD_TEXT as never,
+            });
         }, BACKGROUND_CONTEXT);
         await first.stop();
 
@@ -743,22 +748,27 @@ describe("the cost of the repair", () => {
     });
 });
 
+// What a conversation closed before v0.10 can hold: a queued reset behind the closed mark, which closing now empties.
+async function queueResetBeforeClosedMark(ctx: ServiceContext, conversationId: string): Promise<void> {
+    const id = Number(conversationId) as never;
+    await internalHarness(ctx.host).commit(async (tx) => {
+        const submission = await tx.createSubmission({ conversationId: id, type: "write", status: "queued" });
+        (await tx.doc(InboxDoc, id)).items.push({
+            id: submission.id,
+            mode: "write",
+            entry: { kind: "pi.reset", head: "self" },
+        } as never);
+    }, BACKGROUND_CONTEXT);
+}
+
 describe("rule 4: a closed conversation of a Done job with a queued write", () => {
     it("writes no repair over two starts for an idle closed lead whose inbox holds only a reset", async () => {
         const rig = await createRig();
         const first = await rig.boot();
-        const heldCall = rig.hold();
         const job = await first.createJob();
-        await waitFor(() => rig.modelInputs.length === 1, "the lead's run to be in its model call");
-        const lead = { conversationId: job.leadConversation };
-        await first.daemon.catalogue.invoke("conversations.reset", lead, webCaller);
-        await first.daemon.catalogue.invoke(
-            "jobs.cancel",
-            { job: job.id, justification: "no longer needed" },
-            webCaller,
-        );
-        heldCall.release();
         await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        await cancelJob(first.deps, job.id, "no longer needed", teamMember);
+        await queueResetBeforeClosedMark(first.ctx, job.leadConversation);
         const modes = (await inboxOf(first.ctx, job.leadConversation)).map((item) => item.mode);
         assert.ok(modes.includes("write"), "the reset is queued");
         assert.ok(!modes.some((mode) => mode === "steer" || mode === "followUp"), "no input is queued");
@@ -770,6 +780,33 @@ describe("rule 4: a closed conversation of a Done job with a queued write", () =
             assert.deepEqual(await repairsOf(booted.ctx, job.id), [], `${start} start`);
             await booted.stop();
         }
+    });
+});
+
+describe("rule 4: an unclosed conversation of a Done job with queued items", () => {
+    it("empties the inbox when it closes the conversation, and a repeated start writes nothing more", async () => {
+        const rig = await createRig();
+        const first = await rig.boot({ afterWrite: crashAt("job-cancelled") });
+        const heldCall = rig.hold();
+        const job = await first.createJob();
+        await waitFor(() => rig.modelInputs.length === 1, "the lead's run to be in its model call");
+        await first.daemon.catalogue.invoke("conversations.reset", { conversationId: job.leadConversation }, webCaller);
+        assert.deepEqual(
+            (await inboxOf(first.ctx, job.leadConversation)).map((item) => item.mode),
+            ["write"],
+        );
+        await assert.rejects(cancelJob(first.deps, job.id, "no longer needed", teamMember), /crash at job-cancelled/);
+        await first.stop();
+
+        const second = await rig.boot();
+
+        assert.deepEqual(didsOf(await repairsOf(second.ctx, job.id)), [RULE_4]);
+        assert.deepEqual(await inboxOf(second.ctx, job.leadConversation), []);
+        await second.stop();
+        const third = await rig.boot();
+        assert.deepEqual(didsOf(await repairsOf(third.ctx, job.id)), [RULE_4]);
+        assert.deepEqual(await inboxOf(third.ctx, job.leadConversation), []);
+        heldCall.release();
     });
 });
 

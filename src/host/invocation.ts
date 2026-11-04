@@ -5,7 +5,7 @@
  * invoked conversation without its invocation link.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { type ConversationId, defineDoc, type Tx } from "@earendil-works/pi-durable";
+import { type ConversationId, defineDoc, InboxDoc, type Tx } from "@earendil-works/pi-durable";
 import { INVOCATION_DEPTH_CAP } from "../daemon/constants.ts";
 import { FRONT_DESK_CREATION } from "../desk/desk_model.ts";
 import type { Seat } from "../roles/role_model.ts";
@@ -336,13 +336,22 @@ export async function abortWithAwaited(host: HarnessHost, conversationId: string
     return aborted;
 }
 
-const closeConversation = (host: HarnessHost, conversationId: string) =>
-    updateMeta(host, conversationId, (meta) => {
+// The closed mark and the emptied inbox are one commit, so no queued item (a reset included) can land at a run's
+// boundary after the mark. Held messages have no submission, so they settle nothing.
+async function closeConversation(host: HarnessHost, conversationId: string): Promise<void> {
+    await requireMeta(host, conversationId);
+    const id = toNumericId(conversationId);
+    await internalHarness(host).commit(async (tx) => {
+        const meta = (await tx.doc(conversationMetaDoc, id)) as ConversationMeta;
         meta.closed = true;
         meta.parked = null;
         meta.awaiting = [];
         meta.held = [];
-    });
+        const inbox = await tx.doc(InboxDoc, id);
+        for (const item of inbox.items) tx.settleSubmission(item.id, { status: "unanswered", reason: "closed" });
+        inbox.items = [];
+    }, context);
+}
 
 // Lists and closes in the job's section, so no admission or creation of the job falls between the list and the marks.
 function closeJobConversations(host: HarnessHost, jobId: string): Promise<string[]> {

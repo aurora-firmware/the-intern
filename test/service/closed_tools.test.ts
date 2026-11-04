@@ -19,13 +19,12 @@ import {
 } from "@earendil-works/pi-ai";
 import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
-import { type ConversationId, InboxDoc } from "@earendil-works/pi-durable";
+import { type ConversationId, InboxDoc, type SubmissionId } from "@earendil-works/pi-durable";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { STOP_BOUND_MS } from "../../src/daemon/constants.ts";
 import { type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { createDeskComponent } from "../../src/desk/desk_component.ts";
-import { submissionState } from "../../src/host/conversation_control.ts";
 import { internalHarness } from "../../src/host/harness_host.ts";
 import { createInvokedConversations } from "../../src/host/invocation.ts";
 import { setJobDoneCheck, setSectionHook } from "../../src/host/job_section.ts";
@@ -42,6 +41,7 @@ import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts"
 const WAIT_MS = 20_000;
 const POLL_MS = 10;
 const SETTLE_PAUSE_MS = 100;
+const SUBMISSION_ID_PROBE_LIMIT = 200;
 const quietLogger = createLogger({ stream: { write: () => true } });
 const commandLine: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
 const teamMember: SeatActor = { kind: "team_member", wayIn: "command line" };
@@ -711,6 +711,33 @@ async function inboxOf(started: Started, conversationId: string): Promise<InboxI
     }, BACKGROUND_CONTEXT);
 }
 
+// The harness reads one submission by id and ids are not contiguous, so the ones closed are found by probing a range.
+async function closedOf(started: Started, conversationId: string) {
+    const harness = internalHarness(started.ctx.host);
+    const settled: { type: string; reason: string }[] = [];
+    for (let id = 1; id <= SUBMISSION_ID_PROBE_LIMIT; id += 1) {
+        const submission = await harness.submission(id as SubmissionId, BACKGROUND_CONTEXT);
+        if (submission === undefined) continue;
+        const record = await submission.status(BACKGROUND_CONTEXT);
+        if (
+            String(record.conversationId) === conversationId &&
+            record.status === "unanswered" &&
+            record.reason === "closed"
+        ) {
+            settled.push({ type: record.type, reason: record.reason });
+        }
+    }
+    return settled;
+}
+
+async function resetCount(started: Started, conversationId: string): Promise<number> {
+    const { entries } = await started.invoke<Promise<{ entries: { kind: string }[] }>>("conversations.entries", {
+        conversationId,
+        limit: 500,
+    });
+    return entries.filter((entry) => entry.kind === "pi.reset").length;
+}
+
 describe("a clean handoff committed just before the job closes", () => {
     it("settles its queued note unanswered by the job's abort, and the note runs no model turn", async () => {
         const started = await start();
@@ -737,25 +764,24 @@ describe("a clean handoff committed just before the job closes", () => {
             reached.open();
             await release.opened;
         });
-        let queued: InboxItem[] = [];
-        started.setAfterWrite(async (point, jobId) => {
-            if (point === "conversations-closed" && jobId === job.id) queued = await inboxOf(started, caller);
-        });
 
+        const resetsBefore = await resetCount(started, caller);
         await submitCompleteInput(started, job.leadConversation);
         go.open();
         await waitFor(async () => (await started.ctx.jobStore.getJob(job.id)).status === "done", "the job to be Done");
         await sleep(SETTLE_PAUSE_MS);
         release.open();
-        const queuedNote = () => queued.find((item) => item.mode === "followUp");
-        await waitFor(() => queuedNote() !== undefined, "the queued note at the close");
-        const noteId = String(queuedNote()?.id);
-        await waitFor(
-            async () => (await submissionState(started.ctx.host, noteId)).state === "unanswered",
-            "the note to settle",
-        );
+        await waitFor(async () => (await closedOf(started, caller)).length === 2, "the queued items to be closed");
 
-        assert.deepEqual(await submissionState(started.ctx.host, noteId), { state: "unanswered", reason: "aborted" });
+        assert.deepEqual(
+            (await closedOf(started, caller)).map(({ type, reason }) => [type, reason]),
+            [
+                ["write", "closed"],
+                ["input", "closed"],
+            ],
+        );
+        assert.deepEqual(await inboxOf(started, caller), []);
+        assert.equal(await resetCount(started, caller), resetsBefore, "no reset is placed after the closed mark");
         assert.equal((await readConversationMeta(started.ctx.host, caller))?.closed, true);
         assert.deepEqual(noteTurns, []);
     });
