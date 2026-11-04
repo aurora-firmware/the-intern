@@ -26,6 +26,7 @@ import { type SqliteDatabase, SqliteStorage } from "@earendil-works/pi-durable/s
 import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { Logger } from "../daemon/logger.ts";
 import type { HarnessSettingsMapping } from "../models/settings_mapping.ts";
+import { parseConversationId } from "./conversation_id.ts";
 
 export type { Extension, Models, SqliteDatabase, Storage };
 
@@ -208,10 +209,6 @@ function logReport(logger: Logger, error: unknown, info: ReportInfo): void {
     logger.error("pi-durable report", fields);
 }
 
-function toConversationId(id: string): ConversationId | undefined {
-    return /^\d+$/.test(id) ? (Number(id) as ConversationId) : undefined;
-}
-
 function toModelRef(model: string): { provider: string; modelId: string } {
     const separator = model.indexOf("/");
     if (separator <= 0 || separator === model.length - 1) {
@@ -266,7 +263,7 @@ async function listBusyConversationIds(harness: Harness): Promise<Set<Conversati
 }
 
 async function requireConversation(harness: Harness, id: string): Promise<Conversation> {
-    const conversationId = toConversationId(id);
+    const conversationId = parseConversationId(id);
     const conversation = conversationId === undefined ? undefined : await harness.conversation(conversationId, context);
     if (!conversation) throw new Error(`Conversation "${id}" does not exist.`);
     return conversation;
@@ -312,7 +309,7 @@ function createHost(harness: Harness): HarnessHost {
         },
         listConversations,
         async conversationInfo(id) {
-            const conversationId = toConversationId(id);
+            const conversationId = parseConversationId(id);
             if (conversationId === undefined || !(await harness.conversation(conversationId, context)))
                 return undefined;
             return { id, busy: (await listBusyConversationIds(harness)).has(conversationId) };

@@ -5,7 +5,7 @@
  * invoked conversation without its invocation link.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { type ConversationId, defineDoc, InboxDoc, LiveDoc, type Tx } from "@earendil-works/pi-durable";
+import { defineDoc, InboxDoc, LiveDoc, type Tx } from "@earendil-works/pi-durable";
 import { INVOCATION_DEPTH_CAP } from "../daemon/constants.ts";
 import { FRONT_DESK_CREATION } from "../desk/desk_model.ts";
 import type { Seat } from "../roles/role_model.ts";
@@ -16,6 +16,7 @@ import {
     submissionIdFor,
     submitInput,
 } from "./conversation_control.ts";
+import { toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { findCreatedConversation } from "./idempotency.ts";
 import { inJobSection, inOpenConversation } from "./job_section.ts";
@@ -68,7 +69,6 @@ const invocationsDocument = defineDoc<{ conversations: Record<string, string> }>
 // One invocation call at a time per host, so concurrent calls with one request id can't both miss the lookup.
 const pendingInvocations = new WeakMap<HarnessHost, Promise<unknown>>();
 
-const toNumericId = (conversationId: string): ConversationId => Number(conversationId) as ConversationId;
 const requestIdOf = (invokingId: string, callId: string, index: number): string =>
     `invoke:${invokingId}:${callId}:${index}`;
 
@@ -94,7 +94,7 @@ async function createOne(
     const ownership = { kind: "ownerless" } as const;
     const isFork = request.contextMode !== "clean" && forkAt !== undefined;
     const record = isFork
-        ? await tx.forkConversation(toNumericId(invokingId), forkAt.id, { ownership })
+        ? await tx.forkConversation(toConversationId(invokingId), forkAt.id, { ownership })
         : await tx.createConversation({ ownership });
     const conversationId = String(record.id);
     // Every field is written, so a fork keeps nothing of the invoker's document.
@@ -118,7 +118,7 @@ async function createMissing(
 ): Promise<string[]> {
     const { invokingId, callId, agents, actor, parked } = input;
     return internalHarness(host).commit(async (tx) => {
-        const invokingDoc = await tx.doc(conversationMetaDoc, toNumericId(invokingId));
+        const invokingDoc = await tx.doc(conversationMetaDoc, toConversationId(invokingId));
         if (invokingDoc.jobId === "") {
             throw new SeatingError(`Conversation "${invokingId}" was not created by createSeatedConversation.`);
         }
@@ -132,7 +132,7 @@ async function createMissing(
         );
         // Table reads come before the first table write.
         const latest = hasMissing
-            ? (await tx.scanEntries({ conversationId: toNumericId(invokingId), order: "descending" }, 1)).items[0]
+            ? (await tx.scanEntries({ conversationId: toConversationId(invokingId), order: "descending" }, 1)).items[0]
             : undefined;
         const ids: string[] = [];
         for (const [index, request] of agents.entries()) {
@@ -154,7 +154,7 @@ async function createMissing(
 
 async function hasSubmission(host: HarnessHost, conversationId: string, requestId: string): Promise<boolean> {
     const found = await internalHarness(host).commit(
-        (tx) => tx.submissionByRequest(toNumericId(conversationId), requestId),
+        (tx) => tx.submissionByRequest(toConversationId(conversationId), requestId),
         context,
     );
     return found !== undefined;
@@ -211,7 +211,7 @@ export async function createInvokedConversations(
 async function updateMeta(host: HarnessHost, conversationId: string, change: (meta: ConversationMeta) => void) {
     await requireMeta(host, conversationId);
     await internalHarness(host).commit(async (tx) => {
-        change((await tx.doc(conversationMetaDoc, toNumericId(conversationId))) as ConversationMeta);
+        change((await tx.doc(conversationMetaDoc, toConversationId(conversationId))) as ConversationMeta);
     }, context);
 }
 
@@ -340,7 +340,7 @@ export async function abortWithAwaited(host: HarnessHost, conversationId: string
 // boundary after the mark. Held messages have no submission, so they settle nothing.
 async function closeConversation(host: HarnessHost, conversationId: string): Promise<void> {
     await requireMeta(host, conversationId);
-    const id = toNumericId(conversationId);
+    const id = toConversationId(conversationId);
     await internalHarness(host).commit(async (tx) => {
         const meta = (await tx.doc(conversationMetaDoc, id)) as ConversationMeta;
         meta.closed = true;
@@ -380,7 +380,7 @@ async function abortRunningCompactions(
     const harness = internalHarness(host);
     for (const id of conversationIds) {
         try {
-            const live = await harness.snapshot(LiveDoc, toNumericId(id) as ConversationId, context);
+            const live = await harness.snapshot(LiveDoc, toConversationId(id), context);
             for (const status of live?.compactions ?? []) {
                 if (!status.blocking) await harness.abortTask(status.taskId, context);
             }

@@ -7,9 +7,10 @@
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
-import type { Conversation, ConversationId, EntryId } from "@earendil-works/pi-durable";
+import type { Conversation, EntryId } from "@earendil-works/pi-durable";
 import type { Logger } from "../daemon/logger.ts";
 import { submitInput } from "./conversation_control.ts";
+import { toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { watchConversationMeta, watchInstance } from "./host_observation.ts";
 import { continueParked } from "./invocation.ts";
@@ -25,8 +26,6 @@ export type ReportRecord = { actor: SeatActor; content: string };
 type Report = { content: string; requestId: string };
 type LastAnswer = { text: string; entryId: EntryId };
 
-const toNumericId = (conversationId: string): ConversationId => Number(conversationId) as ConversationId;
-
 const isAssistantMessage = (message: Message): message is AssistantMessage => message.role === "assistant";
 
 function textOfAssistant(message: AssistantMessage): string {
@@ -39,7 +38,7 @@ function textOfAssistant(message: AssistantMessage): string {
 // The last answer is the text of the last assistant message; entries are read newest first.
 async function readLastAnswer(host: HarnessHost, invokedId: string): Promise<LastAnswer | undefined> {
     const conversation: Conversation | undefined = await internalHarness(host).conversation(
-        toNumericId(invokedId),
+        toConversationId(invokedId),
         context,
     );
     if (conversation === undefined) return undefined;
@@ -81,7 +80,7 @@ async function readReport(
 
 async function changeMeta(host: HarnessHost, conversationId: string, change: (meta: ConversationMeta) => void) {
     await internalHarness(host).commit(async (tx) => {
-        change((await tx.doc(conversationMetaDoc, toNumericId(conversationId))) as ConversationMeta);
+        change((await tx.doc(conversationMetaDoc, toConversationId(conversationId))) as ConversationMeta);
     }, context);
 }
 

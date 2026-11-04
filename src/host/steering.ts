@@ -7,6 +7,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type ConversationId, defineEntry } from "@earendil-works/pi-durable";
 import { HostNotFoundError, notifyInputSubmitted, submissionIdFor } from "./conversation_control.ts";
+import { parseConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { continueParked } from "./invocation.ts";
 import { inOpenConversation } from "./job_section.ts";
@@ -25,7 +26,7 @@ const steerRecordEntry = defineEntry<SteerRecord>(STEER_RECORD_KIND);
 const toStoredJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 async function requireConversation(host: HarnessHost, targetId: string) {
-    const numericId = /^\d+$/.test(targetId) ? (Number(targetId) as ConversationId) : undefined;
+    const numericId = parseConversationId(targetId);
     const conversation =
         numericId === undefined ? undefined : await internalHarness(host).conversation(numericId, context);
     if (conversation === undefined) throw new HostNotFoundError(`Conversation "${targetId}" does not exist.`);

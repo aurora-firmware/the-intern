@@ -301,6 +301,35 @@ describe("the front-desk state and steering tools", { timeout: TEST_TIMEOUT_MS }
         assert.match(results[1]?.text ?? "", new RegExp(MISSING_ID));
     });
 
+    it("answers send_to_conversation naming the front desk in a non-canonical form as a missing conversation", async () => {
+        const fixture = await start();
+        const paddedId = `0${fixture.deskId}`;
+
+        const results = await fixture.run([
+            { name: "send_to_conversation", arguments: { conversationId: paddedId, message: "hi", mode: "steer" } },
+        ]);
+
+        assert.equal(results[0]?.isError, true);
+        assert.match(results[0]?.text ?? "", new RegExp(`"${paddedId}" does not exist`));
+        const entries = (await fixture.ctx.host.readEntries(fixture.deskId, { limit: 500 })).entries;
+        const steers = entries.filter((entry) => entry.kind === STEER_RECORD_KIND);
+        assert.deepEqual(
+            steers.map((entry) => (entry.data as { actor: { kind: string } }).actor.kind),
+            ["team_member"],
+            "only the team member's script input is a steer",
+        );
+    });
+
+    it("answers stop_conversation naming the front desk in a non-canonical form without stopping its own run", async () => {
+        const fixture = await start();
+        const paddedId = `0${fixture.deskId}`;
+
+        const results = await fixture.run([{ name: "stop_conversation", arguments: { conversationId: paddedId } }]);
+
+        assert.equal(results[0]?.isError, true);
+        assert.match(results[0]?.text ?? "", new RegExp(`"${paddedId}" does not exist`));
+    });
+
     it("returns what the read operations return for the same input", async () => {
         const fixture = await start();
         const job = await fixture.createJob();

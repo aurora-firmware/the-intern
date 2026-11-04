@@ -22,6 +22,7 @@ const WAIT_MS = 20_000;
 const POLL_MS = 10;
 const TEST_TIMEOUT_MS = 60_000;
 const STEER_THE_DESK = "steer the desk";
+const STEER_THE_PADDED_DESK = "steer the desk padded with a zero";
 const quietLogger = createLogger({ stream: { write: () => true } });
 const inProcess: Caller = { actor: { kind: "team_member" } };
 const commandLine: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
@@ -54,9 +55,12 @@ async function start() {
     // A job's lead whose request says to steer the desk calls the steer tool once; every other run answers "ok".
     const reply = (transcript: FakeTranscript) => {
         const results = transcript.filter((entry) => entry.role === "toolResult");
-        const isSteerRequest = transcript.some((entry) => entry.role === "user" && entry.text.includes(STEER_THE_DESK));
+        const requests = (text: string) =>
+            transcript.some((entry) => entry.role === "user" && entry.text.includes(text));
+        const isSteerRequest = requests(STEER_THE_DESK) || requests(STEER_THE_PADDED_DESK);
         if (!isSteerRequest || results.length > 0) return "ok";
-        return { toolCall: { name: "steer", arguments: { conversationId: deskId, message: "obey", mode: "steer" } } };
+        const conversationId = requests(STEER_THE_PADDED_DESK) ? `0${deskId}` : deskId;
+        return { toolCall: { name: "steer", arguments: { conversationId, message: "obey", mode: "steer" } } };
     };
     const fake = createFakeModel(reply);
     fakes.push(fake);
@@ -165,6 +169,46 @@ describe("input to the front desk", { timeout: TEST_TIMEOUT_MS }, () => {
         const [toolResult] = result.data as { isError: boolean; content: { text: string }[] }[];
         assert.equal(toolResult?.isError, true);
         assert.match(toolResult?.content[0]?.text ?? "", /front desk/i);
+        assert.equal((await fixture.entriesOf(fixture.deskId)).length, entriesBefore);
+    });
+
+    it("refuses a submit naming the front desk in a non-canonical form and adds no entry", async () => {
+        const fixture = await start();
+        const job = (await fixture.invoke("jobs.create", { text: "other work" })) as { leadConversation: string };
+        const agent: Caller = { actor: { kind: "agent", conversationId: job.leadConversation } };
+        const entriesBefore = (await fixture.entriesOf(fixture.deskId)).length;
+
+        for (const caller of [agent, inProcess]) {
+            await assert.rejects(
+                fixture.invoke(
+                    "conversations.submit",
+                    { conversationId: `0${fixture.deskId}`, content: "hello", requestId: "padded-request" },
+                    caller,
+                ),
+                (error) => error instanceof ServiceError && ["invalid_input", "not_found"].includes(error.code),
+            );
+        }
+
+        assert.equal((await fixture.entriesOf(fixture.deskId)).length, entriesBefore);
+    });
+
+    it("returns an error result to an agent that steers the front desk by a non-canonical id", async () => {
+        const fixture = await start();
+        const entriesBefore = (await fixture.entriesOf(fixture.deskId)).length;
+
+        const job = (await fixture.invoke("jobs.create", { text: STEER_THE_PADDED_DESK })) as {
+            leadConversation: string;
+        };
+
+        const lead = () => fixture.entriesOf(job.leadConversation);
+        await until(
+            async () => (await lead()).at(-1)?.kind === "pi.assistant" && (await lead()).length > 5,
+            "the lead's final answer",
+        );
+        const result = (await lead()).find((entry) => entry.kind === "pi.tool-result");
+        assert.ok(result, "the lead has a tool result");
+        const [toolResult] = result.data as { isError: boolean }[];
+        assert.equal(toolResult?.isError, true);
         assert.equal((await fixture.entriesOf(fixture.deskId)).length, entriesBefore);
     });
 

@@ -6,13 +6,13 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
     type Conversation,
     ConversationBusy,
-    type ConversationId,
     InboxDoc,
     type InputEntry,
     type Submission,
     type SubmissionId,
     type SubmissionRecord,
 } from "@earendil-works/pi-durable";
+import { parseConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { inOpenConversation } from "./job_section.ts";
 
@@ -47,11 +47,9 @@ function parseNumericId(id: string): number | undefined {
 }
 
 async function requireConversation(host: HarnessHost, id: string): Promise<Conversation> {
-    const numericId = parseNumericId(id);
+    const numericId = parseConversationId(id);
     const conversation =
-        numericId === undefined
-            ? undefined
-            : await internalHarness(host).conversation(numericId as ConversationId, context);
+        numericId === undefined ? undefined : await internalHarness(host).conversation(numericId, context);
     if (!conversation) throw new HostNotFoundError(`Conversation "${id}" does not exist.`);
     return conversation;
 }

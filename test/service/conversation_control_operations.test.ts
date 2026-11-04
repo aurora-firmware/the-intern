@@ -316,6 +316,22 @@ describe("conversations.abort, conversations.reset and conversations.compact", (
         }
     });
 
+    it("reject with not_found for an existing conversation's id written with a leading zero", async () => {
+        const fixture = await openFixture();
+        const paddedId = `0${fixture.conversationId}`;
+
+        for (const name of ["conversations.abort", "conversations.reset", "conversations.compact"]) {
+            assert.equal(await rejectionCode(fixture.call(name, { conversationId: paddedId })), "not_found", name);
+        }
+        const submit = fixture.call("conversations.submit", {
+            conversationId: paddedId,
+            content: "hi",
+            requestId: "r",
+        });
+        assert.equal(await rejectionCode(submit), "not_found");
+        assert.equal(fixture.modelCalls(), 0);
+    });
+
     it("reject with invalid_input when the conversation id is missing", async () => {
         const fixture = await openFixture();
 
