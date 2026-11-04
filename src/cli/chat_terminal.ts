@@ -240,7 +240,8 @@ export async function runTerminalChat(
             warn("The Intern went away before the turn was stopped; it may still be running");
             return;
         }
-        showPrompt();
+        // The abort leaves the typed line as it is, and the cursor where it was in it.
+        showPrompt(true);
     }
 
     /** Names each submitted line that has no answer because the daemon went away while Ctrl-D waited for it. */

@@ -445,6 +445,40 @@ describe("runTerminalChat with the line editor in use while a partial arrives", 
     });
 });
 
+describe("runTerminalChat when Ctrl-C comes with a line half typed", () => {
+    it("leaves_the_typed_text_and_its_cursor_as_they_were", async () => {
+        const chat = chatOnScriptedFeed();
+        chat.feed({ snapshot: { entries: [], live: {} } });
+        chat.type("half of a thou");
+        await chat.seeRow("> half of a thou");
+
+        chat.type("\x03");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        chat.type("ght");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const { lines } = chat.terminal();
+        await chat.leave();
+
+        assert.deepEqual(lines.slice(-1), ["> half of a thought"]);
+    });
+
+    it("leaves_the_cursor_in_the_middle_of_the_line_where_it_was", async () => {
+        const chat = chatOnScriptedFeed();
+        chat.feed({ snapshot: { entries: [], live: {} } });
+        chat.type(`half${LEFT}${LEFT}`);
+        await chat.seeRow("> half");
+
+        chat.type("\x03");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        chat.type("X");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const { lines } = chat.terminal();
+        await chat.leave();
+
+        assert.deepEqual(lines.slice(-1), ["> haXlf"]);
+    });
+});
+
 describe("runTerminalChat on a terminal that reports no width", () => {
     it("prints_an_answer_that_fits_a_usual_row_on_one_row", async () => {
         const chat = chatOnScriptedFeed(0);
