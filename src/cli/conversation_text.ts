@@ -1,9 +1,11 @@
 /**
  * The text the `bob conversations` commands print (S-005 REQ-011). Pure: each function turns a service answer into
- * lines. Imports types only, so no daemon code loads.
+ * lines, each of one line: data goes through `flat`, so it brings no control sequence and no line break. Imports types
+ * only, so no daemon code loads.
  */
 import type { SeatActor, SeatRecord, SeatSummary } from "../host/seating.ts";
 import type { ConversationListing, InvocationTree } from "../service/conversation_read_operations.ts";
+import { flat } from "./terminal_text.ts";
 
 type TranscriptEntry = { id: string; kind: string; data: unknown; seat?: SeatSummary };
 
@@ -11,30 +13,30 @@ const MAX_TEXT_LENGTH = 200;
 const NO_VALUE = "-";
 
 function seatText(seat: SeatSummary | null): string {
-    return seat === null ? NO_VALUE : `${seat.role} (${seat.model})`;
+    return seat === null ? NO_VALUE : `${flat(seat.role)} (${flat(seat.model)})`;
 }
 
 function placeText(listing: ConversationListing): string {
     if (listing.isFrontDesk) return "front desk";
     if (listing.jobId === null) return "no job";
-    return `job ${listing.jobId}${listing.isLead ? " lead" : ""}`;
+    return `job ${flat(listing.jobId)}${listing.isLead ? " lead" : ""}`;
 }
 
 export function formatConversationLine(listing: ConversationListing): string {
-    const activity = listing.lastActivity ?? NO_VALUE;
-    return `${listing.id}  ${placeText(listing)}  ${seatText(listing.seat)}  ${listing.status}  ${activity}`;
+    const activity = flat(listing.lastActivity ?? NO_VALUE);
+    return `${flat(listing.id)}  ${placeText(listing)}  ${seatText(listing.seat)}  ${flat(listing.status)}  ${activity}`;
 }
 
 function actorText(actor: SeatActor): string {
-    if (actor.kind === "team_member") return `team member via ${actor.wayIn}`;
-    if (actor.kind === "agent") return `agent ${actor.role}`;
-    if (actor.kind === "job_source") return `job source ${actor.source}`;
+    if (actor.kind === "team_member") return `team member via ${flat(actor.wayIn)}`;
+    if (actor.kind === "agent") return `agent ${flat(actor.role)}`;
+    if (actor.kind === "job_source") return `job source ${flat(actor.source)}`;
     return "daemon";
 }
 
 function oneLine(text: string): string {
-    const flat = text.replace(/\s+/g, " ").trim();
-    return flat.length > MAX_TEXT_LENGTH ? `${flat.slice(0, MAX_TEXT_LENGTH)}...` : flat;
+    const line = flat(text);
+    return line.length > MAX_TEXT_LENGTH ? `${line.slice(0, MAX_TEXT_LENGTH)}...` : line;
 }
 
 function contentText(content: unknown): string {
@@ -53,10 +55,10 @@ function messageText(data: unknown): string {
 }
 
 function seatRecordText(record: SeatRecord): string {
-    const previous = record.previous === null ? NO_VALUE : record.previous.role;
-    const mode = record.contextMode === undefined ? "" : `, ${record.contextMode} context`;
+    const previous = record.previous === null ? NO_VALUE : flat(record.previous.role);
+    const mode = record.contextMode === undefined ? "" : `, ${flat(record.contextMode)} context`;
     const note = record.note === undefined ? "" : `, note: ${oneLine(record.note)}`;
-    return `seat: ${previous} -> ${record.next.role} (${record.next.model}) by ${actorText(record.actor)}${mode}${note}`;
+    return `seat: ${previous} -> ${flat(record.next.role)} (${flat(record.next.model)}) by ${actorText(record.actor)}${mode}${note}`;
 }
 
 function formatEntry(entry: TranscriptEntry): string {
@@ -64,12 +66,12 @@ function formatEntry(entry: TranscriptEntry): string {
     if (kind === "intern.seat") return seatRecordText(data as SeatRecord);
     if (kind === "pi.user") return `input: ${messageText(data)}`;
     if (kind === "pi.assistant") {
-        const role = entry.seat === undefined ? "" : ` (${entry.seat.role})`;
+        const role = entry.seat === undefined ? "" : ` (${flat(entry.seat.role)})`;
         return `assistant${role}: ${messageText(data)}`;
     }
     if (kind === "intern.steer") {
         const record = data as { actor: SeatActor; mode: string; content?: string };
-        return `${record.mode} from ${actorText(record.actor)}: ${oneLine(record.content ?? "")}`;
+        return `${flat(record.mode)} from ${actorText(record.actor)}: ${oneLine(record.content ?? "")}`;
     }
     if (kind === "intern.report") {
         const record = data as { actor: SeatActor; content: string };
@@ -77,7 +79,7 @@ function formatEntry(entry: TranscriptEntry): string {
     }
     if (kind === "pi.reset") return "reset";
     if (kind === "pi.compaction") return "compaction";
-    return kind;
+    return flat(kind);
 }
 
 export function formatTranscript(entries: readonly TranscriptEntry[]): string[] {
@@ -85,11 +87,11 @@ export function formatTranscript(entries: readonly TranscriptEntry[]): string[] 
 }
 
 export function formatInvocations(tree: InvocationTree, depth = 0): string[] {
-    const line = `${"  ".repeat(depth)}${tree.id}  ${tree.role ?? NO_VALUE}  ${tree.status}`;
+    const line = `${"  ".repeat(depth)}${flat(tree.id)}  ${flat(tree.role ?? NO_VALUE)}  ${flat(tree.status)}`;
     return [line, ...tree.invoked.flatMap((child) => formatInvocations(child, depth + 1))];
 }
 
 export function formatSeat(seat: { role: string; model: string; thinkingLevel?: string; workspace: string }): string {
-    const thinking = seat.thinkingLevel === undefined ? "" : `, thinking ${seat.thinkingLevel}`;
-    return `${seat.role} (${seat.model}${thinking}, workspace ${seat.workspace})`;
+    const thinking = seat.thinkingLevel === undefined ? "" : `, thinking ${flat(seat.thinkingLevel)}`;
+    return `${flat(seat.role)} (${flat(seat.model)}${thinking}, workspace ${flat(seat.workspace)})`;
 }

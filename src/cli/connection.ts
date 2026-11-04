@@ -8,6 +8,7 @@ import { nodeTransport } from "../client/node_transport.ts";
 import { InstanceDirError, localSocketPath, resolveInstanceDirs } from "../daemon/state_layout.ts";
 import { type CommandInput, EXIT_CODES } from "./command_line.ts";
 import { writeError } from "./output.ts";
+import { flat } from "./terminal_text.ts";
 
 export function UNREACHABLE_MESSAGE(path: string): string {
     return `The Intern isn't running here (${path}); start it with \`bob serve\``;
@@ -44,7 +45,7 @@ export async function withClient(input: CommandInput, action: (client: Client) =
             return EXIT_CODES.unreachable;
         }
         if (error instanceof ClientError) {
-            writeError(io, `${error.code}: ${error.message}`);
+            writeError(io, `${flat(error.code)}: ${flat(error.message)}`);
             return EXIT_CODES.refused;
         }
         throw error;

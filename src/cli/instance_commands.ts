@@ -12,6 +12,7 @@ import type { CommandInput, CommandSpec } from "./command_line.ts";
 import { EXIT_CODES } from "./command_line.ts";
 import { withClient } from "./connection.ts";
 import { writeError, writeJson, writeLine } from "./output.ts";
+import { flat } from "./terminal_text.ts";
 
 function statusLines(status: DaemonStatus): string[] {
     const { instance, versions, workerThreads } = status;
@@ -39,7 +40,7 @@ function usageLines(heading: string, report: UsageReport): string[] {
     for (const [kind, bucket] of buckets) {
         for (const [name, totals] of Object.entries(bucket)) {
             lines.push(
-                `  ${kind} ${name}: ${totals.input} in, ${totals.output} out, ${totals.totalTokens} tokens, cost ${totals.cost.total}`,
+                `  ${kind} ${flat(name)}: ${totals.input} in, ${totals.output} out, ${totals.totalTokens} tokens, cost ${totals.cost.total}`,
             );
         }
     }
@@ -80,7 +81,7 @@ export const usageCommand: CommandSpec = {
             const conversations = (await client.invoke("conversations.list", {})) as ConversationListing[];
             for (const { id } of conversations) {
                 const report = (await client.invoke("usage.get", { conversationId: id })) as UsageReport;
-                for (const line of usageLines(`Conversation ${id}`, report)) writeLine(input.io, line);
+                for (const line of usageLines(`Conversation ${flat(id)}`, report)) writeLine(input.io, line);
             }
             for (const line of usageLines("Total", total)) writeLine(input.io, line);
             return EXIT_CODES.ok;

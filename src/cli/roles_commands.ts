@@ -11,6 +11,7 @@ import type { CommandInput, CommandSpec, OptionSpec } from "./command_line.ts";
 import { EXIT_CODES } from "./command_line.ts";
 import { withClient } from "./connection.ts";
 import { writeError, writeJson, writeLine } from "./output.ts";
+import { block, flat } from "./terminal_text.ts";
 
 type ModelSummary = { model: string; thinkingLevels: string[] };
 
@@ -74,18 +75,21 @@ function roleFieldsOf(input: CommandInput): Record<string, unknown> {
 
 function formatRoleLine(role: CatalogRole): string {
     const origin = role.shipped ? (role.changed ? "shipped, changed" : "shipped") : "team";
-    return `${role.name}  ${origin}  ${role.model ?? "default model"}`;
+    return `${flat(role.name)}  ${origin}  ${flat(role.model ?? "default model")}`;
 }
 
 function formatRole(role: CatalogRole): string[] {
     return [
         formatRoleLine(role),
-        `  Thinking: ${role.thinkingLevel ?? "default"}`,
-        `  Workspace: ${role.workspace ?? "role default"}`,
-        `  Tools: ${role.tools.join(", ") || NOTHING}`,
-        `  Skills: ${role.skills.join(", ") || NOTHING}`,
+        `  Thinking: ${flat(role.thinkingLevel ?? "default")}`,
+        `  Workspace: ${flat(role.workspace ?? "role default")}`,
+        `  Tools: ${flat(role.tools.join(", ")) || NOTHING}`,
+        `  Skills: ${flat(role.skills.join(", ")) || NOTHING}`,
         "  Instructions:",
-        ...role.instructions.split("\n").map((line) => `    ${line}`),
+        // Every line of the instructions is indented, so none reads as a field of this listing.
+        ...block(role.instructions)
+            .split("\n")
+            .map((line) => `    ${line}`),
     ];
 }
 
@@ -150,8 +154,8 @@ function roleNameCommand(verb: "remove" | "restore", summary: string, done: stri
 
 function formatWorkspaceLine(workspace: WorkspaceListing): string {
     return workspace.kind === "role_default"
-        ? `${workspace.path}  default of ${workspace.role}`
-        : `${workspace.path}  registered`;
+        ? `${flat(workspace.path)}  default of ${flat(workspace.role ?? "")}`
+        : `${flat(workspace.path)}  registered`;
 }
 
 const pathPositional = { name: "path", required: true };
@@ -186,7 +190,7 @@ const modelsList = serviceCommand(
         if (input.json) writeJson(input.io, models);
         else
             for (const { model, thinkingLevels } of models)
-                writeLine(input.io, `${model}  ${thinkingLevels.join(", ")}`);
+                writeLine(input.io, `${flat(model)}  ${flat(thinkingLevels.join(", "))}`);
         return EXIT_CODES.ok;
     },
 );

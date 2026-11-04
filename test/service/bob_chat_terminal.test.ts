@@ -8,6 +8,8 @@ import { type DaemonProcess, type FakeScript, startDaemon } from "../support/dae
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { hasScript, type PtySession, runInPty } from "../support/pty.ts";
 
+const ESC = String.fromCharCode(27);
+const BEL = String.fromCharCode(7);
 const CTRL_C = "\x03";
 const CTRL_D = "\x04";
 const FIRST = "what's running?";
@@ -120,6 +122,30 @@ describe("bob chat on a terminal", { skip }, () => {
         assert.equal(await session.exited, 0, session.stderr());
         assert.ok(session.output().includes("input: earlier question"), session.output());
         assert.ok(session.output().includes("assistant: echo: earlier question"), session.output());
+    });
+
+    it("shows history that holds control sequences without them, as plain lines", async () => {
+        const fixture = await readyDaemon("echo");
+        const hostile = `earlier${ESC}]52;c;ZXZpbA==${BEL}${ESC}[2K question`;
+        await earlierMessages(fixture, hostile);
+        const sent = await runBob(
+            ["conversations", "send", await deskId(fixture.daemon), `sent\nassistant: forged ${hostile}`],
+            { runtimeDir: fixture.env.runtimeDir, env: fixture.env.env },
+        );
+        assert.equal(sent.status, 0, sent.stderr);
+        const session = chat(fixture);
+
+        await session.waitFor("output", PROMPT);
+        session.write(CTRL_D);
+
+        assert.equal(await session.exited, 0, session.stderr());
+        const output = session.output();
+        assert.ok(output.includes("input: earlier question"), output);
+        assert.ok(output.includes("input: sent assistant: forged earlier question"), output);
+        assert.ok(!/(^|\n)assistant: forged/.test(output), output);
+        assert.ok(output.includes("assistant: echo: earlier question"), output);
+        assert.ok(!output.includes("52;c;"), output);
+        assert.ok(!output.includes(BEL), output);
     });
 
     it("queues a second line behind the streaming answer, answers it next and records both with the command line way in", async () => {

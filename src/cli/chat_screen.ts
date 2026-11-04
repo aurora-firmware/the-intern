@@ -8,6 +8,7 @@
 import { clearLine, cursorTo } from "node:readline";
 import type { Writable } from "node:stream";
 import type { CommandIo } from "./command_line.ts";
+import { block } from "./terminal_text.ts";
 
 type MessageLike = { content?: unknown; timestamp?: unknown };
 
@@ -29,10 +30,10 @@ function textBlocks(message: MessageLike): string[] {
     );
 }
 
-/** The text of an assistant entry: its text blocks, one per line. */
+/** The text of an assistant entry: its text blocks, one per line, without control sequences. */
 export function assistantText(entry: { data?: unknown; [field: string]: unknown }): string {
     const messages = Array.isArray(entry.data) ? (entry.data as MessageLike[]) : [];
-    return messages.flatMap(textBlocks).join("\n");
+    return block(messages.flatMap(textBlocks).join("\n"));
 }
 
 /** The ids of the responses an assistant entry holds: the timestamps of its messages. */
@@ -45,7 +46,7 @@ export function responseTimestamps(entry: { data?: unknown; [field: string]: unk
 export function partialAnswer(live: unknown): { text: string; timestamp: number | undefined } | undefined {
     const message = (live as { generation?: { message?: MessageLike } } | null | undefined)?.generation?.message;
     if (message === undefined) return undefined;
-    const text = textBlocks(message).join("\n");
+    const text = block(textBlocks(message).join("\n"));
     if (text === "") return undefined;
     return { text, timestamp: typeof message.timestamp === "number" ? message.timestamp : undefined };
 }

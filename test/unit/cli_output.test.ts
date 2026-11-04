@@ -9,6 +9,9 @@ import { type CommandInput, type CommandIo, EXIT_CODES } from "../../src/cli/com
 import { resolveRuntimeDir, socketPathFor, UNREACHABLE_MESSAGE, withClient } from "../../src/cli/connection.ts";
 import { paint, writeError, writeJson, writeLine } from "../../src/cli/output.ts";
 
+const ESC = String.fromCharCode(27);
+const BEL = String.fromCharCode(7);
+
 type MemoryIo = { io: CommandIo; stdout: () => string; stderr: () => string };
 
 function memoryIo(overrides: Partial<CommandIo> = {}): MemoryIo {
@@ -178,5 +181,33 @@ describe("output", () => {
         assert.ok(painted.startsWith("\u001b["));
         assert.ok(painted.includes("text"));
         assert.ok(painted.endsWith("\u001b[0m"));
+    });
+
+    it("removes_control_sequences_from_text_it_writes_but_keeps_its_newlines", () => {
+        const memory = memoryIo();
+        const attack = `x${ESC}]52;c;ZXZpbA==${BEL}y${ESC}[2Kz\nsecond`;
+        writeLine(memory.io, attack);
+        writeError(memory.io, attack);
+        assert.equal(memory.stdout(), "xyz\nsecond\n");
+        assert.equal(memory.stderr(), "xyz\nsecond\n");
+    });
+
+    it("keeps_its_own_colour_on_a_terminal_and_drops_every_other_sequence", () => {
+        const { io, stdout } = memoryIo({ isStdoutTerminal: true });
+        writeLine(io, `${paint(io, "ok", "green")} ${ESC}[4mdata${ESC}[0;38;5;9m${ESC}]0;title${BEL}`);
+        assert.equal(stdout(), `${paint(io, "ok", "green")} data\n`);
+    });
+
+    it("drops_colour_sequences_too_when_standard_output_is_not_a_terminal", () => {
+        const memory = memoryIo({ isStdoutTerminal: false });
+        writeLine(memory.io, `${ESC}[31mred${ESC}[0m`);
+        assert.equal(memory.stdout(), "red\n");
+    });
+
+    it("writes_json_exactly_even_when_a_value_holds_control_characters", () => {
+        const memory = memoryIo();
+        const value = { text: `a${ESC}[2Kb${BEL}` };
+        writeJson(memory.io, value);
+        assert.equal(memory.stdout(), `${JSON.stringify(value)}\n`);
     });
 });

@@ -15,6 +15,7 @@ import { type AttributedEntryLike, createEntryTracker, followFeed, outageNoticeF
 import { conversationEntryLine } from "./feed_text.ts";
 import { writeError, writeJson, writeLine } from "./output.ts";
 import { patientClient } from "./patient_client.ts";
+import { flat } from "./terminal_text.ts";
 
 const PROMPT = "> ";
 const HISTORY_LINES = 10;
@@ -34,7 +35,7 @@ type TypedLine = { line: string; requestId: string };
 function historyText(entry: AttributedEntryLike): string | undefined {
     if (entry.kind !== "intern.steer") return conversationEntryLine(entry);
     const { content } = entry.data as { content?: unknown };
-    return typeof content === "string" ? `input: ${content}` : undefined;
+    return typeof content === "string" ? `input: ${flat(content)}` : undefined;
 }
 
 async function readHistory(client: Client, conversationId: string, io: CommandIo, json: boolean) {
