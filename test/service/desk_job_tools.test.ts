@@ -281,6 +281,31 @@ describe("the front-desk job tools", { timeout: TEST_TIMEOUT_MS }, () => {
         assert.equal(jsonOf(results[3]).number, target.number);
     });
 
+    it("returns an error result naming the rule for a job tool given the front desk's id", async () => {
+        const fixture = await start();
+        const job = (await fixture.invoke("jobs.create", { text: "seven" })) as JobResult;
+
+        const results = await fixture.run("local socket", [
+            { name: "read_job", arguments: { job: fixture.deskId } },
+            { name: "update_job", arguments: { job: fixture.deskId, title: "x" } },
+            { name: "add_worklog", arguments: { job: fixture.deskId, text: "x" } },
+            { name: "relate_jobs", arguments: { job: fixture.deskId, other: job.number } },
+            { name: "relate_jobs", arguments: { job: job.number, other: fixture.deskId, unrelate: true } },
+        ]);
+
+        assert.equal(results.length, 5);
+        for (const result of results) {
+            assert.equal(result.isError, true, result.text);
+            assert.match(result.text, /front desk is not a job conversation/);
+        }
+        const stored = await fixture.read(job.id);
+        assert.deepEqual([stored.related, stored.worklog], [[], []]);
+        assert.equal(
+            stored.history.some((entry) => entry.field === "title"),
+            false,
+        );
+    });
+
     it("returns an error result for a job that does not exist and lets the run go on", async () => {
         const fixture = await start();
 

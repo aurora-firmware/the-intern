@@ -18,7 +18,7 @@ import { STEER_RECORD_KIND } from "../host/steering.ts";
 import { EDITABLE_FIELDS, type JobAuthor, type JobStatus, type Letter } from "../jobs/job_model.ts";
 import { JobNotFoundError, JobRefusedError, type JobStore } from "../jobs/job_store.ts";
 import type { CreateJobRequest, JobView } from "../service/job_operations.ts";
-import { readJob } from "../service/job_record_operations.ts";
+import { readJob, refuseFrontDesk } from "../service/job_record_operations.ts";
 import { type Caller, type Catalogue, ServiceError } from "../service/operations.ts";
 import { FRONT_DESK_EXTENSION_NAME } from "./desk_model.ts";
 import { deskStateTools, jsonResult, textResult } from "./desk_state_tools.ts";
@@ -80,9 +80,10 @@ const readJobTool = (options: DeskToolsOptions) =>
         description: "Read a job with its worklog and its history.",
         parameters: Type.Object({ job: Type.String({ description: JOB_FIELD_DESCRIPTION }) }),
         execute: (args) =>
-            refusable("read_job", async () =>
-                jsonResult(await readJob({ host: options.host(), jobStore: options.jobStore() }, args.job)),
-            ),
+            refusable("read_job", async () => {
+                await refuseFrontDesk(options.host(), args.job);
+                return jsonResult(await readJob({ host: options.host(), jobStore: options.jobStore() }, args.job));
+            }),
     });
 
 const listJobsParameters = Type.Object({
@@ -162,9 +163,10 @@ const updateJobTool = (options: DeskToolsOptions) =>
             if (Object.keys(fields).length === 0) {
                 return textResult(`update_job was refused: name at least one of ${EDITABLE_FIELDS.join(", ")}.`, true);
             }
-            return refusable("update_job", async () =>
-                jsonResult(await options.jobStore().updateFields(args.job, fields, author)),
-            );
+            return refusable("update_job", async () => {
+                await refuseFrontDesk(options.host(), args.job);
+                return jsonResult(await options.jobStore().updateFields(args.job, fields, author));
+            });
         },
     });
 
@@ -178,9 +180,10 @@ const addWorklogTool = (options: DeskToolsOptions) =>
         }),
         async execute(args, api) {
             const author = await authorOf(options, api);
-            return refusable("add_worklog", async () =>
-                jsonResult(await options.jobStore().addWorklog(args.job, args.text, author)),
-            );
+            return refusable("add_worklog", async () => {
+                await refuseFrontDesk(options.host(), args.job);
+                return jsonResult(await options.jobStore().addWorklog(args.job, args.text, author));
+            });
         },
     });
 
@@ -197,6 +200,8 @@ const relateJobsTool = (options: DeskToolsOptions) =>
             const author = await authorOf(options, api);
             const store = options.jobStore();
             return refusable("relate_jobs", async () => {
+                await refuseFrontDesk(options.host(), args.job);
+                await refuseFrontDesk(options.host(), args.other);
                 const change = args.unrelate === true ? store.unrelate : store.relate;
                 const { a, b } = await change.call(store, args.job, args.other, author);
                 return textResult(

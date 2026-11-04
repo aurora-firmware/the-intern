@@ -164,6 +164,8 @@ describe("the front desk is not a job conversation", { timeout: TEST_TIMEOUT_MS 
 
     for (const [operation, input] of [
         ["jobs.get", {}],
+        ["jobs.worklog.list", {}],
+        ["jobs.history.list", {}],
         ["jobs.update", { title: "new" }],
         ["jobs.worklog.add", { text: "note" }],
         ["jobs.resume", {}],
@@ -179,6 +181,19 @@ describe("the front desk is not a job conversation", { timeout: TEST_TIMEOUT_MS 
 
             assert.equal(JSON.stringify(await fixture.invoke("jobs.get", { job: job.id })), before);
             assert.equal(((await fixture.invoke("jobs.list", {})) as { jobs: unknown[] }).jobs.length, 1);
+        });
+    }
+
+    for (const operation of ["jobs.relate", "jobs.unrelate"] as const) {
+        it(`refuses ${operation} naming the front desk's id as either job and changes nothing`, async () => {
+            const fixture = await start({ turnEndRule: false });
+            const job = await fixture.createJob();
+            const before = JSON.stringify(await fixture.invoke("jobs.get", { job: job.id }));
+
+            await assert.rejects(fixture.invoke(operation, { job: fixture.deskId, other: job.id }), isNotAJobRefusal);
+            await assert.rejects(fixture.invoke(operation, { job: job.id, other: fixture.deskId }), isNotAJobRefusal);
+
+            assert.equal(JSON.stringify(await fixture.invoke("jobs.get", { job: job.id })), before);
         });
     }
 

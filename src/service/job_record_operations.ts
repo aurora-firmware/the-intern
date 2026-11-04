@@ -202,13 +202,19 @@ export function jobRecordOperations(_options: JobsComponentOptions) {
         name: "jobs.worklog.list",
         kind: "read",
         parse: parsePage,
-        run: (ctx, input) => refusing(ctx.jobStore.listWorklog(input.job, pageOf(input))),
+        async run(ctx, input) {
+            await refuseFrontDesk(ctx.host, input.job);
+            return refusing(ctx.jobStore.listWorklog(input.job, pageOf(input)));
+        },
     });
     const historyList = defineOperation<ServiceContext, PageInput, { entries: HistoryEntry[]; cursor?: string }>({
         name: "jobs.history.list",
         kind: "read",
         parse: parsePage,
-        run: (ctx, input) => refusing(ctx.jobStore.listHistory(input.job, pageOf(input))),
+        async run(ctx, input) {
+            await refuseFrontDesk(ctx.host, input.job);
+            return refusing(ctx.jobStore.listHistory(input.job, pageOf(input)));
+        },
     });
     const link = (name: "jobs.relate" | "jobs.unrelate", method: "relate" | "unrelate") =>
         defineOperation<ServiceContext, PairInput, { a: Job; b: Job }>({
@@ -216,6 +222,8 @@ export function jobRecordOperations(_options: JobsComponentOptions) {
             kind: "control",
             parse: parsePair,
             async run(ctx, input, caller) {
+                await refuseFrontDesk(ctx.host, input.job);
+                await refuseFrontDesk(ctx.host, input.other);
                 const author = await authorOf(caller, ctx.host);
                 return refusing(ctx.jobStore[method](input.job, input.other, author));
             },
