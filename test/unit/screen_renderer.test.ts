@@ -53,4 +53,26 @@ describe("renderTerminal", () => {
         assert.deepEqual(renderTerminal(bytes, { height: 3 }).rows, [""]);
         assert.deepEqual(renderTerminal(bytes, { height: 3, isHomeClearKept: true }).scrollback, ["one", "two"]);
     });
+
+    it("joins_rows_the_terminal_wrapped_into_one_line_and_keeps_a_line_feed_as_two", () => {
+        assert.deepEqual(renderTerminal("abcdefghij", { columns: 4 }).lines, ["abcdefghij"]);
+        assert.deepEqual(renderTerminal("abcdef\nxy", { columns: 4 }).lines, ["abcdef", "xy"]);
+        assert.deepEqual(renderTerminal("abcd\nef", { columns: 4 }).lines, ["abcd", "ef"]);
+    });
+
+    it("keeps_the_space_at_the_end_of_a_wrapped_row_in_the_joined_line", () => {
+        assert.deepEqual(renderTerminal("run -v x", { columns: 5 }).lines, ["run -v x"]);
+    });
+
+    it("joins_a_wrapped_line_whose_first_row_scrolled_into_the_scrollback", () => {
+        const screen = renderTerminal("one\nabcdefghij", { columns: 4, height: 2 });
+
+        assert.deepEqual(screen.scrollback, ["one", "abcd"]);
+        assert.deepEqual(screen.lines, ["one", "abcdefghij"]);
+    });
+
+    it("forgets_a_wrap_when_the_row_is_erased_and_written_again", () => {
+        assert.deepEqual(renderTerminal("abcdef\u001b[1A\u001b[0J\rxy", { columns: 4 }).lines, ["xy"]);
+        assert.deepEqual(renderTerminal("abcdef\r\u001b[2Kxy", { columns: 4 }).lines, ["abcd", "xy"]);
+    });
 });

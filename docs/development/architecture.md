@@ -165,10 +165,12 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   `terminal_text.ts` first (`flat`, `block` and `continued`), which removes control sequences and line breaks that would
   forge a line, and `writeLine` and `writeError` strip any that remain. `output.ts` writes data to standard output,
   errors to standard error and `--json` answers as one line. `chat_screen.ts` writes the front desk's answers on a
-  terminal as they stream: the finished rows of the answer go above the prompt for good, cut at the screen width by
-  `text_rows.ts`, and the unfinished last row, at most one screen row, is a row of its own between them and the prompt
-  that is written again as it grows. The line editor owns the prompt and the typed line, and the screen only asks it
-  to draw them again (`prompt(true)`), so its history and cursor stay as they were. A data command ends with exit 0
+  terminal as they stream: a line of the answer that has ended goes above the prompt once, in one piece with no line
+  feed inside it, so the terminal wraps it and a copy of it is one line. The line still arriving is a single
+  transient row between them and the prompt, its last part that fits the width (`lastRow` in `text_rows.ts`), written
+  again as it grows; it holds no line feed and never reaches the scrollback, so a very long line appears whole only
+  when it ends. The line editor owns the prompt and the typed line, and the screen only asks it to draw them again
+  (`prompt(true)`), so its history and cursor stay as they were. A data command ends with exit 0
   when the reader of its output closes it (`bob.ts`). Every command except `serve` and `import` is a thin client:
   `withClient` (`connection.ts`) resolves the socket from `--runtime-dir`, `BOB_RUNTIME_DIR` or the default runtime
   directory, calls the operations through the client library over `bob.sock`, and maps a refusal to exit 1 and an

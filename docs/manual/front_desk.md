@@ -51,7 +51,9 @@ bob chat
 ```
 
 On a terminal, `bob chat` shows the last lines of the front desk's history and a prompt. Type a line and press Enter to
-send it. The answer prints as it streams, and what you type stays on the last line, below it.
+send it. The answer prints as it streams, and what you type stays on the last line, below it. A line of the answer
+that is still being written shows as one row, its last part, above the prompt. When the line ends it is written whole,
+so a very long line, such as a URL or a command, appears in full only then, and copying it gives one line.
 
 - **Queueing.** A line you type while the front desk is busy queues, and the front desk answers it after the current
   line. A line sent to the front desk survives a restart of the daemon and is answered after it.

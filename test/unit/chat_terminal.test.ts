@@ -281,14 +281,13 @@ describe("runTerminalChat with the team member typing while an answer streams", 
         chat.feed({ snapshot: { entries: [], live: {} } });
         chat.type("a line typed that runs over the width of the screen");
         await chat.seeRow("of the screen");
-        chat.feed(partialOf("one two three four five six seven eight nine ten", 1));
-        await chat.seeRow("nine ten");
+        chat.feed(partialOf("one two thrhree four five six seven eight nine ten", 1));
+        await chat.seeRow("hree four five six seven eight nine ten");
         const rows = chat.rendered();
         await chat.leave();
 
-        assert.deepEqual(rows.slice(-4), [
-            "one two three four five six seven eight",
-            "nine ten",
+        assert.deepEqual(rows.slice(-3), [
+            "hree four five six seven eight nine ten",
             "> a line typed that runs over the width",
             "of the screen",
         ]);
@@ -311,15 +310,79 @@ describe("runTerminalChat with an unfinished answer line taller than the screen"
         chat.entries.push(answerEntry("e1", words.join(" "), 7));
         chat.feed({ seq: 99, delta: { seq: 99, view: { live: {} } } });
         await new Promise((resolve) => setTimeout(resolve, 50));
-        const rows = chat.rendered();
+        const done = chat.terminal();
         await chat.leave();
 
         for (const word of words) {
-            assert.equal(rows.join(" ").split(word).length - 1, 1, `${word} once in ${rows.join("\n")}`);
+            assert.equal(done.rows.join(" ").split(word).length - 1, 1, `${word} once in ${done.rows.join("\n")}`);
         }
-        assert.equal(rows.slice(0, -1).join(" "), words.join(" "));
-        assert.equal(whileStreaming.screen.at(-1), ">", whileStreaming.screen.join("\n"));
-        assert.ok(whileStreaming.screen.at(-2)?.endsWith(words.at(-1) as string), whileStreaming.screen.join("\n"));
+        assert.deepEqual(done.lines, [words.join(" "), ">"]);
+        assert.ok(done.scrollback.length > 0, "the paragraph is taller than the screen");
+        assert.deepEqual(whileStreaming.scrollback, []);
+        assert.equal(whileStreaming.lines.length, 2, whileStreaming.lines.join("\n"));
+        assert.ok(whileStreaming.lines[0]?.endsWith(words.at(-1) as string), whileStreaming.lines.join("\n"));
+    });
+});
+
+const URL_TEXT = "https://example.com/docs/a/long/path/to/some/page/that/does/not/fit?query=value&other=1";
+const COMMAND_TEXT = "docker run --rm -it -v /srv/data:/data -p 8080:80 --name web example/web:latest --verbose";
+
+/** The answer fed word by word as partials, and then its entry, so the line grows across many redraws. */
+async function streamAnswer(chat: ReturnType<typeof chatOnScriptedFeed>, text: string) {
+    const words = text.split(" ");
+    for (let count = 1; count <= words.length; count++) {
+        chat.feed(partialOf(words.slice(0, count).join(" "), count));
+        await chat.see(words[count - 1]?.slice(-4) as string);
+    }
+    chat.entries.push(answerEntry("e1", text, 7));
+    chat.feed({ seq: 999, delta: { seq: 999, view: { live: {} } } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+}
+
+describe("runTerminalChat with an answer line wider than a row", () => {
+    for (const [name, line] of [
+        ["a_url", URL_TEXT],
+        ["a_docker_run_command", COMMAND_TEXT],
+    ] as const) {
+        it(`keeps_${name}_in_one_line_that_the_terminal_wraps_when_the_answer_is_written`, async () => {
+            const chat = chatOnScriptedFeed();
+            chat.feed({ snapshot: { entries: [], live: {} } });
+            await streamAnswer(chat, `Run this:\n${line}\nThen stop.`);
+            const { lines } = chat.terminal();
+            await chat.leave();
+
+            assert.deepEqual(lines, ["Run this:", line, "Then stop.", ">"]);
+        });
+
+        it(`shows_only_one_transient_row_of_${name}_while_it_streams_and_writes_it_whole_at_its_end`, async () => {
+            const chat = chatOnScriptedFeed();
+            chat.feed({ snapshot: { entries: [], live: {} } });
+            const half = line.slice(0, line.lastIndexOf(" "));
+            chat.feed(partialOf(`first\n${half}`, 1));
+            await chat.see(half.slice(-6));
+            const whileStreaming = chat.terminal();
+            chat.feed(partialOf(`first\n${line}\nnext`, 2));
+            await chat.see(line.slice(-6));
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            const afterTheLineEnded = chat.terminal();
+            await chat.leave();
+
+            assert.deepEqual(whileStreaming.lines, ["first", half.slice(-(SCREEN_COLUMNS - 1)), ">"]);
+            assert.deepEqual(afterTheLineEnded.lines, ["first", line, "next", ">"]);
+        });
+    }
+
+    it("writes_a_line_wider_than_a_row_whole_when_the_answer_ends_without_a_newline", async () => {
+        const chat = chatOnScriptedFeed();
+        chat.feed({ snapshot: { entries: [], live: {} } });
+        chat.feed(partialOf(COMMAND_TEXT, 1));
+        await chat.see(COMMAND_TEXT.slice(-6));
+        chat.type(CTRL_D);
+        chat.entries.push(answerEntry("e1", COMMAND_TEXT, 7));
+        assert.equal(await chat.finished, 0);
+
+        const { lines } = chat.terminal();
+        assert.ok(lines.includes(COMMAND_TEXT), lines.join("\n"));
     });
 });
 
@@ -405,7 +468,7 @@ describe("runTerminalChat with the line editor in use while a partial arrives", 
         }
     });
 
-    it("keeps_a_paragraph_of_wide_characters_in_one_copy_with_every_row_inside_the_screen_width", async () => {
+    it("keeps_a_paragraph_of_wide_characters_in_one_copy_with_the_transient_row_inside_the_screen_width", async () => {
         const chat = chatOnScriptedFeed();
         chat.feed({ snapshot: { entries: [], live: {} } });
         const text = Array.from({ length: 150 }, (_, n) => String.fromCodePoint(0x3042 + (n % 40))).join("");
@@ -413,17 +476,16 @@ describe("runTerminalChat with the line editor in use while a partial arrives", 
             chat.feed(partialOf(text.slice(0, length), length));
             await chat.see(text.slice(length - 1, length));
         }
+        const whileStreaming = chat.terminal();
         chat.entries.push(answerEntry("e1", text, 7));
         chat.feed({ seq: 99, delta: { seq: 99, view: { live: {} } } });
         await new Promise((resolve) => setTimeout(resolve, 50));
-        const rows = chat.rendered();
+        const done = chat.terminal();
         await chat.leave();
 
-        assert.equal(rows.slice(0, -1).join(""), text);
-        assert.ok(
-            rows.slice(0, -1).every((row) => row.length * 2 < SCREEN_COLUMNS),
-            rows.join("\n"),
-        );
+        assert.deepEqual(done.lines, [text, ">"]);
+        assert.equal(whileStreaming.rows.length, 2, whileStreaming.rows.join("\n"));
+        assert.ok((whileStreaming.rows[0] as string).length * 2 < SCREEN_COLUMNS, whileStreaming.rows[0]);
     });
 
     it("shows_the_unfinished_line_once_and_only_when_it_completes_when_the_input_closes_during_a_stream", async () => {

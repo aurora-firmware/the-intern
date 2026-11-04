@@ -1,28 +1,30 @@
 /**
  * What `bob chat` puts on a terminal of the front desk's answers (S-005 REQ-009). An answer is written as it grows: the
- * committed partial of the response in flight (`pi.live`, S-002 REQ-014) is printed as it comes. Its finished rows are
- * written above the prompt for good, cut at the screen width on a space, so no row of it is ever drawn again. What is
- * left of the last row, less than one screen row wide, is the tail: a row of its own between the answer and the prompt,
- * written again as it grows. The prompt, with the line the team member is typing, stays below it all and belongs to the
- * line editor: the screen climbs to the top of the prompt, clears from there, writes, and asks the line editor to draw
- * the prompt again where it was (`prompt(true)`), so the editor's history and cursor are never touched. The stored
- * entry that follows only completes the tail. Only the text blocks of a message are shown, as in the entries. A partial
- * that no longer continues the printed text (a response started again after a restart) starts a new row, and a partial
- * of a response whose entry is already printed is dropped. Imports no daemon code.
+ * committed partial of the response in flight (`pi.live`, S-002 REQ-014) is shown as it comes. A line of it that has
+ * ended (its newline arrived, or the answer finished or was cut off) is written above the prompt once, in one piece
+ * with no line feed inside it, so the terminal wraps it itself and a copy of it is one line. The line still arriving is
+ * the tail: shown as a single transient row between the finished text and the prompt, the last part of it that fits the
+ * width, written again as it grows. The row holds no line feed and never reaches the scrollback; a very long line
+ * appears whole only when it ends. The prompt, with the line the team member is typing, stays below it all and belongs
+ * to the line editor: the screen climbs to the top of the prompt, clears from there, writes, and asks the line editor
+ * to draw the prompt again where it was (`prompt(true)`), so the editor's history and cursor are never touched. The
+ * stored entry that follows only completes the tail. Only the text blocks of a message are shown, as in the entries. A
+ * partial that no longer continues the printed text (a response started again after a restart) starts a new line, and a
+ * partial of a response whose entry is already printed is dropped. Imports no daemon code.
  */
 import { clearScreenDown, cursorTo, moveCursor } from "node:readline";
 import type { Writable } from "node:stream";
 import { block } from "./terminal_text.ts";
-import { cutRows, displayRow } from "./text_rows.ts";
+import { lastRow } from "./text_rows.ts";
 
 type MessageLike = { content?: unknown; timestamp?: unknown };
 
 export type ChatScreen = {
     /** Shows the text of the response in flight so far; `timestamp` tells which response it is. */
     showPartial(text: string, timestamp: number | undefined): void;
-    /** Shows a stored answer: completes the tail when the answer continues it, else prints it on rows. */
+    /** Shows a stored answer: completes the tail when the answer continues it, else prints it as lines. */
     showAnswer(text: string, timestamps: number[]): void;
-    /** Ends the tail as a row, so the exit starts on a line of its own; a later entry still finds what was shown. */
+    /** Ends the tail as a line, so the exit starts on a line of its own; a later entry still finds what was shown. */
     settle(): void;
     /** Runs the write (a notice) on a line of its own above the prompt, the tail of the answer ended first. */
     notice(write: () => void): void;
@@ -86,8 +88,8 @@ const DEFAULT_COLUMNS = 80;
 
 export function createChatScreen(options: ChatScreenOptions): ChatScreen {
     const { output, lines, prompt: PROMPT, isOpen } = options;
-    // The text of the response in flight that was shown, and how much of it is in the scrollback: whole rows, written
-    // for good. What is left is the tail, one screen row at most, shown as a row of its own above the prompt.
+    // The text of the response in flight that was shown, and how much of it is written for good: whole lines, each
+    // with its newline. What is left is the tail, the line still arriving, shown as one row above the prompt.
     let shown = "";
     let committed = 0;
     let isTailShown = false;
@@ -97,27 +99,21 @@ export function createChatScreen(options: ChatScreenOptions): ChatScreen {
     // A row one cell short of the width, so a full row never leaves the cursor waiting to wrap. A terminal that tells
     // no width (none, or 0) is taken to be as wide as the usual one.
     const rowWidth = () => (output.columns || DEFAULT_COLUMNS) - 1;
+    const tailRow = () => `${lastRow(tail(), rowWidth())}\n`;
 
-    /** The rows of the text from `from` on, each ended; the last one only when `isFinal`, else it is the tail. */
-    function layout(text: string, from: number, isFinal: boolean): { rows: string; end: number } {
-        const rows: string[] = [];
+    /** The lines of the text from `from` on that ended, each in one piece; the last one only when `isFinal`. */
+    function endedLines(text: string, from: number, isFinal: boolean): { lines: string; end: number } {
+        let lines = "";
         let at = from;
-        for (;;) {
-            const newline = text.indexOf("\n", at);
-            const line = text.slice(at, newline === -1 ? undefined : newline);
-            const cut = cutRows(line, rowWidth());
-            rows.push(...cut.rows);
-            const rest = line.slice(cut.consumed);
-            const isRowLeft = rest !== "" || (cut.rows.length === 0 && newline !== -1);
-            if (newline !== -1) {
-                if (isRowLeft) rows.push(displayRow(rest));
-                at = newline + 1;
-                continue;
-            }
-            if (isFinal && rest !== "") rows.push(displayRow(rest));
-            const end = isFinal ? text.length : at + cut.consumed;
-            return { rows: rows.map((row) => `${row}\n`).join(""), end };
+        for (let newline = text.indexOf("\n", at); newline !== -1; newline = text.indexOf("\n", at)) {
+            lines += text.slice(at, newline + 1);
+            at = newline + 1;
         }
+        if (isFinal && at < text.length) {
+            lines += `${text.slice(at)}\n`;
+            at = text.length;
+        }
+        return { lines, end: at };
     }
 
     /**
@@ -137,31 +133,31 @@ export function createChatScreen(options: ChatScreenOptions): ChatScreen {
         clearScreenDown(output);
         writeAbove();
         isTailShown = withTail && tail() !== "";
-        if (isTailShown) output.write(`${displayRow(tail())}\n`);
+        if (isTailShown) output.write(tailRow());
         // The editor climbs its own count of rows, which is behind the cursor's row after a chunk of typed text that
         // wrapped; the cursor starts that many rows down, so the drawing begins at the top of the prompt.
         output.write("\n".repeat(lines.prevRows ?? above));
         lines.prompt(true);
     }
 
-    /** Ends the tail as a row of its own; what comes next starts a new row. */
+    /** Ends the tail as a line of its own, in one piece; what comes next starts a new line. */
     function commitTail(): string {
         const pending = tail();
         committed = shown.length;
-        return pending === "" ? "" : `${displayRow(pending)}\n`;
+        return pending === "" ? "" : `${pending}\n`;
     }
 
     function restart(): string {
-        const rows = commitTail();
+        const written = commitTail();
         shown = "";
         committed = 0;
-        return rows;
+        return written;
     }
 
     function notice(write: () => void): void {
-        const rows = commitTail();
+        const written = commitTail();
         redraw(() => {
-            output.write(rows);
+            output.write(written);
             write();
         });
     }
@@ -175,7 +171,7 @@ export function createChatScreen(options: ChatScreenOptions): ChatScreen {
         afterSubmit() {
             if (!isOpen()) return;
             isTailShown = tail() !== "";
-            if (isTailShown) output.write(`${displayRow(tail())}\n`);
+            if (isTailShown) output.write(tailRow());
             lines.prompt();
         },
         closed() {
@@ -190,23 +186,23 @@ export function createChatScreen(options: ChatScreenOptions): ChatScreen {
             if (timestamp !== undefined && answeredAt.has(timestamp)) return;
             if (shown.startsWith(text)) return;
             const restarted = text.startsWith(shown) ? "" : restart();
-            const { rows, end } = layout(text, committed, false);
+            const { lines: ended, end } = endedLines(text, committed, false);
             shown = text;
             committed = end;
-            redraw(() => output.write(restarted + rows));
+            redraw(() => output.write(restarted + ended));
         },
         showAnswer(text, timestamps) {
             for (const timestamp of timestamps) answeredAt.add(timestamp);
             if (text === "") return;
-            let rows = "";
-            if (shown.startsWith(text)) rows = commitTail();
+            let written = "";
+            if (shown.startsWith(text)) written = commitTail();
             else {
-                if (!text.startsWith(shown)) rows = restart();
-                rows += layout(text, committed, true).rows;
+                if (!text.startsWith(shown)) written = restart();
+                written += endedLines(text, committed, true).lines;
             }
             shown = "";
             committed = 0;
-            redraw(() => output.write(rows));
+            redraw(() => output.write(written));
         },
     };
 }

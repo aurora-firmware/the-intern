@@ -1,7 +1,7 @@
 /**
- * Cuts text into rows that fit a number of terminal cells, so a screen knows how many rows text fills without asking the
- * terminal. A cell count is an estimate: a combining mark takes none, and an emoji or an East Asian wide character two.
- * Imports nothing.
+ * What a screen needs to know of text in terminal cells, without asking the terminal: how wide a character is and which
+ * part of a line fits one row. A cell count is an estimate: a combining mark takes none, and an emoji or an East Asian
+ * wide character two. Imports nothing.
  */
 
 const TAB_CELLS = 4;
@@ -33,38 +33,19 @@ export function displayRow(text: string): string {
     return text.replaceAll("\t", TAB_AS_SPACES);
 }
 
-/** Where the row that starts at `start` runs out of cells: the index of the first character that doesn't fit. */
-function overflowIndex(line: string, start: number, width: number): number {
-    let used = 0;
-    let index = start;
-    for (const char of line.slice(start)) {
-        used += cellsOf(char);
-        if (used > width) return index;
-        index += char.length;
-    }
-    return line.length;
-}
-
-/** Where to cut the row that overflows at `overflow`: after the last space that fits, else in the middle of a word. */
-function breakAt(line: string, start: number, overflow: number): { end: number; next: number } {
-    if (line[overflow] === " ") return { end: overflow, next: overflow + 1 };
-    const space = line.lastIndexOf(" ", overflow - 1);
-    return space > start ? { end: space, next: space + 1 } : { end: overflow, next: overflow };
-}
-
 /**
- * Cuts rows off the front of a line (no line break in it) while what is left is wider than `width` cells. A row ends
- * at a space, which is dropped, or in the middle of a word that is wider than a row. `consumed` is how much of the line
- * the rows took; the rest fits in one row. Width is at least 2, so a wide character always fits.
+ * The last part of a line that fits in `width` cells, tabs shown as spaces: the row a screen shows of a line that is
+ * still being written. A line that fits is returned whole. Width is at least 2, so a wide character always fits.
  */
-export function cutRows(line: string, width: number): { rows: string[]; consumed: number } {
-    const rows: string[] = [];
-    let start = 0;
-    for (;;) {
-        const overflow = overflowIndex(line, start, Math.max(2, width));
-        if (overflow === line.length) return { rows, consumed: start };
-        const { end, next } = breakAt(line, start, overflow);
-        rows.push(displayRow(line.slice(start, end).trimEnd()));
-        start = next;
+export function lastRow(line: string, width: number): string {
+    const text = displayRow(line);
+    const characters = [...text];
+    let used = 0;
+    let first = characters.length;
+    while (first > 0) {
+        used += cellsOf(characters[first - 1] as string);
+        if (used > Math.max(2, width)) break;
+        first--;
     }
+    return characters.slice(first).join("");
 }

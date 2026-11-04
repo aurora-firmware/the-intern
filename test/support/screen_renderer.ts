@@ -8,7 +8,8 @@
  * The screen has a height. A line feed or a wrap on its last row scrolls it: the top row moves into the scrollback,
  * where no sequence reaches again. A cursor movement up stops at the top row and one down at the bottom row, and erase
  * in display clears the visible rows only. A wide character (two cells) that doesn't fit in the last column of a row
- * wraps whole. This is what a real terminal (checked against tmux) does, and what a redraw that climbs more rows than
+ * wraps whole. A row that the terminal wrapped into, as opposed to one that a line feed started, is marked, so `lines`
+ * joins it to the row before it, as `tmux capture-pane -J` does. This is what a real terminal (checked against tmux) does, and what a redraw that climbs more rows than
  * the screen holds runs into. `isHomeClearKept` adds one tmux habit: clearing from the home position keeps the rows
  * in the scrollback, which xterm does not do.
  */
@@ -46,6 +47,8 @@ const SECOND_HALF = "";
 export type RenderedScreen = {
     /** The scrollback and the visible rows, from the first one written, each without trailing spaces. */
     rows: string[];
+    /** The logical lines: a row the terminal wrapped into is joined to the row before it, a line feed starts a new one. */
+    lines: string[];
     /** The rows joined with line feeds, without trailing blank rows. */
     text: string;
     /** The rows that scrolled off the top. */
@@ -56,6 +59,17 @@ export type RenderedScreen = {
     cursor: { row: number; column: number };
 };
 
+/** The first `count` rows as logical lines. Trailing spaces of a row that was wrapped from stay: they are in the text. */
+function logicalLines(cells: Cell[][], wraps: boolean[], count: number): string[] {
+    const lines: string[] = [];
+    for (let row = 0; row < count; row++) {
+        const text = (cells[row] as Cell[]).join("");
+        if (wraps[row] && lines.length > 0) lines[lines.length - 1] += text;
+        else lines.push(text);
+    }
+    return lines.map((line) => line.trimEnd());
+}
+
 export function renderTerminal(
     bytes: string,
     options: { columns?: number; height?: number; isHomeClearKept?: boolean } = {},
@@ -64,12 +78,17 @@ export function renderTerminal(
     const height = options.height ?? DEFAULT_HEIGHT;
     const scrolled: Cell[][] = [];
     const grid: Cell[][] = Array.from({ length: height }, () => []);
+    // For each row, whether the terminal wrapped into it from the row above, and the same for the scrollback.
+    const scrolledWraps: boolean[] = [];
+    const gridWraps: boolean[] = Array.from({ length: height }, () => false);
     const cursor = { row: 0, column: 0 };
     let isWrapPending = false;
 
     const scroll = () => {
         scrolled.push(grid.shift() as Cell[]);
+        scrolledWraps.push(gridWraps.shift() as boolean);
         grid.push([]);
+        gridWraps.push(false);
     };
     const lineFeed = () => {
         if (cursor.row === height - 1) scroll();
@@ -85,6 +104,7 @@ export function renderTerminal(
         if (cells === 0) return;
         if (isWrapPending || cursor.column + cells > columns) {
             lineFeed();
+            gridWraps[cursor.row] = true;
             cursor.column = 0;
             isWrapPending = false;
         }
@@ -101,22 +121,32 @@ export function renderTerminal(
     // tmux, asked to clear from the home position to the end of the screen, moves the rows to its history first.
     const keepScreen = () => {
         const used = grid.findLastIndex((row) => row.length > 0) + 1;
-        for (let row = 0; row < used; row++) scrolled.push([...(grid[row] as Cell[])]);
+        for (let row = 0; row < used; row++) {
+            scrolled.push([...(grid[row] as Cell[])]);
+            scrolledWraps.push(gridWraps[row] as boolean);
+        }
     };
     const eraseInLine = (mode: number) => {
         const row = grid[cursor.row] as Cell[];
         if (mode === 0) row.length = Math.min(row.length, cursor.column);
         else if (mode === 1)
             for (let column = 0; column <= cursor.column && column < row.length; column++) row[column] = " ";
-        else row.length = 0;
+        else {
+            row.length = 0;
+            gridWraps[cursor.row] = false;
+        }
     };
     const eraseInDisplay = (mode: number) => {
         if (mode === 0) {
             if (options.isHomeClearKept && cursor.row === 0 && cursor.column === 0) keepScreen();
             eraseInLine(0);
-            for (let row = cursor.row + 1; row < height; row++) (grid[row] as Cell[]).length = 0;
+            for (let row = cursor.row + 1; row < height; row++) {
+                (grid[row] as Cell[]).length = 0;
+                gridWraps[row] = false;
+            }
         } else if (mode === 2) {
             for (const row of grid) row.length = 0;
+            gridWraps.fill(false);
         }
     };
     const applySequence = (final: string, parameters: number[]) => {
@@ -164,5 +194,12 @@ export function renderTerminal(
         screen.findLastIndex((row) => row !== ""),
     );
     const rows = [...scrollback, ...screen.slice(0, lastUsed + 1)];
-    return { rows, text: rows.join("\n").trimEnd(), scrollback, screen, cursor: { ...cursor } };
+    return {
+        rows,
+        lines: logicalLines([...scrolled, ...grid], [...scrolledWraps, ...gridWraps], rows.length),
+        text: rows.join("\n").trimEnd(),
+        scrollback,
+        screen,
+        cursor: { ...cursor },
+    };
 }
