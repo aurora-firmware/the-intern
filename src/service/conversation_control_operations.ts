@@ -18,7 +18,7 @@ import type { HarnessHost } from "../host/harness_host.ts";
 import { abortWithAwaited } from "../host/invocation.ts";
 import { ConversationClosedError } from "../host/job_section.ts";
 import { readConversationMeta } from "../host/seating.ts";
-import { holdForParked, steerConversation } from "../host/steering.ts";
+import { holdForParked, steerConversation, steerEntryFor } from "../host/steering.ts";
 import { type Caller, defineOperation, type Operation, ServiceError } from "./operations.ts";
 import { seatActorFor } from "./seat_operations.ts";
 
@@ -118,7 +118,11 @@ async function submitOrSteer(host: HarnessHost, input: SubmitInput, caller: Call
         // A conversation parked for reports holds a reject input as a follow-up; a running one still refuses it
         // with busy.
         const isHeld = await holdForParked(host, conversationId, { ...message, mode: "followUp" });
-        return isHeld ? { held: true } : submitInput(host, conversationId, input);
+        if (isHeld) return { held: true };
+        // The front desk records the sender and way in of a reject input too; its busy refusal stays.
+        const isFrontDesk = conversationId === (await readFrontDeskId(host));
+        const entry = isFrontDesk ? steerEntryFor({ ...message, mode: "followUp" }) : undefined;
+        return submitInput(host, conversationId, { ...input, ...(entry && { entry }) });
     }
     // A conversation parked for an answer continues with a reject input as a follow-up.
     const mode = busyMode === "reject" ? "followUp" : busyMode;

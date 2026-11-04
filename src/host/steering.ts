@@ -61,6 +61,12 @@ export async function holdForParked(host: HarnessHost, targetId: string, input: 
     return holdIfParked(host, conversation.id, input);
 }
 
+/** The `intern.steer` entry that places a message: its data names the actor and keeps the text. */
+export function steerEntryFor(input: SteerInput) {
+    const placed: SteerRecord & { content: string } = { actor: input.actor, mode: input.mode, content: input.content };
+    return { kind: STEER_RECORD_KIND, data: toStoredJson(placed) as never };
+}
+
 /**
  * Steers the target conversation. Returns `held: true` when the target is parked and the message waits for it to
  * continue, with no submission. A target parked for an answer (its job is Blocked) continues with the message.
@@ -74,8 +80,7 @@ export async function steerConversation(
 ): Promise<{ held: boolean; submissionId?: string }> {
     const conversation = await requireConversation(host, targetId);
     if (await holdIfParked(host, conversation.id, input)) return { held: true };
-    const placed: SteerRecord & { content: string } = { actor: input.actor, mode: input.mode, content: input.content };
-    const entry = { kind: STEER_RECORD_KIND, data: toStoredJson(placed) as never };
+    const entry = steerEntryFor(input);
     if ((await readConversationMeta(host, String(conversation.id)))?.parked?.waitingFor === "answer") {
         return { held: false, ...(await continueParked(host, String(conversation.id), { ...input, entry })) };
     }
