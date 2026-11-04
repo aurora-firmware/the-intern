@@ -72,10 +72,19 @@ A job never goes back to To do. Done is final: you can't edit a Done job, add to
 it. The one change still allowed is relating it to another job. More work on a finished job becomes a new job, which
 may be Related to the old one.
 
-Completing or cancelling a job aborts and closes every conversation of the job, so nothing stays parked or waiting for
-a report. A closed conversation stays closed for good. It keeps its transcript as the record of the work and lists with
-status `closed`. You can read it, but input to it, withdrawing its input, and aborting, resetting, reseating or
-compacting it are refused as `conflict` and change nothing. So no answer reaches the lead of a Done job.
+Completing or cancelling a job closes every conversation of the job and aborts its work, so nothing stays parked or
+waiting for a report. A lead that completes the job itself ends its run at that call. A closed conversation stays closed
+for good. It keeps its transcript as the record of the work and lists with status `closed`. You can read it, but input
+to it, withdrawing its input, and aborting, resetting, reseating or compacting it are refused as `conflict` and change
+nothing. So no answer reaches the lead of a Done job.
+
+The `complete_job` tool of the lead returns a result that isn't an error and names the job as Done. If the lead's
+closed mark doesn't land after the job is written Done, the tool's result says the call was aborted, and
+`bob jobs follow` can show `tool complete_job failed` for that Done job. This happens only when the commit that sets
+the mark fails without a storage error. The job stays Done and the lead's run ends. Until the next start, the job's
+conversations list with a status other than `closed`, and refuse input as `conflict`. At the next start, repair rule 4
+closes them. A team member's `jobs.complete` or `jobs.cancel` that fails the same way fails with `internal` and aborts
+no further conversation, and rule 4 closes them at the next start.
 
 ## The definition of done
 
@@ -133,8 +142,8 @@ Each job has two records. You read both with `jobs.get`, or page them with `jobs
   between creating the conversation and submitting the input, gets that input submitted (either is cancelled if the
   start is refused); 2, a Blocked job whose lead isn't parked gets it parked;
   3, a Blocked job whose lead holds or took input since the block is set In progress and the lead continues with that
-  input; 4, a Done job with a conversation that isn't closed, or that is closed but still runs or has queued input,
-  gets it closed and aborted.
+  input; 4, a Done job with a conversation that isn't closed, or that is closed but still runs, has a running
+  compaction or has queued input, gets it closed and aborted.
 
 ## Related jobs and follow-up jobs
 
