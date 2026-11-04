@@ -453,6 +453,40 @@ describe("kill -9 between a job's closed-mark commits and the aborts", () => {
     });
 });
 
+describe("kill -9 in a lead's complete tool, after the closed mark", () => {
+    it("settles the run's input unanswered as aborted at the next start, with no further model request", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const env = await hermetic();
+        const first = start(env, "invoke-and-complete", "conversations-closed");
+        await first.ready;
+        const job = await createJob(first, "complete from the lead's tool");
+        const leadId = job.leadConversation as string;
+        await untilKilled(first);
+
+        const second = start(env, "invoke-and-complete");
+        await second.ready;
+
+        assert.equal((await jobOf(second, job.id)).status, "done");
+        const conversations = await assertClosedAndStopped(second, job.id, 2);
+        const invokedId = (conversations.find((conversation) => !conversation.isLead) as Listing).id;
+        const report = (await entriesOf(second, invokedId)).findLast((entry) => entry.kind === "pi.assistant") as
+            | (Entry & { id: string })
+            | undefined;
+        assert.ok(report, "the invoked agent has reported");
+        const settlement = await second.invoke("test.submissionState", {
+            conversationId: leadId,
+            requestId: `report:${invokedId}:${report.id}`,
+        });
+        assert.deepEqual(settlement, { state: "unanswered", reason: "aborted" });
+        // The lead's three model turns are update_job, invoke and complete_job; the aborted tool result ends its entries.
+        const leadEntries = await entriesOf(second, leadId);
+        assert.equal(leadEntries.filter((entry) => entry.kind === "pi.assistant").length, 3);
+        assert.equal(leadEntries.at(-1)?.kind, "pi.tool-result");
+        assert.deepEqual(await repairEntriesOf(second, job.id), [RULE_4]);
+    });
+});
+
 describe("kill -9 as a lead's turn ends with its job In progress", () => {
     it("blocks the job at the next start when it has no definition of done", { timeout: TEST_TIMEOUT_MS }, async () => {
         const env = await hermetic();
