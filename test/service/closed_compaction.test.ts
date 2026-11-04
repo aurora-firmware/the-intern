@@ -14,7 +14,6 @@ import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { conversationEntryLine } from "../../src/cli/feed_text.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
-import { compactConversation } from "../../src/host/conversation_control.ts";
 import { readConversationMeta } from "../../src/host/seating.ts";
 import { cancelJob, type JobActionDeps } from "../../src/jobs/job_actions.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
@@ -24,6 +23,10 @@ import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts"
 const WAIT_MS = 20_000;
 const POLL_MS = 10;
 const SETTLE_MS = 300;
+// The model's window is 128000 tokens and a background compaction starts 32768 tokens below the blocking threshold.
+// This reserve puts that start 100 tokens into the context and the blocking threshold far above it, so the
+// compaction starts at the lead's second turn and does not block it.
+const BLOCKING_MARGIN_RESERVE = 128000 - 32768 - 100;
 const webCaller: Caller = { actor: { kind: "team_member", wayIn: "web interface" } };
 
 const envs: HermeticEnv[] = [];
@@ -55,10 +58,10 @@ type Rig = Awaited<ReturnType<typeof start>>;
 
 /**
  * A daemon whose lead follows `leadSteps`, one tool call per model reply; every other request is answered "done".
- * The compaction's summarization request is held until `releaseSummary()` or until it is aborted, and `onStep` runs
- * before the reply of the step with that index. Every conversation compacts as soon as it has one entry to drop.
+ * The compaction's summarization request is held until `releaseSummary()` or until it is aborted.
+ * Every conversation starts a background compaction at its second turn.
  */
-async function start(leadSteps: { name: string; args: Record<string, unknown> }[], onStep?: (index: number) => void) {
+async function start(leadSteps: { name: string; args: Record<string, unknown> }[]) {
     const env = await createHermeticEnv();
     envs.push(env);
     const logger = createLogger({ stream: { write: () => true } });
@@ -99,7 +102,6 @@ async function start(leadSteps: { name: string; args: Record<string, unknown> }[
         turns.count++;
         const step = leadSteps[index];
         if (step === undefined) return fauxAssistantMessage("finished");
-        onStep?.(index);
         return fauxAssistantMessage([fauxToolCall(step.name, step.args as never)], { stopReason: "toolUse" });
     };
     fake.setResponses([respond]);
@@ -109,7 +111,7 @@ async function start(leadSteps: { name: string; args: Record<string, unknown> }[
         JSON.stringify({
             defaultProvider: provider,
             defaultModel: "model-one",
-            compaction: { keepRecentTokens: 1 },
+            compaction: { keepRecentTokens: 1, reserveTokens: BLOCKING_MARGIN_RESERVE },
         }),
     );
     const agents = await createAgentsComponent({ logger });
@@ -177,38 +179,30 @@ async function assertNoSummaryPlaced(rig: Rig, conversationId: string): Promise<
 
 describe("a compaction running when the job becomes Done", () => {
     it("is aborted when the lead completes the job, which still records the tool's success and ends the run", async () => {
-        let lead = "";
-        let isCompacting = false;
-        const rig = await start(
-            [
-                { name: "update_job", args: { definitionOfDone: "the work is stopped" } },
-                { name: "complete_job", args: { justification: "stopped" } },
-            ],
-            (index) => {
-                if (index !== 1 || isCompacting) return;
-                isCompacting = true;
-                void compactConversation(rig.ctx.host, lead).catch(() => undefined);
-            },
-        );
+        const rig = await start([
+            { name: "update_job", args: { definitionOfDone: "the work is stopped" } },
+            { name: "complete_job", args: { justification: "stopped" } },
+        ]);
         const job = await rig.createJob();
-        lead = job.leadConversation;
         await waitFor(async () => (await rig.status(job.id)) === "done", "the job to be Done");
-        await waitFor(() => rig.isIdle(lead), "the lead's run to end");
+        await waitFor(() => rig.isIdle(job.leadConversation), "the lead's run to end");
         await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
 
         assert.equal(rig.summary.requests, 1, "the compaction was running");
         assert.equal(rig.summary.isAborted, true, "the compaction's model request is aborted");
-        assert.ok((await rig.lines(lead)).includes("tool complete_job returned"));
+        assert.ok((await rig.lines(job.leadConversation)).includes("tool complete_job returned"));
         assert.equal(rig.turns.count, 2, "no model request follows the complete call");
-        await assertNoSummaryPlaced(rig, lead);
+        await assertNoSummaryPlaced(rig, job.leadConversation);
     });
 
     it("is aborted when a team member cancels the job", async () => {
-        const rig = await start([]);
+        const rig = await start([
+            { name: "update_job", args: { definitionOfDone: "the work is stopped" } },
+            { name: "block_job", args: { reason: "which build is failing?" } },
+        ]);
         const job = await rig.createJob();
-        await waitFor(() => rig.isIdle(job.leadConversation), "the lead to be idle");
-        void compactConversation(rig.ctx.host, job.leadConversation).catch(() => undefined);
-        await waitFor(() => rig.summary.requests === 1, "the compaction's model request");
+        await waitFor(async () => (await rig.status(job.id)) === "blocked", "the job to be Blocked");
+        assert.equal(rig.summary.requests, 1, "the compaction is running");
         const turnsBefore = rig.turns.count;
 
         await cancelJob(rig.deps, job.id, "no longer needed", { kind: "team_member", wayIn: "web interface" });
