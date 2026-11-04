@@ -114,7 +114,8 @@ Options: `--json`, `--runtime-dir <value>`, `--help`.
 
 ### `bob usage`
 
-Print the usage per conversation and in total. With `--json` it prints the total usage, the answer of `usage.get`.
+Print the usage per conversation and in total. With `--json` it prints an object with `total` and `conversations`: `total` is the answer of
+`usage.get`, and `conversations` holds the same answer for each conversation, by its id.
 
 Options: `--json`, `--runtime-dir <value>`, `--help`.
 

@@ -121,13 +121,23 @@ describe("bob usage", () => {
         assert.ok(result.stdout.includes(modelName), result.stdout);
     });
 
-    it("prints exactly the answer of usage.get with --json", async () => {
+    it("prints the total and each conversation's usage.get answer unchanged with --json", async () => {
         const { env, daemon } = await readyDaemon();
-        await finishOneRun(daemon);
+        const conversationId = await finishOneRun(daemon);
 
         const result = await runBob(["usage", "--json"], { runtimeDir: env.runtimeDir, env: env.env });
 
         assert.equal(result.status, 0, result.stderr);
-        assert.deepEqual(JSON.parse(result.stdout), await daemon.invoke("usage.get", {}));
+        const listed = (await daemon.invoke("conversations.list", {})) as { id: string }[];
+        assert.ok(
+            listed.some((conversation) => conversation.id === conversationId),
+            "the finished run's conversation is listed",
+        );
+        const conversations = Object.fromEntries(
+            await Promise.all(
+                listed.map(async ({ id }) => [id, await daemon.invoke("usage.get", { conversationId: id })] as const),
+            ),
+        );
+        assert.deepEqual(JSON.parse(result.stdout), { total: await daemon.invoke("usage.get", {}), conversations });
     });
 });

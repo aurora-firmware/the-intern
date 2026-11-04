@@ -74,13 +74,16 @@ export const usageCommand: CommandSpec = {
     run: (input: CommandInput) =>
         withClient(input, async (client) => {
             const total = (await client.invoke("usage.get", {})) as UsageReport;
+            const conversations = (await client.invoke("conversations.list", {})) as ConversationListing[];
+            const reports = new Map<string, UsageReport>();
+            for (const { id } of conversations) {
+                reports.set(id, (await client.invoke("usage.get", { conversationId: id })) as UsageReport);
+            }
             if (input.json) {
-                writeJson(input.io, total);
+                writeJson(input.io, { total, conversations: Object.fromEntries(reports) });
                 return EXIT_CODES.ok;
             }
-            const conversations = (await client.invoke("conversations.list", {})) as ConversationListing[];
-            for (const { id } of conversations) {
-                const report = (await client.invoke("usage.get", { conversationId: id })) as UsageReport;
+            for (const [id, report] of reports) {
                 for (const line of usageLines(`Conversation ${flat(id)}`, report)) writeLine(input.io, line);
             }
             for (const line of usageLines("Total", total)) writeLine(input.io, line);
