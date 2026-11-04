@@ -18,7 +18,7 @@ import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { createDeskComponent, type DeskCreatePoint } from "../../src/desk/desk_component.ts";
-import { onInputSubmitted } from "../../src/host/conversation_control.ts";
+import { onInputSubmitted, submissionIdFor, submissionState } from "../../src/host/conversation_control.ts";
 import type { Models, Storage } from "../../src/host/harness_host.ts";
 import { readConversationMeta } from "../../src/host/seating.ts";
 import { blockJob, cancelJob } from "../../src/jobs/job_actions.ts";
@@ -324,6 +324,26 @@ function waitingOperation() {
     });
 }
 
+/** Reads how the input with a request id settled, which no service operation shows. */
+function submissionStateOperation() {
+    return defineOperation<
+        ServiceContext,
+        { conversationId: string; requestId: string },
+        Awaited<ReturnType<typeof submissionState>>
+    >({
+        name: "test.submissionState",
+        kind: "read",
+        parse: (raw) => raw as { conversationId: string; requestId: string },
+        async run(ctx, { conversationId, requestId }) {
+            const submissionId = await submissionIdFor(ctx.host, conversationId, requestId);
+            if (submissionId === undefined) {
+                throw new Error(`Conversation ${conversationId} holds no submission for request ${requestId}`);
+            }
+            return submissionState(ctx.host, submissionId);
+        },
+    });
+}
+
 function errorFields(error: unknown): { code: ServiceErrorCode; message: string } {
     if (error instanceof ServiceError) return { code: error.code, message: error.message };
     return { code: "internal", message: error instanceof Error ? error.message : String(error) };
@@ -399,6 +419,7 @@ async function main(): Promise<void> {
             blockJobOperation(jobs),
             createJobCancelledBeforeLeadOperation(jobs),
             waitingOperation(),
+            submissionStateOperation(),
             ...createTestOperations({
                 storageSwitch,
                 modelFor: (ctx) => modelFor(ctx, fakeModelId, switches.model),
