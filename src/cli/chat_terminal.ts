@@ -112,6 +112,12 @@ export async function runTerminalChat(
         steps = steps.then(step).catch(outcome.reject);
     };
 
+    // Ctrl-D closes the interface while submitted lines are still being answered; a closed interface refuses a prompt.
+    let isInputClosed = false;
+    const showPrompt = (shouldKeepCursor = false) => {
+        if (!isInputClosed) lines.prompt(shouldKeepCursor);
+    };
+
     let tail: Promise<void> = Promise.resolve();
     let isCatchUpQueued = false;
     let feedClient: Client | undefined;
@@ -131,7 +137,7 @@ export async function runTerminalChat(
         clearLine(io.stdout as Writable, 0);
         cursorTo(io.stdout as Writable, 0);
         for (const answer of answers) if (answer !== "") writeLine(io, answer);
-        lines.prompt(true);
+        showPrompt(true);
     }
 
     function catchUp(from: Client | undefined = feedClient): Promise<void> {
@@ -179,7 +185,7 @@ export async function runTerminalChat(
             if (state === "unanswered") writeError(io, `Dropped, not answered: ${entry.line}`);
             else if (state !== "done") sent.push(entry);
         }
-        lines.prompt();
+        showPrompt();
     }
 
     async function leave(): Promise<void> {
@@ -195,7 +201,10 @@ export async function runTerminalChat(
         else enqueue(() => submitLine(line));
     });
     lines.on("SIGINT", () => enqueue(abortTurn));
-    lines.on("close", () => enqueue(leave));
+    lines.on("close", () => {
+        isInputClosed = true;
+        enqueue(leave);
+    });
     lines.prompt();
     return outcome.promise;
 }

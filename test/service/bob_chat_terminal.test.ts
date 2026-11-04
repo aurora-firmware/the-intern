@@ -92,6 +92,19 @@ async function until(isDone: () => Promise<boolean>, what: string): Promise<void
     }
 }
 
+/** The exit status of the session, or a failure when it hasn't ended by the deadline. */
+async function exitStatus(session: PtySession): Promise<number | null> {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`bob chat did not exit; output ${session.output()}`)), WAIT_MS);
+    });
+    try {
+        return await Promise.race([session.exited, deadline]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 const skip = !hasScript() && !process.env.CI ? SKIP_REASON : false;
 
 describe("bob chat on a terminal", { skip }, () => {
@@ -199,6 +212,36 @@ describe("bob chat on a terminal", { skip }, () => {
             "a feed delta",
         );
         assert.ok(JSON.stringify(values).includes(`echo: ${FIRST}`));
+    });
+});
+
+describe("bob chat leaving while a turn is running", { skip }, () => {
+    it("prints the answer and exits 0 when Ctrl-D comes before the answer", async () => {
+        const fixture = await readyDaemon("gated");
+        const session = chat(fixture);
+        await session.waitFor("output", PROMPT);
+        session.write(`${FIRST}\r`);
+        await until(async () => JSON.stringify(await entriesOf(fixture.daemon)).includes(FIRST), "the first line");
+
+        session.write(CTRL_D);
+        fixture.daemon.releaseRuns();
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+        assert.ok(session.output().includes(`echo: ${FIRST}`), session.output());
+        assert.equal(session.stderr(), "");
+    });
+
+    it("exits 0 and names the dropped line when Ctrl-C is followed at once by Ctrl-D", async () => {
+        const fixture = await readyDaemon("gated");
+        const session = chat(fixture);
+        await session.waitFor("output", PROMPT);
+        session.write(`${FIRST}\r`);
+        await until(async () => JSON.stringify(await entriesOf(fixture.daemon)).includes(FIRST), "the first line");
+
+        session.write(`${CTRL_C}${CTRL_D}`);
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+        assert.equal(session.stderr(), `Dropped, not answered: ${FIRST}\n`);
     });
 });
 
