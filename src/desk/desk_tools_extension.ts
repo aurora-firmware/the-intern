@@ -105,7 +105,7 @@ const listJobsParameters = Type.Object({
 const listJobsTool = (options: DeskToolsOptions) =>
     defineTool({
         name: "list_jobs",
-        description: "List jobs, newest last, filtered by status and by origin letter when given.",
+        description: "List jobs, newest first, filtered by status and by origin letter when given.",
         parameters: listJobsParameters,
         execute: (args: Static<typeof listJobsParameters>) =>
             refusable("list_jobs", async () => {
