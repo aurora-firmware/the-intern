@@ -26,7 +26,8 @@ Until a release provides `bob`, run it from a checkout of the project:
 node src/cli/bob.ts serve
 ```
 
-`bob serve` takes these flags, all optional:
+The other commands, such as `bob status`, `bob jobs create` and `bob chat`, are listed in the
+[Command reference](commands.md). `bob serve` takes these flags, all optional:
 
 | Flag                  | Effect                                                                  |
 | --------------------- | ----------------------------------------------------------------------- |
@@ -109,6 +110,10 @@ The file is `config.toml` in the config directory. It is optional: without it, T
 
 Models and their logins come from the service account's pi login. The Intern uses it in place: it doesn't copy the
 credentials. Log in with pi as the service account before you start the service.
+
+The service needs a default model to start. At startup it seats the [front desk](front_desk.md) as the `desk` role with
+that role's defaults, so it needs the default model of the pi login or a `model` set for `desk` in `config.toml`. When
+neither exists, the service refuses to start and names the `desk` role and its model.
 
 The service reads the pi agent folder, `~/.pi/agent` by default. Set `PI_CODING_AGENT_DIR` in the service's environment
 to use another folder.

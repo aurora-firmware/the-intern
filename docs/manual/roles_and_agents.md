@@ -12,15 +12,16 @@ A role is what an agent is made from. A role brings:
 - skills, which the agent reads when it needs them
 - a default model, a default thinking level and a default workspace
 
-The Intern ships two roles:
+The Intern ships three roles:
 
 | Role  | What it is for                                                                                          |
 | ----- | ------------------------------------------------------------------------------------------------------- |
 | `bob` | Leads jobs. It is the default lead: a job starts with `bob` unless its source names another role. `bob` defines the job (goal, needs, plan and definition of done), asks for what is missing, then does the work itself, hands it to a better-suited role or invokes other agents for parts of it, and finally verifies the result against the definition of done. |
 | `gp`  | A general-purpose executor. It carries out a part of a job to completion and reports back. It comes with a shipped skill that describes how. |
+| `desk` | Assists team members in the [front desk](front_desk.md). It answers questions about the work from jobs, conversations, status and usage, turns every request for real work into a job instead of doing it, reports the new job's short number, and passes answers and steering to a job's conversations when a team member asks. |
 
-You can create your own roles, change any role (including `bob` and `gp`) and remove the roles you created. You can't
-remove a shipped role.
+You can create your own roles, change any role (including `bob`, `gp` and `desk`) and remove the roles you created. You
+can't remove a shipped role.
 
 A change to a role affects only agents seated after the change. An agent that is already working keeps its
 instructions, tools, skills, model, thinking level and workspace until its seat changes.
@@ -39,16 +40,16 @@ and hyphens, in at most 40 characters in all.
 | Key              | Meaning                                                                       | Default                                  |
 | ---------------- | ----------------------------------------------------------------------------- | ---------------------------------------- |
 | `instructions`   | A string with the role's instructions. It can't be empty.                     | None for your own roles: required. For a shipped role, the shipped text. |
-| `tools`          | A list of tool names: `read`, `write`, `edit` and `bash`.                      | None for your own roles: required. For a shipped role, all four. |
+| `tools`          | A list of tool names: `read`, `write`, `edit` and `bash`.                      | None for your own roles: required. For `bob` and `gp`, all four. For `desk`, an empty list. |
 | `skills`         | A list of absolute paths to skill folders.                                     | An empty list. For `gp`, its shipped skill. |
 | `model`          | The role's default model, written `provider/id`.                               | The default model of the service account's pi login. |
 | `thinking_level` | The role's default thinking level. It must be one the model supports.          | The default thinking level of the pi login. |
 | `workspace`      | The absolute path of the role's default workspace. It must be registered.      | The role's own workspace, described below. |
 
-Every role is also offered `handoff`, `invoke` and `steer` (see [Sharing a job](#sharing-a-job)) and the job tools
-`read_job`, `update_job`, `add_worklog`, `create_job`, `relate_jobs`, `block_job` and `complete_job`. A tool list can't
-leave them out, so you don't list them. Only a job's lead can use `block_job` and `complete_job`: an agent it invoked
-gets an error result from either, and its run goes on. An agent seated before the job tools existed keeps its tools
+In a job, every role is also offered `handoff`, `invoke` and `steer` (see [Sharing a job](#sharing-a-job)) and the
+job tools `read_job`, `update_job`, `add_worklog`, `create_job`, `relate_jobs`, `block_job` and `complete_job`. A tool
+list can't leave them out, so you don't list them. Only a job's lead can use `block_job` and `complete_job`: an agent
+it invoked gets an error result from either, and its run goes on. An agent seated before the job tools existed keeps its tools
 until its seat changes.
 
 For a shipped role, set only the keys you want to change. Any key you leave out keeps its shipped value. For your own
@@ -70,10 +71,15 @@ thinking_level = "high"
 model = "anthropic/claude-sonnet-4-5"
 ```
 
+The `desk` role has an empty tool set: it changes no file and runs no command. In the front desk it is offered only the
+tools for reading jobs and conversations, creating and editing jobs, and passing input to a job's conversations. See
+[The front desk and `bob chat`](front_desk.md).
+
 ### Undo a change to a shipped role
 
-A change to `bob` or `gp` is kept in your configuration. The installed copy is never edited. To restore the shipped
-role, remove its `[roles.bob]` or `[roles.gp]` table from the file, or only the keys you want to undo, and restart
+A change to `bob`, `gp` or `desk` is kept in your configuration. The installed copy is never edited. To restore the
+shipped role, remove its `[roles.bob]`, `[roles.gp]` or `[roles.desk]` table from the file, or only the keys you want
+to undo, and restart
 the service. You can also restore a shipped role while the service runs; the command for it comes with the
 command-line documentation.
 
