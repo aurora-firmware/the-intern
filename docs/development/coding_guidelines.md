@@ -58,16 +58,52 @@ accepted ADRs win over this document; when they disagree, fix this document. The
 - **Release-owned content loads by path from inside the package** (shipped skills, prompt text). No copy or install
   step. Team customisation goes in an overlay loaded after the shipped content.
 
+## Command line
+
+The `bob` commands (`src/cli/`, [S-005](../ai-team/specs/S-005-command-line.md)) follow these rules. A later spec that
+adds a command group follows them too, and does not change them without amending S-005.
+
+- **One noun per component.** A group is named for the thing a team member works with (`jobs`, `conversations`,
+  `roles`), has its own file `src/cli/<group>_commands.ts` that exports its `CommandSpec` entries, and joins the
+  `COMMANDS` table in `src/cli/commands.ts`. A group that is reserved for a later spec (`RESERVED_GROUPS` in
+  `command_line.ts`) leaves that list in the change that adds it.
+- **Curated commands.** A command is named for what a team member does (`bob jobs answer`), not for the operation it
+  calls. It calls the operations its spec names for it, and every option maps to the input of the same meaning in the
+  operation.
+- **The shared verbs.** Use `bob <group> <verb> [arguments] [options]`, with the verbs `list`, `show`, `create`,
+  `change` and `remove` where they apply.
+- **The shared options.** A data command takes `--json`, a command that calls the service takes `--runtime-dir`
+  (else `BOB_RUNTIME_DIR`, else the default runtime directory), and every command takes `--help`. Declare `isData` and
+  `callsService` on the `CommandSpec`; the parser adds these options from them.
+- **Output.** Data goes to standard output; errors, notices and hints go to standard error. No colour, prompt or
+  interactive step appears when standard input or output isn't a terminal. Print through `src/cli/output.ts`.
+- **`--json` prints the service's answer unchanged**, with `writeJson`. A `show` command that calls several operations
+  prints one object keyed by operation name, each value that operation's answer. A following command prints one JSON
+  value per line. The wording of text output may change; command names, `--json` output and exit codes may not.
+- **Exit codes.** `0` success, `1` the service refused or failed (its error code and message on standard error), `2` a
+  usage error or a reserved group, `3` the daemon can't be reached. Use `EXIT_CODES` and `withClient`
+  (`src/cli/connection.ts`), which maps the client's errors to them.
+- **A thin client.** A command validates nothing and resolves no short number the service does, and keeps no file,
+  cache or history. It reaches the daemon only through the client library. No daemon module (host, service, listeners,
+  jobs, agents) is imported by a command other than `serve` and `import`, and those load theirs by a dynamic `import()`
+  inside `run`, so a command that only calls the service starts quickly. To check, list the modules a run loads with
+  `node --import ./test/support/module_trace.ts src/cli/bob.ts <command>`.
+- **Words.** Help and messages say team member, job and invokes, never user, subagent or task in its general sense.
+- **The command reference page changes in the same change as a command** (S-005 REQ-017):
+  `docs/manual/commands.md` lists every command, its arguments and options, its JSON output and its exit codes, so a
+  command, option or output that changes leaves the page wrong until it changes too.
+
 ## Durability rules (pi-durable)
 
 - **Don't write recovery or retry code** (ADR-001). Resume, `requestId` dedup and the follow-up queue are library
   features. If you find yourself writing a retry loop or an intake table, check the library first. Decision 4 allows
   two bounded exceptions, and nothing else:
-  - The-intern's own facts about a conversation (held messages, awaiting links, parked state, the abort mark, creation
-    keys) are pi-durable documents committed with the change they describe, and the only recovery is redelivering the
-    input they show as undelivered, made safe to repeat by request ids.
+  - The-intern's own facts about a conversation (held messages, awaiting links, parked state, the abort mark, the
+    closed mark, creation keys) are pi-durable documents committed with the change they describe, and the only
+    recovery is redelivering the input they show as undelivered, made safe to repeat by request ids.
   - A job write is committed before the pi-durable change it goes with, and the four startup repair rules of S-004
-    REQ-018 (`src/jobs/job_repair.ts`) are the only job recovery. Rule 3 also covers input the lead took since the job
+    REQ-018 (`src/jobs/job_repair.ts`) are the only job recovery. Rule 4 closes and aborts the conversations of a Done
+    job that a crash left open. Rule 3 also covers input the lead took since the job
     blocked, read from the entry the block recorded in `blockedAfterEntry`, and always clears the park the block made,
     so the turn-end rule applies to the lead's next stop. A fifth rule, a retry of a failed job
     write or a timer that checks jobs amends ADR-001 first.
