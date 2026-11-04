@@ -64,8 +64,8 @@ Text output prints what jobs, worklogs, roles and conversations hold, and agents
 control sequences and control characters from that text before it prints, so text from an agent can't redraw your
 screen, change the window title or set the clipboard. Where a field holds several lines, `bob jobs show`, `bob follow`
 and `bob jobs follow` indent every line after the first by four spaces, so a line of data never reads as a line of
-`bob`'s own. `--json` prints the data as stored; the characters U+0080 to U+009F, which some terminals read as control sequences,
-are written as JSON escapes, so the value read back is the same.
+`bob`'s own. `--json` prints the data as stored; the characters U+0080 to U+009F, which some terminals read as control
+sequences, are written as JSON escapes, so the value read back is the same.
 
 A data command stops quietly, with exit 0, when the program that reads its output closes it early, as in
 `bob follow | head -n 1`.
@@ -282,8 +282,9 @@ Print the job's current status, then its status changes, edits and worklog entri
 conversations. A line of a conversation starts with the conversation's ID in brackets. It exits 0 when the job is Done,
 after printing its resolution, or when you press Ctrl-C. A job that is already Done prints its resolution and exits 0.
 If the daemon restarts, it prints a notice on standard error and goes on, and it prints the entries the job's
-conversations wrote while the daemon was away. Worklog entries and edits made meanwhile are not replayed; the snapshot
-shows the state they led to. If a feed lags, it goes on without a notice.
+conversations wrote while the daemon was away. Worklog entries, edits and status changes made meanwhile are not
+replayed, so they are not printed afterwards; a job that was completed meanwhile prints its resolution and exits. If a
+feed lags, it goes on without a notice.
 
 With `--json` it prints the job first. A job that is already Done ends there. Otherwise it goes on with the snapshot
 and each delta of the instance feed that concern the job, and the snapshot and each delta of the feed of each of its

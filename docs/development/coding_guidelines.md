@@ -66,9 +66,9 @@ adds a command group follows them too, and does not change them without amending
 - **One noun per component.** A group is named for the thing a team member works with (`jobs`, `conversations`,
   `roles`), has its commands in a file `src/cli/<name>_commands.ts` that exports its `CommandSpec` entries, and joins
   the `COMMANDS` table in `src/cli/commands.ts`. `jobs`, `conversations` and `roles` have their own files; `workspaces`
-  and `models` share `roles_commands.ts`, and `bob follow` and `bob jobs follow` share `follow_commands.ts`. `bob chat`, the third following command, has
-  `chat_command.ts` and `chat_terminal.ts`. A group that is
-  reserved for a later spec (`RESERVED_GROUPS` in `command_line.ts`) leaves that list in the change that adds it.
+  and `models` share `roles_commands.ts`, and `bob follow` and `bob jobs follow` share `follow_commands.ts`. `bob chat`,
+  the third following command, has `chat_command.ts` and `chat_terminal.ts`. A group that is reserved for a later spec
+  (`RESERVED_GROUPS` in `command_line.ts`) leaves that list in the change that adds it.
 - **Curated commands.** A command is named for what a team member does (`bob jobs answer`), not for the operation it
   calls. It calls the operations its spec names for it, and every option maps to the input of the same meaning in the
   operation.
