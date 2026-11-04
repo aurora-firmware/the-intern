@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { type BobChild, spawnBob } from "../support/bob_process.ts";
 import { type DaemonProcess, type FakeScript, startDaemon } from "../support/daemon_process.ts";
@@ -310,5 +312,69 @@ describe("bob chat and bob follow across a daemon restart", {
         }, "the follow to print a job created after the restart");
 
         assert.equal(await Promise.race([follow.exited, Promise.resolve("running")]), "running");
+    });
+});
+
+const UNAVAILABLE_NOTICE = "The Intern is starting or stopping; trying again";
+const LONG_SLEEP_SECONDS = "60";
+
+/** Starts a run that holds the daemon's stop open: a bash tool call that sleeps until the stop aborts it. */
+async function startSleepingRun(daemon: DaemonProcess): Promise<void> {
+    const { conversationId } = (await daemon.invoke("test.createConversation", { key: "one", cwd: "." })) as {
+        conversationId: string;
+    };
+    await daemon.invoke("conversations.submit", {
+        conversationId,
+        content: LONG_SLEEP_SECONDS,
+        requestId: "request-sleep",
+    });
+    await until(async () => {
+        const { entries } = (await daemon.invoke("conversations.entries", { conversationId })) as {
+            entries: { kind: string; data: unknown }[];
+        };
+        return entries.some((entry) => JSON.stringify(entry.data).includes("toolCall"));
+    }, "the sleeping tool call");
+}
+
+const ANY_OUTAGE_NOTICE = /The Intern (isn't reachable|is starting or stopping); trying again/;
+
+describe("bob follow across a daemon that stops and starts again", () => {
+    it("prints a notice when the daemon is stopped with SIGTERM, waits, and goes on after it starts again", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const stopping = await readyDaemon(env, "bash-sleep");
+        const follow = spawnBob(["follow"], { runtimeDir: env.runtimeDir, env: env.env });
+        children.push(follow);
+        await waitUntilFollowing(stopping, follow);
+        await startSleepingRun(stopping);
+
+        stopping.signal("SIGTERM");
+        await follow.waitFor("stderr", "trying again");
+        await stopping.exited;
+        const restarted = await readyDaemon(env, "bash-sleep");
+        await waitUntilFollowing(restarted, follow);
+
+        assert.match(follow.stderr(), ANY_OUTAGE_NOTICE);
+        assert.equal(await Promise.race([follow.exited, Promise.resolve("running")]), "running");
+    });
+
+    it("prints the starting-or-stopping notice for a daemon that answers unavailable, and resumes when it is ready", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const starting = startDaemon({ hermetic: env, script: "bash-sleep", turnEndRule: false, holdStart: true });
+        daemons.push(starting);
+        // The socket opens while the start is held, and the daemon answers unavailable on it until it is released.
+        await until(async () => existsSync(join(env.runtimeDir, "bob.sock")), "the held daemon to open its socket");
+        const follow = spawnBob(["follow"], { runtimeDir: env.runtimeDir, env: env.env });
+        children.push(follow);
+
+        await follow.waitFor("stderr", UNAVAILABLE_NOTICE);
+        assert.equal(await Promise.race([follow.exited, Promise.resolve("running")]), "running");
+        starting.release();
+        await starting.ready;
+        await waitUntilFollowing(starting, follow);
+
+        assert.equal(await Promise.race([follow.exited, Promise.resolve("running")]), "running");
+        assert.equal(follow.stderr(), `${UNAVAILABLE_NOTICE}\n`);
     });
 });
