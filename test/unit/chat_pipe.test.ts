@@ -3,7 +3,7 @@ import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
 import { runPipedChat } from "../../src/cli/chat_command.ts";
 import type { CommandIo } from "../../src/cli/command_line.ts";
-import type { Client } from "../../src/client/client.ts";
+import { type Client, UnreachableError } from "../../src/client/client.ts";
 
 const DESK_ID = "desk-1";
 type Entry = { id: string; kind: string; data: unknown };
@@ -164,5 +164,35 @@ describe("runPipedChat", () => {
         assert.equal(piped.stdout(), "");
         assert.ok(notice.includes("one"), notice);
         assert.equal(calls.filter((call) => call.name === "conversations.submit").length, 1);
+    });
+
+    it("keeps trying a line with its one request id and prints one notice when the daemon is gone for two attempts", async () => {
+        const scripted = scriptedClient({ waits: ["done"], answers: ["still here"] });
+        let refusals = 2;
+        const requestIds: unknown[] = [];
+        const client: Client = {
+            subscribe: scripted.client.subscribe,
+            invoke(name, input) {
+                if (name === "conversations.submit") requestIds.push((input as { requestId?: unknown }).requestId);
+                if (name === "conversations.submit" && refusals-- > 0) {
+                    return Promise.reject(new UnreachableError("/run/bob.sock", "gone"));
+                }
+                return scripted.client.invoke(name, input);
+            },
+        };
+        const piped = pipedIo(["are you there?"]);
+        let notices = "";
+        piped.io.stderr.on("data", (chunk) => {
+            notices += chunk;
+        });
+
+        const status = await runPipedChat(client, piped.io, false);
+
+        assert.equal(status, 0);
+        assert.equal(piped.stdout(), "still here\n");
+        assert.equal(notices, "The Intern isn't reachable; trying again\n");
+        assert.equal(requestIds.length, 3, "two refused attempts and the one that got through");
+        assert.equal(new Set(requestIds).size, 1, `one request id for every attempt: ${requestIds}`);
+        assert.equal(typeof requestIds[0], "string");
     });
 });

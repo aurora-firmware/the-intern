@@ -75,4 +75,12 @@ describe("bob chat without a terminal", () => {
         assert.ok(answer.entries.some((entry) => entry.kind === "pi.assistant"));
         assert.ok(JSON.stringify(answer).includes(`echo: ${QUESTION}`));
     });
+
+    it("exits 3 at once when no daemon runs in the runtime directory", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const result = await runBob(["chat"], { runtimeDir: env.runtimeDir, env: env.env, stdin: `${QUESTION}\n` });
+        assert.equal(result.status, 3, result.stderr);
+        assert.equal(result.stdout, "");
+    });
 });

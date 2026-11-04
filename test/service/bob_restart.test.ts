@@ -93,6 +93,51 @@ async function restartWhileWaiting(): Promise<Scenario> {
     return { env, chat, follow, restarted };
 }
 
+/** The number of front desk entries that carry the line as a team member's input. */
+async function inputCount(daemon: DaemonProcess, line: string): Promise<number> {
+    const { conversationId } = (await daemon.invoke("desk.get", {})) as { conversationId: string };
+    const { entries } = (await daemon.invoke("conversations.entries", { conversationId })) as {
+        entries: { kind: string; data: { content?: string } }[];
+    };
+    return entries.filter((entry) => entry.kind === "intern.steer" && entry.data.content === line).length;
+}
+
+async function exitedWithin(child: BobChild, what: string): Promise<number | null> {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${what} did not exit; stderr ${child.stderr()}`)), WAIT_MS);
+    });
+    try {
+        return await Promise.race([child.exited, deadline]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+describe("piped bob chat across a daemon restart", () => {
+    it("prints a notice, waits for the daemon and prints the answer once, with the line admitted once", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const first = await readyDaemon(env);
+        const chat = spawnBob(["chat"], { runtimeDir: env.runtimeDir, env: env.env });
+        children.push(chat);
+        chat.write(`${LINE}\n`);
+        await until(async () => (await entriesText(first)).includes(LINE), "the line to reach the front desk");
+
+        first.kill9();
+        await first.exited;
+        await chat.waitFor("stderr", UNREACHABLE_NOTICE);
+        const restarted = await readyDaemon(env);
+        restarted.releaseRuns();
+        await chat.waitFor("stdout", `echo: ${LINE}`);
+        chat.endInput();
+
+        assert.equal(await exitedWithin(chat, "bob chat"), 0, chat.stderr());
+        assert.equal(chat.stdout(), `echo: ${LINE}\n`);
+        assert.equal(await inputCount(restarted, LINE), 1);
+    });
+});
+
 describe("bob chat and bob follow across a daemon restart", {
     skip: !hasScript() && !process.env.CI ? SKIP_REASON : false,
 }, () => {

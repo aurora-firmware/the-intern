@@ -1,7 +1,7 @@
 /**
  * `bob chat` (S-005 REQ-010). Without a terminal it reads lines from standard input, submits each to the front desk
- * in turn, waits for the submission to settle and prints the answer: no prompt, no history, no colour. Imports the
- * client library types only, never the daemon.
+ * in turn, waits for the submission to settle and prints the answer: no prompt, no history, no colour. A daemon that
+ * goes away while it runs is waited for. Imports the client library types only, never the daemon.
  */
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
@@ -12,6 +12,7 @@ import type { CommandIo, CommandSpec } from "./command_line.ts";
 import { EXIT_CODES } from "./command_line.ts";
 import { socketPathFor, withClient } from "./connection.ts";
 import { writeError, writeJson, writeLine } from "./output.ts";
+import { patientClient } from "./patient_client.ts";
 
 // The most a single submissions.wait lasts (S-002 REQ-012); an unsettled submission is waited on again.
 const WAIT_MS = 300_000;
@@ -93,12 +94,14 @@ async function exchange(client: Client, io: CommandIo, conversationId: string, l
 }
 
 export async function runPipedChat(client: Client, io: CommandIo, json: boolean, reset = false): Promise<number> {
+    // A daemon that is absent at the start ends the command (S-005 AC-002.2); one lost later is waited for (REQ-015).
     const { conversationId } = (await client.invoke("desk.get")) as { conversationId: string };
     if (reset) await client.invoke("conversations.reset", { conversationId });
+    const patient = patientClient(client, { onNotice: (text) => writeError(io, text) });
     const lines = createInterface({ input: io.stdin, crlfDelay: Number.POSITIVE_INFINITY });
     for await (const line of lines) {
         if (line.trim() === "") continue;
-        if (!(await exchange(client, io, conversationId, line, json))) return EXIT_CODES.refused;
+        if (!(await exchange(patient, io, conversationId, line, json))) return EXIT_CODES.refused;
     }
     return EXIT_CODES.ok;
 }

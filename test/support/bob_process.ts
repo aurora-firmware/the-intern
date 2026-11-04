@@ -35,6 +35,8 @@ export type BobChild = {
     /** Resolves once the stream's text so far contains the given text; rejects after the timeout. */
     waitFor(stream: "stdout" | "stderr", text: string, timeoutMs?: number): Promise<void>;
     write(text: string): void;
+    /** Ends standard input, as the end of a pipe does. */
+    endInput(): void;
     signal(sig: NodeJS.Signals): void;
     /** Resolves with the exit status when the child exits. */
     exited: Promise<number | null>;
@@ -81,6 +83,9 @@ export function spawnBob(
         },
         write: (text) => {
             child.stdin.write(text);
+        },
+        endInput: () => {
+            child.stdin.end();
         },
         signal: (sig) => {
             child.kill(sig);

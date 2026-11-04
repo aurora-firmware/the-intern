@@ -6,7 +6,7 @@
  */
 import { type Client, ClientError, type FeedItem, type FeedScope, UnreachableError } from "../client/client.ts";
 
-const DEFAULT_RETRY_DELAY_MS = 1000;
+export const DEFAULT_RETRY_DELAY_MS = 1000;
 const LAGGING_REASON = "lagging";
 const ENTRIES_PAGE_LIMIT = 500;
 
@@ -25,14 +25,14 @@ export type FollowOptions = {
 };
 
 /** Why an attempt could not go on: the daemon isn't there, or answers `unavailable`. Any other failure is thrown. */
-function noticeFor(error: unknown): string | undefined {
+export function outageNoticeFor(error: unknown): string | undefined {
     if (error instanceof UnreachableError) return UNREACHABLE_NOTICE;
     if (error instanceof ClientError && error.code === "unavailable") return UNAVAILABLE_NOTICE;
     return undefined;
 }
 
 /** Resolves after the delay, or at once when the signal aborts. */
-function pause(delayMs: number, signal: AbortSignal): Promise<void> {
+export function pause(delayMs: number, signal: AbortSignal): Promise<void> {
     return new Promise((resolve) => {
         const finish = () => {
             clearTimeout(timer);
@@ -100,7 +100,7 @@ export async function followFeed(options: FollowOptions): Promise<void> {
             if (signal.aborted) return;
             if (reason !== LAGGING_REASON) await pause(retryDelayMs, signal);
         } catch (error) {
-            const notice = noticeFor(error);
+            const notice = outageNoticeFor(error);
             if (notice === undefined) throw error;
             if ((error as { hasSnapshot?: boolean }).hasSnapshot) isOutageNoticed = false;
             if (!isOutageNoticed) onNotice(notice);
