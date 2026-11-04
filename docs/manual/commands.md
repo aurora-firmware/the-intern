@@ -259,8 +259,9 @@ conversations. A line of a conversation starts with the conversation's ID in bra
 after printing its resolution, or when you press Ctrl-C. A job that is already Done prints its resolution and exits 0.
 If the daemon restarts or a feed lags, it prints a notice on standard error and goes on.
 
-With `--json` it prints the job, then the snapshot and each delta of the instance feed that concern the job, and the
-snapshot and each delta of the feed of each of its conversations, one JSON value per line.
+With `--json` it prints the job first. A job that is already Done ends there. Otherwise it goes on with the snapshot
+and each delta of the instance feed that concern the job, and the snapshot and each delta of the feed of each of its
+conversations, one JSON value per line.
 
 ## Conversations
 
@@ -283,8 +284,8 @@ exit 1.
 
 ### `bob conversations list`
 
-List conversations, one line each with the ID, the job (marked `lead` for a lead conversation) or `front desk`, the
-seat, the status and the last activity. The status is `closed`, `waiting for a worker thread`, `running`, `parked` or
+List conversations, one line each with the ID, the job's ID (followed by `lead` for a lead conversation) or `front desk`,
+the seat, the status and the last activity. The status is `closed`, `waiting for a worker thread`, `running`, `parked` or
 `idle`. With `--json` it prints the array of conversations.
 
 | Option            | Meaning                              |
@@ -313,7 +314,7 @@ Give at most one of the two; both together exit 2.
 ### `bob conversations stop <id>`, `reset <id>` and `compact <id>`
 
 `stop` aborts the conversation's current run. `reset` empties its context. `compact` compacts its context. Each prints
-one line, such as `stopped <id>`. With `--json` each prints the service's answer.
+one line, such as `stopped <id>`. With `--json` each prints the service's answer, which is the empty object `{}`.
 
 | Option                    | Meaning                                  |
 | ------------------------- | ---------------------------------------- |
@@ -321,8 +322,8 @@ one line, such as `stopped <id>`. With `--json` each prints the service's answer
 
 ### `bob conversations seat <id>`
 
-Seat the conversation in a role, with optional overrides. It prints the new seat. With `--json` it prints the seat the
-service answers with.
+Seat the conversation in a role, with optional overrides. It prints the new seat. With `--json` it prints an object
+with the new seat's `role`, `model` and `workspace`.
 
 | Option                 | Meaning                                                      |
 | ---------------------- | ------------------------------------------------------------ |
@@ -350,8 +351,8 @@ service answers with.
 `bob roles list` prints one line per role with its name, whether it is shipped, changed or a team role, and its model.
 With `--json` it prints an object with `roles`. `bob roles show` prints the role with its thinking level, workspace,
 tools, skills and instructions; with `--json` it prints that role. When no role has the name, it prints so and exits 1.
-`create`, `change`, `remove` and `restore` print one line, such as `reviewer created`; with `--json` each prints the
-service's answer.
+`create`, `change`, `remove` and `restore` print one line, such as `reviewer created`. With `--json`, `create`,
+`change` and `restore` print an object with the role under `role`, and `remove` prints the empty object `{}`.
 
 `bob roles create` and `bob roles change` take these options. `change` sends only the options you give.
 
@@ -376,8 +377,8 @@ service's answer.
 | `bob workspaces unregister <path>` | Unregister a workspace.             |
 
 `list` prints one line per workspace with its path and either `registered` or `default of <role>`. With `--json` it
-prints an object with `workspaces`. `register` and `unregister` print one line, such as `<path> registered`; with
-`--json` each prints the service's answer.
+prints an object with `workspaces`. `register` and `unregister` print one line, such as `<path> registered`. With
+`--json`, `register` prints an object with the `path`, and `unregister` prints the empty object `{}`.
 
 ## Models
 
