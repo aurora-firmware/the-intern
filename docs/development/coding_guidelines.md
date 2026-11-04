@@ -64,9 +64,10 @@ The `bob` commands (`src/cli/`, [S-005](../ai-team/specs/S-005-command-line.md))
 adds a command group follows them too, and does not change them without amending S-005.
 
 - **One noun per component.** A group is named for the thing a team member works with (`jobs`, `conversations`,
-  `roles`), has its own file `src/cli/<group>_commands.ts` that exports its `CommandSpec` entries, and joins the
-  `COMMANDS` table in `src/cli/commands.ts`. A group that is reserved for a later spec (`RESERVED_GROUPS` in
-  `command_line.ts`) leaves that list in the change that adds it.
+  `roles`), has its commands in a file `src/cli/<name>_commands.ts` that exports its `CommandSpec` entries, and joins
+  the `COMMANDS` table in `src/cli/commands.ts`. `jobs`, `conversations` and `roles` have their own files; `workspaces`
+  and `models` share `roles_commands.ts`, and the following commands share `follow_commands.ts`. A group that is
+  reserved for a later spec (`RESERVED_GROUPS` in `command_line.ts`) leaves that list in the change that adds it.
 - **Curated commands.** A command is named for what a team member does (`bob jobs answer`), not for the operation it
   calls. It calls the operations its spec names for it, and every option maps to the input of the same meaning in the
   operation.
@@ -83,11 +84,14 @@ adds a command group follows them too, and does not change them without amending
 - **Exit codes.** `0` success, `1` the service refused or failed (its error code and message on standard error), `2` a
   usage error or a reserved group, `3` the daemon can't be reached. Use `EXIT_CODES` and `withClient`
   (`src/cli/connection.ts`), which maps the client's errors to them.
-- **A thin client.** A command validates nothing and resolves no short number the service does, and keeps no file,
-  cache or history. It reaches the daemon only through the client library. No daemon module (host, service, listeners,
+- **A thin client.** A command validates nothing and resolves no short number the service does, and keeps no file, cache
+  or history. It reaches the daemon only through the client library. No daemon module (daemon, host, service, listeners,
   jobs, agents) is imported by a command other than `serve` and `import`, and those load theirs by a dynamic `import()`
-  inside `run`, so a command that only calls the service starts quickly. To check, list the modules a run loads with
-  `node --import ./test/support/module_trace.ts src/cli/bob.ts <command>`.
+  inside `run`, so a command that only calls the service starts quickly. The one exception is
+  `src/daemon/state_layout.ts`, which `connection.ts` imports to resolve the runtime directory and which imports only
+  Node modules. To check, list the modules a run loads with
+  `node --import ./test/support/module_trace.ts src/cli/bob.ts <command>`: it prints that file and nothing else from the
+  daemon, host, service, listeners, jobs or agents folders.
 - **Words.** Help and messages say team member, job and invokes, never user, subagent or task in its general sense.
 - **The command reference page changes in the same change as a command** (S-005 REQ-017):
   `docs/manual/commands.md` lists every command, its arguments and options, its JSON output and its exit codes, so a

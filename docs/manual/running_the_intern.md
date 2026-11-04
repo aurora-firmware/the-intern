@@ -61,6 +61,7 @@ reason. Run `chmod 700` on the directory, or choose another one with the flag.
 The `jobs.export` operation writes a copy of the whole database to a new file while The Intern keeps working. Give it
 `path`, an absolute path to a file that doesn't exist yet in a folder that does. It returns the path and the size
 written.
+From the command line, run [`bob export <file>`](commands.md#bob-export-file).
 
 - The copy holds the jobs, their worklogs and histories, and the conversations and queued work, as committed when the
   copy started. It doesn't hold `config.toml`, so back that up on its own.
@@ -77,8 +78,8 @@ written.
 ## Restore a copy as the database
 
 The import step places an exported file as the database of an instance that has none. Use it to move your jobs to
-another computer running the same version, or to restore a backup. The step has no `bob` command yet; the command's
-name comes with the command line.
+another computer running the same version, or to restore a backup. Run it with
+[`bob import <file>`](commands.md#bob-import-file).
 
 - Stop the instance's daemon first. The step takes the instance's single-owner lock while it runs, so it can't replace
   the database of a running daemon, and a daemon you start meanwhile refuses to start.

@@ -57,9 +57,12 @@ send it. The answer prints as it streams.
   line. A line sent to the front desk survives a restart of the daemon and is answered after it.
 - **Ctrl-C** stops the front desk's current turn and drops the lines still queued. `bob chat` prints each dropped line
   on standard error, so you can send it again. The chat stays open.
-- **Ctrl-D** leaves the chat and exits with status 0.
+- **Ctrl-D** leaves the chat and exits with status 0. It first waits for the answers to the lines the front desk has
+  taken, so a long turn keeps the command open without a prompt. If the daemon is away when you press Ctrl-D, the
+  chat exits at once and names on standard error each line that was not sent.
 - **A restart of the daemon.** `bob chat` prints a notice on standard error and tries again until the daemon answers. It
-  then prints what the front desk wrote while it was away, and the chat goes on. It doesn't exit.
+  then prints what the front desk wrote while it was away, and the chat goes on. A line you type meanwhile is sent when
+  the daemon answers. The chat doesn't exit on its own.
 
 ### Start with an empty context
 
@@ -76,7 +79,8 @@ itself.
 
 ## Chat without a terminal
 
-When standard input isn't a terminal, `bob chat` shows no prompt, history or colour. It sends each line of standard
+When standard input or standard output isn't a terminal, `bob chat` shows no prompt, history or colour. This includes
+`bob chat > answers.txt`. It sends each line of standard
 input in turn, waits for the answer, prints it on standard output, and exits with status 0 at the end of input. A
 script can use it:
 
@@ -85,8 +89,9 @@ echo "what's blocked?" | bob chat
 ```
 
 The output holds the front desk's answer and nothing else. A long answer can take several minutes; `bob chat` waits for
-it. If the daemon isn't running, the command prints a message on standard error and exits with status 3, as every
-command does (see the [Command reference](commands.md#text-json-and-exit-codes)).
+it. If the daemon isn't running when the command starts, it prints a message on standard error and exits with status
+3, as every command does (see the [Command reference](commands.md#text-json-and-exit-codes)). If the daemon goes away
+later, the command prints a notice on standard error, waits for the daemon and goes on.
 
 With `--json`, `bob chat` prints JSON instead of text. See [`bob chat`](commands.md#bob-chat) for the options and the
 JSON.

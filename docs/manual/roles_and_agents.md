@@ -71,16 +71,16 @@ thinking_level = "high"
 model = "anthropic/claude-sonnet-4-5"
 ```
 
-The `desk` role has an empty tool set: it changes no file and runs no command. In the front desk it is offered only the
-tools for reading jobs and conversations, creating and editing jobs, and passing input to a job's conversations. See
-[The front desk and `bob chat`](front_desk.md).
+The `desk` role has an empty tool set: it changes no file and runs no command. In the front desk it is offered only
+the tools for reading jobs, conversations, and the daemon's status and usage; for creating and editing jobs; and for
+passing input to or stopping a job's conversations. See [The front desk and `bob chat`](front_desk.md).
 
 ### Undo a change to a shipped role
 
 A change to `bob`, `gp` or `desk` is kept in your configuration. The installed copy is never edited. To restore the
 shipped role, remove its `[roles.bob]`, `[roles.gp]` or `[roles.desk]` table from the file, or only the keys you want
-to undo, and restart the service. You can also restore a shipped role while the service runs; the command for it
-comes with the command-line documentation.
+to undo, and restart the service. You can also restore a shipped role while the service runs, with
+`bob roles restore <name>`.
 
 ### The `[workspaces]` table
 
@@ -141,7 +141,9 @@ written to `config.toml`.
 The service reads hand edits of `config.toml` only at startup. After you edit the file by hand, restart the service
 before you make a change another way. See [Running The Intern](running_the_intern.md#the-configuration-file).
 
-The commands for these changes come with the command-line documentation.
+Use `bob roles create`, `change`, `remove` and `restore` for roles, and `bob workspaces register` and `unregister` for
+workspaces. To move a running conversation to a changed role, use `bob conversations seat <id>`. The
+[Command reference](commands.md#roles) lists their options.
 
 ## Sharing a job
 
@@ -228,8 +230,8 @@ nothing.
 ### Steering
 
 You and any agent can steer a running conversation with a message. The message arrives after the current tool calls, or
-as a follow-up after the run ends. The transcript records who steered. The commands for you to steer a conversation
-come with the command-line documentation.
+as a follow-up after the run ends. The transcript records who steered. To steer a conversation yourself, run
+`bob conversations send <id> <text>` (see [`bob conversations send`](commands.md#bob-conversations-send-id-text)).
 
 A closed conversation, one of a Done job, can't be steered. A `steer` aimed at it gets an error result and delivers
 nothing, and the run of the agent that sent it goes on. A message you send to it is refused as `conflict`.

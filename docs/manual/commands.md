@@ -60,11 +60,20 @@ stable, so a script can rely on them.
 Data goes to standard output. Errors, notices and hints go to standard error. Text output uses colour only when
 standard output is a terminal.
 
+Text output prints what jobs, worklogs, roles and conversations hold, and agents write some of it. `bob` removes
+control sequences and control characters from that text before it prints, so text from an agent can't redraw your
+screen, change the window title or set the clipboard. Where a field holds several lines, `bob jobs show`, `bob follow`
+and `bob jobs follow` indent every line after the first by four spaces, so a line of data never reads as a line of
+`bob`'s own. `--json` prints the data exactly as stored.
+
+A data command stops quietly, with exit 0, when the program that reads its output closes it early, as in
+`bob follow | head -n 1`.
+
 | Exit code | Meaning                                                                                              |
 | --------- | ---------------------------------------------------------------------------------------------------- |
 | 0         | The command succeeded.                                                                               |
 | 1         | The service refused or failed. Standard error holds its error code and message, as `conflict: <message>`. |
-| 2         | A usage error: an unknown command or option, a missing or extra argument, or a reserved group. Standard error holds the usage of the group concerned. |
+| 2         | A usage error: an unknown command or option, a missing or extra argument, or a reserved group. Standard error holds the usage of the group concerned, except for a reserved group, which prints one line saying the group isn't available yet. |
 | 3         | The daemon can't be reached.                                                                         |
 
 ### JSON output
@@ -134,8 +143,9 @@ If a daemon holds the instance, or the file can't be imported, it prints the rea
 ### `bob follow`
 
 Print the instance feed until you press Ctrl-C, which exits 0. It prints one line for each job created, changing
-status, blocked or done, and each time an agent starts or stops a run. If the daemon restarts or the feed lags, it
-prints a notice on standard error and goes on.
+status, blocked or done, and each time an agent starts or stops a run. If the daemon restarts, it prints a notice on
+standard error and goes on. If the feed lags, it goes on without a notice. If no daemon answers when it starts, it
+exits 3 as every command does.
 
 With `--json` it prints the feed snapshot, then each delta, one JSON value per line.
 
@@ -147,10 +157,14 @@ Talk to the front desk. Its behaviour depends on where your input comes from.
 
 - On a terminal, it shows the last lines of the front desk's history and a prompt. A line you type while the front desk
   is busy queues and is answered after the current one. Ctrl-C stops the current turn, drops the queued lines and names
-  each on standard error, so you can send it again; the chat stays open. Ctrl-D leaves and exits 0. If the daemon
-  restarts, the chat prints a notice, reconnects and prints what the front desk wrote while it was away.
-- Without a terminal, such as `echo "what's blocked?" | bob chat`, it shows no prompt, history or colour. It sends each
-  line of standard input in turn, waits for the answer, prints it and exits 0 at the end of input.
+  each on standard error, so you can send it again; the chat stays open. Ctrl-D waits for the answers to the lines
+  the front desk has taken, prints them and exits 0. If the daemon restarts, the chat prints a notice, reconnects and
+  prints what the front desk wrote while it was away. A line typed while the daemon is away is sent when it returns. If
+  the daemon is away when you press Ctrl-D, the chat exits 0 at once and names each line not sent on standard error.
+- Without a terminal, such as `echo "what's blocked?" | bob chat`, or with its output redirected, such as
+  `bob chat > answers.txt`, it shows no prompt, history or colour. It sends each line of standard input in turn, waits
+  for the answer, prints it and exits 0 at the end of input. If the daemon isn't running when the command starts, it
+  exits 3. If the daemon goes away later, it prints a notice on standard error, waits for the daemon and goes on.
 
 | Option    | Meaning                                                           |
 | --------- | ----------------------------------------------------------------- |
@@ -257,7 +271,8 @@ The command refuses in three cases, each with exit 1 and nothing sent:
 Print the job's current status, then its status changes, edits and worklog entries, and the activity of each of its
 conversations. A line of a conversation starts with the conversation's ID in brackets. It exits 0 when the job is Done,
 after printing its resolution, or when you press Ctrl-C. A job that is already Done prints its resolution and exits 0.
-If the daemon restarts or a feed lags, it prints a notice on standard error and goes on.
+If the daemon restarts, it prints a notice on standard error and goes on, and it prints what happened while the daemon
+was away. If a feed lags, it goes on without a notice.
 
 With `--json` it prints the job first. A job that is already Done ends there. Otherwise it goes on with the snapshot
 and each delta of the instance feed that concern the job, and the snapshot and each delta of the feed of each of its

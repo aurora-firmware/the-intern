@@ -64,6 +64,10 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   the job's lead. Roles are the configuration agents are made from; a seat is a role's place in a conversation. The
   lead can hand its conversation to an agent of another role, or invoke agents of specialist roles in conversations of
   their own that report back (S-001).
+- **Conversation ids.** `src/host/conversation_id.ts` is the one place that reads a conversation id from text:
+  `parseConversationId` accepts only the digits of the id with no leading zero, the way the product writes it, and
+  `toConversationId` throws for an id the product wrote itself. A spelling such as `07` names no conversation, so a
+  comparison of two id strings, a lookup keyed by one and the conversation it resolves to agree.
 - **Closed mark.** Every conversation of a job closes when the job is Done. The mark is the `closed` field of the
   conversation's `intern.conversation` document (`ConversationMeta` in `src/host/seating.ts`). A job's abort sets it,
   with the parked state, the awaiting links and the held messages cleared, in the abort's own commit. That commit also
@@ -157,17 +161,22 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   `jobs`, `conversations`, `roles`, `workspaces` and `models` (`jobs_commands.ts`, `conversations_commands.ts`,
   `roles_commands.ts`), and the top-level commands are `serve`, `status`, `usage`, `export`, `import`, `follow` and
   `chat` (`instance_commands.ts`, `follow_commands.ts`, `chat_command.ts`, `chat_terminal.ts`). Text output is built in
-  `job_text.ts`, `conversation_text.ts` and `feed_text.ts`; `output.ts` writes data to standard output, errors to
-  standard error and `--json` answers as one line. Every command except `serve` and `import` is a thin client:
-  `withClient` (`connection.ts`) resolves the socket from `--runtime-dir`, `BOB_RUNTIME_DIR` or the default runtime
-  directory, calls the operations through the client library over `bob.sock`, and maps a refusal to exit 1 and an
-  unreachable daemon to exit 3. The command table imports no daemon module. `serve` and `import` load their code with a
-  dynamic `import()` inside `run` (`serve.ts`; `host/database_import.ts` and `daemon/state_layout.ts`), so a command
-  that only calls the service never loads the daemon. The following commands (`bob follow`, `bob jobs follow` and
-  `bob chat`) read the feed through `followFeed` and `createEntryTracker` in `feed_follower.ts`: it subscribes, passes
-  each snapshot and delta to the command, subscribes again when the feed ends `lagging` or the daemon is unreachable or
-  `unavailable`, and pages `conversations.entries` forward from the cursor it kept, so a restart or a lag costs no
-  entry. The command line keeps no file, cache or history of its own (S-005 REQ-016).
+  `job_text.ts`, `conversation_text.ts` and `feed_text.ts`. Data an agent or a team member wrote goes through
+  `terminal_text.ts` first (`flat`, `block` and `continued`), which removes control sequences and line breaks that would
+  forge a line, and `writeLine` and `writeError` strip any that remain. `output.ts` writes data to standard output,
+  errors to standard error and `--json` answers as one line. `chat_screen.ts` writes the front desk's answers on a
+  terminal as they stream. A data command ends with exit 0 when the reader of its output closes it (`bob.ts`). Every
+  command except `serve` and `import` is a thin client: `withClient` (`connection.ts`) resolves the socket from
+  `--runtime-dir`, `BOB_RUNTIME_DIR` or the default runtime directory, calls the operations through the client library
+  over `bob.sock`, and maps a refusal to exit 1 and an unreachable daemon to exit 3. The command table imports no daemon
+  module except the path layout named below. `serve` and `import` load their code with a dynamic `import()` inside `run`
+  (`serve.ts`; `host/database_import.ts` and `daemon/state_layout.ts`), so a command that only calls the service never
+  loads the daemon. The one daemon file such a command loads is `daemon/state_layout.ts`, which `connection.ts` imports
+  to resolve the runtime directory and which imports only Node modules. The following commands (`bob follow`,
+  `bob jobs follow` and `bob chat`) read the feed through `followFeed` and `createEntryTracker` in `feed_follower.ts`:
+  it subscribes, passes each snapshot and delta to the command, subscribes again when the feed ends `lagging` or the
+  daemon is unreachable or `unavailable`, and pages `conversations.entries` forward from the cursor it kept, so a
+  restart or a lag costs no entry. The command line keeps no file, cache or history of its own (S-005 REQ-016).
 - **Failure.** A storage error closes the harness; the daemon exits non-zero rather than reopening the database
   (S-002, ADR-001). A failed job store write is one too: `createJobStore` reports it through `onWriteFailure`, and the
   daemon logs it and runs the same shutdown (S-004 REQ-020).
@@ -203,8 +212,10 @@ are not described here.
   pi-durable. The service layer and every other component depend on the host's interface, so an upgrade of the pi
   packages touches a few files.
 - **Every job source ends in the same service operation.** Every way in and job source submits through the service layer.
-- **The command table imports no daemon module.** A `bob` command reaches the daemon only through the client
-  library, except `serve` and `import`, which load the daemon's code by a dynamic import inside `run` (S-005 REQ-016).
+- **The command table imports no daemon module besides the path layout.** A `bob` command reaches the daemon only
+  through the client library, except `serve` and `import`, which load the daemon's code by a dynamic import inside
+  `run` (S-005 REQ-016). The path layout, `src/daemon/state_layout.ts`, is the one daemon file every command loads
+  (`connection.ts` uses it for the runtime directory); it imports only Node modules.
 - **Listeners and the client library use only the service layer.** Listener and client library code imports neither
   the harness host nor any pi package. Listeners reach the daemon's state only through the catalogue, the feed and the
   lifecycle hooks, and import the daemon and feed modules only as types (S-003 REQ-013, ADR-001).

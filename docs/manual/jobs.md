@@ -282,7 +282,7 @@ The answer is the path and the size written. The path must be absolute and name 
 folder that does. [Running The Intern](running_the_intern.md#copy-the-database-as-a-backup) describes the copy.
 
 The import step places an exported file as the database of an instance that has none. It runs while the service is
-stopped and has no `bob` command yet; the command line documentation names it when it ships. See
+stopped, as [`bob import <file>`](commands.md#bob-import-file). See
 [Running The Intern](running_the_intern.md#restore-a-copy-as-the-database) for what it checks and refuses.
 
 ## What jobs don't do
