@@ -478,8 +478,8 @@ and a prompt, and then:
 ### REQ-010 — Chat without a terminal
 
 When standard input or output isn't a terminal, `bob chat` SHALL show no prompt, history or colour; it SHALL submit
-each line of standard input in turn and wait for the submission to settle, calling `submissions.wait` again each time a wait
-ends with the submission still unsettled (each wait lasts at most 5 minutes, S-002 REQ-012). It SHALL then read the
+each line of standard input in turn and wait for the submission to settle, calling `submissions.wait` again each time
+a wait ends with the submission still unsettled (each wait lasts at most 5 minutes, S-002 REQ-012). It SHALL then read the
 front desk's answer with `conversations.entries`, print it and, at the end of input, exit 0.
 
 #### AC-010.1 — A piped question
