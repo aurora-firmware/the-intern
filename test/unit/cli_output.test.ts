@@ -210,4 +210,15 @@ describe("output", () => {
         writeJson(memory.io, value);
         assert.equal(memory.stdout(), `${JSON.stringify(value)}\n`);
     });
+
+    it("writes_json_without_raw_C1_control_characters_and_with_the_same_value", () => {
+        for (const isStdoutTerminal of [true, false]) {
+            const memory = memoryIo({ isStdoutTerminal });
+            const value = { title: "a\u009b2Kb\u009d0;pwned\u009cc\u0080\u009f", nested: ["\u0085"] };
+            writeJson(memory.io, value);
+
+            assert.equal(/[\u0080-\u009f]/.test(memory.stdout()), false, JSON.stringify(memory.stdout()));
+            assert.deepEqual(JSON.parse(memory.stdout()), value);
+        }
+    });
 });

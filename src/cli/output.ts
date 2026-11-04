@@ -13,9 +13,18 @@ const RESET_SEQUENCE = "\u001b[0m";
 // carries one is not told from `bob`'s own; callers print data through `terminal_text.ts` first.
 const OWN_STYLE_SEQUENCES = new RegExp(`(\\u001b\\[(?:0|${Object.values(STYLE_CODES).join("|")})m)`);
 
-/** Writes the value as one JSON line, exactly `JSON.stringify` of it, so a reader parses the output line by line. */
+// `JSON.stringify` escapes the C0 controls but writes U+0080 to U+009F raw, and a terminal may read those as the
+// start of a control sequence. Inside a JSON string the escape `\u009b` is the same character, so the value is kept.
+const C1_CONTROLS = /[\u0080-\u009f]/g;
+
+const asEscape = (char: string) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`;
+
+/**
+ * Writes the value as one JSON line, so a reader parses the output line by line: `JSON.stringify` of it, with the C1
+ * control characters written as escapes so none reaches a terminal raw. The line parses to the same value.
+ */
 export function writeJson(io: CommandIo, value: unknown): void {
-    io.stdout.write(`${JSON.stringify(value)}\n`);
+    io.stdout.write(`${JSON.stringify(value).replace(C1_CONTROLS, asEscape)}\n`);
 }
 
 /**

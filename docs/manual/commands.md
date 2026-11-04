@@ -64,7 +64,8 @@ Text output prints what jobs, worklogs, roles and conversations hold, and agents
 control sequences and control characters from that text before it prints, so text from an agent can't redraw your
 screen, change the window title or set the clipboard. Where a field holds several lines, `bob jobs show`, `bob follow`
 and `bob jobs follow` indent every line after the first by four spaces, so a line of data never reads as a line of
-`bob`'s own. `--json` prints the data exactly as stored.
+`bob`'s own. `--json` prints the data as stored; the characters U+0080 to U+009F, which some terminals read as control sequences,
+are written as JSON escapes, so the value read back is the same.
 
 A data command stops quietly, with exit 0, when the program that reads its output closes it early, as in
 `bob follow | head -n 1`.

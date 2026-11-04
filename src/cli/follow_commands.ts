@@ -233,7 +233,10 @@ async function jobsFollow(input: CommandInput): Promise<number> {
         const { io, json } = input;
         // A daemon that is absent at the start ends the command (S-005 AC-002.2); one that is starting or stopping is
         // waited for (REQ-015).
-        const starting = patientClient(client, { onNotice: (text) => writeError(io, text), isAbsentFatalAtStart: true });
+        const starting = patientClient(client, {
+            onNotice: (text) => writeError(io, text),
+            isAbsentFatalAtStart: true,
+        });
         const job = (await starting.invoke("jobs.get", { job: input.positionals[0] })) as Job;
         if (json) writeJson(io, job);
         if (job.status === "done") {
