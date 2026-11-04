@@ -1,6 +1,6 @@
 ---
 title: Agent roles and conversations
-version: '0.10'
+version: '0.11'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-15'
 author: planner
@@ -299,8 +299,8 @@ These operations of the S-002 catalogue carry this spec's behaviour (S-002 REQ-0
 Two capabilities are offered in-process only, for S-004: `jobs.startLead`, which starts a job's lead conversation
 with a role, optional overrides, a first input and an origin and is called by `jobs.create` (REQ-012); and the
 capability that closes every conversation of a job and aborts each, except the conversation of a complete tool that
-calls it, for S-004's complete and cancel actions and its repair
-rule 4 (REQ-008, REQ-026).
+calls it when its closed mark lands (S-004 REQ-007), for S-004's complete and cancel actions and its repair rule 4
+(REQ-008, REQ-026).
 
 ### Exposed: transcript entries
 
@@ -790,7 +790,9 @@ defaults, and a job prompt for its part.
   and ends its own run; the operation that does it belongs to the Jobs spec, and this
   spec delivers the capability it calls. A closed conversation can't be aborted (REQ-026).
 - An abort leaves no aborted conversation parked or waiting for a report. Its held messages (REQ-020) are withdrawn,
-  as an abort withdraws queued input. Whether its invoking conversation gets a report follows REQ-019.
+  as an abort withdraws queued input. Whether its invoking conversation gets a report follows REQ-019. The one
+  exception is the abort after a failed close (REQ-026), which commits nothing of its own: S-004 REQ-018 rule 4 clears
+  these at the next start.
 
 #### AC-008.1 — Each context mode
 
@@ -839,7 +841,8 @@ defaults, and a job prompt for its part.
 - **Given:** two jobs with several conversations each
 - **When:** the job abort capability runs for one job
 - **Then:** every conversation of that job is aborted and closed, and none of the other job, and, when a lead's
-  complete tool runs it, that lead is closed and not aborted
+  complete tool runs it, that lead is closed and not aborted; a lead whose closed mark doesn't land is aborted at once
+  and closed at the next start (S-004 AC-005.8)
 
 **Verification:** test — `test/service/abort_cascade.test.ts` ("abortJobConversations").
 
@@ -847,7 +850,8 @@ defaults, and a job prompt for its part.
 
 - **Given:** a steerable or a parked invoker with report delivery running
 - **When:** it is aborted, or its job's conversations are
-- **Then:** no aborted conversation is parked, awaiting a report or holding messages
+- **Then:** no aborted conversation is parked, awaiting a report or holding messages, except after a failed close
+  (REQ-026), until the next start
 
 **Verification:** test — `test/service/abort_cascade.test.ts` ("an abort with report delivery running").
 
@@ -1483,17 +1487,26 @@ which a team member or an agent of any job may create and may relate to the firs
   requirement, even before its closed mark is committed. Input queued before the closed mark settles `unanswered` with
   reason `closed`. The placed input of a run the job abort stops settles `unanswered` with reason `aborted`. The placed
   input of a run that completes the job through its tool settles `done`; when a crash cuts that call or its tool round
-  short, rule 4 aborts the run and its input settles `unanswered` with reason `aborted`. A write queued before the
-  closed mark places no entry. Entries the abort itself writes, such as an aborted answer or tool result, and the
-  complete tool's own result may follow the mark. No input runs a model turn after the job is Done.
+  short, rule 4 aborts the run and its input settles `unanswered` with reason `aborted`. When the closed-mark commit
+  fails without a storage error after a lead's complete through its tool, the daemon aborts the job's other
+  conversations and a lead whose mark didn't land (S-004 REQ-007). The placed and queued input of a conversation
+  without its mark settles `unanswered` with reason `aborted`. Until the next start, that conversation has no mark:
+  it can stay parked, keeps its `awaiting` and held messages, lists with a status other than `closed`, and any
+  compaction still running in it goes on. Every refusal of this requirement still holds, and no input starts a run.
+  Rule 4 closes it at the next start. A write queued before the closed mark places no entry.
+  Entries the abort itself writes, such as an aborted answer or tool result, and the complete tool's own result may
+  follow the mark. No input runs a model turn after the job is Done, with one known exception: when a team member's
+  `jobs.complete` or `jobs.cancel` fails at a closed-mark commit or an abort after it, without a storage error, the
+  call fails and the conversations not yet aborted stay unaborted. Until the next start, a run or compaction already
+  going in one goes on, even after its mark landed, and an input still queued can start a run.
 - A coordination or job tool called from a conversation whose job is Done, or that is closed, returns an error result
   and changes nothing: `invoke` creates no conversation, `handoff` changes no seat, `steer` delivers nothing. A lead
   start (`jobs.startLead`, REQ-012) is refused at whichever of its two commits finds the job Done: refused at the lead
   conversation's creation, it creates no conversation; refused at the first input, it submits no first input, and the
   conversation it created is closed by the job abort.
-- A closed conversation runs no more model turns, after a restart too: it takes no automatic compaction, report or
-  held message. A closed conversation whose abort a crash left unfinished is aborted by S-004 REQ-018 rule 4 before
-  work resumes.
+- A closed conversation runs no more model turns, after a restart too, apart from the known exception above: it takes
+  no automatic compaction, report or held message. A closed conversation whose abort a crash left unfinished is
+  aborted by S-004 REQ-018 rule 4 before work resumes.
 - The front desk belongs to no job and never closes (REQ-021, REQ-025).
 
 #### AC-026.1 — Done closes every conversation of the job
@@ -1781,3 +1794,4 @@ behaviour. Deciding either one is a scope amendment of this spec.
 | 2026-11-03 | v0.9. Closed conversations: every conversation of a job closes when the job is Done and stays closed for good; it keeps its transcript and every read works on it, and input, abort, reset, reseat and compaction of it are refused `conflict`; the `steer` tool and the front-desk steering tools aimed at it return an error result; it runs no more model turns, after a restart too; the front desk never closes. New REQ-026 with AC-026.1 to AC-026.4. Definitions (Closed), Exclusions (continuing a closed conversation), Responsibility Separation (the closed mark in the conversation's own document, written in the job abort's commit), Interfaces (the job abort capability closes, and serves S-004's repair rule 4), Workflow, REQ-004, REQ-008, REQ-011, REQ-016 (status `closed`), REQ-017 (the closed mark survives a crash), REQ-020, REQ-025 and AC-025.2, and Implementation Order phase 7 follow. Architecture consistency review (findings F1 to F8, F10 to F13 and F15), same version: REQ-026, a conversation of the job counts as closed from the job's complete or cancel, input admitted before it is withdrawn or aborted and settles `unanswered`, and no input runs a model turn after the job is Done (new AC-026.5); a coordination or job tool called from a closed conversation, or from one whose job is Done, returns an error result and changes nothing (new AC-026.6), and a lead start is refused at whichever commit finds the job Done, creating no conversation or submitting no first input (new AC-026.7 and AC-026.8); the refusals include `submissions.withdraw` (AC-026.2, which also adds a reset that reseats); the conversation lists `closed` from the commit that sets its mark, and the instance feed publishes a `status_changed` delta to `closed` (AC-026.1, AC-016.1); S-004 repair rule 4 finishes an abort a crash left unfinished (AC-026.4). AC-008.6: the job abort also closes. Definitions, Users and Journeys, Exclusions, Design Principles, Alternatives Considered, REQ-008, REQ-019 and Assumptions: the lead completes the job rather than closes it. Long lines rewrapped. | Product owner decision of 2026-11-03, during the S-005 dev-loop (T-166): a Done job's conversations close and are kept only as the history of the work; a conversation belongs to at most one job; more work is a new job; the front desk never closes; only read operations act on a closed conversation. Architecture consistency review of the amendment, 2026-11-03; ADR-001 decision 4 amended with it. | T-166 (blocked on it); T-186 to T-196 (Gate 2 passed 2026-11-03; the amendment merged into `dev-pi-durable-s005` before the preflight, by the product owner's approval of the in-flight amendment) |
 | 2026-11-03 | v0.9, same version. REQ-026: more work after a Done job is a new job, which a team member or an agent may relate to the first, as it chooses (S-004 REQ-009). | Product owner decision of 2026-11-03 (finding F9 of the S-001 v0.9 consistency review): relating a follow-up job is the agent's choice in the moment. | None |
 | 2026-11-04 | v0.10. REQ-026: the closed-mark commit also withdraws queued writes, and everything it withdraws settles `unanswered` with reason `closed`; a lead that completes the job through its tool ends its run at that call instead of being aborted, and that run's input settles `done`; entries the abort itself writes and the complete tool's own result may follow the mark; a held message settles nothing; a compaction still running is aborted after the commit, and a finished summary may follow the mark. REQ-008, REQ-017, the in-process capability, Interfaces and the upgrade review list follow. AC-008.6. New AC-026.9 and AC-026.10. | Product owner decision of 2026-11-04 (B-006 and the misleading `tool complete_job failed` line). Architecture consistency review, findings F1 to F5. | T-197, T-198, T-199, T-200, T-201 |
+| 2026-11-04 | v0.11. Interfaces (the in-process job abort capability), REQ-008, REQ-026, AC-008.6 and AC-008.7: when the closed-mark commit fails without a storage error after a lead's complete through its tool, the daemon aborts the conversations whose marks didn't land, so no queued input runs a model turn, and rule 4 closes them at the next start. The same failure on a team member's `jobs.complete` or `jobs.cancel`, or a failed abort after it, is recorded as a known exception, and the closed-conversation bullet names it (B-010). | S-004 v0.9 REQ-007; product owner decision of 2026-11-04 on T-198 finding F1. | T-198 |
