@@ -3,7 +3,8 @@
  * is no block operation for team members. A refusal of the job store is a service refusal of the same code.
  */
 import type { ServiceContext } from "../daemon/daemon.ts";
-import { steerConversation } from "../host/steering.ts";
+import { ConversationClosedError } from "../host/job_section.ts";
+import { type SteerInput, steerConversation } from "../host/steering.ts";
 import { cancelJob, completeJob, resumeJob } from "../jobs/job_actions.ts";
 import { blockResumeCount, type JobAuthor, resumeRequestId } from "../jobs/job_model.ts";
 import type { Job } from "../jobs/job_store.ts";
@@ -45,6 +46,16 @@ function parseFinish(raw: unknown): FinishInput {
     return { job: requireString(record, "job"), justification: requireString(record, "justification") };
 }
 
+// A cancel or complete that lands after the resume read the job Blocked closes the lead, and the steer finds it so.
+async function steerRefusingClosed(ctx: ServiceContext, leadId: string, input: SteerInput): Promise<void> {
+    try {
+        await steerConversation(ctx.host, leadId, input);
+    } catch (error) {
+        if (error instanceof ConversationClosedError) throw new ServiceError("conflict", error.message);
+        throw error;
+    }
+}
+
 export function jobActionOperations(options: JobsComponentOptions) {
     const resume = defineOperation<ServiceContext, ResumeInput, Job>({
         name: "jobs.resume",
@@ -64,7 +75,7 @@ export function jobActionOperations(options: JobsComponentOptions) {
                 );
                 // The text reaches the parked lead before the job is written, so a crash in between leaves a
                 // Blocked job whose lead has the answer, which the recovery of rule 3 resumes.
-                await steerConversation(ctx.host, leadId, {
+                await steerRefusingClosed(ctx, leadId, {
                     content: input.text ?? RESUMED_NOTE,
                     mode: "followUp",
                     actor: actorOfAuthor(author),
