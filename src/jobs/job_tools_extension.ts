@@ -9,6 +9,7 @@ import {
     defineExtension,
     defineTool,
     type Extension,
+    LiveDoc,
     type ToolExecutionApi,
     type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
@@ -208,17 +209,25 @@ const completeJobTool = (options: JobToolsOptions) =>
         name: "complete_job",
         description:
             "Complete the job of this conversation, with the justification that its definition of done is met. " +
-            "Only the job's lead can use it, and the job needs a definition of done. Your run ends at this call.",
+            "Only the job's lead can use it, the job needs a definition of done, and it must be the only tool call of " +
+            "its turn. Your run ends at this call.",
         parameters: Type.Object({
             justification: Type.String({ description: "Why the definition of done is met." }),
         }),
-        async execute(args, api) {
+        async execute(args, api, context) {
             const { jobId, conversationId, isLead, author } = await seatOf(options, api);
             if (!isLead) return leadOnly("complete_job", "complete");
-            return refusable("complete_job", async () => {
+            // pi-durable ends a run only when every call of the model turn asks, so the model turn is read from the
+            // live state, not from the newest entries, which `countCallsOfRound` scans only in part.
+            const live = await api.snapshot(LiveDoc, api.conversationId, context as never);
+            if (live?.tools?.length !== 1) {
+                return textResult("complete_job was refused: it must be the only tool call of its turn.", true);
+            }
+            const result = await refusable("complete_job", async () => {
                 const done = await completeJob(options.actions(), jobId, args.justification, author, conversationId);
                 return textResult(`${done.number} is Done.`);
             });
+            return result.isError === true ? result : { ...result, control: { terminate: true } };
         },
     });
 

@@ -11,16 +11,17 @@ import {
 import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
+import { conversationEntryLine } from "../../src/cli/feed_text.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
+import { submitInput } from "../../src/host/conversation_control.ts";
 import { readConversationMeta } from "../../src/host/seating.ts";
-import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
+import { createJobsComponent, type JobsComponentOptions } from "../../src/jobs/jobs_component.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const WAIT_MS = 20_000;
 const POLL_MS = 10;
-const quietLogger = createLogger({ stream: { write: () => true } });
 const emailCaller: Caller = { actor: { kind: "team_member", wayIn: "email" } };
 const webCaller: Caller = { actor: { kind: "team_member", wayIn: "web interface" } };
 
@@ -36,7 +37,7 @@ afterEach(async () => {
 
 type Call = { name: string; arguments: Record<string, unknown> };
 /** One model reply of a scripted conversation: tool calls of one round, or a hold that ends in a plain reply. */
-type Step = { calls: Call[] } | { hold: Promise<unknown>; onEntered?: () => void };
+type Step = { calls: Call[]; before?: () => Promise<void> } | { hold: Promise<unknown>; onEntered?: () => void };
 type ModelContext = Parameters<FauxResponseFactory>[0];
 type ToolResultSeen = { text: string; isError: boolean };
 type CreatedJob = { id: string; number: string; leadConversation: string };
@@ -73,14 +74,27 @@ async function waitFor(check: () => Promise<boolean> | boolean, what: string): P
  * A daemon whose conversations follow scripts. A conversation follows the script whose key its first user message
  * contains, one step per model reply; any other conversation answers "done".
  */
-async function start(scripts: Record<string, Step[]>, workerThreadCount?: number) {
+async function start(
+    scripts: Record<string, Step[]>,
+    workerThreadCount?: number,
+    afterWrite?: NonNullable<JobsComponentOptions["afterWrite"]>,
+) {
+    const logLines: string[] = [];
+    const quietLogger = createLogger({
+        stream: {
+            write: (line) => {
+                logLines.push(String(line));
+                return true;
+            },
+        },
+    });
     const env = await createHermeticEnv();
     envs.push(env);
     const fake = registerFauxProvider({ models: [{ id: "model-one", reasoning: true }] });
     fakes.push(fake);
     const results: Record<string, ToolResultSeen[]> = {};
     const replies: Record<string, number> = {};
-    const respond: FauxResponseFactory = async (context) => {
+    const respond: FauxResponseFactory = async (context, streamOptions) => {
         fake.appendResponses([respond]);
         const first = context.messages.find((message) => message.role === "user");
         const text = first === undefined ? "" : textOf(first.content);
@@ -92,9 +106,16 @@ async function start(scripts: Record<string, Step[]>, workerThreadCount?: number
         if (step === undefined) return fauxAssistantMessage("finished");
         if ("hold" in step) {
             step.onEntered?.();
-            await step.hold;
+            // An abort ends the held request, as it ends a real one.
+            const signal = streamOptions?.signal;
+            const isAborted = new Promise<void>((resolve) => {
+                if (signal?.aborted) resolve();
+                signal?.addEventListener("abort", () => resolve());
+            });
+            await Promise.race([step.hold, isAborted]);
             return fauxAssistantMessage("done");
         }
+        await step.before?.();
         return fauxAssistantMessage(
             step.calls.map((c) => fauxToolCall(c.name, c.arguments as never)),
             { stopReason: "toolUse" },
@@ -107,7 +128,12 @@ async function start(scripts: Record<string, Step[]>, workerThreadCount?: number
         JSON.stringify({ defaultProvider: provider, defaultModel: "model-one" }),
     );
     const agents = await createAgentsComponent({ logger: quietLogger });
-    const jobs = await createJobsComponent({ agents, logger: quietLogger, turnEndRule: false });
+    const jobs = await createJobsComponent({
+        agents,
+        logger: quietLogger,
+        turnEndRule: false,
+        ...(afterWrite !== undefined && { afterWrite }),
+    });
     let captured: ServiceContext | undefined;
     const probe: DaemonComponent = {
         name: "probe",
@@ -143,6 +169,8 @@ async function start(scripts: Record<string, Step[]>, workerThreadCount?: number
     const ctx = captured as ServiceContext;
     return {
         ctx,
+        logLines,
+        invoke: (name: string, input: unknown) => daemon.catalogue.invoke(name, input, webCaller),
         results,
         replies,
         createJob: async (text: string, as: Caller = webCaller): Promise<CreatedJob> =>
@@ -160,6 +188,10 @@ const invokeSteerable = (jobPrompt: string): Step =>
         // biome-ignore lint/suspicious/noThenProperty: `then` is the parameter name the specification gives the tool
         then: "steerable",
     });
+
+type Started = Awaited<ReturnType<typeof start>>;
+let startedRef: Started | undefined;
+const started_ = (): Started => startedRef as Started;
 
 describe("complete_job", () => {
     it("completes the job and ends the lead's run, the job being To do, In progress, then Done on one thread", async () => {
@@ -204,6 +236,169 @@ describe("complete_job", () => {
         await waitFor(() => started.isIdle(job.leadConversation), "the lead's run to end");
         assert.equal(started.replies["renew the certificate"], 2);
     });
+});
+
+const linesOf = async (started: Started, conversationId: string): Promise<string[]> =>
+    (await started.ctx.host.readEntries(conversationId, { limit: 100 })).entries.flatMap((entry) => {
+        const line = conversationEntryLine(entry);
+        return line === undefined ? [] : [line];
+    });
+
+describe("complete_job as the only call of its turn", () => {
+    it("records a result that is not an error, settles the input, sends no further request and closes the job's conversations", async () => {
+        const gate = deferred();
+        let isWorkerRunning = false;
+        let leadId: string | undefined;
+        let followUp: { submissionId: string } | undefined;
+        const started = await start({
+            "lead with worker": [
+                invokeSteerable("worker task"),
+                call("update_job", { definitionOfDone: "the worker is stopped" }),
+                {
+                    calls: [{ name: "complete_job", arguments: { justification: "stopped" } }],
+                    before: async () => {
+                        await waitFor(() => leadId !== undefined, "the lead's id");
+                        followUp = await submitInput(started_().ctx.host, leadId as string, {
+                            content: "late question",
+                            requestId: "late-1",
+                            busyMode: "followUp",
+                        });
+                    },
+                },
+            ],
+            "worker task": [
+                {
+                    hold: gate.promise,
+                    onEntered: () => {
+                        isWorkerRunning = true;
+                    },
+                },
+            ],
+        });
+        startedRef = started;
+        const job = await started.createJob("lead with worker");
+        leadId = job.leadConversation;
+        await waitFor(() => isWorkerRunning, "the invoked agent to run");
+        await waitFor(async () => (await started.status(job.id)) === "done", "the job to be Done");
+        await waitFor(() => started.isIdle(job.leadConversation), "the lead's run to end");
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        const lines = await linesOf(started, job.leadConversation);
+        assert.ok(lines.includes("tool complete_job returned"), lines.join("\n"));
+        assert.equal(started.replies["lead with worker"], 3, "no model request follows the complete call");
+        const state = (await started.invoke("submissions.get", {
+            submissionId: (followUp as { submissionId: string }).submissionId,
+        })) as {
+            state: string;
+            reason?: string;
+        };
+        assert.deepEqual(state, { state: "unanswered", reason: "closed" });
+        const conversations = await started.ctx.host.listConversations();
+        for (const { id } of conversations)
+            assert.equal((await readConversationMeta(started.ctx.host, id))?.closed, true);
+        for (const { id } of conversations) assert.equal(await started.isIdle(id), true);
+        assert.equal(
+            lines.some((line) => line.includes("aborted")),
+            false,
+            lines.join("\n"),
+        );
+        gate.release();
+    });
+});
+
+describe("complete_job sharing its turn with another call", () => {
+    it("returns an error result naming the rule, lets the other tool finish and completes on a later call made alone", async () => {
+        let leadJobId: string | undefined;
+        let statusBeforeAloneCall: string | undefined;
+        const started = await start({
+            "share the turn": [
+                call("update_job", { definitionOfDone: "the note is written" }),
+                {
+                    calls: [
+                        { name: "complete_job", arguments: { justification: "too early" } },
+                        { name: "add_worklog", arguments: { text: "the note" } },
+                    ],
+                },
+                {
+                    calls: [{ name: "complete_job", arguments: { justification: "alone now" } }],
+                    before: async () => {
+                        statusBeforeAloneCall = await started_().status(leadJobId as string);
+                    },
+                },
+            ],
+        });
+        startedRef = started;
+        const job = await started.createJob("share the turn");
+        leadJobId = job.id;
+        await waitFor(() => started.replies["share the turn"] === 3, "the lead to see the shared turn's results");
+
+        const [, completeResult, worklogResult] = started.results["share the turn"] ?? [];
+        assert.equal(completeResult?.isError, true);
+        assert.match(completeResult?.text ?? "", /only tool call/);
+        assert.equal(worklogResult?.isError, false);
+        await waitFor(() => statusBeforeAloneCall !== undefined, "the lead's alone call");
+        assert.equal(statusBeforeAloneCall, "in_progress");
+
+        await waitFor(async () => (await started.status(job.id)) === "done", "the job to be Done");
+        assert.deepEqual((await started.ctx.jobStore.getJob(job.id)).resolution, {
+            kind: "completed",
+            justification: "alone now",
+        });
+    });
+
+    it("returns an error result from each of two complete calls in one turn and leaves the job In progress", async () => {
+        const started = await start({
+            "complete twice": [
+                call("update_job", { definitionOfDone: "the note is written" }),
+                {
+                    calls: [
+                        { name: "complete_job", arguments: { justification: "first" } },
+                        { name: "complete_job", arguments: { justification: "second" } },
+                    ],
+                },
+            ],
+        });
+        const job = await started.createJob("complete twice");
+        await waitFor(() => started.replies["complete twice"] === 3, "the lead to see the results");
+
+        const [, first, second] = started.results["complete twice"] ?? [];
+        for (const result of [first, second]) {
+            assert.equal(result?.isError, true);
+            assert.match(result?.text ?? "", /only tool call/);
+        }
+        assert.equal(await started.status(job.id), "in_progress");
+    });
+});
+
+describe("a step after the Done write that fails", () => {
+    for (const point of ["job-completed", "conversations-closed"] as const) {
+        it(`logs it, returns the tool's success and sends no further request when the hook fails at ${point}`, async () => {
+            const started = await start(
+                {
+                    "failing hook": [
+                        call("update_job", { definitionOfDone: "the note is written" }),
+                        call("complete_job", { justification: "done" }),
+                    ],
+                },
+                undefined,
+                (writePoint) => {
+                    if (writePoint === point) throw new Error(`hook failed at ${point}`);
+                },
+            );
+            const job = await started.createJob("failing hook");
+            await waitFor(async () => (await started.status(job.id)) === "done", "the job to be Done");
+            await waitFor(() => started.isIdle(job.leadConversation), "the lead's run to end");
+            await new Promise((resolve) => setTimeout(resolve, 300));
+
+            const lines = await linesOf(started, job.leadConversation);
+            assert.ok(lines.includes("tool complete_job returned"), lines.join("\n"));
+            assert.equal(started.replies["failing hook"], 2, "no model request follows the complete call");
+            assert.ok(
+                started.logLines.some((line) => line.includes(`hook failed at ${point}`)),
+                "the failure is logged",
+            );
+        });
+    }
 });
 
 describe("block_job", () => {
