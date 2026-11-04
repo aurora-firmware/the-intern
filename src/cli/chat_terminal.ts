@@ -7,6 +7,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
+import type { Writable } from "node:stream";
 import type { Client } from "../client/client.ts";
 import { assistantText, createChatScreen, partialAnswer, responseTimestamps } from "./chat_screen.ts";
 import type { CommandIo } from "./command_line.ts";
@@ -103,12 +104,20 @@ export async function runTerminalChat(
     const unadmitted: TypedLine[] = [];
     // One notice per outage, whether the feed or a call meets it first.
     let lastNotice: string | undefined;
-    const screen = createChatScreen(io);
-    // A notice or a message of the command's own goes on a line of its own, not at the end of a half-written answer.
-    const warn = (text: string) => {
-        screen.settle();
-        writeError(io, text);
-    };
+    // Ctrl-D closes the interface while submitted lines are still being answered; a closed interface refuses a prompt.
+    let isInputClosed = false;
+    const screen = createChatScreen({
+        output: (json ? io.stderr : io.stdout) as Writable,
+        lines,
+        prompt: PROMPT,
+        isOpen: () => !isInputClosed,
+    });
+    // The line editor takes Enter after this listener, so the screen can take the answer's tail off the prompt first.
+    io.stdin.prependListener("keypress", (_character: unknown, key?: { name?: string }) => {
+        if (key?.name === "return" || key?.name === "enter") screen.beforeSubmit();
+    });
+    // A notice or a message of the command's own goes on a line of its own, not in the middle of an answer or a typed line.
+    const warn = (text: string) => screen.notice(() => writeError(io, text));
     const notify = (text: string) => {
         if (text === lastNotice) return;
         lastNotice = text;
@@ -127,8 +136,6 @@ export async function runTerminalChat(
         steps = steps.then(step).catch(outcome.reject);
     };
 
-    // Ctrl-D closes the interface while submitted lines are still being answered; a closed interface refuses a prompt.
-    let isInputClosed = false;
     const showPrompt = (shouldKeepCursor = false) => {
         if (!isInputClosed) lines.prompt(shouldKeepCursor);
     };
@@ -150,7 +157,6 @@ export async function runTerminalChat(
         const answers = missed.filter((entry) => entry.kind === "pi.assistant");
         if (answers.every((entry) => assistantText(entry) === "")) return;
         for (const entry of answers) screen.showAnswer(assistantText(entry), responseTimestamps(entry));
-        showPrompt(true);
     }
 
     /** Shows the response in flight, in order with the answers printed from the entries. */
@@ -251,12 +257,12 @@ export async function runTerminalChat(
     }
 
     lines.on("line", (line) => {
-        if (line.trim() === "") lines.prompt();
-        else {
+        if (line.trim() !== "") {
             const typed = { line, requestId: randomUUID() };
             unadmitted.push(typed);
             enqueue(() => submitLine(typed));
         }
+        screen.afterSubmit();
     });
     lines.on("SIGINT", () => enqueue(abortTurn));
     lines.on("close", () => {

@@ -4,10 +4,10 @@
  * no line of data starts where a status line of `bob jobs follow` or `bob jobs show` starts.
  */
 import assert from "node:assert/strict";
+import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
 import { assistantText, createChatScreen, partialAnswer } from "../../src/cli/chat_screen.ts";
-import type { CommandIo } from "../../src/cli/command_line.ts";
 import {
     formatConversationLine,
     formatInvocations,
@@ -17,6 +17,7 @@ import {
 import { conversationEntryLine, doneLine, instanceEventLine, jobEventLine } from "../../src/cli/feed_text.ts";
 import { formatCreated, formatJobDetail, formatJobLine } from "../../src/cli/job_text.ts";
 import type { Job } from "../../src/jobs/job_store.ts";
+import { renderTerminal } from "../support/screen_renderer.ts";
 
 const ESC = String.fromCharCode(27);
 const BEL = String.fromCharCode(7);
@@ -241,13 +242,15 @@ describe("conversation text", () => {
 });
 
 function memoryScreen() {
-    const stream = new PassThrough();
+    const output = new PassThrough();
     let written = "";
-    stream.on("data", (chunk) => {
+    output.on("data", (chunk) => {
         written += chunk;
     });
-    const io = { stdout: stream, stderr: new PassThrough(), isStdoutTerminal: true } as unknown as CommandIo;
-    return { screen: createChatScreen(io), written: () => written };
+    const lines = createInterface({ input: new PassThrough(), output, terminal: true, prompt: "> " });
+    lines.prompt();
+    const screen = createChatScreen({ output, lines, prompt: "> ", isOpen: () => true });
+    return { screen, rendered: () => renderTerminal(written).text, close: () => lines.close() };
 }
 
 describe("the chat's answers", () => {
@@ -258,7 +261,7 @@ describe("the chat's answers", () => {
     });
 
     it("removes_control_sequences_from_an_answer_in_flight_even_when_one_is_cut_between_two_pieces", () => {
-        const { screen, written } = memoryScreen();
+        const { screen, rendered, close } = memoryScreen();
         const partial = (text: string) =>
             partialAnswer({ generation: { message: { timestamp: 1, content: [{ type: "text", text }] } } });
         const attack = `${ESC}]52;c;ZXZpbA==${BEL}`;
@@ -269,7 +272,7 @@ describe("the chat's answers", () => {
         }
         screen.showAnswer("onetwothree", [1]);
 
-        // The cursor sequences are the screen's own, written once when the line opens.
-        assert.equal(written(), `${ESC}[2K${ESC}[1Gonetwothree\n`);
+        assert.equal(rendered(), "onetwothree\n>");
+        close();
     });
 });

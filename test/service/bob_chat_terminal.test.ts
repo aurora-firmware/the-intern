@@ -7,6 +7,7 @@ import { runBob } from "../support/bob_process.ts";
 import { type DaemonProcess, type FakeScript, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { hasScript, type PtySession, runInPty } from "../support/pty.ts";
+import { renderTerminal } from "../support/screen_renderer.ts";
 
 const ESC = String.fromCharCode(27);
 const BEL = String.fromCharCode(7);
@@ -148,7 +149,7 @@ describe("bob chat on a terminal", { skip }, () => {
         assert.ok(!output.includes(BEL), output);
     });
 
-    it("queues a second line behind the streaming answer, answers it next and records both with the command line way in", async () => {
+    it("queues a second line behind the running turn, answers it next and records both with the command line way in", async () => {
         const fixture = await readyDaemon("gated");
         const session = chat(fixture);
         await session.waitFor("output", PROMPT);
@@ -242,8 +243,9 @@ describe("bob chat on a terminal", { skip }, () => {
     });
 });
 
-function occurrences(text: string, part: string): number {
-    return text.split(part).length - 1;
+/** The rows a terminal shows of what `bob chat` wrote, so a test reads the screen and not the bytes behind it. */
+function screenRows(session: PtySession): string[] {
+    return renderTerminal(session.output()).rows;
 }
 
 async function assistantEntryCount(daemon: DaemonProcess): Promise<number> {
@@ -265,8 +267,13 @@ describe("bob chat streaming an answer", { skip }, () => {
         session.write(CTRL_D);
 
         assert.equal(await exitStatus(session), 0, session.stderr());
-        assert.equal(occurrences(session.output(), "echo: tell"), 1, session.output());
-        assert.equal(occurrences(session.output(), `echo: ${LONG}`), 1, session.output());
+        const rows = screenRows(session);
+        assert.equal(rows.filter((row) => row === `echo: ${LONG}`).length, 1, rows.join("\n"));
+        assert.equal(
+            rows.filter((row) => row.includes("echo: tell") && row !== `echo: ${LONG}`).length,
+            0,
+            rows.join("\n"),
+        );
     });
 
     it("keeps the part already printed once, and ends its line, when Ctrl-C cuts the answer off", async () => {
@@ -284,8 +291,60 @@ describe("bob chat streaming an answer", { skip }, () => {
         session.write(CTRL_D);
 
         assert.equal(await exitStatus(session), 0, session.stderr());
-        assert.equal(occurrences(session.output(), "echo: tell"), 1, session.output());
+        const rows = screenRows(session);
+        assert.equal(rows.filter((row) => row.includes("echo: tell")).length, 1, rows.join("\n"));
         assert.equal(session.output().includes(`echo: ${LONG}`), false, "the cut-off answer was not completed");
+        assert.ok(
+            rows.some((row) => row.startsWith("echo: tell") && !row.includes(">")),
+            `the cut-off part ends its line: ${rows.join("\n")}`,
+        );
+        assert.ok(rows.includes(`echo: ${THIRD}`), `the next answer starts its own line: ${rows.join("\n")}`);
+    });
+
+    it("keeps the streamed part whole on screen while the team member types and erases a character", async () => {
+        const fixture = await readyDaemon("streaming-gated");
+        const session = chat(fixture);
+        await session.waitFor("output", PROMPT);
+        session.write(`${LONG}\r`);
+        await session.waitFor("output", "echo: tell");
+
+        session.write("abc\x7f");
+        await session.waitFor("output", "> ab");
+
+        const rows = screenRows(session);
+        assert.ok(
+            rows.some((row) => row.startsWith("echo: tell") && !row.includes("abc")),
+            rows.join("\n"),
+        );
+        assert.equal(rows.at(-1), "> ab", rows.join("\n"));
+        session.write("\x7f\x7f");
+        fixture.daemon.releaseRuns();
+        await session.waitFor("output", `echo: ${LONG}`);
+        session.write(CTRL_D);
+        assert.equal(await exitStatus(session), 0, session.stderr());
+    });
+
+    it("keeps a second line typed while the answer streams out of the answer, and answers it next", async () => {
+        const fixture = await readyDaemon("streaming-gated");
+        const session = chat(fixture);
+        await session.waitFor("output", PROMPT);
+        session.write(`${LONG}\r`);
+        await session.waitFor("output", "echo: tell");
+
+        session.write(`${SECOND}\r`);
+        await until(async () => (await inboxOf(fixture)).includes(SECOND), "the second line queued");
+        const whileStreaming = screenRows(session);
+        fixture.daemon.releaseRuns();
+        await session.waitFor("output", `echo: ${SECOND}`);
+        session.write(CTRL_D);
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+        assert.ok(whileStreaming.includes(`> ${SECOND}`), whileStreaming.join("\n"));
+        assert.equal(whileStreaming.filter((row) => row.includes("echo: tell")).length, 1, whileStreaming.join("\n"));
+        const rows = screenRows(session);
+        assert.equal(rows.filter((row) => row === `echo: ${LONG}`).length, 1, rows.join("\n"));
+        assert.equal(rows.filter((row) => row === `echo: ${SECOND}`).length, 1, rows.join("\n"));
+        assert.equal(rows.filter((row) => row.includes(`> ${SECOND}`)).length, 1, rows.join("\n"));
     });
 });
 
