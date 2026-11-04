@@ -80,10 +80,11 @@ nothing. So no answer reaches the lead of a Done job.
 
 The `complete_job` tool of the lead returns a result that isn't an error and names the job as Done. If the lead's
 closed mark doesn't land after the job is written Done, the tool's result says the call was aborted, and
-`bob jobs follow` can show `tool complete_job failed` for that Done job. This happens only when the commit that sets
-the mark fails without a storage error. The job stays Done and the lead's run ends. Until the next start, the job's
-conversations list with a status other than `closed`, and refuse input as `conflict`. At the next start, repair rule 4
-closes them. A team member's `jobs.complete` or `jobs.cancel` that fails the same way fails with `internal` and aborts
+`bob jobs follow` can show `tool complete_job failed` for that Done job. The job stays Done and the lead's run ends.
+When the commit that sets the mark fails without a storage error, the job's conversations list with a status other
+than `closed` until the next start, and refuse input as `conflict`. At the next start, repair rule 4 closes them. The
+same line can appear after a storage error or a daemon crash during the call, once rule 4 has aborted the run. A team
+member's `jobs.complete` or `jobs.cancel` that fails the same way fails with `internal` and aborts
 no further conversation, and rule 4 closes them at the next start.
 
 ## The definition of done
