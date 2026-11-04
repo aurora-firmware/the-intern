@@ -13,6 +13,7 @@ import { createProvider } from "@earendil-works/pi-ai/models";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
+import { ensureFrontDesk } from "../../src/desk/front_desk.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { createSeatedConversation } from "../../src/host/seating.ts";
 import { JOB_TOOL_NAMES } from "../../src/jobs/job_model.ts";
@@ -138,6 +139,7 @@ async function start() {
             const input = { text: "renew the certificate", ...extra };
             return (await daemon.catalogue.invoke("jobs.create", input, as)) as CreatedJob;
         },
+        frontDesk: () => ensureFrontDesk(ctx.host, agents.runtime().catalog),
         // Seats a conversation of the job whose seat lists the job tools, as T-123 will for every role.
         async seat(jobId: string, tools = JOB_TOOLS): Promise<string> {
             const seat = { ...agents.runtime().catalog.seatFor("gp"), tools };
@@ -320,6 +322,24 @@ describe("relate_jobs", () => {
         await started.run(conversation, [{ name: "relate_jobs", arguments: { job: other.id, unrelate: true } }]);
         assert.deepEqual((await started.ctx.jobStore.getJob(job.id)).related, []);
         assert.deepEqual((await started.ctx.jobStore.getJob(other.id)).related, []);
+    });
+
+    it("refuses the front desk's conversation id with the rule, and changes nothing", async () => {
+        const started = await start();
+        const job = await started.createJob();
+        const deskId = await started.frontDesk();
+        const conversation = await started.seat(job.id);
+
+        const { results } = await started.run(conversation, [
+            { name: "relate_jobs", arguments: { job: deskId } },
+            { name: "relate_jobs", arguments: { job: deskId, unrelate: true } },
+        ]);
+
+        for (const result of results) {
+            assert.equal(result.isError, true, result.text);
+            assert.match(result.text, /front desk is not a job conversation/);
+        }
+        assert.deepEqual((await started.ctx.jobStore.getJob(job.id)).related, []);
     });
 });
 

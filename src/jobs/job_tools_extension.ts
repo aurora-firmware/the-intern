@@ -18,7 +18,7 @@ import type { HarnessHost } from "../host/harness_host.ts";
 import { ConversationClosedError, isConversationClosed } from "../host/job_section.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import type { CreateJobRequest, JobView } from "../service/job_operations.ts";
-import { readJob } from "../service/job_record_operations.ts";
+import { readJob, refuseFrontDesk } from "../service/job_record_operations.ts";
 import { type Caller, ServiceError } from "../service/operations.ts";
 import { blockJob, completeJob, type JobActionDeps } from "./job_actions.ts";
 import { EDITABLE_FIELDS, type JobAuthor } from "./job_model.ts";
@@ -169,6 +169,7 @@ const relateJobsTool = (options: JobToolsOptions) =>
             const { jobId, author } = await seatOf(options, api);
             const store = options.jobStore();
             return refusable("relate_jobs", async () => {
+                await refuseFrontDesk(options.host(), args.job);
                 const change = args.unrelate === true ? store.unrelate : store.relate;
                 const { a, b } = await change.call(store, jobId, args.job, author);
                 return textResult(
