@@ -12,7 +12,7 @@
  * partial that no longer continues the printed text (a response started again after a restart) starts a new line, and a
  * partial of a response whose entry is already printed is dropped. Imports no daemon code.
  */
-import { clearScreenDown, cursorTo, moveCursor } from "node:readline";
+import { clearLine, clearScreenDown, cursorTo, moveCursor } from "node:readline";
 import type { Writable } from "node:stream";
 import { block } from "./terminal_text.ts";
 import { lastRow } from "./text_rows.ts";
@@ -128,9 +128,17 @@ export function createChatScreen(options: ChatScreenOptions): ChatScreen {
             return;
         }
         const { rows: above } = lines.getCursorPos();
-        moveCursor(output, 0, -(above + (isTailShown ? 1 : 0)));
+        const rowsBelowTop = above + (isTailShown ? 1 : 0);
+        moveCursor(output, 0, -rowsBelowTop);
         cursorTo(output, 0);
-        clearScreenDown(output);
+        // The top row and the rows below it are cleared apart: a terminal such as tmux keeps the screen in its
+        // scrollback when a clear down starts at its home position, and the top row can be there.
+        clearLine(output, 0);
+        if (rowsBelowTop > 0) {
+            moveCursor(output, 0, 1);
+            clearScreenDown(output);
+            moveCursor(output, 0, -1);
+        }
         writeAbove();
         isTailShown = withTail && tail() !== "";
         if (isTailShown) output.write(tailRow());

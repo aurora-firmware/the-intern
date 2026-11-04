@@ -322,6 +322,25 @@ describe("runTerminalChat with an unfinished answer line taller than the screen"
         assert.equal(whileStreaming.lines.length, 2, whileStreaming.lines.join("\n"));
         assert.ok(whileStreaming.lines[0]?.endsWith(words.at(-1) as string), whileStreaming.lines.join("\n"));
     });
+
+    it("leaves_nothing_in_the_scrollback_of_a_terminal_that_keeps_the_rows_a_clear_from_home_erases", async () => {
+        const chat = chatOnScriptedFeed();
+        chat.feed({ snapshot: { entries: [], live: {} } });
+        const words = paragraphOf(40);
+        for (let count = 5; count <= words.length; count += 5) {
+            chat.feed(partialOf(words.slice(0, count).join(" "), count));
+            await chat.see(words[count - 1] as string);
+        }
+        const kept = renderTerminal(chat.screen(), {
+            columns: SCREEN_COLUMNS,
+            height: SCREEN_ROWS,
+            isHomeClearKept: true,
+        });
+        await chat.leave();
+
+        assert.deepEqual(kept.scrollback, []);
+        assert.equal(kept.lines.length, 2, kept.lines.join("\n"));
+    });
 });
 
 const URL_TEXT = "https://example.com/docs/a/long/path/to/some/page/that/does/not/fit?query=value&other=1";
