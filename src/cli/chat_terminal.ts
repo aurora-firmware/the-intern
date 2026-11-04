@@ -111,7 +111,7 @@ export async function runTerminalChat(
     // Ctrl-D closes the interface while submitted lines are still being answered; a closed interface refuses a prompt.
     let isInputClosed = false;
     const screen = createChatScreen({
-        output: (json ? io.stderr : io.stdout) as Writable,
+        output: (json ? io.stderr : io.stdout) as Writable & { columns?: number },
         lines,
         prompt: PROMPT,
         isOpen: () => !isInputClosed,
@@ -299,6 +299,7 @@ export async function runTerminalChat(
     lines.on("SIGINT", () => enqueue(abortTurn));
     lines.on("close", () => {
         isInputClosed = true;
+        screen.closed();
         leaving.abort();
         enqueue(leave);
     });

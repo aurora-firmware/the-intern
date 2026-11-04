@@ -165,14 +165,18 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   `terminal_text.ts` first (`flat`, `block` and `continued`), which removes control sequences and line breaks that would
   forge a line, and `writeLine` and `writeError` strip any that remain. `output.ts` writes data to standard output,
   errors to standard error and `--json` answers as one line. `chat_screen.ts` writes the front desk's answers on a
-  terminal as they stream. A data command ends with exit 0 when the reader of its output closes it (`bob.ts`). Every
-  command except `serve` and `import` is a thin client: `withClient` (`connection.ts`) resolves the socket from
-  `--runtime-dir`, `BOB_RUNTIME_DIR` or the default runtime directory, calls the operations through the client library
-  over `bob.sock`, and maps a refusal to exit 1 and an unreachable daemon to exit 3. The command table imports no daemon
-  module except the path layout named below. `serve` and `import` load their code with a dynamic `import()` inside `run`
-  (`serve.ts`; `host/database_import.ts` and `daemon/state_layout.ts`), so a command that only calls the service never
-  loads the daemon. The one daemon file such a command loads is `daemon/state_layout.ts`, which `connection.ts` imports
-  to resolve the runtime directory and which imports only Node modules. The following commands (`bob follow`,
+  terminal as they stream: the finished rows of the answer go above the prompt for good, cut at the screen width by
+  `text_rows.ts`, and the unfinished last row, at most one screen row, is a row of its own between them and the prompt
+  that is written again as it grows. The line editor owns the prompt and the typed line, and the screen only asks it
+  to draw them again (`prompt(true)`), so its history and cursor stay as they were. A data command ends with exit 0
+  when the reader of its output closes it (`bob.ts`). Every command except `serve` and `import` is a thin client:
+  `withClient` (`connection.ts`) resolves the socket from `--runtime-dir`, `BOB_RUNTIME_DIR` or the default runtime
+  directory, calls the operations through the client library over `bob.sock`, and maps a refusal to exit 1 and an
+  unreachable daemon to exit 3. The command table imports no daemon module except the path layout named below. `serve`
+  and `import` load their code with a dynamic `import()` inside `run` (`serve.ts`; `host/database_import.ts` and
+  `daemon/state_layout.ts`), so a command that only calls the service never loads the daemon. The one daemon file such
+  a command loads is `daemon/state_layout.ts`, which `connection.ts` imports to resolve the runtime directory and which
+  imports only Node modules. The following commands (`bob follow`,
   `bob jobs follow` and `bob chat`) read the feed through `followFeed` and `createEntryTracker` in `feed_follower.ts`:
   it subscribes, passes each snapshot and delta to the command, subscribes again when the feed ends `lagging` or the
   daemon is unreachable or `unavailable`, and pages `conversations.entries` forward from the cursor it kept, so a

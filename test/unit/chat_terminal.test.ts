@@ -13,6 +13,7 @@ import { renderTerminal } from "../support/screen_renderer.ts";
 
 const DESK_ID = "desk-1";
 const SCREEN_COLUMNS = 40;
+const SCREEN_ROWS = 10;
 
 function terminalIo(): CommandIo {
     return {
@@ -85,7 +86,7 @@ afterEach(() => {
 });
 
 /** A chat on a feed the test feeds by hand; `entries` is what `conversations.entries` returns. */
-function chatOnScriptedFeed() {
+function chatOnScriptedFeed(reportedColumns = SCREEN_COLUMNS) {
     const entries: Entry[] = [];
     const queue: unknown[] = [];
     let wake = () => {};
@@ -106,7 +107,7 @@ function chatOnScriptedFeed() {
         },
     };
     const io = terminalIo();
-    Object.assign(io.stdout, { columns: SCREEN_COLUMNS });
+    Object.assign(io.stdout, { columns: reportedColumns, rows: SCREEN_ROWS });
     let screen = "";
     io.stdout.on("data", (chunk) => {
         screen += chunk;
@@ -118,13 +119,15 @@ function chatOnScriptedFeed() {
         finished,
         screen: () => screen,
         /** What a terminal shows after the bytes written so far. */
-        rendered: () => renderTerminal(screen, { columns: SCREEN_COLUMNS }).rows,
+        rendered: () => renderTerminal(screen, { columns: SCREEN_COLUMNS, height: SCREEN_ROWS }).rows,
+        /** The screen, with its scrollback, cursor and visible rows. */
+        terminal: () => renderTerminal(screen, { columns: SCREEN_COLUMNS, height: SCREEN_ROWS }),
         type(keys: string) {
             (io.stdin as PassThrough).write(keys);
         },
         async seeRow(text: string) {
             const deadline = Date.now() + 5000;
-            while (!renderTerminal(screen, { columns: SCREEN_COLUMNS }).rows.includes(text)) {
+            while (!renderTerminal(screen, { columns: SCREEN_COLUMNS, height: SCREEN_ROWS }).rows.includes(text)) {
                 assert.ok(Date.now() < deadline, `timed out waiting for the row ${JSON.stringify(text)} in ${screen}`);
                 await new Promise((resolve) => setTimeout(resolve, 5));
             }
@@ -289,5 +292,168 @@ describe("runTerminalChat with the team member typing while an answer streams", 
             "> a line typed that runs over the width",
             "of the screen",
         ]);
+    });
+});
+
+/** Words `w001 w002 ...`: a paragraph with no line break, each word one marker to count. */
+const paragraphOf = (words: number) => Array.from({ length: words }, (_, n) => `w${String(n + 1).padStart(3, "0")}`);
+
+describe("runTerminalChat with an unfinished answer line taller than the screen", () => {
+    it("keeps_one_copy_of_the_paragraph_in_the_scrollback_while_it_streams_and_when_its_entry_lands", async () => {
+        const chat = chatOnScriptedFeed();
+        chat.feed({ snapshot: { entries: [], live: {} } });
+        const words = paragraphOf(120);
+        for (let count = 5; count <= words.length; count += 5) {
+            chat.feed(partialOf(words.slice(0, count).join(" "), count));
+            await chat.see(words[count - 1] as string);
+        }
+        const whileStreaming = chat.terminal();
+        chat.entries.push(answerEntry("e1", words.join(" "), 7));
+        chat.feed({ seq: 99, delta: { seq: 99, view: { live: {} } } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const rows = chat.rendered();
+        await chat.leave();
+
+        for (const word of words) {
+            assert.equal(rows.join(" ").split(word).length - 1, 1, `${word} once in ${rows.join("\n")}`);
+        }
+        assert.equal(rows.slice(0, -1).join(" "), words.join(" "));
+        assert.equal(whileStreaming.screen.at(-1), ">", whileStreaming.screen.join("\n"));
+        assert.ok(whileStreaming.screen.at(-2)?.endsWith(words.at(-1) as string), whileStreaming.screen.join("\n"));
+    });
+});
+
+const CTRL_D = "\x04";
+const UP = "\x1b[A";
+const DOWN = "\x1b[B";
+const LEFT = "\x1b[D";
+
+describe("runTerminalChat with the line editor in use while a partial arrives", () => {
+    it("keeps_the_arrows_browsing_the_history_when_a_partial_arrives_between_two_presses", async () => {
+        const chat = chatOnScriptedFeed();
+        chat.feed({ snapshot: { entries: [], live: {} } });
+        chat.type("one\r");
+        await chat.seeRow("> one");
+        chat.type("two\r");
+        await chat.seeRow("> two");
+        chat.type("three\r");
+        await chat.seeRow("> three");
+        chat.type(UP);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.equal(chat.rendered().at(-1), "> three");
+
+        chat.feed(partialOf("an answer", 1));
+        await chat.seeRow("an answer");
+        chat.type(UP);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.equal(chat.rendered().at(-1), "> two");
+        chat.type(DOWN);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        const rows = chat.rendered();
+        await chat.leave();
+
+        assert.equal(rows.at(-1), "> three", rows.join("\n"));
+        assert.equal(rows.filter((row) => row === "an answer").length, 1, rows.join("\n"));
+    });
+
+    it("leaves_the_cursor_where_the_team_member_put_it_when_a_partial_arrives", async () => {
+        const chat = chatOnScriptedFeed();
+        chat.feed({ snapshot: { entries: [], live: {} } });
+        chat.type(`a\u{1F600}b${LEFT}${LEFT}`);
+        await chat.seeRow("> a\u{1F600}b");
+
+        chat.feed(partialOf("an answer", 1));
+        await chat.seeRow("an answer");
+        const { cursor, screen } = chat.terminal();
+        chat.type("X");
+        await chat.seeRow("> aX\u{1F600}b");
+        await chat.leave();
+
+        assert.equal(screen[cursor.row], "> a\u{1F600}b");
+        assert.equal(cursor.column, "> a".length);
+    });
+
+    it("keeps_the_unfinished_line_once_above_a_blank_prompt_when_enter_comes_on_an_empty_line", async () => {
+        const chat = chatOnScriptedFeed();
+        chat.feed({ snapshot: { entries: [], live: {} } });
+        chat.feed(partialOf("two jobs are", 1));
+        await chat.seeRow("two jobs are");
+
+        chat.type("\r");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        chat.feed(partialOf("two jobs are running", 2));
+        await chat.seeRow("two jobs are running");
+        const rows = chat.rendered();
+        await chat.leave();
+
+        assert.equal(rows.filter((row) => row.includes("two jobs")).length, 1, rows.join("\n"));
+        assert.deepEqual(rows.slice(-3), [">", "two jobs are running", ">"]);
+    });
+
+    it("removes_a_control_sequence_cut_between_two_partials_from_the_screen", async () => {
+        const chat = chatOnScriptedFeed();
+        chat.feed({ snapshot: { entries: [], live: {} } });
+        chat.feed(partialOf("two \u001b[3", 1));
+        await chat.seeRow("two");
+        chat.feed(partialOf("two \u001b[31mjobs\u001b[0m run\u001b]0;title\u0007 on", 2));
+        await chat.seeRow("two jobs run on");
+        const written = chat.screen();
+        await chat.leave();
+
+        for (const sequence of ["\u001b[31m", "\u001b[0m", "\u001b]0;", "\u0007"]) {
+            assert.equal(written.includes(sequence), false, JSON.stringify(sequence));
+        }
+    });
+
+    it("keeps_a_paragraph_of_wide_characters_in_one_copy_with_every_row_inside_the_screen_width", async () => {
+        const chat = chatOnScriptedFeed();
+        chat.feed({ snapshot: { entries: [], live: {} } });
+        const text = Array.from({ length: 150 }, (_, n) => String.fromCodePoint(0x3042 + (n % 40))).join("");
+        for (let length = 10; length <= text.length; length += 10) {
+            chat.feed(partialOf(text.slice(0, length), length));
+            await chat.see(text.slice(length - 1, length));
+        }
+        chat.entries.push(answerEntry("e1", text, 7));
+        chat.feed({ seq: 99, delta: { seq: 99, view: { live: {} } } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const rows = chat.rendered();
+        await chat.leave();
+
+        assert.equal(rows.slice(0, -1).join(""), text);
+        assert.ok(
+            rows.slice(0, -1).every((row) => row.length * 2 < SCREEN_COLUMNS),
+            rows.join("\n"),
+        );
+    });
+
+    it("shows_the_unfinished_line_once_and_only_when_it_completes_when_the_input_closes_during_a_stream", async () => {
+        const chat = chatOnScriptedFeed();
+        chat.feed({ snapshot: { entries: [], live: {} } });
+        chat.feed(partialOf("two jobs are", 1));
+        await chat.seeRow("two jobs are");
+
+        chat.entries.push(answerEntry("e1", "two jobs are running", 7));
+        chat.type(CTRL_D);
+        assert.equal(await chat.finished, 0);
+        const rows = chat.rendered();
+
+        assert.equal(rows.filter((row) => row.includes("two jobs")).length, 1, rows.join("\n"));
+        assert.ok(
+            rows.some((row) => row.endsWith("two jobs are running")),
+            rows.join("\n"),
+        );
+    });
+});
+
+describe("runTerminalChat on a terminal that reports no width", () => {
+    it("prints_an_answer_that_fits_a_usual_row_on_one_row", async () => {
+        const chat = chatOnScriptedFeed(0);
+        chat.feed({ snapshot: { entries: [], live: {} } });
+        chat.feed(partialOf("two jobs are running and one is blocked", 1));
+        await chat.seeRow("two jobs are running and one is blocked");
+        const rows = chat.rendered();
+        await chat.leave();
+
+        assert.deepEqual(rows.slice(-2), ["two jobs are running and one is blocked", ">"]);
     });
 });
