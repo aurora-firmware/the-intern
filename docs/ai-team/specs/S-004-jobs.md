@@ -1,7 +1,7 @@
 ---
 id: S-004
 title: Jobs
-version: '0.8'
+version: '0.9'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-02'
 author: planner
@@ -535,6 +535,18 @@ refused `invalid_input`. Every action is written to the history.
 
 **Verification:** test — a service test on the fake model.
 
+#### AC-005.8 — A close that fails after the complete write
+
+- **Given:** a lead with a running invoked agent and a follow-up queued for the lead
+- **When:** it calls the complete tool as the only call of its model turn, and the closed-mark commit fails after the
+  complete is written, without a storage error
+- **Then:** the job is Done, the failure is logged, the model gets no further request, the run's input and the follow-up
+  settle `unanswered` with reason `aborted`, the tool's result records the abort, and the invoked agent is aborted.
+  Until the next start, both conversations list with a status other than `closed` and refuse input `conflict`. At the
+  next start, rule 4 closes both conversations.
+
+**Verification:** test — a service test on the fake model, with the failure injected and a restart.
+
 ### REQ-006 — Blocking and resuming
 
 When the lead agent blocks its job, the daemon SHALL set the job Blocked with its Blocked reason and park the lead
@@ -585,15 +597,19 @@ REQ-008), leaving nothing parked or awaited, and SHALL close every conversation 
 REQ-026). Input, abort, reset, reseat and compaction of a closed conversation are refused `conflict`, so no answer
 reaches a Done job's lead. The front desk is no conversation of any job, so they never abort or close it (REQ-022). When
 the lead completes the job through its tool, the tool records its result and its own run ends at that call with no
-further model turn; the job's other conversations are aborted. Once the complete is written, the tool's result is not an
-error and ends the run whatever a later step of the abort does; a step that fails is logged, and repair rule 4 finishes
-it at the next start. A refused complete tool ends nothing: it returns an error result and the run goes on. The complete
-tool SHALL be the only tool call of its model turn: called with others, a second complete call included, each complete
-call returns an error result and changes nothing, and the other calls go on. From the complete or cancel, input to the
-job's conversations is refused as S-001 REQ-026 states. A lead start refused because the job is already Done doesn't
-cancel it again: `jobs.create` returns the job as Done. A job completed or cancelled before its lead conversation is
-created gets none, and `jobs.get` returns no `leadConversation` for it. One completed or cancelled after the creation
-and before the first input keeps a closed lead conversation that holds no first input.
+further model turn; the job's other conversations are aborted. Once the complete is written, the run ends with no
+further model turn whatever a later step of the close does; a step that fails is logged, and repair rule 4 finishes it
+at the next start. The tool's result is not an error, unless the lead's closed mark didn't land: the daemon then aborts
+the lead's run with pi-durable's abort, which withdraws its queued input and records the call as aborted. The job's
+other conversations are aborted in either case. A team member's `jobs.complete` or `jobs.cancel` that fails at a
+closed-mark commit or an abort after it, without a storage error, fails with `internal` and aborts no further
+conversation (S-001 REQ-026). A refused complete tool ends nothing: it returns an error result and the run goes on. The
+complete tool SHALL be the only tool call of its model turn: called with others, a second complete call included, each
+complete call returns an error result and changes nothing, and the other calls go on. From the complete or cancel, input
+to the job's conversations is refused as S-001 REQ-026 states. A lead start refused because the job is already Done
+doesn't cancel it again: `jobs.create` returns the job as Done. A job completed or cancelled before its lead
+conversation is created gets none, and `jobs.get` returns no `leadConversation` for it. One completed or cancelled after
+the creation and before the first input keeps a closed lead conversation that holds no first input.
 
 #### AC-007.1 — Creation starts the lead
 
@@ -1119,3 +1135,4 @@ None.
 | 2026-11-03 | v0.7. Closed conversations (S-001 v0.9 REQ-026). REQ-005 and REQ-007: complete and cancel also close every conversation of the job, idle ones included, so input to a Done job's lead is refused `conflict`; AC-007.3 checks the conversations are closed. REQ-018: a complete or cancel is written before the conversations are aborted and closed, and repair rule 4 closes each conversation of a Done job that isn't closed, aborting it first if it still runs, is parked or is awaited. REQ-022 and AC-022.2: the front desk is never closed. Exclusions, Workflow and Consumed follow. Architecture consistency review (findings F1, F12, F13 and F15), same version: REQ-018 rule 4 also covers a closed conversation that still has an unfinished run or queued input, in one commit that sets its closed mark, clears `parked` and empties `awaiting` and `held`, then pi-durable's abort; AC-018.1 adds a crash between that commit and the abort; rule 3 applies only to a job that isn't Done; REQ-007, from the complete or cancel input to the job's conversations is refused as S-001 REQ-026 states, a lead start refused because the job is already Done doesn't cancel it again, a job completed or cancelled before its lead conversation is created gets none, and one completed or cancelled before the first input keeps a closed lead conversation with no first input (S-001 AC-026.7, AC-026.8). Long lines rewrapped. | Product owner decision of 2026-11-03, during the S-005 dev-loop (T-166): a Done job's conversations close and are kept only as the history of the work. Architecture consistency review of the amendment, 2026-11-03; ADR-001 decision 4 amended with it. | T-166 (blocked on it); T-186 to T-196 (Gate 2 passed 2026-11-03; the amendment merged into `dev-pi-durable-s005` before the preflight, by the product owner's approval of the in-flight amendment) |
 | 2026-11-03 | v0.7, same version. REQ-009, AC-003.3, the create job tool, journey 5 and the Exclusion on reopening: a follow-up job is Related to the job it came from only when the agent's create job call sets the optional `related` flag; the agent decides each time. Its origin names the conversation it came from either way. | Product owner decision of 2026-11-03 (finding F9 of the S-001 v0.9 consistency review): relating a follow-up job is the agent's choice in the moment, not a hard requirement. | The job tools (`src/jobs/job_tools_extension.ts`), a new task |
 | 2026-11-04 | v0.8. REQ-007 and the REQ-005 table: the lead's complete tool records its result and ends its own run at that call with no further model turn, instead of being aborted, and it must be the only tool call of its model turn; once the complete is written, a later failed step of the abort doesn't stop the run ending, and rule 4 finishes it; a refused complete tool ends nothing. REQ-018 rule 4: the closing commit also empties the pi-durable inbox, a running compaction also fires the rule and is aborted. AC-018.1. New AC-005.5 to AC-005.7. Workflow, the job tools table and Assumptions follow. | Product owner decision of 2026-11-04 (B-006 and the misleading `tool complete_job failed` line). Architecture consistency review, findings F1 to F7. | T-197, T-198, T-199, T-200, T-201 |
+| 2026-11-04 | v0.9. REQ-007: when the lead's closed mark doesn't land after the complete write, the daemon aborts the lead's run with pi-durable's abort, so a queued input can't run a model turn on the Done job, and the tool's result records the abort; in every other case the result is not an error. The job's other conversations are aborted even when the close failed. The same failure on a team member's `jobs.complete` or `jobs.cancel` fails with `internal` and is a known exception (S-001 REQ-026, B-010). New AC-005.8. | Product owner decision of 2026-11-04: T-198 finding F1, a queued follow-up ran a third model request on a Done job when the close failed without a storage error. | T-198 |
