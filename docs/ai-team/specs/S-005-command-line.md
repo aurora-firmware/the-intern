@@ -140,7 +140,7 @@ resolved by the service, S-004 REQ-002):
 | `bob follow` | the instance feed (S-002 REQ-014) | REQ-007 |
 | `bob status` | `daemon.status` (S-002 REQ-003) | REQ-008 |
 | `bob usage` | `usage.get` for the total, `conversations.list`, then `usage.get` for each conversation (S-002 REQ-012) | REQ-008 |
-| `bob chat` | `desk.get`, `conversations.entries`, the conversation feed, `conversations.submit` for each line, `conversations.abort` and `submissions.get` on Ctrl-C, `submissions.wait` and `conversations.entries` without a terminal (S-001 REQ-021; S-002 REQ-012) | REQ-009, REQ-010 |
+| `bob chat` | `desk.get`, `conversations.entries`, the conversation feed, `conversations.submit` for each line, `conversations.abort` and `submissions.get` on Ctrl-C, `submissions.wait` after Ctrl-D, and `submissions.wait` and `conversations.entries` after each line without a terminal (S-001 REQ-021; S-002 REQ-012) | REQ-009, REQ-010 |
 | `bob chat --reset` | `desk.get`, `conversations.reset` (S-001 REQ-024), then as `bob chat` | REQ-009 |
 | `bob conversations list` | `conversations.list`, optionally for one job, with `jobs.get` first to name that job (S-001 REQ-016) | REQ-011 |
 | `bob conversations show <id>` | `conversations.get`, `conversations.entries`, `conversations.invocations` (S-001 REQ-016) | REQ-011 |
@@ -175,8 +175,9 @@ maps to the input of the same meaning in the operation it calls.
   a usage error, or a reserved group; `3` the daemon can't be reached (REQ-003).
 - With `--json`, standard output holds the service's answer unchanged. A `show` command that calls several
   operations prints one JSON object keyed by operation name, each value that operation's answer unchanged (for
-  example `{ "jobs.get": …, "jobs.worklog.list": …, "jobs.history.list": … }`). A following command prints one JSON
-  value per line: each feed snapshot or delta, or each answer it waits for.
+  example `{ "jobs.get": …, "jobs.worklog.list": …, "jobs.history.list": … }`). `bob usage` prints
+  `{ "total": …, "conversations": { "<id>": … } }`, each value a `usage.get` answer unchanged. A following command
+  prints one JSON value per line: each feed snapshot or delta, or each answer it waits for.
 - Reserved groups: `schedules`, `triggers`, `skills`, `instructions`, `knowledge`, `mail`.
 
 ### Consumed
@@ -320,8 +321,8 @@ answer.
 - **Given:** a test daemon
 - **When:** one read command and one control command of each group, and each top-level data command, run with
   `--json`, and each once with input the service refuses
-- **Then:** each JSON output equals the answer of the operation it calls, and each exit code is 0 or 1 as the call
-  succeeded or was refused
+- **Then:** each JSON output equals the answer of the operation it calls, or for a command that calls several
+  operations has the shape Interfaces names, and each exit code is 0 or 1 as the call succeeded or was refused
 
 **Verification:** test — a service test running `bob` as a child process.
 
@@ -423,14 +424,15 @@ done, and agents starting and stopping runs, until the team member presses Ctrl-
 
 `bob status` SHALL print the daemon status (`daemon.status`: phase, versions, start time, instance directories,
 worker threads in use and waiting), and `bob usage` the usage per conversation and in total (`usage.get`). With
-`--json`, `bob usage` SHALL print one object that holds both.
+`--json`, `bob usage` SHALL print one object that holds both, in the shape Interfaces names.
 
 #### AC-008.1 — Status and usage
 
 - **Given:** a ready test daemon with one finished run
 - **When:** a team member runs `bob status` and `bob usage`, each also with `--json`
-- **Then:** the text names the phase "ready" and the worker threads, and the usage of that run; the JSON equals each
-  operation's answer
+- **Then:** the text names the phase "ready" and the worker threads, and the usage of that run; the `bob status` JSON
+  equals the `daemon.status` answer, and the `bob usage` JSON holds the `usage.get` answers for the total and for each
+  conversation, unchanged
 
 **Verification:** test — a service test running `bob` as a child process.
 
@@ -498,6 +500,14 @@ the front desk's answer with `conversations.entries`, print it and, at the end o
 - **Then:** `bob` waits a second time, reads the answer with `conversations.entries`, prints it once, and exits 0
 
 **Verification:** test — a unit test of `bob chat` with a client whose waits are scripted.
+
+#### AC-010.3 — Standard output redirected
+
+- **Given:** a terminal on standard input and standard output redirected to a file
+- **When:** a team member runs `bob chat`, types a line and presses Ctrl-D
+- **Then:** the file holds only the front desk's answer, with no prompt, history or control sequence, and `bob` exits 0
+
+**Verification:** test — `test/service/bob_chat_terminal.test.ts` ("bob chat with standard output redirected").
 
 ### REQ-011 — Conversation commands
 
@@ -765,4 +775,4 @@ None.
 | 2026-11-03 | v0.2. Clarifications, no change of scope: AC-014.1, the cases that run `bob` with no command or an unknown one expect the top-level usage (REQ-001); Interfaces, a `show` command that calls several operations prints one JSON object keyed by operation name; Design Principles, a command calls the operations Interfaces names, not "one or two". | Product owner approval of the keyed `--json` shape, 2026-11-03 (finding F14 of the S-001 v0.9 consistency review). Architect ruling on T-162 (AC-014.1). Reviews of T-165 (the keyed JSON) and of the plan (the number of operations). | T-162, T-165 (built as clarified) |
 | 2026-11-03 | v0.2. REQ-005: a Done job's lead conversation is closed (S-001 v0.9 REQ-026), so `bob jobs answer` is refused `conflict`, and an unknown job `not_found`. REQ-011: a closed conversation lists as `closed`, and `send`, `stop`, `reset`, `seat` and `compact` on it exit 1. Architecture consistency review (finding F10), same version: REQ-005, when `jobs.get` returns no `leadConversation` the command submits nothing, prints that the job has no lead conversation and exits 1; new AC-005.2 for a completed job, a job cancelled before its lead started and an unknown job; new AC-011.4 for a closed conversation. | Product owner decision of 2026-11-03 on T-166. Architecture consistency review of the closed-conversation amendment, 2026-11-03. | T-166, T-167 |
 | 2026-11-03 | v0.2, still. AC-005.2: the cancelled job is one cancelled before its lead conversation was created (S-004 REQ-007, S-001 AC-026.8). | Architecture consistency review of S-001 v0.9, 2026-11-03. | T-166, T-167 |
-| 2026-11-04 | v0.3. Interfaces: the Contract names the operations `bob jobs follow`, `bob usage` and `bob conversations list --job` call. REQ-008: `bob usage --json` holds the usage per conversation and the total. REQ-010: chat without a terminal also applies when standard output isn't a terminal, as Definitions and Design Principles state. Assumptions: current versions; the breakdowns are done. | PR #148 review findings, product owner decision of 2026-11-04. | None; fixed on the PR branch |
+| 2026-11-04 | v0.3. Interfaces: the Contract names the operations `bob jobs follow`, `bob usage` and `bob conversations list --job` call. Interfaces, REQ-008, AC-008.1 and AC-003.3: `bob usage --json` prints `{ "total", "conversations" }`, holding the usage per conversation and the total. The `bob chat` row names `submissions.wait` after Ctrl-D. REQ-010: chat without a terminal also applies when standard output isn't a terminal, as Definitions and Design Principles state; new AC-010.3. Assumptions: current versions; the breakdowns are done. | PR #148 review findings, product owner decision of 2026-11-04. | None; fixed on the PR branch |

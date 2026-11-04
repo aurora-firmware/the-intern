@@ -38,9 +38,12 @@ operating-system account The Intern runs as, not by logins or per-action rules.
    operations it exposes. No service operation reads transport details, a connection or the caller's machine to decide
    its outcome (S-002 REQ-016). Where S-001 requires attribution, the actor is still recorded: a team member with the
    way in they used, an agent, or a job source (S-001 REQ-007). It says where an action came from and grants nothing.
-   One rule reads the way in to decide an outcome: the front desk takes input only by the command line or the web
-   interface (S-001 REQ-020, S-004 REQ-021). The rule is about the route, not the person: it reads no transport detail,
-   and it treats every team member who comes by those routes alike.
+   Two rules read the way in to decide an outcome. A submit to the front desk is refused `invalid_input` unless its
+   caller is a team member with the way in `command line` or `web interface`, so an agent, the front desk's own agent,
+   a job source and an in-process caller naming no way in are refused too (S-001 REQ-020, S-004 REQ-021). `jobs.create`
+   refuses a way in with no origin letter, which is what an in-process caller naming none gets (S-004 REQ-002). Both
+   read the way in on the caller's actor, which a listener fixes (S-003 REQ-007), and no transport detail, connection
+   or machine (S-002 REQ-016), and both treat every team member with the same way in alike.
 3. **No per-action approval rules.** The Intern has no policy component and no approvals for each action. What it can
    do is bounded by what the service account can reach.
 4. **The service account is the boundary.** The Intern runs as one operating-system account, the service account. In
@@ -120,4 +123,4 @@ the same account log each other out. Using the service account's credentials in 
 
 | Date | Change | Reason |
 |---|---|---|
-| 2026-11-04 | Decision 2: records the one rule that reads the way in to decide an outcome, the front desk's refusal of input by any other way in. | S-001 REQ-020 and S-004 REQ-021 already require it, and this decision said the actor grants nothing. PR #148 review; product owner decision of 2026-11-04. |
+| 2026-11-04 | Decision 2: records the two rules that read the way in to decide an outcome: the front desk's refusal of input from anyone but a team member by the command line or the web interface, and the refusal of `jobs.create` for a way in with no origin letter. | S-001 REQ-020 and S-004 REQ-021 and REQ-002 already require them, and this decision said the actor grants nothing. PR #148 review; product owner decision of 2026-11-04. |
