@@ -98,9 +98,9 @@ adds a command group follows them too, and does not change them without amending
 - **Don't write recovery or retry code** (ADR-001). Resume, `requestId` dedup and the follow-up queue are library
   features. If you find yourself writing a retry loop or an intake table, check the library first. Decision 4 allows
   two bounded exceptions, and nothing else:
-  - The-intern's own facts about a conversation (held messages, awaiting links, parked state, the abort mark, the closed mark,
-    creation keys) are pi-durable documents committed with the change they describe, and the only recovery is redelivering the
-    input they show as undelivered, made safe to repeat by request ids.
+  - The-intern's own facts about a conversation (held messages, awaiting links, parked state, the abort mark, the
+    closed mark, creation keys) are pi-durable documents committed with the change they describe, and the only
+    recovery is redelivering the input they show as undelivered, made safe to repeat by request ids.
   - A job write is committed before the pi-durable change it goes with, and the four startup repair rules of S-004
     REQ-018 (`src/jobs/job_repair.ts`) are the only job recovery. Rule 4 closes and aborts the conversations of a Done
     job that a crash left open. Rule 3 also covers input the lead took since the job
