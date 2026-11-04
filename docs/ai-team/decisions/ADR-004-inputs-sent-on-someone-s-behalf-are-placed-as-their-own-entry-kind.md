@@ -74,8 +74,8 @@ kind through pi-durable `InputEntry`. The entry's data names the sender and carr
    text, so a transcript read shows the text once.
 5. **Other inputs stay `pi.user`.** A conversation's first input stays plain `pi.user`, because the conversation's
    origin already records its source: a job's first input (S-001 REQ-012) and the job prompt of an invoked
-   conversation (S-001 REQ-008). An input submitted with `whenBusy: "reject"` also stays plain `pi.user`, except one to the
-   front desk. A reject input
+   conversation (S-001 REQ-008). An input submitted with `whenBusy: "reject"` also stays plain `pi.user`, except one
+   to the front desk. A reject input
    held for a parked conversation is held as a follow-up and delivered as `intern.steer` (S-001 REQ-020).
 
    The inputs S-004 adds are `intern.steer` follow-ups, placed in the lead conversation:
