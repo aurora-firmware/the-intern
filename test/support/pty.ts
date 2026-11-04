@@ -12,8 +12,10 @@ export type PtySession = {
     output(): string;
     /** Everything `bob` wrote to standard error, which goes to a file instead of the terminal. */
     stderr(): string;
+    /** Everything `bob` wrote to standard output when the session redirects it to a file; empty otherwise. */
+    stdout(): string;
     /** Resolves once the stream's text so far contains the text; rejects after the timeout. */
-    waitFor(stream: "output" | "stderr", text: string, timeoutMs?: number): Promise<void>;
+    waitFor(stream: "output" | "stderr" | "stdout", text: string, timeoutMs?: number): Promise<void>;
     /** Types the keys on the terminal, such as `\x03` for Ctrl-C and `\x04` for Ctrl-D. */
     write(keys: string): void;
     /** Ends the session if it still runs. */
@@ -32,32 +34,42 @@ function shellQuote(word: string): string {
 
 /**
  * Runs `node src/cli/bob.ts <args>` under `script -qfec`, so standard input and output are a terminal. Standard error
- * is redirected to a file inside the command, which keeps it apart from the terminal's output.
+ * is redirected to a file inside the command, which keeps it apart from the terminal's output. With
+ * `redirectStdout`, standard output goes to a file too, so only standard input stays a terminal.
  */
-export function runInPty(args: readonly string[], options: { runtimeDir: string }): PtySession {
+export function runInPty(
+    args: readonly string[],
+    options: { runtimeDir: string; redirectStdout?: boolean },
+): PtySession {
     const directory = mkdtempSync(join(tmpdir(), "bob-pty-"));
     const stderrPath = join(directory, "stderr");
+    const stdoutPath = join(directory, "stdout");
     const words = [process.execPath, BOB_ENTRY, ...args, "--runtime-dir", options.runtimeDir].map(shellQuote);
-    const command = `${words.join(" ")} 2>${shellQuote(stderrPath)}`;
+    const redirection = options.redirectStdout ? ` >${shellQuote(stdoutPath)}` : "";
+    const command = `${words.join(" ")}${redirection} 2>${shellQuote(stderrPath)}`;
     const child = spawn("script", ["-qfec", command, "/dev/null"], { stdio: ["pipe", "pipe", "ignore"] });
     let output = "";
     child.stdout.on("data", (chunk) => {
         output += chunk;
     });
-    let finalStderr: string | undefined;
-    const readStderr = () => {
-        if (finalStderr !== undefined) return finalStderr;
+    const finalFiles = new Map<string, string>();
+    const readFile = (path: string) => () => {
+        const final = finalFiles.get(path);
+        if (final !== undefined) return final;
         try {
-            return readFileSync(stderrPath, "utf8");
+            return readFileSync(path, "utf8");
         } catch {
             return "";
         }
     };
-    const streams = { output: () => output, stderr: readStderr };
+    const readStderr = readFile(stderrPath);
+    const readStdout = readFile(stdoutPath);
+    const streams = { output: () => output, stderr: readStderr, stdout: readStdout };
     const exited = new Promise<number | null>((resolve, reject) => {
         child.on("error", reject);
         child.on("close", (status) => {
-            finalStderr = readStderr();
+            finalFiles.set(stderrPath, readStderr());
+            finalFiles.set(stdoutPath, readStdout());
             rmSync(directory, { recursive: true, force: true });
             resolve(status);
         });

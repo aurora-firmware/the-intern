@@ -202,6 +202,22 @@ describe("bob chat on a terminal", { skip }, () => {
     });
 });
 
+describe("bob chat with standard output redirected", { skip }, () => {
+    it("reads lines from the terminal with no prompt and writes only the answer to the file", async () => {
+        const fixture = await readyDaemon("echo");
+        await earlierMessages(fixture, "earlier question");
+        const session = runInPty(["chat"], { runtimeDir: fixture.env.runtimeDir, redirectStdout: true });
+        sessions.push(session);
+
+        session.write(`${FIRST}\r`);
+        await session.waitFor("stdout", `echo: ${FIRST}`);
+        session.write(CTRL_D);
+
+        assert.equal(await session.exited, 0, session.stderr());
+        assert.equal(session.stdout(), `echo: ${FIRST}\n`);
+    });
+});
+
 describe("bob chat --reset without a terminal", () => {
     it("empties the front desk's next context and keeps its conversation", async () => {
         const fixture = await readyDaemon("echo");

@@ -112,7 +112,8 @@ export const chatCommand: CommandSpec = {
     callsService: true,
     run: (input) => {
         const reset = input.options.reset === true;
-        if (input.io.isStdinTerminal) {
+        // A terminal is standard input and output together (S-005 Definitions); redirected output takes the piped path.
+        if (input.io.isStdinTerminal && input.io.isStdoutTerminal) {
             const connect = () => createClient(nodeTransport({ socketPath: socketPathFor(input) }));
             return withClient(input, () => runTerminalChat(connect, input.io, { reset, json: input.json }));
         }
