@@ -78,12 +78,14 @@ A data command stops quietly, with exit 0, when the program that reads its outpu
 
 ### JSON output
 
-Most commands print the answer of one service operation as one JSON value. Two kinds of command print more:
+Most commands print the answer of one service operation as one JSON value. Three kinds of command print more:
 
 - A `show` command that reads several operations prints one JSON object. Each key is the name of an operation and each
   value is that operation's answer unchanged. `bob jobs show` prints the keys `jobs.get`, `jobs.worklog.list` and
   `jobs.history.list`. `bob conversations show` prints `conversations.get`, `conversations.entries` and
   `conversations.invocations`.
+- `bob usage` prints one JSON object with the keys `total` and `conversations`: the answer of `usage.get` for the
+  instance and the same answer for each conversation, by its id.
 - A following command prints one JSON value per line: `bob follow`, `bob jobs follow` and `bob chat`. Each line is a
   feed snapshot, a feed delta or an answer the command reads. Read the output line by line.
 
@@ -275,8 +277,9 @@ The command refuses in three cases, each with exit 1 and nothing sent:
 Print the job's current status, then its status changes, edits and worklog entries, and the activity of each of its
 conversations. A line of a conversation starts with the conversation's ID in brackets. It exits 0 when the job is Done,
 after printing its resolution, or when you press Ctrl-C. A job that is already Done prints its resolution and exits 0.
-If the daemon restarts, it prints a notice on standard error and goes on, and it prints what happened while the daemon
-was away. If a feed lags, it goes on without a notice.
+If the daemon restarts, it prints a notice on standard error and goes on, and it prints the entries the job's
+conversations wrote while the daemon was away. Worklog entries and edits made meanwhile are not replayed; the snapshot
+shows the state they led to. If a feed lags, it goes on without a notice.
 
 With `--json` it prints the job first. A job that is already Done ends there. Otherwise it goes on with the snapshot
 and each delta of the instance feed that concern the job, and the snapshot and each delta of the feed of each of its
