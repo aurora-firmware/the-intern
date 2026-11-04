@@ -51,15 +51,17 @@ bob chat
 ```
 
 On a terminal, `bob chat` shows the last lines of the front desk's history and a prompt. Type a line and press Enter to
-send it. The answer prints as it streams.
+send it. The answer prints as it streams, and what you type stays on the last line, below it.
 
 - **Queueing.** A line you type while the front desk is busy queues, and the front desk answers it after the current
   line. A line sent to the front desk survives a restart of the daemon and is answered after it.
 - **Ctrl-C** stops the front desk's current turn and drops the lines still queued. `bob chat` prints each dropped line
-  on standard error, so you can send it again. The chat stays open.
+  on standard error, so you can send it again. The chat stays open. Pressed while Ctrl-D waits, it stops the turn and
+  names the dropped lines, and the chat then exits 0.
 - **Ctrl-D** leaves the chat and exits with status 0. It first waits for the answers to the lines the front desk has
-  taken, so a long turn keeps the command open without a prompt. If the daemon is away when you press Ctrl-D, the
-  chat exits at once and names on standard error each line that was not sent.
+  taken, so a long turn keeps the command open without a prompt. If the daemon is away when you press Ctrl-D, or goes
+  away while it waits, the chat exits 0 and says on standard error that the daemon went away, naming each line that was
+  not sent and each that was not answered.
 - **A restart of the daemon.** `bob chat` prints a notice on standard error and tries again until the daemon answers. It
   then prints what the front desk wrote while it was away, and the chat goes on. A line you type meanwhile is sent when
   the daemon answers. The chat doesn't exit on its own.

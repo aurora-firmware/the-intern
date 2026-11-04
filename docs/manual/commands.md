@@ -161,7 +161,10 @@ Talk to the front desk. Its behaviour depends on where your input comes from.
   each on standard error, so you can send it again; the chat stays open. Ctrl-D waits for the answers to the lines
   the front desk has taken, prints them and exits 0. If the daemon restarts, the chat prints a notice, reconnects and
   prints what the front desk wrote while it was away. A line typed while the daemon is away is sent when it returns. If
-  the daemon is away when you press Ctrl-D, the chat exits 0 at once and names each line not sent on standard error.
+  the daemon is away when you press Ctrl-D, or goes away while Ctrl-D waits, the chat exits 0 and says on standard error
+  that the daemon went away, naming each line not sent and each line not answered. Ctrl-C while Ctrl-D waits stops the
+  turn and names the dropped lines as before; the chat then exits 0. If Ctrl-C's abort could not reach the daemon before
+  Ctrl-D, the chat says so on standard error.
 - Without a terminal, such as `echo "what's blocked?" | bob chat`, or with its output redirected, such as
   `bob chat > answers.txt`, it shows no prompt, history or colour. It sends each line of standard input in turn, waits
   for the answer, prints it and exits 0 at the end of input. If the daemon isn't running when the command starts, it

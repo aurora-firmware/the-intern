@@ -2,8 +2,9 @@
  * `bob chat` on a terminal (S-005 REQ-009). It opens the front desk, prints the recent history and a prompt, submits
  * each typed line as a follow-up and prints the answers as the conversation feed brings them, an answer still being
  * written as it grows (chat_screen.ts). A daemon that goes away is waited for, with typed lines kept. Ctrl-C aborts the
- * current turn and names the lines the abort dropped; Ctrl-D leaves once every submitted line is answered. Imports the
- * client library types only, never the daemon.
+ * current turn and names the lines the abort dropped, also while Ctrl-D waits; Ctrl-D leaves once every submitted line
+ * is answered, or says which are not when the daemon goes away. Imports the client library types only, never the
+ * daemon.
  */
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
@@ -223,31 +224,55 @@ export async function runTerminalChat(
     async function abortTurn(): Promise<void> {
         try {
             await patient.invoke("conversations.abort", { conversationId });
-            for (const entry of sent.splice(0)) {
+            for (const entry of [...sent]) {
                 const { state } = (await patient.invoke("submissions.get", { submissionId: entry.submissionId })) as {
                     state: string;
                 };
                 if (state === "unanswered") warn(`Dropped, not answered: ${entry.line}`);
-                else if (state !== "done") sent.push(entry);
+                if (state === "unanswered" || state === "done") sent.splice(sent.indexOf(entry), 1);
             }
         } catch (error) {
-            if (isReconnectable(error)) return;
-            throw error;
+            if (!isReconnectable(error)) throw error;
+            // Only Ctrl-D makes a call give up on an outage; the abort that was asked for isn't done.
+            warn("The Intern went away before the turn was stopped; it may still be running");
+            return;
         }
         showPrompt();
     }
 
-    /** Waits for the answers to the submitted lines; an outage after Ctrl-D ends the wait. */
-    async function waitForAnswers(): Promise<void> {
-        try {
-            for (const entry of sent.splice(0)) await waitUntilSettled(patient, entry.submissionId);
-        } catch (error) {
-            if (!isReconnectable(error)) throw error;
+    /** Names each submitted line that has no answer because the daemon went away while Ctrl-D waited for it. */
+    function reportLostAnswers(settled: ReadonlySet<string>): void {
+        for (const { submissionId, line } of sent.splice(0)) {
+            if (!settled.has(submissionId)) warn(`The Intern went away; not answered: ${line}`);
         }
     }
 
+    /** Waits for the answers to the submitted lines; a daemon that goes away after Ctrl-D ends the wait, said so. */
+    async function waitForAnswers(): Promise<void> {
+        const settled = new Set<string>();
+        try {
+            for (const { submissionId } of [...sent]) {
+                await waitUntilSettled(patient, submissionId);
+                settled.add(submissionId);
+            }
+        } catch (error) {
+            if (!isReconnectable(error)) throw error;
+            reportLostAnswers(settled);
+        }
+    }
+
+    // Once Ctrl-D has closed the interface it no longer reads Ctrl-C, so the signal reaches the process: it stops the turn.
+    const interruptWait = () => {
+        abortTurn().catch(outcome.reject);
+    };
+
     async function leave(): Promise<void> {
-        await waitForAnswers();
+        process.on("SIGINT", interruptWait);
+        try {
+            await waitForAnswers();
+        } finally {
+            process.off("SIGINT", interruptWait);
+        }
         if (!json) await catchUp(client);
         stop.abort();
         await feed;

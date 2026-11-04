@@ -6,6 +6,7 @@ import { type BobChild, spawnBob } from "../support/bob_process.ts";
 import { type DaemonProcess, type FakeScript, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { hasScript, type PtySession, runInPty } from "../support/pty.ts";
+import { renderTerminal } from "../support/screen_renderer.ts";
 
 const CTRL_C = "\x03";
 const CTRL_D = "\x04";
@@ -225,12 +226,65 @@ describe("bob chat used during a daemon outage", {
         assert.ok(chat.stderr().includes(TYPED_DURING_OUTAGE), chat.stderr());
     });
 
-    it("leaves on Ctrl-D with exit 0 while an admitted line waits for its answer", async () => {
+    it("leaves on Ctrl-D with exit 0 while an admitted line waits for its answer, and names the line", async () => {
         const { chat } = await chatInOutage();
 
         chat.write(CTRL_D);
 
         assert.equal(await ptyExitedWithin(chat), 0, chat.stderr());
+        assert.ok(chat.stderr().includes(`The Intern went away; not answered: ${LINE}`), chat.stderr());
+    });
+
+    it("says the abort was not done when Ctrl-C and then Ctrl-D come during the outage", async () => {
+        const { chat } = await chatInOutage();
+
+        chat.write(CTRL_C);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        chat.write(CTRL_D);
+
+        assert.equal(await ptyExitedWithin(chat), 0, chat.stderr());
+        assert.ok(chat.stderr().includes("went away before the turn was stopped"), chat.stderr());
+        assert.ok(chat.stderr().includes(`not answered: ${LINE}`), chat.stderr());
+    });
+});
+
+describe("bob chat waiting for an answer after Ctrl-D", {
+    skip: !hasScript() && !process.env.CI ? SKIP_REASON : false,
+}, () => {
+    async function chatWaitingAfterCtrlD(): Promise<{ chat: PtySession; daemon: DaemonProcess }> {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const daemon = await readyDaemon(env);
+        const chat = runInPty(["chat"], { runtimeDir: env.runtimeDir });
+        sessions.push(chat);
+        await chat.waitFor("output", PROMPT);
+        chat.write(`${LINE}\r`);
+        await until(async () => (await entriesText(daemon)).includes(LINE), "the line to reach the front desk");
+        chat.write(CTRL_D);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        assert.equal(await Promise.race([chat.exited, Promise.resolve("running")]), "running", chat.stderr());
+        return { chat, daemon };
+    }
+
+    it("exits 0 and names the line when the daemon goes away during the wait", async () => {
+        const { chat, daemon } = await chatWaitingAfterCtrlD();
+
+        daemon.kill9();
+
+        assert.equal(await ptyExitedWithin(chat), 0, chat.stderr());
+        assert.ok(chat.stderr().includes(`The Intern went away; not answered: ${LINE}`), chat.stderr());
+    });
+
+    it("stops the turn on Ctrl-C, names the dropped line and exits 0", async () => {
+        const { chat, daemon } = await chatWaitingAfterCtrlD();
+
+        chat.write(CTRL_C);
+
+        assert.equal(await ptyExitedWithin(chat), 0, chat.stderr());
+        assert.ok(chat.stderr().includes(`Dropped, not answered: ${LINE}`), chat.stderr());
+        daemon.releaseRuns();
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        assert.equal((await entriesText(daemon)).includes(`echo: ${LINE}`), false, "the aborted turn didn't answer");
     });
 });
 
@@ -259,12 +313,10 @@ describe("bob chat restarted in the middle of an answer", {
         chat.write(CTRL_D);
 
         assert.equal(await ptyExitedWithin(chat), 0, chat.stderr());
-        const answersOnScreen = chat
-            .output()
-            .split(/\r?\n/)
-            .filter((row) => row.includes("echo: tell"));
-        assert.equal(answersOnScreen.length, await assistantEntryCount(restarted), chat.output());
-        assert.equal(occurrences(chat.output(), `echo: ${LONG_LINE}`), 1, chat.output());
+        const rows = renderTerminal(chat.output()).rows;
+        const answersOnScreen = rows.filter((row) => row.includes("echo: tell"));
+        assert.equal(answersOnScreen.length, await assistantEntryCount(restarted), rows.join("\n"));
+        assert.equal(rows.filter((row) => row === `echo: ${LONG_LINE}`).length, 1, rows.join("\n"));
     });
 });
 
