@@ -601,13 +601,15 @@ further model turn; the job's other conversations are aborted. Once the complete
 further model turn whatever a later step of the close does; a step that fails is logged, and repair rule 4 finishes it
 at the next start. The tool's result is not an error, unless the lead's closed mark didn't land: the daemon then aborts
 the lead's run with pi-durable's abort, which withdraws its queued input and records the call as aborted. The job's
-other conversations are aborted in either case. A refused complete tool ends nothing: it returns an error result and the
-run goes on. The complete tool SHALL be the only tool call of its model turn: called with others, a second complete call
-included, each complete call returns an error result and changes nothing, and the other calls go on. From the complete
-or cancel, input to the job's conversations is refused as S-001 REQ-026 states. A lead start refused because the job is
-already Done doesn't cancel it again: `jobs.create` returns the job as Done. A job completed or cancelled before its
-lead conversation is created gets none, and `jobs.get` returns no `leadConversation` for it. One completed or cancelled
-after the creation and before the first input keeps a closed lead conversation that holds no first input.
+other conversations are aborted in either case. A team member's `jobs.complete` or `jobs.cancel` that fails at the close
+fails with `internal` and aborts nothing (S-001 REQ-026). A refused complete tool ends nothing: it returns an error
+result and the run goes on. The complete tool SHALL be the only tool call of its model turn: called with others, a
+second complete call included, each complete call returns an error result and changes nothing, and the other calls go
+on. From the complete or cancel, input to the job's conversations is refused as S-001 REQ-026 states. A lead start
+refused because the job is already Done doesn't cancel it again: `jobs.create` returns the job as Done. A job completed
+or cancelled before its lead conversation is created gets none, and `jobs.get` returns no `leadConversation` for it. One
+completed or cancelled after the creation and before the first input keeps a closed lead conversation that holds no
+first input.
 
 #### AC-007.1 — Creation starts the lead
 
