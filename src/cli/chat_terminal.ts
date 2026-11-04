@@ -265,8 +265,11 @@ export async function runTerminalChat(
     }
 
     // Once Ctrl-D has closed the interface it no longer reads Ctrl-C, so the signal reaches the process: it stops the turn.
+    // The wait ends as soon as the abort drops the lines, so the abort is waited for before leaving: it is still naming
+    // them.
+    let interruption: Promise<void> = Promise.resolve();
     const interruptWait = () => {
-        abortTurn().catch(outcome.reject);
+        interruption = interruption.then(abortTurn).catch(outcome.reject);
     };
 
     async function leave(): Promise<void> {
@@ -276,6 +279,7 @@ export async function runTerminalChat(
         } finally {
             process.off("SIGINT", interruptWait);
         }
+        await interruption;
         if (!json) await catchUp(client);
         stop.abort();
         await feed;

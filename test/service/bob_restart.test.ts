@@ -251,15 +251,19 @@ describe("bob chat used during a daemon outage", {
 describe("bob chat waiting for an answer after Ctrl-D", {
     skip: !hasScript() && !process.env.CI ? SKIP_REASON : false,
 }, () => {
-    async function chatWaitingAfterCtrlD(): Promise<{ chat: PtySession; daemon: DaemonProcess }> {
+    async function chatWaitingAfterCtrlD(
+        lines: readonly string[] = [LINE],
+    ): Promise<{ chat: PtySession; daemon: DaemonProcess }> {
         const env = await createHermeticEnv();
         envs.push(env);
         const daemon = await readyDaemon(env);
         const chat = runInPty(["chat"], { runtimeDir: env.runtimeDir });
         sessions.push(chat);
         await chat.waitFor("output", PROMPT);
-        chat.write(`${LINE}\r`);
-        await until(async () => (await entriesText(daemon)).includes(LINE), "the line to reach the front desk");
+        for (const line of lines) {
+            chat.write(`${line}\r`);
+            await until(async () => (await entriesText(daemon)).includes(line), `${line} to reach the front desk`);
+        }
         chat.write(CTRL_D);
         await new Promise((resolve) => setTimeout(resolve, 500));
         assert.equal(await Promise.race([chat.exited, Promise.resolve("running")]), "running", chat.stderr());
@@ -285,6 +289,34 @@ describe("bob chat waiting for an answer after Ctrl-D", {
         daemon.releaseRuns();
         await new Promise((resolve) => setTimeout(resolve, 500));
         assert.equal((await entriesText(daemon)).includes(`echo: ${LINE}`), false, "the aborted turn didn't answer");
+    });
+});
+
+describe("bob chat dropping several lines on Ctrl-C during the Ctrl-D wait", {
+    skip: !hasScript() && !process.env.CI ? SKIP_REASON : false,
+}, () => {
+    it("names every line it dropped, the last one too, before it exits 0", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const daemon = await readyDaemon(env);
+        const lines = ["first line", "second line", "third line", "fourth line"];
+        const chat = runInPty(["chat"], { runtimeDir: env.runtimeDir });
+        sessions.push(chat);
+        await chat.waitFor("output", PROMPT);
+        chat.write(`${lines[0]}\r`);
+        await until(async () => (await entriesText(daemon)).includes(lines[0] as string), "the first line to run");
+        // The others queue behind the running turn: they are not entries until it ends, so give each time to be sent.
+        for (const line of lines.slice(1)) {
+            chat.write(`${line}\r`);
+            await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+        chat.write(CTRL_D);
+        await new Promise((resolve) => setTimeout(resolve, 600));
+
+        chat.write(CTRL_C);
+
+        assert.equal(await ptyExitedWithin(chat), 0, chat.stderr());
+        assert.equal(chat.stderr(), lines.map((line) => `Dropped, not answered: ${line}\n`).join(""));
     });
 });
 
