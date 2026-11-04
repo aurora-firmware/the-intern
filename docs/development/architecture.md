@@ -130,21 +130,24 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   on the daemon's connection, while work goes on (`src/host/database_copy.ts`, `backupDatabase`). `importDatabase` in
   `src/host/database_import.ts` places an exported file as the database of a stopped instance, under the single-owner
   lock; it converts nothing. `bob import` calls it (see Command line).
-- **Front desk** (`src/desk/`, [S-001](../ai-team/specs/S-001-agent-roles-and-conversations.md) REQ-021 to REQ-025).
-  The instance's one standing conversation, seated as the shipped `desk` role, with no job and no first input.
+- **Front desk** (`src/desk/`, [S-001](../ai-team/specs/S-001-agent-roles-and-conversations.md) REQ-021 to REQ-025). The
+  instance's one standing conversation, seated as the shipped `desk` role, with no job and no first input.
   `createDeskComponent` (`desk_component.ts`) returns a daemon component named `desk`. At startup step 6
   (`ensureWorkspaces`) it calls `ensureFrontDesk` (`front_desk.ts`), a keyed create under `FRONT_DESK_CREATION` in
   `desk_model.ts`: the key is written in the commit that creates the conversation, so a repeated start finds the
-  conversation it already created (ADR-001 decision 4). `readFrontDeskId` reads
-  it back. The component also holds the `desk.get` read operation, which answers the conversation id and its seat, read
-  through `conversations.get` so the two never differ. `desk.get` is `not_found` when the instance has no front desk.
-  The tools live in the opt-in extension `intern.desk` (`FRONT_DESK_EXTENSION_NAME`): `desk_tools_extension.ts`
-  registers it, `desk_state_tools.ts` holds the read tools and `desk_steering_tools.ts` the tools that send to and stop
-  a job's conversation. The component passes it as an `optInExtensions` entry, which the host installs but selects for
-  no conversation. A conversation gets it from its seat: `extensionSelectionFor` in `src/host/seating.ts` adds
-  `intern.desk` and removes `intern.coordination` and `intern.jobs` (`JOB_CONVERSATION_EXTENSION_NAMES`) when the
-  origin is `front_desk`, as an `{ add, remove }` edit, so the other default extensions stay. The front desk is never a
-  job: job operations given its id refuse it, and its job tools create jobs with origin `front_desk`.
+  conversation it already created (ADR-001 decision 4). `readFrontDeskId` reads it back. The component also holds the
+  `desk.get` read operation, which answers the conversation id and its seat, read through `conversations.get` so the two
+  never differ. `desk.get` is `not_found` when the instance has no front desk. The tools live in the opt-in extension
+  `intern.desk` (`FRONT_DESK_EXTENSION_NAME`): `desk_tools_extension.ts` registers it, `desk_state_tools.ts` holds the
+  read tools and `desk_steering_tools.ts` the tools that send to and stop a job's conversation. The component passes it
+  as an `optInExtensions` entry, which the host installs but selects for no conversation. A conversation gets it from
+  its seat: `extensionSelectionFor` in `src/host/seating.ts` adds `intern.desk` and removes `intern.coordination` and
+  `intern.jobs` (`JOB_CONVERSATION_EXTENSION_NAMES`) when the origin is `front_desk`, as an `{ add, remove }` edit, so
+  the other default extensions stay. Its tools that send to a job's conversation place an `intern.steer` entry with the
+  front desk's agent as actor and the request id `steer:<frontDeskId>:<toolCallId>` (`desk_steering_tools.ts`; ADR-004
+  decisions 2, 3 and 5). A team member's input to the front desk keeps the kind `conversations.submit` gives it, and no
+  agent's input reaches it. The front desk is never a job: job operations given its id refuse it, and its job tools
+  create jobs with origin `front_desk`.
 - **Command line** (`src/cli/`, [S-005](../ai-team/specs/S-005-command-line.md)). `bob.ts` is the entry point: `main`
   parses the arguments with `parseCommandLine` (`command_line.ts`) against `COMMANDS` (`commands.ts`), prints help,
   usage errors and the notice for a reserved group, and otherwise runs the command and returns its exit code. The table
