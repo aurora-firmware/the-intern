@@ -54,16 +54,21 @@ the next model turn (S-001 REQ-004). The reset lands at the running run's next b
 that boundary follows a tool round, pi-durable ends the run there and settles its inputs `unanswered` with reason
 `reset`, as it does for `conversations.reset` on a busy conversation. The next turn runs with the new seat in the
 cleared context (REQ-011). A crash after the commit leaves the queued reset in the inbox, and it lands when the run
-resumes or at the next boundary (REQ-017: "completes on resume").
+resumes or at the next boundary (REQ-017: "completes on resume"). If the job is Done first, the closed-mark commit
+withdraws it.
 
-This record covers only the busy path of submission admission. Request-ID idempotency, `whenBusy` modes and the
-idle boundary for queued items stay with `Conversation.submit` and aren't copied.
+This record covers the busy path of submission admission and the close's removal of queued items. Request-ID
+idempotency, `whenBusy` modes and the idle boundary for queued items stay with `Conversation.submit` and aren't copied.
 
 This keeps ADR-001 decision 4: the queue, its durability and the placement at the boundary stay pi-durable's. The
 host only puts an item on pi-durable's own queue in the commit that owns the change, and writes no queue or intake
 table of its own. The `held` list of a parked conversation isn't such a queue: it is a fact the-intern owns under the
 bounded exception in ADR-001 decision 4, and its messages reach the conversation through `Conversation.submit` when it
 continues.
+
+The job abort's closed-mark commit (S-001 REQ-026) removes queued items from the same inbox and settles them
+`unanswered`. A queued write otherwise survives `Conversation.abort()` and could land after the mark. A closed
+conversation runs no more, so the write has nothing left to act on.
 
 ## Consequences
 
@@ -78,8 +83,8 @@ continues.
 ### Negative
 
 - The host copies part of pi-durable submission admission and depends on the `pi.inbox` item shape and on the
-  meaning of `LiveDoc.run`. Each pi-durable upgrade rechecks `admitSubmission` against this record, together with
-  the README compatibility section.
+  meaning of `LiveDoc.run`. Each pi-durable upgrade rechecks `admitSubmission` and the removal of queued items against
+  this record, together with the README compatibility section.
 - The seat record is written before the running turn's last answer, so the transcript shows the record before an
   answer the old seat produced. REQ-007 attribution therefore comes from the seat of the run that produced the message,
   not from the latest seat record. A plain seat change on a busy conversation (`changeSeat`) already behaves this
@@ -116,3 +121,4 @@ forbids.
 |---|---|---|
 | 2026-11-01 | Added a pointer in the Decision: the `held` list of a parked conversation is a fact the-intern owns under ADR-001 decision 4's bounded exception, not a queue in front of pi-durable. No decision changes. | Spec-truth reconciliation of S-001, finding F6, and the ADR-001 amendment of the same date. |
 | 2026-11-01 | Context: a report delivered into a running invoking conversation goes through `Conversation.submit` as an `intern.report` entry (ADR-004), not through this record's busy path. No decision changes. | Architecture consistency review of ADR-004. |
+| 2026-11-04 | Decision: the job abort's closed-mark commit also removes queued items from the inbox, and the upgrade recheck covers that removal. | Product owner decision of 2026-11-04 (B-006 and the misleading `tool complete_job failed` line). |
