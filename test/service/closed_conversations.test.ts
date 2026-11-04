@@ -7,16 +7,20 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type FauxProviderRegistration, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
+import { type ConversationId, InboxDoc } from "@earendil-works/pi-durable";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import type { InstanceDelta } from "../../src/feed/instance_feed.ts";
+import { submissionIdFor, submissionState } from "../../src/host/conversation_control.ts";
+import { internalHarness } from "../../src/host/harness_host.ts";
 import { abortJobConversations, createInvokedConversations } from "../../src/host/invocation.ts";
 import { REPORT_KIND } from "../../src/host/reports.ts";
-import type { SeatActor } from "../../src/host/seating.ts";
+import { conversationMetaDoc, readConversationMeta, type SeatActor } from "../../src/host/seating.ts";
 import { type JobActionDeps, startJob } from "../../src/jobs/job_actions.ts";
 import type { JobAuthor } from "../../src/jobs/job_model.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
@@ -284,5 +288,58 @@ describe("a closed conversation", () => {
             tree: "closed",
             snapshot: "closed",
         });
+    });
+});
+
+type QueuedItem = { id: number; mode: string };
+
+async function queuedItemsOf(started: Started, conversationId: string): Promise<QueuedItem[]> {
+    return internalHarness(started.ctx.host).commit(async (tx) => {
+        const { items } = await tx.doc(InboxDoc, Number(conversationId) as ConversationId);
+        return JSON.parse(JSON.stringify(items)) as QueuedItem[];
+    }, BACKGROUND_CONTEXT);
+}
+
+describe("the closed mark of a conversation that holds queued items", () => {
+    it("empties the inbox, input and write alike, and settles each item unanswered with reason closed", async () => {
+        const started = await start();
+        const job = await startedJob(started);
+        const invoked = await invokeRunning(started, job.leadConversation, false);
+        await started.invoke("conversations.submit", {
+            conversationId: invoked,
+            content: "a queued note",
+            requestId: "queued-note",
+        });
+        await started.invoke("conversations.reset", { conversationId: invoked });
+        const queued = await queuedItemsOf(started, invoked);
+        assert.deepEqual(queued.map((item) => item.mode).sort(), ["followUp", "write"]);
+
+        await abortJobConversations(started.ctx.host, job.id);
+
+        await waitFor(async () => !(await isBusy(started.ctx, invoked)), "the abort");
+        assert.deepEqual(await queuedItemsOf(started, invoked), []);
+        for (const item of queued) {
+            assert.deepEqual(await submissionState(started.ctx.host, String(item.id)), {
+                state: "unanswered",
+                reason: "closed",
+            });
+        }
+    });
+
+    it("drops the held messages of a closed conversation and settles no submission for them", async () => {
+        const started = await start();
+        const job = await startedJob(started);
+        const invoked = await invokeRunning(started, job.leadConversation, true);
+        await internalHarness(started.ctx.host).commit(async (tx) => {
+            const meta = await tx.doc(conversationMetaDoc, Number(invoked) as ConversationId);
+            meta.held.push({ content: "held note", mode: "followUp", actor: teamMember, requestId: "held-note" });
+        }, BACKGROUND_CONTEXT);
+
+        await abortJobConversations(started.ctx.host, job.id);
+
+        await waitFor(async () => !(await isBusy(started.ctx, invoked)), "the abort");
+        assert.deepEqual((await readConversationMeta(started.ctx.host, invoked))?.held, []);
+        assert.equal(await submissionIdFor(started.ctx.host, invoked, "held-note"), undefined);
+        assert.deepEqual(await queuedItemsOf(started, invoked), []);
     });
 });
