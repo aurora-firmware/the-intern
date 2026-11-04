@@ -54,10 +54,11 @@ the next model turn (S-001 REQ-004). The reset lands at the running run's next b
 that boundary follows a tool round, pi-durable ends the run there and settles its inputs `unanswered` with reason
 `reset`, as it does for `conversations.reset` on a busy conversation. The next turn runs with the new seat in the
 cleared context (REQ-011). A crash after the commit leaves the queued reset in the inbox, and it lands when the run
-resumes or at the next boundary (REQ-017: "completes on resume").
+resumes or at the next boundary (REQ-017: "completes on resume"). If the job is Done first, the closed-mark commit
+withdraws it.
 
-This record covers only the busy path of submission admission. Request-ID idempotency, `whenBusy` modes and the
-idle boundary for queued items stay with `Conversation.submit` and aren't copied.
+This record covers the busy path of submission admission and the close's removal of queued items. Request-ID
+idempotency, `whenBusy` modes and the idle boundary for queued items stay with `Conversation.submit` and aren't copied.
 
 This keeps ADR-001 decision 4: the queue, its durability and the placement at the boundary stay pi-durable's. The
 host only puts an item on pi-durable's own queue in the commit that owns the change, and writes no queue or intake
