@@ -1487,8 +1487,9 @@ which a team member or an agent of any job may create and may relate to the firs
   short, rule 4 aborts the run and its input settles `unanswered` with reason `aborted`. When the closed-mark commit
   fails after the complete with the daemon still running, the daemon aborts the job's other conversations and a lead
   whose mark didn't land. The placed and queued input of a conversation without its mark settles `unanswered` with
-  reason `aborted`, and rule 4 closes it at the next start. A write queued before the closed mark places no entry. Entries the abort itself writes, such as an aborted answer or tool result, and the
-  complete tool's own result may follow the mark. No input runs a model turn after the job is Done.
+  reason `aborted`, and rule 4 closes it at the next start. A write queued before the closed mark places no entry.
+  Entries the abort itself writes, such as an aborted answer or tool result, and the complete tool's own result may
+  follow the mark. No input runs a model turn after the job is Done.
 - A coordination or job tool called from a conversation whose job is Done, or that is closed, returns an error result
   and changes nothing: `invoke` creates no conversation, `handoff` changes no seat, `steer` delivers nothing. A lead
   start (`jobs.startLead`, REQ-012) is refused at whichever of its two commits finds the job Done: refused at the lead
