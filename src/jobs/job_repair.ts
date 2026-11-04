@@ -157,6 +157,8 @@ async function needsClosing(ctx: ServiceContext, known: JobConversations): Promi
  * gets its conversations closed and aborted: the closed marks are committed before pi-durable's aborts.
  * `listed` is the job as listed before the rules: a job that rule 1 cancels was not Done then, and that cancel
  * already closed its conversations, so the listing taken before it does not apply to it.
+ * A closed conversation with a compaction still running is busy, because every live task counts, so it is unsettled
+ * and this rule fires for it too; the abort then stops the compaction, which no closed mark stops by itself.
  */
 async function applyRule4(deps: JobActionDeps, listed: Job, known: JobConversations): Promise<void> {
     const { ctx } = deps;

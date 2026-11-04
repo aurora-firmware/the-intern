@@ -60,8 +60,10 @@ type BootOptions = {
     workerThreadCount?: number;
 };
 type Rig = {
-    /** The user messages of every model call so far, in order. */
+    /** The user messages of every model call so far, in order, summarization requests excepted. */
     modelInputs: string[][];
+    /** How many summarization requests the model has received; each is held until aborted. */
+    summaryRequests(): number;
     /** Holds the model calls that start from now on until `release()`. */
     hold(): { release(): void };
     boot(options?: BootOptions): Promise<Booted>;
@@ -84,28 +86,49 @@ const textOf = (message: Message): string => {
 const abortion = (signal: AbortSignal | undefined): Promise<void> =>
     new Promise((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
 
-async function createRig(): Promise<Rig> {
+// The model's window is 128000 tokens and a background compaction starts 32768 tokens below the blocking threshold.
+// This reserve puts that start 100 tokens into the context and the blocking threshold far above it, so a lead's
+// second turn starts a compaction that does not block it.
+const BACKGROUND_COMPACTION_RESERVE = 128000 - 32768 - 100;
+
+async function createRig(options: { isCompactingAtSecondTurn?: boolean } = {}): Promise<Rig> {
     const env = await createHermeticEnv();
     envs.push(env);
     const fake = registerFauxProvider({ models: [{ id: "model-one", reasoning: true }] });
     fakes.push(fake);
     const modelInputs: string[][] = [];
     let gate: Promise<void> | undefined;
-    const answer = async (context: { messages: Message[] }, options?: { signal?: AbortSignal }) => {
+    let summaryRequests = 0;
+    const answer = async (context: { messages: Message[] }, streamOptions?: { signal?: AbortSignal }) => {
         fake.appendResponses([answer]);
+        const isSummarization = context.messages.some(
+            (message) => message.role === "system" && textOf(message).includes("context summarization assistant"),
+        );
+        if (isSummarization) {
+            summaryRequests++;
+            await abortion(streamOptions?.signal);
+            return fauxAssistantMessage("the summary");
+        }
         modelInputs.push(context.messages.filter((m) => m.role === "user").map(textOf));
         // A held call ends when it is released or aborted, so stopping the daemon does not wait for it.
-        await Promise.race([gate, abortion(options?.signal)]);
+        await Promise.race([gate, abortion(streamOptions?.signal)]);
         return fauxAssistantMessage("done");
     };
     fake.setResponses([answer]);
     const provider = fake.getModel().provider;
     await writeFile(
         join(env.piAgentDir, "settings.json"),
-        JSON.stringify({ defaultProvider: provider, defaultModel: "model-one" }),
+        JSON.stringify({
+            defaultProvider: provider,
+            defaultModel: "model-one",
+            ...(options.isCompactingAtSecondTurn && {
+                compaction: { keepRecentTokens: 1, reserveTokens: BACKGROUND_COMPACTION_RESERVE },
+            }),
+        }),
     );
     return {
         modelInputs,
+        summaryRequests: () => summaryRequests,
         hold() {
             let release: () => void = () => undefined;
             gate = new Promise<void>((resolve) => {
@@ -119,13 +142,13 @@ async function createRig(): Promise<Rig> {
                 },
             };
         },
-        async boot(options = {}) {
+        async boot(bootOptions = {}) {
             const agents = await createAgentsComponent({ logger: quietLogger });
             const jobs = await createJobsComponent({
                 agents,
                 logger: quietLogger,
-                turnEndRule: options.turnEndRule ?? false,
-                ...(options.afterWrite && { afterWrite: options.afterWrite }),
+                turnEndRule: bootOptions.turnEndRule ?? false,
+                ...(bootOptions.afterWrite && { afterWrite: bootOptions.afterWrite }),
             });
             let captured: ServiceContext | undefined;
             const probe: DaemonComponent = {
@@ -147,7 +170,9 @@ async function createRig(): Promise<Rig> {
                 sections: agents.sections,
                 components: [agents.component, jobs.component, probe],
                 operations: [...agents.operations, ...jobs.operations],
-                ...(options.workerThreadCount !== undefined && { workerThreadCount: options.workerThreadCount }),
+                ...(bootOptions.workerThreadCount !== undefined && {
+                    workerThreadCount: bootOptions.workerThreadCount,
+                }),
                 prepareModels: (runtime) => {
                     const implementation = getApiProvider(fake.api);
                     if (!implementation) throw new Error("the fake model's api is not registered");
@@ -163,7 +188,7 @@ async function createRig(): Promise<Rig> {
                 },
             });
             daemons.push(daemon);
-            if (options.isStartupExpectedToFail) {
+            if (bootOptions.isStartupExpectedToFail) {
                 await waitFor(() => daemon.phase() !== "starting", "the daemon to finish starting");
             } else {
                 await waitFor(() => daemon.phase() === "ready", "the daemon to become ready");
@@ -684,6 +709,34 @@ describe("rule 4: a closed conversation of a Done job with a run or queued input
     });
 });
 
+describe("rule 4: a closed idle conversation of a Done job with a running compaction", () => {
+    it("fires, records the repair and aborts the compaction, which places no summary and sends no request", async () => {
+        const rig = await createRig({ isCompactingAtSecondTurn: true });
+        const first = await rig.boot({ afterWrite: crashAt("conversations-closed") });
+        const job = await first.createJob();
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        await steerConversation(first.ctx.host, job.leadConversation, {
+            content: HELD_TEXT,
+            mode: "followUp",
+            actor: teamMember,
+            requestId: "second-turn",
+        });
+        await waitFor(() => rig.modelInputs.length === 2 && rig.summaryRequests() === 1, "the compaction to run");
+        await assert.rejects(cancelJob(first.deps, job.id, "no longer needed", teamMember), /crash at conversations/);
+        assert.equal((await readConversationMeta(first.ctx.host, job.leadConversation))?.closed, true);
+        await first.stop();
+
+        const second = await rig.boot();
+
+        assert.deepEqual(didsOf(await repairsOf(second.ctx, job.id)), [RULE_4]);
+        assert.equal(await isIdle(second.ctx, job.leadConversation), true);
+        assert.equal(rig.summaryRequests(), 1, "the compaction sends no further request");
+        assert.equal(rig.modelInputs.length, 2, "no model turn follows");
+        const { entries } = await second.ctx.host.readEntries(job.leadConversation, { limit: 100 });
+        assert.ok(!entries.some((entry) => entry.kind === "pi.compaction"), "no compaction entry is placed");
+    });
+});
+
 describe("rules 3 and 4: jobs with nothing to repair", () => {
     it("writes nothing for an In progress job whose parked lead holds a message for its reports", async () => {
         const rig = await createRig();
@@ -718,6 +771,31 @@ describe("rules 3 and 4: jobs with nothing to repair", () => {
         const second = await rig.boot();
 
         assert.deepEqual(await repairsOf(second.ctx, job.id), []);
+    });
+});
+
+describe("rule 4: a Done job whose compaction was aborted when the job ended", () => {
+    it("writes no repair at the next start", async () => {
+        const rig = await createRig({ isCompactingAtSecondTurn: true });
+        const first = await rig.boot();
+        const job = await first.createJob();
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        await steerConversation(first.ctx.host, job.leadConversation, {
+            content: HELD_TEXT,
+            mode: "followUp",
+            actor: teamMember,
+            requestId: "second-turn",
+        });
+        await waitFor(() => rig.modelInputs.length === 2 && rig.summaryRequests() === 1, "the compaction to run");
+        await cancelJob(first.deps, job.id, "no longer needed", teamMember);
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the compaction to stop");
+        assert.equal(await hasQueuedInput(first.ctx.host, job.leadConversation), false);
+        await first.stop();
+
+        const second = await rig.boot();
+
+        assert.deepEqual(await repairsOf(second.ctx, job.id), []);
+        assert.equal(rig.summaryRequests(), 1);
     });
 });
 
