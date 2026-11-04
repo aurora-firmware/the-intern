@@ -62,7 +62,7 @@ function seatRecordText(record: SeatRecord): string {
 function formatEntry(entry: TranscriptEntry): string {
     const { kind, data } = entry;
     if (kind === "intern.seat") return seatRecordText(data as SeatRecord);
-    if (kind === "pi.user") return `user: ${messageText(data)}`;
+    if (kind === "pi.user") return `input: ${messageText(data)}`;
     if (kind === "pi.assistant") {
         const role = entry.seat === undefined ? "" : ` (${entry.seat.role})`;
         return `assistant${role}: ${messageText(data)}`;

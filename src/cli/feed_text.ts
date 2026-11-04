@@ -102,7 +102,7 @@ export function conversationEntryLine(entry: unknown): string | undefined {
     const messages = messagesOf(data);
     switch (kind) {
         case "pi.user":
-            return messages.map((message) => `user: ${oneLine(textOf(message))}`).join("\n");
+            return messages.map((message) => `input: ${oneLine(textOf(message))}`).join("\n");
         case "pi.assistant":
             return messages.map((message) => `assistant: ${assistantText(message)}`).join("\n");
         case "pi.tool-result":
