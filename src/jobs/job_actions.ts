@@ -6,7 +6,12 @@
  */
 import type { ServiceContext } from "../daemon/daemon.ts";
 import type { SubmittedInput } from "../host/conversation_control.ts";
-import { abortJobConversations, parkConversation, unparkConversation } from "../host/invocation.ts";
+import {
+    abortAfterFailedClose,
+    abortJobConversations,
+    parkConversation,
+    unparkConversation,
+} from "../host/invocation.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import { leadConversationOf } from "../service/job_operations.ts";
 import type { JobAuthor } from "./job_model.ts";
@@ -141,6 +146,9 @@ async function finishJob(
         await closeAfterFinish(deps, action, job.id, ownConversationId);
     } catch (error) {
         logFinishFailure(ctx, job.id, "could not finish closing the job after the Done write", error);
+        const onAbortError = (abortError: unknown) =>
+            logFinishFailure(ctx, job.id, "could not abort a conversation", abortError);
+        await abortAfterFailedClose(ctx.host, job.id, ownConversationId, onAbortError).catch(onAbortError);
     }
     return done;
 }

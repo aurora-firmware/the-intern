@@ -393,3 +393,34 @@ export async function abortJobConversations(
     }
     return ofJob;
 }
+
+/**
+ * Aborts the job's conversations after a failure that left the lead's closed mark unwritten, so a queued input can't
+ * run a model turn on a Done job. The other conversations are aborted in turn and a failed abort goes to `onError`.
+ * The lead is aborted unless its closed mark landed, and that abort is not awaited: it waits for the run, and the run
+ * waits for the tool call that is making this call. The conversations stay unclosed until rule 4 closes them at the
+ * next start.
+ */
+export async function abortAfterFailedClose(
+    host: HarnessHost,
+    jobId: string,
+    ownConversationId: string,
+    onError: (error: unknown) => void,
+): Promise<void> {
+    // Listed in the job's section, so a conversation admitted before the abort is in the list.
+    const ofJob = await inJobSection(host, jobId, async () => {
+        const found: { id: string; isClosed: boolean }[] = [];
+        for (const { id } of await host.listConversations()) {
+            const meta = await readConversationMeta(host, id);
+            if (meta?.jobId === jobId) found.push({ id, isClosed: meta.closed === true });
+        }
+        return found;
+    });
+    for (const { id, isClosed } of ofJob) {
+        if (id !== ownConversationId) {
+            await abortConversation(host, id).catch(onError);
+            continue;
+        }
+        if (!isClosed) void abortConversation(host, id).catch(onError);
+    }
+}

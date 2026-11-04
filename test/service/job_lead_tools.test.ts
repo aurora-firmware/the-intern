@@ -14,7 +14,7 @@ import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { conversationEntryLine } from "../../src/cli/feed_text.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
-import { submitInput } from "../../src/host/conversation_control.ts";
+import { submissionIdFor, submitInput } from "../../src/host/conversation_control.ts";
 import { readConversationMeta } from "../../src/host/seating.ts";
 import { createJobsComponent, type JobsComponentOptions } from "../../src/jobs/jobs_component.ts";
 import type { Caller } from "../../src/service/operations.ts";
@@ -78,6 +78,7 @@ async function start(
     scripts: Record<string, Step[]>,
     workerThreadCount?: number,
     afterWrite?: NonNullable<JobsComponentOptions["afterWrite"]>,
+    sameEnvAs?: HermeticEnv,
 ) {
     const logLines: string[] = [];
     const quietLogger = createLogger({
@@ -88,8 +89,8 @@ async function start(
             },
         },
     });
-    const env = await createHermeticEnv();
-    envs.push(env);
+    const env = sameEnvAs ?? (await createHermeticEnv());
+    if (sameEnvAs === undefined) envs.push(env);
     const fake = registerFauxProvider({ models: [{ id: "model-one", reasoning: true }] });
     fakes.push(fake);
     const results: Record<string, ToolResultSeen[]> = {};
@@ -169,6 +170,8 @@ async function start(
     const ctx = captured as ServiceContext;
     return {
         ctx,
+        env,
+        daemon,
         logLines,
         invoke: (name: string, input: unknown) => daemon.catalogue.invoke(name, input, webCaller),
         results,
@@ -370,8 +373,8 @@ describe("complete_job sharing its turn with another call", () => {
     });
 });
 
-describe("a step after the Done write that fails", () => {
-    for (const point of ["job-completed", "conversations-closed"] as const) {
+describe("a step after the lead's closed mark landed that fails", () => {
+    for (const point of ["conversations-closed"] as const) {
         it(`logs it, returns the tool's success and sends no further request when the hook fails at ${point}`, async () => {
             const started = await start(
                 {
@@ -400,6 +403,96 @@ describe("a step after the Done write that fails", () => {
         });
     }
 });
+
+describe("a closed-mark commit that fails after the complete write", () => {
+    it("aborts the lead and the invoked agent, settles the queued input aborted and leaves both open until the next start", async () => {
+        const gate = deferred();
+        let isWorkerRunning = false;
+        let leadId: string | undefined;
+        let followUp: { submissionId: string } | undefined;
+        const scripts: Record<string, Step[]> = {
+            "lead with worker": [
+                invokeSteerable("worker task"),
+                call("update_job", { definitionOfDone: "the worker is stopped" }),
+                {
+                    calls: [{ name: "complete_job", arguments: { justification: "stopped" } }],
+                    before: async () => {
+                        await waitFor(() => leadId !== undefined, "the lead's id");
+                        followUp = await submitInput(started_().ctx.host, leadId as string, {
+                            content: "late question",
+                            requestId: "late-1",
+                            busyMode: "followUp",
+                        });
+                    },
+                },
+            ],
+            "worker task": [
+                {
+                    hold: gate.promise,
+                    onEntered: () => {
+                        isWorkerRunning = true;
+                    },
+                },
+            ],
+        };
+        const started = await start(scripts, undefined, (writePoint) => {
+            if (writePoint === "job-completed") throw new Error("the closed-mark commit failed");
+        });
+        startedRef = started;
+        const job = await started.createJob("lead with worker");
+        const lead = job.leadConversation;
+        leadId = lead;
+        await waitFor(() => isWorkerRunning, "the invoked agent to run");
+        await waitFor(async () => (await started.status(job.id)) === "done", "the job to be Done");
+        await waitFor(() => started.isIdle(lead), "the lead's run to end");
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        const conversationIds = (await started.ctx.host.listConversations()).map(({ id }) => id);
+        const invoked = conversationIds.find((id) => id !== lead) as string;
+        const lines = await linesOf(started, lead);
+        assert.equal(lines.at(-1), "tool complete_job failed", lines.join("\n"));
+        assert.equal(started.replies["lead with worker"], 3, "no model request follows the complete call");
+        assert.ok(
+            started.logLines.some((line) => line.includes("the closed-mark commit failed")),
+            "the failure is logged",
+        );
+        const submissionIds = [
+            (followUp as { submissionId: string }).submissionId,
+            await submissionIdFor(started.ctx.host, lead, `lead:${job.id}`),
+        ];
+        for (const submissionId of submissionIds) {
+            assert.deepEqual(await started.invoke("submissions.get", { submissionId }), {
+                state: "unanswered",
+                reason: "aborted",
+            });
+        }
+        assert.equal(await started.isIdle(invoked), true, "the invoked agent is aborted");
+        for (const id of [lead, invoked]) {
+            assert.notEqual(await statusOf(started, job.id, id), "closed");
+            await assert.rejects(
+                started.invoke("conversations.submit", {
+                    conversationId: id,
+                    content: "hello",
+                    requestId: `refused-${id}`,
+                    busyMode: "followUp",
+                }),
+                { code: "conflict" },
+            );
+        }
+
+        await started.daemon.stop();
+        const restarted = await start({}, undefined, undefined, started.env);
+        startedRef = restarted;
+        await waitFor(async () => (await statusOf(restarted, job.id, lead)) === "closed", "rule 4 to close the lead");
+        assert.equal(await statusOf(restarted, job.id, invoked), "closed");
+        gate.release();
+    });
+});
+
+async function statusOf(started: Started, jobId: string, conversationId: string): Promise<string | undefined> {
+    const listed = (await started.invoke("conversations.list", { jobId })) as { id: string; status: string }[];
+    return listed.find(({ id }) => id === conversationId)?.status;
+}
 
 describe("block_job", () => {
     it("blocks the job with the reason, parks its lead and runs the other job's lead", async () => {
