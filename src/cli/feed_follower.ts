@@ -125,6 +125,33 @@ export async function followFeed(options: FollowOptions): Promise<void> {
     }
 }
 
+export type CatchUpQueue = {
+    /** Queues a catch-up unless one is already waiting to start; resolves when the catch-up that covers this call is done. */
+    catchUp(client: Client | undefined): Promise<void>;
+};
+
+/**
+ * Runs the catch-ups of one conversation one at a time, in order. A catch-up that fails rejects for its callers only:
+ * the next one still runs, so one failed read (the daemon went away mid-read) never stops the printing for good.
+ */
+export function createCatchUpQueue(read: (client: Client) => Promise<void>): CatchUpQueue {
+    let tail: Promise<void> = Promise.resolve();
+    let waiting: Promise<void> | undefined;
+    return {
+        catchUp(client) {
+            if (client === undefined) return tail;
+            if (waiting !== undefined) return waiting;
+            const run = tail.then(() => {
+                waiting = undefined;
+                return read(client);
+            });
+            waiting = run;
+            tail = run.catch(() => {});
+            return run;
+        },
+    };
+}
+
 export type AttributedEntryLike = { id: string; [field: string]: unknown };
 
 export type EntryTracker = {

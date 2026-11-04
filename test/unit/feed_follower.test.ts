@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createEntryTracker, followFeed } from "../../src/cli/feed_follower.ts";
+import { createCatchUpQueue, createEntryTracker, followFeed } from "../../src/cli/feed_follower.ts";
 import { type Client, ClientError, type FeedItem, UnreachableError } from "../../src/client/client.ts";
 
 type Attempt = { items?: FeedItem[]; end?: string; failure?: Error; hold?: boolean };
@@ -349,5 +349,66 @@ describe("createEntryTracker when a page read fails", () => {
             missed.map((entry) => entry.id),
             ["e1", "e2"],
         );
+    });
+});
+
+describe("createCatchUpQueue", () => {
+    const client = {} as Client;
+
+    it("runs_the_next_catch_up_after_one_fails_and_gives_the_failure_to_its_caller_only", async () => {
+        const outcomes = [new UnreachableError("/run/bob.sock", "refused"), undefined];
+        const reads: number[] = [];
+        const queue = createCatchUpQueue(async () => {
+            const outcome = outcomes[reads.length];
+            reads.push(reads.length);
+            if (outcome !== undefined) throw outcome;
+        });
+
+        await assert.rejects(queue.catchUp(client), UnreachableError);
+        await queue.catchUp(client);
+
+        assert.deepEqual(reads, [0, 1]);
+    });
+
+    it("lets_one_waiting_catch_up_cover_every_call_made_before_it_starts", async () => {
+        const release = Promise.withResolvers<void>();
+        let reads = 0;
+        const queue = createCatchUpQueue(async () => {
+            reads += 1;
+            if (reads === 1) await release.promise;
+        });
+
+        const running = queue.catchUp(client);
+        await new Promise((resolve) => setImmediate(resolve));
+        const waiting = queue.catchUp(client);
+        const covered = queue.catchUp(client);
+        release.resolve();
+        await Promise.all([running, waiting, covered]);
+
+        assert.equal(reads, 2);
+    });
+
+    it("gives_a_caller_covered_by_a_failing_catch_up_its_failure", async () => {
+        const release = Promise.withResolvers<void>();
+        let reads = 0;
+        const queue = createCatchUpQueue(async () => {
+            reads += 1;
+            if (reads === 1) await release.promise;
+            else throw new UnreachableError("/run/bob.sock", "refused");
+        });
+
+        const running = queue.catchUp(client);
+        await new Promise((resolve) => setImmediate(resolve));
+        const covered = queue.catchUp(client);
+        release.resolve();
+
+        await running;
+        await assert.rejects(covered, UnreachableError);
+    });
+
+    it("does_nothing_without_a_client", async () => {
+        const queue = createCatchUpQueue(async () => assert.fail("no client to read with"));
+
+        await queue.catchUp(undefined);
     });
 });

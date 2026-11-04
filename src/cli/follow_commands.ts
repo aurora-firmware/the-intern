@@ -10,7 +10,7 @@ import type { Job } from "../jobs/job_store.ts";
 import type { CommandInput, CommandSpec } from "./command_line.ts";
 import { EXIT_CODES } from "./command_line.ts";
 import { socketPathFor, withClient } from "./connection.ts";
-import { createEntryTracker, followFeed } from "./feed_follower.ts";
+import { createCatchUpQueue, createEntryTracker, followFeed } from "./feed_follower.ts";
 import { conversationEntryLine, doneLine, instanceEventLine, jobEventLine } from "./feed_text.ts";
 import { statusLabel } from "./job_text.ts";
 import { writeError, writeJson, writeLine } from "./output.ts";
@@ -90,24 +90,17 @@ function isAbout(delta: Record<string, unknown>, number: string, conversationIds
 function followConversation(follow: JobFollow, conversationId: string) {
     const { input, socketPath, stop } = follow;
     const tracker = createEntryTracker(conversationId);
-    let tail: Promise<void> = Promise.resolve();
-    let isCatchUpQueued = false;
     let feedClient: Client | undefined;
 
     async function printMissed(client: Client): Promise<void> {
-        isCatchUpQueued = false;
         for (const entry of await tracker.catchUp(client)) {
             const line = conversationEntryLine(entry);
             if (line !== undefined) writeLine(input.io, line.replaceAll(/^/gm, `[${conversationId}] `));
         }
     }
 
-    function catchUp(client: Client | undefined = feedClient): Promise<void> {
-        if (client === undefined || isCatchUpQueued) return tail;
-        isCatchUpQueued = true;
-        tail = tail.then(() => printMissed(client));
-        return tail;
-    }
+    const queue = createCatchUpQueue(printMissed);
+    const catchUp = (client: Client | undefined = feedClient) => queue.catchUp(client);
 
     const feed = followFeed({
         connect: () => createClient(nodeTransport({ socketPath })),
