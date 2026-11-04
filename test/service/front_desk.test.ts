@@ -30,7 +30,12 @@ afterEach(async () => {
     for (const env of envs.splice(0)) await env.dispose();
 });
 
-type Instance = { start(): Promise<RunningDaemon>; context(): ServiceContext };
+type Instance = {
+    start(): Promise<RunningDaemon>;
+    context(): ServiceContext;
+    /** Leaves the pi agent folder with no default model, as if the team member had removed it. */
+    removeDefaultModel(): Promise<void>;
+};
 
 async function createInstance(): Promise<Instance> {
     const env = await createHermeticEnv();
@@ -45,6 +50,7 @@ async function createInstance(): Promise<Instance> {
     );
     let captured: ServiceContext | undefined;
     return {
+        removeDefaultModel: () => writeFile(join(env.piAgentDir, "settings.json"), "{}"),
         context() {
             if (captured === undefined) throw new Error("the daemon has not started");
             return captured;
@@ -143,6 +149,21 @@ describe("the front desk", () => {
         const before = await deskOf(first);
         const entriesBefore = await entriesOf(first, before.conversationId);
         assert.equal(await first.stop(), 0);
+
+        const second = await instance.start();
+
+        assert.deepEqual(await deskOf(second), before);
+        assert.deepEqual(await entriesOf(second, before.conversationId), entriesBefore);
+        assert.equal((await listAll(second)).length, 1);
+    });
+
+    it("restarts with its id and entries when the pi agent folder no longer names a model", async () => {
+        const instance = await createInstance();
+        const first = await instance.start();
+        const before = await deskOf(first);
+        const entriesBefore = await entriesOf(first, before.conversationId);
+        assert.equal(await first.stop(), 0);
+        await instance.removeDefaultModel();
 
         const second = await instance.start();
 

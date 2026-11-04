@@ -10,8 +10,14 @@ import { FRONT_DESK_CREATION } from "./desk_model.ts";
 
 const FRONT_DESK_ROLE = "desk";
 
-/** Returns the front desk's conversation id, creating the conversation when the instance has none. */
+/**
+ * Returns the front desk's conversation id, creating the conversation when the instance has none. The seat is resolved
+ * only for a creation: an instance that has its front desk restarts without a model to seat it. A crash between the
+ * lookup and the creation repeats both, and the keyed creation makes it happen once.
+ */
 export async function ensureFrontDesk(host: HarnessHost, catalog: RoleCatalog): Promise<string> {
+    const existing = await readFrontDeskId(host);
+    if (existing !== undefined) return existing;
     const { conversationId } = await createSeatedConversation(host, {
         ...FRONT_DESK_CREATION,
         job: { jobId: null, isLead: false, origin: { kind: "front_desk" }, depth: 0 },
