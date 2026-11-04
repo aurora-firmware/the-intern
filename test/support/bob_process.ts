@@ -1,13 +1,21 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
+import { DEFAULT_EXIT_DEADLINE_MS, exitWithin } from "./exit_deadline.ts";
 
 const BOB_ENTRY = join(import.meta.dirname, "..", "..", "src", "cli", "bob.ts");
 
-export type BobOptions = { runtimeDir?: string; env?: NodeJS.ProcessEnv; stdin?: string; cwd?: string };
+export type BobOptions = {
+    runtimeDir?: string;
+    env?: NodeJS.ProcessEnv;
+    stdin?: string;
+    cwd?: string;
+    /** How long `bob` may run before the test fails and the child is killed. */
+    deadlineMs?: number;
+};
 export type BobResult = { status: number | null; stdout: string; stderr: string };
 
 /** Runs `node src/cli/bob.ts` as a child, with `--runtime-dir` when given, and collects its status and output. */
-export function runBob(args: readonly string[], options: BobOptions = {}): Promise<BobResult> {
+export async function runBob(args: readonly string[], options: BobOptions = {}): Promise<BobResult> {
     const runtimeArgs = options.runtimeDir === undefined ? [] : ["--runtime-dir", options.runtimeDir];
     const child = spawn(process.execPath, [BOB_ENTRY, ...args, ...runtimeArgs], {
         env: options.env ?? process.env,
@@ -23,10 +31,15 @@ export function runBob(args: readonly string[], options: BobOptions = {}): Promi
         stderr += chunk;
     });
     child.stdin.end(options.stdin ?? "");
-    return new Promise((resolve, reject) => {
-        child.on("error", reject);
-        child.on("close", (status) => resolve({ status, stdout, stderr }));
-    });
+    const status = await exitWithin(
+        child,
+        `bob ${args.join(" ")}`,
+        options.deadlineMs ?? DEFAULT_EXIT_DEADLINE_MS,
+        () => {
+            return `stdout ${JSON.stringify(stdout)}, stderr ${JSON.stringify(stderr)}`;
+        },
+    );
+    return { status, stdout, stderr };
 }
 
 export type BobChild = {
@@ -38,7 +51,7 @@ export type BobChild = {
     /** Ends standard input, as the end of a pipe does. */
     endInput(): void;
     signal(sig: NodeJS.Signals): void;
-    /** Resolves with the exit status when the child exits. */
+    /** Resolves with the exit status when the child exits; rejects, after killing it, when it runs past the deadline. */
     exited: Promise<number | null>;
 };
 
@@ -48,7 +61,7 @@ const WAIT_FOR_POLL_MS = 10;
 /** Starts `node src/cli/bob.ts` as a child that keeps running; the test reads its output as it arrives. */
 export function spawnBob(
     args: readonly string[],
-    options: { runtimeDir?: string; env?: NodeJS.ProcessEnv; cwd?: string } = {},
+    options: { runtimeDir?: string; env?: NodeJS.ProcessEnv; cwd?: string; deadlineMs?: number } = {},
 ): BobChild {
     const runtimeArgs = options.runtimeDir === undefined ? [] : ["--runtime-dir", options.runtimeDir];
     const child = spawn(process.execPath, [BOB_ENTRY, ...args, ...runtimeArgs], {
@@ -63,10 +76,11 @@ export function spawnBob(
     child.stderr.on("data", (chunk) => {
         output.stderr += chunk;
     });
-    const exited = new Promise<number | null>((resolve, reject) => {
-        child.on("error", reject);
-        child.on("close", (status) => resolve(status));
+    const exited = exitWithin(child, `bob ${args.join(" ")}`, options.deadlineMs ?? DEFAULT_EXIT_DEADLINE_MS, () => {
+        return `stdout ${JSON.stringify(output.stdout)}, stderr ${JSON.stringify(output.stderr)}`;
     });
+    // A test that never awaits `exited` must not turn the deadline into an unhandled rejection.
+    exited.catch(() => {});
     return {
         stdout: () => output.stdout,
         stderr: () => output.stderr,

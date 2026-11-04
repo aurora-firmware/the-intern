@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_EXIT_DEADLINE_MS, exitWithin } from "./exit_deadline.ts";
 
 const BOB_ENTRY = join(import.meta.dirname, "..", "..", "src", "cli", "bob.ts");
 const DEFAULT_WAIT_FOR_MS = 20_000;
@@ -20,6 +21,7 @@ export type PtySession = {
     write(keys: string): void;
     /** Ends the session if it still runs. */
     kill(): void;
+    /** Resolves with the exit status; rejects, after killing the session, when it runs past the deadline. */
     exited: Promise<number | null>;
 };
 
@@ -39,7 +41,7 @@ function shellQuote(word: string): string {
  */
 export function runInPty(
     args: readonly string[],
-    options: { runtimeDir: string; redirectStdout?: boolean },
+    options: { runtimeDir: string; redirectStdout?: boolean; deadlineMs?: number },
 ): PtySession {
     const directory = mkdtempSync(join(tmpdir(), "bob-pty-"));
     const stderrPath = join(directory, "stderr");
@@ -65,15 +67,16 @@ export function runInPty(
     const readStderr = readFile(stderrPath);
     const readStdout = readFile(stdoutPath);
     const streams = { output: () => output, stderr: readStderr, stdout: readStdout };
-    const exited = new Promise<number | null>((resolve, reject) => {
-        child.on("error", reject);
-        child.on("close", (status) => {
-            finalFiles.set(stderrPath, readStderr());
-            finalFiles.set(stdoutPath, readStdout());
-            rmSync(directory, { recursive: true, force: true });
-            resolve(status);
-        });
+    child.once("close", () => {
+        finalFiles.set(stderrPath, readStderr());
+        finalFiles.set(stdoutPath, readStdout());
+        rmSync(directory, { recursive: true, force: true });
     });
+    const exited = exitWithin(child, `bob ${args.join(" ")}`, options.deadlineMs ?? DEFAULT_EXIT_DEADLINE_MS, () => {
+        return `output ${JSON.stringify(output)}, stderr ${JSON.stringify(readStderr())}`;
+    });
+    // A test that never awaits `exited` must not turn the deadline into an unhandled rejection.
+    exited.catch(() => {});
     return {
         ...streams,
         async waitFor(stream, text, timeoutMs = DEFAULT_WAIT_FOR_MS) {
