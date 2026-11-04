@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { runBob } from "../support/bob_process.ts";
+import { runBob, spawnBob } from "../support/bob_process.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -82,5 +82,23 @@ describe("bob chat without a terminal", () => {
         const result = await runBob(["chat"], { runtimeDir: env.runtimeDir, env: env.env, stdin: `${QUESTION}\n` });
         assert.equal(result.status, 3, result.stderr);
         assert.equal(result.stdout, "");
+    });
+});
+
+describe("bob chat without a terminal when the reader of its output goes away", () => {
+    it("exits 0 with no error output when standard output is closed before the answer", async () => {
+        const fixture = await readyDaemon();
+        const child = spawnBob(["chat"], {
+            runtimeDir: fixture.env.runtimeDir,
+            env: fixture.env.env,
+            deadlineMs: WAIT_MS,
+        });
+
+        // Standard input stays open, as in `(echo a; sleep 1) | bob chat | true`.
+        child.write(`${QUESTION}\n`);
+        child.closeStdout();
+
+        assert.equal(await child.exited, 0, child.stderr());
+        assert.equal(child.stderr(), "");
     });
 });

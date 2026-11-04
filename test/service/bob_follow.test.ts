@@ -168,3 +168,26 @@ describe("bob follow at its start", () => {
         assert.match(result.stderr, /^[^\n]*relative\/run[^\n]*absolute path[^\n]*\n$/);
     });
 });
+
+describe("bob follow when the reader of its output goes away", () => {
+    it("exits 0 with no error output when standard output is closed after the first line", async () => {
+        const env = await newEnv();
+        const daemon = await readyDaemon(env);
+        const child = follow(env);
+        await waitUntilFollowing(daemon, child);
+
+        child.closeStdout();
+        const deadline = Date.now() + 20_000;
+        let status: number | null | undefined;
+        child.exited.then((exit) => {
+            status = exit;
+        });
+        while (status === undefined && Date.now() < deadline) {
+            await daemon.invoke("jobs.create", { text: "after the reader left" });
+            await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+
+        assert.equal(status, EXIT_OK, child.stderr());
+        assert.equal(child.stderr(), "");
+    });
+});

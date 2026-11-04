@@ -28,6 +28,26 @@ function drained(stream: CommandIo["stdout"]): Promise<void> {
     });
 }
 
+/**
+ * Resolves when a reader of standard output or standard error has gone (`EPIPE`), and rejects with any other stream
+ * failure. The listeners stay on for the life of the process, so no error event finds a stream without one.
+ */
+function whenReaderGone(io: CommandIo): Promise<void> {
+    const gone = Promise.withResolvers<void>();
+    const onError = (error: NodeJS.ErrnoException) => {
+        if (error.code === "EPIPE") gone.resolve();
+        else gone.reject(error);
+    };
+    io.stdout.on("error", onError);
+    io.stderr.on("error", onError);
+    return gone.promise;
+}
+
+/** Runs the command to its status, or to success when its reader goes away first. */
+function runUntilReaderGone(command: () => Promise<number>, io: CommandIo): Promise<number> {
+    return Promise.race([command(), whenReaderGone(io).then(() => EXIT_CODES.ok)]);
+}
+
 /** Runs the command and returns the process exit status. */
 export async function main(argv: readonly string[], io: CommandIo = processIo()): Promise<number> {
     const parsed = parseCommandLine(argv, COMMANDS);
@@ -42,7 +62,9 @@ export async function main(argv: readonly string[], io: CommandIo = processIo())
             io.stderr.write(`${parsed.message}\n`);
             return EXIT_CODES.usage;
         case "command": {
-            const status = await parsed.command.run({ ...parsed.input, io });
+            const run = () => parsed.command.run({ ...parsed.input, io });
+            // `serve` keeps its own reaction to a lost stream; a data command ends quietly when its reader goes.
+            const status = parsed.command.isData ? await runUntilReaderGone(run, io) : await run();
             // A piped stream holds only what the reader has taken, so exiting at once would cut data commands short.
             // The error listener comes after the command, so `serve` reacts to a lost stderr as before.
             if (parsed.command.isData) await Promise.all([drained(io.stdout), drained(io.stderr)]);

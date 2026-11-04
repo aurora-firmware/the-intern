@@ -50,6 +50,8 @@ export type BobChild = {
     write(text: string): void;
     /** Ends standard input, as the end of a pipe does. */
     endInput(): void;
+    /** Closes the test's end of standard output, as a reader that goes away does (`bob follow | head -1`). */
+    closeStdout(): void;
     signal(sig: NodeJS.Signals): void;
     /** Resolves with the exit status when the child exits; rejects, after killing it, when it runs past the deadline. */
     exited: Promise<number | null>;
@@ -100,6 +102,9 @@ export function spawnBob(
         },
         endInput: () => {
             child.stdin.end();
+        },
+        closeStdout: () => {
+            child.stdout.destroy();
         },
         signal: (sig) => {
             child.kill(sig);
