@@ -76,6 +76,9 @@ A data command stops quietly, with exit 0, when the program that reads its outpu
 | 2         | A usage error: an unknown command or option, a missing or extra argument, or a reserved group. Standard error holds the usage of the group concerned, except for a reserved group, which prints one line saying the group isn't available yet. |
 | 3         | The daemon can't be reached.                                                                         |
 
+`bob chat`, `bob follow` and `bob jobs follow` exit 3 when no daemon runs at the start. When the daemon is there but
+starting or stopping, they print a notice on standard error and wait for it.
+
 ### JSON output
 
 Most commands print the answer of one service operation as one JSON value. Three kinds of command print more:

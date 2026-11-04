@@ -430,3 +430,99 @@ describe("bob follow across a daemon that stops and starts again", () => {
         assert.equal(follow.stderr(), `${UNAVAILABLE_NOTICE}\n`);
     });
 });
+
+/** A daemon whose start is held: it opens its socket and answers `unavailable` on it until the test releases it. */
+async function heldDaemon(env: HermeticEnv): Promise<DaemonProcess> {
+    const held = startDaemon({ hermetic: env, script: "echo", turnEndRule: false, holdStart: true });
+    daemons.push(held);
+    await until(async () => existsSync(join(env.runtimeDir, "bob.sock")), "the held daemon to open its socket");
+    return held;
+}
+
+async function isStillRunning(child: BobChild): Promise<boolean> {
+    return (await Promise.race([child.exited, Promise.resolve("running")])) === "running";
+}
+
+describe("the following commands started while the daemon is starting", () => {
+    it("makes bob follow keep trying, with the notice, when the daemon goes away after answering unavailable", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const held = await heldDaemon(env);
+        const follow = spawnBob(["follow"], { runtimeDir: env.runtimeDir, env: env.env });
+        children.push(follow);
+        await follow.waitFor("stderr", UNAVAILABLE_NOTICE);
+
+        held.kill9();
+        await held.exited;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+
+        assert.equal(await isStillRunning(follow), true, follow.stderr());
+    });
+
+    it("makes piped bob chat wait for the daemon, with the notice, and answer once it is ready", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const held = await heldDaemon(env);
+        const chat = spawnBob(["chat"], { runtimeDir: env.runtimeDir, env: env.env });
+        children.push(chat);
+        chat.write(`${LINE}\n`);
+        chat.endInput();
+
+        await chat.waitFor("stderr", UNAVAILABLE_NOTICE);
+        assert.equal(await isStillRunning(chat), true, chat.stderr());
+        held.release();
+
+        assert.equal(await chat.exited, 0, chat.stderr());
+        assert.equal(chat.stdout(), `echo: ${LINE}\n`);
+        assert.equal(chat.stderr(), `${UNAVAILABLE_NOTICE}\n`);
+    });
+
+    it("makes bob jobs follow wait for the daemon, with the notice, and go on once it is ready", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const held = await heldDaemon(env);
+        const follow = spawnBob(["jobs", "follow", "J-1"], { runtimeDir: env.runtimeDir, env: env.env });
+        children.push(follow);
+
+        await follow.waitFor("stderr", UNAVAILABLE_NOTICE);
+        assert.equal(await isStillRunning(follow), true, follow.stderr());
+        held.release();
+        await held.ready;
+
+        // The daemon has no such job: the command got past the start, and the daemon's own answer ends it.
+        assert.equal(await follow.exited, 1, follow.stderr());
+        assert.ok(follow.stderr().includes("not_found"), follow.stderr());
+    });
+
+    it("makes bob chat on a terminal wait for the daemon, with the notice, and show its prompt once it is ready", {
+        skip: !hasScript() && !process.env.CI ? SKIP_REASON : false,
+    }, async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const held = await heldDaemon(env);
+        const chat = runInPty(["chat"], { runtimeDir: env.runtimeDir });
+        sessions.push(chat);
+
+        await chat.waitFor("stderr", UNAVAILABLE_NOTICE);
+        held.release();
+        await chat.waitFor("output", PROMPT);
+        chat.write(CTRL_D);
+
+        assert.equal(await ptyExitedWithin(chat), 0, chat.stderr());
+    });
+});
+
+describe("the following commands started with no daemon", () => {
+    for (const args of [["chat"], ["follow"], ["jobs", "follow", "J-1"]]) {
+        it(`makes bob ${args.join(" ")} say the daemon isn't running and exit 3`, async () => {
+            const env = await createHermeticEnv();
+            envs.push(env);
+            const child = spawnBob(args, { runtimeDir: env.runtimeDir, env: env.env });
+            children.push(child);
+            child.endInput();
+
+            assert.equal(await child.exited, 3, child.stderr());
+            assert.ok(child.stderr().includes("isn't running here"), child.stderr());
+        });
+    }
+});

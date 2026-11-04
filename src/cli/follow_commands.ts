@@ -14,6 +14,7 @@ import { createCatchUpQueue, createEntryTracker, followFeed } from "./feed_follo
 import { conversationEntryLine, doneLine, instanceEventLine, jobEventLine } from "./feed_text.ts";
 import { statusLabel } from "./job_text.ts";
 import { writeError, writeJson, writeLine } from "./output.ts";
+import { patientClient } from "./patient_client.ts";
 
 async function follow(input: CommandInput): Promise<number> {
     const { io, json } = input;
@@ -230,7 +231,10 @@ async function followJob(follow: JobFollow, client: Client): Promise<void> {
 async function jobsFollow(input: CommandInput): Promise<number> {
     return withClient(input, async (client) => {
         const { io, json } = input;
-        const job = (await client.invoke("jobs.get", { job: input.positionals[0] })) as Job;
+        // A daemon that is absent at the start ends the command (S-005 AC-002.2); one that is starting or stopping is
+        // waited for (REQ-015).
+        const starting = patientClient(client, { onNotice: (text) => writeError(io, text), isAbsentFatalAtStart: true });
+        const job = (await starting.invoke("jobs.get", { job: input.positionals[0] })) as Job;
         if (json) writeJson(io, job);
         if (job.status === "done") {
             if (!json) writeLine(io, endLine(job));

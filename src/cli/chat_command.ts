@@ -95,10 +95,11 @@ async function exchange(client: Client, io: CommandIo, conversationId: string, l
 }
 
 export async function runPipedChat(client: Client, io: CommandIo, json: boolean, reset = false): Promise<number> {
-    // A daemon that is absent at the start ends the command (S-005 AC-002.2); one lost later is waited for (REQ-015).
-    const { conversationId } = (await client.invoke("desk.get")) as { conversationId: string };
-    if (reset) await client.invoke("conversations.reset", { conversationId });
-    const patient = patientClient(client, { onNotice: (text) => writeError(io, text) });
+    // A daemon that is absent at the start ends the command (S-005 AC-002.2); one that is starting or stopping, or lost
+    // later, is waited for (REQ-015).
+    const patient = patientClient(client, { onNotice: (text) => writeError(io, text), isAbsentFatalAtStart: true });
+    const { conversationId } = (await patient.invoke("desk.get")) as { conversationId: string };
+    if (reset) await patient.invoke("conversations.reset", { conversationId });
     const lines = createInterface({ input: io.stdin, crlfDelay: Number.POSITIVE_INFINITY });
     for await (const line of lines) {
         if (line.trim() === "") continue;

@@ -77,13 +77,16 @@ export async function runTerminalChat(
 ): Promise<number> {
     const { json } = options;
     const client = connect();
-    const desk = (await client.invoke("desk.get")) as { conversationId: string };
+    // A daemon that is absent at the start ends the command (S-005 AC-002.2); one that is starting or stopping, or lost
+    // later, is waited for (REQ-015).
+    const starting = patientClient(client, { onNotice: (text) => writeError(io, text), isAbsentFatalAtStart: true });
+    const desk = (await starting.invoke("desk.get")) as { conversationId: string };
     const { conversationId } = desk;
     if (json) writeJson(io, desk);
-    if (options.reset) await client.invoke("conversations.reset", { conversationId });
+    if (options.reset) await starting.invoke("conversations.reset", { conversationId });
 
     const tracker = createEntryTracker(conversationId);
-    const history = await readHistory(client, conversationId, io, json);
+    const history = await readHistory(starting, conversationId, io, json);
     for (const entry of history) tracker.markPrinted(entry.id);
     if (!json) {
         const lines = history.flatMap((entry) => historyText(entry) ?? []).flatMap((l) => l.split("\n"));

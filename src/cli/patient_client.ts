@@ -3,7 +3,7 @@
  * gone, or starting or stopping, prints one notice and is made again until the daemon answers, with the same input, so
  * a request id keeps a submitted line admitted exactly once. Imports the client library only, never the daemon.
  */
-import type { Client } from "../client/client.ts";
+import { type Client, ClientError, UnreachableError } from "../client/client.ts";
 import { DEFAULT_RETRY_DELAY_MS, outageNoticeFor, pause } from "./feed_follower.ts";
 
 export type PatienceOptions = {
@@ -13,20 +13,31 @@ export type PatienceOptions = {
     /** Once aborted, a call that meets an outage again fails with it instead of waiting; the call in flight is not cut. */
     signal?: AbortSignal;
     retryDelayMs?: number;
+    /**
+     * Fails with the `UnreachableError` while no call has found the daemon there, instead of waiting for one. A command
+     * that starts with no daemon ends (S-005 AC-002.2); a daemon that answered, even `unavailable`, is waited for.
+     */
+    isAbsentFatalAtStart?: boolean;
 };
 
-async function untilAnswered<T>(attempt: () => Promise<T>, options: PatienceOptions): Promise<T> {
+/** Whether the daemon has been there at any call: it answered, or answered that it is starting or stopping. */
+type Reached = { value: boolean };
+
+async function untilAnswered<T>(attempt: () => Promise<T>, options: PatienceOptions, reached: Reached): Promise<T> {
     const { onNotice, onRecovered, signal, retryDelayMs = DEFAULT_RETRY_DELAY_MS } = options;
     const neverAborted = new AbortController().signal;
     let lastNotice: string | undefined;
     for (;;) {
         try {
             const answer = await attempt();
+            reached.value = true;
             if (lastNotice !== undefined) onRecovered?.();
             return answer;
         } catch (error) {
+            if (error instanceof ClientError && error.code === "unavailable") reached.value = true;
             const notice = outageNoticeFor(error);
             if (notice === undefined || signal?.aborted) throw error;
+            if (options.isAbsentFatalAtStart && !reached.value && error instanceof UnreachableError) throw error;
             if (notice !== lastNotice) onNotice(notice);
             lastNotice = notice;
             await pause(retryDelayMs, signal ?? neverAborted);
@@ -36,8 +47,9 @@ async function untilAnswered<T>(attempt: () => Promise<T>, options: PatienceOpti
 
 /** Wraps `invoke` so it waits out an outage; `subscribe` is the follower's business and is passed through. */
 export function patientClient(client: Client, options: PatienceOptions): Client {
+    const reached: Reached = { value: false };
     return {
-        invoke: (name, input) => untilAnswered(() => client.invoke(name, input), options),
+        invoke: (name, input) => untilAnswered(() => client.invoke(name, input), options, reached),
         subscribe: (scope) => client.subscribe(scope),
     };
 }

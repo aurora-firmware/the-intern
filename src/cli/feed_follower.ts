@@ -98,13 +98,14 @@ async function readSubscription(options: FollowOptions, client: Client): Promise
 export async function followFeed(options: FollowOptions): Promise<void> {
     const { connect, onNotice, signal, retryDelayMs = DEFAULT_RETRY_DELAY_MS } = options;
     let isOutageNoticed = false;
-    let isConnected = false;
+    // Whether a daemon has been there: it sent a snapshot, or answered that it is starting or stopping.
+    let hasReachedDaemon = false;
     while (!signal.aborted) {
         try {
             const { hasSnapshot, reason } = await readSubscription(options, connect());
             if (hasSnapshot) {
                 isOutageNoticed = false;
-                isConnected = true;
+                hasReachedDaemon = true;
             }
             if (signal.aborted) return;
             if (reason !== LAGGING_REASON) await pause(retryDelayMs, signal);
@@ -112,12 +113,15 @@ export async function followFeed(options: FollowOptions): Promise<void> {
             const notice = outageNoticeFor(error);
             if (notice === undefined) throw error;
             const hasSnapshot = (error as { hasSnapshot?: boolean }).hasSnapshot === true;
-            if (options.isUnreachableFatalAtStart && !isConnected && !hasSnapshot && error instanceof UnreachableError)
+            if (
+                options.isUnreachableFatalAtStart &&
+                !hasReachedDaemon &&
+                !hasSnapshot &&
+                error instanceof UnreachableError
+            )
                 throw error;
-            if (hasSnapshot) {
-                isOutageNoticed = false;
-                isConnected = true;
-            }
+            if (hasSnapshot) isOutageNoticed = false;
+            if (hasSnapshot || !(error instanceof UnreachableError)) hasReachedDaemon = true;
             if (!isOutageNoticed) onNotice(notice);
             isOutageNoticed = true;
             await pause(retryDelayMs, signal);
