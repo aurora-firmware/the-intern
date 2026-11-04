@@ -73,9 +73,10 @@ it. The one change still allowed is relating it to another job. More work on a f
 may be Related to the old one.
 
 Completing or cancelling a job closes every conversation of the job and aborts its work, so nothing stays parked or
-waiting for a report. A lead that completes the job itself ends its run at that call. A closed conversation stays
-closed for good. It keeps its transcript as the record of the work and lists with status `closed`. You can read it, but input to it, withdrawing its input, and aborting, resetting, reseating
-or compacting it are refused as `conflict` and change nothing. So no answer reaches the lead of a Done job.
+waiting for a report. A lead that completes the job itself ends its run at that call. A closed conversation stays closed
+for good. It keeps its transcript as the record of the work and lists with status `closed`. You can read it, but input
+to it, withdrawing its input, and aborting, resetting, reseating or compacting it are refused as `conflict` and change
+nothing. So no answer reaches the lead of a Done job.
 
 The `complete_job` tool of the lead returns a result that isn't an error and names the job as Done. If the lead's
 closed mark doesn't land after the job is written Done, the tool's result says the call was aborted, and
