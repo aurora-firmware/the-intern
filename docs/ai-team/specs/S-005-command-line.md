@@ -1,7 +1,7 @@
 ---
 id: S-005
 title: Command line
-version: '0.2'
+version: '0.3'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-03'
 author: planner
@@ -136,12 +136,13 @@ resolved by the service, S-004 REQ-002):
 | `bob jobs relate <job> <job>`, `bob jobs unrelate <job> <job>` | `jobs.relate`, `jobs.unrelate` (S-004 REQ-009) | REQ-004 |
 | `bob jobs complete <job> <justification>`, `bob jobs cancel <job> <justification>` | `jobs.complete`, `jobs.cancel` (S-004 REQ-005, REQ-007) | REQ-004 |
 | `bob jobs answer <job> <text>` | `jobs.get` for the lead conversation, then `conversations.submit` to it (S-001 REQ-020; S-004 REQ-006) | REQ-005 |
-| `bob jobs follow <job>` | `jobs.get`, the instance feed filtered to the job, and the conversation feed of each of its conversations (S-002 REQ-014; S-004 REQ-015) | REQ-006 |
+| `bob jobs follow <job>` | `jobs.get`, `jobs.history.list`, `conversations.list` and `conversations.get` for the job's conversations, the instance feed filtered to the job, and the conversation feed and `conversations.entries` of each of its conversations (S-002 REQ-014; S-004 REQ-015) | REQ-006 |
 | `bob follow` | the instance feed (S-002 REQ-014) | REQ-007 |
-| `bob status`, `bob usage` | `daemon.status`, `usage.get` (S-002 REQ-003, REQ-012) | REQ-008 |
+| `bob status` | `daemon.status` (S-002 REQ-003) | REQ-008 |
+| `bob usage` | `usage.get` for the total, `conversations.list`, then `usage.get` for each conversation (S-002 REQ-012) | REQ-008 |
 | `bob chat` | `desk.get`, `conversations.entries`, the conversation feed, `conversations.submit` for each line, `conversations.abort` and `submissions.get` on Ctrl-C, `submissions.wait` and `conversations.entries` without a terminal (S-001 REQ-021; S-002 REQ-012) | REQ-009, REQ-010 |
 | `bob chat --reset` | `desk.get`, `conversations.reset` (S-001 REQ-024), then as `bob chat` | REQ-009 |
-| `bob conversations list` | `conversations.list`, optionally for one job (S-001 REQ-016) | REQ-011 |
+| `bob conversations list` | `conversations.list`, optionally for one job, with `jobs.get` first to name that job (S-001 REQ-016) | REQ-011 |
 | `bob conversations show <id>` | `conversations.get`, `conversations.entries`, `conversations.invocations` (S-001 REQ-016) | REQ-011 |
 | `bob conversations send <id> <text>` | `conversations.submit`, busy mode steer unless the team member names follow-up or reject (S-001 REQ-020) | REQ-011 |
 | `bob conversations stop <id>` | `conversations.abort` (S-001 REQ-008) | REQ-011 |
@@ -421,7 +422,8 @@ done, and agents starting and stopping runs, until the team member presses Ctrl-
 ### REQ-008 — Status and usage
 
 `bob status` SHALL print the daemon status (`daemon.status`: phase, versions, start time, instance directories,
-worker threads in use and waiting), and `bob usage` the usage per conversation and in total (`usage.get`).
+worker threads in use and waiting), and `bob usage` the usage per conversation and in total (`usage.get`). With
+`--json`, `bob usage` SHALL print one object that holds both.
 
 #### AC-008.1 — Status and usage
 
@@ -475,8 +477,8 @@ and a prompt, and then:
 
 ### REQ-010 — Chat without a terminal
 
-When standard input isn't a terminal, `bob chat` SHALL show no prompt, history or colour; it SHALL submit each line
-of standard input in turn and wait for the submission to settle, calling `submissions.wait` again each time a wait
+When standard input or output isn't a terminal, `bob chat` SHALL show no prompt, history or colour; it SHALL submit
+each line of standard input in turn and wait for the submission to settle, calling `submissions.wait` again each time a wait
 ends with the submission still unsettled (each wait lasts at most 5 minutes, S-002 REQ-012). It SHALL then read the
 front desk's answer with `conversations.entries`, print it and, at the end of input, exit 0.
 
@@ -722,8 +724,8 @@ sense.
   strict mode, fails an unknown option with `ERR_PARSE_ARGS_UNKNOWN_OPTION`, which REQ-001 needs; `node:readline` and
   `node:readline/promises` provide `createInterface` and keypress events for `bob chat`. `bob serve` already uses
   `parseArgs`.
-- **S-001 v0.8, S-002 v0.10 and S-004 v0.6.** The front desk, `desk.get` and the job operations exist as specified;
-  the front-desk work is planned in their breakdowns, which `bob chat` waits for.
+- **S-001 v0.11, S-002 v0.11 and S-004 v0.9.** The front desk, `desk.get`, closed conversations and the job operations
+  exist as specified.
 - **S-004's import step** (REQ-017) runs in-process and holds the single-owner lock (S-002 REQ-001).
 - **Installation and service setup** puts `bob` on the `PATH`; until then the manual shows `node src/cli/bob.ts`.
 - **Later specs** (Schedules and triggers, Skills and instructions, Team knowledge, Email) add their groups under the
@@ -763,3 +765,4 @@ None.
 | 2026-11-03 | v0.2. Clarifications, no change of scope: AC-014.1, the cases that run `bob` with no command or an unknown one expect the top-level usage (REQ-001); Interfaces, a `show` command that calls several operations prints one JSON object keyed by operation name; Design Principles, a command calls the operations Interfaces names, not "one or two". | Product owner approval of the keyed `--json` shape, 2026-11-03 (finding F14 of the S-001 v0.9 consistency review). Architect ruling on T-162 (AC-014.1). Reviews of T-165 (the keyed JSON) and of the plan (the number of operations). | T-162, T-165 (built as clarified) |
 | 2026-11-03 | v0.2. REQ-005: a Done job's lead conversation is closed (S-001 v0.9 REQ-026), so `bob jobs answer` is refused `conflict`, and an unknown job `not_found`. REQ-011: a closed conversation lists as `closed`, and `send`, `stop`, `reset`, `seat` and `compact` on it exit 1. Architecture consistency review (finding F10), same version: REQ-005, when `jobs.get` returns no `leadConversation` the command submits nothing, prints that the job has no lead conversation and exits 1; new AC-005.2 for a completed job, a job cancelled before its lead started and an unknown job; new AC-011.4 for a closed conversation. | Product owner decision of 2026-11-03 on T-166. Architecture consistency review of the closed-conversation amendment, 2026-11-03. | T-166, T-167 |
 | 2026-11-03 | v0.2, still. AC-005.2: the cancelled job is one cancelled before its lead conversation was created (S-004 REQ-007, S-001 AC-026.8). | Architecture consistency review of S-001 v0.9, 2026-11-03. | T-166, T-167 |
+| 2026-11-04 | v0.3. Interfaces: the Contract names the operations `bob jobs follow`, `bob usage` and `bob conversations list --job` call. REQ-008: `bob usage --json` holds the usage per conversation and the total. REQ-010: chat without a terminal also applies when standard output isn't a terminal, as Definitions and Design Principles state. Assumptions: current versions; the breakdowns are done. | PR #148 review findings, product owner decision of 2026-11-04. | None; fixed on the PR branch |

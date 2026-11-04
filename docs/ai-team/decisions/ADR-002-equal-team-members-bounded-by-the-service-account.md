@@ -38,6 +38,9 @@ operating-system account The Intern runs as, not by logins or per-action rules.
    operations it exposes. No service operation reads transport details, a connection or the caller's machine to decide
    its outcome (S-002 REQ-016). Where S-001 requires attribution, the actor is still recorded: a team member with the
    way in they used, an agent, or a job source (S-001 REQ-007). It says where an action came from and grants nothing.
+   One rule reads the way in to decide an outcome: the front desk takes input only by the command line or the web
+   interface (S-001 REQ-020, S-004 REQ-021). The rule is about the route, not the person: it reads no transport detail,
+   and it treats every team member who comes by those routes alike.
 3. **No per-action approval rules.** The Intern has no policy component and no approvals for each action. What it can
    do is bounded by what the service account can reach.
 4. **The service account is the boundary.** The Intern runs as one operating-system account, the service account. In
@@ -112,3 +115,9 @@ network setup, and the service layer stays free of transport and authorization (
 **Description:** Copy model keys and account credentials into The Intern's configuration or database.
 **Rejected because:** It creates a second credential store to protect, and lets The Intern and a person's own pi under
 the same account log each other out. Using the service account's credentials in place keeps one copy and one boundary.
+
+## Amendments
+
+| Date | Change | Reason |
+|---|---|---|
+| 2026-11-04 | Decision 2: records the one rule that reads the way in to decide an outcome, the front desk's refusal of input by any other way in. | S-001 REQ-020 and S-004 REQ-021 already require it, and this decision said the actor grants nothing. PR #148 review; product owner decision of 2026-11-04. |

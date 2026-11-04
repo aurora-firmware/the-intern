@@ -74,7 +74,7 @@ kind through pi-durable `InputEntry`. The entry's data names the sender and carr
    text, so a transcript read shows the text once.
 5. **Other inputs stay `pi.user`.** A conversation's first input stays plain `pi.user`, because the conversation's
    origin already records its source: a job's first input (S-001 REQ-012) and the job prompt of an invoked
-   conversation (S-001 REQ-008). An input submitted with `whenBusy: "reject"` also stays plain `pi.user`. A reject input
+   conversation (S-001 REQ-008). An input submitted with `whenBusy: "reject"` also stays plain `pi.user`, except one to the front desk. A reject input
    held for a parked conversation is held as a follow-up and delivered as `intern.steer` (S-001 REQ-020).
 
    The inputs S-004 adds are `intern.steer` follow-ups, placed in the lead conversation:
@@ -86,8 +86,9 @@ kind through pi-durable `InputEntry`. The entry's data names the sender and carr
    A team member's input submitted to a Blocked job's lead through `conversations.submit` keeps the kind it has today:
    an `intern.steer` with its sender, which now continues the lead instead of being held (S-001 REQ-020). An answer by
    email follows the same rule when the Email spec delivers it. Input the front desk sends to a job's conversation is
-   an `intern.steer` with the front desk's agent as its actor. Input a team member submits to the front desk keeps the
-   kind `conversations.submit` gives it; no agent's input reaches the front desk (S-001 REQ-020). Any other input
+   an `intern.steer` with the front desk's agent as its actor. Input a team member submits to the front desk, in any
+   busy mode, is an `intern.steer` with its sender and way in (S-001 REQ-023); no agent's input reaches the front desk
+   (S-001 REQ-020). Any other input
    sent on someone's behalf gets its kind by amending this record.
 
 ## Consequences
@@ -146,3 +147,4 @@ the message it describes.
 | 2026-11-01 | Decision 1: a transcript read and the conversation feed show the entry's own data; a context read shows the model's user message. Negative: the transcript read and the conversation feed now follow decision 1 (T-090, T-091); the earlier text named the instance feed, but entries are in the conversation feed. No decision changes. | S-001 spec-truth reconciliation, closing finding N1; product owner decision of 2026-11-01 that `conversations.context` shows what the model sees. |
 | 2026-11-02 | Decision 5: the text of `jobs.resume`, its default resume note and the reminder of S-004 REQ-008 are `intern.steer` follow-ups, the first two with the team member as actor and the reminder with the daemon; a team member's submit to a Blocked job's lead stays `intern.steer`. Decision 2: the daemon is an `intern.steer` actor. Decision 3: the request ids `resume:<jobId>:<n>` and `reminder:<jobId>:<n>`. | S-004 v0.2 REQ-006 and REQ-008, S-001 v0.7 REQ-007 and REQ-020; S-004 architecture consistency review; decision 5 asked for these kinds to be fixed by amendment. |
 | 2026-11-03 | Decision 2: the front desk's agent is an `intern.steer` actor when it passes a team member's answer or steering to a job's conversation. Decision 3: a front-desk steering input carries the request id `steer:<frontDeskId>:<toolCallId>`, as the `steer` tool's does. Decision 5: input the front desk sends to a job's conversation is an `intern.steer`; input a team member submits to the front desk keeps the kind `conversations.submit` gives it, and no agent's input reaches the front desk. No new entry kind. | S-001 v0.8 REQ-020, REQ-022 and REQ-023; front desk architecture consistency review, finding F9; decision 5 asks for new inputs sent on someone's behalf to be fixed by amendment. |
+| 2026-11-04 | Decision 5: a team member's input to the front desk is an `intern.steer` with its sender and way in in every busy mode, a reject input included. | S-001 REQ-023 says every input to the front desk records its way in, and S-004 REQ-021 gives a job the letter of that way in. A plain `pi.user` records none. PR #148 review; product owner decision of 2026-11-04. |
