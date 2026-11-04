@@ -404,6 +404,52 @@ describe("a step after the lead's closed mark landed that fails", () => {
     }
 });
 
+describe("a step that fails after the lead's closed mark landed, with an invoked agent running", () => {
+    it("aborts the invoked agent, returns the tool's success and sends no further request", async () => {
+        const gate = deferred();
+        let isWorkerRunning = false;
+        const started = await start(
+            {
+                "lead with worker": [
+                    invokeSteerable("worker task"),
+                    call("update_job", { definitionOfDone: "the worker is stopped" }),
+                    call("complete_job", { justification: "stopped" }),
+                ],
+                "worker task": [
+                    {
+                        hold: gate.promise,
+                        onEntered: () => {
+                            isWorkerRunning = true;
+                        },
+                    },
+                ],
+            },
+            undefined,
+            (writePoint) => {
+                if (writePoint === "conversations-closed") throw new Error("the step after the marks failed");
+            },
+        );
+        const job = await started.createJob("lead with worker");
+        await waitFor(() => isWorkerRunning, "the invoked agent to run");
+        await waitFor(async () => (await started.status(job.id)) === "done", "the job to be Done");
+        await waitFor(() => started.isIdle(job.leadConversation), "the lead's run to end");
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        const invoked = (await started.ctx.host.listConversations())
+            .map(({ id }) => id)
+            .find((id) => id !== job.leadConversation) as string;
+        const lines = await linesOf(started, job.leadConversation);
+        assert.ok(lines.includes("tool complete_job returned"), lines.join("\n"));
+        assert.equal(started.replies["lead with worker"], 3, "no model request follows the complete call");
+        assert.ok(
+            started.logLines.some((line) => line.includes("the step after the marks failed")),
+            "the failure is logged",
+        );
+        assert.equal(await started.isIdle(invoked), true, "the invoked agent is aborted");
+        gate.release();
+    });
+});
+
 describe("a closed-mark commit that fails after the complete write", () => {
     it("aborts the lead and the invoked agent, settles the queued input aborted and leaves both open until the next start", async () => {
         const gate = deferred();
