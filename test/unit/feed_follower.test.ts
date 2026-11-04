@@ -120,6 +120,51 @@ describe("followFeed", () => {
         assert.equal(script.connections(), 3);
     });
 
+    it("throws_the_unreachable_error_without_a_notice_when_no_daemon_answers_before_the_first_snapshot", async () => {
+        const script = scriptedConnect([{ failure: new UnreachableError("/run/bob.sock", "refused") }]);
+
+        await assert.rejects(
+            followFeed({
+                connect: script.connect,
+                scope: { scope: "instance" },
+                onSnapshot: async () => {},
+                onDelta: async () => {},
+                onNotice: () => assert.fail("a daemon absent at the start gives no notice"),
+                signal: new AbortController().signal,
+                retryDelayMs: 1,
+                isUnreachableFatalAtStart: true,
+            }),
+            UnreachableError,
+        );
+        assert.equal(script.connections(), 1);
+    });
+
+    it("keeps_waiting_for_a_daemon_that_goes_away_after_the_first_snapshot_even_when_unreachable_is_fatal_at_start", async () => {
+        const script = scriptedConnect([
+            { items: [{ snapshot: "s1" }], failure: undefined, end: "unsubscribed" },
+            { failure: new UnreachableError("/run/bob.sock", "refused") },
+            { items: [{ snapshot: "s2" }], hold: true },
+        ]);
+        const controller = new AbortController();
+        const notices: string[] = [];
+        const snapshots: unknown[] = [];
+        await followFeed({
+            connect: script.connect,
+            scope: { scope: "instance" },
+            onSnapshot: async (snapshot) => {
+                snapshots.push(snapshot);
+                if (snapshot === "s2") controller.abort();
+            },
+            onDelta: async () => {},
+            onNotice: (text) => notices.push(text),
+            signal: controller.signal,
+            retryDelayMs: 1,
+            isUnreachableFatalAtStart: true,
+        });
+        assert.equal(notices.length, 1);
+        assert.deepEqual(snapshots, ["s1", "s2"]);
+    });
+
     it("writes_a_notice_and_retries_when_the_daemon_answers_unavailable", async () => {
         const script = scriptedConnect([
             { failure: new ClientError("unavailable", "The daemon is starting") },

@@ -22,6 +22,11 @@ export type FollowOptions = {
     onNotice(text: string): void;
     signal: AbortSignal;
     retryDelayMs?: number;
+    /**
+     * Fails with the `UnreachableError` when no daemon answers before the first snapshot, instead of waiting for one.
+     * A command that starts with no daemon ends (S-005 AC-002.2); REQ-015 applies once it has been connected.
+     */
+    isUnreachableFatalAtStart?: boolean;
 };
 
 /** Why an attempt could not go on: the daemon isn't there, or answers `unavailable`. Any other failure is thrown. */
@@ -93,16 +98,26 @@ async function readSubscription(options: FollowOptions, client: Client): Promise
 export async function followFeed(options: FollowOptions): Promise<void> {
     const { connect, onNotice, signal, retryDelayMs = DEFAULT_RETRY_DELAY_MS } = options;
     let isOutageNoticed = false;
+    let isConnected = false;
     while (!signal.aborted) {
         try {
             const { hasSnapshot, reason } = await readSubscription(options, connect());
-            if (hasSnapshot) isOutageNoticed = false;
+            if (hasSnapshot) {
+                isOutageNoticed = false;
+                isConnected = true;
+            }
             if (signal.aborted) return;
             if (reason !== LAGGING_REASON) await pause(retryDelayMs, signal);
         } catch (error) {
             const notice = outageNoticeFor(error);
             if (notice === undefined) throw error;
-            if ((error as { hasSnapshot?: boolean }).hasSnapshot) isOutageNoticed = false;
+            const hasSnapshot = (error as { hasSnapshot?: boolean }).hasSnapshot === true;
+            if (options.isUnreachableFatalAtStart && !isConnected && !hasSnapshot && error instanceof UnreachableError)
+                throw error;
+            if (hasSnapshot) {
+                isOutageNoticed = false;
+                isConnected = true;
+            }
             if (!isOutageNoticed) onNotice(notice);
             isOutageNoticed = true;
             await pause(retryDelayMs, signal);

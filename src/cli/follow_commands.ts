@@ -17,32 +17,36 @@ import { writeError, writeJson, writeLine } from "./output.ts";
 
 async function follow(input: CommandInput): Promise<number> {
     const { io, json } = input;
-    const socketPath = socketPathFor(input);
-    const stop = new AbortController();
-    const requestStop = () => stop.abort();
-    process.once("SIGINT", requestStop);
-    try {
-        await followFeed({
-            connect: () => createClient(nodeTransport({ socketPath })),
-            scope: { scope: "instance" },
-            signal: stop.signal,
-            onNotice: (text) => writeError(io, text),
-            async onSnapshot(snapshot) {
-                if (json) writeJson(io, snapshot);
-            },
-            async onDelta(delta) {
-                if (json) {
-                    writeJson(io, delta);
-                    return;
-                }
-                const line = instanceEventLine(delta);
-                if (line !== undefined) writeLine(io, line);
-            },
-        });
-    } finally {
-        process.off("SIGINT", requestStop);
-    }
-    return EXIT_CODES.ok;
+    // `withClient` maps a missing daemon to exit 3, a refusal to exit 1 and a bad runtime directory to exit 2.
+    return withClient(input, async () => {
+        const socketPath = socketPathFor(input);
+        const stop = new AbortController();
+        const requestStop = () => stop.abort();
+        process.once("SIGINT", requestStop);
+        try {
+            await followFeed({
+                connect: () => createClient(nodeTransport({ socketPath })),
+                scope: { scope: "instance" },
+                signal: stop.signal,
+                isUnreachableFatalAtStart: true,
+                onNotice: (text) => writeError(io, text),
+                async onSnapshot(snapshot) {
+                    if (json) writeJson(io, snapshot);
+                },
+                async onDelta(delta) {
+                    if (json) {
+                        writeJson(io, delta);
+                        return;
+                    }
+                    const line = instanceEventLine(delta);
+                    if (line !== undefined) writeLine(io, line);
+                },
+            });
+        } finally {
+            process.off("SIGINT", requestStop);
+        }
+        return EXIT_CODES.ok;
+    });
 }
 
 export const followCommand: CommandSpec = {

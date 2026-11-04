@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { type BobChild, spawnBob } from "../support/bob_process.ts";
+import { type BobChild, runBob, spawnBob } from "../support/bob_process.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -141,5 +141,30 @@ describe("bob follow", () => {
         child.signal("SIGINT");
 
         assert.equal(await child.exited, EXIT_OK);
+    });
+});
+
+describe("bob follow at its start", () => {
+    it("says it isn't running and exits 3 when no daemon runs in the runtime directory", async () => {
+        const env = await newEnv();
+
+        const result = await runBob(["follow"], { runtimeDir: env.runtimeDir, env: env.env, deadlineMs: 20_000 });
+
+        assert.equal(result.status, 3, result.stderr);
+        assert.equal(result.stdout, "");
+        assert.equal(
+            result.stderr.trim(),
+            `The Intern isn't running here (${env.runtimeDir}/bob.sock); start it with \`bob serve\``,
+        );
+    });
+
+    it("exits 2 with one line on standard error when the runtime directory is relative", async () => {
+        const env = await newEnv();
+
+        const result = await runBob(["follow"], { runtimeDir: "relative/run", env: env.env, deadlineMs: 20_000 });
+
+        assert.equal(result.status, 2, result.stderr);
+        assert.equal(result.stdout, "");
+        assert.match(result.stderr, /^[^\n]*relative\/run[^\n]*absolute path[^\n]*\n$/);
     });
 });
