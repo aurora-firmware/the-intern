@@ -368,9 +368,10 @@ function closeJobConversations(host: HarnessHost, jobId: string): Promise<string
 /**
  * Closes every conversation whose `intern.conversation` document names the job (closed mark set, nothing parked,
  * awaited or held) in the job's section, awaits `afterClosed`, then aborts them. The section is released before
- * `afterClosed` and the aborts. An abort waits for the run to end, so the conversation of a running tool (`own`) is
- * aborted last and its abort is not awaited here: the tool returns, and the run ends. `own.onError` gets a failed
- * abort of it. No abort mark is set, so no report is sent.
+ * `afterClosed` and the aborts. `own` names the conversation of a running tool: it is closed and not aborted, because
+ * its abort would cut the tool's call off, and its run ends by itself when the tool returns. With `own`, a failed
+ * abort of another conversation goes to `own.onError` and the remaining aborts are still attempted; without it the
+ * failure rejects. A failed closed-mark commit rejects. No abort mark is set, so no report is sent.
  */
 export async function abortJobConversations(
     host: HarnessHost,
@@ -381,9 +382,45 @@ export async function abortJobConversations(
     if (jobId === (await findCreatedConversation(host, FRONT_DESK_CREATION))) throw new FrontDeskNotJobError(jobId);
     const ofJob = await closeJobConversations(host, jobId);
     await afterClosed?.();
-    for (const id of ofJob) if (id !== own?.conversationId) await abortConversation(host, id);
-    if (own !== undefined && ofJob.includes(own.conversationId)) {
-        abortConversation(host, own.conversationId).catch(own.onError);
+    for (const id of ofJob) {
+        if (id === own?.conversationId) continue;
+        try {
+            await abortConversation(host, id);
+        } catch (error) {
+            if (own === undefined) throw error;
+            own.onError(error);
+        }
     }
     return ofJob;
+}
+
+/**
+ * Aborts the job's conversations after a failure that left the lead's closed mark unwritten, so a queued input can't
+ * run a model turn on a Done job. The other conversations are aborted in turn and a failed abort goes to `onError`.
+ * The lead is aborted unless its closed mark landed, and that abort is not awaited: it waits for the run, and the run
+ * waits for the tool call that is making this call. The conversations stay unclosed until rule 4 closes them at the
+ * next start.
+ */
+export async function abortAfterFailedClose(
+    host: HarnessHost,
+    jobId: string,
+    ownConversationId: string,
+    onError: (error: unknown) => void,
+): Promise<void> {
+    // Listed in the job's section, so a conversation admitted before the abort is in the list.
+    const ofJob = await inJobSection(host, jobId, async () => {
+        const found: { id: string; isClosed: boolean }[] = [];
+        for (const { id } of await host.listConversations()) {
+            const meta = await readConversationMeta(host, id);
+            if (meta?.jobId === jobId) found.push({ id, isClosed: meta.closed === true });
+        }
+        return found;
+    });
+    for (const { id, isClosed } of ofJob) {
+        if (id !== ownConversationId) {
+            await abortConversation(host, id).catch(onError);
+            continue;
+        }
+        if (!isClosed) void abortConversation(host, id).catch(onError);
+    }
 }
