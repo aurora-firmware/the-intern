@@ -8,18 +8,22 @@ import { DEFAULT_RETRY_DELAY_MS, outageNoticeFor, pause } from "./feed_follower.
 
 export type PatienceOptions = {
     onNotice(text: string): void;
+    /** Called when a call that met an outage is answered at last. */
+    onRecovered?(): void;
     /** Once aborted, a call that meets an outage again fails with it instead of waiting; the call in flight is not cut. */
     signal?: AbortSignal;
     retryDelayMs?: number;
 };
 
 async function untilAnswered<T>(attempt: () => Promise<T>, options: PatienceOptions): Promise<T> {
-    const { onNotice, signal, retryDelayMs = DEFAULT_RETRY_DELAY_MS } = options;
+    const { onNotice, onRecovered, signal, retryDelayMs = DEFAULT_RETRY_DELAY_MS } = options;
     const neverAborted = new AbortController().signal;
     let lastNotice: string | undefined;
     for (;;) {
         try {
-            return await attempt();
+            const answer = await attempt();
+            if (lastNotice !== undefined) onRecovered?.();
+            return answer;
         } catch (error) {
             const notice = outageNoticeFor(error);
             if (notice === undefined || signal?.aborted) throw error;

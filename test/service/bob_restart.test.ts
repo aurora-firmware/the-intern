@@ -5,6 +5,7 @@ import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { hasScript, type PtySession, runInPty } from "../support/pty.ts";
 
+const CTRL_C = "\x03";
 const CTRL_D = "\x04";
 const LINE = "are you still there?";
 const PROMPT = "> ";
@@ -93,13 +94,13 @@ async function restartWhileWaiting(): Promise<Scenario> {
     return { env, chat, follow, restarted };
 }
 
-/** The number of front desk entries that carry the line as a team member's input. */
-async function inputCount(daemon: DaemonProcess, line: string): Promise<number> {
+/** The team member's inputs to the front desk, in the order they were admitted. */
+async function inputsOf(daemon: DaemonProcess): Promise<string[]> {
     const { conversationId } = (await daemon.invoke("desk.get", {})) as { conversationId: string };
     const { entries } = (await daemon.invoke("conversations.entries", { conversationId })) as {
         entries: { kind: string; data: { content?: string } }[];
     };
-    return entries.filter((entry) => entry.kind === "intern.steer" && entry.data.content === line).length;
+    return entries.flatMap((entry) => (entry.kind === "intern.steer" ? [String(entry.data.content)] : []));
 }
 
 async function exitedWithin(child: BobChild, what: string): Promise<number | null> {
@@ -134,7 +135,91 @@ describe("piped bob chat across a daemon restart", () => {
 
         assert.equal(await exitedWithin(chat, "bob chat"), 0, chat.stderr());
         assert.equal(chat.stdout(), `echo: ${LINE}\n`);
-        assert.equal(await inputCount(restarted, LINE), 1);
+        assert.deepEqual(await inputsOf(restarted), [LINE]);
+    });
+});
+
+const TYPED_DURING_OUTAGE = "is anyone there?";
+const SECOND_DURING_OUTAGE = "and now?";
+
+/** An open chat whose daemon was killed: the notice is on standard error and the line `LINE` was admitted before. */
+async function chatInOutage(): Promise<{ env: HermeticEnv; chat: PtySession; first: DaemonProcess }> {
+    const env = await createHermeticEnv();
+    envs.push(env);
+    const first = await readyDaemon(env);
+    const chat = runInPty(["chat"], { runtimeDir: env.runtimeDir });
+    sessions.push(chat);
+    await chat.waitFor("output", PROMPT);
+    chat.write(`${LINE}\r`);
+    await until(async () => (await entriesText(first)).includes(LINE), "the line to reach the front desk");
+    first.kill9();
+    await first.exited;
+    await chat.waitFor("stderr", UNREACHABLE_NOTICE);
+    return { env, chat, first };
+}
+
+async function ptyExitedWithin(session: PtySession): Promise<number | null> {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`bob chat did not exit; stderr ${session.stderr()}`)), WAIT_MS);
+    });
+    try {
+        return await Promise.race([session.exited, deadline]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+describe("bob chat used during a daemon outage", {
+    skip: !hasScript() && !process.env.CI ? SKIP_REASON : false,
+}, () => {
+    it("keeps a typed line and admits it once, in order, when the daemon is back", async () => {
+        const { env, chat } = await chatInOutage();
+
+        chat.write(`${TYPED_DURING_OUTAGE}\r`);
+        chat.write(`${SECOND_DURING_OUTAGE}\r`);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        assert.equal(await Promise.race([chat.exited, Promise.resolve("running")]), "running", chat.stderr());
+        const restarted = await readyDaemon(env);
+        restarted.releaseRuns();
+        await chat.waitFor("output", `echo: ${SECOND_DURING_OUTAGE}`);
+        chat.write(CTRL_D);
+
+        assert.equal(await ptyExitedWithin(chat), 0, chat.stderr());
+        assert.deepEqual(await inputsOf(restarted), [LINE, TYPED_DURING_OUTAGE, SECOND_DURING_OUTAGE]);
+        assert.equal(occurrences(chat.stderr(), UNREACHABLE_NOTICE), 1, chat.stderr());
+    });
+
+    it("keeps trying the abort, then names the line it dropped", async () => {
+        const { env, chat } = await chatInOutage();
+
+        chat.write(`${TYPED_DURING_OUTAGE}\r`);
+        chat.write(CTRL_C);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        assert.equal(await Promise.race([chat.exited, Promise.resolve("running")]), "running", chat.stderr());
+        await readyDaemon(env);
+        await chat.waitFor("stderr", `Dropped, not answered: ${TYPED_DURING_OUTAGE}`);
+        chat.write(CTRL_D);
+
+        assert.equal(await ptyExitedWithin(chat), 0, chat.stderr());
+    });
+
+    it("leaves on Ctrl-D with exit 0 and names the line that was never admitted", async () => {
+        const { chat } = await chatInOutage();
+
+        chat.write(`${TYPED_DURING_OUTAGE}\r`);
+        chat.write(CTRL_D);
+
+        assert.equal(await ptyExitedWithin(chat), 0, chat.stderr());
+        assert.ok(chat.stderr().includes(TYPED_DURING_OUTAGE), chat.stderr());
+    });
+
+    it("leaves on Ctrl-D with exit 0 while an admitted line waits for its answer", async () => {
+        const { chat } = await chatInOutage();
+
+        chat.write(CTRL_D);
+
+        assert.equal(await ptyExitedWithin(chat), 0, chat.stderr());
     });
 });
 
