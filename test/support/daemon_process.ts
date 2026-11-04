@@ -20,6 +20,8 @@ const READY_POLL_TIMEOUT_MS = 30_000;
  * `job A` and `job B`; the invoked agents' answers are slow. `invoke-parked-slow-lead`: as `invoke-parked`, but the invoked
  * agents answer at once and the lead's answer to each report is slow, so a kill lands while a report is being delivered.
  * `gated`: every answer waits until the test calls `releaseRuns()`, so a run lasts exactly as long as the test wants.
+ * `streaming-gated`: every answer streams its first piece of text and then waits until the test calls `releaseRuns()`,
+ * so a partial answer is committed while the turn is still running.
  * `desk-steer`: an input `steer <conversationId>` makes the answering agent call `send_to_conversation` to that
  * conversation with the message `from-desk`, and its answer after the tool result is slow, so a kill lands in that run.
  * All of the others answer anything else with an echo.
@@ -34,6 +36,7 @@ export type FakeScript =
     | "invoke-nested"
     | "invoke-and-complete"
     | "gated"
+    | "streaming-gated"
     | "desk-steer";
 
 export type StartDaemonOptions = {

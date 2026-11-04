@@ -378,6 +378,7 @@ async function main(): Promise<void> {
         : createFakeModel((transcript) => replyFor(switches.script ?? "echo", transcript), {
               delayMs: (transcript) => delayFor(switches, transcript),
               ...(switches.script === "gated" && { gate: runGate.promise }),
+              ...(switches.script === "streaming-gated" && { streamGate: runGate.promise }),
           });
     const fakeModelId = fake ? `${fake.getModel().provider}/${fake.getModel().id}` : undefined;
     const storageSwitch: StorageSwitch = { isFailing: false };

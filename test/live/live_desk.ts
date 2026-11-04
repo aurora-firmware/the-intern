@@ -12,7 +12,7 @@ import { chmod, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { assistantText } from "../../src/cli/chat_terminal.ts";
+import { assistantText } from "../../src/cli/chat_screen.ts";
 import { resolvePiAgentDir } from "../../src/models/model_runtime.ts";
 import type { JobView } from "../../src/service/job_operations.ts";
 import { runBob } from "../support/bob_process.ts";

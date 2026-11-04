@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import {
+    type AssistantMessageEvent,
+    type AssistantMessageEventStream,
+    createAssistantMessageEventStream,
     type FauxProviderRegistration,
     type FauxResponseFactory,
     fauxAssistantMessage,
@@ -7,7 +10,12 @@ import {
     type JsonObject,
     type TranscriptContext,
 } from "@earendil-works/pi-ai";
-import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
+import {
+    getApiProvider,
+    registerApiProvider,
+    registerFauxProvider,
+    unregisterApiProviders,
+} from "@earendil-works/pi-ai/compat";
 
 export type FakeTranscript = readonly { role: "user" | "assistant" | "toolResult"; text: string }[];
 
@@ -17,6 +25,11 @@ export type FakeModelOptions = {
     delayMs?: (transcript: FakeTranscript) => number;
     /** An answer waits until this promise settles (or the run is aborted), for a test that decides when a run ends. */
     gate?: Promise<void>;
+    /**
+     * An answer streams its first piece of text, then waits until this promise settles (or the run is aborted) before it
+     * streams the rest, so a test can look at a partial answer while the turn is still running.
+     */
+    streamGate?: Promise<void>;
 };
 
 function textOf(content: unknown): string {
@@ -72,6 +85,57 @@ function messageFor(reply: FakeReply, transcript: FakeTranscript) {
 }
 
 /**
+ * The faux stream changes the text blocks of its earlier partials as it goes on and runs ahead of its consumer, so a
+ * partial read late holds text the stream hadn't produced yet at that event. This rebuilds the text each partial held.
+ */
+function withTextSoFar(event: AssistantMessageEvent, textByBlock: string[]): AssistantMessageEvent {
+    if (event.type !== "text_start" && event.type !== "text_delta" && event.type !== "text_end") return event;
+    const content = event.partial.content.map((block, index) =>
+        block.type === "text" ? { ...block, text: textByBlock[index] ?? "" } : block,
+    );
+    return { ...event, partial: { ...event.partial, content } };
+}
+
+/** Forwards the events of the source, pausing after its first text piece until the gate settles or the run aborts. */
+async function forwardWithPause(
+    source: AssistantMessageEventStream,
+    target: AssistantMessageEventStream,
+    gate: Promise<void>,
+    signal: AbortSignal | undefined,
+): Promise<void> {
+    const textByBlock: string[] = [];
+    let isPaused = false;
+    for await (const event of source) {
+        if (event.type === "text_start") textByBlock[event.contentIndex] = "";
+        if (event.type === "text_delta") textByBlock[event.contentIndex] += event.delta;
+        target.push(withTextSoFar(event, textByBlock));
+        if (event.type !== "text_delta" || isPaused) continue;
+        isPaused = true;
+        await untilOrAborted(gate, signal);
+    }
+    target.end(await source.result());
+}
+
+/** Replaces the registration's api provider with one whose streams pause after their first text piece. */
+function pauseStreamsAfterFirstText(registration: FauxProviderRegistration, gate: Promise<void>): () => void {
+    const inner = getApiProvider(registration.api);
+    if (!inner) throw new Error("The fake model's api is not registered");
+    const sourceId = `paused-stream-${registration.api}`;
+    const pausing =
+        (stream: typeof inner.stream): typeof inner.stream =>
+        (model, context, options) => {
+            const target = createAssistantMessageEventStream();
+            void forwardWithPause(stream(model, context, options), target, gate, options?.signal);
+            return target;
+        };
+    registerApiProvider(
+        { api: registration.api, stream: pausing(inner.stream), streamSimple: pausing(inner.streamSimple) },
+        sourceId,
+    );
+    return () => unregisterApiProviders(sourceId);
+}
+
+/**
  * Registers a pi-ai faux model whose answer is the pure function `reply` of the transcript it receives.
  *
  * The default faux provider hands out queued answers, so a restarted run would get a different one. Here the single
@@ -93,5 +157,13 @@ export function createFakeModel(
         return messageFor(reply(transcript), transcript);
     };
     registration.setResponses([answerFromTranscript]);
-    return registration;
+    if (options.streamGate === undefined) return registration;
+    const unregisterPause = pauseStreamsAfterFirstText(registration, options.streamGate);
+    return {
+        ...registration,
+        unregister() {
+            unregisterPause();
+            registration.unregister();
+        },
+    };
 }

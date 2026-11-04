@@ -1,13 +1,14 @@
 /**
  * `bob chat` on a terminal (S-005 REQ-009). It opens the front desk, prints the recent history and a prompt, submits
- * each typed line as a follow-up and prints the answers as the conversation feed brings them. Ctrl-C aborts the
+ * each typed line as a follow-up and prints the answers as the conversation feed brings them, an answer still being
+ * written as it grows (chat_screen.ts). A daemon that goes away is waited for, with typed lines kept. Ctrl-C aborts the
  * current turn and names the lines the abort dropped; Ctrl-D leaves once every submitted line is answered. Imports the
  * client library types only, never the daemon.
  */
 import { randomUUID } from "node:crypto";
-import { clearLine, createInterface, cursorTo } from "node:readline";
-import type { Writable } from "node:stream";
+import { createInterface } from "node:readline";
 import type { Client } from "../client/client.ts";
+import { assistantText, createChatScreen, partialAnswer, responseTimestamps } from "./chat_screen.ts";
 import type { CommandIo } from "./command_line.ts";
 import { EXIT_CODES } from "./command_line.ts";
 import { type AttributedEntryLike, createEntryTracker, followFeed, outageNoticeFor } from "./feed_follower.ts";
@@ -28,20 +29,6 @@ type SubmitAnswer = { submissionId: string } | { held: true };
 type SentLine = { submissionId: string; line: string };
 /** A typed line; its request id is fixed when it is typed, so every attempt to submit it is the same submission. */
 type TypedLine = { line: string; requestId: string };
-
-/** The text of an assistant entry: its text blocks, one per line. */
-export function assistantText(entry: { data?: unknown; [field: string]: unknown }): string {
-    const messages = Array.isArray(entry.data) ? (entry.data as { content?: unknown }[]) : [];
-    return messages
-        .flatMap(({ content }) => {
-            if (typeof content === "string") return [content];
-            if (!Array.isArray(content)) return [];
-            return content.flatMap((block: { type?: string; text?: unknown }) =>
-                block.type === "text" && typeof block.text === "string" ? [block.text] : [],
-            );
-        })
-        .join("\n");
-}
 
 /** One history entry as text: a typed line is `intern.steer` (who sent it, and the text), the rest reads as in a feed. */
 function historyText(entry: AttributedEntryLike): string | undefined {
@@ -115,10 +102,16 @@ export async function runTerminalChat(
     const unadmitted: TypedLine[] = [];
     // One notice per outage, whether the feed or a call meets it first.
     let lastNotice: string | undefined;
+    const screen = createChatScreen(io);
+    // A notice or a message of the command's own goes on a line of its own, not at the end of a half-written answer.
+    const warn = (text: string) => {
+        screen.settle();
+        writeError(io, text);
+    };
     const notify = (text: string) => {
         if (text === lastNotice) return;
         lastNotice = text;
-        writeError(io, text);
+        warn(text);
     };
     const patient = patientClient(client, {
         onNotice: notify,
@@ -153,12 +146,18 @@ export async function runTerminalChat(
             if (isReconnectable(error)) return;
             throw error;
         }
-        const answers = missed.filter((entry) => entry.kind === "pi.assistant").map(assistantText);
-        if (answers.every((answer) => answer === "")) return;
-        clearLine(io.stdout as Writable, 0);
-        cursorTo(io.stdout as Writable, 0);
-        for (const answer of answers) if (answer !== "") writeLine(io, answer);
+        const answers = missed.filter((entry) => entry.kind === "pi.assistant");
+        if (answers.every((entry) => assistantText(entry) === "")) return;
+        for (const entry of answers) screen.showAnswer(assistantText(entry), responseTimestamps(entry));
         showPrompt(true);
+    }
+
+    /** Shows the response in flight, in order with the answers printed from the entries. */
+    function showLive(live: unknown): Promise<void> {
+        const partial = partialAnswer(live);
+        if (partial === undefined) return tail;
+        tail = tail.then(() => screen.showPartial(partial.text, partial.timestamp)).catch(outcome.reject);
+        return tail;
     }
 
     function catchUp(from: Client | undefined = feedClient): Promise<void> {
@@ -176,12 +175,20 @@ export async function runTerminalChat(
         async onSnapshot(snapshot, from) {
             lastNotice = undefined;
             feedClient = from;
-            if (json) writeJson(io, snapshot);
-            else await catchUp(from);
+            if (json) {
+                writeJson(io, snapshot);
+                return;
+            }
+            await catchUp(from);
+            await showLive((snapshot as { live?: unknown }).live);
         },
         async onDelta(delta) {
-            if (json) writeJson(io, delta);
-            else await catchUp();
+            if (json) {
+                writeJson(io, delta);
+                return;
+            }
+            await showLive((delta as { view?: { live?: unknown } }).view?.live);
+            await catchUp();
         },
     });
     feed.catch(outcome.reject);
@@ -201,7 +208,7 @@ export async function runTerminalChat(
             throw error;
         }
         unadmitted.splice(unadmitted.indexOf(typed), 1);
-        if ("held" in answer) writeError(io, `The front desk held the line until it continues: ${typed.line}`);
+        if ("held" in answer) warn(`The front desk held the line until it continues: ${typed.line}`);
         else sent.push({ submissionId: answer.submissionId, line: typed.line });
     }
 
@@ -213,7 +220,7 @@ export async function runTerminalChat(
                 const { state } = (await patient.invoke("submissions.get", { submissionId: entry.submissionId })) as {
                     state: string;
                 };
-                if (state === "unanswered") writeError(io, `Dropped, not answered: ${entry.line}`);
+                if (state === "unanswered") warn(`Dropped, not answered: ${entry.line}`);
                 else if (state !== "done") sent.push(entry);
             }
         } catch (error) {
@@ -237,7 +244,8 @@ export async function runTerminalChat(
         if (!json) await catchUp(client);
         stop.abort();
         await feed;
-        for (const { line } of unadmitted) writeError(io, `Not sent, the front desk was unreachable: ${line}`);
+        screen.settle();
+        for (const { line } of unadmitted) warn(`Not sent, the front desk was unreachable: ${line}`);
         outcome.resolve(EXIT_CODES.ok);
     }
 

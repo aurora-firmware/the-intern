@@ -13,6 +13,7 @@ const CTRL_D = "\x04";
 const FIRST = "what's running?";
 const SECOND = "and what is blocked?";
 const THIRD = "anything else?";
+const LONG = "tell me everything about the running jobs please";
 const WAIT_MS = 20_000;
 const POLL_MS = 10;
 const PROMPT = "> ";
@@ -212,6 +213,53 @@ describe("bob chat on a terminal", { skip }, () => {
             "a feed delta",
         );
         assert.ok(JSON.stringify(values).includes(`echo: ${FIRST}`));
+    });
+});
+
+function occurrences(text: string, part: string): number {
+    return text.split(part).length - 1;
+}
+
+async function assistantEntryCount(daemon: DaemonProcess): Promise<number> {
+    return (await entriesOf(daemon)).filter((entry) => entry.kind === "pi.assistant").length;
+}
+
+describe("bob chat streaming an answer", { skip }, () => {
+    it("prints the first part of the answer before the turn ends and the rest after, each once", async () => {
+        const fixture = await readyDaemon("streaming-gated");
+        const session = chat(fixture);
+        await session.waitFor("output", PROMPT);
+
+        session.write(`${LONG}\r`);
+        await session.waitFor("output", "echo: tell");
+        assert.equal(await assistantEntryCount(fixture.daemon), 0, "the turn is still running");
+        assert.equal(session.output().includes(`echo: ${LONG}`), false, "only the first part is on screen");
+        fixture.daemon.releaseRuns();
+        await session.waitFor("output", `echo: ${LONG}`);
+        session.write(CTRL_D);
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+        assert.equal(occurrences(session.output(), "echo: tell"), 1, session.output());
+        assert.equal(occurrences(session.output(), `echo: ${LONG}`), 1, session.output());
+    });
+
+    it("keeps the part already printed once, and ends its line, when Ctrl-C cuts the answer off", async () => {
+        const fixture = await readyDaemon("streaming-gated");
+        const session = chat(fixture);
+        await session.waitFor("output", PROMPT);
+        session.write(`${LONG}\r`);
+        await session.waitFor("output", "echo: tell");
+
+        session.write(CTRL_C);
+        await until(async () => (await assistantEntryCount(fixture.daemon)) === 1, "the aborted answer entry");
+        fixture.daemon.releaseRuns();
+        session.write(`${THIRD}\r`);
+        await session.waitFor("output", `echo: ${THIRD}`);
+        session.write(CTRL_D);
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+        assert.equal(occurrences(session.output(), "echo: tell"), 1, session.output());
+        assert.equal(session.output().includes(`echo: ${LONG}`), false, "the cut-off answer was not completed");
     });
 });
 

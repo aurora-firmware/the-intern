@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { type BobChild, spawnBob } from "../support/bob_process.ts";
-import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
+import { type DaemonProcess, type FakeScript, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { hasScript, type PtySession, runInPty } from "../support/pty.ts";
 
 const CTRL_C = "\x03";
 const CTRL_D = "\x04";
 const LINE = "are you still there?";
+const LONG_LINE = "tell me everything about the running jobs please";
 const PROMPT = "> ";
 const UNREACHABLE_NOTICE = "The Intern isn't reachable; trying again";
 const WAIT_MS = 20_000;
@@ -35,8 +36,8 @@ afterEach(async () => {
     for (const env of envs.splice(0)) await env.dispose();
 });
 
-async function readyDaemon(env: HermeticEnv): Promise<DaemonProcess> {
-    const daemon = startDaemon({ hermetic: env, script: "gated", turnEndRule: false });
+async function readyDaemon(env: HermeticEnv, script: FakeScript = "gated"): Promise<DaemonProcess> {
+    const daemon = startDaemon({ hermetic: env, script, turnEndRule: false });
     daemons.push(daemon);
     await daemon.ready;
     return daemon;
@@ -101,6 +102,14 @@ async function inputsOf(daemon: DaemonProcess): Promise<string[]> {
         entries: { kind: string; data: { content?: string } }[];
     };
     return entries.flatMap((entry) => (entry.kind === "intern.steer" ? [String(entry.data.content)] : []));
+}
+
+async function assistantEntryCount(daemon: DaemonProcess): Promise<number> {
+    const { conversationId } = (await daemon.invoke("desk.get", {})) as { conversationId: string };
+    const { entries } = (await daemon.invoke("conversations.entries", { conversationId })) as {
+        entries: { kind: string }[];
+    };
+    return entries.filter((entry) => entry.kind === "pi.assistant").length;
 }
 
 async function exitedWithin(child: BobChild, what: string): Promise<number | null> {
@@ -220,6 +229,40 @@ describe("bob chat used during a daemon outage", {
         chat.write(CTRL_D);
 
         assert.equal(await ptyExitedWithin(chat), 0, chat.stderr());
+    });
+});
+
+describe("bob chat restarted in the middle of an answer", {
+    skip: !hasScript() && !process.env.CI ? SKIP_REASON : false,
+}, () => {
+    // pi-durable keeps what a killed response had written as an aborted entry, so the transcript holds that part and
+    // the whole answer that follows; the screen shows each of the two once.
+    it("shows the interrupted part and the whole answer, each once, when the daemon starts the response again", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const first = await readyDaemon(env, "streaming-gated");
+        const chat = runInPty(["chat"], { runtimeDir: env.runtimeDir });
+        sessions.push(chat);
+        await chat.waitFor("output", PROMPT);
+        chat.write(`${LONG_LINE}\r`);
+        await chat.waitFor("output", "echo: tell");
+
+        first.kill9();
+        await first.exited;
+        await chat.waitFor("stderr", UNREACHABLE_NOTICE);
+        const restarted = await readyDaemon(env, "streaming-gated");
+        restarted.releaseRuns();
+        await chat.waitFor("output", `echo: ${LONG_LINE}`);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        chat.write(CTRL_D);
+
+        assert.equal(await ptyExitedWithin(chat), 0, chat.stderr());
+        const answersOnScreen = chat
+            .output()
+            .split(/\r?\n/)
+            .filter((row) => row.includes("echo: tell"));
+        assert.equal(answersOnScreen.length, await assistantEntryCount(restarted), chat.output());
+        assert.equal(occurrences(chat.output(), `echo: ${LONG_LINE}`), 1, chat.output());
     });
 });
 
