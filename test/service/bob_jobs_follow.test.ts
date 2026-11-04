@@ -93,7 +93,7 @@ describe("bob jobs follow", () => {
         const job = await createJob(held);
         const child = jobsFollow(env, job.number);
         await child.waitFor("stdout", job.number);
-        await child.waitFor("stdout", "user:");
+        await child.waitFor("stdout", "input:");
 
         held.kill9();
         await held.exited;
@@ -124,7 +124,7 @@ describe("bob jobs follow", () => {
         const job = await createJob(daemon);
         const other = await createJob(daemon);
         const child = jobsFollow(env, job.number);
-        await child.waitFor("stdout", "user:");
+        await child.waitFor("stdout", "input:");
 
         await daemon.invoke("test.blockJob", { job: other.id, reason: "other reason" });
         await daemon.invoke("test.blockJob", { job: job.id, reason: "which build?" });
@@ -144,7 +144,7 @@ describe("bob jobs follow", () => {
         const daemon = await readyDaemon(env, "gated");
         const job = await createJob(daemon);
         const child = jobsFollow(env, job.number);
-        await child.waitFor("stdout", "user:");
+        await child.waitFor("stdout", "input:");
 
         child.signal("SIGINT");
 

@@ -44,7 +44,7 @@ export function assistantText(entry: { data?: unknown; [field: string]: unknown 
 function historyText(entry: AttributedEntryLike): string | undefined {
     if (entry.kind !== "intern.steer") return conversationEntryLine(entry);
     const { content } = entry.data as { content?: unknown };
-    return typeof content === "string" ? `user: ${content}` : undefined;
+    return typeof content === "string" ? `input: ${content}` : undefined;
 }
 
 async function readHistory(client: Client, conversationId: string, io: CommandIo, json: boolean) {

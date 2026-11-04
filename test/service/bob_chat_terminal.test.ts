@@ -104,7 +104,7 @@ describe("bob chat on a terminal", { skip }, () => {
         session.write(CTRL_D);
 
         assert.equal(await session.exited, 0, session.stderr());
-        assert.ok(session.output().includes("user: earlier question"), session.output());
+        assert.ok(session.output().includes("input: earlier question"), session.output());
         assert.ok(session.output().includes("assistant: echo: earlier question"), session.output());
     });
 
