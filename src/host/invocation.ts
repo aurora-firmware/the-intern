@@ -5,7 +5,7 @@
  * invoked conversation without its invocation link.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { type ConversationId, defineDoc, InboxDoc, type Tx } from "@earendil-works/pi-durable";
+import { type ConversationId, defineDoc, InboxDoc, LiveDoc, type Tx } from "@earendil-works/pi-durable";
 import { INVOCATION_DEPTH_CAP } from "../daemon/constants.ts";
 import { FRONT_DESK_CREATION } from "../desk/desk_model.ts";
 import type { Seat } from "../roles/role_model.ts";
@@ -366,6 +366,32 @@ function closeJobConversations(host: HarnessHost, jobId: string): Promise<string
 }
 
 /**
+ * Aborts the compactions still running in the conversations, the completing lead's included, now that their closed
+ * marks are committed: a finished summary is placed outside the job's section and would follow the mark. A blocking
+ * compaction is left to `Conversation.abort()`, because its generation owns it and would fail the run if it were
+ * aborted alone. This runs before the first `Conversation.abort()`, which turns scheduling on after a restart, so no
+ * compaction marked later can send a model request first. Without `onError` a failure rejects.
+ */
+async function abortRunningCompactions(
+    host: HarnessHost,
+    conversationIds: string[],
+    onError?: (error: unknown) => void,
+): Promise<void> {
+    const harness = internalHarness(host);
+    for (const id of conversationIds) {
+        try {
+            const live = await harness.snapshot(LiveDoc, toNumericId(id) as ConversationId, context);
+            for (const status of live?.compactions ?? []) {
+                if (!status.blocking) await harness.abortTask(status.taskId, context);
+            }
+        } catch (error) {
+            if (onError === undefined) throw error;
+            onError(error);
+        }
+    }
+}
+
+/**
  * Closes every conversation whose `intern.conversation` document names the job (closed mark set, nothing parked,
  * awaited or held) in the job's section, awaits `afterClosed`, then aborts them. The section is released before
  * `afterClosed` and the aborts. `own` names the conversation of a running tool: it is closed and not aborted, because
@@ -382,6 +408,7 @@ export async function abortJobConversations(
     if (jobId === (await findCreatedConversation(host, FRONT_DESK_CREATION))) throw new FrontDeskNotJobError(jobId);
     const ofJob = await closeJobConversations(host, jobId);
     await afterClosed?.();
+    await abortRunningCompactions(host, ofJob, own?.onError);
     for (const id of ofJob) {
         if (id === own?.conversationId) continue;
         try {
