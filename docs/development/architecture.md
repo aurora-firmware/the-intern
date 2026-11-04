@@ -66,10 +66,11 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   their own that report back (S-001).
 - **Closed mark.** Every conversation of a job closes when the job is Done. The mark is the `closed` field of the
   conversation's `intern.conversation` document (`ConversationMeta` in `src/host/seating.ts`). A job's abort sets it,
-  with the parked state, the awaiting links and the held messages cleared, in the abort's own commit. Nothing clears
-  it, and a document written without the field reads as not closed. A conversation also counts as closed while its job
-  is Done, before the mark is set (`isConversationClosed` in `src/host/job_section.ts`). The front desk and a
-  conversation with no job are never closed. The conversation lists with status `closed` (`ConversationStatus` in
+  with the parked state, the awaiting links and the held messages cleared, in the abort's own commit. That commit also
+  removes the conversation's queued inbox items and settles them `unanswered` with reason `closed`. Nothing clears it,
+  and a document written without the field reads as not closed. A conversation also counts as closed while its job is
+  Done, before the mark is set (`isConversationClosed` in `src/host/job_section.ts`). The front desk and a conversation
+  with no job are never closed. The conversation lists with status `closed` (`ConversationStatus` in
   `src/service/conversation_read_operations.ts`), and every read operation still works on it (S-001 REQ-026).
 - **Per-job serial section** (`src/host/job_section.ts`). The section orders, per job and in this process, the job
   abort's listing and marking of the job's conversations with every admission, control operation and creation that
@@ -89,10 +90,10 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   the job abort's listing and marking (`closeJobConversations` in `src/host/invocation.ts`).
 - **Job abort that closes.** `complete` and `cancel` write the job Done first (`finishJob` in
   `src/jobs/job_actions.ts`), then `abortJobConversations` lists the job's conversations and sets their marks in the
-  section, releases it, and then aborts them. No abort mark is set, so no report is sent. The conversation of a tool
-  that is running the abort is aborted last and not awaited. Between the Done write and the marks a crash leaves a Done
-  job with open conversations, which repair rule 4 closes at the next start. Passing the front desk's id to it throws
-  `FrontDeskNotJobError`.
+  section, releases it, and then aborts them. No abort mark is set, so no report is sent. A lead's complete tool isn't
+  aborted: it returns `control: { terminate: true }`, and its run ends at that call. A compaction still running is
+  aborted after the marks. Between the Done write and the marks a crash leaves a Done job with open conversations, which
+  repair rule 4 closes at the next start. Passing the front desk's id to it throws `FrontDeskNotJobError`.
 - **Job store.** The job record (jobs, counters, worklog, history, Related links) lives in `intern_` tables in the
   same file, kept by `src/jobs/job_store.ts` (S-004 REQ-001). The file has one connection: `openHarnessHost` opens it
   owner-only and gives the same handle to `SqliteStorage.open` and, through `hostDatabase(host)`, to the job store, so
@@ -114,8 +115,8 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   reads whether that lead holds a submission with that request id (`hasSubmissionWithRequestId`), and submits the
   input when it doesn't. That read is made only for To do jobs with a known lead, so it adds nothing for a job in any
   other status. Rules 2 and 3 and the turn-end check read the lead of each Blocked or In progress job in their own way.
-  Rule 4 applies to a Done job with a conversation that isn't closed, or that is closed but still runs or has queued
-  input: it calls `abortJobConversations` and so closes and aborts the job's conversations.
+  Rule 4 applies to a Done job with a conversation that isn't closed, or that is closed but still runs, has a running
+  compaction or has queued input: it calls `abortJobConversations` and so closes and aborts the job's conversations.
 - **Job operations and tools.** The catalogue carries the `jobs.*` operations: `create`, `get`, `list`, `update`,
   `worklog.add`, `worklog.list`, `history.list`, `relate`, `unrelate`, `resume`, `complete`, `cancel` and `export`.
   `jobs.startLead` is no longer an operation: `jobs.create` starts the lead in-process

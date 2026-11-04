@@ -49,8 +49,8 @@ and hyphens, in at most 40 characters in all.
 In a job, every role is also offered `handoff`, `invoke` and `steer` (see [Sharing a job](#sharing-a-job)) and the
 job tools `read_job`, `update_job`, `add_worklog`, `create_job`, `relate_jobs`, `block_job` and `complete_job`. A tool
 list can't leave them out, so you don't list them. Only a job's lead can use `block_job` and `complete_job`: an agent
-it invoked gets an error result from either, and its run goes on. An agent seated before the job tools existed keeps
-its tools until its seat changes.
+it invoked gets an error result from either, and its run goes on. `complete_job` must be the only tool call of its
+turn. An agent seated before the job tools existed keeps its tools until its seat changes.
 
 For a shipped role, set only the keys you want to change. Any key you leave out keeps its shipped value. For your own
 role, `instructions` and `tools` are required.
@@ -219,7 +219,7 @@ aborted stays parked, waits for a report or keeps its held messages. An agent ab
 says so, with its last answer when it has one, and a parked agent that invoked it continues on that report. The agents
 aborted along with their invoker send no report back.
 
-When a job is completed or cancelled, every conversation of the job is aborted and closed for good, as
+When a job is completed or cancelled, every conversation of the job is closed and its work aborted, as
 [Statuses and actions](jobs.md#statuses-and-actions) describes. A closed conversation can't be aborted: the abort is
 refused as `conflict`. A coordination or job tool called from a conversation of a Done job gets an error result and
 changes nothing, and the run goes on: `invoke` creates no conversation, `handoff` changes no seat and `steer` delivers
