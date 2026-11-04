@@ -65,6 +65,10 @@ table of its own. The `held` list of a parked conversation isn't such a queue: i
 bounded exception in ADR-001 decision 4, and its messages reach the conversation through `Conversation.submit` when it
 continues.
 
+The job abort's closed-mark commit (S-001 REQ-026) removes queued items from the same inbox and settles them
+`unanswered`. A queued write otherwise survives `Conversation.abort()` and could land after the mark. A closed
+conversation runs no more, so the write has nothing left to act on.
+
 ## Consequences
 
 ### Positive
@@ -78,8 +82,8 @@ continues.
 ### Negative
 
 - The host copies part of pi-durable submission admission and depends on the `pi.inbox` item shape and on the
-  meaning of `LiveDoc.run`. Each pi-durable upgrade rechecks `admitSubmission` against this record, together with
-  the README compatibility section.
+  meaning of `LiveDoc.run`. Each pi-durable upgrade rechecks `admitSubmission` and the removal of queued items against
+  this record, together with the README compatibility section.
 - The seat record is written before the running turn's last answer, so the transcript shows the record before an
   answer the old seat produced. REQ-007 attribution therefore comes from the seat of the run that produced the message,
   not from the latest seat record. A plain seat change on a busy conversation (`changeSeat`) already behaves this
@@ -116,3 +120,4 @@ forbids.
 |---|---|---|
 | 2026-11-01 | Added a pointer in the Decision: the `held` list of a parked conversation is a fact the-intern owns under ADR-001 decision 4's bounded exception, not a queue in front of pi-durable. No decision changes. | Spec-truth reconciliation of S-001, finding F6, and the ADR-001 amendment of the same date. |
 | 2026-11-01 | Context: a report delivered into a running invoking conversation goes through `Conversation.submit` as an `intern.report` entry (ADR-004), not through this record's busy path. No decision changes. | Architecture consistency review of ADR-004. |
+| 2026-11-04 | Decision: the job abort's closed-mark commit also removes queued items from the inbox, and the upgrade recheck covers that removal. | Product owner decision of 2026-11-04 (B-006 and the misleading `tool complete_job failed` line). |
