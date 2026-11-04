@@ -36,7 +36,8 @@ function shellQuote(word: string): string {
 
 /**
  * Runs `node src/cli/bob.ts <args>` under `script -qfec`, so standard input and output are a terminal. Standard error
- * is redirected to a file inside the command, which keeps it apart from the terminal's output. With
+ * is redirected to a file inside the command, which keeps it apart from the terminal's output. The command is `exec`ed:
+ * a shell that stays behind (dash does, bash does not) would exit 130 on Ctrl-C whatever status `bob` gave. With
  * `redirectStdout`, standard output goes to a file too, so only standard input stays a terminal.
  */
 export function runInPty(
@@ -48,7 +49,7 @@ export function runInPty(
     const stdoutPath = join(directory, "stdout");
     const words = [process.execPath, BOB_ENTRY, ...args, "--runtime-dir", options.runtimeDir].map(shellQuote);
     const redirection = options.redirectStdout ? ` >${shellQuote(stdoutPath)}` : "";
-    const command = `${words.join(" ")}${redirection} 2>${shellQuote(stderrPath)}`;
+    const command = `exec ${words.join(" ")}${redirection} 2>${shellQuote(stderrPath)}`;
     const child = spawn("script", ["-qfec", command, "/dev/null"], { stdio: ["pipe", "pipe", "ignore"] });
     let output = "";
     child.stdout.on("data", (chunk) => {
