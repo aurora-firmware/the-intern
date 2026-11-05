@@ -4,6 +4,8 @@ import { defineConfig } from "vitepress";
 export default defineConfig({
     title: "The Intern",
     description: "User manual for The Intern",
+    // GitHub Pages serves this project's site under /the-intern/, not at the domain root.
+    base: "/the-intern/",
     outDir: "../../.tmp/manual-site",
     cacheDir: "../../.tmp/manual-cache",
     themeConfig: {
