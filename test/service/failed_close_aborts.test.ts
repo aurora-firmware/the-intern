@@ -10,6 +10,7 @@ import { injectCloseFailures } from "../support/close_failure.ts";
 import {
     assertNoSummaryPlaced,
     disposeRigs,
+    HELD_AGENT_PROMPT,
     HOLD_STEP,
     type Rig,
     SETTLE_MS,
@@ -100,7 +101,12 @@ for (const [name, act] of teamActions) {
 
 const abortedSettlement = { state: "unanswered", reason: "aborted" };
 
-/** A running lead with its model request held, two invoked conversations and a follow-up queued. */
+async function assertInvokedAgentsStopped(rig: Rig, children: string[]): Promise<void> {
+    assert.equal(rig.heldAgents.aborted, 2, "each running invoked agent's model request is aborted");
+    for (const child of children) assert.equal(await rig.isIdle(child), true, `${child} stopped running`);
+}
+
+/** A running lead and two running invoked agents, each with its model request held, and a follow-up queued. */
 async function runningJobWithQueuedFollowUp() {
     const rig = await start([
         { name: "update_job", args: { definitionOfDone: "the work is stopped" } },
@@ -113,12 +119,12 @@ async function runningJobWithQueuedFollowUp() {
         invokingId: lead,
         callId: "call-1",
         agents: [
-            { seat: rig.seat(), contextMode: "clean", jobPrompt: "work" },
-            { seat: rig.seat(), contextMode: "clean", jobPrompt: "more work" },
+            { seat: rig.seat(), contextMode: "clean", jobPrompt: HELD_AGENT_PROMPT },
+            { seat: rig.seat(), contextMode: "clean", jobPrompt: HELD_AGENT_PROMPT },
         ],
         actor: author,
     })) as string[];
-    for (const child of children) await waitFor(() => rig.isIdle(child), "an invoked conversation to be idle");
+    await waitFor(() => rig.heldAgents.requests === 2, "both invoked agents to be running");
     const followUp = await submitInput(rig.ctx.host, lead, {
         content: "one more thing",
         requestId: "late-1",
@@ -133,17 +139,19 @@ for (const [name, act] of teamActions) {
     describe(`a team member's ${name} of a running lead that fails while closing the job`, () => {
         it("aborts the lead and the invoked conversations, settles its input aborted and refuses input when the lead's mark is rejected", async () => {
             const { rig, job, lead, children, followUp, runInput } = await runningJobWithQueuedFollowUp();
-            const log = injectCloseFailures(rig.ctx.host, { failMark: 1 });
+            injectCloseFailures(rig.ctx.host, { failMark: 1 });
 
             await assert.rejects(act(rig, job.id), { message: "injected mark failure" });
             await settle();
 
             assert.equal(await rig.status(job.id), "done");
             assert.match(rig.logs.join(""), /could not finish closing the job.*injected mark failure/);
-            for (const id of [lead, ...children]) assert.ok(log.aborts.includes(id), `${id} is aborted`);
+            assert.equal(rig.hold.isAborted, true, "the lead's model request is aborted");
+            await assertInvokedAgentsStopped(rig, children);
             assert.deepEqual(await submissionState(rig.ctx.host, followUp), abortedSettlement);
             assert.deepEqual(await submissionState(rig.ctx.host, runInput), abortedSettlement);
-            assert.equal(rig.turns.count, 2, "the model gets no further request");
+            assert.equal(rig.turns.count, 2, "the model gets no further request from the lead");
+            assert.equal(rig.heldAgents.requests, 2, "the model gets no further request from the invoked agents");
             assert.equal(await isClosed(rig, lead), false, "the lead lists with a status other than closed");
             await assert.rejects(
                 submitInput(rig.ctx.host, lead, { content: "hi", requestId: "late-2", busyMode: "followUp" }),
@@ -153,28 +161,29 @@ for (const [name, act] of teamActions) {
 
         it("aborts the others and leaves running the conversation whose abort is rejected, with every mark landed", async () => {
             const { rig, job, lead, children } = await runningJobWithQueuedFollowUp();
-            const log = injectCloseFailures(rig.ctx.host, { failAbortOf: lead });
+            injectCloseFailures(rig.ctx.host, { failAbortOf: lead });
 
             await assert.rejects(act(rig, job.id), { message: "injected abort failure" });
             await settle();
 
             assert.equal(await rig.status(job.id), "done");
             assert.match(rig.logs.join(""), /could not finish closing the job.*injected abort failure/);
-            for (const child of children) assert.ok(log.aborts.includes(child), `${child} is aborted`);
+            await assertInvokedAgentsStopped(rig, children);
             assert.equal(rig.hold.isAborted, false, "the lead whose abort failed keeps running");
             assert.equal(await isClosed(rig, lead), true);
         });
 
         it("aborts the others and leaves running the conversation whose abort is rejected, after the lead's mark failed", async () => {
             const { rig, job, lead, children } = await runningJobWithQueuedFollowUp();
-            const log = injectCloseFailures(rig.ctx.host, { failMark: 1, failAbortOf: lead });
+            injectCloseFailures(rig.ctx.host, { failMark: 1, failAbortOf: lead });
 
             await assert.rejects(act(rig, job.id), { message: "injected mark failure" });
             await settle();
 
             assert.equal(await rig.status(job.id), "done");
+            assert.match(rig.logs.join(""), /could not finish closing the job.*injected mark failure/);
             assert.match(rig.logs.join(""), /could not abort a conversation.*injected abort failure/);
-            for (const child of children) assert.ok(log.aborts.includes(child), `${child} is aborted`);
+            await assertInvokedAgentsStopped(rig, children);
             assert.equal(rig.hold.isAborted, false, "the lead whose abort failed keeps running");
             assert.equal(await isClosed(rig, lead), false);
         });

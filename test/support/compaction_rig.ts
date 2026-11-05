@@ -21,6 +21,8 @@ import { createHermeticEnv, type HermeticEnv } from "./hermetic_env.ts";
 
 /** A lead step that holds the lead's model request, so its run stays busy, until the request is aborted. */
 export const HOLD_STEP = "hold";
+/** An invoked agent's job prompt that holds its model request, so its run stays busy, until the request is aborted. */
+export const HELD_AGENT_PROMPT = "hold this agent's request";
 export const WAIT_MS = 20_000;
 const POLL_MS = 10;
 export const SETTLE_MS = 300;
@@ -58,6 +60,19 @@ export async function waitFor(check: () => Promise<boolean> | boolean, what: str
 
 export type Rig = Awaited<ReturnType<typeof start>>;
 
+/** Resolves when the request is aborted or `gates` is released, and calls `onAbort` only on an abort. */
+function holdRequest(signal: AbortSignal | undefined, onAbort: () => void): Promise<void> {
+    return new Promise<void>((resolve) => {
+        const markAborted = (): void => {
+            onAbort();
+            resolve();
+        };
+        if (signal?.aborted) markAborted();
+        signal?.addEventListener("abort", markAborted);
+        gates.push(resolve);
+    });
+}
+
 /**
  * A daemon whose lead follows `leadSteps`, one tool call per model reply; every other request is answered "done".
  * The compaction's summarization request is held until `releaseSummary()` or until it is aborted.
@@ -80,6 +95,7 @@ export async function start(leadSteps: { name: string; args: Record<string, unkn
     const summary = { requests: 0, isAborted: false };
     const turns = { count: 0 };
     const hold = { isAborted: false };
+    const heldAgents = { requests: 0, aborted: 0 };
     let releaseSummary = (): void => {};
     const summaryGate = new Promise<void>((resolve) => {
         releaseSummary = resolve;
@@ -106,6 +122,13 @@ export async function start(leadSteps: { name: string; args: Record<string, unkn
             return fauxAssistantMessage("the summary");
         }
         const first = context.messages.find((message) => message.role === "user");
+        if (first !== undefined && textOf(first.content).includes(HELD_AGENT_PROMPT)) {
+            heldAgents.requests++;
+            await holdRequest(streamOptions?.signal, () => {
+                heldAgents.aborted++;
+            });
+            return fauxAssistantMessage("finished");
+        }
         if (first === undefined || !textOf(first.content).includes("lead with compaction")) {
             return fauxAssistantMessage("done");
         }
@@ -114,16 +137,8 @@ export async function start(leadSteps: { name: string; args: Record<string, unkn
         const step = leadSteps[index];
         if (step === undefined) return fauxAssistantMessage("finished");
         if (step.name === HOLD_STEP) {
-            // The lead's run stays busy until the request is aborted.
-            const signal = streamOptions?.signal;
-            await new Promise<void>((resolve) => {
-                const markAborted = (): void => {
-                    hold.isAborted = true;
-                    resolve();
-                };
-                if (signal?.aborted) markAborted();
-                signal?.addEventListener("abort", markAborted);
-                gates.push(resolve);
+            await holdRequest(streamOptions?.signal, () => {
+                hold.isAborted = true;
             });
             return fauxAssistantMessage("finished");
         }
@@ -180,6 +195,7 @@ export async function start(leadSteps: { name: string; args: Record<string, unkn
         summary,
         turns,
         hold,
+        heldAgents,
         logs,
         releaseSummary: () => releaseSummary(),
         createJob: async () =>
