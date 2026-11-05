@@ -217,6 +217,9 @@ export async function repairJobs(deps: JobActionDeps): Promise<RepairOutcome> {
         marked.push(...(await applyRule4(deps, job, known)));
     }
     if (deps.options.turnEndRule === false) return { marked, pendingFirstInputs };
-    for (const { id } of jobs) await checkTurnEnd(deps, id, leads.get(id));
+    // A lead that still owes its first input has not run a turn, so there is none to end; its run's end is checked
+    // when it finishes after the resume.
+    const awaitingFirstInput = new Set(pendingFirstInputs.map((pending) => pending.jobId));
+    for (const { id } of jobs) if (!awaitingFirstInput.has(id)) await checkTurnEnd(deps, id, leads.get(id));
     return { marked, pendingFirstInputs };
 }
