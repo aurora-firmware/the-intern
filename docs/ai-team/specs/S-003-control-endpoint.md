@@ -1,7 +1,7 @@
 ---
 id: S-003
 title: Control endpoint
-version: '0.3'
+version: '0.4'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-01'
 author: planner
@@ -633,8 +633,7 @@ Built-in constants, not configurable: the 10 MiB body limit (REQ-004) and the 10
   feed with its end reasons, startup step 8, the shutdown order, readiness, the stop bound and the
   runtime directory. This spec relies on S-002 v0.7's amendments, made on the same planning branch: listeners refuse
   calls until ready (REQ-003), a job's origin is built from the caller (AC-012.5), and the configuration file keeps
-  sections later specs add (REQ-021, REQ-022). The current code may deviate from them; the S-003 breakdown includes a
-  task that investigates and closes the deviations.
+  sections later specs add (REQ-021, REQ-022). T-094 closed the code's deviations from them.
 - **S-001** records the team member's way in on seat records and messages (S-001 REQ-007); this spec supplies its
   value.
 - **ADR-001** keeps pi-durable behind the host; **ADR-002** settles that no listener authenticates and that reach
@@ -685,3 +684,4 @@ None affect the specified behaviour.
 | 2026-11-02 | v0.2. REQ-007: each listener passes the caller details it observes with the way in: the network listener the TCP peer's remote address and port, never a header such as `X-Forwarded-For`, and the local socket none beyond the way in (no OS account); a job created through a listener records them (new AC-007.3). AC-007.2: the refused origin claim is a `jobs.create` call, which creates no job and uses no number, and without the origin creates `C-n`. AC-003.1: observed caller details may differ between the three results. Design Principles, "Listeners are transports only": the caller is fixed by the listener and the connection. | S-004 architecture consistency review; product owner decisions 2026-11-02 (the OS account dropped). Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None yet; the code changes (observed caller details, `jobs.create` in place of `jobs.startLead` in the tests) come in the S-004 breakdown |
 | 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The runtime-dependency principle moved to `docs/development/tech_stack.md`. All alternatives stay. | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
 | 2026-11-05 | v0.3. No behaviour changes (CR-001): implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: REQ-001, AC-001.4, REQ-002, REQ-010 (start hooks, the harness), REQ-013, AC-013.1, with the copies in Consumed, Workflow and Assumptions. REQ-013 and AC-013.1 point to ADR-001 decision 2. No identifier added or retired. | CR-001, approved by the product owner. | T-202 (inspects AC-013.1); spec text otherwise |
+| 2026-11-05 | v0.4. No behaviour changes. Assumptions, S-002: T-094 closed the code's deviations from the S-002 v0.7 amendments, in place of the statement that a task would investigate them. | spec-truth reconciliation: a stale assumption (D4). | None; spec text only |
