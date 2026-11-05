@@ -14,6 +14,7 @@ import { toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { watchConversationMeta, watchInstance } from "./host_observation.ts";
 import { continueParked } from "./invocation.ts";
+import { isConversationClosed } from "./job_section.ts";
 import { type ConversationMeta, conversationMetaDoc, readConversationMeta, type SeatActor } from "./seating.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -115,6 +116,9 @@ async function deliver(host: HarnessHost, invokedId: string): Promise<void> {
     const invokerId = invoked.invokedBy;
     const invoker = await readConversationMeta(host, invokerId);
     if (invoker === undefined || !invoker.awaiting.includes(invokedId)) return;
+    // A closed invoker takes no report, and a close that failed leaves its state to repair rule 4 (ADR-001): holding the
+    // report or continuing the invoker would change that state outside the job's section before the refusal.
+    if (await isConversationClosed(host, invokerId)) return;
     if ((await host.conversationInfo(invokedId))?.busy !== false) return;
     const report = await readReport(host, invoked, invokedId);
     if (report === undefined) return;

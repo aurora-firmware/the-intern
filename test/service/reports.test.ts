@@ -10,6 +10,7 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import { createInvokedConversations, parkConversation } from "../../src/host/invocation.ts";
+import { inJobSection, setJobDoneCheck } from "../../src/host/job_section.ts";
 import { REPORT_KIND, type ReportRecord, startReportDelivery } from "../../src/host/reports.ts";
 import {
     createSeatedConversation,
@@ -324,6 +325,56 @@ describe("startReportDelivery", () => {
         await settle();
 
         assert.equal(reportsSeenBy(fixture.invokerRequests(), "job A"), 1);
+    });
+});
+
+describe("report delivery to the invoker of a Done job whose close failed", () => {
+    // A failed close (S-004 AC-005.8) leaves the job Done and the conversation without its closed mark.
+    async function parkedInvokerOfDoneJob(continueOn: ParkedState["continueOn"]) {
+        const fixture = await createFixture();
+        const invokerId = await fixture.startInvoker();
+        const releaseA = fixture.holdAnswerTo("job A");
+        const parked: ParkedState = { waitingFor: "reports", continueOn };
+        const prompts = continueOn === "all" ? ["job A", "job B"] : ["job A"];
+        await fixture.invoke(invokerId, prompts, parked);
+        await parkConversation(fixture.host, invokerId, parked);
+        const before = await readConversationMeta(fixture.host, invokerId);
+        setJobDoneCheck(fixture.host, async () => true);
+        const errors: string[] = [];
+        const recording = createLogger({ stream: { write: (line: string) => errors.push(line) !== 0 } });
+        deliveries.push(await startReportDelivery(fixture.host, { logger: recording }));
+        return { fixture, invokerId, before, releaseA, errors };
+    }
+
+    for (const continueOn of ["each", "all"] as const) {
+        it(`leaves the parked invoker as it was and logs no failure when it continues on ${continueOn}`, async () => {
+            const { fixture, invokerId, before, releaseA, errors } = await parkedInvokerOfDoneJob(continueOn);
+            const requestsBefore = fixture.invokerRequests().length;
+            releaseA();
+            await settle();
+
+            const after = await readConversationMeta(fixture.host, invokerId);
+            assert.deepEqual(after?.parked, before?.parked);
+            assert.deepEqual(after?.awaiting, before?.awaiting);
+            assert.deepEqual(after?.held, []);
+            assert.equal(errors.filter((line) => line.includes("report delivery failed")).length, 0);
+            assert.equal(fixture.invokerRequests().length, requestsBefore, "no model call");
+        });
+    }
+
+    it("leaves the parked invoker as it was while the job's section is held", async () => {
+        const { fixture, invokerId, before, releaseA } = await parkedInvokerOfDoneJob("each");
+        let openSection: () => void = () => {};
+        const section = new Promise<void>((resolve) => (openSection = resolve));
+        const held = inJobSection(fixture.host, "job-1", () => section);
+        releaseA();
+        await settle();
+
+        const during = await readConversationMeta(fixture.host, invokerId);
+        openSection();
+        await held;
+        assert.deepEqual(during?.parked, before?.parked);
+        assert.deepEqual(during?.awaiting, before?.awaiting);
     });
 });
 
