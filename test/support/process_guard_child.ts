@@ -4,7 +4,8 @@
  * `{ released: true }` first (the test ended normally), it also removes the hermetic root. SIGKILL of the test process
  * closes the channel, which is why this runs in a process of its own.
  */
-import { readFileSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
+import { processCommand } from "./process_command.ts";
 
 const [pidArgument, root] = process.argv.slice(2);
 const pid = Number(pidArgument);
@@ -12,11 +13,7 @@ let isReleased = false;
 
 /** The pid may have been reused after the process ended, so it counts only while its arguments name the root. */
 function isGuardedProcess(): boolean {
-    try {
-        return readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(root ?? "\0");
-    } catch {
-        return false;
-    }
+    return processCommand(pid)?.includes(root ?? "\0") ?? false;
 }
 
 process.on("message", (message) => {
@@ -26,7 +23,13 @@ process.on("message", (message) => {
 });
 
 process.on("disconnect", () => {
-    if (isGuardedProcess()) process.kill(pid, "SIGKILL");
+    try {
+        if (isGuardedProcess()) process.kill(pid, "SIGKILL");
+    } catch (error) {
+        // The daemon may still run, so the root stays: removing it would delete the folder under a live process.
+        console.error(error);
+        process.exit(1);
+    }
     if (!isReleased && root !== undefined) rmSync(root, { recursive: true, force: true });
     process.exit(0);
 });
