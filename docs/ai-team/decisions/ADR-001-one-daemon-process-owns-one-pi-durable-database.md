@@ -236,9 +236,9 @@ code of our own, apart from the two bounded exceptions in decision 4.
      pi-durable input, and the job resumes after it (S-004 REQ-006).
    - The start action needs no repair. It is written when the lead's first run takes a worker thread, before its
      first model request; after a crash before that write, the run resumes, takes a worker thread again and writes it.
-   - At startup, after admission is restored and before work resumes (S-002 REQ-002 step 7), the daemon applies
-     exactly the four repair rules of S-004 REQ-018, and no other recovery to jobs. S-004 REQ-018 states the rules in
-     behaviour words, under the same numbers, and this record holds how they are built:
+   - At startup, after admission is restored (S-002 REQ-002 step 7), the daemon applies exactly the four repair rules
+     of S-004 REQ-018, and no other recovery to jobs. S-004 REQ-018 states the rules in behaviour words, under the same
+     numbers, and this record holds how they are built:
      1. A job whose start is missing or was cut short gets its start completed: a job that isn't Done and has no
         lead conversation, or a To do job whose lead conversation holds no submission with request id
         `lead:<jobId>`, gets its lead conversation started and its first input submitted.
@@ -251,6 +251,15 @@ code of our own, apart from the two bounded exceptions in decision 4.
         compaction or queued input, gets it closed and aborted: one commit sets its closed mark, clears `parked` and
         empties `awaiting`, `held` and its pi-durable inbox, then pi-durable aborts it and any compaction still running
         in it (S-001 REQ-026).
+   - The rules run before `host.resume()`, and scheduling stays off while they do. `Conversation.submit`, `compact` and
+     `abort` turn scheduling on, so the rules make none of those calls: they write their history entries and job facts,
+     seat lead conversations, commit closed marks and parks, and mark tasks with `harness.abortTask`. What needs one of
+     those calls, or needs scheduling, comes after `host.resume()`, still within step 7 and before any listener answers
+     a call other than `daemon.status`, in this order: rule 1's first inputs; rule 3's held messages, where releasing
+     the lead, submitting each message, clearing them and setting the job In progress all happen at that point, so the
+     job stays Blocked until its input has reached the lead; the reminders the turn-end check owes; and last the wait
+     for the conversations rules 1 and 4 marked. A rule writes its history entry first, so one that a crash cuts short
+     applies again at the next start and writes another entry.
    - The block records the ID of the lead conversation's newest transcript entry, or null, in the job's internal
      `blockedAfterEntry`, in the same write as the status change, and the resume clears it the same way. It isn't one
      of the job fields `jobs.get` returns, and the history doesn't record it. This is how rule 3 knows that a lead
@@ -269,9 +278,10 @@ code of our own, apart from the two bounded exceptions in decision 4.
      start that a crash cut short returns the conversation it created and submits nothing twice. A repeated park, or
      a repeated abort, changes nothing.
    - After the four rules, and still before work resumes, the daemon checks S-004 REQ-008's turn-end rule for each
-     In progress job whose lead is idle and waits for nothing. It is the rule a lead's turn end runs, applied to saved
-     state, so a crash between the end of a lead's turn and the daemon handling it loses nothing; it isn't a fifth
-     repair rule (product owner decision, 2026-11-02).
+     In progress job whose lead is idle and waits for nothing; a reminder the check owes is submitted after
+     `host.resume()`, as above. It is the rule a lead's turn end runs, applied to saved state, so a crash between the
+     end of a lead's turn and the daemon handling it loses nothing; it isn't a fifth repair rule (product owner
+     decision, 2026-11-02).
    - A reminder is spent when pi-durable holds its input. The reminder's request id is `reminder:<jobId>:<n>`, where
      `n` counts the job's blocks and resumes in its history, so whether it is spent survives a restart without a fact
      of its own, and a repeated check submits it once.
@@ -422,3 +432,4 @@ second connection open. One shared handle orders every transaction and closes wi
 | 2026-11-05 | Citations only (Context, Sources, Alternatives A and G): S-002 and S-004 no longer have Design Principles, the document-families alternative left S-004 Alternatives Considered, and the Alternative A citation of S-002 Exclusions has been stale since S-002 v0.6, independent of this restructure. No decision changes. | Architecture consistency review of the ai-team 0.19.0 spec layout, T-185. |
 | 2026-11-05 | Decision 2: names what the harness host module is; listener and client library code imports none of the host module, pi-durable, `pi-ai`, `chord` or `pi-coding-agent`; listeners reach the daemon's state only through the catalogue, the feed and the lifecycle hooks; the service layer knows no transport. Decision 1: single ownership is a lock file, and the import step refuses a copy with a newer job or pi-durable schema. Decision 4: the front desk's input is in the order pi-durable admits it, with no lock of the daemon's own; S-004 REQ-018 states the repair rules in behaviour words; `blockedAfterEntry` is cited to rule 3, and isn't returned or recorded in the history. These statements come from the specs and change no behaviour. | CR-001: design statements leave the requirement text of S-001 to S-005, so a constraint needs a binding home first. |
 | 2026-11-05 | Decision 4, first bounded exception: the failed-close bullet now covers a team member's `jobs.complete` and `jobs.cancel` as well as a lead's complete tool, and a rejected abort as well as a rejected closed-mark commit. A rejected abort, of a compaction or of a conversation, is logged and stops no other. A compaction running in a conversation whose mark landed is aborted; a background compaction in a conversation without its mark goes on until rule 4 aborts it. A conversation whose own abort is rejected keeps running until the next start, on every path. The marks after a rejected commit aren't attempted: rule 4 already sets them, this adds no recovery path, and `closeJobConversations`, which rule 4 also uses, keeps rejecting. | Product owner decisions of 2026-11-05 on B-010; S-001 v0.13 REQ-026 and S-004 v0.11 REQ-007. The product owner left the remaining marks open, so this record decides them. |
+| 2026-11-05 | Decision 4, second bounded exception: states when each part of the repair takes effect. The rules run before `host.resume()` and make no call that turns scheduling on; rule 1's first inputs, the delivery of rule 3's held messages with the job's change to In progress, and the turn-end check's reminders are submitted after it, within step 7 and in that order, and the wait for marked conversations comes last; a rule a crash cuts short writes another entry. The decision itself is unchanged and nothing in the build changes. | Spec-truth reconciliation (S-004 REQ-018, S-002 REQ-002 step 7): "before work resumes" could not hold, because pi-durable's `Conversation.submit` turns scheduling on (`Harness.resume`; B-016, B-018). |
