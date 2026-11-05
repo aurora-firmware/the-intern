@@ -73,6 +73,14 @@ async function waitFor(check: () => Promise<boolean> | boolean, what: string): P
     }
 }
 
+/** Settles when the signal aborts, so a held model call ends with the run's abort. */
+function untilAborted(signal: AbortSignal | undefined): Promise<void> {
+    return new Promise((resolve) => {
+        if (signal?.aborted) resolve();
+        signal?.addEventListener("abort", () => resolve(), { once: true });
+    });
+}
+
 const settle = () => new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
 
 const textOf = (content: unknown): string =>
@@ -90,7 +98,7 @@ async function start(scripts: Record<string, Step[]>, options: StartOptions = {}
     const fake = registerFauxProvider({ models: [{ id: "model-one", reasoning: true }] });
     fakes.push(fake);
     const userMessages: Record<string, string[]> = {};
-    const respond: FauxResponseFactory = async (context) => {
+    const respond: FauxResponseFactory = async (context, streamOptions) => {
         fake.appendResponses([respond]);
         const users = context.messages.filter((message) => message.role === "user").map((m) => textOf(m.content));
         const key = Object.keys(scripts).find((candidate) => users[0]?.includes(candidate));
@@ -100,7 +108,7 @@ async function start(scripts: Record<string, Step[]>, options: StartOptions = {}
         if (step === undefined) return fauxAssistantMessage("finished");
         if ("hold" in step) {
             step.onEntered?.();
-            await step.hold;
+            await Promise.race([step.hold, untilAborted(streamOptions?.signal)]);
             return fauxAssistantMessage("done");
         }
         return fauxAssistantMessage(
@@ -432,6 +440,54 @@ describe("the turn-end rule beside other actors", () => {
         const reminderId = reminderRequestId(job.id, 0);
         assert.equal(await hasSubmissionWithRequestId(started.ctx.host, job.leadConversation, reminderId), false);
         gate.release();
+    });
+
+    it("reminds a lead whose run was aborted with a reset queued, and the job then blocks", async () => {
+        const gate = deferred();
+        let isHolding = false;
+        const started = await start({
+            "aborted lead": [
+                setDefinitionOfDone,
+                {
+                    hold: gate.promise,
+                    onEntered: () => {
+                        isHolding = true;
+                    },
+                },
+            ],
+        });
+        const job = await started.createJob("aborted lead");
+        const leadId = job.leadConversation;
+        await waitFor(() => isHolding, "the lead to hold its run");
+        await started.invoke("conversations.reset", { conversationId: leadId });
+        await started.invoke("conversations.abort", { conversationId: leadId });
+
+        await waitFor(async () => (await started.status(job.id)) === "blocked", "the job to block");
+
+        const reminderId = reminderRequestId(job.id, 0);
+        assert.equal(await hasSubmissionWithRequestId(started.ctx.host, leadId, reminderId), true);
+        assert.equal(await hasQueuedInput(started.ctx.host, leadId), false);
+    });
+
+    it("blocks a job with no definition of done when its lead's run was aborted with a reset queued", async () => {
+        const gate = deferred();
+        let isHolding = false;
+        const started = await start({
+            "aborted bare lead": [
+                {
+                    hold: gate.promise,
+                    onEntered: () => {
+                        isHolding = true;
+                    },
+                },
+            ],
+        });
+        const job = await started.createJob("aborted bare lead");
+        await waitFor(() => isHolding, "the lead to hold its run");
+        await started.invoke("conversations.reset", { conversationId: job.leadConversation });
+        await started.invoke("conversations.abort", { conversationId: job.leadConversation });
+
+        await waitFor(async () => (await started.status(job.id)) === "blocked", "the job to block");
     });
 
     it("does nothing for an idle lead that is parked", async () => {
