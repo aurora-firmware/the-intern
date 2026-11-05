@@ -3,7 +3,7 @@
  * the daemon either reminds the lead once or blocks the job. The daemon is the actor of the reminder and the author of
  * the block (S-001 v0.7 REQ-007).
  */
-import { hasQueuedInput, hasSubmissionWithRequestId } from "../host/conversation_control.ts";
+import { hasQueuedUserInput, hasSubmissionWithRequestId } from "../host/conversation_control.ts";
 import { watchInstance } from "../host/host_observation.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import { steerConversation } from "../host/steering.ts";
@@ -19,13 +19,14 @@ export const REMINDER_TEXT =
     "cannot go on, or complete it with complete_job.";
 
 // The lead waits for something while it is parked, awaits invoked conversations, runs, or has input queued; an
-// invoked conversation of the job that runs is work the lead is waiting on too.
+// invoked conversation of the job that runs is work the lead is waiting on too. A queued entry write, such as a reset
+// that an abort left behind, is not input the lead will act on, so it is not waited for.
 async function isLeadWaiting(deps: JobActionDeps, jobId: string, leadId: string): Promise<boolean> {
     const { host } = deps.ctx;
     const meta = await readConversationMeta(host, leadId);
     if (meta === undefined || meta.parked !== null || meta.awaiting.length > 0) return true;
     if ((await host.conversationInfo(leadId))?.busy !== false) return true;
-    if (await hasQueuedInput(host, leadId)) return true;
+    if (await hasQueuedUserInput(host, leadId)) return true;
     for (const { id, busy } of await host.listConversations()) {
         if (busy && id !== leadId && (await readConversationMeta(host, id))?.jobId === jobId) return true;
     }
