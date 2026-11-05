@@ -545,7 +545,8 @@ describe("rule 3: input the lead has not taken", () => {
         const job = await first.createJob();
         leadId = job.leadConversation;
         await waitFor(() => rig.modelInputs.length === 1, "the lead's run to be in its model call");
-        await blockJob(first.deps, job.id, REASON, teamMember);
+        // The block finds the queued answer and goes on to the resume, where the crash cuts it short.
+        await assert.rejects(blockJob(first.deps, job.id, REASON, teamMember), /crash at lead-input/);
         assert.equal((await first.ctx.jobStore.getJob(job.id)).status, "blocked");
         assert.equal(await hasQueuedInput(first.ctx.host, job.leadConversation), true);
         assert.notEqual((await readConversationMeta(first.ctx.host, job.leadConversation))?.parked, null);
