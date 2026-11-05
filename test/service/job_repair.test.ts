@@ -449,6 +449,118 @@ describe("rule 1: the cancel after a refused start of a lead that exists", () =>
     });
 });
 
+describe("rule 1: the first input of a lead that exists", () => {
+    it("sends no model request before the host resumes, then submits the first input once and runs the lead", async () => {
+        const rig = await createRig();
+        const first = await rig.boot();
+        const heldCall = rig.hold();
+        await first.createJob();
+        await waitFor(() => rig.modelInputs.length === 1, "the other job's run to be in its model call");
+        const { job } = await first.ctx.jobStore.insertJob({
+            letter: "W",
+            requestText: "do it",
+            origin: { kind: "request", wayIn: "web interface" },
+            leadStart: {
+                role: DEFAULT_LEAD_ROLE,
+                overrides: {},
+                actor: { kind: "team_member", wayIn: "web interface" },
+            },
+        });
+        const { conversationId: leadId } = await createSeatedConversation(first.ctx.host, {
+            scope: "job.lead",
+            key: job.id,
+            job: { jobId: job.id, isLead: true, origin: { kind: "request", wayIn: "web interface" }, depth: 0 },
+            seat: first.deps.options.agents.runtime().catalog.seatFor(DEFAULT_LEAD_ROLE),
+            actor: { kind: "team_member", wayIn: "web interface" },
+        });
+        await first.stop();
+        const requestsBeforeRestart = rig.modelInputs.length;
+        let requestsAtEndOfRepair = -1;
+        const observer: DaemonComponent = {
+            name: "observer",
+            start: async () => undefined,
+            repair: async () => {
+                await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+                requestsAtEndOfRepair = rig.modelInputs.length;
+            },
+        };
+
+        const second = await rig.boot({ components: [observer] });
+
+        assert.equal(requestsAtEndOfRepair, requestsBeforeRestart, "no run sends a request while the repair runs");
+        assert.equal(await hasSubmissionWithRequestId(second.ctx.host, leadId, `lead:${job.id}`), true);
+        await waitFor(async () => (await second.ctx.jobStore.getJob(job.id)).status === "in_progress", "In progress");
+        const leadInputs = rig.modelInputs.filter((inputs) => /^W-2\n\ndo it\n/.test(inputs[0] ?? ""));
+        assert.equal(leadInputs.length, 1, "the lead of the repaired job runs once, on its first input");
+        assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [1]);
+        heldCall.release();
+    });
+});
+
+describe("rule 1: a job past To do with no lead conversation", () => {
+    async function insertLeadlessJob(booted: Booted, status: "in_progress" | "blocked") {
+        const { job } = await booted.ctx.jobStore.insertJob({
+            letter: "W",
+            requestText: "do it",
+            origin: { kind: "request", wayIn: "web interface" },
+            leadStart: {
+                role: DEFAULT_LEAD_ROLE,
+                overrides: {},
+                actor: { kind: "team_member", wayIn: "web interface" },
+            },
+        });
+        await booted.ctx.jobStore.applyAction(job.id, "start", {}, daemonAuthor);
+        if (status === "blocked") {
+            await booted.ctx.jobStore.applyAction(job.id, "block", { blockedReason: REASON }, daemonAuthor);
+        }
+        return job;
+    }
+
+    it("leaves an In progress job In progress until its lead has taken the first input", async () => {
+        const rig = await createRig();
+        const first = await rig.boot();
+        const job = await insertLeadlessJob(first, "in_progress");
+        await first.stop();
+        const heldCall = rig.hold();
+        let statusAtEndOfRepair: string | undefined;
+        const observer: DaemonComponent = {
+            name: "observer",
+            start: async () => undefined,
+            repair: async (ctx) => {
+                statusAtEndOfRepair = (await ctx.jobStore.getJob(job.id)).status;
+            },
+        };
+
+        const second = await rig.boot({ turnEndRule: true, components: [observer] });
+
+        assert.equal(statusAtEndOfRepair, "in_progress", "no turn-end check judges a lead that has not run");
+        const [leadId] = await leadsOf(second.ctx, job.id);
+        assert.ok(leadId);
+        assert.equal(await hasSubmissionWithRequestId(second.ctx.host, leadId, `lead:${job.id}`), true);
+        assert.equal(await hasSubmissionWithRequestId(second.ctx.host, leadId, reminderRequestId(job.id, 0)), false);
+        assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [1]);
+        heldCall.release();
+    });
+
+    it("gives a Blocked job its lead, parked for an answer, and its first input", async () => {
+        const rig = await createRig();
+        const first = await rig.boot();
+        const job = await insertLeadlessJob(first, "blocked");
+        await first.stop();
+
+        const second = await rig.boot({ turnEndRule: true });
+
+        const [leadId] = await leadsOf(second.ctx, job.id);
+        assert.ok(leadId);
+        assert.equal((await readConversationMeta(second.ctx.host, leadId))?.parked?.waitingFor, "answer");
+        assert.equal(await hasSubmissionWithRequestId(second.ctx.host, leadId, `lead:${job.id}`), true);
+        await waitFor(() => rig.modelInputs.length === 1, "the lead's first run");
+        await waitFor(() => isIdle(second.ctx, leadId), "the lead to be idle");
+        assert.equal((await second.ctx.jobStore.getJob(job.id)).status, "blocked");
+        assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [1, 2]);
+    });
+});
+
 describe("rule 1: a start that fails for another reason than a refusal", () => {
     it("fails the startup instead of cancelling the job", async () => {
         const rig = await createRig();

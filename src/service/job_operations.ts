@@ -74,19 +74,18 @@ export type LeadStart = {
 export const leadStartRequestId = (jobId: string): string => `lead:${jobId}`;
 
 /**
- * Seats the job's lead conversation and submits its first input (S-002 REQ-013). The job id is the idempotency key, so
- * a repeat returns the conversation, and the request id derived from it makes the first input go in once. The two
- * are separate commits, and `afterWrite` is awaited between them. Either is refused when the job is Done: the creation
- * with `JobDoneError`, the first input with `ConversationClosedError`.
+ * Seats the job's lead conversation (S-002 REQ-013). The job id is the idempotency key, so a repeat returns the
+ * conversation. The creation is refused with `JobDoneError` when the job is Done. `afterWrite` is awaited after the
+ * creation commit.
  */
-export async function startLeadConversation(
+export async function seatLeadConversation(
     ctx: ServiceContext,
     agents: AgentsComponent,
     input: LeadStart,
     afterWrite?: JobsComponentOptions["afterWrite"],
 ): Promise<StartLeadResult> {
     const { host } = ctx;
-    const { jobId, firstInput, origin, role, overrides, actor } = input;
+    const { jobId, role, overrides, origin, actor } = input;
     let seat: Seat;
     try {
         seat = agents.runtime().catalog.seatFor(role ?? DEFAULT_LEAD_ROLE, overrides);
@@ -107,12 +106,35 @@ export async function startLeadConversation(
         });
     });
     await afterWrite?.("lead-created", jobId);
-    // Every call submits: pi-durable deduplicates the request id, so a repeat repairs a crash before this point.
-    await submitInput(host, result.conversationId, {
-        content: firstInput,
-        requestId: leadStartRequestId(jobId),
+    return result;
+}
+
+/**
+ * Submits the first input of a job's lead conversation. Every call submits: pi-durable deduplicates the request id, so
+ * a repeat repairs a crash before this point. Refused with `ConversationClosedError` when the job is Done. The
+ * submission turns pi-durable's scheduling on.
+ */
+export async function submitLeadFirstInput(
+    ctx: ServiceContext,
+    conversationId: string,
+    input: Pick<LeadStart, "jobId" | "firstInput">,
+): Promise<void> {
+    await submitInput(ctx.host, conversationId, {
+        content: input.firstInput,
+        requestId: leadStartRequestId(input.jobId),
         busyMode: "followUp",
     });
+}
+
+/** Seats the job's lead conversation and submits its first input (S-002 REQ-013); the two are separate commits. */
+export async function startLeadConversation(
+    ctx: ServiceContext,
+    agents: AgentsComponent,
+    input: LeadStart,
+    afterWrite?: JobsComponentOptions["afterWrite"],
+): Promise<StartLeadResult> {
+    const result = await seatLeadConversation(ctx, agents, input, afterWrite);
+    await submitLeadFirstInput(ctx, result.conversationId, input);
     return result;
 }
 
