@@ -463,10 +463,10 @@ export async function abortJobConversations(
  * Aborts the job's conversations after a failure while closing the job, before `abortJobConversations` attempted any
  * abort, so a queued input can't run a model turn on a Done job. The compactions still running in the conversations
  * whose closed mark landed are stopped first, the lead's included, then the conversations are aborted in turn, and a
- * failed stop or abort goes to `onError` without ending the rest. A running tool's `ownConversationId` is aborted unless its closed mark landed, and that abort is not
- * awaited: it waits for the run, and the run waits for the tool call that is making this call. Without it every
- * conversation is aborted and awaited. The marks that did not land are not retried: repair rule 4 sets them, and
- * ends the compactions of those conversations, at the next start.
+ * failed stop or abort goes to `onError` without ending the rest. A running tool's `ownConversationId` is aborted
+ * unless its closed mark landed, and that abort is not awaited: it waits for the run, and the run waits for the tool
+ * call that is making this call. Without it every conversation is aborted and awaited. The marks that did not land are
+ * not retried: repair rule 4 sets them, and ends the compactions of those conversations, at the next start.
  */
 export async function abortAfterFailedClose(
     host: HarnessHost,
