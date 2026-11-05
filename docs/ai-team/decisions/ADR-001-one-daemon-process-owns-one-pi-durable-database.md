@@ -208,12 +208,20 @@ code of our own, apart from the two bounded exceptions in decision 4.
      before pi-durable's abort leaves the abort undone: the operation that asked for it fails, and repeating it is safe.
      The daemon doesn't finish the abort on its own, except a job's abort, which repair rule 4 finishes at the next
      start, because a closed conversation refuses a repeated abort and a Done job a repeated complete or cancel.
-   - A close that fails inside a lead's complete tool with the harness still open is followed by pi-durable's abort of
-     the job's conversations, the lead's unless its closed mark landed, and that abort isn't awaited because it waits
-     for the tool's own run. It withdraws queued input, so none runs on the Done job. It isn't a retry: the failed
-     commit isn't repeated, and rule 4 sets the marks at the next start. This abort has no commit of its own, so
-     `parked`, `awaiting` and `held` stay until rule 4 clears them, and a background compaction goes on until then. A
-     storage error isn't this case: it closes the harness, decision 5 applies, and these aborts fail and are logged.
+   - A close that fails with the harness still open doesn't stop the job's aborts. This covers a lead's complete tool
+     and a team member's `jobs.complete` and `jobs.cancel`, when a closed-mark commit or an abort is rejected. The
+     daemon doesn't repeat a rejected commit or commit the marks after it, so this isn't a retry, and rule 4 sets the
+     missing marks at the next start. The daemon aborts any compaction still running in each conversation whose mark
+     landed, the completing lead's included. It then calls pi-durable's abort on every conversation of the job, except a
+     lead in its complete tool whose mark landed. A rejected abort, of a compaction or of a conversation, is logged and
+     stops no other. A team member's call waits for these aborts and then fails with `internal`. The abort of a lead in
+     its complete tool isn't awaited, because it waits for the tool's own run. pi-durable's abort withdraws queued
+     input, so none runs on the Done job. It has no commit of its own, so a conversation without its mark keeps
+     `parked`, `awaiting` and `held` until rule 4 clears them. pi-durable's abort doesn't reach a background compaction,
+     so one running in a conversation without its mark goes on until rule 4 aborts it. A conversation whose own abort is
+     rejected keeps running until the next start, on every path, and rule 4 then closes and aborts it: this is the known
+     exception of S-001 REQ-026. A storage error isn't this case: it closes the harness, decision 5 applies, and these
+     aborts fail and are logged.
    - Nothing else is allowed: no retry of a failed call, no timer that tries again, no list that holds input for a
      conversation that can take it, and no repair of state pi-durable owns, except the closed-mark commit's removal of
      queued inbox items (ADR-003) and the abort of a closed conversation's compaction. A new kind of fact or a new
@@ -413,3 +421,4 @@ second connection open. One shared handle orders every transaction and closes wi
 | 2026-11-04 | Decision 4, first bounded exception: a close that fails inside a lead's complete tool with the harness still open is followed by pi-durable's abort of the job's conversations, without their marks; `parked`, `awaiting` and `held` stay until rule 4 clears them. A storage error stays under decision 5. | Product owner decision of 2026-11-04 on T-198 finding F1; S-004 v0.9 REQ-007. |
 | 2026-11-05 | Citations only (Context, Sources, Alternatives A and G): S-002 and S-004 no longer have Design Principles, the document-families alternative left S-004 Alternatives Considered, and the Alternative A citation of S-002 Exclusions has been stale since S-002 v0.6, independent of this restructure. No decision changes. | Architecture consistency review of the ai-team 0.19.0 spec layout, T-185. |
 | 2026-11-05 | Decision 2: names what the harness host module is; listener and client library code imports none of the host module, pi-durable, `pi-ai`, `chord` or `pi-coding-agent`; listeners reach the daemon's state only through the catalogue, the feed and the lifecycle hooks; the service layer knows no transport. Decision 1: single ownership is a lock file, and the import step refuses a copy with a newer job or pi-durable schema. Decision 4: the front desk's input is in the order pi-durable admits it, with no lock of the daemon's own; S-004 REQ-018 states the repair rules in behaviour words; `blockedAfterEntry` is cited to rule 3, and isn't returned or recorded in the history. These statements come from the specs and change no behaviour. | CR-001: design statements leave the requirement text of S-001 to S-005, so a constraint needs a binding home first. |
+| 2026-11-05 | Decision 4, first bounded exception: the failed-close bullet now covers a team member's `jobs.complete` and `jobs.cancel` as well as a lead's complete tool, and a rejected abort as well as a rejected closed-mark commit. A rejected abort, of a compaction or of a conversation, is logged and stops no other. A compaction running in a conversation whose mark landed is aborted; a background compaction in a conversation without its mark goes on until rule 4 aborts it. A conversation whose own abort is rejected keeps running until the next start, on every path. The marks after a rejected commit aren't attempted: rule 4 already sets them, this adds no recovery path, and `closeJobConversations`, which rule 4 also uses, keeps rejecting. | Product owner decisions of 2026-11-05 on B-010; S-001 v0.13 REQ-026 and S-004 v0.11 REQ-007. The product owner left the remaining marks open, so this record decides them. |
