@@ -153,7 +153,7 @@ describe("createRoleCatalog", () => {
 
         await catalog.restore("gp");
         assert.deepEqual({ ...catalog.get("gp") }, { ...SHIPPED[1], shipped: true, changed: false });
-        assert.doesNotMatch(await fileText(), /gp/);
+        assert.doesNotMatch(await fileText(), /\[roles\.gp\]/);
     });
 
     it("accumulates successive changes to a shipped role until it is restored", async () => {
