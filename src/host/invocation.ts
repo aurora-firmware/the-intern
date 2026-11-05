@@ -452,16 +452,18 @@ export async function abortJobConversations(
 }
 
 /**
- * Aborts the job's conversations after a failure that left the lead's closed mark unwritten, so a queued input can't
- * run a model turn on a Done job. The other conversations are aborted in turn and a failed abort goes to `onError`.
- * The lead is aborted unless its closed mark landed, and that abort is not awaited: it waits for the run, and the run
- * waits for the tool call that is making this call. The conversations stay unclosed until rule 4 closes them at the
- * next start.
+ * Aborts the job's conversations after a failure while closing the job, so a queued input can't run a model turn on a
+ * Done job. The compactions still running in the conversations whose closed mark landed are stopped first, the lead's
+ * included, then the conversations are aborted in turn, and a failed stop or abort goes to `onError` without ending
+ * the rest. A running tool's `ownConversationId` is aborted unless its closed mark landed, and that abort is not
+ * awaited: it waits for the run, and the run waits for the tool call that is making this call. Without it every
+ * conversation is aborted and awaited. The marks that did not land are not retried: repair rule 4 sets them, and
+ * ends the compactions of those conversations, at the next start.
  */
 export async function abortAfterFailedClose(
     host: HarnessHost,
     jobId: string,
-    ownConversationId: string,
+    ownConversationId: string | undefined,
     onError: (error: unknown) => void,
 ): Promise<void> {
     // Listed in the job's section, so a conversation admitted before the abort is in the list.
@@ -473,6 +475,11 @@ export async function abortAfterFailedClose(
         }
         return found;
     });
+    await abortRunningCompactions(
+        host,
+        ofJob.filter(({ isClosed }) => isClosed).map(({ id }) => id),
+        onError,
+    );
     for (const { id, isClosed } of ofJob) {
         if (id !== ownConversationId) {
             await abortConversation(host, id).catch(onError);
