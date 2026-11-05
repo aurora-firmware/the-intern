@@ -569,7 +569,7 @@ Listeners and the client library SHALL stay on the service layer as ADR-001 deci
 
 - **Given:** the listener and client library code
 - **When:** a reviewer checks its imports
-- **Then:** its imports and its reach into the daemon follow ADR-001 decision 2
+- **Then:** its imports follow ADR-001 decision 2
 
 **Verification:** inspection — the import lists of the listener and client library modules.
 
