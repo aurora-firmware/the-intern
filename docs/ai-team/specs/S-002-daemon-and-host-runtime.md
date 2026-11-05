@@ -1,6 +1,6 @@
 ---
 title: Daemon and host runtime
-version: '0.11'
+version: '0.12'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-16'
 author: planner
@@ -26,9 +26,9 @@ This spec uses S-001's Definitions. It adds these terms:
 | Term | Meaning in this spec |
 |---|---|
 | Daemon | The single long-running process of the-intern (`bob serve`). It owns the database and runs every agent run. |
-| Database | The one pi-durable store (S-001) holding every conversation, entry, pi-durable task, submission and document, plus the daemon's own documents and the job store's `intern_` tables (S-004 REQ-001). |
+| Database | The one durable store of an instance (S-001), holding every conversation, entry, pi-durable task, submission and document, plus the daemon's own documents and the job store's tables (S-004 REQ-001). |
 | Instance | One daemon together with its state directory. Two instances share nothing. A second instance with its own state directory is the only hard wall between sets of conversations. |
-| Service layer | The set of service operations. It is the only way to read or change the daemon's state from outside the harness. |
+| Service layer | The set of service operations. It is the only way for clients and job sources to read or change the daemon's state. |
 | Service operation | One named capability of the daemon, such as "submit input" or "reset a conversation". It is either a **read** operation (it observes) or a **control** operation (it changes state or starts work). |
 | Caller | Whatever invokes a service operation: a client through a listener, a job source (a schedule fire, a trigger, email) or an agent tool. The caller states the actor that S-001 attribution records. |
 | Listener | A transport that exposes service operations to clients. Listeners belong to S-000's Intern service and are defined in the control-endpoint spec (S-003), not here. |
@@ -50,7 +50,7 @@ credentials and `settings.json` in pi agent's agent folder.
 | Team member | Uses the-intern through clients (the `bob` command line on the machine, the web interface over the network), and relies on work surviving restarts. |
 | Supervisor (systemd, launchd) | Starts the daemon at machine startup without a login and restarts it after an error exit. |
 | Callers (downstream systems) | Clients through listeners, job sources and agent tools call service operations and subscribe to the observation feed. |
-| Later specs (downstream systems) | The control endpoint, Jobs, schedules and triggers, email and the web interface plug into the daemon's start hooks, service layer and feed. |
+| Later specs (downstream systems) | The control endpoint, Jobs, schedules and triggers, email and the web interface plug into the daemon's startup, service layer and feed. |
 | Developer | Runs the whole daemon, including kills and restarts, on the fake model without a network. |
 
 Journeys, in priority order:
@@ -89,7 +89,7 @@ What this specification explicitly does NOT cover:
 - **Configurable capacity limits.** The worker-thread count and the invocation depth cap are built-in constants
   (REQ-009), not settings.
 - **Jobs, skills and instructions, schedules and triggers, email, the web interface and team knowledge.** Each has
-  its own spec. This spec gives them the host, the service layer and the observation feed they build on.
+  its own spec. This spec gives them the daemon, the service layer and the observation feed they build on.
 - **Installation.** Release form and the supervisor registration that REQ-004 requires belong to S-000's Installation
   and service setup, decided in the bootstrap plan.
 - **Approval rules for actions.** S-000 excludes them; no policy component exists.
@@ -185,7 +185,7 @@ Take single ownership → another live owner? exit non-zero, naming state dir   
   ↓
 Read job schema version → newer? exit non-zero, naming both versions            REQ-002
   ↓
-Open database, create or migrate job store, install extensions → check          REQ-002
+Open database, create or migrate job store, ready the tools → check             REQ-002
   configured models and thinking levels → unresolvable? exit non-zero, naming
   the role and value
   ↓
@@ -223,12 +223,12 @@ waiting run starts
 Failure and stop while running:
 
 ```
-Storage error closes the harness → daemon exits non-zero within 10 s            REQ-007
+Storage error closes the database → daemon exits non-zero within 10 s           REQ-007
   ↓
 Supervisor restarts it → normal start → unfinished runs resume from their       REQ-008
 checkpoints
 
-SIGTERM / SIGINT → stopping → stop hooks in reverse order → close harness →     REQ-005
+SIGTERM / SIGINT → stopping → stop components in reverse order → close database → REQ-005
 exit 0 (non-zero past the 10 s bound)
 ```
 
@@ -246,18 +246,18 @@ cause:
 1. load and validate configuration (REQ-021)
 2. resolve the instance directories and check or create them (REQ-006)
 3. take single ownership (REQ-001)
-4. read the job schema version, open the database through pi-durable, create or migrate the job store's tables, and
-   install the-intern's extensions, before anything resumes
+4. read the job schema version, open the database, create or migrate the job store's tables, and make the-intern's
+   tools ready, before anything resumes
 5. check that every configured model and thinking level resolves (S-001 Configuration Requirements)
 6. ensure the per-role default workspaces (S-001 REQ-003) and the front desk (S-001 REQ-021)
 7. restore admission (REQ-010), apply the job repair rules (S-004 REQ-018), then resume unfinished work
-8. start the components that registered a start hook (listeners, scheduler), then report ready
+8. start the components that start after work resumes (listeners, scheduler), then report ready
 
 #### AC-002.1 — The steps run in order
 
 - **Given:** a valid instance
 - **When:** the daemon starts
-- **Then:** the eight steps run in order, and status reports "starting" until the start hooks have finished
+- **Then:** the eight steps run in order, and status reports "starting" until step 8 has finished
 
 **Verification:** test — `test/service/daemon_startup.test.ts`.
 
@@ -265,7 +265,7 @@ cause:
 
 - **Given:** an invalid configuration file, an unknown key, an unsafe directory, a relative directory flag, a live
   owner, an unopenable database, a newer job schema, an unresolvable configured model, a failing workspace or a
-  failing later start hook
+  component that fails to start in step 8
 - **When:** the daemon starts
 - **Then:** it exits non-zero naming the failing step and its cause, creates no database file where the step precedes
   step 4, releases ownership it took, and stops the components already started
@@ -282,7 +282,7 @@ so they can receive calls before the daemon is ready; until then every call but 
 
 #### AC-003.1 — Starting until ready
 
-- **Given:** a daemon whose start hook is held
+- **Given:** a daemon held in step 8
 - **When:** callers call `daemon.status` and other operations
 - **Then:** status answers "starting", every other operation is refused as `unavailable`, and after release status
   answers "ready"
@@ -329,12 +329,12 @@ registration exists (`docs/development/release_form.md`, "What is still unverifi
 On SIGTERM or SIGINT the daemon SHALL:
 
 1. report "stopping" and stop accepting new calls
-2. stop the components with a stop hook, in reverse start order
-3. close the harness and every model connection
+2. stop the started components, in reverse start order
+3. close the database and every model connection
 4. exit with status 0
 
 Work running at that moment is not recorded as a team member's abort. It resumes on the next start, where calls that
-aren't replay-safe come back as interrupted results (pi-durable). The stop bound is 10 seconds: if shutdown hasn't
+aren't replay-safe come back as interrupted results. The stop bound is 10 seconds: if shutdown hasn't
 finished by then, because some code doesn't honour its abort signal, the daemon exits with a non-zero status. No
 queued input, waiting work or parked conversation is lost either way.
 
@@ -342,7 +342,7 @@ queued input, waiting work or parked conversation is lost either way.
 
 - **Given:** a ready daemon with started components
 - **When:** it receives SIGTERM
-- **Then:** it reports "stopping", answers calls `unavailable`, stops components in reverse order, closes the harness
+- **Then:** it reports "stopping", answers calls `unavailable`, stops components in reverse order, closes the database
   and exits 0
 
 **Verification:** test — `test/service/daemon_shutdown.test.ts`, `test/service/daemon_process.test.ts` ("signals").
@@ -358,7 +358,7 @@ queued input, waiting work or parked conversation is lost either way.
 
 #### AC-005.3 — The stop bound
 
-- **Given:** a stop hook that ignores its abort signal
+- **Given:** a component that doesn't stop when asked
 - **When:** the daemon shuts down
 - **Then:** it exits non-zero after 10 seconds and logs an error
 
@@ -400,8 +400,8 @@ permissions"), `test/service/harness_host.test.ts` ("makes the database file and
 
 ### REQ-009 — Process model
 
-The daemon SHALL be one operating-system process with one event loop. A worker thread is a slot in that process, not
-an operating-system thread. CPU-heavy work runs outside the daemon process: tools run commands as child processes.
+The daemon SHALL be one process (Definitions), and a worker thread SHALL be a logical unit of capacity. How the daemon
+runs agent runs and tool commands side by side follows ADR-001 decision 3.
 
 - The number of worker threads is a built-in constant: **32**, the most concurrent agent runs the daemon is
   tested with. It changes only with a release, after load tests, and no one can configure it.
@@ -422,8 +422,8 @@ S-001 REQ-010 SHALL hold, with these additions:
 
 - An agent run takes a worker thread before its first model request, and gives it back when the conversation
   becomes idle, parked or aborted.
-- The waiting order is stored in the database. After a restart, runs that held a worker thread at the kill resume
-  first, up to the worker-thread count. Waiting runs then start in their stored order.
+- The waiting order survives a restart. After a restart, runs that held a worker thread at the kill resume first, up
+  to the worker-thread count. Waiting runs then start in that order.
 - If more runs held a worker thread than the running release allows (a release lowered the count), the extra runs
   wait at the head of the queue in their original order.
 - Admission never starves a waiting run: a run waits only for runs ahead of it in the queue or already active.
@@ -449,7 +449,7 @@ S-001 REQ-010 SHALL hold, with these additions:
 
 - **Given:** one active and two waiting runs
 - **When:** the daemon is killed with `kill -9` and restarted
-- **Then:** the active run resumes first and the waiting runs start in their stored order
+- **Then:** the active run resumes first and the waiting runs start in their waiting order
 
 **Verification:** test — `test/service/admission_process.test.ts`, `test/service/admission.test.ts`.
 
@@ -608,7 +608,7 @@ Every operation MUST:
 
 A control operation that creates something (a job, a role, a workspace registration) accepts an
 idempotency key. A repeated call with the same key returns the original result and creates nothing. Submits are
-idempotent through their request id (pi-durable). Read operations never change state.
+idempotent through their request id. Read operations never change state.
 
 #### AC-013.1 — Validation and error outcomes
 
@@ -667,8 +667,8 @@ Which operations a listener exposes is the listener's choice (S-003).
 
 - **Given:** the service layer's code and the operation tests
 - **When:** a reviewer checks them
-- **Then:** every operation is called in-process in the tests, and no operation takes a request or connection as
-  input; observed caller details are recorded only, and no outcome depends on them
+- **Then:** every operation is called in-process in the tests, and the service layer follows ADR-001 decision 2 on
+  transports; observed caller details are recorded only, and no outcome depends on them
 
 **Verification:** inspection — `src/service/`; test — AC-012.1's tests.
 
@@ -676,7 +676,7 @@ Which operations a listener exposes is the listener's choice (S-003).
 
 The read or control mark of each operation SHALL be part of the catalogue, so a listener can expose read operations
 only, and add control operations later without changing the service layer. The observation feed is the only source of
-live data for clients, so every client's live view is derived from it without a second path into the harness.
+live data for clients, so every client's live view is derived from it without a second path into the daemon's state.
 
 #### AC-017.1 — Every operation is marked
 
@@ -688,7 +688,7 @@ live data for clients, so every client's live view is derived from it without a 
 
 ### REQ-019 — Explicit settings mapping
 
-pi agent settings SHALL reach the harness only through an explicit mapping. At least these are mapped: transport,
+Only the pi agent settings the-intern maps explicitly SHALL take effect. At least these are mapped: transport,
 retry, steering and follow-up modes, compaction thresholds and stream timeouts. Every mapped setting has a test.
 Unmapped settings have no effect, and the user manual lists the mapped ones.
 
@@ -696,7 +696,7 @@ Unmapped settings have no effect, and the user manual lists the mapped ones.
 
 - **Given:** a `settings.json` with each mapped setting, an unmapped one, and wrong-typed values
 - **When:** it is mapped
-- **Then:** each mapped setting reaches its harness field, unmapped and wrong-typed values have no effect, and valid
+- **Then:** each mapped setting takes effect, unmapped and wrong-typed values have no effect, and valid
   siblings are kept
 
 **Verification:** test — `test/unit/settings_mapping.test.ts`, `test/unit/model_runtime.test.ts`; inspection — the
@@ -704,9 +704,9 @@ user manual lists the mapped settings (`docs/manual/running_the_intern.md`, "Pi 
 
 ### REQ-020 — Versions
 
-The status operation SHALL report the-intern's version and the pi package versions in use. The database records which
-versions last opened it. When they differ from the running versions, the daemon logs the change at startup and
-continues.
+The status operation SHALL report the-intern's version and the pi package versions in use. The instance keeps, with its
+database, which versions last opened it. When they differ from the running versions, the daemon logs the change at
+startup and continues.
 
 #### AC-020.1 — Versions are reported and changes logged
 
@@ -809,13 +809,14 @@ recorded owner is no longer alive, the new daemon takes ownership and starts nor
 
 - **Given:** a daemon owning an instance
 - **When:** a second daemon starts on the same state directory
-- **Then:** it is refused naming the state directory and the first daemon's pid, and the lock file is unchanged
+- **Then:** it is refused naming the state directory and the first daemon's pid, and the first daemon still owns the
+  instance
 
 **Verification:** test — `test/service/daemon_lifecycle.test.ts` ("single ownership"), `test/unit/ownership.test.ts`.
 
 #### AC-001.2 — A stale owner is taken over
 
-- **Given:** a lock left by a daemon killed with `kill -9`, by an earlier boot, or unparsable
+- **Given:** an ownership record left by a daemon killed with `kill -9`, by an earlier boot, or unparsable
 - **When:** a new daemon starts, or two race for it
 - **Then:** exactly one takes ownership and starts normally
 
@@ -831,14 +832,14 @@ recorded owner is no longer alive, the new daemon takes ownership and starts nor
 
 ### REQ-007 — Storage failure
 
-When the harness closes because of a storage error, or a job store write fails (S-004 REQ-020), the daemon MUST log
-the error, stop accepting calls and exit with a non-zero status within the stop bound (REQ-005). It doesn't try to
-reopen the database itself. After the supervisor restarts it, unfinished work resumes from its last checkpoint.
+When the database closes because of a storage error, or a job store write fails (S-004 REQ-020), the daemon MUST log the
+error, stop accepting calls and exit with a non-zero status within the stop bound (REQ-005). It doesn't try to reopen
+the database itself. After the supervisor restarts it, unfinished work resumes from its last checkpoint.
 
 #### AC-007.1 — Exit and resume
 
 - **Given:** a run in progress
-- **When:** a commit fails with a storage error, and the daemon is started again
+- **When:** a database write fails with a storage error, and the daemon is started again
 - **Then:** it exits non-zero within 10 seconds without reopening the database, and the run resumes from its last
   checkpoint and settles once
 
@@ -853,8 +854,7 @@ operation, the next start MUST:
 - resume every unfinished agent run
 - keep every queued input, parked conversation and waiting run
 - leave every service operation that changes state either completed or not applied, never half-applied (S-001
-  REQ-017); a job operation cut off between its job write and its pi-durable change is completed by S-004 REQ-018
-  before work resumes
+  REQ-017); a job operation cut off part way is completed by S-004 REQ-018 before work resumes
 
 #### AC-008.1 — Kill at each point
 
@@ -975,7 +975,7 @@ supervisor registration.
 
 | Phase | What | Depends On |
 |---|---|---|
-| 1 | Lifecycle, configuration, instance directories and single ownership; the harness on the fake model; status; kill and restart tests | Nothing |
+| 1 | Lifecycle, configuration, instance directories and single ownership; the daemon on the fake model; status; kill and restart tests | Nothing |
 | 2 | Real models: pi agent login, model validation, settings mapping, closing connections on shutdown; live test 1 | Phase 1 |
 | 3 | Service layer with the read and control catalogue, and the observation feed | Phase 1 |
 | 4 | Admission and worker threads, durable across restarts | Phase 3 |
@@ -1002,3 +1002,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-03 | v0.10. The front desk (S-001 v0.8). REQ-012, Interfaces and new AC-012.6: the read operation `desk.get` returns the front desk's conversation id and seat, and `conversations.list` marks the front desk; a job the front desk creates records a request with the way in of the input it answers and the front desk in its origin details. REQ-002: step 6 also ensures the front desk. | Product owner decisions of the front desk brainstorm, 2026-11-03. S-002 owns the catalogue. | None yet; the front desk comes in the breakdown of this amendment |
 | 2026-11-03 | v0.11. REQ-012: a conversation of a Done job is closed (S-001 v0.9 REQ-026); the list and get give it status `closed`, every read works on it, and submit, abort, reset, compact and seat on it are refused `conflict`. Architecture consistency review (findings F2, F4 and F8), same version: REQ-012, the refusals apply from the job's complete or cancel and include `submissions.withdraw`; new AC-012.7, verified by the service test of S-001 AC-026.2. | Product owner decision of 2026-11-03, during the S-005 dev-loop (T-166). S-002 owns the catalogue and its error outcomes. Architecture consistency review of the amendment, 2026-11-03. | T-166 (blocked on it); T-186 to T-196 (Gate 2 passed 2026-11-03; the amendment merged into `dev-pi-durable-s005` before the preflight, by the product owner's approval of the in-flight amendment) |
 | 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The device-model alternative stays, because it is a different interface for the same need. The other three alternatives were implementation approaches: they, the system diagram, the responsibility table and the durability principle moved to `docs/development/architecture.md`, and ADR-001 records the reasoning. Configuration Requirements and Implementation Order no longer use the table's component names "state layout", "harness host" and "model runtime". | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
+| 2026-11-05 | v0.12. No behaviour changes (CR-001): technology and implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: AC-001.1, AC-001.2, REQ-002 (the same eight steps and numbers), AC-002.1, AC-002.2, AC-003.1, REQ-005, AC-005.1, AC-005.3, REQ-007, AC-007.1, REQ-008, REQ-009 (constants unchanged), REQ-010, AC-010.3, REQ-013, AC-016.1, REQ-017, REQ-019, AC-019.1, REQ-020, with the copies in Definitions, Users, Exclusions, Workflow and Implementation Order. Moved statements live in ADR-001 decisions 1, 2, 3, 4 and 5 and `docs/development/architecture.md`. AC-016.1 points to ADR-001 decision 2. No identifier added or retired. | CR-001, approved by the product owner. | T-202 (inspects AC-016.1); spec text otherwise |

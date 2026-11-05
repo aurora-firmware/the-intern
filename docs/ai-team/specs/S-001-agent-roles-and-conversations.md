@@ -1,6 +1,6 @@
 ---
 title: Agent roles and conversations
-version: '0.11'
+version: '0.12'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-15'
 author: planner
@@ -11,8 +11,8 @@ id: S-001
 
 ## Purpose
 
-This spec covers the **Agents and roles** component of S-000. The-intern runs every conversation in one pi-durable
-database, and all of its work is organised as jobs (S-000) that agents carry out in conversations. Before any way in,
+This spec covers the **Agents and roles** component of S-000. The-intern runs every conversation in one database,
+and all of its work is organised as jobs (S-000) that agents carry out in conversations. Before any way in,
 schedule or client can be built, it has to be fixed what a conversation is, what the agent working in it is, and how
 agents share the work of a job. This spec defines roles that agents are made from, one lead agent per job that can pass
 the job's conversation to another role or invoke specialist agents to work on parts of the job in parallel, the
@@ -29,10 +29,8 @@ members and turns their requests into jobs. Success Criteria lists the observabl
 | bob | The name of the default lead role (REQ-001) and of the CLI. |
 | Team member | Anyone who can reach one of the-intern's ways in (S-000). All team members are equal: each can give jobs, follow and steer work, and configure the-intern. |
 | Role | A set of parameters that an agent is made from: instructions (system prompt), tools and skills, plus default values for the pi-durable agent parameters: model, thinking level and workspace (the pi-durable `cwd`). If a role is a class, an agent is an object of that class. |
-| Role catalog | The shipped roles (`bob`, `gp`, `desk`), the team's own roles with their instructions, tools, skills and defaults, and the registered workspaces (REQ-003, REQ-018). |
 | Agent | The actor that interacts with the model and carries out a conversation. A conversation has one agent at a time and can be a succession of agents: each role change ends the current agent and seats a new one in the same conversation. An agent keeps its role for its whole life. It is not an operating-system process: the daemon runs every agent, and the current agent's configuration is the pi-durable agent of its conversation. |
 | Seat | The place of the current agent in a conversation, with the role, model, thinking level and workspace it runs with: the role's defaults, or overrides given when the agent was seated or invoked. |
-| Role prompt | What the model sees as its system prompt in a seat: the-intern's preamble, the role's instructions and skills, and the workspace's instructions (`AGENTS.md`/`CLAUDE.md`) and skills (REQ-005). |
 | Job | The product's unit of work (S-000): it has a description, a definition of done, a status, a Blocked reason while blocked, a resolution with its justification, a worklog, a history and Related jobs (S-004), kept in the job record. The job record and the job's steps belong to the Jobs component and its own spec. This spec defines only how agents and conversations work on a job. |
 | Lead conversation, lead agent | Each job has one lead conversation. Its current agent is the job's lead agent, which carries the job from definition to verification and is the only agent that completes it (S-004 REQ-005). A handoff in the lead conversation passes the lead to the new agent, so a job has exactly one lead at a time. |
 | Specialist agent | An agent invoked for a part of a job. It works in its own conversation, finishes its part and reports back. It never completes the job. |
@@ -43,7 +41,7 @@ members and turns their requests into jobs. Success Criteria lists the observabl
 | Clean-up step | What runs when an agent decides its part is done: report a summary back to the invoking conversation, do nothing, and/or release the worker thread. Chosen programmatically by the type of conversation. |
 | Agent run | The model turns an agent takes from picking up an input until its conversation is idle or parked. One agent run uses one worker thread. |
 | Model turn | One model request and the tool calls it makes. A seat change applies from the next model turn, so it can take effect during an agent run. |
-| Worker thread | A logical unit of capacity: one active agent run uses one. Their number is S-000's limit on how many agents work at once (REQ-010). Whether they are operating-system threads is the daemon spec's choice. |
+| Worker thread | A logical unit of capacity: one active agent run uses one. Their number is S-000's limit on how many agents work at once (REQ-010). How they are built is decided outside this spec (S-002 REQ-009, ADR-001 decision 3). |
 | Thread | Only in the multi-threading sense. |
 | Closed | The final status of a job's conversation once its job is Done (REQ-026). A closed conversation keeps its transcript as the record of the work and takes no input or control; only read operations act on it. The front desk never closes. |
 | Reset | Clears what the model sees of a conversation. The conversation, its id and its stored entries stay. |
@@ -52,7 +50,6 @@ members and turns their requests into jobs. Success Criteria lists the observabl
 | Job source, origin | A job source starts a job and its lead conversation: a request from a team member (command line, web interface, email), a schedule fire, a trigger, or a follow-up job created by an agent. The origin of a conversation records its job source, the invoking conversation for an agent invocation, or "front desk" for the front desk. |
 | Front desk | The one standing conversation of an instance that assists team members (REQ-021). It belongs to no job. Team members reach it from the command line and the web interface; it answers questions about the work, creates jobs that agents take, and passes answers and steering to a job's conversations. It never does the work itself. |
 | Front-desk tools | The tools offered only in the front desk: job tools that name the job they act on, reads of conversations, status and usage, and steering of a job's conversations (REQ-022). |
-| Entry routing | The daemon behaviour that starts a job's lead conversation for each job source, with the role the source names (`bob` when it names none), and records its origin (REQ-012). At startup it makes sure the front desk exists (REQ-021), and it serves team members' requests to reset conversations (REQ-011). |
 
 ### pi agent and pi-durable terms
 
@@ -149,11 +146,11 @@ What this specification explicitly does NOT cover:
   message; each input records only its way in (REQ-023).
 - **Model, thinking level or workspace per schedule entry.** Whether a schedule entry can name values other than its
   role's defaults is deferred (Open Questions). In v1 a fire runs with the named role's defaults.
-- **Process and concurrency model.** Whether worker threads are operating-system threads, share one event loop or
-  are spread over several processes belongs to the daemon and host-runtime spec. This spec uses worker threads only
-  as a logical unit of capacity and states the observable caps (REQ-009, REQ-010).
+- **Process and concurrency model.** Whether worker threads are operating-system threads, share one event loop or are
+  spread over several processes is decided outside this spec (S-002 REQ-009, ADR-001 decision 3). This spec uses worker
+  threads only as a logical unit of capacity and states the observable caps (REQ-009, REQ-010).
 - **Technology choices.** The control protocol, client transport, storage layout, config file format and process
-  model belong to the daemon and control-endpoint specs and to S-000's Installation and service setup. This spec
+  model belong to the daemon and control-endpoint specs, the ADRs and S-000's Installation and service setup. This spec
   states behaviour only.
 
 ## Alternatives Considered
@@ -220,11 +217,10 @@ These operations of the S-002 catalogue carry this spec's behaviour (S-002 REQ-0
 | `conversations.list`, `conversations.get`, `conversations.invocations`, `conversations.entries`, `feed.subscribe` | read | Monitoring (REQ-016); `conversations.list` marks the front desk (REQ-021) |
 | `desk.get` | read | The front desk's conversation id and seat (REQ-021) |
 
-Two capabilities are offered in-process only, for S-004: `jobs.startLead`, which starts a job's lead conversation
-with a role, optional overrides, a first input and an origin and is called by `jobs.create` (REQ-012); and the
-capability that closes every conversation of a job and aborts each, except the conversation of a complete tool that
-calls it when its closed mark lands (S-004 REQ-007), for S-004's complete and cancel actions and its repair rule 4
-(REQ-008, REQ-026).
+Two capabilities are offered in-process only, for S-004: the one that starts a job's lead conversation with a role,
+optional overrides, a first input and an origin and is called by `jobs.create` (REQ-012); and the one that closes every
+conversation of a job and aborts each, except the conversation of a complete tool that calls it once it is marked closed
+(S-004 REQ-007), for S-004's complete and cancel actions and its repair rule 4 (REQ-008, REQ-026).
 
 ### Exposed: transcript entries
 
@@ -259,7 +255,7 @@ Schedule fire skipped or refused? → the schedules and triggers spec; stop
   ↓
 Unknown role or unresolvable override? → refused, nothing created                           REQ-012
   ↓
-Jobs creates the job → entry routing starts its lead conversation, origin = job source      REQ-012
+Jobs creates the job → the daemon starts its lead conversation, origin = job source         REQ-012
   ↓
 Waits for a worker thread if all are busy (arrival order)                                   REQ-010
   ↓
@@ -294,7 +290,7 @@ Job Done → every conversation of the job is aborted and closed: read only, for
 The front desk, from startup to a team member's request:
 
 ```
-Startup: entry routing makes sure the front desk exists                                    REQ-021
+Startup: the daemon makes sure the front desk exists                                       REQ-021
   (missing → created seated as desk, no job, origin "front desk", id recorded)              REQ-021, REQ-023
   (crash during the creation → the next start finds or creates exactly one)                 REQ-021
   ↓
@@ -309,7 +305,7 @@ The desk agent answers with the front-desk tools only                           
     └─ answers or steers → input from the front desk to a job's conversation, or a stop     REQ-022, REQ-023
           (a Blocked job's lead resumes on the input)                                       REQ-020; S-004 REQ-006
   ↓
-Context fills → pi-durable compacts it; a team member resets it → same id, clean context     REQ-024
+Context fills → automatic compaction; a team member resets it → same id, clean context     REQ-024
 A job-only operation given the front desk → refused "not a job conversation"                 REQ-025
 The front desk never closes; steering a closed job conversation → error result               REQ-026
 ```
@@ -703,19 +699,19 @@ defaults, and a job prompt for its part.
   parallel, each on its own worker thread. An invoked agent finishes its part and reports; it never completes the job.
 - The invoking agent then chooses how it carries on:
   1. **Steerable.** It keeps running on its worker thread and can steer the agents it invoked (REQ-020).
-  2. **Parked.** Its conversation is parked: pi-durable keeps the state of the conversation and its agent, and the
+  2. **Parked.** Its conversation is parked: the state of the conversation and its agent is kept, and the
      worker thread is freed. A parked agent can't steer. It continues as REQ-019 describes.
 - An invocation that parks must be the only tool call of its model turn. One that shares its model turn with other
   tool calls is refused like an invocation past the depth cap (REQ-009): the invoking agent gets an error result that
   says why, no conversation is created, and its run continues.
-- Aborting a conversation also aborts the invoked conversations whose report it is still waiting for, whether it
-  is steerable or parked. Each of those aborts the conversations it waits for in turn. Aborting a job aborts every
+- Aborting a conversation also aborts the invoked conversations whose report it is still waiting for, whether it is
+  steerable or parked. Each of those aborts the conversations it waits for in turn. Aborting a job aborts every
   conversation of the job and closes them (REQ-026), except that a lead completing the job through its tool is closed
-  and ends its own run; the operation that does it belongs to the Jobs spec, and this
-  spec delivers the capability it calls. A closed conversation can't be aborted (REQ-026).
+  and ends its own run; the operation that does it belongs to the Jobs spec, and this spec delivers the capability it
+  calls. A closed conversation can't be aborted (REQ-026).
 - An abort leaves no aborted conversation parked or waiting for a report. Its held messages (REQ-020) are withdrawn,
   as an abort withdraws queued input. Whether its invoking conversation gets a report follows REQ-019. The one
-  exception is the abort after a failed close (REQ-026), which commits nothing of its own: S-004 REQ-018 rule 4 clears
+  exception is the abort after a failed close (REQ-026), which clears nothing itself: S-004 REQ-018 rule 4 clears
   these at the next start.
 
 #### AC-008.1 — Each context mode
@@ -765,7 +761,7 @@ defaults, and a job prompt for its part.
 - **Given:** two jobs with several conversations each
 - **When:** the job abort capability runs for one job
 - **Then:** every conversation of that job is aborted and closed, and none of the other job, and, when a lead's
-  complete tool runs it, that lead is closed and not aborted; a lead whose closed mark doesn't land is aborted at once
+  complete tool runs it, that lead is closed and not aborted; a lead that couldn't be marked closed is aborted at once
   and closed at the next start (S-004 AC-005.8)
 
 **Verification:** test — `test/service/abort_cascade.test.ts` ("abortJobConversations").
@@ -986,7 +982,7 @@ in the stored transcript, and the seat is kept unless the reset names a new one.
 
 ### REQ-012 — Lead conversation of a job
 
-When a job is created (Jobs spec), entry routing SHALL start its lead conversation:
+When a job is created (Jobs spec), the daemon SHALL start its lead conversation:
 
 - with the role the job source names, or `bob` when it names none, with that role's defaults unless a team member's
   request names a model, a thinking level or a registered workspace
@@ -1136,23 +1132,22 @@ command-line spec (product owner ruling, 2026-10-31).
 ### REQ-021 — The front desk
 
 Each instance SHALL have exactly one front desk: a standing conversation that assists team members and belongs to no
-job. At startup (S-002 REQ-002 step 6), entry routing SHALL make sure it exists:
+job. At startup (S-002 REQ-002 step 6), the daemon SHALL make sure it exists:
 
-- If the instance has none, entry routing creates one conversation seated as `desk` with that role's defaults, with
+- If the instance has none, the daemon creates one conversation seated as `desk` with that role's defaults, with
   no job, no first input and the origin "front desk" (REQ-023). The seat record names the daemon as actor. Its
-  conversation id is recorded under a fixed creation key in the daemon's own creation-key record, in the commit that
-  creates the conversation (ADR-001 decision 4), so a crash leaves neither or both.
-- If the instance has one, entry routing keeps it: its id, seat and transcript are unchanged.
+  conversation id is recorded as one change with its creation (ADR-001 decision 4), so a crash leaves neither or both.
+- If the instance has one, the daemon keeps it: its id, seat and transcript are unchanged.
 - No operation or tool creates a second front desk.
 
-`desk.get` SHALL return the front desk's conversation id and seat, and `conversations.list` SHALL mark it as the
-front desk. Team members reach it from the command line and the web interface with the existing operations:
+`desk.get` SHALL return the front desk's conversation id and seat, and `conversations.list` SHALL mark it as the front
+desk. Team members reach it from the command line and the web interface with the existing operations:
 `conversations.submit`, `conversations.entries`, the conversation feed, `conversations.abort` (which stops its current
-run), `conversations.reset` and `conversations.seat`. Input from both ways in shares one transcript, in the order
-pi-durable admits it; the daemon adds no lock of its own.
+run), `conversations.reset` and `conversations.seat`. Input from both ways in shares one transcript, in the order it is
+admitted (ADR-001 decision 4).
 
-The front desk's runs take worker threads like any other work and count toward their limit (REQ-010). It never
-parks, and no job waits on it. Its input, queueing, steering and crash survival come from pi-durable (ADR-001); the
+The front desk's runs take worker threads like any other work and count toward their limit (REQ-010). It never parks,
+and no job waits on it. Its input, queueing, steering and crash survival work as for any conversation (ADR-001); the
 only fact the daemon adds for it is its conversation id.
 
 #### AC-021.1 — First start
@@ -1175,8 +1170,8 @@ only fact the daemon adds for it is its conversation id.
 
 #### AC-021.3 — A kill during the creation
 
-- **Given:** a new instance whose daemon is killed with `kill -9` just before the commit that creates the front desk,
-  and another killed just after it
+- **Given:** a new instance whose daemon is killed with `kill -9` just before the front desk is created, and another
+  killed just after it
 - **When:** each daemon starts again, and again after that
 - **Then:** each instance has exactly one front desk, and `desk.get` returns the same conversation id on every later
   start
@@ -1197,7 +1192,7 @@ only fact the daemon adds for it is its conversation id.
 
 - **Given:** the front desk in the middle of a run on a team member's message
 - **When:** the daemon is killed with `kill -9` and started again
-- **Then:** the run resumes through pi-durable and the message is answered once
+- **Then:** the run resumes and the message is answered once
 
 **Verification:** test — a service test on the fake model, killing the daemon during the run.
 
@@ -1223,9 +1218,9 @@ other conversation. They are:
   what the matching read operation returns (REQ-016; S-002 REQ-012).
 - **Steering:** send input to a conversation of a job, which acts as `conversations.submit` does: a steer or a
   follow-up for a running conversation, a held message for one parked for reports, and the input that continues a lead
-  parked because its job is Blocked (REQ-020; S-004 REQ-006). The input takes the request id
-  `steer:<frontDeskId>:<toolCallId>`, as the `steer` tool's input does, so a call repeated after a crash delivers it
-  once. Stop a conversation of a job, which acts as `conversations.abort` does, with its cascade (REQ-008).
+  parked because its job is Blocked (REQ-020; S-004 REQ-006). A call repeated after a crash delivers the
+  input once, as for the `steer` tool. Stop a conversation of a job, which acts as `conversations.abort` does, with its
+  cascade (REQ-008).
 
 The front desk itself takes input only from team members (REQ-020). A steering tool that names the front desk itself
 or a conversation that doesn't exist returns an error result, and the run goes on. Only a team member changes the
@@ -1292,8 +1287,7 @@ of the tools the-intern ships (REQ-002), so an agent of it in the front desk cha
 
 - **Given:** the front desk sending input to a job's lead conversation
 - **When:** the daemon is killed with `kill -9` during the steering call and started again
-- **Then:** the call resumes, and the lead's transcript holds the input exactly once, with request id
-  `steer:<frontDeskId>:<toolCallId>`
+- **Then:** the call resumes, and the lead's transcript holds the input exactly once
 
 **Verification:** test — a service test on the fake model, killing the daemon during the steering call.
 
@@ -1328,7 +1322,7 @@ no new fact for it.
 
 ### REQ-024 — Compaction and reset of the front desk
 
-The front desk's context SHALL be kept within the model's window by pi-durable's automatic compaction, as for every
+The front desk's context SHALL be kept within the model's window by automatic compaction, as for every
 conversation; the daemon starts no compaction of its own for it. A team member SHALL be able to reset the front desk
 as any conversation (REQ-011): its context is cleared, its earlier entries stay stored, its seat is kept, and its
 conversation id doesn't change, so `desk.get` keeps naming it. A reset is the only way to start the front desk clean.
@@ -1337,7 +1331,7 @@ conversation id doesn't change, so `desk.get` keeps naming it. A reset is the on
 
 - **Given:** the front desk on the fake model with a small context window and the default compaction settings
 - **When:** team members write to it until its context nears the window
-- **Then:** a `pi.compaction` entry appears, the next context starts from the summary, the next message is answered,
+- **Then:** a compaction entry appears, the next context starts from the summary, the next message is answered,
   and the daemon has called no compaction itself
 
 **Verification:** test — a service test on the fake model with a small context window.
@@ -1392,40 +1386,40 @@ closed conversation never works again. Its transcript stays as the record of wha
 which a team member or an agent of any job may create and may relate to the first, as it chooses (S-004 REQ-009).
 
 - Closing is part of the job abort (REQ-008): every conversation of the job, whether running, idle, parked or waiting
-  for a worker thread, is aborted, with no report sent (REQ-019). Its queued input and queued writes are removed and
-  its held messages dropped, and it is marked closed, all in the abort's own commit. Each removed item settles
-  `unanswered` with reason `closed`. A held message has no submission (S-002 REQ-012), so it settles nothing. A
-  compaction still running in the conversation is aborted after that commit; a summary it had already finished may
-  follow the mark, and no model turn follows it. That covers the lead conversation and every conversation invoked
-  within the job, at any depth. A lead that completes the job through its tool is closed the same way, but its run
-  ends at that call instead of being aborted (S-004 REQ-007).
+  for a worker thread, is aborted, with no report sent (REQ-019). Its queued input and queued writes are removed and its
+  held messages dropped, and it is marked closed, all as one change. Each removed item settles `unanswered` with reason
+  `closed`. A held message has no submission (S-002 REQ-012), so it settles nothing. A compaction still running in the
+  conversation is aborted after that change; a summary it had already finished may follow the mark, and no model turn
+  follows it. That covers the lead conversation and every conversation invoked within the job, at any depth. A lead that
+  completes the job through its tool is closed the same way, but its run ends at that call instead of being aborted
+  (S-004 REQ-007).
 - A closed conversation keeps its id, seat, origin, job links, invocation links and every stored entry. Every read
-  operation works on it (REQ-016; S-002 REQ-012). It lists with status `closed` from the commit that sets its mark,
+  operation works on it (REQ-016; S-002 REQ-012). It lists with status `closed` from the moment its mark is set,
   whatever else is true of it, and the instance feed publishes a `status_changed` delta to `closed` for it.
 - Every operation that would change a closed conversation SHALL refuse it with `conflict`, naming the conversation as
   closed, and change nothing: submitting input in any busy mode, withdrawing one of its submissions
   (`submissions.withdraw`), abort, reset, reseat and compaction (REQ-004, REQ-008, REQ-011, REQ-020; S-002 REQ-012).
   The `steer` tool and the front-desk steering tools (REQ-022) aimed at a closed conversation return an error result,
   and the run goes on.
-- From the job's complete or cancel, a conversation of the job counts as closed for every refusal of this
-  requirement, even before its closed mark is committed. Input queued before the closed mark settles `unanswered` with
-  reason `closed`. The placed input of a run the job abort stops settles `unanswered` with reason `aborted`. The placed
-  input of a run that completes the job through its tool settles `done`; when a crash cuts that call or its tool round
-  short, rule 4 aborts the run and its input settles `unanswered` with reason `aborted`. When the closed-mark commit
-  fails without a storage error after a lead's complete through its tool, the daemon aborts the job's other
-  conversations and a lead whose mark didn't land (S-004 REQ-007). The placed and queued input of a conversation
-  without its mark settles `unanswered` with reason `aborted`. Until the next start, that conversation has no mark:
-  it can stay parked, keeps its `awaiting` and held messages, lists with a status other than `closed`, and any
-  compaction still running in it goes on. Every refusal of this requirement still holds, and no input starts a run.
-  Rule 4 closes it at the next start. A write queued before the closed mark places no entry.
-  Entries the abort itself writes, such as an aborted answer or tool result, and the complete tool's own result may
-  follow the mark. No input runs a model turn after the job is Done, with one known exception: when a team member's
-  `jobs.complete` or `jobs.cancel` fails at a closed-mark commit or an abort after it, without a storage error, the
-  call fails and the conversations not yet aborted stay unaborted. Until the next start, a run or compaction already
-  going in one goes on, even after its mark landed, and an input still queued can start a run.
+- From the job's complete or cancel, a conversation of the job counts as closed for every refusal of this requirement,
+  even before its closed mark is set. Input queued before the closed mark settles `unanswered` with reason `closed`. The
+  placed input of a run the job abort stops settles `unanswered` with reason `aborted`. The placed input of a run that
+  completes the job through its tool settles `done`; when a crash cuts that call or its tool round short, rule 4 aborts
+  the run and its input settles `unanswered` with reason `aborted`. When setting a closed mark fails without a storage
+  error after a lead's complete through its tool, the daemon aborts the job's other conversations and a lead whose mark
+  didn't land (S-004 REQ-007). The placed and queued input of a conversation without its mark settles `unanswered` with
+  reason `aborted`. Until the next start, that conversation has no mark: it can stay parked, keeps its awaited reports
+  and held messages, lists with a status other than `closed`, and any compaction still running in it goes on. Every
+  refusal of this requirement still holds, and no input starts a run. Rule 4 closes it at the next start. A write queued
+  before the closed mark places no entry. Entries the abort itself writes, such as an aborted answer or tool result, and
+  the complete tool's own result may follow the mark. No input runs a model turn after the job is Done, with one known
+  exception: when a team member's `jobs.complete` or `jobs.cancel` fails while setting a closed mark, or at an abort
+  after it, without a storage error, the call fails and the conversations not yet aborted stay unaborted. Until the next
+  start, a run or compaction already going in one goes on, even after its mark landed, and an input still queued can
+  start a run.
 - A coordination or job tool called from a conversation whose job is Done, or that is closed, returns an error result
   and changes nothing: `invoke` creates no conversation, `handoff` changes no seat, `steer` delivers nothing. A lead
-  start (`jobs.startLead`, REQ-012) is refused at whichever of its two commits finds the job Done: refused at the lead
+  start (REQ-012) is refused at whichever of its two steps finds the job Done: refused at the lead
   conversation's creation, it creates no conversation; refused at the first input, it submits no first input, and the
   conversation it created is closed by the job abort.
 - A closed conversation runs no more model turns, after a restart too, apart from the known exception above: it takes
@@ -1465,8 +1459,8 @@ which a team member or an agent of any job may create and may relate to the firs
 
 #### AC-026.4 — Closed across a restart
 
-- **Given:** a job's closed conversations, one of them closed while it was running, and one whose closed mark was
-  committed when the daemon was killed before pi-durable's abort
+- **Given:** a job's closed conversations, one of them closed while it was running, and one marked closed when
+  the daemon was killed before its abort
 - **When:** the daemon is killed with `kill -9` and restarted
 - **Then:** each is still closed, runs no model turn and takes no compaction, and the front desk is not closed
 
@@ -1510,10 +1504,10 @@ which a team member or an agent of any job may create and may relate to the firs
 
 #### AC-026.9 — A queued reset at the close
 
-- **Given:** a clean handoff whose seat commit lands just before the job's complete
+- **Given:** a clean handoff whose seat change lands just before the job's complete
 - **When:** the job is completed
-- **Then:** the queued reset and note settle `unanswered` with reason `closed`, the conversation has no `pi.reset`
-  entry after its closed mark, its seat change stays, and it runs no model turn
+- **Then:** the queued reset and note settle `unanswered` with reason `closed`, the conversation has no reset
+  entry after it is marked closed, its seat change stays, and it runs no model turn
 
 **Verification:** test — a service test on the fake model, with the interleaving injected.
 
@@ -1529,13 +1523,13 @@ which a team member or an agent of any job may create and may relate to the firs
 
 ### REQ-017 — Durability
 
-Seats, seat records, resets, job links, invocation links, depth, origins, parked state, undelivered reports, the closed
-mark (REQ-026) and the front desk's conversation id (REQ-021) MUST survive a daemon kill and restart. A seat change,
-handoff, reset, invocation, park or report interrupted by a crash either completed before the crash or completes on
-resume, unless its job is Done, when the close withdraws what is queued (REQ-026). It is never half-applied: never a new
-seat without its record, never an invoked conversation without its invocation link, never a lead conversation without
-its job, and never a report lost or delivered twice. Work waiting for a worker thread is still waiting after the
-restart, in the same order.
+Seats, seat records, resets, job links, invocation links, depth, origins, parked state, undelivered reports, whether a
+conversation is closed (REQ-026) and the front desk's conversation id (REQ-021) MUST survive a daemon kill and restart.
+A seat change, handoff, reset, invocation, park or report interrupted by a crash either completed before the crash or
+completes on resume, unless its job is Done, when the close withdraws what is queued (REQ-026). It is never
+half-applied: never a new seat without its record, never an invoked conversation without its invocation link, never a
+lead conversation without its job, and never a report lost or delivered twice. Work waiting for a worker thread is still
+waiting after the restart, in the same order.
 
 #### AC-017.1 — Kill during a seat change, a handoff, an invocation and a lead start
 
@@ -1615,7 +1609,7 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
 
 - **S-002, Daemon and host runtime.** Provides the database, startup, configuration file, service layer, admission
   and observation feed this spec builds on. Its built-in constants fix the depth cap and the worker-thread count.
-- **S-004 (Jobs).** Creates jobs and calls `jobs.startLead`, which is in-process only, from `jobs.create` (REQ-012);
+- **S-004 (Jobs).** Creates jobs and starts their lead conversations, in-process only, from `jobs.create` (REQ-012);
   decides when a job is blocked and delivers its answer (REQ-014); completes and cancels jobs, and its complete and
   cancel actions call this spec's abort capability (REQ-008); adds the job tools to every role (REQ-003, REQ-005).
 - **The schedules and triggers spec, the command-line spec and the Email spec (not yet written).** They own the fire
@@ -1672,16 +1666,16 @@ Delivered: phases 1 to 5 are implemented (tasks up to T-091). Phase 6, the front
 command-line spec (S-005, tasks T-145 to T-159). Phase 7, closed conversations, comes with the v0.9 amendment and
 is broken down in T-186 to T-196.
 
-This spec relies on the daemon and host-runtime spec for the database, startup, configuration and process model,
+This spec relies on the daemon and host-runtime spec for the database, startup, configuration and worker threads,
 on the control-endpoint spec for the surfaces the command line, the web interface and monitoring use, and on the
 Jobs spec for creating jobs. Its phases can be developed against a minimal host until those exist.
 
 | Phase | What | Depends On |
 |---|---|---|
-| 1 | Role catalog with shipped and team roles, workspace registration, seating with overrides and role prompt; team member changes the seat; resets; seat records and attribution | Daemon and host runtime |
+| 1 | Shipped and team roles, workspace registration, seating with overrides and the system prompt; team member changes the seat; resets; seat records and attribution | Daemon and host runtime |
 | 2 | Handoff by agents in all three context modes | Phase 1 |
 | 3 | Agent invocation (context modes, steerable and parked), report-back step, abort of awaited invoked agents, steering by agents, depth cap | Phase 1 |
-| 4 | Worker threads, and parked conversations freeing them | Phase 3, daemon spec's process model |
+| 4 | Worker threads, and parked conversations freeing them | Phase 3, S-002 REQ-009 |
 | 5 | Job sources: the operation that starts a job's lead conversation for requests, schedule fires, triggers and follow-ups; the parking and continuing that blocked jobs use; the capability that aborts every conversation of a job. Monitoring read operations: list, job links, statuses, invocations, live transcript. The schedule behaviour, the command-line views and the job abort operation come with their own specs | Phases 1–3, S-002 phase 3 |
 | 6 | The front desk: the shipped `desk` role, its creation and recovery at startup, `desk.get` and the front-desk mark in `conversations.list`, the front-desk tools, its attribution, and the refusals of REQ-025; live acceptance test 4 | Phases 1–5, S-004's job tools and `list_jobs` (S-004 REQ-021) |
 | 7 | Closed conversations: the closed mark written with a job's abort, `closed` in the status, the `conflict` refusals of input and control, the error results of the steering tools, and the closed mark in repair rule 4 (S-004 REQ-018) | Phases 1–6, S-004's complete, cancel and repair rules |
@@ -1720,3 +1714,4 @@ behaviour. Deciding either one is a scope amendment of this spec.
 | 2026-11-04 | v0.10. REQ-026: the closed-mark commit also withdraws queued writes, and everything it withdraws settles `unanswered` with reason `closed`; a lead that completes the job through its tool ends its run at that call instead of being aborted, and that run's input settles `done`; entries the abort itself writes and the complete tool's own result may follow the mark; a held message settles nothing; a compaction still running is aborted after the commit, and a finished summary may follow the mark. REQ-008, REQ-017, the in-process capability, Interfaces and the upgrade review list follow. AC-008.6. New AC-026.9 and AC-026.10. | Product owner decision of 2026-11-04 (B-006 and the misleading `tool complete_job failed` line). Architecture consistency review, findings F1 to F5. | T-197, T-198, T-199, T-200, T-201 |
 | 2026-11-04 | v0.11. Interfaces (the in-process job abort capability), REQ-008, REQ-026, AC-008.6 and AC-008.7: when the closed-mark commit fails without a storage error after a lead's complete through its tool, the daemon aborts the conversations whose marks didn't land, so no queued input runs a model turn, and rule 4 closes them at the next start. The same failure on a team member's `jobs.complete` or `jobs.cancel`, or a failed abort after it, is recorded as a known exception, and the closed-conversation bullet names it (B-010). | S-004 v0.9 REQ-007; product owner decision of 2026-11-04 on T-198 finding F1. | T-198 |
 | 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The system diagram, the responsibility table and the conversation's own document moved to `docs/development/architecture.md`. Definitions gain Entry routing, Role catalog and Role prompt, drawn from that table, because REQ-012, REQ-021, Workflow, Implementation Order and S-004 REQ-008 use them. Interfaces, Consumed: "S-002's configuration component" became "S-002's configuration loading". | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
+| 2026-11-05 | v0.12. No behaviour changes (CR-001): technology and implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: REQ-008, AC-008.6, REQ-012, REQ-017, REQ-021, AC-021.3, AC-021.5, REQ-022, AC-022.7, REQ-024, AC-024.1, REQ-026, AC-026.4, AC-026.9, with the copies in Purpose, Definitions, Exclusions, Interfaces, Workflow, Assumptions and Implementation Order. REQ-026's settlement outcomes are unchanged. The Entry routing, Role catalog and Role prompt rows leave Definitions; `docs/development/architecture.md` describes them. Worker thread and Exclusions now leave the process model to S-002 REQ-009 and ADR-001 decision 3. REQ-021 points to ADR-001 decision 4, which now holds "adds no lock of its own". Moved statements live in ADR-001 decision 4, ADR-003 and ADR-004 decision 3. No identifier added or retired. | CR-001, approved by the product owner. | None; spec text only |

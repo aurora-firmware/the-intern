@@ -4,7 +4,7 @@ A high-level map of how The Intern fits together at runtime and which spec owns 
 requirements: the specs and the accepted ADRs are the source of truth, and where this page differs from them, fix this
 page. Read [S-000](../ai-team/specs/S-000-system-overview.md) for scope. The shared vocabulary and the spec map are in
 [system_overview.html](../system_overview.html) (sections 4 and 5), and are not repeated here. The module rule comes
-from the [coding guidelines](coding_guidelines.md).
+from ADR-001 decision 2 and ADR-005, and the [coding guidelines](coding_guidelines.md) give the detail.
 
 ## Runtime shape
 
@@ -275,7 +275,7 @@ small.
 | Admission | Counts worker threads, grants one to each ready agent run, holds the rest in arrival order, and keeps that order across restarts | Implements S-001 REQ-010. pi-durable has no concurrency cap of its own, so admission gates when runs start, including runs that resume after a restart. State kept in the daemon's admission document |
 | Service layer | The catalogue of read and control operations, their validation and their error outcomes | Called by listeners, job sources and agent tools alike |
 | Observation feed | Publishes snapshots and deltas for the instance and for each conversation, never a replay; drops a subscriber that falls too far behind | The source for the command line's and the web interface's live views and for monitoring |
-| Status | Reports whether the daemon is starting, ready or stopping, its versions, start time, instance paths, and worker threads in use and waiting | A read operation and an instance-scope feed entry |
+| Status | Reports whether the daemon is starting, ready or stopping, its versions, start time, instance paths, and worker threads in use and waiting | A read operation and an instance-scope feed entry. The versions that last opened the database are kept in a daemon document, `intern.versions`, in that database, so a copy of the database carries them (S-002 REQ-020) |
 
 - **Durability belongs to the runtime.** Recovery, exactly-once admission of input, queued input and checkpoints come
   from pi-durable. The daemon adds no retry loops, intake tables or recovery code of its own, except two bounded
@@ -338,10 +338,11 @@ are not described here.
 - **Every job source ends in the same service operation.** Every way in and job source submits through the service layer.
 - **The command table imports no daemon module besides the path layout.** A `bob` command reaches the daemon only
   through the client library, except `serve` and `import`, which load the daemon's code by a dynamic import inside
-  `run` (S-005 REQ-016). The path layout, `src/daemon/state_layout.ts`, is the one daemon file every command loads
-  (`connection.ts` uses it for the runtime directory); it imports only Node modules.
+  `run` (S-005 REQ-016, ADR-005). The path layout, `src/daemon/state_layout.ts`, is the one daemon file every command
+  loads (`connection.ts` uses it for the runtime directory); it imports only Node modules.
 - **Listeners and the client library use only the service layer.** Listener and client library code imports neither
   the harness host nor any pi package. Listeners reach the daemon's state only through the catalogue, the feed and the
-  lifecycle hooks, and import the daemon and feed modules only as types (S-003 REQ-013, ADR-001).
+  lifecycle hooks, and import the daemon and feed modules only as types (S-003 REQ-013, ADR-001 decision 2). No service
+  operation takes a request or connection as input (S-002 REQ-016, ADR-001 decision 2).
 
 See [coding_guidelines.md](coding_guidelines.md), Module structure, for the full rules.

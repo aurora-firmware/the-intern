@@ -1,7 +1,7 @@
 ---
 id: S-005
 title: Command line
-version: '0.3'
+version: '0.4'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-03'
 author: planner
@@ -179,7 +179,7 @@ Unknown command, flag or missing argument → the group's usage on standard erro
 Reserved group → "not available yet", exit 2                                                REQ-001
   ↓
 serve → runs the daemon (S-002)                                                             REQ-014
-import → S-004's import step, daemon stopped; refused while a daemon holds the lock, exit 1  REQ-013
+import → S-004's import step, daemon stopped; refused while a daemon owns the instance, exit 1  REQ-013
   ↓
 Socket: --runtime-dir, else BOB_RUNTIME_DIR, else the default runtime directory             REQ-002
   ↓
@@ -562,9 +562,9 @@ steered or held. A closed conversation (S-001 REQ-026) lists with status `closed
 ### REQ-013 — Export and import
 
 `bob export <file>` SHALL call `jobs.export` with the file made absolute against the current directory and print the
-path and size written (S-004 REQ-016). `bob import <file>` SHALL run S-004's import step in-process for the instance
-its directory flags or defaults name, the same flags as `bob serve`, under the single-owner lock, and SHALL refuse,
-with the step's message and exit 1, while a daemon holds the lock or in any other case S-004 REQ-017 refuses
+path and size written (S-004 REQ-016). `bob import <file>` SHALL run S-004's import step in-process for the instance its
+directory flags or defaults name, the same flags as `bob serve`, under single ownership of the instance, and SHALL
+refuse, with the step's message and exit 1, while a daemon owns the instance or in any other case S-004 REQ-017 refuses
 (S-002 REQ-001).
 
 #### AC-013.1 — Back up and restore
@@ -581,7 +581,7 @@ with the step's message and exit 1, while a daemon holds the lock or in any othe
 
 - **Given:** a running daemon
 - **When:** a team member runs `bob import backup.db` for its instance
-- **Then:** it prints the lock holder's message on standard error, changes nothing and exits 1
+- **Then:** it prints the step's message on standard error, changes nothing and exits 1
 
 **Verification:** test — a service test running `bob` as a child process.
 
@@ -641,16 +641,15 @@ only a Ctrl-C withdraws queued lines (REQ-009).
 
 ### REQ-016 — Thin and quick
 
-`bob` SHALL keep no state of its own: no configuration file, cache or local history, and no short-number resolution
-or validation the service does. A command that only calls the service SHALL NOT load the daemon's code. As a
-reference, not an acceptance threshold, `bob jobs list` answers in under half a second on a development machine.
+`bob` SHALL keep no state of its own: no configuration file, cache or local history, and no short-number resolution or
+validation the service does. A command that only calls the service SHALL NOT load the daemon's code, as ADR-005 states.
+As a reference, not an acceptance threshold, `bob jobs list` answers in under half a second on a development machine.
 
 #### AC-016.1 — No state and no daemon code
 
 - **Given:** the `bob` entry point and its command modules
 - **When:** a reviewer reads them, and runs `bob jobs list` with module loading traced
-- **Then:** no file is written outside standard output and standard error, and no daemon module (host, service,
-  listeners, jobs, agents) is loaded by a command other than `serve` and `import`
+- **Then:** no file is written outside standard output and standard error, and the modules loaded follow ADR-005
 
 **Verification:** inspection — the `bob` entry point and its command modules, and the module trace of one run.
 
@@ -716,7 +715,7 @@ sense.
   `parseArgs`.
 - **S-001 v0.11, S-002 v0.11 and S-004 v0.9.** The front desk, `desk.get`, closed conversations and the job operations
   exist as specified.
-- **S-004's import step** (REQ-017) runs in-process and holds the single-owner lock (S-002 REQ-001).
+- **S-004's import step** (REQ-017) runs in-process and holds single ownership of the instance (S-002 REQ-001).
 - **Installation and service setup** puts `bob` on the `PATH`; until then the manual shows `node src/cli/bob.ts`.
 - **Later specs** (Schedules and triggers, Skills and instructions, Team knowledge, Email) add their groups under the
   reserved names and follow the conventions of Interfaces.
@@ -757,3 +756,4 @@ None.
 | 2026-11-03 | v0.2, still. AC-005.2: the cancelled job is one cancelled before its lead conversation was created (S-004 REQ-007, S-001 AC-026.8). | Architecture consistency review of S-001 v0.9, 2026-11-03. | T-166, T-167 |
 | 2026-11-04 | v0.3. Interfaces: the Contract names the operations `bob jobs follow`, `bob usage` and `bob conversations list --job` call. Interfaces, REQ-008, AC-008.1 and AC-003.3: `bob usage --json` prints `{ "total", "conversations" }`, holding the usage per conversation and the total. The `bob chat` row names `submissions.wait` after Ctrl-D. REQ-010: chat without a terminal also applies when standard output isn't a terminal, as Definitions and Design Principles state; new AC-010.3. Assumptions: current versions; the breakdowns are done. | PR #148 review findings, product owner decision of 2026-11-04. | None; fixed on the PR branch |
 | 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. All alternatives stay: each is a different interface for the same need. | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
+| 2026-11-05 | v0.4. No behaviour changes (CR-001): technology and implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: REQ-013, AC-013.2, REQ-016, AC-016.1, with the copies in Workflow and Assumptions. Moved statements live in ADR-005 (which modules a command may load) and ADR-001 decision 1 (the lock file). No identifier added or retired. | CR-001, approved by the product owner. | T-202 (inspects AC-016.1); spec text otherwise |
