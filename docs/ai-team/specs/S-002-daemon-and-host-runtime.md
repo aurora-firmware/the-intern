@@ -28,7 +28,7 @@ This spec uses S-001's Definitions. It adds these terms:
 | Daemon | The single long-running process of the-intern (`bob serve`). It owns the database and runs every agent run. |
 | Database | The one durable store of an instance (S-001), holding every conversation, entry, pi-durable task, submission and document, plus the daemon's own documents and the job store's tables (S-004 REQ-001). |
 | Instance | One daemon together with its state directory. Two instances share nothing. A second instance with its own state directory is the only hard wall between sets of conversations. |
-| Service layer | The set of service operations. It is the only way to read or change the daemon's state from outside the daemon. |
+| Service layer | The set of service operations. It is the only way for clients and job sources to read or change the daemon's state. |
 | Service operation | One named capability of the daemon, such as "submit input" or "reset a conversation". It is either a **read** operation (it observes) or a **control** operation (it changes state or starts work). |
 | Caller | Whatever invokes a service operation: a client through a listener, a job source (a schedule fire, a trigger, email) or an agent tool. The caller states the actor that S-001 attribution records. |
 | Listener | A transport that exposes service operations to clients. Listeners belong to S-000's Intern service and are defined in the control-endpoint spec (S-003), not here. |
@@ -223,7 +223,7 @@ waiting run starts
 Failure and stop while running:
 
 ```
-Storage error → daemon exits non-zero within 10 s                               REQ-007
+Storage error closes the database → daemon exits non-zero within 10 s           REQ-007
   ↓
 Supervisor restarts it → normal start → unfinished runs resume from their       REQ-008
 checkpoints
@@ -667,8 +667,8 @@ Which operations a listener exposes is the listener's choice (S-003).
 
 - **Given:** the service layer's code and the operation tests
 - **When:** a reviewer checks them
-- **Then:** every operation is called in-process in the tests, and no operation takes a request or connection as
-  input; observed caller details are recorded only, and no outcome depends on them
+- **Then:** every operation is called in-process in the tests, and the service layer follows ADR-001 decision 2 on
+  transports; observed caller details are recorded only, and no outcome depends on them
 
 **Verification:** inspection — `src/service/`; test — AC-012.1's tests.
 
@@ -704,9 +704,9 @@ user manual lists the mapped settings (`docs/manual/running_the_intern.md`, "Pi 
 
 ### REQ-020 — Versions
 
-The status operation SHALL report the-intern's version and the pi package versions in use. The instance keeps which
-versions last opened its database. When they differ from the running versions, the daemon logs the change at startup and
-continues.
+The status operation SHALL report the-intern's version and the pi package versions in use. The instance keeps, with its
+database, which versions last opened it. When they differ from the running versions, the daemon logs the change at
+startup and continues.
 
 #### AC-020.1 — Versions are reported and changes logged
 
@@ -809,13 +809,14 @@ recorded owner is no longer alive, the new daemon takes ownership and starts nor
 
 - **Given:** a daemon owning an instance
 - **When:** a second daemon starts on the same state directory
-- **Then:** it is refused naming the state directory and the first daemon's pid, and the lock file is unchanged
+- **Then:** it is refused naming the state directory and the first daemon's pid, and the first daemon still owns the
+  instance
 
 **Verification:** test — `test/service/daemon_lifecycle.test.ts` ("single ownership"), `test/unit/ownership.test.ts`.
 
 #### AC-001.2 — A stale owner is taken over
 
-- **Given:** a lock left by a daemon killed with `kill -9`, by an earlier boot, or unparsable
+- **Given:** an ownership record left by a daemon killed with `kill -9`, by an earlier boot, or unparsable
 - **When:** a new daemon starts, or two race for it
 - **Then:** exactly one takes ownership and starts normally
 
@@ -831,14 +832,14 @@ recorded owner is no longer alive, the new daemon takes ownership and starts nor
 
 ### REQ-007 — Storage failure
 
-When a storage error occurs, or a job store write fails (S-004 REQ-020), the daemon MUST log
-the error, stop accepting calls and exit with a non-zero status within the stop bound (REQ-005). It doesn't try to
-reopen the database itself. After the supervisor restarts it, unfinished work resumes from its last checkpoint.
+When the database closes because of a storage error, or a job store write fails (S-004 REQ-020), the daemon MUST log the
+error, stop accepting calls and exit with a non-zero status within the stop bound (REQ-005). It doesn't try to reopen
+the database itself. After the supervisor restarts it, unfinished work resumes from its last checkpoint.
 
 #### AC-007.1 — Exit and resume
 
 - **Given:** a run in progress
-- **When:** a commit fails with a storage error, and the daemon is started again
+- **When:** a database write fails with a storage error, and the daemon is started again
 - **Then:** it exits non-zero within 10 seconds without reopening the database, and the run resumes from its last
   checkpoint and settles once
 
@@ -1001,4 +1002,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-03 | v0.10. The front desk (S-001 v0.8). REQ-012, Interfaces and new AC-012.6: the read operation `desk.get` returns the front desk's conversation id and seat, and `conversations.list` marks the front desk; a job the front desk creates records a request with the way in of the input it answers and the front desk in its origin details. REQ-002: step 6 also ensures the front desk. | Product owner decisions of the front desk brainstorm, 2026-11-03. S-002 owns the catalogue. | None yet; the front desk comes in the breakdown of this amendment |
 | 2026-11-03 | v0.11. REQ-012: a conversation of a Done job is closed (S-001 v0.9 REQ-026); the list and get give it status `closed`, every read works on it, and submit, abort, reset, compact and seat on it are refused `conflict`. Architecture consistency review (findings F2, F4 and F8), same version: REQ-012, the refusals apply from the job's complete or cancel and include `submissions.withdraw`; new AC-012.7, verified by the service test of S-001 AC-026.2. | Product owner decision of 2026-11-03, during the S-005 dev-loop (T-166). S-002 owns the catalogue and its error outcomes. Architecture consistency review of the amendment, 2026-11-03. | T-166 (blocked on it); T-186 to T-196 (Gate 2 passed 2026-11-03; the amendment merged into `dev-pi-durable-s005` before the preflight, by the product owner's approval of the in-flight amendment) |
 | 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The device-model alternative stays, because it is a different interface for the same need. The other three alternatives were implementation approaches: they, the system diagram, the responsibility table and the durability principle moved to `docs/development/architecture.md`, and ADR-001 records the reasoning. Configuration Requirements and Implementation Order no longer use the table's component names "state layout", "harness host" and "model runtime". | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
-| 2026-11-05 | v0.12. No behaviour changes (CR-001): technology and implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: REQ-002 (the same eight steps and numbers), AC-002.1, AC-002.2, AC-003.1, REQ-005, AC-005.1, AC-005.3, REQ-007, REQ-008, REQ-009 (constants unchanged), REQ-010, AC-010.3, REQ-013, REQ-017, REQ-019, AC-019.1, REQ-020, with the copies in Definitions, Users, Exclusions, Workflow and Implementation Order. Moved statements live in ADR-001 decisions 1, 3, 4 and 5 and `docs/development/architecture.md`. AC-016.1 keeps its wording until a decision holds it. No identifier added or retired. | CR-001, approved by the product owner. | None; spec text only |
+| 2026-11-05 | v0.12. No behaviour changes (CR-001): technology and implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: AC-001.1, AC-001.2, REQ-002 (the same eight steps and numbers), AC-002.1, AC-002.2, AC-003.1, REQ-005, AC-005.1, AC-005.3, REQ-007, AC-007.1, REQ-008, REQ-009 (constants unchanged), REQ-010, AC-010.3, REQ-013, AC-016.1, REQ-017, REQ-019, AC-019.1, REQ-020, with the copies in Definitions, Users, Exclusions, Workflow and Implementation Order. Moved statements live in ADR-001 decisions 1, 2, 3, 4 and 5 and `docs/development/architecture.md`. AC-016.1 points to ADR-001 decision 2. No identifier added or retired. | CR-001, approved by the product owner. | None; spec text only |
