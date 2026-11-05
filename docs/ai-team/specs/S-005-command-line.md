@@ -85,27 +85,7 @@ What this specification explicitly does NOT cover:
 - **Mail to the front desk and presentation in the browser.** Email doesn't reach the front desk (S-001), and the web
   chat and board belong to the Web interface spec.
 
-## Architecture
-
-### Design Principles
-
-- **Thin client.** Every command except `bob serve` and `bob import` calls Intern service operations through S-003's
-  client library and prints what they return. Validation, short-number resolution and refusals come from the service;
-  `bob` adds no behaviour of its own (S-000; REQ-016).
-- **Curated commands.** Each command is named for what a team member does (`bob jobs answer`), not for the operation
-  it calls, and calls the operations Interfaces names for it.
-- **Stable for scripts.** Command names, `--json` output and exit codes are a contract; changing them needs an
-  amendment of this spec. The wording of text output may change (REQ-003).
-- **Works without a terminal.** No colour, prompt or interactive step appears when standard input or output isn't a
-  terminal, so every command runs in a pipe or a script (REQ-003, REQ-010).
-- **Watching survives restarts.** A following command outlives a daemon restart or a dropped feed, and catches up
-  on the entries of the conversations it shows (REQ-015).
-- **Quick to start.** A command that only calls the service doesn't load the daemon's code (REQ-016).
-- **One noun per component.** Later specs add groups that follow the same verbs, options and exit codes (REQ-001).
-- **The vocabulary of the product.** Help and messages say team member, job and invokes, never user, subagent or task
-  in its general sense (REQ-017).
-
-### Alternatives Considered
+## Alternatives Considered
 
 - **Commands generated from the operation catalogue** (`bob jobs.create --title …`). Rejected: almost no code per
   operation, but the output is raw, the names follow operations instead of what a team member does (no
@@ -776,3 +756,4 @@ None.
 | 2026-11-03 | v0.2. REQ-005: a Done job's lead conversation is closed (S-001 v0.9 REQ-026), so `bob jobs answer` is refused `conflict`, and an unknown job `not_found`. REQ-011: a closed conversation lists as `closed`, and `send`, `stop`, `reset`, `seat` and `compact` on it exit 1. Architecture consistency review (finding F10), same version: REQ-005, when `jobs.get` returns no `leadConversation` the command submits nothing, prints that the job has no lead conversation and exits 1; new AC-005.2 for a completed job, a job cancelled before its lead started and an unknown job; new AC-011.4 for a closed conversation. | Product owner decision of 2026-11-03 on T-166. Architecture consistency review of the closed-conversation amendment, 2026-11-03. | T-166, T-167 |
 | 2026-11-03 | v0.2, still. AC-005.2: the cancelled job is one cancelled before its lead conversation was created (S-004 REQ-007, S-001 AC-026.8). | Architecture consistency review of S-001 v0.9, 2026-11-03. | T-166, T-167 |
 | 2026-11-04 | v0.3. Interfaces: the Contract names the operations `bob jobs follow`, `bob usage` and `bob conversations list --job` call. Interfaces, REQ-008, AC-008.1 and AC-003.3: `bob usage --json` prints `{ "total", "conversations" }`, holding the usage per conversation and the total. The `bob chat` row names `submissions.wait` after Ctrl-D. REQ-010: chat without a terminal also applies when standard output isn't a terminal, as Definitions and Design Principles state; new AC-010.3. Assumptions: current versions; the breakdowns are done. | PR #148 review findings, product owner decision of 2026-11-04. | None; fixed on the PR branch |
+| 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. All alternatives stay: each is a different interface for the same need. | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |

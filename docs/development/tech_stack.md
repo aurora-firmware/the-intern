@@ -5,6 +5,8 @@ This file records the answers to the "Decisions needed" of the development infra
 one section per component, and each answer sits under the question it settles. A question that is still open says so
 and names where it is decided.
 
+Control endpoint isn't one of those components: it records technology choices moved out of S-003.
+
 ## Development environment
 
 **Which language and runtime version is the solution written for?**
@@ -111,6 +113,18 @@ both in `docs/ai-team/decisions/`.
 **Where does the shared vocabulary live, and how is it kept in step with the specs?**
 Developer docs live in `docs/development/`. The shared vocabulary stays in `docs/system_overview.html`. A task that
 changes a shared term updates it in the same change, and the reviewer checks it.
+
+## Control endpoint
+
+**Which HTTP support do the listeners and the client library use?**
+The HTTP support built into Node and the browser, so they add no runtime dependency.
+
+**Which protocols were rejected for the listeners and the feed?**
+
+- **WebSocket for the feed.** Rejected: the feed is one-way, Server-Sent Events carry it over plain HTTP in Node and
+  in browsers, and a WebSocket server needs more machinery for no gain.
+- **A line protocol (NDJSON) on the socket and HTTP only on the network.** Rejected: two protocols to keep in step.
+  The feature review had already chosen HTTP over the socket (`docs/research/feature-review.md`, open decision 3).
 
 ## Local runs and diagnostics
 

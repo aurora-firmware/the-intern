@@ -100,91 +100,11 @@ What this specification explicitly does NOT cover:
   don't convert it (S-004).
 - **Windows, Linux arm64 and Intel macOS.** These remain unsupported.
 
-## Architecture
+## Alternatives Considered
 
-### Design Principles
-
-- **One owner per database.** At most one daemon process opens an instance's database. Nothing but the daemon reads
-  or writes it, including history, which clients read through the service layer, apart from the import step, run
-  while the daemon is stopped, under the single-owner lock (S-004 REQ-017).
-- **Durability belongs to the runtime.** Recovery, exactly-once admission of input, queued input and checkpoints come
-  from pi-durable. The daemon adds no retry loops, intake tables or recovery code of its own, except two bounded
-  exceptions (ADR-001 decision 4). The first: the facts the-intern owns about a conversation (held messages, awaiting
-  links, parked state, the abort mark and creation keys) live in its own documents, and the only recovery is
-  redelivering the input those facts show as undelivered, made safe to repeat by pi-durable request ids. Each
-  daemon-owned fact is committed in the same atomic commit as the change it describes, except for an abort. An
-  abort's facts are written in one commit just before pi-durable's abort, not in pi-durable's abort commit. The
-  second: job writes are committed before their pi-durable change, and four startup repair rules are the only job
-  recovery (S-004 REQ-018).
-- **The service layer is free of transport.** Every service operation can be called in-process with no request,
-  connection or listener in scope. Neither authorization nor the choice of which operations a listener exposes lives
-  in the service layer. Adding a listener never changes a service operation.
-- **Clients are viewers.** No client connection or subscription owns work. Closing a client, or a client falling
-  behind, never stops, slows or changes an agent run.
-- **Fail closed at startup, exit on a storage failure.** Invalid configuration, unsafe permissions or a second owner
-  stop the daemon before it opens the database. A storage error while running ends the process with an error, and
-  the supervisor's restart resumes the work.
-- **The service account is the boundary.** Every directory and file the daemon creates is accessible only to the
-  service account. The daemon stores no credentials: models, keys and the-intern's other accounts are the service
-  account's, used in place. What agents can do is bounded by what the service account can reach (S-000).
-- **Bounded capacity.** The number of active agent runs never exceeds the worker-thread count, including during
-  recovery after a restart.
-- **pi-durable sits behind a narrow host.** Only the host module and the-intern's own extensions use pi-durable. The
-  service layer and every other component depend on the host's interface, so an upgrade of the pi packages touches a
-  few files (coding guidelines).
-- **Testable without a network.** The whole daemon, including kills and restarts, runs on the fake model with an
-  isolated state directory and an isolated pi agent folder.
-
-### Alternatives Considered
-
-- **durable-pi's device model: several devices, a hub, a device registry, tokens and provisioning.** Rejected: these
-  make up most of durable-pi's weight, and the-intern runs on one machine.
-- **One database per session or conversation** (durable-pi's layout). Rejected: S-001 fixes one database per
-  instance, and the daemon keeps its own state as documents in that database, not in a second store.
-- **Several processes sharing one database, or operating-system threads or worker processes per agent run.**
-  Rejected: pi-durable allows one owner per storage. Worker threads stay a logical capacity unit (REQ-009).
-- **A retry loop, intake table or recovery code of the daemon's own.** Rejected: durability belongs to pi-durable,
-  with the two bounded exceptions in Design Principles (ADR-001 decision 4).
-
-### System Diagram
-
-```
- clients (S-003 listeners)        job sources                agents (tools)
- bob CLI (local socket) ·         schedules, triggers,        coordination tools (S-001)
- web interface (network)          email                             │
-        │ read / control ops            │ control ops               │ control ops
-        ▼                               ▼                           ▼
- ┌──────────────────────────────────────────────────────────────────────────────┐
- │ daemon process                                                               │
- │  ┌────────────────────────────────────────────────────┐   ┌───────────────┐ │
- │  │ service layer (operations, read | control, caller)  │──►│ observation   │─┼──► subscribers
- │  └──────────────┬─────────────────────────────────────┘   │ feed          │ │    (snapshot,
- │                 │                                          └───────▲───────┘ │     then deltas)
- │  ┌──────────────▼─────────┐  ┌──────────────────┐                  │         │
- │  │ admission              │─►│ harness host     │──────────────────┘         │
- │  │ (worker threads, FIFO) │  │ (pi-durable,     │──► model runtime ──► pi agent login,
- │  └────────────────────────┘  │  extensions,     │    (fake model in tests)   settings, models
- │                              │  execution env)  │                            │
- │  lifecycle · configuration · └────────┬─────────┘                            │
- │  state layout                         ▼                                      │
- └───────────────────────────────── database (one SQLite file, state dir) ──────┘
-                 ▲ start, restart on error exit
-   supervisor (systemd / launchd, at machine startup)
-```
-
-### Responsibility Separation
-
-| Component | Responsibility | Notes |
-|---|---|---|
-| Lifecycle | Startup sequence, single-owner lock, readiness, signals, shutdown, exit on a storage failure | Runs in the foreground; the supervisor handles daemonizing and restarts. Offers start and stop hooks so other components (listeners, scheduler) start after readiness and stop before the harness closes |
-| Configuration | Produces one validated configuration from built-in defaults, the configuration file, command-line flags and the environment; refuses to start when it is invalid; persists settings changed through service operations | The file is read at startup and written only by settings operations |
-| State layout | Resolves the instance's directories, creates them owner-only when they are missing, and refuses unsafe existing ones | Gives the paths of the database, the runtime directory (for S-003's socket), the data directory (for S-001's per-role default workspaces) and the configuration file |
-| Model runtime | Resolves models and thinking levels through the pi agent login and model registry; validates model and thinking-level choices for the seat operations; maps pi agent settings into the harness explicitly; closes model connections on shutdown | Reads pi agent's folder only, apart from the login's own token refresh. The fake model replaces it in tests |
-| Harness host | Opens the database, installs the-intern's extensions, applies settings, builds the execution environment for each tool call from the seat's workspace, then resumes | The only user of pi-durable outside the-intern's extensions; exposes the narrow host interface the service layer, admission and observation feed use |
-| Admission | Counts worker threads, grants one to each ready agent run, holds the rest in arrival order, and keeps that order across restarts | Implements S-001 REQ-010. pi-durable has no concurrency cap of its own, so admission gates when runs start, including runs that resume after a restart. State kept in the daemon's admission document |
-| Service layer | The catalogue of read and control operations, their validation and their error outcomes | Called by listeners, job sources and agent tools alike |
-| Observation feed | Publishes snapshots and deltas for the instance and for each conversation, never a replay; drops a subscriber that falls too far behind | The source for the command line's and the web interface's live views and for monitoring |
-| Status | Reports whether the daemon is starting, ready or stopping, its versions, start time, instance paths, and worker threads in use and waiting | A read operation and an instance-scope feed entry |
+None. This spec's behaviour follows from S-000 and S-001, and no other behaviour, interaction or interface was
+weighed for the same need. The alternatives considered were implementation approaches, recorded in
+`docs/development/architecture.md` (Rejected approaches) and ADR-001.
 
 ## Interfaces
 
@@ -1082,3 +1002,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-02 | v0.9. REQ-012 and AC-012.5: a team member's or an agent's `jobs.create` call that names an origin of any kind is refused `invalid_input`, as S-004 Interfaces states. | Gate 2 review of the S-004 task plan. | T-117 |
 | 2026-11-03 | v0.10. The front desk (S-001 v0.8). REQ-012, Interfaces and new AC-012.6: the read operation `desk.get` returns the front desk's conversation id and seat, and `conversations.list` marks the front desk; a job the front desk creates records a request with the way in of the input it answers and the front desk in its origin details. REQ-002: step 6 also ensures the front desk. | Product owner decisions of the front desk brainstorm, 2026-11-03. S-002 owns the catalogue. | None yet; the front desk comes in the breakdown of this amendment |
 | 2026-11-03 | v0.11. REQ-012: a conversation of a Done job is closed (S-001 v0.9 REQ-026); the list and get give it status `closed`, every read works on it, and submit, abort, reset, compact and seat on it are refused `conflict`. Architecture consistency review (findings F2, F4 and F8), same version: REQ-012, the refusals apply from the job's complete or cancel and include `submissions.withdraw`; new AC-012.7, verified by the service test of S-001 AC-026.2. | Product owner decision of 2026-11-03, during the S-005 dev-loop (T-166). S-002 owns the catalogue and its error outcomes. Architecture consistency review of the amendment, 2026-11-03. | T-166 (blocked on it); T-186 to T-196 (Gate 2 passed 2026-11-03; the amendment merged into `dev-pi-durable-s005` before the preflight, by the product owner's approval of the in-flight amendment) |
+| 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The alternatives were all implementation approaches, so the section now says None. They, the system diagram, the responsibility table and the durability principle moved to `docs/development/architecture.md`. | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |

@@ -79,30 +79,7 @@ What this specification explicitly does NOT cover:
   they get no compatibility promise across versions.
 - **Windows, Linux arm64 and Intel macOS.** These remain unsupported (S-000).
 
-## Architecture
-
-### Design Principles
-
-- **One protocol, two listeners.** Both listeners serve the same HTTP front. A difference between them is limited to
-  what REQ-002, REQ-007 and REQ-008 name: whether it runs, the way in it records, and serving the web interface files.
-- **The catalogue is the route table.** Routes are derived from S-002's catalogue, so an operation added to the
-  catalogue is reachable on both listeners with no listener change, and no second list of operations exists. The one
-  exception is `feed.subscribe`, whose result is a stream and which is served as one (REQ-003, REQ-006).
-- **Listeners are transports only.** A listener decides no outcome: it parses the request, calls the service layer
-  with a caller fixed by the listener and the connection and returns what the service layer returned. Listeners call
-  only the service layer and never the host or pi-durable (ADR-001; REQ-013). The service layer stays free of
-  transport (S-002 REQ-016).
-- **Clients are viewers.** No connection or stream owns work. A slow, stalled or closed client never delays an agent
-  run or holds a worker thread (S-002 REQ-015; REQ-011).
-- **Reach is decided outside The Intern.** Who reaches the local socket follows from the owner-only runtime
-  directory; who reaches the network listener follows from its address and the team's network setup (ADR-002).
-  Exposing The Intern on the network is a deliberate setting, never a default (REQ-002).
-- **Fail closed at startup, never block shutdown.** A listener that can't start stops startup (S-002 REQ-002); a
-  listener never holds shutdown past the daemon's stop bound (S-002 REQ-005; REQ-010).
-- **No new runtime dependency.** The listeners and the client library use the HTTP support built into Node and the
-  browser.
-
-### Alternatives Considered
+## Alternatives Considered
 
 - **Resource-style routes mapped by hand** (for example a read of one conversation at `/conversations/<id>` and a
   submit at `/conversations/<id>/submit`). Rejected: friendlier to curl and outsiders, but every new operation needs a
@@ -110,10 +87,6 @@ What this specification explicitly does NOT cover:
 - **TCP only, with no Unix socket**, the command line using the network listener on loopback. Rejected: it gives up
   the owner-only runtime directory as the gate on the machine, and the command line wouldn't work while the network
   listener is off, which is the default.
-- **WebSocket for the feed.** Rejected: the feed is one-way, Server-Sent Events carry it over plain HTTP in Node and
-  in browsers, and a WebSocket server needs more machinery for no gain.
-- **A line protocol (NDJSON) on the socket and HTTP only on the network.** Rejected: two protocols to keep in step.
-  The feature review had already chosen HTTP over the socket (`docs/research/feature-review.md`, open decision 3).
 - **The network listener on by default** (on loopback or on every interface). Rejected: with no authentication,
   exposing The Intern on a network has to be a deliberate setting.
 - **A read-only network listener.** Rejected: S-000 has team members create jobs, answer, stop and redirect agents and
@@ -707,3 +680,4 @@ None affect the specified behaviour.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-11-02 | v0.2. REQ-007: each listener passes the caller details it observes with the way in: the network listener the TCP peer's remote address and port, never a header such as `X-Forwarded-For`, and the local socket none beyond the way in (no OS account); a job created through a listener records them (new AC-007.3). AC-007.2: the refused origin claim is a `jobs.create` call, which creates no job and uses no number, and without the origin creates `C-n`. AC-003.1: observed caller details may differ between the three results. Design Principles, "Listeners are transports only": the caller is fixed by the listener and the connection. | S-004 architecture consistency review; product owner decisions 2026-11-02 (the OS account dropped). Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None yet; the code changes (observed caller details, `jobs.create` in place of `jobs.startLead` in the tests) come in the S-004 breakdown |
+| 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The WebSocket and line-protocol alternatives and the runtime-dependency principle moved to `docs/development/tech_stack.md`. | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |

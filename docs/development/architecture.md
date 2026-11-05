@@ -187,6 +187,126 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   (S-002, ADR-001). A failed job store write is one too: `createJobStore` reports it through `onWriteFailure`, and the
   daemon logs it and runs the same shutdown (S-004 REQ-020).
 
+## Agents and conversations
+
+This is how S-001's behaviour is built: where jobs start, how roles seat agents in conversations, and what reads them.
+A requirement number with no spec named in this section is S-001's.
+
+```
+ job sources                        conversations (one database)                 roles (catalog)
+┌──────────────────┐   new job   ┌────────────────────────────────────┐  seat   ┌──────────────────┐
+│ request (CLI,    ├────────────►│ job A: lead conversation [bob]     │◄────────┤ bob  (default    │
+│ web, email)      │             │   ├─ invokes #m      [role: gp]    │         │  lead), gp, desk,│
+├──────────────────┤             │   │    └─ invokes …  [role: any]   │         │  team roles      │
+│ schedule fire,   │──new job───►│   ├─ steerable or parked           │         │                  │
+│ trigger          │             │   └─ handoff / reset: same conv,   │         │ each: instr.,    │
+├──────────────────┤             │      next agent, context mode      │         │  tools, skills;  │
+│ follow-up job    │──new job───►│ job B: lead conversation [gp]      │         │  default model,  │
+│ (from an agent)  │             │ front desk [desk], no job          │         │  thinking,       │
+│                  │             │ reports return as new input        │         │  workspace*      │
+└──────────────────┘             └──────┬───────────────▲─────────────┘         └──────────────────┘
+                                        │ role-attributed│ seat change, reset,   * team-set; a seat
+                                        ▼ transcript     │ steer, invocation       may override them
+                                 ┌──────────────┐  ┌─────┴───────────────┐      (registered workspaces)
+                                 │ monitoring   │  │ agent coordination  │
+                                 │ (list, jobs, │  │ (handoff, invoke,   │
+                                 │ invocations, │  │  steer, report)     │
+                                 │ live)        │  │ + caps, worker thr. │
+                                 └──────────────┘  └─────────────────────┘
+```
+
+| Component | Responsibility | Notes |
+|---|---|---|
+| Role catalog | Holds the shipped roles (`bob`, `gp`, `desk`), the team's own roles, their instructions, tools, skills and defaults, and the registered workspaces, each checked when it is registered | Changed by team members through settings operations (REQ-003, REQ-018). Consumes the-intern's settings, its shipped tools and pi agent's default model and thinking level |
+| Seating | Seats an agent of a role in a conversation, with optional model, thinking level and workspace overrides, so that later turns use that seat, and records who seated it | The only path that changes a conversation's seat. Consumes the role catalog and the pi-durable agent of each conversation |
+| Role prompt | Builds what the model sees: the-intern's preamble, role instructions, role skills, workspace instructions (`AGENTS.md`/`CLAUDE.md`) and workspace skills | Stays byte-stable while the seat and the role are unchanged (AC-005.4) |
+| Agent coordination | Agent-callable handoff, agent invocation and steer capabilities; parking and continuing invoking conversations; the report-back clean-up step; the depth cap and the worker threads | Every role is offered the same coordination capabilities in a job's conversations, and none in the front desk (REQ-022). Consumes seating, conversation reset, compaction and fork, conversation creation, the inbox of the target conversation, and each conversation's own `intern.conversation` document (below) |
+| Entry routing | Starts a job's lead conversation for each job source with the role it names (`bob` when it names none) and records its origin; at startup, makes sure the front desk exists and records its conversation id (REQ-021); serves team members' requests to reset conversations | Holds no channel knowledge beyond choosing the role and recording the origin. Called by the Jobs component when a job is created, and by startup for the front desk |
+| Front-desk tools | The tools offered only in the front desk: the job tools that name a job, the state reads and the steering of a job's conversations (REQ-022) | Calls the job operations (S-004) and the same paths as `conversations.submit` and `conversations.abort`, recording the jobs and the input it passes on as from the front desk (REQ-023) |
+| Monitoring | Lists conversations with their job, lead flag, front-desk mark, seats, origins, status, invocation links and live transcripts | Read-only. Abort, reset and steer go through other components |
+
+**The conversation's own document.** Each conversation's `intern.conversation` document holds the conversation's parked
+state, the messages held for it while it is parked, the invoked conversations whose reports it awaits, its abort mark,
+which records that its invoker is owed an "aborted" report (REQ-019), and its closed mark (REQ-026). They are facts
+the-intern owns, written in the commit that changes them, and the only recovery from them is redelivery (ADR-001
+decision 4). An abort's facts are written in one commit just before pi-durable's abort; when a job's abort closes the
+conversation, the closed mark and the removal of its queued items are written in that same commit. The document is
+internal to the daemon, not an external contract.
+
+- **A role is configuration, not a process.** Seating an agent changes stored per-conversation configuration only.
+  No process or connection is tied to a role or to an agent.
+
+## Daemon internals
+
+This is how S-002's behaviour is built: the components inside the daemon process and the rule that keeps its recovery
+small.
+
+```
+ clients (S-003 listeners)        job sources                agents (tools)
+ bob CLI (local socket) ·         schedules, triggers,        coordination tools (S-001)
+ web interface (network)          email                             │
+        │ read / control ops            │ control ops               │ control ops
+        ▼                               ▼                           ▼
+ ┌──────────────────────────────────────────────────────────────────────────────┐
+ │ daemon process                                                               │
+ │  ┌────────────────────────────────────────────────────┐   ┌───────────────┐ │
+ │  │ service layer (operations, read | control, caller)  │──►│ observation   │─┼──► subscribers
+ │  └──────────────┬─────────────────────────────────────┘   │ feed          │ │    (snapshot,
+ │                 │                                          └───────▲───────┘ │     then deltas)
+ │  ┌──────────────▼─────────┐  ┌──────────────────┐                  │         │
+ │  │ admission              │─►│ harness host     │──────────────────┘         │
+ │  │ (worker threads, FIFO) │  │ (pi-durable,     │──► model runtime ──► pi agent login,
+ │  └────────────────────────┘  │  extensions,     │    (fake model in tests)   settings, models
+ │                              │  execution env)  │                            │
+ │  lifecycle · configuration · └────────┬─────────┘                            │
+ │  state layout                         ▼                                      │
+ └───────────────────────────────── database (one SQLite file, state dir) ──────┘
+                 ▲ start, restart on error exit
+   supervisor (systemd / launchd, at machine startup)
+```
+
+| Component | Responsibility | Notes |
+|---|---|---|
+| Lifecycle | Startup sequence, single-owner lock, readiness, signals, shutdown, exit on a storage failure | Runs in the foreground; the supervisor handles daemonizing and restarts. Offers start and stop hooks so other components (listeners, scheduler) start after readiness and stop before the harness closes |
+| Configuration | Produces one validated configuration from built-in defaults, the configuration file, command-line flags and the environment; refuses to start when it is invalid; persists settings changed through service operations | The file is read at startup and written only by settings operations |
+| State layout | Resolves the instance's directories, creates them owner-only when they are missing, and refuses unsafe existing ones | Gives the paths of the database, the runtime directory (for S-003's socket), the data directory (for S-001's per-role default workspaces) and the configuration file |
+| Model runtime | Resolves models and thinking levels through the pi agent login and model registry; validates model and thinking-level choices for the seat operations; maps pi agent settings into the harness explicitly; closes model connections on shutdown | Reads pi agent's folder only, apart from the login's own token refresh. The fake model replaces it in tests |
+| Harness host | Opens the database, installs the-intern's extensions, applies settings, builds the execution environment for each tool call from the seat's workspace, then resumes | The only user of pi-durable outside the-intern's extensions; exposes the narrow host interface the service layer, admission and observation feed use |
+| Admission | Counts worker threads, grants one to each ready agent run, holds the rest in arrival order, and keeps that order across restarts | Implements S-001 REQ-010. pi-durable has no concurrency cap of its own, so admission gates when runs start, including runs that resume after a restart. State kept in the daemon's admission document |
+| Service layer | The catalogue of read and control operations, their validation and their error outcomes | Called by listeners, job sources and agent tools alike |
+| Observation feed | Publishes snapshots and deltas for the instance and for each conversation, never a replay; drops a subscriber that falls too far behind | The source for the command line's and the web interface's live views and for monitoring |
+| Status | Reports whether the daemon is starting, ready or stopping, its versions, start time, instance paths, and worker threads in use and waiting | A read operation and an instance-scope feed entry |
+
+- **Durability belongs to the runtime.** Recovery, exactly-once admission of input, queued input and checkpoints come
+  from pi-durable. The daemon adds no retry loops, intake tables or recovery code of its own, except two bounded
+  exceptions (ADR-001 decision 4). The first: the facts the-intern owns about a conversation (held messages, awaiting
+  links, parked state, the abort mark and creation keys) live in its own documents, and the only recovery is
+  redelivering the input those facts show as undelivered, made safe to repeat by pi-durable request ids. Each
+  daemon-owned fact is committed in the same atomic commit as the change it describes, except for an abort. An
+  abort's facts are written in one commit just before pi-durable's abort, not in pi-durable's abort commit. The
+  second: job writes are committed before their pi-durable change, and four startup repair rules are the only job
+  recovery (S-004 REQ-018).
+
+## Rejected approaches
+
+Implementation approaches weighed and rejected. ADR-001, Alternatives Considered, gives the full reasoning for the ones
+it records. [tech_stack.md](tech_stack.md), Control endpoint, holds the rejected protocols.
+
+- **durable-pi's device model: several devices, a hub, a device registry, tokens and provisioning.** Rejected: these
+  make up most of durable-pi's weight, and the-intern runs on one machine.
+- **One database per session or conversation** (durable-pi's layout). Rejected: S-001 fixes one database per
+  instance, and the daemon keeps its own state as documents in that database, not in a second store.
+- **Several processes sharing one database, or operating-system threads or worker processes per agent run.**
+  Rejected: pi-durable allows one owner per storage. Worker threads stay a logical capacity unit
+  (S-002 REQ-009).
+- **A retry loop, intake table or recovery code of the daemon's own.** Rejected: durability belongs to pi-durable,
+  with the two bounded exceptions under Daemon internals (ADR-001 decision 4).
+- **pi-durable document families as the tables.** Atomic with conversation changes and watchable with no extra code,
+  so no repair rules would be needed. Rejected by the product owner on 2026-11-02: the job record would be stored in
+  pi-durable's format, which has no compatibility promise across versions, it can't be indexed or read with standard
+  SQLite tools, and every filter scans a whole family.
+- **The status in pi-durable documents and the other fields in tables.** Rejected: one job kept in two places.
+
 ## Components and owning specs
 
 The components are those of S-000, Components, Solution. This table gives the responsibility in one line and the spec
