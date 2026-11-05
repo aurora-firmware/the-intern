@@ -111,15 +111,19 @@ export async function resumeAfterLeadInput(deps: JobActionDeps, input: Submitted
     }
 }
 
-/**
- * The steps after the Done or Cancelled write: the hook, the closed marks, the hook again and the aborts. An error
- * thrown by the hook is added to `hookFailures`: the hook stands in for a crash, which no recovery follows.
- */
+type CloseFailures = {
+    /** The errors thrown by the hook, which stands in for a crash: no recovery follows it. */
+    hook: unknown[];
+    /** The aborts and compaction stops that were rejected, each logged and attempted only once. */
+    aborts: unknown[];
+};
+
+/** The steps after the Done or Cancelled write: the hook, the closed marks, the hook again and the aborts. */
 async function closeAfterFinish(
     deps: JobActionDeps,
     action: "complete" | "cancel",
     jobId: string,
-    hookFailures: unknown[],
+    failures: CloseFailures,
     ownConversationId?: string,
 ): Promise<void> {
     const { ctx, options } = deps;
@@ -127,19 +131,19 @@ async function closeAfterFinish(
         try {
             await options.afterWrite?.(point, jobId);
         } catch (error) {
-            hookFailures.push(error);
+            failures.hook.push(error);
             throw error;
         }
     };
     await runHook(action === "complete" ? "job-completed" : "job-cancelled");
-    const own =
-        ownConversationId === undefined
-            ? undefined
-            : {
-                  conversationId: ownConversationId,
-                  onError: (error: unknown) => logFinishFailure(ctx, jobId, "could not abort a conversation", error),
-              };
-    await abortJobConversations(ctx.host, jobId, own, () => runHook("conversations-closed"));
+    const reporting = {
+        conversationId: ownConversationId,
+        onError: (error: unknown) => {
+            failures.aborts.push(error);
+            logFinishFailure(ctx, jobId, "could not abort a conversation", error);
+        },
+    };
+    await abortJobConversations(ctx.host, jobId, reporting, () => runHook("conversations-closed"));
 }
 
 function logFinishFailure(ctx: ServiceContext, jobId: string, what: string, error: unknown): void {
@@ -160,17 +164,18 @@ async function finishJob(
     // The job is Done, so a failure after the write must still abort what it can. A lead's own tool call does not
     // fail on it: that would drop `terminate` and start another model turn. A team member's call fails `internal`
     // with the original error. Repair rule 4 finishes what failed at the next start.
-    const hookFailures: unknown[] = [];
+    const failures: CloseFailures = { hook: [], aborts: [] };
     try {
-        await closeAfterFinish(deps, action, job.id, hookFailures, ownConversationId);
+        await closeAfterFinish(deps, action, job.id, failures, ownConversationId);
     } catch (error) {
-        if (ownConversationId === undefined && hookFailures.includes(error)) throw error;
+        if (ownConversationId === undefined && failures.hook.includes(error)) throw error;
         logFinishFailure(ctx, job.id, "could not finish closing the job after the Done write", error);
         const onAbortError = (abortError: unknown) =>
             logFinishFailure(ctx, job.id, "could not abort a conversation", abortError);
         await abortAfterFailedClose(ctx.host, job.id, ownConversationId, onAbortError).catch(onAbortError);
         if (ownConversationId === undefined) throw error;
     }
+    if (ownConversationId === undefined && failures.aborts.length > 0) throw failures.aborts[0];
     return done;
 }
 

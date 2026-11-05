@@ -97,11 +97,12 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   section, releases it, and then aborts them. No abort mark is set, so no report is sent. A lead's complete tool isn't
   aborted: it returns `control: { terminate: true }`, and its run ends at that call. A compaction still running is
   aborted after the marks. Between the Done write and the marks a crash leaves a Done job with open conversations, which
-  repair rule 4 closes at the next start. A closed mark whose commit rejects, or an abort that rejects, doesn't end the
-  work: `abortAfterFailedClose` stops the compactions of the conversations whose mark landed and aborts every
-  conversation (the lead's own one unawaited on its own tool path), logs each failure, and the team member's call still
-  fails `internal`. The marks after a rejected commit aren't retried; rule 4 sets them (ADR-001 decision 4). Passing
-  the front desk's id to it throws `FrontDeskNotJobError`.
+  repair rule 4 closes at the next start. An abort or compaction stop that rejects is logged and stops no other, and isn't
+  attempted again, so its conversation keeps running until the next start. A closed mark whose commit rejects doesn't
+  end the work either: `abortAfterFailedClose` stops the compactions of the conversations whose mark landed and aborts
+  every conversation (the lead's own one unawaited on its own tool path), logging each failure. Either way a team
+  member's call still fails `internal`. The marks after a rejected commit aren't retried; rule 4 sets them (ADR-001
+  decision 4). Passing the front desk's id to it throws `FrontDeskNotJobError`.
 - **Job store.** The job record (jobs, counters, worklog, history, Related links) lives in `intern_` tables in the
   same file, kept by `src/jobs/job_store.ts` (S-004 REQ-001). The file has one connection: `openHarnessHost` opens it
   owner-only and gives the same handle to `SqliteStorage.open` and, through `hostDatabase(host)`, to the job store, so

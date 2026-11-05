@@ -168,7 +168,7 @@ for (const [name, act] of teamActions) {
             await settle();
 
             assert.equal(await rig.status(job.id), "done");
-            assert.match(rig.logs.join(""), /could not finish closing the job.*injected abort failure/);
+            assert.match(rig.logs.join(""), /could not abort a conversation.*injected abort failure/);
             await assertInvokedAgentsStopped(rig, children);
             assert.equal(rig.hold.isAborted, false, "the lead whose abort failed keeps running");
             assert.equal(await isClosed(rig, lead), true);
@@ -191,7 +191,52 @@ for (const [name, act] of teamActions) {
     });
 }
 
+const countOf = (items: string[], item: string): number => items.filter((other) => other === item).length;
+
 for (const [name, act] of teamActions) {
+    describe(`a team member's ${name} with a stop that is rejected once`, () => {
+        it("doesn't attempt a rejected abort again, and the conversation keeps running", async () => {
+            const { rig, job, lead, children } = await runningJobWithQueuedFollowUp();
+            const log = injectCloseFailures(rig.ctx.host, { failFirstAbortOf: lead });
+
+            await assert.rejects(act(rig, job.id), { message: "injected abort failure" });
+            await settle();
+
+            assert.equal(await rig.status(job.id), "done");
+            assert.equal(countOf(log.aborts, lead), 1, "one attempt on the rejected conversation");
+            assert.equal(rig.hold.isAborted, false, "the lead whose abort failed keeps running");
+            await assertInvokedAgentsStopped(rig, children);
+            assert.match(rig.logs.join(""), /could not abort a conversation.*injected abort failure/);
+        });
+
+        it("doesn't attempt a rejected compaction stop again, and still aborts the conversations", async () => {
+            const { rig, job, lead, child } = await blockedJobWithChild();
+            const log = injectCloseFailures(rig.ctx.host, { failFirstCompactionAbort: true });
+
+            await assert.rejects(act(rig, job.id), { message: "injected compaction abort failure" });
+            await settle();
+
+            assert.equal(await rig.status(job.id), "done");
+            assert.equal(log.compactionStops.length, 1, "one attempt on the rejected stop");
+            assert.equal(rig.summary.isAborted, false, "the compaction whose stop failed keeps running");
+            for (const id of [lead, child]) assert.equal(countOf(log.aborts, id), 1, `${id} is aborted once`);
+            assert.match(rig.logs.join(""), /could not abort a conversation.*injected compaction abort failure/);
+        });
+
+        it("still stops the conversation's next compaction after a rejected stop", async () => {
+            const { rig, job } = await blockedJobWithChild();
+            const log = injectCloseFailures(rig.ctx.host, {
+                failFirstCompactionAbort: true,
+                secondCompactionTask: "second-compaction",
+            });
+
+            await assert.rejects(act(rig, job.id), { message: "injected compaction abort failure" });
+
+            assert.equal(log.compactionStops.length, 2);
+            assert.equal(log.compactionStops[1], "second-compaction");
+        });
+    });
+
     describe(`the next start after a team member's ${name} that failed while closing the job`, () => {
         const scenarios = [
             ["the lead's mark is rejected", () => ({ failMark: 1 })],
