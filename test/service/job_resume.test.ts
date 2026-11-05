@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { type FauxProviderRegistration, fauxAssistantMessage, type Message } from "@earendil-works/pi-ai";
+import { type FauxProviderRegistration, fauxAssistantMessage, fauxToolCall, type Message } from "@earendil-works/pi-ai";
 import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
@@ -62,7 +62,10 @@ const textOf = (message: Message): string => {
     return content.map((block) => ("text" in block ? block.text : "")).join("");
 };
 
-async function start(): Promise<Started> {
+/** Holds the lead's first model call on `gate`, then has the lead call block_job in that run. */
+type StartOptions = { blockOnFirstCallAfter?: Promise<void> };
+
+async function start(options: StartOptions = {}): Promise<Started> {
     const env = await createHermeticEnv();
     envs.push(env);
     const fake = registerFauxProvider({ models: [{ id: "model-one", reasoning: true }] });
@@ -71,6 +74,12 @@ async function start(): Promise<Started> {
     const answer = async (context: { messages: Message[] }) => {
         fake.appendResponses([answer]);
         modelInputs.push(context.messages.filter((m) => m.role === "user").map(textOf));
+        if (modelInputs.length === 1 && options.blockOnFirstCallAfter !== undefined) {
+            await options.blockOnFirstCallAfter;
+            return fauxAssistantMessage([fauxToolCall("block_job", { reason: BLOCKED_REASON })], {
+                stopReason: "toolUse",
+            });
+        }
         return fauxAssistantMessage("done");
     };
     fake.setResponses([answer]);
@@ -356,4 +365,28 @@ describe("input to a Blocked job's lead", () => {
 
         assert.equal((await started.ctx.jobStore.getJob(job.id)).status, "blocked");
     });
+
+    for (const busyMode of ["followUp", "steer"] as const) {
+        it(`resumes the job and leaves the lead unparked when ${busyMode} input queued before the lead's block_job`, async () => {
+            let releaseFirstCall!: () => void;
+            const firstCallGate = new Promise<void>((resolve) => {
+                releaseFirstCall = resolve;
+            });
+            const started = await start({ blockOnFirstCallAfter: firstCallGate });
+            const job = (await started.ctx.catalogue.invoke("jobs.create", { text: "do it" }, webCaller)) as CreatedJob;
+            await waitFor(() => started.modelInputs.length === 1, "the lead's first model call");
+            await started.ctx.catalogue.invoke(
+                "conversations.submit",
+                { conversationId: job.leadConversation, content: ANSWER, requestId: "queued-1", busyMode },
+                webCaller,
+            );
+
+            releaseFirstCall();
+            await waitFor(() => hasReceived(started, ANSWER), "the lead to receive the queued input");
+            await waitFor(() => isIdle(started.ctx, job.leadConversation), "the lead's runs to end");
+
+            assert.equal((await started.ctx.jobStore.getJob(job.id)).status, "in_progress");
+            assert.equal((await readConversationMeta(started.ctx.host, job.leadConversation))?.parked, null);
+        });
+    }
 });

@@ -5,7 +5,7 @@
  * conversation of the job, and the hook runs again after the closed marks, before the aborts.
  */
 import type { ServiceContext } from "../daemon/daemon.ts";
-import type { SubmittedInput } from "../host/conversation_control.ts";
+import { hasQueuedUserInput, type SubmittedInput } from "../host/conversation_control.ts";
 import {
     abortAfterFailedClose,
     abortJobConversations,
@@ -68,7 +68,16 @@ export async function blockJob(deps: JobActionDeps, jobId: string, reason: strin
     // Input that reached the lead between the block and the park has resumed the job and started the lead's run, so
     // the lead must not stay parked.
     if ((await ctx.jobStore.getJob(job.id)).status !== "blocked") await unparkConversation(ctx.host, leadId);
+    else if (await hasQueuedUserInput(ctx.host, leadId)) await resumeForQueuedInput(deps, job.id, leadId);
     return blocked;
+}
+
+// Input submitted to the lead before the block and still queued is delivered to the parked lead without a submit-time
+// notification, so the resume listener never sees it. It reaches the lead all the same (S-004 REQ-006).
+async function resumeForQueuedInput(deps: JobActionDeps, jobId: string, leadId: string): Promise<void> {
+    await deps.options.afterWrite?.("lead-input", jobId);
+    await resumeJob(deps, jobId, { kind: "daemon" });
+    await unparkConversation(deps.ctx.host, leadId);
 }
 
 /** Resumes a Blocked job and clears its reason. A job that is not Blocked is returned unchanged. */
