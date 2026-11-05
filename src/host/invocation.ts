@@ -238,10 +238,12 @@ function heldEntryOf(message: HeldMessage): InputRecord {
 
 // Clears the parked state, then submits the held messages in order, as the request ids make a repeat safe. The held
 // list is cleared by the caller once everything that goes with it is submitted, so a crash in between loses none.
-async function releaseHeld(host: HarnessHost, conversationId: string): Promise<void> {
-    await updateMeta(host, conversationId, (meta) => {
-        meta.parked = null;
-    });
+async function releaseHeld(host: HarnessHost, conversationId: string, inSection: InSection): Promise<void> {
+    await inSection(() =>
+        updateMeta(host, conversationId, (meta) => {
+            meta.parked = null;
+        }),
+    );
     const held = (await requireMeta(host, conversationId)).held;
     for (const message of held) {
         await submitInput(host, conversationId, {
@@ -253,6 +255,10 @@ async function releaseHeld(host: HarnessHost, conversationId: string): Promise<v
     }
 }
 
+/** Wraps the commit that clears the parked state, so a caller can order it in the conversation's job section. */
+export type InSection = (work: () => Promise<void>) => Promise<void>;
+const withoutSection: InSection = (work) => work();
+
 const clearHeld = (host: HarnessHost, conversationId: string) =>
     updateMeta(host, conversationId, (meta) => {
         meta.held = [];
@@ -262,16 +268,18 @@ const clearHeld = (host: HarnessHost, conversationId: string) =>
  * Clears the parked state, then submits the held messages in order and the input after them, as follow-ups: the first
  * starts a run on a free worker thread. The held messages are cleared only once submitted, so a crash in between
  * loses none; their request ids make a repeated call safe. A repeat of an input pi-durable already holds is no new
- * input, so it returns that submission and leaves the conversation parked.
+ * input, so it returns that submission and leaves the conversation parked. `inSection` runs the parked-clear commit,
+ * and a refusal from it leaves the conversation as it was.
  */
 export async function continueParked(
     host: HarnessHost,
     conversationId: string,
     input: { content: string; requestId: string; entry?: InputRecord },
+    inSection: InSection = withoutSection,
 ): Promise<{ submissionId: string }> {
     const existing = await submissionIdFor(host, conversationId, input.requestId);
     if (existing !== undefined) return { submissionId: existing };
-    await releaseHeld(host, conversationId);
+    await releaseHeld(host, conversationId, inSection);
     const submitted = await submitInput(host, conversationId, { ...input, busyMode: "followUp" });
     await clearHeld(host, conversationId);
     return submitted;
@@ -279,7 +287,7 @@ export async function continueParked(
 
 /** Continues a conversation that no new input reached: clears the parked state and delivers only its held messages. */
 export async function continueWithHeld(host: HarnessHost, conversationId: string): Promise<void> {
-    await releaseHeld(host, conversationId);
+    await releaseHeld(host, conversationId, withoutSection);
     await clearHeld(host, conversationId);
 }
 
