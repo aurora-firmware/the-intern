@@ -6,7 +6,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type FauxProviderRegistration, fauxAssistantMessage, type Message } from "@earendil-works/pi-ai";
 import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
-import { InboxDoc } from "@earendil-works/pi-durable";
+import { defineExtension, defineTask, InboxDoc } from "@earendil-works/pi-durable";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
@@ -26,6 +26,7 @@ import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts"
 
 const WAIT_MS = 20_000;
 const POLL_MS = 10;
+const SETTLE_MS = 300;
 const HELD_TEXT = "the answer that reached the parked lead";
 const REASON = "which build is failing?";
 const quietLogger = createLogger({ stream: { write: () => true } });
@@ -58,6 +59,10 @@ type BootOptions = {
     /** Waits for the daemon to leave the starting phase, ready or not. */
     isStartupExpectedToFail?: boolean;
     workerThreadCount?: number;
+    /** Components that follow the Jobs component, for a test that adds an extension or observes startup. */
+    components?: readonly DaemonComponent[];
+    /** `false` returns once the daemon runs, ready or not, so a test can look at it while it is still starting. */
+    isReadyAwaited?: boolean;
 };
 type Rig = {
     /** The user messages of every model call so far, in order, summarization requests excepted. */
@@ -168,7 +173,7 @@ async function createRig(options: { isCompactingAtSecondTurn?: boolean } = {}): 
                 homeDir: env.root,
                 logger: quietLogger,
                 sections: agents.sections,
-                components: [agents.component, jobs.component, probe],
+                components: [agents.component, jobs.component, probe, ...(bootOptions.components ?? [])],
                 operations: [...agents.operations, ...jobs.operations],
                 ...(bootOptions.workerThreadCount !== undefined && {
                     workerThreadCount: bootOptions.workerThreadCount,
@@ -188,7 +193,9 @@ async function createRig(options: { isCompactingAtSecondTurn?: boolean } = {}): 
                 },
             });
             daemons.push(daemon);
-            if (bootOptions.isStartupExpectedToFail) {
+            if (bootOptions.isReadyAwaited === false) {
+                // The caller waits for the phase it wants.
+            } else if (bootOptions.isStartupExpectedToFail) {
                 await waitFor(() => daemon.phase() !== "starting", "the daemon to finish starting");
             } else {
                 await waitFor(() => daemon.phase() === "ready", "the daemon to become ready");
@@ -1033,5 +1040,163 @@ describe("the turn-end check at startup", () => {
         assert.equal(await isReminderSubmitted(second, job), false);
         assert.equal((await second.ctx.jobStore.getJob(job.id)).status, "in_progress");
         heldCall.release();
+    });
+});
+
+// Tasks of a test extension on a Done job's lead: one that lives until it is aborted, and one whose abort is held until
+// the test lets it finish. They show which work rule 4 marks and what the daemon waits for before it is ready.
+const untilSignalled = (signal: AbortSignal) =>
+    new Promise<void>((resolve) => {
+        if (signal.aborted) resolve();
+        signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+const heldAborts = { entered: false, release: Promise.withResolvers<void>() };
+const abortedOutcome = { status: "terminal", outcome: { status: "aborted" } } as never;
+const livingTask = (name: string) =>
+    defineTask<null, { phase: "living" }, null>({
+        name,
+        version: 1,
+        initial: () => ({ phase: "living" }),
+        phases: { living: async (_task, runtime) => untilSignalled(runtime.signal) },
+        abort: async (_task, runtime, taskContext) => {
+            if (name === SLOW_ABORT_TASK) {
+                heldAborts.entered = true;
+                await heldAborts.release.promise;
+            }
+            await runtime.commit(() => abortedOutcome, taskContext);
+        },
+    });
+const BACKGROUND_TASK = "test.background_living";
+const SLOW_ABORT_TASK = "test.slow_abort";
+const backgroundTask = livingTask(BACKGROUND_TASK);
+const slowAbortTask = livingTask(SLOW_ABORT_TASK);
+const taskComponent: DaemonComponent = {
+    name: "test-tasks",
+    extensions: [defineExtension({ name: "test-tasks", tasks: [backgroundTask, slowAbortTask] })],
+};
+
+async function createTaskOn(
+    ctx: ServiceContext,
+    conversationId: string,
+    task: typeof backgroundTask,
+    isBackground: boolean,
+): Promise<void> {
+    const conversation = await internalHarness(ctx.host).conversation(
+        Number(conversationId) as never,
+        BACKGROUND_CONTEXT,
+    );
+    assert.ok(conversation, "the conversation exists");
+    await conversation.commit(
+        (tx) => tx.createTask(task, null, { ownership: { kind: "conversation" }, background: isBackground }),
+        BACKGROUND_CONTEXT,
+    );
+}
+
+async function liveTasksOf(ctx: ServiceContext) {
+    return (await internalHarness(ctx.host).inspect(BACKGROUND_CONTEXT)).tasks.map((task) => task.record);
+}
+
+describe("rule 4: queued input of a closed conversation of a Done job", () => {
+    it("settles a queued input and a queued write unanswered and sends no request for them", async () => {
+        const rig = await createRig();
+        const first = await rig.boot();
+        const job = await first.createJob();
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        await cancelJob(first.deps, job.id, "no longer needed", teamMember);
+        const id = Number(job.leadConversation) as never;
+        const queued = await internalHarness(first.ctx.host).commit(async (tx) => {
+            const input = await tx.createSubmission({ conversationId: id, type: "input", status: "queued" });
+            const write = await tx.createSubmission({ conversationId: id, type: "write", status: "queued" });
+            const items = (await tx.doc(InboxDoc, id)).items;
+            items.push({ id: input.id, mode: "followUp", content: HELD_TEXT as never });
+            items.push({ id: write.id, mode: "write", entry: { kind: "pi.reset", head: "self" } } as never);
+            return { input: input.id, write: write.id };
+        }, BACKGROUND_CONTEXT);
+        await first.stop();
+
+        const second = await rig.boot();
+
+        assert.deepEqual(didsOf(await repairsOf(second.ctx, job.id)), [RULE_4]);
+        assert.deepEqual(await inboxOf(second.ctx, job.leadConversation), []);
+        const harness = internalHarness(second.ctx.host);
+        for (const submission of [queued.input, queued.write]) {
+            const record = await (await harness.submission(submission, BACKGROUND_CONTEXT))?.status(BACKGROUND_CONTEXT);
+            assert.equal(record?.status, "unanswered");
+        }
+        assert.equal(rig.modelInputs.length, 1, "no request follows");
+        assert.ok(!rig.modelInputs.flat().includes(HELD_TEXT));
+    });
+});
+
+describe("rule 4: background work of a closed conversation of a Done job", () => {
+    it("leaves a background task that is not a compaction running, and aborts the ordinary task beside it", async () => {
+        const rig = await createRig();
+        const first = await rig.boot({ components: [taskComponent] });
+        const job = await first.createJob();
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        await cancelJob(first.deps, job.id, "no longer needed", teamMember);
+        await createTaskOn(first.ctx, job.leadConversation, backgroundTask, true);
+        await createTaskOn(first.ctx, job.leadConversation, slowAbortTask, false);
+        heldAborts.release.resolve();
+        await first.stop();
+
+        const second = await rig.boot({ components: [taskComponent] });
+
+        assert.deepEqual(didsOf(await repairsOf(second.ctx, job.id)), [RULE_4]);
+        const tasks = await liveTasksOf(second.ctx);
+        assert.deepEqual(
+            tasks.map((task) => task.kind),
+            [BACKGROUND_TASK],
+            "only the background task is live",
+        );
+        assert.equal(tasks[0]?.abortRequested, false, "the background task is not marked");
+    });
+
+    it("aborts a background compaction", async () => {
+        const rig = await createRig({ isCompactingAtSecondTurn: true });
+        const first = await rig.boot({ afterWrite: crashAt("conversations-closed") });
+        const job = await first.createJob();
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        await steerConversation(first.ctx.host, job.leadConversation, {
+            content: HELD_TEXT,
+            mode: "followUp",
+            actor: teamMember,
+            requestId: "second-turn",
+        });
+        await waitFor(() => rig.modelInputs.length === 2 && rig.summaryRequests() === 1, "the compaction to run");
+        await assert.rejects(cancelJob(first.deps, job.id, "no longer needed", teamMember), /crash at conversations/);
+        assert.deepEqual(
+            (await liveTasksOf(first.ctx)).filter((task) => task.background).map((task) => task.kind),
+            ["pi.compaction"],
+            "a background compaction is live",
+        );
+        await first.stop();
+
+        const second = await rig.boot();
+
+        assert.deepEqual(await liveTasksOf(second.ctx), [], "the compaction is aborted");
+    });
+});
+
+describe("rule 4: the wait after the host resumes", () => {
+    it("keeps the daemon starting until the marked conversation is idle", async () => {
+        heldAborts.entered = false;
+        heldAborts.release = Promise.withResolvers<void>();
+        const rig = await createRig();
+        const first = await rig.boot({ components: [taskComponent] });
+        const job = await first.createJob();
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        await cancelJob(first.deps, job.id, "no longer needed", teamMember);
+        await createTaskOn(first.ctx, job.leadConversation, slowAbortTask, false);
+        await first.stop();
+        heldAborts.entered = false;
+
+        const second = await rig.boot({ components: [taskComponent], isReadyAwaited: false });
+
+        await waitFor(() => heldAborts.entered, "the abort of the marked task to begin");
+        await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+        assert.equal(second.daemon.phase(), "starting", "listeners do not open while the abort is running");
+        heldAborts.release.resolve();
+        await waitFor(() => second.daemon.phase() === "ready", "the daemon to become ready");
     });
 });

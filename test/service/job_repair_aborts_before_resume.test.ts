@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
+import { type DaemonProcess, RESUME_MARKER, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const POLL_INTERVAL_MS = 50;
@@ -60,7 +60,9 @@ describe("rule 4: the aborts of several Done jobs after a kill -9", () => {
         for (const text of DONE_JOB_TEXTS) doneJobs.push((await first.invoke("jobs.create", { text })) as JobView);
         await first.invoke("jobs.create", { text: IN_PROGRESS_JOB_TEXT });
         await untilTrue(
-            async () => (await modelRequestsOf(first)).length === DONE_JOB_TEXTS.length + 1,
+            async () =>
+                (await modelRequestsOf(first)).filter((request) => request.firstUserText !== RESUME_MARKER).length ===
+                DONE_JOB_TEXTS.length + 1,
             "every lead's run to be in its model call",
         );
         await assert.rejects(
@@ -85,6 +87,15 @@ describe("rule 4: the aborts of several Done jobs after a kill -9", () => {
             assert.equal(conversation.status, "closed", job.leadConversation);
             assert.deepEqual(await second.invoke("tasks.live", { conversationId: job.leadConversation }), []);
         }
+        const requestsBeforeResume = requests.slice(
+            0,
+            requests.findIndex((request) => request.firstUserText === RESUME_MARKER),
+        );
+        assert.ok(
+            requests.some((request) => request.firstUserText === RESUME_MARKER),
+            "the host resumed",
+        );
+        assert.deepEqual(requestsBeforeResume, [], "no request starts before the host resumes");
         await untilTrue(
             async () =>
                 (await modelRequestsOf(second)).some((request) => request.firstUserText.includes(IN_PROGRESS_JOB_TEXT)),

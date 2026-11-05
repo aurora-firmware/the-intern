@@ -27,7 +27,7 @@ import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts"
 import type { InternModels } from "../../src/models/model_runtime.ts";
 import { createJob, type JobView } from "../../src/service/job_operations.ts";
 import { type Caller, defineOperation, ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
-import type { StartDaemonOptions } from "./daemon_process.ts";
+import { RESUME_MARKER, type StartDaemonOptions } from "./daemon_process.ts";
 import { createFakeModel, type FakeReply, type FakeTranscript } from "./fake_model.ts";
 import { createTestOperations, type StorageSwitch } from "./test_operations.ts";
 
@@ -451,6 +451,11 @@ async function main(): Promise<void> {
         sections: agents.sections,
         // The jobs and desk components and the local socket follow the agents component, as in `src/cli/bob.ts`.
         components: [
+            // First, so its hook runs in the tick that resumes the host, before any model request can start.
+            {
+                name: "mark-resume",
+                afterResume: async () => void modelRequests.push({ firstUserText: RESUME_MARKER, phase: "starting" }),
+            },
             agents.component,
             jobs.component,
             desk.component,

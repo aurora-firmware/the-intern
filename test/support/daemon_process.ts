@@ -39,6 +39,9 @@ export type FakeScript =
     | "streaming-gated"
     | "desk-steer";
 
+/** Recorded among the child's model requests at the point the host resumes, so a test can tell which came before. */
+export const RESUME_MARKER = "<host resumed>";
+
 export type StartDaemonOptions = {
     hermetic: HermeticEnv;
     workerThreads?: number;

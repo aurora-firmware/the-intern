@@ -5,23 +5,13 @@
  * waiting for it to end; the daemon resumes the host afterwards and then waits for the marked conversations to settle.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { InboxDoc, type TaskId } from "@earendil-works/pi-durable";
+import type { TaskId } from "@earendil-works/pi-durable";
 import { requireConversation } from "./conversation_control.ts";
 import { toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { abortRunningCompactions, closeJobConversations } from "./invocation.ts";
 
 const context = BACKGROUND_CONTEXT;
-
-// Withdraws the queued inputs, as `Conversation.abort()` does. A queued write stays queued: it is not input.
-async function withdrawQueuedInputs(host: HarnessHost, conversationId: string): Promise<void> {
-    const harness = internalHarness(host);
-    const id = toConversationId(conversationId);
-    const inbox = await harness.snapshot(InboxDoc, id, context);
-    for (const item of inbox?.items ?? []) {
-        if (item.mode !== "write") await harness.abortSubmission(item.id, context, id);
-    }
-}
 
 // Marks the live tasks that are neither background nor owned by another marked task: the owner's abort reaches the
 // tasks below it, and a blocking compaction aborted alone would fail the run that owns it.
@@ -39,14 +29,14 @@ async function markLiveTasks(host: HarnessHost, conversationIds: string[]): Prom
 }
 
 /**
- * Closes the job's conversations, then marks their running work and withdraws their queued input for abort. Never
- * resumes scheduling and never waits for a run to end. Returns the conversations, for `waitForMarkedConversations`.
+ * Closes the job's conversations, then marks their running work for abort. The closing commit already settles every
+ * queued item of their inboxes, so no queued input remains to withdraw. Never resumes scheduling and never waits for a
+ * run to end. Returns the conversations, for `waitForMarkedConversations`.
  */
 export async function markJobConversationsForAbort(host: HarnessHost, jobId: string): Promise<string[]> {
     const ofJob = await closeJobConversations(host, jobId);
     await abortRunningCompactions(host, ofJob);
     await markLiveTasks(host, ofJob);
-    for (const id of ofJob) await withdrawQueuedInputs(host, id);
     return ofJob;
 }
 
