@@ -14,7 +14,8 @@ import {
     leadRefusedJustification,
     leadStartFor,
     leadStartRequestId,
-    startLeadConversation,
+    seatLeadConversation,
+    submitLeadFirstInput,
 } from "../service/job_operations.ts";
 import { ServiceError } from "../service/operations.ts";
 import { type JobActionDeps, resumeJob } from "./job_actions.ts";
@@ -106,17 +107,19 @@ async function needsLeadStart(ctx: ServiceContext, job: Job, leadId: string | un
     return !(await hasSubmissionWithRequestId(ctx.host, leadId, leadStartRequestId(job.id)));
 }
 
+/** A first input rule 1 owes a lead conversation: submitted once the host has resumed. */
+export type PendingFirstInput = { conversationId: string; jobId: string; firstInput: string };
+
+type Rule1Outcome = { leadId: string | undefined; marked: string[]; pending?: PendingFirstInput };
+
 /**
  * Rule 1: a job that isn't Done and has no lead conversation gets it started, and a To do job whose lead never
  * received its first input gets that input submitted. A refused start cancels the job, and the aborts of its
- * conversations are marks, as in rule 4, because the normal cancel's abort turns scheduling on.
- * Returns the job's lead conversation after the rule, and the conversations it marked for abort.
+ * conversations are marks, as in rule 4, because the normal cancel's abort turns scheduling on. So does the
+ * submission of the first input, which is why the rule only seats the lead and returns the input still owed.
+ * Returns the job's lead conversation after the rule, the conversations it marked for abort, and the pending input.
  */
-async function applyRule1(
-    deps: JobActionDeps,
-    jobId: string,
-    leadId: string | undefined,
-): Promise<{ leadId: string | undefined; marked: string[] }> {
+async function applyRule1(deps: JobActionDeps, jobId: string, leadId: string | undefined): Promise<Rule1Outcome> {
     const { ctx, options } = deps;
     const job = await ctx.jobStore.getJob(jobId);
     if (!(await needsLeadStart(ctx, job, leadId))) return { leadId, marked: [] };
@@ -127,8 +130,13 @@ async function applyRule1(
     await ctx.jobStore.recordRepair(job.id, { rule: 1, did });
     try {
         const start = await leadStartFor(ctx, job);
-        const started = await startLeadConversation(ctx, options.agents, start, options.afterWrite);
-        return { leadId: started.conversationId, marked: [] };
+        const started = await seatLeadConversation(ctx, options.agents, start, options.afterWrite);
+        const { jobId: startedJobId, firstInput } = start;
+        return {
+            leadId: started.conversationId,
+            marked: [],
+            pending: { conversationId: started.conversationId, jobId: startedJobId, firstInput },
+        };
     } catch (error) {
         if (!(error instanceof ServiceError)) throw error;
         const justification = leadRefusedJustification(error);
@@ -175,29 +183,40 @@ async function applyRule4(deps: JobActionDeps, listed: Job, known: JobConversati
     return markJobConversationsForAbort(ctx.host, listed.id);
 }
 
+/** What the repair leaves for the daemon to do once the host has resumed. */
+export type RepairOutcome = { marked: string[]; pendingFirstInputs: PendingFirstInput[] };
+
+/** Submits the first inputs rule 1 owed. Call it after `host.resume()`: the submission turns scheduling on. */
+export async function submitPendingFirstInputs(ctx: ServiceContext, pending: PendingFirstInput[]): Promise<void> {
+    for (const input of pending) await submitLeadFirstInput(ctx, input.conversationId, input);
+}
+
 /**
  * Applies the four repair rules to every job, then the turn-end rule (S-004 REQ-008) to each In progress job whose
  * lead is idle and waits for nothing. The turn-end check is that rule applied to saved state, not a fifth repair.
  * The conversations are listed once, before the rules, so a Done job whose conversations are all closed and idle
  * costs one queued-input read per conversation and no other conversation read.
- * Returns the conversations rules 1 and 4 marked for abort, which end once the host resumes.
+ * Returns the conversations rules 1 and 4 marked for abort, which end once the host resumes, and the first inputs
+ * rule 1 owes, which are submitted then too.
  */
-export async function repairJobs(deps: JobActionDeps): Promise<string[]> {
+export async function repairJobs(deps: JobActionDeps): Promise<RepairOutcome> {
     const jobs = await allJobs(deps.ctx);
     const index = await indexConversations(deps.ctx);
     const leads = new Map<string, string>();
     const marked: string[] = [];
+    const pendingFirstInputs: PendingFirstInput[] = [];
     for (const job of jobs) {
         const { id } = job;
         const known = index.get(id) ?? { isUnsettled: false, idleClosedIds: [] };
         await applyRule3(deps, id, known.leadId);
-        const { leadId, marked: markedByRule1 } = await applyRule1(deps, id, known.leadId);
+        const { leadId, marked: markedByRule1, pending } = await applyRule1(deps, id, known.leadId);
         marked.push(...markedByRule1);
+        if (pending !== undefined) pendingFirstInputs.push(pending);
         if (leadId !== undefined) leads.set(id, leadId);
         await applyRule2(deps, id, leadId);
         marked.push(...(await applyRule4(deps, job, known)));
     }
-    if (deps.options.turnEndRule === false) return marked;
+    if (deps.options.turnEndRule === false) return { marked, pendingFirstInputs };
     for (const { id } of jobs) await checkTurnEnd(deps, id, leads.get(id));
-    return marked;
+    return { marked, pendingFirstInputs };
 }

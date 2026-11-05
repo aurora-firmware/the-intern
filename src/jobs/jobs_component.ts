@@ -15,7 +15,7 @@ import { createJob, createJobOperation } from "../service/job_operations.ts";
 import { jobRecordOperations } from "../service/job_record_operations.ts";
 import type { Operation } from "../service/operations.ts";
 import { resumeAfterLeadInput, startJob } from "./job_actions.ts";
-import { repairJobs } from "./job_repair.ts";
+import { type PendingFirstInput, repairJobs, submitPendingFirstInputs } from "./job_repair.ts";
 import { JobNotFoundError } from "./job_store.ts";
 import { createJobToolsExtension } from "./job_tools_extension.ts";
 import { startTurnEndRule } from "./turn_end_rule.ts";
@@ -67,6 +67,7 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
     let stopTurnEndRule: (() => void) | undefined;
     let stopJobDoneCheck: (() => void) | undefined;
     let markedByRepair: string[] = [];
+    let firstInputsOwed: PendingFirstInput[] = [];
     let context: ServiceContext | undefined;
     // The job tools are built before the host opens, so they reach the service context once startup has bound it.
     const requireContext = (): ServiceContext => {
@@ -108,10 +109,13 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
             },
             // Step 7: after admission is restored and before work resumes (S-004 REQ-018).
             async repair(ctx) {
-                markedByRepair = await repairJobs({ ctx, options });
+                ({ marked: markedByRepair, pendingFirstInputs: firstInputsOwed } = await repairJobs({ ctx, options }));
             },
-            // The marked work ends only once the host has resumed; listeners open after it has.
+            // The marked work ends only once the host has resumed; listeners open after it has. So do the first
+            // inputs rule 1 owes: submitting one turns scheduling on, which the repair must leave off.
             async afterResume(ctx) {
+                await submitPendingFirstInputs(ctx, firstInputsOwed);
+                firstInputsOwed = [];
                 await waitForMarkedConversations(ctx.host, markedByRepair);
                 markedByRepair = [];
             },
