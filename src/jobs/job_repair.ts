@@ -20,7 +20,7 @@ import {
 import { ServiceError } from "../service/operations.ts";
 import { type JobActionDeps, resumeJob } from "./job_actions.ts";
 import type { Job } from "./job_store.ts";
-import { checkTurnEnd } from "./turn_end_rule.ts";
+import { evaluateTurnEnd, type PendingReminder, submitReminder } from "./turn_end_rule.ts";
 
 const DAEMON = { kind: "daemon" } as const;
 const PAGE_SIZE = 500;
@@ -75,13 +75,25 @@ async function leadTookInput(ctx: ServiceContext, leadId: string, jobId: string)
     return blockedAfterEntry !== null && hasInputSince(ctx.host, leadId, blockedAfterEntry);
 }
 
-/** Rule 3: a Blocked job whose lead holds or took input is set In progress, and the lead continues with that input. */
-async function applyRule3(deps: JobActionDeps, jobId: string, leadId: string | undefined): Promise<void> {
+/** Held messages rule 3 owes a lead conversation: delivered once the host has resumed, and the job resumed with them. */
+export type PendingHeldDelivery = { conversationId: string; jobId: string };
+
+/**
+ * Rule 3: a Blocked job whose lead holds or took input is set In progress, and the lead continues with that input.
+ * Delivering held messages submits input, which turns scheduling on, so the rule only records the repair and returns
+ * the delivery still owed. The job stays Blocked until then, so a crash before the delivery applies the rule again,
+ * and the turn-end check does not judge a lead that has not yet taken the input.
+ */
+async function applyRule3(
+    deps: JobActionDeps,
+    jobId: string,
+    leadId: string | undefined,
+): Promise<PendingHeldDelivery | undefined> {
     const { ctx } = deps;
     const job = await ctx.jobStore.getJob(jobId);
-    if (job.status !== "blocked" || leadId === undefined) return;
+    if (job.status !== "blocked" || leadId === undefined) return undefined;
     const holds = await leadHoldsInput(ctx, leadId);
-    if (!holds && !(await leadTookInput(ctx, leadId, job.id))) return;
+    if (!holds && !(await leadTookInput(ctx, leadId, job.id))) return undefined;
     await ctx.jobStore.recordRepair(job.id, {
         rule: 3,
         did: "Set the job In progress: its lead held or had taken input since the job blocked",
@@ -90,9 +102,10 @@ async function applyRule3(deps: JobActionDeps, jobId: string, leadId: string | u
     // lead already took, or input queued for it, leaves nothing to deliver, but a park for the answer that the block
     // made is cleared all the same: the lead continues, and the turn-end rule sees it as waiting for nothing.
     const meta = await readConversationMeta(ctx.host, leadId);
-    if (meta?.held.length) await continueWithHeld(ctx.host, leadId);
-    else if (meta?.parked) await unparkConversation(ctx.host, leadId);
+    if (meta?.held.length) return { conversationId: leadId, jobId: job.id };
+    if (meta?.parked) await unparkConversation(ctx.host, leadId);
     await resumeJob(deps, job.id, DAEMON);
+    return undefined;
 }
 
 /**
@@ -184,7 +197,12 @@ async function applyRule4(deps: JobActionDeps, listed: Job, known: JobConversati
 }
 
 /** What the repair leaves for the daemon to do once the host has resumed. */
-export type RepairOutcome = { marked: string[]; pendingFirstInputs: PendingFirstInput[] };
+export type RepairOutcome = {
+    marked: string[];
+    pendingFirstInputs: PendingFirstInput[];
+    pendingHeldDeliveries: PendingHeldDelivery[];
+    pendingReminders: PendingReminder[];
+};
 
 /** Submits the first inputs rule 1 owed. Call it after `host.resume()`: the submission turns scheduling on. */
 export async function submitPendingFirstInputs(ctx: ServiceContext, pending: PendingFirstInput[]): Promise<void> {
@@ -192,12 +210,28 @@ export async function submitPendingFirstInputs(ctx: ServiceContext, pending: Pen
 }
 
 /**
+ * Delivers the held messages rule 3 owed, then resumes the job (a no-op when the delivery's input already did). Call it
+ * after `host.resume()`: the submission turns scheduling on.
+ */
+export async function deliverPendingHeld(deps: JobActionDeps, pending: PendingHeldDelivery[]): Promise<void> {
+    for (const { conversationId, jobId } of pending) {
+        await continueWithHeld(deps.ctx.host, conversationId);
+        await resumeJob(deps, jobId, DAEMON);
+    }
+}
+
+/** Submits the reminders the turn-end check owed. Call it after `host.resume()`: the submission turns scheduling on. */
+export async function submitPendingReminders(ctx: ServiceContext, pending: PendingReminder[]): Promise<void> {
+    for (const reminder of pending) await submitReminder(ctx.host, reminder);
+}
+
+/**
  * Applies the four repair rules to every job, then the turn-end rule (S-004 REQ-008) to each In progress job whose
  * lead is idle and waits for nothing. The turn-end check is that rule applied to saved state, not a fifth repair.
  * The conversations are listed once, before the rules, so a Done job whose conversations are all closed and idle
  * costs one queued-input read per conversation and no other conversation read.
- * Returns the conversations rules 1 and 4 marked for abort, which end once the host resumes, and the first inputs
- * rule 1 owes, which are submitted then too.
+ * Returns the conversations rules 1 and 4 marked for abort, which end once the host resumes, and the first inputs,
+ * held-message deliveries and reminders that rules 1 and 3 and the turn-end check owe, which are submitted then too.
  */
 export async function repairJobs(deps: JobActionDeps): Promise<RepairOutcome> {
     const jobs = await allJobs(deps.ctx);
@@ -205,21 +239,30 @@ export async function repairJobs(deps: JobActionDeps): Promise<RepairOutcome> {
     const leads = new Map<string, string>();
     const marked: string[] = [];
     const pendingFirstInputs: PendingFirstInput[] = [];
+    const pendingHeldDeliveries: PendingHeldDelivery[] = [];
     for (const job of jobs) {
         const { id } = job;
         const known = index.get(id) ?? { isUnsettled: false, idleClosedIds: [] };
-        await applyRule3(deps, id, known.leadId);
+        const heldDelivery = await applyRule3(deps, id, known.leadId);
+        if (heldDelivery !== undefined) pendingHeldDeliveries.push(heldDelivery);
         const { leadId, marked: markedByRule1, pending } = await applyRule1(deps, id, known.leadId);
         marked.push(...markedByRule1);
         if (pending !== undefined) pendingFirstInputs.push(pending);
         if (leadId !== undefined) leads.set(id, leadId);
-        await applyRule2(deps, id, leadId);
+        if (heldDelivery === undefined) await applyRule2(deps, id, leadId);
         marked.push(...(await applyRule4(deps, job, known)));
     }
-    if (deps.options.turnEndRule === false) return { marked, pendingFirstInputs };
+    const pendingReminders: PendingReminder[] = [];
+    if (deps.options.turnEndRule === false) {
+        return { marked, pendingFirstInputs, pendingHeldDeliveries, pendingReminders };
+    }
     // A lead that still owes its first input has not run a turn, so there is none to end; its run's end is checked
     // when it finishes after the resume.
     const awaitingFirstInput = new Set(pendingFirstInputs.map((pending) => pending.jobId));
-    for (const { id } of jobs) if (!awaitingFirstInput.has(id)) await checkTurnEnd(deps, id, leads.get(id));
-    return { marked, pendingFirstInputs };
+    for (const { id } of jobs) {
+        if (awaitingFirstInput.has(id)) continue;
+        const reminder = await evaluateTurnEnd(deps, id, leads.get(id));
+        if (reminder !== undefined) pendingReminders.push(reminder);
+    }
+    return { marked, pendingFirstInputs, pendingHeldDeliveries, pendingReminders };
 }
