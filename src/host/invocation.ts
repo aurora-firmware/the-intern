@@ -400,7 +400,8 @@ export function closeJobConversations(host: HarnessHost, jobId: string): Promise
  * marks are committed: a finished summary is placed outside the job's section and would follow the mark. A blocking
  * compaction is left to `Conversation.abort()`, because its generation owns it and would fail the run if it were
  * aborted alone. This runs before the first `Conversation.abort()`, which turns scheduling on after a restart, so no
- * compaction marked later can send a model request first. Without `onError` a failure rejects.
+ * compaction marked later can send a model request first. With `onError`, a failed stop goes to it and the others are
+ * still attempted; without it the first failure rejects.
  */
 export async function abortRunningCompactions(
     host: HarnessHost,
@@ -408,60 +409,69 @@ export async function abortRunningCompactions(
     onError?: (error: unknown) => void,
 ): Promise<void> {
     const harness = internalHarness(host);
-    for (const id of conversationIds) {
+    const attempt = async (stop: () => Promise<unknown>): Promise<void> => {
         try {
-            const live = await harness.snapshot(LiveDoc, toConversationId(id), context);
-            for (const status of live?.compactions ?? []) {
-                if (!status.blocking) await harness.abortTask(status.taskId, context);
-            }
+            await stop();
         } catch (error) {
             if (onError === undefined) throw error;
             onError(error);
         }
+    };
+    for (const id of conversationIds) {
+        await attempt(async () => {
+            const live = await harness.snapshot(LiveDoc, toConversationId(id), context);
+            for (const status of live?.compactions ?? []) {
+                if (!status.blocking) await attempt(() => harness.abortTask(status.taskId, context));
+            }
+        });
     }
 }
 
 /**
  * Closes every conversation whose `intern.conversation` document names the job (closed mark set, nothing parked,
  * awaited or held) in the job's section, awaits `afterClosed`, then aborts them. The section is released before
- * `afterClosed` and the aborts. `own` names the conversation of a running tool: it is closed and not aborted, because
- * its abort would cut the tool's call off, and its run ends by itself when the tool returns. With `own`, a failed
- * abort of another conversation goes to `own.onError` and the remaining aborts are still attempted; without it the
- * failure rejects. A failed closed-mark commit rejects. No abort mark is set, so no report is sent.
+ * `afterClosed` and the aborts. `reporting.conversationId` names the conversation of a running tool: it is closed and
+ * not aborted, because its abort would cut the tool's call off, and its run ends by itself when the tool returns. With
+ * `reporting`, a failed abort or compaction stop goes to `reporting.onError` and every other one is still attempted,
+ * once each: the conversation or compaction it failed for keeps running until the next start. Without it the failure
+ * rejects. A failed closed-mark commit always rejects, before any abort is attempted, and `abortAfterFailedClose`
+ * recovers from it. No abort mark is set, so no report is sent.
  */
 export async function abortJobConversations(
     host: HarnessHost,
     jobId: string,
-    own?: { conversationId: string; onError(error: unknown): void },
+    reporting?: { conversationId?: string | undefined; onError(error: unknown): void },
     afterClosed?: () => void | Promise<void>,
 ): Promise<string[]> {
     if (jobId === (await findCreatedConversation(host, FRONT_DESK_CREATION))) throw new FrontDeskNotJobError(jobId);
     const ofJob = await closeJobConversations(host, jobId);
     await afterClosed?.();
-    await abortRunningCompactions(host, ofJob, own?.onError);
+    await abortRunningCompactions(host, ofJob, reporting?.onError);
     for (const id of ofJob) {
-        if (id === own?.conversationId) continue;
+        if (id === reporting?.conversationId) continue;
         try {
             await abortConversation(host, id);
         } catch (error) {
-            if (own === undefined) throw error;
-            own.onError(error);
+            if (reporting === undefined) throw error;
+            reporting.onError(error);
         }
     }
     return ofJob;
 }
 
 /**
- * Aborts the job's conversations after a failure that left the lead's closed mark unwritten, so a queued input can't
- * run a model turn on a Done job. The other conversations are aborted in turn and a failed abort goes to `onError`.
- * The lead is aborted unless its closed mark landed, and that abort is not awaited: it waits for the run, and the run
- * waits for the tool call that is making this call. The conversations stay unclosed until rule 4 closes them at the
- * next start.
+ * Aborts the job's conversations after a failure while closing the job, before `abortJobConversations` attempted any
+ * abort, so a queued input can't run a model turn on a Done job. The compactions still running in the conversations
+ * whose closed mark landed are stopped first, the lead's included, then the conversations are aborted in turn, and a
+ * failed stop or abort goes to `onError` without ending the rest. A running tool's `ownConversationId` is aborted
+ * unless its closed mark landed, and that abort is not awaited: it waits for the run, and the run waits for the tool
+ * call that is making this call. Without it every conversation is aborted and awaited. The marks that did not land are
+ * not retried: repair rule 4 sets them, and ends the compactions of those conversations, at the next start.
  */
 export async function abortAfterFailedClose(
     host: HarnessHost,
     jobId: string,
-    ownConversationId: string,
+    ownConversationId: string | undefined,
     onError: (error: unknown) => void,
 ): Promise<void> {
     // Listed in the job's section, so a conversation admitted before the abort is in the list.
@@ -473,6 +483,11 @@ export async function abortAfterFailedClose(
         }
         return found;
     });
+    await abortRunningCompactions(
+        host,
+        ofJob.filter(({ isClosed }) => isClosed).map(({ id }) => id),
+        onError,
+    );
     for (const { id, isClosed } of ofJob) {
         if (id !== ownConversationId) {
             await abortConversation(host, id).catch(onError);
