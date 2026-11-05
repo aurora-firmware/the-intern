@@ -14,7 +14,7 @@ import { toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { watchConversationMeta, watchInstance } from "./host_observation.ts";
 import { continueParked } from "./invocation.ts";
-import { isConversationClosed } from "./job_section.ts";
+import { ConversationClosedError, inOpenConversation, isConversationClosed } from "./job_section.ts";
 import { type ConversationMeta, conversationMetaDoc, readConversationMeta, type SeatActor } from "./seating.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -108,7 +108,18 @@ async function holdReport(
     });
 }
 
+// The invoker's own writes run in its job's section, which orders them with a close; a close that wins leaves them
+// undone, and `submitInput` after them takes its own section, so none is held across it.
 async function deliver(host: HarnessHost, invokedId: string): Promise<void> {
+    try {
+        await deliverInSection(host, invokedId);
+    } catch (error) {
+        if (error instanceof ConversationClosedError) return;
+        throw error;
+    }
+}
+
+async function deliverInSection(host: HarnessHost, invokedId: string): Promise<void> {
     const invoked = await readConversationMeta(host, invokedId);
     if (invoked?.invokedBy === undefined || invoked.parked !== null) return;
     // A run that ends while the agent still waits for reports of agents it invoked doesn't end its part.
@@ -116,8 +127,7 @@ async function deliver(host: HarnessHost, invokedId: string): Promise<void> {
     const invokerId = invoked.invokedBy;
     const invoker = await readConversationMeta(host, invokerId);
     if (invoker === undefined || !invoker.awaiting.includes(invokedId)) return;
-    // A closed invoker takes no report, and a close that failed leaves its state to repair rule 4 (ADR-001): holding the
-    // report or continuing the invoker would change that state outside the job's section before the refusal.
+    // A closed invoker takes no report, and a close that failed leaves its state to repair rule 4 (ADR-001).
     if (await isConversationClosed(host, invokerId)) return;
     if ((await host.conversationInfo(invokedId))?.busy !== false) return;
     const report = await readReport(host, invoked, invokedId);
@@ -125,14 +135,16 @@ async function deliver(host: HarnessHost, invokedId: string): Promise<void> {
 
     const isLastReport = withoutId(invoker.awaiting, invokedId).length === 0;
     if (invoker.parked?.continueOn === "all" && !isLastReport) {
-        await holdReport(host, { invokerId, invokedId, role: invoked.seat.role, report });
+        await inOpenConversation(host, invokerId, () =>
+            holdReport(host, { invokerId, invokedId, role: invoked.seat.role, report }),
+        );
         return;
     }
     const actor: SeatActor = { kind: "agent", conversationId: invokedId, role: invoked.seat.role };
     const record: ReportRecord = { actor, content: report.content };
     const input = { ...report, entry: { kind: REPORT_KIND, data: record } };
     if (invoker.parked !== null || invoker.held.length > 0) {
-        await continueParked(host, invokerId, input);
+        await continueParked(host, invokerId, input, (work) => inOpenConversation(host, invokerId, work));
     } else {
         await submitInput(host, invokerId, { ...input, busyMode: "followUp" });
     }

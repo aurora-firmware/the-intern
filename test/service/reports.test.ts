@@ -378,6 +378,45 @@ describe("report delivery to the invoker of a Done job whose close failed", () =
     });
 });
 
+describe("report delivery while a close of the invoker's job is in progress", () => {
+    it("leaves the parked invoker as it was when the job turns Done while the close holds the section", async () => {
+        const fixture = await createFixture();
+        const invokerId = await fixture.startInvoker();
+        const releaseA = fixture.holdAnswerTo("job A");
+        const parked: ParkedState = { waitingFor: "reports", continueOn: "each" };
+        await fixture.invoke(invokerId, ["job A"], parked);
+        await parkConversation(fixture.host, invokerId, parked);
+        const before = await readConversationMeta(fixture.host, invokerId);
+        const requestsBefore = fixture.invokerRequests().length;
+        let isDone = false;
+        setJobDoneCheck(fixture.host, async () => isDone);
+        const errors: string[] = [];
+        const recording = createLogger({ stream: { write: (line: string) => errors.push(line) !== 0 } });
+        deliveries.push(await startReportDelivery(fixture.host, { logger: recording }));
+
+        // The close holds the job's section before the job is Done and, failing, never marks the conversation.
+        let finishClose: () => void = () => {};
+        const closeMayFinish = new Promise<void>((resolve) => (finishClose = resolve));
+        const closing = inJobSection(fixture.host, "job-1", async () => {
+            await closeMayFinish;
+            isDone = true;
+        });
+        releaseA();
+        await settle();
+        const whileClosing = await readConversationMeta(fixture.host, invokerId);
+        finishClose();
+        await closing;
+        await settle();
+
+        const after = await readConversationMeta(fixture.host, invokerId);
+        assert.deepEqual(whileClosing?.parked, before?.parked, "not cleared outside the section while it is held");
+        assert.deepEqual(after?.parked, before?.parked);
+        assert.deepEqual(after?.awaiting, before?.awaiting);
+        assert.equal(errors.filter((line) => line.includes("report delivery failed")).length, 0);
+        assert.equal(fixture.invokerRequests().length, requestsBefore, "no model call");
+    });
+});
+
 async function rawEntriesOf(host: HarnessHost, conversationId: string) {
     const conversation = await internalHarness(host).conversation(
         Number(conversationId) as ConversationId,
