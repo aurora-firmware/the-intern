@@ -272,6 +272,19 @@ describe("the way in recorded through each listener", { timeout: TEST_TIMEOUT_MS
         assert.deepEqual(actors["over the network"], WEB_INTERFACE);
     });
 
+    it("records a reject-mode input to an idle conversation with that listener's way in", async () => {
+        const fixture = await startFixture();
+        const conversationId = await fixture.idleConversation("rejected");
+        const reject = { busyMode: "reject" };
+
+        await fixture.submitAndSettle("local socket", conversationId, "reject socket", { input: reject });
+        await fixture.submitAndSettle("network listener", conversationId, "reject network", { input: reject });
+
+        const actors = messageActors(await fixture.entries(conversationId));
+        assert.deepEqual(actors["reject socket"], COMMAND_LINE);
+        assert.deepEqual(actors["reject network"], WEB_INTERFACE);
+    });
+
     it("records a team member with command line when a local socket call's input claims another caller", async () => {
         const fixture = await startFixture();
         const conversationId = await fixture.idleConversation("claimed-in-input");
