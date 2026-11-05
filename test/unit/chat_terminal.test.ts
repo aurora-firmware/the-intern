@@ -341,6 +341,27 @@ describe("runTerminalChat with an unfinished answer line taller than the screen"
         assert.deepEqual(kept.scrollback, []);
         assert.equal(kept.lines.length, 2, kept.lines.join("\n"));
     });
+
+    it("clears_a_wrapped_typed_line_from_under_the_answer_with_the_cursor_on_its_first_row", async () => {
+        const chat = chatOnScriptedFeed();
+        chat.feed({ snapshot: { entries: [], live: {} } });
+        const typed = "a line that takes two rows of the forty column screen as it does and goes on past them";
+        for (const key of typed) {
+            chat.type(key);
+            await new Promise((resolve) => setImmediate(resolve));
+        }
+        await chat.see("goes on");
+        chat.type("\u0001");
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        chat.feed(partialOf("streamed one\nstreamed two\nstreamed three\n", 1));
+        await chat.see("streamed three");
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        const { lines } = chat.terminal();
+        chat.type("\u0005\u0015");
+        await chat.leave();
+
+        assert.deepEqual(lines, ["streamed one", "streamed two", "streamed three", `> ${typed}`]);
+    });
 });
 
 const URL_TEXT = "https://example.com/docs/a/long/path/to/some/page/that/does/not/fit?query=value&other=1";

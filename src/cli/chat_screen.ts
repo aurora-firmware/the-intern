@@ -128,17 +128,14 @@ export function createChatScreen(options: ChatScreenOptions): ChatScreen {
             return;
         }
         const { rows: above } = lines.getCursorPos();
-        const rowsBelowTop = above + (isTailShown ? 1 : 0);
-        moveCursor(output, 0, -rowsBelowTop);
+        moveCursor(output, 0, -(above + (isTailShown ? 1 : 0)));
+        // A terminal such as tmux keeps the screen in its scrollback when a clear down starts at its home position, and
+        // the top row can be there, so the clear down starts one column in and the row's first cell is cleared with it.
         cursorTo(output, 0);
-        // The top row and the rows below it are cleared apart: a terminal such as tmux keeps the screen in its
-        // scrollback when a clear down starts at its home position, and the top row can be there.
         clearLine(output, 0);
-        if (rowsBelowTop > 0) {
-            moveCursor(output, 0, 1);
-            clearScreenDown(output);
-            moveCursor(output, 0, -1);
-        }
+        cursorTo(output, 1);
+        clearScreenDown(output);
+        cursorTo(output, 0);
         writeAbove();
         isTailShown = withTail && tail() !== "";
         if (isTailShown) output.write(tailRow());
