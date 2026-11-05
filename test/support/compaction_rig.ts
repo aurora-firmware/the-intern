@@ -60,6 +60,8 @@ export async function waitFor(check: () => Promise<boolean> | boolean, what: str
 
 export type Rig = Awaited<ReturnType<typeof start>>;
 
+export type LeadStep = { name: string; args: Record<string, unknown>; before?: () => Promise<void> };
+
 /** Resolves when the request is aborted or `gates` is released, and calls `onAbort` only on an abort. */
 function holdRequest(signal: AbortSignal | undefined, onAbort: () => void): Promise<void> {
     return new Promise<void>((resolve) => {
@@ -76,11 +78,12 @@ function holdRequest(signal: AbortSignal | undefined, onAbort: () => void): Prom
 /**
  * A daemon whose lead follows `leadSteps`, one tool call per model reply; every other request is answered "done".
  * The compaction's summarization request is held until `releaseSummary()` or until it is aborted.
- * Every conversation starts a background compaction at its second turn.
+ * Every conversation starts a background compaction at its second turn. A step's `before` runs before its reply.
+ * With `restartedEnv` the daemon starts over the directories of an earlier one.
  */
-export async function start(leadSteps: { name: string; args: Record<string, unknown> }[]) {
-    const env = await createHermeticEnv();
-    envs.push(env);
+export async function start(leadSteps: LeadStep[], restartedEnv?: HermeticEnv) {
+    const env = restartedEnv ?? (await createHermeticEnv());
+    if (restartedEnv === undefined) envs.push(env);
     const logs: string[] = [];
     const logger = createLogger({
         stream: {
@@ -142,6 +145,7 @@ export async function start(leadSteps: { name: string; args: Record<string, unkn
             });
             return fauxAssistantMessage("finished");
         }
+        await step.before?.();
         return fauxAssistantMessage([fauxToolCall(step.name, step.args as never)], { stopReason: "toolUse" });
     };
     fake.setResponses([respond]);
@@ -198,6 +202,10 @@ export async function start(leadSteps: { name: string; args: Record<string, unkn
         heldAgents,
         logs,
         releaseSummary: () => releaseSummary(),
+        restart: async () => {
+            await daemon.stop();
+            return start([], env);
+        },
         createJob: async () =>
             (await daemon.catalogue.invoke("jobs.create", { text: "lead with compaction" }, webCaller)) as {
                 id: string;
