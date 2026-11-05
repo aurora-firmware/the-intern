@@ -119,10 +119,9 @@ async function submitOrSteer(host: HarnessHost, input: SubmitInput, caller: Call
         // with busy.
         const isHeld = await holdForParked(host, conversationId, { ...message, mode: "followUp" });
         if (isHeld) return { held: true };
-        // The front desk records the sender and way in of a reject input too; its busy refusal stays.
-        const isFrontDesk = conversationId === (await readFrontDeskId(host));
-        const entry = isFrontDesk ? steerEntryFor({ ...message, mode: "followUp" }) : undefined;
-        return submitInput(host, conversationId, { ...input, ...(entry && { entry }) });
+        // A reject input records its sender and way in like any other; its busy refusal stays.
+        const entry = steerEntryFor({ ...message, mode: "followUp" });
+        return submitInput(host, conversationId, { ...input, entry });
     }
     // A conversation parked for an answer continues with a reject input as a follow-up.
     const mode = busyMode === "reject" ? "followUp" : busyMode;
