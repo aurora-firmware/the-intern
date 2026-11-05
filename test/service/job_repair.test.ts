@@ -404,6 +404,51 @@ describe("rule 1: a lead start cut short before its first input", () => {
     });
 });
 
+describe("rule 1: the cancel after a refused start of a lead that exists", () => {
+    it("sends no model request before the host resumes, and leaves the closed lead idle after", async () => {
+        const rig = await createRig();
+        const first = await rig.boot();
+        const heldCall = rig.hold();
+        await first.createJob();
+        await waitFor(() => rig.modelInputs.length === 1, "the other job's run to be in its model call");
+        const { job } = await first.ctx.jobStore.insertJob({
+            letter: "W",
+            requestText: "do it",
+            origin: { kind: "request", wayIn: "web interface" },
+            leadStart: { role: "no-such-role", overrides: {}, actor: { kind: "team_member", wayIn: "web interface" } },
+        });
+        const { conversationId: leadId } = await createSeatedConversation(first.ctx.host, {
+            scope: "job.lead",
+            key: job.id,
+            job: { jobId: job.id, isLead: true, origin: { kind: "request", wayIn: "web interface" }, depth: 0 },
+            seat: first.deps.options.agents.runtime().catalog.seatFor(DEFAULT_LEAD_ROLE),
+            actor: { kind: "team_member", wayIn: "web interface" },
+        });
+        await first.stop();
+        const requestsBeforeRestart = rig.modelInputs.length;
+        let requestsAtEndOfRepair = -1;
+        const observer: DaemonComponent = {
+            name: "observer",
+            start: async () => undefined,
+            repair: async () => {
+                await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+                requestsAtEndOfRepair = rig.modelInputs.length;
+            },
+        };
+
+        const second = await rig.boot({ components: [observer] });
+
+        assert.equal(requestsAtEndOfRepair, requestsBeforeRestart, "no run sends a request while the repair runs");
+        const stored = await second.ctx.jobStore.getJob(job.id);
+        assert.equal(stored.status, "done");
+        assert.equal(stored.resolution?.kind, "cancelled");
+        assert.match(stored.resolution?.justification ?? "", /^The lead could not be started: .*no-such-role/);
+        assert.equal((await readConversationMeta(second.ctx.host, leadId))?.closed, true);
+        assert.equal(await isIdle(second.ctx, leadId), true);
+        heldCall.release();
+    });
+});
+
 describe("rule 1: a start that fails for another reason than a refusal", () => {
     it("fails the startup instead of cancelling the job", async () => {
         const rig = await createRig();

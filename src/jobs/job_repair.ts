@@ -17,7 +17,7 @@ import {
     startLeadConversation,
 } from "../service/job_operations.ts";
 import { ServiceError } from "../service/operations.ts";
-import { cancelJob, type JobActionDeps, resumeJob } from "./job_actions.ts";
+import { type JobActionDeps, resumeJob } from "./job_actions.ts";
 import type { Job } from "./job_store.ts";
 import { checkTurnEnd } from "./turn_end_rule.ts";
 
@@ -108,13 +108,18 @@ async function needsLeadStart(ctx: ServiceContext, job: Job, leadId: string | un
 
 /**
  * Rule 1: a job that isn't Done and has no lead conversation gets it started, and a To do job whose lead never
- * received its first input gets that input submitted. A refused start cancels the job.
- * Returns the job's lead conversation after the rule.
+ * received its first input gets that input submitted. A refused start cancels the job, and the aborts of its
+ * conversations are marks, as in rule 4, because the normal cancel's abort turns scheduling on.
+ * Returns the job's lead conversation after the rule, and the conversations it marked for abort.
  */
-async function applyRule1(deps: JobActionDeps, jobId: string, leadId: string | undefined) {
+async function applyRule1(
+    deps: JobActionDeps,
+    jobId: string,
+    leadId: string | undefined,
+): Promise<{ leadId: string | undefined; marked: string[] }> {
     const { ctx, options } = deps;
     const job = await ctx.jobStore.getJob(jobId);
-    if (!(await needsLeadStart(ctx, job, leadId))) return leadId;
+    if (!(await needsLeadStart(ctx, job, leadId))) return { leadId, marked: [] };
     const did =
         leadId === undefined
             ? "Started the lead conversation, which the job lacked"
@@ -122,11 +127,13 @@ async function applyRule1(deps: JobActionDeps, jobId: string, leadId: string | u
     await ctx.jobStore.recordRepair(job.id, { rule: 1, did });
     try {
         const start = await leadStartFor(ctx, job);
-        return (await startLeadConversation(ctx, options.agents, start, options.afterWrite)).conversationId;
+        const started = await startLeadConversation(ctx, options.agents, start, options.afterWrite);
+        return { leadId: started.conversationId, marked: [] };
     } catch (error) {
         if (!(error instanceof ServiceError)) throw error;
-        await cancelJob(deps, job.id, leadRefusedJustification(error), DAEMON);
-        return undefined;
+        const justification = leadRefusedJustification(error);
+        await ctx.jobStore.applyAction(job.id, "cancel", { justification }, DAEMON);
+        return { leadId: undefined, marked: await markJobConversationsForAbort(ctx.host, job.id) };
     }
 }
 
@@ -173,7 +180,7 @@ async function applyRule4(deps: JobActionDeps, listed: Job, known: JobConversati
  * lead is idle and waits for nothing. The turn-end check is that rule applied to saved state, not a fifth repair.
  * The conversations are listed once, before the rules, so a Done job whose conversations are all closed and idle
  * costs one queued-input read per conversation and no other conversation read.
- * Returns the conversations rule 4 marked for abort, which end once the host resumes.
+ * Returns the conversations rules 1 and 4 marked for abort, which end once the host resumes.
  */
 export async function repairJobs(deps: JobActionDeps): Promise<string[]> {
     const jobs = await allJobs(deps.ctx);
@@ -184,7 +191,8 @@ export async function repairJobs(deps: JobActionDeps): Promise<string[]> {
         const { id } = job;
         const known = index.get(id) ?? { isUnsettled: false, idleClosedIds: [] };
         await applyRule3(deps, id, known.leadId);
-        const leadId = await applyRule1(deps, id, known.leadId);
+        const { leadId, marked: markedByRule1 } = await applyRule1(deps, id, known.leadId);
+        marked.push(...markedByRule1);
         if (leadId !== undefined) leads.set(id, leadId);
         await applyRule2(deps, id, leadId);
         marked.push(...(await applyRule4(deps, job, known)));
