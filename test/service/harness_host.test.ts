@@ -6,7 +6,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type Models, Type } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
-import { defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { defineEntry, defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createLogger } from "../../src/daemon/logger.ts";
 import {
@@ -454,6 +454,92 @@ describe("conversations", () => {
             assert.ok(!contextIds.includes(earlier), `readContext leaves out entry ${earlier}`);
         }
         assert.ok(contextIds.length > 0);
+    });
+});
+
+const fillerEntry = defineEntry<Record<string, never>>("test.filler");
+const PAGE_OVERFLOW = 510;
+
+// Appends entries that contribute no model message, so they carry no timestamp.
+async function appendFiller(host: HarnessHost, id: string, count: number): Promise<void> {
+    await internalHarness(host).commit(async (tx) => {
+        for (let index = 0; index < count; index++)
+            await tx.appendEntry(fillerEntry, Number(id) as never, { data: {} });
+    }, ctx);
+}
+
+function countingStorage(counter: { scans: number }): (database: SqliteDatabase) => Promise<Storage> {
+    return async (database) => {
+        const storage = await SqliteStorage.open(database);
+        return new Proxy(storage, {
+            get(target, property) {
+                const value = Reflect.get(target, property, target);
+                if (property !== "scanEntries" || typeof value !== "function") return value;
+                return (...args: unknown[]) => {
+                    counter.scans += 1;
+                    return value.apply(target, args);
+                };
+            },
+        });
+    };
+}
+
+async function newestAssistantTime(host: HarnessHost, id: string): Promise<number> {
+    const entries = await allEntries(host, id);
+    const messages = entries.flatMap((entry) => (Array.isArray(entry.data) ? entry.data : []));
+    return Math.max(...messages.map((message: { timestamp: number }) => message.timestamp));
+}
+
+describe("readLastMessageTime", () => {
+    it("returns null for a conversation with no entries", async () => {
+        const env = await makeEnv();
+        const fake = makeFake(() => "hello");
+        const host = await openHost({ databaseFile: join(env.root, "state.sqlite"), fake });
+        const id = await host.createConversation({ agent: { model: modelNameOf(fake) } });
+
+        assert.equal(await host.readLastMessageTime(id), null);
+    });
+
+    it("returns null for a multi-page conversation with no model message", async () => {
+        const env = await makeEnv();
+        const fake = makeFake(() => "hello");
+        const host = await openHost({ databaseFile: join(env.root, "state.sqlite"), fake });
+        const id = await host.createConversation({ agent: { model: modelNameOf(fake) } });
+        await appendFiller(host, id, PAGE_OVERFLOW);
+
+        assert.equal(await host.readLastMessageTime(id), null);
+    });
+
+    it("finds the newest model message when it sits in the oldest page of a multi-page conversation", async () => {
+        const env = await makeEnv();
+        const fake = makeFake(() => "hello");
+        const host = await openHost({ databaseFile: join(env.root, "state.sqlite"), fake });
+        const id = await host.createConversation({ agent: { model: modelNameOf(fake) } });
+        await answer(host, id, "hi");
+        await appendFiller(host, id, PAGE_OVERFLOW);
+
+        assert.equal(await host.readLastMessageTime(id), await newestAssistantTime(host, id));
+    });
+
+    it("reads only the newest page when it holds a model message", async () => {
+        const env = await makeEnv();
+        const counter = { scans: 0 };
+        const fake = makeFake(() => "hello");
+        const host = await openHost({
+            databaseFile: join(env.root, "state.sqlite"),
+            fake,
+            openStorage: countingStorage(counter),
+        });
+        const id = await host.createConversation({ agent: { model: modelNameOf(fake) } });
+        await appendFiller(host, id, PAGE_OVERFLOW);
+        await answer(host, id, "hi");
+        counter.scans = 0;
+
+        const time = await host.readLastMessageTime(id);
+        const scans = counter.scans;
+
+        assert.equal(time, await newestAssistantTime(host, id));
+        assert.equal(scans, 1);
     });
 });
 

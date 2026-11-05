@@ -344,20 +344,23 @@ function createHost(harness: Harness): HarnessHost {
         },
         async readLastMessageTime(id) {
             const conversation = await requireConversation(harness, id);
-            let newest: number | null = null;
             let cursor: Cursor | undefined;
             do {
                 const page = await conversation.entries(
-                    { order: "ascending" },
+                    { order: "descending" },
                     CONVERSATION_PAGE_SIZE,
                     cursor,
                     context,
                 );
+                // A message's timestamp is set when pi creates it, but its entry is appended when the message ends,
+                // so an entry placed meanwhile (a steer) can sit before an older timestamp. That skew spans the
+                // entries of one turn, so the newest of a whole page that holds a message is taken, and older pages
+                // are not read.
                 const pageNewest = newestModelMessageTime(page.items);
-                if (pageNewest !== null && (newest === null || pageNewest > newest)) newest = pageNewest;
+                if (pageNewest !== null) return pageNewest;
                 cursor = page.next;
             } while (cursor !== undefined);
-            return newest;
+            return null;
         },
     };
 }
