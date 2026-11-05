@@ -22,8 +22,8 @@ The product owner approved S-000 and S-002, which answer both questions. This re
 one of the standing decisions S-000 asks to record before development starts (S-000, Developer documentation,
 Decisions needed).
 
-Sources: S-000 Users, Solution overview and Project exclusions; S-002 Definitions (service account), Design
-Principles, Exclusions, REQ-006, REQ-016 and REQ-018.
+Sources: S-000 Users, Solution overview and Project exclusions; S-002 Definitions (service account), Exclusions,
+REQ-006, REQ-016 and REQ-018.
 
 ## Decision
 
@@ -111,7 +111,7 @@ and the limit that actually holds is what the service account can reach, which r
 
 **Description:** The local socket and the network listener check a token or certificate before accepting calls.
 **Rejected because:** It is a login in another form. Who can reach a listener is decided by the machine and the
-network setup, and the service layer stays free of transport and authorization (S-002 Design Principles, REQ-016).
+network setup, and the service layer stays free of transport and authorization (S-002 REQ-016).
 
 ### Alternative D: The Intern holds its own credentials
 
@@ -124,3 +124,4 @@ the same account log each other out. Using the service account's credentials in 
 | Date | Change | Reason |
 |---|---|---|
 | 2026-11-04 | Decision 2: records the two rules that read the way in to decide an outcome: the front desk's refusal of input from anyone but a team member by the command line or the web interface, and the refusal of `jobs.create` for a way in with no origin letter. | S-001 REQ-020 and S-004 REQ-021 and REQ-002 already require them, and this decision said the actor grants nothing. PR #148 review; product owner decision of 2026-11-04. |
+| 2026-11-05 | Citations only (Sources, Alternative C): S-002 no longer has Design Principles. No decision changes. | Architecture consistency review of the ai-team 0.19.0 spec layout, T-185. |

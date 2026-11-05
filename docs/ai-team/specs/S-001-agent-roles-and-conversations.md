@@ -29,8 +29,10 @@ members and turns their requests into jobs. Success Criteria lists the observabl
 | bob | The name of the default lead role (REQ-001) and of the CLI. |
 | Team member | Anyone who can reach one of the-intern's ways in (S-000). All team members are equal: each can give jobs, follow and steer work, and configure the-intern. |
 | Role | A set of parameters that an agent is made from: instructions (system prompt), tools and skills, plus default values for the pi-durable agent parameters: model, thinking level and workspace (the pi-durable `cwd`). If a role is a class, an agent is an object of that class. |
+| Role catalog | The shipped roles (`bob`, `gp`, `desk`), the team's own roles with their instructions, tools, skills and defaults, and the registered workspaces (REQ-003, REQ-018). |
 | Agent | The actor that interacts with the model and carries out a conversation. A conversation has one agent at a time and can be a succession of agents: each role change ends the current agent and seats a new one in the same conversation. An agent keeps its role for its whole life. It is not an operating-system process: the daemon runs every agent, and the current agent's configuration is the pi-durable agent of its conversation. |
 | Seat | The place of the current agent in a conversation, with the role, model, thinking level and workspace it runs with: the role's defaults, or overrides given when the agent was seated or invoked. |
+| Role prompt | What the model sees as its system prompt in a seat: the-intern's preamble, the role's instructions and skills, and the workspace's instructions (`AGENTS.md`/`CLAUDE.md`) and skills (REQ-005). |
 | Job | The product's unit of work (S-000): it has a description, a definition of done, a status, a Blocked reason while blocked, a resolution with its justification, a worklog, a history and Related jobs (S-004), kept in the job record. The job record and the job's steps belong to the Jobs component and its own spec. This spec defines only how agents and conversations work on a job. |
 | Lead conversation, lead agent | Each job has one lead conversation. Its current agent is the job's lead agent, which carries the job from definition to verification and is the only agent that completes it (S-004 REQ-005). A handoff in the lead conversation passes the lead to the new agent, so a job has exactly one lead at a time. |
 | Specialist agent | An agent invoked for a part of a job. It works in its own conversation, finishes its part and reports back. It never completes the job. |
@@ -50,6 +52,7 @@ members and turns their requests into jobs. Success Criteria lists the observabl
 | Job source, origin | A job source starts a job and its lead conversation: a request from a team member (command line, web interface, email), a schedule fire, a trigger, or a follow-up job created by an agent. The origin of a conversation records its job source, the invoking conversation for an agent invocation, or "front desk" for the front desk. |
 | Front desk | The one standing conversation of an instance that assists team members (REQ-021). It belongs to no job. Team members reach it from the command line and the web interface; it answers questions about the work, creates jobs that agents take, and passes answers and steering to a job's conversations. It never does the work itself. |
 | Front-desk tools | The tools offered only in the front desk: job tools that name the job they act on, reads of conversations, status and usage, and steering of a job's conversations (REQ-022). |
+| Entry routing | The daemon behaviour that starts a job's lead conversation for each job source, with the role the source names (`bob` when it names none), and records its origin (REQ-012). At startup it makes sure the front desk exists (REQ-021), and it serves team members' requests to reset conversations (REQ-011). |
 
 ### pi agent and pi-durable terms
 
@@ -153,41 +156,7 @@ What this specification explicitly does NOT cover:
   model belong to the daemon and control-endpoint specs and to S-000's Installation and service setup. This spec
   states behaviour only.
 
-## Architecture
-
-### Design Principles
-
-- **One agent at a time per conversation.** A conversation can be a succession of agents, but at any moment it has
-  exactly one, with one seat. Every model turn runs with that seat's model, thinking level, instructions, tools,
-  skills and workspace. Nothing in a turn mixes two seats.
-- **One lead per job.** Each job has one lead conversation, and its current agent is the job's only lead. Agents
-  invoked for parts of the job work in their own conversations and report back; only the lead completes the job.
-- **Roles are starting points that the team shapes.** A role supplies instructions, tools and skills, plus a default
-  model, thinking level and workspace. Team members can change all of them, and create and remove roles. Each seat
-  may run a different model, thinking level or registered workspace than the role's defaults, and changing a role
-  affects only agents seated after the change.
-- **No agent owns another.** An agent of any role can hand its conversation to any role and invoke agents of any
-  role. `bob` is only the default lead role, and no agent owns the agents it invokes.
-- **A role is configuration, not a process.** Seating an agent changes stored per-conversation configuration only.
-  No process or connection is tied to a role or to an agent.
-- **The seat carries the workspace.** The workspace is part of the seat, so a new agent can work in another
-  workspace. A conversation has no workspace apart from its current seat.
-- **Workspaces are verified once, when registered.** Only registered workspaces can be used. Registration checks
-  them, and use doesn't re-validate beyond noticing that a folder has disappeared.
-- **Waiting costs no worker thread.** A parked or idle conversation, including the lead conversation of a blocked
-  job, holds no worker thread. pi-durable keeps its state, and it takes a free worker thread again when it has input.
-- **Every agent change is visible and durable.** Each seat change, reset, handoff, invocation, park and report is
-  recorded in the transcript or the conversation's metadata, survives a daemon restart, and appears in monitoring
-  without a model having to describe it.
-- **Unattended except for a blocked job's question.** No step waits for a human, except a blocked job waiting for
-  the answer to its question. Handoffs and agent invocations proceed on agent decisions alone.
-- **The front desk talks; jobs work.** The front desk assists team members and passes their requests, answers and
-  steering on, but every piece of real work becomes a job with its own lead. The front desk owns no job, never waits
-  for a job and never makes a job wait for it.
-- **Bounded delegation.** Invocation depth and the number of worker threads are capped, so no chain of unattended
-  agents can grow without limit. The worker-thread count also bounds how wide delegation can spread.
-
-### Alternatives Considered
+## Alternatives Considered
 
 - **An overlord across jobs.** A single long-lived coordinator conversation that owns every job, or a `bob` that owns
   the agents it invokes. Rejected: each job has its own lead conversation, and the lead owns its job, not the agents
@@ -202,51 +171,6 @@ What this specification explicitly does NOT cover:
 - **Loading pi agent extensions and the account's skills.** Rejected: neither the account's nor a workspace's pi agent
   extensions are loaded, nor the account's own pi agent skills, so an agent is offered exactly its role's tools and
   skills plus the workspace's (REQ-005).
-
-### System Diagram
-
-```
- job sources                        conversations (one database)                 roles (catalog)
-┌──────────────────┐   new job   ┌────────────────────────────────────┐  seat   ┌──────────────────┐
-│ request (CLI,    ├────────────►│ job A: lead conversation [bob]     │◄────────┤ bob  (default    │
-│ web, email)      │             │   ├─ invokes #m      [role: gp]    │         │  lead), gp, desk,│
-├──────────────────┤             │   │    └─ invokes …  [role: any]   │         │  team roles      │
-│ schedule fire,   │──new job───►│   ├─ steerable or parked           │         │                  │
-│ trigger          │             │   └─ handoff / reset: same conv,   │         │ each: instr.,    │
-├──────────────────┤             │      next agent, context mode      │         │  tools, skills;  │
-│ follow-up job    │──new job───►│ job B: lead conversation [gp]      │         │  default model,  │
-│ (from an agent)  │             │ front desk [desk], no job          │         │  thinking,       │
-│                  │             │ reports return as new input        │         │  workspace*      │
-└──────────────────┘             └──────┬───────────────▲─────────────┘         └──────────────────┘
-                                        │ role-attributed│ seat change, reset,   * team-set; a seat
-                                        ▼ transcript     │ steer, invocation       may override them
-                                 ┌──────────────┐  ┌─────┴───────────────┐      (registered workspaces)
-                                 │ monitoring   │  │ agent coordination  │
-                                 │ (list, jobs, │  │ (handoff, invoke,   │
-                                 │ invocations, │  │  steer, report)     │
-                                 │ live)        │  │ + caps, worker thr. │
-                                 └──────────────┘  └─────────────────────┘
-```
-
-### Responsibility Separation
-
-| Component | Responsibility | Notes |
-|---|---|---|
-| Role catalog | Holds the shipped roles (`bob`, `gp`, `desk`), the team's own roles, their instructions, tools, skills and defaults, and the registered workspaces, each checked when it is registered | Changed by team members through settings operations (REQ-003, REQ-018). Consumes the-intern's settings, its shipped tools and pi agent's default model and thinking level |
-| Seating | Seats an agent of a role in a conversation, with optional model, thinking level and workspace overrides, so that later turns use that seat, and records who seated it | The only path that changes a conversation's seat. Consumes the role catalog and the pi-durable agent of each conversation |
-| Role prompt | Builds what the model sees: the-intern's preamble, role instructions, role skills, workspace instructions (`AGENTS.md`/`CLAUDE.md`) and workspace skills | Must stay byte-stable while the seat and the role are unchanged (AC-005.4) |
-| Agent coordination | Agent-callable handoff, agent invocation and steer capabilities; parking and continuing invoking conversations; the report-back clean-up step; the depth cap and the worker threads | Every role is offered the same coordination capabilities in a job's conversations, and none in the front desk (REQ-022). Consumes seating, conversation reset, compaction and fork, conversation creation, the inbox of the target conversation, and each conversation's own `intern.conversation` document (below) |
-| Entry routing | Starts a job's lead conversation for each job source with the role it names (`bob` when it names none) and records its origin; at startup, makes sure the front desk exists and records its conversation id (REQ-021); serves team members' requests to reset conversations | Holds no channel knowledge beyond choosing the role and recording the origin. Called by the Jobs component when a job is created, and by startup for the front desk |
-| Front-desk tools | The tools offered only in the front desk: the job tools that name a job, the state reads and the steering of a job's conversations (REQ-022) | Calls the job operations (S-004) and the same paths as `conversations.submit` and `conversations.abort`, recording the jobs and the input it passes on as from the front desk (REQ-023) |
-| Monitoring | Lists conversations with their job, lead flag, front-desk mark, seats, origins, status, invocation links and live transcripts | Read-only. Abort, reset and steer go through other components |
-
-**The conversation's own document.** Each conversation's `intern.conversation` document holds the conversation's parked
-state, the messages held for it while it is parked, the invoked conversations whose reports it awaits, its abort mark,
-which records that its invoker is owed an "aborted" report (REQ-019), and its closed mark (REQ-026). They are facts
-the-intern owns, written in the commit that changes them, and the only recovery from them is redelivery (ADR-001
-decision 4). An abort's facts are written in one commit just before pi-durable's abort; when a job's abort closes the
-conversation, the closed mark and the removal of its queued items are written in that same commit. The document is
-internal to the daemon, not an external contract.
 
 ## Interfaces
 
@@ -317,7 +241,7 @@ Each assistant entry is returned with the seat that produced it (REQ-007).
 
 ### Consumed
 
-- The configuration file's `[roles.<name>]` and `[workspaces]` tables, through S-002's configuration component (S-002
+- The configuration file's `[roles.<name>]` and `[workspaces]` tables, through S-002's configuration loading (S-002
   REQ-021, REQ-022). The keys are documented in the user manual (`docs/manual/roles_and_agents.md`).
 - The pi agent login, model registry and default model and thinking level of the account the-intern runs as (S-002
   REQ-018).
@@ -1795,3 +1719,4 @@ behaviour. Deciding either one is a scope amendment of this spec.
 | 2026-11-03 | v0.9, same version. REQ-026: more work after a Done job is a new job, which a team member or an agent may relate to the first, as it chooses (S-004 REQ-009). | Product owner decision of 2026-11-03 (finding F9 of the S-001 v0.9 consistency review): relating a follow-up job is the agent's choice in the moment. | None |
 | 2026-11-04 | v0.10. REQ-026: the closed-mark commit also withdraws queued writes, and everything it withdraws settles `unanswered` with reason `closed`; a lead that completes the job through its tool ends its run at that call instead of being aborted, and that run's input settles `done`; entries the abort itself writes and the complete tool's own result may follow the mark; a held message settles nothing; a compaction still running is aborted after the commit, and a finished summary may follow the mark. REQ-008, REQ-017, the in-process capability, Interfaces and the upgrade review list follow. AC-008.6. New AC-026.9 and AC-026.10. | Product owner decision of 2026-11-04 (B-006 and the misleading `tool complete_job failed` line). Architecture consistency review, findings F1 to F5. | T-197, T-198, T-199, T-200, T-201 |
 | 2026-11-04 | v0.11. Interfaces (the in-process job abort capability), REQ-008, REQ-026, AC-008.6 and AC-008.7: when the closed-mark commit fails without a storage error after a lead's complete through its tool, the daemon aborts the conversations whose marks didn't land, so no queued input runs a model turn, and rule 4 closes them at the next start. The same failure on a team member's `jobs.complete` or `jobs.cancel`, or a failed abort after it, is recorded as a known exception, and the closed-conversation bullet names it (B-010). | S-004 v0.9 REQ-007; product owner decision of 2026-11-04 on T-198 finding F1. | T-198 |
+| 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The system diagram, the responsibility table and the conversation's own document moved to `docs/development/architecture.md`. Definitions gain Entry routing, Role catalog and Role prompt, drawn from that table, because REQ-012, REQ-021, Workflow, Implementation Order and S-004 REQ-008 use them. Interfaces, Consumed: "S-002's configuration component" became "S-002's configuration loading". | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |

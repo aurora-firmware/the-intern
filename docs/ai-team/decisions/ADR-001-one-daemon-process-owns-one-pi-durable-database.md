@@ -61,7 +61,7 @@ links, as pi-durable abort withdraws queued input (REQ-008, T-084).
 S-004 adds the job record. On 2026-11-02 the product owner chose to keep it in the-intern's own SQL tables, named
 `intern_…`, in the instance's one SQLite file beside pi-durable's tables, with a job schema version and migrations of
 its own, and not in pi-durable document families. The job record must outlive pi-durable's stored format, which has no
-compatibility promise, and must be indexed and readable with standard SQLite tools (S-004 Alternatives Considered).
+compatibility promise, and must be indexed and readable with standard SQLite tools (S-004 REQ-001; Alternative G).
 This record was first written for a file that only pi-durable writes, and the choice meets it at three points:
 
 - **One file, two schemas.** pi-durable 1.4.0 `SqliteStorage.open(db)` takes a database the host opens itself. It
@@ -73,9 +73,9 @@ This record was first written for a file that only pi-durable writes, and the ch
 - **Export and import.** The job record leaves the instance as a copy of the whole file (S-004 REQ-016), and an
   import step outside the daemon places such a copy while the daemon is stopped (S-004 REQ-017).
 
-Sources: S-002 Design Principles, REQ-001, REQ-007, REQ-008, REQ-009, REQ-010 and Exclusions; S-001 Definitions (worker
-thread), REQ-008, REQ-019, REQ-010, REQ-020 and REQ-017; S-004 Design Principles, Alternatives Considered, REQ-001,
-REQ-006, REQ-016 to REQ-018 and REQ-020; `docs/research/pi-durable-knowledge.md` (sections 1.4, 5.5 and 7.2);
+Sources: S-002 REQ-001, REQ-007, REQ-008, REQ-009, REQ-010 and Exclusions; S-001 Definitions (worker thread), REQ-008,
+REQ-019, REQ-010, REQ-020 and REQ-017; S-004 REQ-001, REQ-006, REQ-016 to REQ-018 and REQ-020;
+`docs/research/pi-durable-knowledge.md` (sections 1.4, 5.5 and 7.2);
 `docs/development/coding_guidelines.md` (Module structure); `src/host/invocation.ts`, `src/host/reports.ts`,
 `src/host/steering.ts` and `src/host/host_observation.ts` (`watchConversationMeta`); T-084 and T-085; pi-durable 1.4.0
 `dist/storage/sqlite/storage.js` (`SqliteStorage.open`, `commit`, `close`) and `dist/storage/sqlite/schema.js`; chord
@@ -317,7 +317,7 @@ code of our own, apart from the two bounded exceptions in decision 4.
 
 **Description:** Open one harness and one SQLite file per session, as `durable-pi` does.
 **Rejected because:** It spreads one job's conversations over several stores, needs a registry of stores, and gives
-no single place for the daemon's own state. S-001 fixes one database per instance (S-002 Exclusions).
+no single place for the daemon's own state. S-001 fixes one database per instance (S-001 Purpose; S-002 Definitions).
 
 ### Alternative B: Several processes, or operating-system threads, per agent run
 
@@ -359,7 +359,7 @@ between the run's end and the report's submission would lose the report, which S
 
 **Description:** Keep jobs, counters, worklogs and history as pi-durable documents, written in the same commits as
 the conversation changes they go with.
-**Rejected because:** The product owner rejected it on 2026-11-02 (S-004 Alternatives Considered). It is atomic and
+**Rejected because:** The product owner rejected it on 2026-11-02 (Amendments, 2026-11-02). It is atomic and
 needs no repair rules, but the job record would be stored in pi-durable's format, which has no compatibility promise,
 couldn't be indexed or read with standard SQLite tools, and every filter would scan a whole family.
 
@@ -391,3 +391,4 @@ second connection open. One shared handle orders every transaction and closes wi
 | 2026-11-03 | Decision 4, first bounded exception: a new fact, the closed mark (`closed`) in the conversation's `intern.conversation` document, set by a job's abort in the abort's own commit on every conversation of the job and never cleared; every control operation and steering tool refuses a closed conversation, and no redelivery path submits to one. Second bounded exception: a complete or cancel is written before the conversations are aborted and closed, and repair rule 4 closes each conversation of a Done job that isn't closed. Architecture consistency review (findings F1, F2, F4, F11, F13 and F15): the closed mark names the operations and tools that refuse a closed conversation, `submissions.withdraw` included; a new bullet orders, per job, the job abort's closed-mark commits with every input admission, control operation and invocation of the job in one in-process serial section, released before pi-durable's abort; the daemon finishes a job's abort that a crash left unfinished, through repair rule 4, which also covers a closed conversation that still has an unfinished run or queued input; rule 3 applies only to a job that isn't Done. The ordering covers every creation of a conversation of the job: an agent invocation, or a job's lead start (`jobs.startLead`). | Product owner decision of 2026-11-03 (S-001 v0.9 REQ-026, S-004 v0.7): a Done job's conversations close for good. The decision requires a new kind of fact to amend it first. Architecture consistency review of the amendment, 2026-11-03; the Architect's wording. |
 | 2026-11-04 | Decision 4, first bounded exception: the closed-mark commit also removes every queued item from the conversation's pi-durable inbox and settles it `unanswered`; repair rule 4 does the same, and it also fires for a running compaction. Any compaction still running is aborted after that commit. | Product owner decision of 2026-11-04 (B-006 and the misleading `tool complete_job failed` line). |
 | 2026-11-04 | Decision 4, first bounded exception: a close that fails inside a lead's complete tool with the harness still open is followed by pi-durable's abort of the job's conversations, without their marks; `parked`, `awaiting` and `held` stay until rule 4 clears them. A storage error stays under decision 5. | Product owner decision of 2026-11-04 on T-198 finding F1; S-004 v0.9 REQ-007. |
+| 2026-11-05 | Citations only (Context, Sources, Alternatives A and G): S-002 and S-004 no longer have Design Principles, the document-families alternative left S-004 Alternatives Considered, and the Alternative A citation of S-002 Exclusions has been stale since S-002 v0.6, independent of this restructure. No decision changes. | Architecture consistency review of the ai-team 0.19.0 spec layout, T-185. |

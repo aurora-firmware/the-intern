@@ -104,37 +104,13 @@ What this specification explicitly does NOT cover:
 - **The front desk itself.** S-001 owns the front desk. It has no job record, so it is never on the board, has no
   definition of done, and the reminder rule, the actions and the repair rules don't apply to it (REQ-022).
 
-## Architecture
+## Alternatives Considered
 
-### Design Principles
-
-- **One job record, one writer.** Only the daemon reads and writes the job store, and every way in and every role
-  uses the same job operations (ADR-001 decision 1; REQ-012, REQ-013).
-- **The job record outlives pi-durable's format.** The job store has its own schema version and migrations and never
-  depends on how pi-durable stores conversations (REQ-001, REQ-017).
-- **Status moves only through actions.** Status and resolution are never written as fields. Each action's guard and
-  side effect live in one place, so a rule changes in one table and no field serves as a workaround (REQ-005).
-- **Everything else stays flexible.** Any team member and any agent of the job can change the editable fields
-  (REQ-004).
-- **Blocked means no agent is working.** A blocked job holds no worker thread, and a job never sits in progress with
-  no agent working on it (REQ-006, REQ-008; S-001 REQ-014).
-- **Writes are ordered, and repair is bounded.** A job write is committed before the pi-durable change it goes with;
-  the only recovery is the four repair rules at startup (REQ-018; ADR-001 amendment).
-- **Origins are observed, not claimed.** Origin details come from the listener or the in-process job source; a
-  client's self-stated name is kept apart and labelled as not checked (REQ-003; S-002 AC-012.5, S-003 AC-007.2).
-
-### Alternatives Considered
-
-- **pi-durable document families as the tables.** Atomic with conversation changes and watchable with no extra code,
-  so no repair rules would be needed. Rejected by the product owner on 2026-11-02: the job record would be stored in
-  pi-durable's format, which has no compatibility promise across versions, it can't be indexed or read with standard
-  SQLite tools, and every filter scans a whole family.
 - **Status as an ordinary field, checked on every write.** One generic update, with a validation table and observers
   firing the side effects. Rejected: side effects hide behind field writes, a refused write is the only feedback, and
   a field becomes the workaround for a rule.
 - **The lead keeping the job as a file in its workspace, synced into the database.** Rejected: two sources of truth,
   conflicts when a team member edits the job meanwhile, and no guard at the moment of change.
-- **The status in pi-durable documents and the other fields in tables.** Rejected: one job kept in two places.
 - **Separate goal, needs, plan and evidence fields.** Rejected by the product owner: the definition of done is the
   only field that controls completion; goal, needs, plan and analysis go in the description, and the evidence is the
   resolution's justification with the job's worklog and conversations.
@@ -1078,9 +1054,8 @@ setting changes the statuses, the actions or the letters.
   before resuming work (REQ-002); the instance scope of the feed carries the job deltas in its sequence (REQ-014); the
   `in-process` way in, recorded when a caller names none (AC-012.5), is refused by `jobs.create` (REQ-002); a team
   member's request records the details its way in observes (REQ-012, REQ-013); a job store write failure is handled
-  as a storage error (REQ-007); a held message waits only for a conversation parked for reports (REQ-012); the
-  Durability principle names job writes and repair as its second exception, and the One-owner principle names the
-  import step.
+  as a storage error (REQ-007); a held message waits only for a conversation parked for reports (REQ-012). ADR-001
+  decision 4 names job writes and repair as its second bounded exception, and decision 1 names the import step.
 - **S-003 amendment.** Each listener passes its observed caller details with the way in (REQ-007): none beyond the way
   in on the local socket, and on the network listener the TCP peer's remote address and port, never a header such as
   `X-Forwarded-For`. The `jobs.startLead` mentions in S-003 AC-007.2 move to `jobs.create`.
@@ -1136,3 +1111,4 @@ None.
 | 2026-11-03 | v0.7, same version. REQ-009, AC-003.3, the create job tool, journey 5 and the Exclusion on reopening: a follow-up job is Related to the job it came from only when the agent's create job call sets the optional `related` flag; the agent decides each time. Its origin names the conversation it came from either way. | Product owner decision of 2026-11-03 (finding F9 of the S-001 v0.9 consistency review): relating a follow-up job is the agent's choice in the moment, not a hard requirement. | The job tools (`src/jobs/job_tools_extension.ts`), a new task |
 | 2026-11-04 | v0.8. REQ-007 and the REQ-005 table: the lead's complete tool records its result and ends its own run at that call with no further model turn, instead of being aborted, and it must be the only tool call of its model turn; once the complete is written, a later failed step of the abort doesn't stop the run ending, and rule 4 finishes it; a refused complete tool ends nothing. REQ-018 rule 4: the closing commit also empties the pi-durable inbox, a running compaction also fires the rule and is aborted. AC-018.1. New AC-005.5 to AC-005.7. Workflow, the job tools table and Assumptions follow. | Product owner decision of 2026-11-04 (B-006 and the misleading `tool complete_job failed` line). Architecture consistency review, findings F1 to F7. | T-197, T-198, T-199, T-200, T-201 |
 | 2026-11-04 | v0.9. REQ-007: when the lead's closed mark doesn't land after the complete write, the daemon aborts the lead's run with pi-durable's abort, so a queued input can't run a model turn on the Done job, and the tool's result records the abort; in every other case the result is not an error. The job's other conversations are aborted even when the close failed. The same failure on a team member's `jobs.complete` or `jobs.cancel` fails with `internal` and is a known exception (S-001 REQ-026, B-010). New AC-005.8. | Product owner decision of 2026-11-04: T-198 finding F1, a queued follow-up ran a third model request on a Done job when the close failed without a storage error. | T-198 |
+| 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The two storage alternatives moved to `docs/development/architecture.md`; ADR-001 Alternative G also records the first. Assumptions, the S-002 amendments item: it cites ADR-001 decisions 1 and 4 in place of the removed S-002 principles. | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |

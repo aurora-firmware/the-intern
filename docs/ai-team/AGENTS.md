@@ -6,8 +6,7 @@ This `docs/ai-team/` directory stores project-local planning and execution artif
 
 - `specs/` holds approved feature or change specifications.
 - `decisions/` stores Architecture Decision Records (ADRs) and amendments.
-- `docs/reports/` stores status reports generated on demand; it is git-ignored by default.
-- The coding guidelines and developer docs live in `docs/development/` at the repository root, not here.
+- `docs/reports/` stores status reports generated on demand; it is git-ignored by default. The location is fixed and `docs/` holds nothing else: the project's own documents live outside `docs/ai-team/`, by default in `docs/development/`.
 
 Keep these artifacts under version control so automation and reviewers can read
 the same canonical project state.
