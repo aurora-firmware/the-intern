@@ -121,11 +121,16 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   conversation read, so startup does not slow down with every job the instance has run. Rule 1 also covers a start cut
   short: starting a lead is two pi-durable commits (the seated conversation, then the first input with request id
   `lead:<jobId>`), with the `"lead-created"` write point between them. For a To do job whose lead is known, rule 1
-  reads whether that lead holds a submission with that request id (`hasSubmissionWithRequestId`), and submits the
+  reads whether that lead holds a submission with that request id (`hasSubmissionWithRequestId`), and owes the
   input when it doesn't. That read is made only for To do jobs with a known lead, so it adds nothing for a job in any
   other status. Rules 2 and 3 and the turn-end check read the lead of each Blocked or In progress job in their own way.
   Rule 4 applies to a Done job with a conversation that isn't closed, or that is closed but still runs, has a running
-  compaction or has queued input: it calls `abortJobConversations` and so closes and aborts the job's conversations.
+  compaction or has queued input: it closes the job's conversations and marks them for abort
+  (`markJobConversationsForAbort`). Submitting input turns scheduling on (`Conversation.submit`), which the repair
+  must leave off until `host.resume()`. So the hook submits nothing: it returns the first inputs rule 1 owes, the
+  held messages rule 3 owes a lead (the job stays Blocked until they are delivered, so a crash before then applies
+  the rule again) and the reminders the turn-end check owes, plus the conversations rules 1 and 4 marked. The
+  component's `afterResume` submits them in that order, then waits for the marked conversations to end.
 - **Job operations and tools.** The catalogue carries the `jobs.*` operations: `create`, `get`, `list`, `update`,
   `worklog.add`, `worklog.list`, `history.list`, `relate`, `unrelate`, `resume`, `complete`, `cancel` and `export`.
   `jobs.startLead` is no longer an operation: `jobs.create` starts the lead in-process

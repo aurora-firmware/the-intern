@@ -747,6 +747,49 @@ describe("rule 3: input the lead has not taken", () => {
     });
 });
 
+describe("rule 3: a held message of a parked lead", () => {
+    it("sends no model request before the host resumes, then delivers the message once", async () => {
+        const rig = await createRig();
+        const first = await rig.boot();
+        const job = await first.createJob();
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        await parkConversation(first.ctx.host, job.leadConversation, { waitingFor: "reports", continueOn: "all" });
+        await first.ctx.jobStore.applyAction(job.id, "block", { blockedReason: REASON }, daemonAuthor);
+        await steerConversation(first.ctx.host, job.leadConversation, {
+            content: HELD_TEXT,
+            mode: "followUp",
+            actor: teamMember,
+            requestId: "held-1",
+        });
+        const heldCall = rig.hold();
+        await first.createJob();
+        await waitFor(() => rig.modelInputs.length === 2, "the other job's run to be in its model call");
+        await first.stop();
+        const requestsBeforeRestart = rig.modelInputs.length;
+        let requestsAtEndOfRepair = -1;
+        const observer: DaemonComponent = {
+            name: "observer",
+            start: async () => undefined,
+            repair: async () => {
+                await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+                requestsAtEndOfRepair = rig.modelInputs.length;
+            },
+        };
+
+        const second = await rig.boot({ components: [observer] });
+
+        assert.equal(requestsAtEndOfRepair, requestsBeforeRestart, "no run sends a request while the repair runs");
+        assert.equal((await second.ctx.jobStore.getJob(job.id)).status, "in_progress");
+        const meta = await readConversationMeta(second.ctx.host, job.leadConversation);
+        assert.equal(meta?.parked, null);
+        assert.deepEqual(meta?.held, []);
+        await waitFor(() => rig.modelInputs.some((users) => users.includes(HELD_TEXT)), "the lead to take the message");
+        assert.equal(rig.modelInputs.filter((users) => users.includes(HELD_TEXT)).length, 1);
+        assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [3]);
+        heldCall.release();
+    });
+});
+
 describe("rule 3: input the lead took since the job blocked", () => {
     it("resumes the job when an idle parked lead took the answer before the crash", async () => {
         const rig = await createRig();
@@ -1154,6 +1197,36 @@ describe("the turn-end check at startup", () => {
         assert.equal(await isReminderSubmitted(second, job), true);
         await waitFor(() => rig.modelInputs.some((users) => users.includes(REMINDER_TEXT)), "the reminder to arrive");
         assert.deepEqual(await repairsOf(second.ctx, job.id), []);
+    });
+
+    it("sends no model request before the host resumes, then submits the reminder once", async () => {
+        const rig = await createRig();
+        const { booted: first, calls } = await bootCrashingAtTurnEnd(rig, 1);
+        const job = await createJobWithDefinitionOfDone(rig, first);
+        await waitFor(() => calls.count === 1, "the turn-end hook");
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        const heldCall = rig.hold();
+        await first.createJob();
+        await waitFor(() => rig.modelInputs.length === 2, "the other job's run to be in its model call");
+        await first.stop();
+        const requestsBeforeRestart = rig.modelInputs.length;
+        let requestsAtEndOfRepair = -1;
+        const observer: DaemonComponent = {
+            name: "observer",
+            start: async () => undefined,
+            repair: async () => {
+                await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+                requestsAtEndOfRepair = rig.modelInputs.length;
+            },
+        };
+
+        const second = await rig.boot({ turnEndRule: true, components: [observer] });
+
+        assert.equal(requestsAtEndOfRepair, requestsBeforeRestart, "no run sends a request while the repair runs");
+        assert.equal(await isReminderSubmitted(second, job), true);
+        await waitFor(() => rig.modelInputs.some((users) => users.includes(REMINDER_TEXT)), "the reminder to arrive");
+        assert.equal(rig.modelInputs.filter((users) => users.includes(REMINDER_TEXT)).length, 1);
+        heldCall.release();
     });
 
     it("blocks the job when the reminder was spent before the restart", async () => {

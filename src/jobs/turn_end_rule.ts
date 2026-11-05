@@ -4,9 +4,10 @@
  * the block (S-001 v0.7 REQ-007).
  */
 import { hasQueuedUserInput, hasSubmissionWithRequestId } from "../host/conversation_control.ts";
+import type { HarnessHost } from "../host/harness_host.ts";
 import { watchInstance } from "../host/host_observation.ts";
 import { readConversationMeta } from "../host/seating.ts";
-import { steerConversation } from "../host/steering.ts";
+import { type SteerInput, steerConversation } from "../host/steering.ts";
 import { leadConversationOf } from "../service/job_operations.ts";
 import { allEntries, STORE_PAGE_SIZE } from "../service/job_record_operations.ts";
 import { blockJob, type JobActionDeps } from "./job_actions.ts";
@@ -33,21 +34,34 @@ async function isLeadWaiting(deps: JobActionDeps, jobId: string, leadId: string)
     return false;
 }
 
+/** A reminder the rule owes a lead conversation. */
+export type PendingReminder = { leadId: string; input: SteerInput };
+
+/** Submits a reminder. Submitting turns scheduling on, so the startup repair does it only after the host resumes. */
+export async function submitReminder(host: HarnessHost, reminder: PendingReminder): Promise<void> {
+    await steerConversation(host, reminder.leadId, reminder.input);
+}
+
 /**
- * Applies the rule to the job once its lead has stopped. It acts only for a job that the job store holds, that is In
- * progress, and whose lead waits for nothing. A reminder is spent when pi-durable already holds a submission with its
- * request id, which names the number of times the job has blocked or resumed. A caller that already knows the job's
- * lead conversation passes it, so the check does not look it up again.
+ * Judges the job once its lead has stopped, and blocks it when the rule says so. It acts only for a job that the job
+ * store holds, that is In progress, and whose lead waits for nothing. A reminder is spent when pi-durable already holds
+ * a submission with its request id, which names the number of times the job has blocked or resumed. A caller that
+ * already knows the job's lead conversation passes it, so the check does not look it up again. Returns the reminder
+ * the lead is owed, which the caller submits.
  */
-export async function checkTurnEnd(deps: JobActionDeps, jobId: string, knownLeadId?: string): Promise<void> {
+export async function evaluateTurnEnd(
+    deps: JobActionDeps,
+    jobId: string,
+    knownLeadId?: string,
+): Promise<PendingReminder | undefined> {
     const { ctx } = deps;
     const job = await ctx.jobStore.getJob(jobId).catch((error: unknown) => {
         if (error instanceof JobNotFoundError) return undefined;
         throw error;
     });
-    if (job === undefined || job.status !== "in_progress") return;
+    if (job === undefined || job.status !== "in_progress") return undefined;
     const leadId = knownLeadId ?? (await leadConversationOf(ctx.host, job.id));
-    if (leadId === undefined || (await isLeadWaiting(deps, job.id, leadId))) return;
+    if (leadId === undefined || (await isLeadWaiting(deps, job.id, leadId))) return undefined;
 
     const history = await allEntries((cursor) =>
         ctx.jobStore.listHistory(job.id, { limit: STORE_PAGE_SIZE, ...(cursor && { cursor }) }),
@@ -59,14 +73,15 @@ export async function checkTurnEnd(deps: JobActionDeps, jobId: string, knownLead
     });
     if (decision.kind === "block") {
         await blockJob(deps, job.id, decision.reason, { kind: "daemon" });
-        return;
+        return undefined;
     }
-    await steerConversation(ctx.host, leadId, {
-        content: REMINDER_TEXT,
-        mode: "followUp",
-        actor: { kind: "daemon" },
-        requestId,
-    });
+    return { leadId, input: { content: REMINDER_TEXT, mode: "followUp", actor: { kind: "daemon" }, requestId } };
+}
+
+/** Applies the rule to the job once its lead has stopped: blocks the job or submits the reminder. */
+export async function checkTurnEnd(deps: JobActionDeps, jobId: string, knownLeadId?: string): Promise<void> {
+    const reminder = await evaluateTurnEnd(deps, jobId, knownLeadId);
+    if (reminder !== undefined) await submitReminder(deps.ctx.host, reminder);
 }
 
 /**
