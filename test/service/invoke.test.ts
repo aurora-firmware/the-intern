@@ -47,6 +47,8 @@ type StartOptions = {
     workerThreadCount?: number;
     /** Invoked agents wait on their first request until the test calls `release()`. */
     isInvokedHeld?: boolean;
+    /** Calls of a tool that does not exist, added to the lead's model turn; pi-durable answers them in the turn's commit. */
+    unavailableCallCount?: number;
 };
 
 // The tool's parameter is named `then`; one place builds it so the lint exception stays single.
@@ -82,7 +84,13 @@ async function start(options: StartOptions) {
         if (last.startsWith("lead")) {
             leadRequests.push(context.messages);
             if (results.length > 0) return fauxAssistantMessage("done");
-            const calls = options.leadCalls.map((args) => fauxToolCall("invoke", invokeCall(args)));
+            const unavailable = Array.from({ length: options.unavailableCallCount ?? 0 }, () =>
+                fauxToolCall("no_such_tool", {}),
+            );
+            const calls = [
+                ...options.leadCalls.map((args) => fauxToolCall("invoke", invokeCall(args))),
+                ...unavailable,
+            ];
             return fauxAssistantMessage(calls, { stopReason: "toolUse" });
         }
         if (last.startsWith("dive") && results.length === 0) {
@@ -269,4 +277,20 @@ describe("the invoke tool", () => {
         assert.deepEqual(await conversationIds(started.ctx), [conversationId]);
         assert.equal((await readConversationMeta(started.ctx.host, conversationId))?.parked, null);
     });
+
+    for (const unavailableCallCount of [1, 19, 20, 60]) {
+        it(`refuses a parked invoke that shares its model turn with ${unavailableCallCount} unavailable calls`, async () => {
+            const started = await start({
+                leadCalls: [{ agents: [invokedAgent("job A")], mode: "parked" }],
+                unavailableCallCount,
+            });
+
+            const { conversationId } = await started.createJob("lead work");
+
+            await waitFor(() => started.leadRequests.length >= 2, "the lead to continue");
+            assert.equal(started.toolResults.filter((text) => /only tool call/.test(text)).length, 1);
+            assert.deepEqual(await conversationIds(started.ctx), [conversationId]);
+            assert.equal((await readConversationMeta(started.ctx.host, conversationId))?.parked, null);
+        });
+    }
 });

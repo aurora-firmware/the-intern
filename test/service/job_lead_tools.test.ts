@@ -587,6 +587,26 @@ describe("block_job", () => {
         assert.match(blockResult?.text ?? "", /only tool call/);
         assert.equal(await started.status(job.id), "in_progress");
     });
+
+    for (const unavailableCount of [19, 20, 60]) {
+        it(`refuses a block that shares its round with ${unavailableCount} unavailable calls and leaves the job In progress`, async () => {
+            const unavailable = Array.from({ length: unavailableCount }, () => ({
+                name: "no_such_tool",
+                arguments: {},
+            }));
+            const started = await start({
+                "crowded lead": [{ calls: [{ name: "block_job", arguments: { reason: "waiting" } }, ...unavailable] }],
+            });
+            const job = await started.createJob("crowded lead");
+            await waitFor(() => started.replies["crowded lead"] === 2, "the lead to see the result");
+
+            const blockResult = (started.results["crowded lead"] ?? []).find((result) =>
+                /only tool call/.test(result.text),
+            );
+            assert.equal(blockResult?.isError, true);
+            assert.equal(await started.status(job.id), "in_progress");
+        });
+    }
 });
 
 describe("empty fields", () => {

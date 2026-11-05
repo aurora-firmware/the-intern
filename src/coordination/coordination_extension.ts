@@ -5,13 +5,13 @@
  */
 import { type Static, Type } from "@earendil-works/pi-ai";
 import {
-    AssistantEntry,
     type CompactionInput,
     CompactionTask,
     defineExtension,
     defineTool,
     type Extension,
     InboxDoc,
+    LiveDoc,
     ResetEntry,
     type ToolExecutionApi,
     type ToolExecutionResult,
@@ -211,13 +211,17 @@ function resolveInvocationSeats(runtime: AgentsRuntime, agents: InvokedAgentArgu
     return requests;
 }
 
-// In pi-durable 1.4.0 `terminate` ends the run only when every call of the round asks for it, so the round of a parked
-// invoke is read from the assistant message that holds the call.
+// In pi-durable 1.4.0 `terminate` ends the run only when every call of the model turn asks for it, so the calls of the
+// turn are read from the live state, which holds one slot per call. The newest entries are no sound source: results of
+// unavailable calls are committed with the assistant entry and push it out of any fixed window.
 export async function countCallsOfRound(api: ToolExecutionApi, context: never): Promise<number> {
-    const page = await api.commit((tx) => tx.scanEntries({ conversationId: api.conversationId }, 20), context);
-    const assistant = page.items.find((entry) => entry.kind === AssistantEntry.kind);
-    const blocks = (assistant?.model ?? []).flatMap((message) => (message.role === "assistant" ? message.content : []));
-    return blocks.filter((block) => block.type === "toolCall").length;
+    const live = await api.snapshot(LiveDoc, api.conversationId, context);
+    if (live?.tools === undefined) {
+        throw new Error(
+            `Conversation ${String(api.conversationId)} has no live tool calls to count for call ${api.callId}`,
+        );
+    }
+    return live.tools.length;
 }
 
 const invokeTool = (options: CoordinationOptions) =>
