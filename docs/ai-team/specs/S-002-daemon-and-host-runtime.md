@@ -102,9 +102,8 @@ What this specification explicitly does NOT cover:
 
 ## Alternatives Considered
 
-None. This spec's behaviour follows from S-000 and S-001, and no other behaviour, interaction or interface was
-weighed for the same need. The alternatives considered were implementation approaches, recorded in
-`docs/development/architecture.md` (Rejected approaches) and ADR-001.
+- **durable-pi's device model: several devices, a hub, a device registry, tokens and provisioning.** Rejected: these
+  make up most of durable-pi's weight, and the-intern runs on one machine.
 
 ## Interfaces
 
@@ -928,7 +927,7 @@ usual places. No credential is copied into the instance's directories or the dat
     sets a smaller worker-thread count, so tests can fill every worker thread.
   - **Where:** test-only switches. They are not in the user manual and not in the configuration file.
   - **Constraints:** never enabled by default.
-  - **Missing:** the real model runtime.
+  - **Missing:** the real models.
 
 Built-in constants, not configurable: 32 worker threads and an invocation depth cap of 10 (REQ-009), the 10-second stop
 bound for shutdown and storage failures (REQ-005, REQ-007), and a submission wait of at most 5 minutes (REQ-012). S-001
@@ -976,8 +975,8 @@ supervisor registration.
 
 | Phase | What | Depends On |
 |---|---|---|
-| 1 | Lifecycle, configuration, state layout and single ownership; harness host on the fake model; status; kill and restart tests | Nothing |
-| 2 | Model runtime: pi agent login, model validation, settings mapping, closing connections on shutdown; live test 1 | Phase 1 |
+| 1 | Lifecycle, configuration, instance directories and single ownership; the harness on the fake model; status; kill and restart tests | Nothing |
+| 2 | Real models: pi agent login, model validation, settings mapping, closing connections on shutdown; live test 1 | Phase 1 |
 | 3 | Service layer with the read and control catalogue, and the observation feed | Phase 1 |
 | 4 | Admission and worker threads, durable across restarts | Phase 3 |
 | 5 | Supervision: storage-failure exit, shutdown bound, live tests 2 and 3 with the installed supervisor registration | Phases 1–4, the bootstrap plan's supervisor registration |
@@ -1002,4 +1001,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-02 | v0.9. REQ-012 and AC-012.5: a team member's or an agent's `jobs.create` call that names an origin of any kind is refused `invalid_input`, as S-004 Interfaces states. | Gate 2 review of the S-004 task plan. | T-117 |
 | 2026-11-03 | v0.10. The front desk (S-001 v0.8). REQ-012, Interfaces and new AC-012.6: the read operation `desk.get` returns the front desk's conversation id and seat, and `conversations.list` marks the front desk; a job the front desk creates records a request with the way in of the input it answers and the front desk in its origin details. REQ-002: step 6 also ensures the front desk. | Product owner decisions of the front desk brainstorm, 2026-11-03. S-002 owns the catalogue. | None yet; the front desk comes in the breakdown of this amendment |
 | 2026-11-03 | v0.11. REQ-012: a conversation of a Done job is closed (S-001 v0.9 REQ-026); the list and get give it status `closed`, every read works on it, and submit, abort, reset, compact and seat on it are refused `conflict`. Architecture consistency review (findings F2, F4 and F8), same version: REQ-012, the refusals apply from the job's complete or cancel and include `submissions.withdraw`; new AC-012.7, verified by the service test of S-001 AC-026.2. | Product owner decision of 2026-11-03, during the S-005 dev-loop (T-166). S-002 owns the catalogue and its error outcomes. Architecture consistency review of the amendment, 2026-11-03. | T-166 (blocked on it); T-186 to T-196 (Gate 2 passed 2026-11-03; the amendment merged into `dev-pi-durable-s005` before the preflight, by the product owner's approval of the in-flight amendment) |
-| 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The alternatives were all implementation approaches, so the section now says None. They, the system diagram, the responsibility table and the durability principle moved to `docs/development/architecture.md`. | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
+| 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The device-model alternative stays, because it is a different interface for the same need. The other three alternatives were implementation approaches: they, the system diagram, the responsibility table and the durability principle moved to `docs/development/architecture.md`, and ADR-001 records the reasoning. Configuration Requirements and Implementation Order no longer use the table's component names "state layout", "harness host" and "model runtime". | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |

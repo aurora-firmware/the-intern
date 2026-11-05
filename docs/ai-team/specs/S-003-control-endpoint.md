@@ -87,6 +87,10 @@ What this specification explicitly does NOT cover:
 - **TCP only, with no Unix socket**, the command line using the network listener on loopback. Rejected: it gives up
   the owner-only runtime directory as the gate on the machine, and the command line wouldn't work while the network
   listener is off, which is the default.
+- **WebSocket for the feed.** Rejected: the feed is one-way, Server-Sent Events carry it over plain HTTP in Node and
+  in browsers, and a WebSocket server needs more machinery for no gain.
+- **A line protocol (NDJSON) on the socket and HTTP only on the network.** Rejected: two protocols to keep in step.
+  The feature review had already chosen HTTP over the socket (`docs/research/feature-review.md`, open decision 3).
 - **The network listener on by default** (on loopback or on every interface). Rejected: with no authentication,
   exposing The Intern on a network has to be a deliberate setting.
 - **A read-only network listener.** Rejected: S-000 has team members create jobs, answer, stop and redirect agents and
@@ -680,4 +684,4 @@ None affect the specified behaviour.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-11-02 | v0.2. REQ-007: each listener passes the caller details it observes with the way in: the network listener the TCP peer's remote address and port, never a header such as `X-Forwarded-For`, and the local socket none beyond the way in (no OS account); a job created through a listener records them (new AC-007.3). AC-007.2: the refused origin claim is a `jobs.create` call, which creates no job and uses no number, and without the origin creates `C-n`. AC-003.1: observed caller details may differ between the three results. Design Principles, "Listeners are transports only": the caller is fixed by the listener and the connection. | S-004 architecture consistency review; product owner decisions 2026-11-02 (the OS account dropped). Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None yet; the code changes (observed caller details, `jobs.create` in place of `jobs.startLead` in the tests) come in the S-004 breakdown |
-| 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The WebSocket and line-protocol alternatives and the runtime-dependency principle moved to `docs/development/tech_stack.md`. | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
+| 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The runtime-dependency principle moved to `docs/development/tech_stack.md`. All alternatives stay. | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
