@@ -1,7 +1,7 @@
 ---
 id: S-005
 title: Command line
-version: '0.4'
+version: '0.5'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-03'
 author: planner
@@ -713,7 +713,7 @@ sense.
   strict mode, fails an unknown option with `ERR_PARSE_ARGS_UNKNOWN_OPTION`, which REQ-001 needs; `node:readline` and
   `node:readline/promises` provide `createInterface` and keypress events for `bob chat`. `bob serve` already uses
   `parseArgs`.
-- **S-001 v0.11, S-002 v0.11 and S-004 v0.9.** The front desk, `desk.get`, closed conversations and the job operations
+- **S-001 v0.14, S-002 v0.13 and S-004 v0.12.** The front desk, `desk.get`, closed conversations and the job operations
   exist as specified.
 - **S-004's import step** (REQ-017) runs in-process and holds single ownership of the instance (S-002 REQ-001).
 - **Installation and service setup** puts `bob` on the `PATH`; until then the manual shows `node src/cli/bob.ts`.
@@ -757,3 +757,5 @@ None.
 | 2026-11-04 | v0.3. Interfaces: the Contract names the operations `bob jobs follow`, `bob usage` and `bob conversations list --job` call. Interfaces, REQ-008, AC-008.1 and AC-003.3: `bob usage --json` prints `{ "total", "conversations" }`, holding the usage per conversation and the total. The `bob chat` row names `submissions.wait` after Ctrl-D. REQ-010: chat without a terminal also applies when standard output isn't a terminal, as Definitions and Design Principles state; new AC-010.3. Assumptions: current versions; the breakdowns are done. | PR #148 review findings, product owner decision of 2026-11-04. | None; fixed on the PR branch |
 | 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. All alternatives stay: each is a different interface for the same need. | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
 | 2026-11-05 | v0.4. No behaviour changes (CR-001): technology and implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: REQ-013, AC-013.2, REQ-016, AC-016.1, with the copies in Workflow and Assumptions. Moved statements live in ADR-005 (which modules a command may load) and ADR-001 decision 1 (the lock file). No identifier added or retired. | CR-001, approved by the product owner. | T-202 (inspects AC-016.1); spec text otherwise |
+| 2026-11-05 | v0.5. No behaviour changes. Assumptions: the dependency on S-001, S-002 and S-004 names their current versions, v0.14, v0.13 and v0.12. | spec-truth reconciliation: a stale assumption (D4). | None; spec text only |
+| 2026-11-05 | spec-truth reconciliation — PASS | Work in 8e1eaa08..HEAD confirmed against v0.5; pinned spec versions corrected; no requirement drift found; its task logs not read | none |
