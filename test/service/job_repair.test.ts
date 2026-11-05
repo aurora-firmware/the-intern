@@ -567,6 +567,27 @@ describe("rule 3: input the lead has not taken", () => {
         heldCall.release();
         await waitFor(() => rig.modelInputs.some((users) => users.includes(HELD_TEXT)), "the lead to take the answer");
     });
+
+    it("leaves the job Blocked and the lead parked when the lead's inbox holds only a queued write", async () => {
+        const rig = await createRig();
+        const first = await rig.boot();
+        const job = await first.createJob();
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        await blockJob(first.deps, job.id, REASON, teamMember);
+        await queueResetBeforeClosedMark(first.ctx, job.leadConversation);
+        assert.deepEqual(
+            (await inboxOf(first.ctx, job.leadConversation)).map((item) => item.mode),
+            ["write"],
+        );
+        await first.stop();
+
+        const second = await rig.boot();
+
+        assert.equal((await second.ctx.jobStore.getJob(job.id)).status, "blocked");
+        assert.equal((await readConversationMeta(second.ctx.host, job.leadConversation))?.parked?.waitingFor, "answer");
+        assert.equal(await hasQueuedInput(second.ctx.host, job.leadConversation), true);
+        assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), []);
+    });
 });
 
 describe("rule 3: input the lead took since the job blocked", () => {

@@ -6,12 +6,7 @@
  * before its change lets the rule apply again at the next start, and each rule is safe to repeat.
  */
 import type { ServiceContext } from "../daemon/daemon.ts";
-import {
-    hasInputSince,
-    hasQueuedInput,
-    hasQueuedUserInput,
-    hasSubmissionWithRequestId,
-} from "../host/conversation_control.ts";
+import { hasInputSince, hasQueuedUserInput, hasSubmissionWithRequestId } from "../host/conversation_control.ts";
 import { continueWithHeld, parkConversation, unparkConversation } from "../host/invocation.ts";
 import { markJobConversationsForAbort } from "../host/repair_abort.ts";
 import { readConversationMeta } from "../host/seating.ts";
@@ -63,13 +58,13 @@ async function indexConversations(ctx: ServiceContext): Promise<Map<string, JobC
     return index;
 }
 
-// Input the lead has not taken: queued in its inbox, or held. A held message waits only for a lead parked for reports
-// (S-004 REQ-012), so one beside a park for an answer is older than the block.
+// Input the lead has not taken: queued in its inbox (a queued write is not input), or held. A held message waits only
+// for a lead parked for reports (S-004 REQ-012), so one beside a park for an answer is older than the block.
 async function leadHoldsInput(ctx: ServiceContext, leadId: string): Promise<boolean> {
     const meta = await readConversationMeta(ctx.host, leadId);
     if (meta === undefined) return false;
     if (meta.held.length > 0 && meta.parked?.waitingFor !== "answer") return true;
-    return hasQueuedInput(ctx.host, leadId);
+    return hasQueuedUserInput(ctx.host, leadId);
 }
 
 // Input the lead took since the job blocked: an input entry after the one the block recorded (ADR-001 decision 4).
