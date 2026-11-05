@@ -14,12 +14,13 @@ import type { Seat } from "../roles/role_model.ts";
 import { type AttributedEntry, attributeEntries } from "./attribution.ts";
 import { defineOperation, type Operation, ServiceError } from "./operations.ts";
 
-export type ConversationStatus = "waiting for a worker thread" | "running" | "parked" | "idle";
+export type ConversationStatus = "closed" | "waiting for a worker thread" | "running" | "parked" | "idle";
 
 export type ConversationListing = {
     id: string;
     jobId: string | null;
     isLead: boolean;
+    isFrontDesk: boolean;
     seat: SeatSummary | null;
     origin: Origin | null;
     status: ConversationStatus;
@@ -39,9 +40,11 @@ const MIN_ENTRIES_LIMIT = 1;
 const MAX_ENTRIES_LIMIT = 500;
 
 export function conversationStatus(
-    info: { id: string; busy: boolean; isParked?: boolean },
+    info: { id: string; busy: boolean; isParked?: boolean; isClosed?: boolean },
     admission: AdmissionSnapshot,
 ): ConversationStatus {
+    // A closed conversation stays closed whatever else is true of it, a run its abort hasn't ended yet included.
+    if (info.isClosed === true) return "closed";
     if (admission.waiting.some((waiter) => waiter.conversationId === info.id)) return "waiting for a worker thread";
     if (info.busy) return "running";
     return info.isParked === true ? "parked" : "idle";
@@ -58,11 +61,15 @@ async function listingOf(
     info: ConversationInfo,
 ): Promise<ConversationListing> {
     const meta = await readConversationMeta(host, info.id);
-    const status = conversationStatus({ ...info, isParked: meta?.parked != null }, admission.state());
+    const status = conversationStatus(
+        { ...info, isParked: meta?.parked != null, isClosed: meta?.closed === true },
+        admission.state(),
+    );
     return {
         id: info.id,
         jobId: meta?.jobId ?? null,
         isLead: meta?.isLead ?? false,
+        isFrontDesk: meta?.origin.kind === "front_desk",
         seat: meta === undefined ? null : summarizeSeat(meta.seat),
         origin: meta?.origin ?? null,
         status,
@@ -168,7 +175,10 @@ const invocationsOperation = defineOperation<ReadContext, ConversationRef, Invoc
             const meta = metaOf.get(info.id);
             return {
                 role: meta?.seat.role ?? null,
-                status: conversationStatus({ ...info, isParked: meta?.parked != null }, state),
+                status: conversationStatus(
+                    { ...info, isParked: meta?.parked != null, isClosed: meta?.closed === true },
+                    state,
+                ),
             };
         });
     },

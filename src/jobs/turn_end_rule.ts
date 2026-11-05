@@ -79,7 +79,7 @@ export function startTurnEndRule(deps: JobActionDeps): { stop(): void; ready: Pr
     const check = async (conversationId: string): Promise<void> => {
         if (isStopped) return;
         const meta = await readConversationMeta(ctx.host, conversationId);
-        if (!meta?.isLead) return;
+        if (!meta?.isLead || meta.jobId === null) return;
         await options.afterWrite?.("turn-ended", meta.jobId);
         await checkTurnEnd(deps, meta.jobId);
     };

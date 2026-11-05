@@ -14,7 +14,14 @@ import { internalHarness } from "../../src/host/harness_host.ts";
 import { createInvokedConversations } from "../../src/host/invocation.ts";
 import { readConversationMeta, type SeatActor } from "../../src/host/seating.ts";
 import { STEER_RECORD_KIND } from "../../src/host/steering.ts";
-import { blockJob, type JobActionDeps, startJob } from "../../src/jobs/job_actions.ts";
+import {
+    blockJob,
+    cancelJob,
+    completeJob,
+    type JobActionDeps,
+    resumeJob,
+    startJob,
+} from "../../src/jobs/job_actions.ts";
 import type { JobAuthor } from "../../src/jobs/job_model.ts";
 import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import { DEFAULT_LEAD_ROLE } from "../../src/roles/shipped_roles.ts";
@@ -282,6 +289,37 @@ describe("jobs.resume", () => {
         assert.equal((await readConversationMeta(started.ctx.host, job.leadConversation))?.parked, null);
         await waitFor(() => hasReceived(started, ANSWER), "the lead to receive the text");
     });
+
+    for (const [ending, finish] of [
+        ["cancelled", (deps: JobActionDeps, jobId: string) => cancelJob(deps, jobId, "not needed", author)],
+        [
+            "completed",
+            async (deps: JobActionDeps, jobId: string) => {
+                await resumeJob(deps, jobId, author);
+                await completeJob(deps, jobId, "finished", author);
+            },
+        ],
+    ] as const) {
+        it(`refuses conflict, and delivers nothing, when the job is ${ending} after the resume read it Blocked`, async () => {
+            const started = await start();
+            const job = await blockedJob(started);
+            const { jobStore } = started.ctx;
+            const readJob = jobStore.getJob.bind(jobStore);
+            // The resume reads the job Blocked; the end lands before the resume reaches the lead.
+            jobStore.getJob = async (ref) => {
+                const stale = await readJob(ref);
+                jobStore.getJob = readJob;
+                await finish(started.deps, job.id);
+                return stale;
+            };
+
+            const refused = await failure(started.invoke("jobs.resume", { job: job.id, text: ANSWER }));
+
+            assert.equal(refused.code, "conflict");
+            assert.equal(hasReceived(started, ANSWER), false);
+            assert.equal((await started.ctx.jobStore.getJob(job.id)).status, "done");
+        });
+    }
 
     it("resumes once and delivers once when two resumes land together", async () => {
         const started = await start();

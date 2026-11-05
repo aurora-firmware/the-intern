@@ -9,14 +9,16 @@ import {
     defineExtension,
     defineTool,
     type Extension,
+    LiveDoc,
     type ToolExecutionApi,
     type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import { countCallsOfRound } from "../coordination/coordination_extension.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
+import { ConversationClosedError, isConversationClosed } from "../host/job_section.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import type { CreateJobRequest, JobView } from "../service/job_operations.ts";
-import { readJob } from "../service/job_record_operations.ts";
+import { readJob, refuseFrontDesk } from "../service/job_record_operations.ts";
 import { type Caller, ServiceError } from "../service/operations.ts";
 import { blockJob, completeJob, type JobActionDeps } from "./job_actions.ts";
 import { EDITABLE_FIELDS, type JobAuthor } from "./job_model.ts";
@@ -46,10 +48,19 @@ const textResult = (text: string, isError = false): ToolExecutionResult => ({
 
 const jsonResult = (value: unknown): ToolExecutionResult => textResult(JSON.stringify(value, null, 2));
 
+// A conversation with no job has nothing for a job tool to act on (S-001 REQ-021).
+class NoJobError extends Error {
+    constructor(conversationId: string) {
+        super(`Conversation ${conversationId} has no job.`);
+        this.name = "NoJobError";
+    }
+}
+
 async function seatOf(options: JobToolsOptions, api: ToolExecutionApi): Promise<ToolSeat> {
     const conversationId = String(api.conversationId);
     const meta = await readConversationMeta(options.host(), conversationId);
     if (meta === undefined) throw new Error(`Conversation ${conversationId} is not a seated conversation`);
+    if (meta.jobId === null) throw new NoJobError(conversationId);
     return {
         jobId: meta.jobId,
         conversationId,
@@ -123,13 +134,16 @@ const createJobTool = (options: JobToolsOptions) =>
     defineTool({
         name: "create_job",
         description:
-            "Create a follow-up job, Related to the job of this conversation. Repeating the same call returns the " +
-            "same job.",
+            "Create a follow-up job. Set related to true to relate it to the job of this conversation; without it " +
+            "the two jobs are not related. Repeating the same call returns the same job.",
         parameters: Type.Object({
             text: Type.String({ description: "The request of the new job." }),
             title: Type.Optional(Type.String({ description: "A title for the new job." })),
             role: Type.Optional(
                 Type.String({ description: "The role of the new job's lead, instead of the default." }),
+            ),
+            related: Type.Optional(
+                Type.Boolean({ description: "True to relate the new job to the job of this conversation." }),
             ),
         }),
         async execute(args, api) {
@@ -155,6 +169,7 @@ const relateJobsTool = (options: JobToolsOptions) =>
             const { jobId, author } = await seatOf(options, api);
             const store = options.jobStore();
             return refusable("relate_jobs", async () => {
+                await refuseFrontDesk(options.host(), args.job);
                 const change = args.unrelate === true ? store.unrelate : store.relate;
                 const { a, b } = await change.call(store, jobId, args.job, author);
                 return textResult(
@@ -195,19 +210,57 @@ const completeJobTool = (options: JobToolsOptions) =>
         name: "complete_job",
         description:
             "Complete the job of this conversation, with the justification that its definition of done is met. " +
-            "Only the job's lead can use it, and the job needs a definition of done. Your run ends at this call.",
+            "Only the job's lead can use it, the job needs a definition of done, and it must be the only tool call of " +
+            "its turn. Your run ends at this call.",
         parameters: Type.Object({
             justification: Type.String({ description: "Why the definition of done is met." }),
         }),
-        async execute(args, api) {
+        async execute(args, api, context) {
             const { jobId, conversationId, isLead, author } = await seatOf(options, api);
             if (!isLead) return leadOnly("complete_job", "complete");
-            return refusable("complete_job", async () => {
+            // pi-durable ends a run only when every call of the model turn asks, so the model turn is read from the
+            // live state, not from the newest entries, which `countCallsOfRound` scans only in part.
+            const live = await api.snapshot(LiveDoc, api.conversationId, context as never);
+            if (live?.tools?.length !== 1) {
+                return textResult("complete_job was refused: it must be the only tool call of its turn.", true);
+            }
+            const result = await refusable("complete_job", async () => {
                 const done = await completeJob(options.actions(), jobId, args.justification, author, conversationId);
                 return textResult(`${done.number} is Done.`);
             });
+            return result.isError === true ? result : { ...result, control: { terminate: true } };
         },
     });
+
+// A job tool called in a conversation with no job is an error result for the agent and its run goes on.
+function refusingWithoutJob<T extends { name: string; execute: (...args: never[]) => Promise<ToolExecutionResult> }>(
+    tool: T,
+): T {
+    const execute = async (...args: never[]): Promise<ToolExecutionResult> => {
+        try {
+            return await tool.execute(...args);
+        } catch (error) {
+            if (error instanceof NoJobError) return textResult(`${tool.name} was refused: ${error.message}`, true);
+            throw error;
+        }
+    };
+    return { ...tool, execute };
+}
+
+// A job tool called from a closed conversation (S-001 REQ-026) is an error result before it acts, and changes no job.
+function refusingWhenClosed(options: JobToolsOptions) {
+    return <T extends { name: string; execute: (...args: never[]) => Promise<ToolExecutionResult> }>(tool: T): T => {
+        const execute = async (...args: never[]): Promise<ToolExecutionResult> => {
+            const conversationId = String((args[1] as ToolExecutionApi).conversationId);
+            if (await isConversationClosed(options.host(), conversationId)) {
+                const { message } = new ConversationClosedError(conversationId);
+                return textResult(`${tool.name} was refused: ${message}`, true);
+            }
+            return tool.execute(...args);
+        };
+        return { ...tool, execute };
+    };
+}
 
 export function createJobToolsExtension(options: JobToolsOptions): Extension {
     return defineExtension({
@@ -220,6 +273,8 @@ export function createJobToolsExtension(options: JobToolsOptions): Extension {
             relateJobsTool(options),
             blockJobTool(options),
             completeJobTool(options),
-        ],
+        ]
+            .map(refusingWithoutJob)
+            .map(refusingWhenClosed(options)),
     });
 }

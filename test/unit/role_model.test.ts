@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { FRONT_DESK_TOOL_NAMES } from "../../src/desk/desk_model.ts";
 import { JOB_TOOL_NAMES } from "../../src/jobs/job_model.ts";
 import {
     applyRoleChange,
@@ -95,6 +96,26 @@ describe("resolveSeat", () => {
             "steer",
             ...JOB_TOOL_NAMES.filter((name) => name !== "read_job"),
         ]);
+    });
+});
+
+describe("resolveSeat in the front desk", () => {
+    it("gives the role's tools and the front-desk tools, with no coordination or own-job tool", () => {
+        const seat = resolveSeat(role({ tools: ["read", "write"] }), defaults, {}, "front_desk");
+        assert.deepEqual(seat.tools, ["read", "write", ...FRONT_DESK_TOOL_NAMES]);
+        for (const name of ["handoff", "invoke", "steer", "block_job", "complete_job"]) {
+            assert.ok(!seat.tools.includes(name), `${name} must not be offered`);
+        }
+    });
+
+    it("gives the desk role exactly the front-desk tools", () => {
+        const seat = resolveSeat(role({ name: "desk", tools: [] }), defaults, {}, "front_desk");
+        assert.deepEqual(seat.tools, [...FRONT_DESK_TOOL_NAMES]);
+    });
+
+    it("keeps the job tools for a seat resolved with the job place", () => {
+        const seat = resolveSeat(role({ tools: [] }), defaults, {}, "job");
+        assert.deepEqual(seat.tools, [...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES]);
     });
 });
 

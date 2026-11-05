@@ -6,6 +6,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { CommitChange, ConversationId, EntryRecord, JsonObject, TaskId } from "@earendil-works/pi-durable";
 import { HostNotFoundError } from "./conversation_control.ts";
+import { parseConversationId, toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, type HostEntry, internalHarness, toHostEntry } from "./harness_host.ts";
 import { CONVERSATION_META_KIND, type ConversationMeta } from "./seating.ts";
 
@@ -102,7 +103,7 @@ async function trackCommits(host: HarnessHost, onEvent: (event: InstanceEvent) =
     applyChanges(pendingChanges, false);
     pendingChanges = undefined;
 
-    const isBusy = (id: string): boolean => isConversationBusy(Number(id) as ConversationId);
+    const isBusy = (id: string): boolean => isConversationBusy(toConversationId(id));
     return {
         conversations: () => [...knownConversations].map((id) => ({ id, busy: isBusy(id) })),
         stop() {
@@ -122,9 +123,8 @@ export async function watchConversation(
     onFrame: (frame: ConversationFrame) => void,
 ): Promise<{ snapshot: ConversationView; stop(): Promise<void> }> {
     const harness = internalHarness(host);
-    const conversation = /^\d+$/.test(id)
-        ? await harness.conversation(Number(id) as ConversationId, context)
-        : undefined;
+    const numericId = parseConversationId(id);
+    const conversation = numericId === undefined ? undefined : await harness.conversation(numericId, context);
     if (!conversation) throw new HostNotFoundError(`Conversation "${id}" does not exist.`);
 
     const watch = await conversation.watch(context);

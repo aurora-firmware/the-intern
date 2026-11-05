@@ -6,14 +6,15 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
     type Conversation,
     ConversationBusy,
-    type ConversationId,
     InboxDoc,
     type InputEntry,
     type Submission,
     type SubmissionId,
     type SubmissionRecord,
 } from "@earendil-works/pi-durable";
+import { parseConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
+import { inOpenConversation } from "./job_section.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -46,11 +47,9 @@ function parseNumericId(id: string): number | undefined {
 }
 
 async function requireConversation(host: HarnessHost, id: string): Promise<Conversation> {
-    const numericId = parseNumericId(id);
+    const numericId = parseConversationId(id);
     const conversation =
-        numericId === undefined
-            ? undefined
-            : await internalHarness(host).conversation(numericId as ConversationId, context);
+        numericId === undefined ? undefined : await internalHarness(host).conversation(numericId, context);
     if (!conversation) throw new HostNotFoundError(`Conversation "${id}" does not exist.`);
     return conversation;
 }
@@ -128,15 +127,18 @@ export async function submitInput(
     const conversation = await requireConversation(host, conversationId);
     const isRepeat = (await findSubmission(host, conversation, input.requestId)) !== undefined;
     try {
-        const submission = await conversation.submit(
-            {
-                type: "input",
-                content: input.content,
-                requestId: input.requestId,
-                whenBusy: input.busyMode,
-                ...(input.entry !== undefined && { entry: input.entry as InputEntry }),
-            },
-            context,
+        // The listeners run after the section is released: a listener may enter the job's section itself.
+        const submission = await inOpenConversation(host, conversationId, () =>
+            conversation.submit(
+                {
+                    type: "input",
+                    content: input.content,
+                    requestId: input.requestId,
+                    whenBusy: input.busyMode,
+                    ...(input.entry !== undefined && { entry: input.entry as InputEntry }),
+                },
+                context,
+            ),
         );
         if (!isRepeat) await notifyInputSubmitted(host, { conversationId, requestId: input.requestId });
         return { submissionId: String(submission.id) };
@@ -160,6 +162,16 @@ export async function hasQueuedInput(host: HarnessHost, conversationId: string):
     const conversation = await requireConversation(host, conversationId);
     const inbox = await internalHarness(host).snapshot(InboxDoc, conversation.id, context);
     return (inbox?.items.length ?? 0) > 0;
+}
+
+/**
+ * Whether the conversation's inbox holds input: an item submitted in a busy mode (`steer` or `followUp`). A queued
+ * entry write, such as a reset, is not input, and an abort leaves it queued.
+ */
+export async function hasQueuedUserInput(host: HarnessHost, conversationId: string): Promise<boolean> {
+    const conversation = await requireConversation(host, conversationId);
+    const inbox = await internalHarness(host).snapshot(InboxDoc, conversation.id, context);
+    return (inbox?.items ?? []).some((item) => item.mode === "steer" || item.mode === "followUp");
 }
 
 // The kinds a transcript places an input as: plain `pi.user`, and the kinds ADR-004 gives inputs sent on behalf.
@@ -187,7 +199,8 @@ export async function hasInputSince(host: HarnessHost, conversationId: string, a
 /** Withdraws a queued input, which settles `unanswered`. Input already placed in the transcript cannot be withdrawn. */
 export async function withdrawInput(host: HarnessHost, submissionId: string): Promise<void> {
     const submission = await requireSubmission(host, submissionId);
-    const result = await submission.abort(context);
+    const record = await submission.status(context);
+    const result = await inOpenConversation(host, String(record.conversationId), () => submission.abort(context));
     if (result === "already_placed") {
         throw new HostConflictError(`Submission "${submissionId}" is already placed in the transcript.`);
     }
@@ -223,7 +236,8 @@ export async function abortConversation(host: HarnessHost, conversationId: strin
 }
 
 export async function resetConversation(host: HarnessHost, conversationId: string, note?: string): Promise<void> {
-    await (await requireConversation(host, conversationId)).reset(note, context);
+    const conversation = await requireConversation(host, conversationId);
+    await inOpenConversation(host, conversationId, () => conversation.reset(note, context));
 }
 
 export async function compactConversation(
@@ -232,6 +246,7 @@ export async function compactConversation(
     instructions?: string,
 ): Promise<void> {
     const conversation = await requireConversation(host, conversationId);
-    const taskId = await conversation.compact(instructions, context);
+    // Only the admission of the compaction task is in the section: the compaction itself runs after it.
+    const taskId = await inOpenConversation(host, conversationId, () => conversation.compact(instructions, context));
     await internalHarness(host).waitForTask(taskId, context);
 }

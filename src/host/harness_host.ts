@@ -26,6 +26,7 @@ import { type SqliteDatabase, SqliteStorage } from "@earendil-works/pi-durable/s
 import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { Logger } from "../daemon/logger.ts";
 import type { HarnessSettingsMapping } from "../models/settings_mapping.ts";
+import { parseConversationId } from "./conversation_id.ts";
 
 export type { Extension, Models, SqliteDatabase, Storage };
 
@@ -94,6 +95,8 @@ export type HarnessHostOptions = {
     models: Models;
     harnessSettings: HarnessSettingsMapping;
     extensions: readonly Extension[];
+    /** Installed but not in the default selection; a conversation selects them with `configure`. */
+    optInExtensions?: readonly Extension[];
     defaultCwd: string;
     logger: Logger;
     /** Runs on the open database before pi-durable creates its tables. A rejection rejects the open. */
@@ -206,10 +209,6 @@ function logReport(logger: Logger, error: unknown, info: ReportInfo): void {
     logger.error("pi-durable report", fields);
 }
 
-function toConversationId(id: string): ConversationId | undefined {
-    return /^\d+$/.test(id) ? (Number(id) as ConversationId) : undefined;
-}
-
 function toModelRef(model: string): { provider: string; modelId: string } {
     const separator = model.indexOf("/");
     if (separator <= 0 || separator === model.length - 1) {
@@ -264,7 +263,7 @@ async function listBusyConversationIds(harness: Harness): Promise<Set<Conversati
 }
 
 async function requireConversation(harness: Harness, id: string): Promise<Conversation> {
-    const conversationId = toConversationId(id);
+    const conversationId = parseConversationId(id);
     const conversation = conversationId === undefined ? undefined : await harness.conversation(conversationId, context);
     if (!conversation) throw new Error(`Conversation "${id}" does not exist.`);
     return conversation;
@@ -310,7 +309,7 @@ function createHost(harness: Harness): HarnessHost {
         },
         listConversations,
         async conversationInfo(id) {
-            const conversationId = toConversationId(id);
+            const conversationId = parseConversationId(id);
             if (conversationId === undefined || !(await harness.conversation(conversationId, context)))
                 return undefined;
             return { id, busy: (await listBusyConversationIds(harness)).has(conversationId) };
@@ -392,7 +391,7 @@ export async function openHarnessHost(options: HarnessHostOptions): Promise<Harn
         throw error;
     }
     const registry = createRegistry();
-    for (const extension of options.extensions) registry.install(extension);
+    for (const extension of [...options.extensions, ...(options.optInExtensions ?? [])]) registry.install(extension);
 
     const harness = await Harness.open(
         storage,

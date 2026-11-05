@@ -1,104 +1,76 @@
 /**
- * The `bob` command line (S-002 REQ-004 to REQ-006, REQ-021). `bob serve` runs the daemon in the foreground: log lines
- * go to standard error, standard output stays unused, and the process exits with the status the daemon settles with.
- * Run it as `node src/cli/bob.ts serve` until the release form provides a `bob` launcher.
+ * The `bob` command line (S-005 REQ-001). `main` parses the arguments against the command table, prints help, usage
+ * errors and reserved-group notices, and otherwise runs the command. Run it as `node src/cli/bob.ts <command>` until
+ * the release form provides a `bob` launcher.
  */
 import { homedir } from "node:os";
-import { parseArgs } from "node:util";
-import { createAgentsComponent } from "../agents/agents_component.ts";
-import { runDaemon } from "../daemon/daemon.ts";
-import { createLogger, type Logger } from "../daemon/logger.ts";
-import { createJobsComponent } from "../jobs/jobs_component.ts";
-import { createLocalSocketComponent } from "../listeners/local_socket.ts";
-import { createNetworkListenerComponent } from "../listeners/network_listener.ts";
-import { networkSection } from "../listeners/network_section.ts";
+import { type CommandIo, EXIT_CODES, parseCommandLine } from "./command_line.ts";
+import { COMMANDS } from "./commands.ts";
 
-const USAGE_EXIT_STATUS = 2;
-const FAILURE_EXIT_STATUS = 1;
-const KEEP_ALIVE_INTERVAL_MS = 60_000;
-const USAGE = `Usage: bob serve [--config-dir <dir>] [--state-dir <dir>] [--data-dir <dir>] [--runtime-dir <dir>] [--verbose]
-`;
-
-const SERVE_OPTIONS = {
-    "config-dir": { type: "string" },
-    "state-dir": { type: "string" },
-    "data-dir": { type: "string" },
-    "runtime-dir": { type: "string" },
-    verbose: { type: "boolean" },
-} as const;
-
-function failWithUsage(): number {
-    process.stderr.write(USAGE);
-    return USAGE_EXIT_STATUS;
-}
-
-function describeError(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-}
-
-function exitOnUncaughtFailure(logger: Logger): void {
-    const fail = (description: string) => (error: unknown) => {
-        logger.error(description, { cause: describeError(error) });
-        process.exit(FAILURE_EXIT_STATUS);
-    };
-    process.on("uncaughtException", fail("uncaught exception"));
-    process.on("unhandledRejection", fail("unhandled rejection"));
-}
-
-async function serve(args: readonly string[]): Promise<number> {
-    let values: ReturnType<typeof parseArgs<{ options: typeof SERVE_OPTIONS; allowPositionals: true }>>;
-    try {
-        values = parseArgs({ args: [...args], options: SERVE_OPTIONS, allowPositionals: true, strict: true });
-    } catch {
-        return failWithUsage();
-    }
-    if (values.positionals.length > 0) return failWithUsage();
-
-    const flags = values.values;
-    const logger = createLogger({ verbose: flags.verbose ?? false });
-    exitOnUncaughtFailure(logger);
-    const agents = await createAgentsComponent({ logger });
-    const jobs = await createJobsComponent({ agents, logger });
-    const daemon = runDaemon({
-        flags: {
-            ...(flags["config-dir"] !== undefined && { configDir: flags["config-dir"] }),
-            ...(flags["state-dir"] !== undefined && { stateDir: flags["state-dir"] }),
-            ...(flags["data-dir"] !== undefined && { dataDir: flags["data-dir"] }),
-            ...(flags["runtime-dir"] !== undefined && { runtimeDir: flags["runtime-dir"] }),
-            ...(flags.verbose !== undefined && { verbose: flags.verbose }),
-        },
+function processIo(): CommandIo {
+    return {
+        stdout: process.stdout,
+        stderr: process.stderr,
+        stdin: process.stdin,
         env: process.env,
+        cwd: process.cwd(),
         homeDir: homedir(),
-        logger,
-        sections: [...agents.sections, networkSection],
-        // The listeners follow the agents component, so they open once the agents are ready (S-003 REQ-001).
-        components: [agents.component, jobs.component, createLocalSocketComponent(), createNetworkListenerComponent()],
-        operations: [...agents.operations, ...jobs.operations],
-    });
-
-    // stop() of a running shutdown waits for it, so a repeated signal needs no handling of its own.
-    let isStopping = false;
-    const requestStop = () => {
-        if (isStopping) return;
-        isStopping = true;
-        void daemon.stop();
+        isStdoutTerminal: process.stdout.isTTY === true,
+        isStdinTerminal: process.stdin.isTTY === true,
     };
-    process.on("SIGTERM", requestStop);
-    process.on("SIGINT", requestStop);
-    // Nothing else holds the event loop open while the daemon idles, so a timer does until it has exited.
-    const keepAlive = setInterval(() => {}, KEEP_ALIVE_INTERVAL_MS);
-    try {
-        return await daemon.exited;
-    } finally {
-        clearInterval(keepAlive);
-    }
+}
+
+// Resolves once the stream has taken everything written so far, or has failed (a reader that closed early).
+function drained(stream: CommandIo["stdout"]): Promise<void> {
+    return new Promise((resolve) => {
+        stream.on("error", () => resolve());
+        stream.write("", () => resolve());
+    });
+}
+
+/**
+ * Resolves when a reader of standard output or standard error has gone (`EPIPE`), and rejects with any other stream
+ * failure. The listeners stay on for the life of the process, so no error event finds a stream without one.
+ */
+function whenReaderGone(io: CommandIo): Promise<void> {
+    const gone = Promise.withResolvers<void>();
+    const onError = (error: NodeJS.ErrnoException) => {
+        if (error.code === "EPIPE") gone.resolve();
+        else gone.reject(error);
+    };
+    io.stdout.on("error", onError);
+    io.stderr.on("error", onError);
+    return gone.promise;
+}
+
+/** Runs the command to its status, or to success when its reader goes away first. */
+function runUntilReaderGone(command: () => Promise<number>, io: CommandIo): Promise<number> {
+    return Promise.race([command(), whenReaderGone(io).then(() => EXIT_CODES.ok)]);
 }
 
 /** Runs the command and returns the process exit status. */
-export async function main(argv: readonly string[]): Promise<number> {
-    const [command, ...rest] = argv;
-    if (command !== "serve") return failWithUsage();
-    return serve(rest);
+export async function main(argv: readonly string[], io: CommandIo = processIo()): Promise<number> {
+    const parsed = parseCommandLine(argv, COMMANDS);
+    switch (parsed.kind) {
+        case "help":
+            io.stdout.write(parsed.usage);
+            return EXIT_CODES.ok;
+        case "usage-error":
+            io.stderr.write(`${parsed.message}\n${parsed.usage}`);
+            return EXIT_CODES.usage;
+        case "reserved-group":
+            io.stderr.write(`${parsed.message}\n`);
+            return EXIT_CODES.usage;
+        case "command": {
+            const run = () => parsed.command.run({ ...parsed.input, io });
+            // `serve` keeps its own reaction to a lost stream; a data command ends quietly when its reader goes.
+            const status = parsed.command.isData ? await runUntilReaderGone(run, io) : await run();
+            // A piped stream holds only what the reader has taken, so exiting at once would cut data commands short.
+            // The error listener comes after the command, so `serve` reacts to a lost stderr as before.
+            if (parsed.command.isData) await Promise.all([drained(io.stdout), drained(io.stderr)]);
+            return status;
+        }
+    }
 }
 
 if (import.meta.main) {

@@ -5,6 +5,7 @@
  */
 import { fork } from "node:child_process";
 import { join } from "node:path";
+import type { DeskCreatePoint } from "../../src/desk/desk_component.ts";
 import type { WritePoint } from "../../src/jobs/jobs_component.ts";
 import { ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
 import type { DaemonStatus } from "../../src/service/status_operation.ts";
@@ -19,6 +20,10 @@ const READY_POLL_TIMEOUT_MS = 30_000;
  * `job A` and `job B`; the invoked agents' answers are slow. `invoke-parked-slow-lead`: as `invoke-parked`, but the invoked
  * agents answer at once and the lead's answer to each report is slow, so a kill lands while a report is being delivered.
  * `gated`: every answer waits until the test calls `releaseRuns()`, so a run lasts exactly as long as the test wants.
+ * `streaming-gated`: every answer streams its first piece of text and then waits until the test calls `releaseRuns()`,
+ * so a partial answer is committed while the turn is still running.
+ * `desk-steer`: an input `steer <conversationId>` makes the answering agent call `send_to_conversation` to that
+ * conversation with the message `from-desk`, and its answer after the tool result is slow, so a kill lands in that run.
  * All of the others answer anything else with an echo.
  */
 export type FakeScript =
@@ -28,13 +33,20 @@ export type FakeScript =
     | "handoff-clean"
     | "invoke-parked"
     | "invoke-parked-slow-lead"
-    | "gated";
+    | "invoke-nested"
+    | "invoke-and-complete"
+    | "gated"
+    | "streaming-gated"
+    | "desk-steer";
 
 export type StartDaemonOptions = {
     hermetic: HermeticEnv;
     workerThreads?: number;
     script?: FakeScript;
-    /** How long a slow answer of the `slow`, `handoff-clean`, `invoke-parked` and `invoke-parked-slow-lead` scripts is held back. */
+    /**
+     * How long a slow answer of the `slow`, `handoff-clean`, `invoke-parked`, `invoke-parked-slow-lead` and
+     * `desk-steer` scripts is held back.
+     */
     delayMs?: number;
     realModels?: boolean;
     /** Live tests only: the model new conversations use with `realModels`, instead of the pi agent folder's default. */
@@ -45,6 +57,13 @@ export type StartDaemonOptions = {
     turnEndRule?: boolean;
     /** The child kills itself with `SIGKILL` the first time the Jobs component reaches this write point. */
     jobCrashAt?: WritePoint;
+    /** The child kills itself with `SIGKILL` just before, or just after, the commit that creates the front desk. */
+    deskCrashAt?: DeskCreatePoint;
+    /**
+     * The child kills itself with `SIGKILL` as the first steer of an agent (request id `steer:...`) has been placed
+     * and its caller is still waiting, so the kill lands inside the steering tool call, before its result is saved.
+     */
+    killOnSteer?: boolean;
 };
 
 export type DaemonProcess = {

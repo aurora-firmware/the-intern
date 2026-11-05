@@ -14,7 +14,7 @@ export type JobAuthor =
     | { kind: "daemon" };
 
 export type JobOrigin =
-    | { kind: "request"; wayIn: string; observed?: ObservedDetails }
+    | { kind: "request"; wayIn: string; observed?: ObservedDetails; frontDesk?: string }
     | { kind: "schedule"; entry: string; fireTime: string }
     | { kind: "trigger"; trigger: string; event: string }
     | { kind: "follow_up"; jobId: string; conversationId: string };

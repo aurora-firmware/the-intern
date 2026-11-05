@@ -26,7 +26,8 @@ Until a release provides `bob`, run it from a checkout of the project:
 node src/cli/bob.ts serve
 ```
 
-`bob serve` takes these flags, all optional:
+The other commands, such as `bob status`, `bob jobs create` and `bob chat`, are listed in the
+[Command reference](commands.md). `bob serve` takes these flags, all optional:
 
 | Flag                  | Effect                                                                  |
 | --------------------- | ----------------------------------------------------------------------- |
@@ -60,6 +61,7 @@ reason. Run `chmod 700` on the directory, or choose another one with the flag.
 The `jobs.export` operation writes a copy of the whole database to a new file while The Intern keeps working. Give it
 `path`, an absolute path to a file that doesn't exist yet in a folder that does. It returns the path and the size
 written.
+From the command line, run [`bob export <file>`](commands.md#bob-export-file).
 
 - The copy holds the jobs, their worklogs and histories, and the conversations and queued work, as committed when the
   copy started. It doesn't hold `config.toml`, so back that up on its own.
@@ -76,8 +78,8 @@ written.
 ## Restore a copy as the database
 
 The import step places an exported file as the database of an instance that has none. Use it to move your jobs to
-another computer running the same version, or to restore a backup. The step has no `bob` command yet; the command's
-name comes with the command line.
+another computer running the same version, or to restore a backup. Run it with
+[`bob import <file>`](commands.md#bob-import-file).
 
 - Stop the instance's daemon first. The step takes the instance's single-owner lock while it runs, so it can't replace
   the database of a running daemon, and a daemon you start meanwhile refuses to start.
@@ -109,6 +111,10 @@ The file is `config.toml` in the config directory. It is optional: without it, T
 
 Models and their logins come from the service account's pi login. The Intern uses it in place: it doesn't copy the
 credentials. Log in with pi as the service account before you start the service.
+
+The service needs a default model to start. At startup it seats the [front desk](front_desk.md) as the `desk` role with
+that role's defaults, so it needs the default model of the pi login or a `model` set for `desk` in `config.toml`. When
+neither exists, the service refuses to start and names the `desk` role and its model.
 
 The service reads the pi agent folder, `~/.pi/agent` by default. Set `PI_CODING_AGENT_DIR` in the service's environment
 to use another folder.

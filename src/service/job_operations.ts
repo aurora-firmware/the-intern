@@ -8,6 +8,7 @@ import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { ServiceContext } from "../daemon/daemon.ts";
 import { submitInput } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
+import { ConversationClosedError, inJobSection, JobDoneError, refuseIfJobDone } from "../host/job_section.ts";
 import { createSeatedConversation, type Origin, readConversationMeta, type SeatActor } from "../host/seating.ts";
 import { type JobAuthor, type JobOrigin, letterFor } from "../jobs/job_model.ts";
 import { type Job, JobNotFoundError, JobRefusedError } from "../jobs/job_store.ts";
@@ -19,7 +20,7 @@ import { DEFAULT_LEAD_ROLE } from "../roles/shipped_roles.ts";
 import { type Caller, defineOperation, ServiceError } from "./operations.ts";
 import { seatActorFor } from "./seat_operations.ts";
 
-type LeadOrigin = Exclude<Origin, { kind: "invocation" }>;
+type LeadOrigin = Exclude<Origin, { kind: "invocation" | "front_desk" }>;
 type SourceOrigin = Extract<LeadOrigin, { kind: "schedule" | "trigger" }>;
 type Overrides = { model?: string; thinkingLevel?: string; workspace?: string };
 type StartLeadResult = { conversationId: string; created: boolean };
@@ -75,7 +76,8 @@ export const leadStartRequestId = (jobId: string): string => `lead:${jobId}`;
 /**
  * Seats the job's lead conversation and submits its first input (S-002 REQ-013). The job id is the idempotency key, so
  * a repeat returns the conversation, and the request id derived from it makes the first input go in once. The two
- * are separate commits, and `afterWrite` is awaited between them.
+ * are separate commits, and `afterWrite` is awaited between them. Either is refused when the job is Done: the creation
+ * with `JobDoneError`, the first input with `ConversationClosedError`.
  */
 export async function startLeadConversation(
     ctx: ServiceContext,
@@ -92,12 +94,17 @@ export async function startLeadConversation(
         if (error instanceof RoleRefusedError) throw new ServiceError(refusalCode(error), error.message);
         throw error;
     }
-    const result = await createSeatedConversation(host, {
-        scope: "job.lead",
-        key: jobId,
-        job: { jobId, isLead: true, origin: origin as LeadOrigin, depth: 0 },
-        seat,
-        actor,
+    // The Done check and the creation share the job's section, so the job abort can't list the job's conversations
+    // between them. `afterWrite` runs after the section is released: a cancel there enters the section itself.
+    const result = await inJobSection(host, jobId, async () => {
+        await refuseIfJobDone(host, jobId);
+        return createSeatedConversation(host, {
+            scope: "job.lead",
+            key: jobId,
+            job: { jobId, isLead: true, origin: origin as LeadOrigin, depth: 0 },
+            seat,
+            actor,
+        });
     });
     await afterWrite?.("lead-created", jobId);
     // Every call submits: pi-durable deduplicates the request id, so a repeat repairs a crash before this point.
@@ -121,6 +128,8 @@ export type CreateJobRequest = {
     thinkingLevel?: string;
     workspace?: string;
     origin?: unknown;
+    // Set by an agent's create job call to relate the follow-up to the job it came from; never read from jobs.create input.
+    related?: boolean;
 };
 
 const MAX_KEY_LENGTH = 200;
@@ -181,11 +190,22 @@ async function describeCaller(host: HarnessHost, request: CreateJobRequest, call
     if (meta === undefined) {
         throw new ServiceError("not_found", `There is no conversation ${actor.conversationId} to follow up`);
     }
+    if (actor.kind === "front_desk") {
+        // The front desk answers a team member's input, so the job is a request over that input's way in.
+        return {
+            origin: { kind: "request", wayIn: actor.wayIn, frontDesk: actor.conversationId },
+            author: { kind: "agent", conversationId: actor.conversationId, role: meta.seat.role },
+            actor: seatActorFor(caller, meta.seat.role),
+        };
+    }
+    if (meta.jobId === null) {
+        throw new ServiceError("invalid_input", `Conversation ${actor.conversationId} has no job to follow up`);
+    }
     return {
         origin: { kind: "follow_up", jobId: meta.jobId, conversationId: actor.conversationId },
         author: { kind: "agent", conversationId: actor.conversationId, role: meta.seat.role },
         actor: seatActorFor(caller, meta.seat.role),
-        relatedTo: meta.jobId,
+        ...(request.related === true && { relatedTo: meta.jobId }),
     };
 }
 
@@ -311,6 +331,10 @@ export async function createJob(
         );
         return viewOf(await jobStore.getJob(job.id), conversationId);
     } catch (error) {
+        // A start refused because the job is already Done must not cancel it again (S-004 REQ-007).
+        if (error instanceof JobDoneError || error instanceof ConversationClosedError) {
+            return viewOf(await jobStore.getJob(job.id), await leadConversationOf(host, job.id));
+        }
         if (!(error instanceof ServiceError)) throw error;
         const justification = leadRefusedJustification(error);
         try {

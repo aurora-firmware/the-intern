@@ -1,11 +1,17 @@
 /**
  * The job actions (S-004 REQ-005 to REQ-007): the one place each action's job write and side effect live. A job write
  * that block, complete or cancel go with is committed first, then the `afterWrite` hook runs, then the pi-durable
- * change is made (ADR-001 decision 4, second bounded exception; S-004 REQ-018).
+ * change is made (ADR-001 decision 4, second bounded exception; S-004 REQ-018). Complete and cancel close every
+ * conversation of the job, and the hook runs again after the closed marks, before the aborts.
  */
 import type { ServiceContext } from "../daemon/daemon.ts";
 import type { SubmittedInput } from "../host/conversation_control.ts";
-import { abortJobConversations, parkConversation, unparkConversation } from "../host/invocation.ts";
+import {
+    abortAfterFailedClose,
+    abortJobConversations,
+    parkConversation,
+    unparkConversation,
+} from "../host/invocation.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import { leadConversationOf } from "../service/job_operations.ts";
 import type { JobAuthor } from "./job_model.ts";
@@ -81,7 +87,7 @@ export async function resumeAfterLeadInput(deps: JobActionDeps, input: Submitted
     if (input.requestId.startsWith(RESUME_REQUEST_PREFIX)) return;
     const { ctx, options } = deps;
     const meta = await readConversationMeta(ctx.host, input.conversationId);
-    if (!meta?.isLead) return;
+    if (!meta?.isLead || meta.jobId === null) return;
     try {
         const job = await ctx.jobStore.getJob(meta.jobId);
         if (job.status !== "blocked") return;
@@ -96,6 +102,29 @@ export async function resumeAfterLeadInput(deps: JobActionDeps, input: Submitted
     }
 }
 
+/** The steps after the Done or Cancelled write: the hook, the closed marks, the hook again and the aborts. */
+async function closeAfterFinish(
+    deps: JobActionDeps,
+    action: "complete" | "cancel",
+    jobId: string,
+    ownConversationId?: string,
+): Promise<void> {
+    const { ctx, options } = deps;
+    await options.afterWrite?.(action === "complete" ? "job-completed" : "job-cancelled", jobId);
+    const own =
+        ownConversationId === undefined
+            ? undefined
+            : {
+                  conversationId: ownConversationId,
+                  onError: (error: unknown) => logFinishFailure(ctx, jobId, "could not abort a conversation", error),
+              };
+    await abortJobConversations(ctx.host, jobId, own, () => options.afterWrite?.("conversations-closed", jobId));
+}
+
+function logFinishFailure(ctx: ServiceContext, jobId: string, what: string, error: unknown): void {
+    ctx.logger.error(what, { jobId, cause: error instanceof Error ? error.message : String(error) });
+}
+
 async function finishJob(
     deps: JobActionDeps,
     action: "complete" | "cancel",
@@ -104,28 +133,30 @@ async function finishJob(
     author: JobAuthor,
     ownConversationId?: string,
 ): Promise<Job> {
-    const { ctx, options } = deps;
+    const { ctx } = deps;
     const job = await ctx.jobStore.getJob(jobId);
     const done = await ctx.jobStore.applyAction(job.id, action, { justification }, author);
-    await options.afterWrite?.(action === "complete" ? "job-completed" : "job-cancelled", job.id);
-    const own =
-        ownConversationId === undefined
-            ? undefined
-            : {
-                  conversationId: ownConversationId,
-                  onError: (error: unknown) =>
-                      ctx.logger.error("could not abort the conversation that ended the job", {
-                          jobId: job.id,
-                          cause: error instanceof Error ? error.message : String(error),
-                      }),
-              };
-    await abortJobConversations(ctx.host, job.id, own);
+    if (ownConversationId === undefined) {
+        await closeAfterFinish(deps, action, job.id);
+        return done;
+    }
+    // The job is Done, so a later failure must not fail the lead's tool call: it would drop `terminate` and start
+    // another model turn. Repair rule 4 finishes what failed at the next start.
+    try {
+        await closeAfterFinish(deps, action, job.id, ownConversationId);
+    } catch (error) {
+        logFinishFailure(ctx, job.id, "could not finish closing the job after the Done write", error);
+        const onAbortError = (abortError: unknown) =>
+            logFinishFailure(ctx, job.id, "could not abort a conversation", abortError);
+        await abortAfterFailedClose(ctx.host, job.id, ownConversationId, onAbortError).catch(onAbortError);
+    }
     return done;
 }
 
 /**
- * Completes the job with its justification, then aborts every conversation of the job. A lead that completes from its
- * own tool call names its conversation, whose abort cannot be awaited from inside that call.
+ * Completes the job with its justification, then closes and aborts every conversation of the job. A lead that
+ * completes from its own tool call names its conversation, which is closed and not aborted, and a failure after the
+ * Done write is logged and not thrown.
  */
 export function completeJob(
     deps: JobActionDeps,
@@ -137,7 +168,7 @@ export function completeJob(
     return finishJob(deps, "complete", jobId, justification, author, ownConversationId);
 }
 
-/** Cancels the job with its justification, then aborts every conversation of the job. */
+/** Cancels the job with its justification, then closes and aborts every conversation of the job. */
 export function cancelJob(deps: JobActionDeps, jobId: string, justification: string, author: JobAuthor) {
     return finishJob(deps, "cancel", jobId, justification, author);
 }

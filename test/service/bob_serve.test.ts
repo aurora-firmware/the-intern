@@ -65,9 +65,13 @@ function directoryFlags(env: HermeticEnv): string[] {
     ];
 }
 
-async function hermetic(): Promise<HermeticEnv> {
+const DEFAULT_MODEL_SETTINGS = JSON.stringify({ defaultProvider: "openai", defaultModel: "gpt-4o-mini" });
+
+/** The pi agent default is what the front desk is seated with at startup, so every daemon needs one to be ready. */
+async function hermetic(hasDefaultModel = true): Promise<HermeticEnv> {
     const env = await createHermeticEnv();
     envs.push(env);
+    if (hasDefaultModel) await writeFile(join(env.piAgentDir, "settings.json"), DEFAULT_MODEL_SETTINGS);
     return env;
 }
 
@@ -107,17 +111,17 @@ describe("bob serve", () => {
         assert.ok(serve.stderr().includes("startup failed step=1"), serve.stderr());
     });
 
-    for (const [description, args] of [
-        ["the command is missing", []],
-        ["the command is unknown", ["frobnicate"]],
-        ["a flag is unknown", ["serve", "--bogus"]],
+    for (const [description, args, expectedUsage] of [
+        ["the command is missing", [], "Usage: bob <command>"],
+        ["the command is unknown", ["frobnicate"], "Usage: bob <command>"],
+        ["a flag is unknown", ["serve", "--bogus"], "Usage: bob serve"],
     ] as const) {
         it(`prints the usage to standard error and exits with 2 when ${description}`, async () => {
             const env = await hermetic();
             const serve = run([...args], env.env);
 
             assert.equal(await serve.exit, USAGE_EXIT_STATUS);
-            assert.ok(serve.stderr().includes("Usage: bob serve"), serve.stderr());
+            assert.ok(serve.stderr().includes(expectedUsage), serve.stderr());
             assert.equal(serve.stdout(), "");
         });
     }

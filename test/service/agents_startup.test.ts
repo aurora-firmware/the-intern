@@ -23,9 +23,13 @@ afterEach(async () => {
     for (const env of envs.splice(0)) await env.dispose();
 });
 
-async function hermetic(configToml?: (env: HermeticEnv) => string): Promise<HermeticEnv> {
+const DEFAULT_MODEL_SETTINGS = JSON.stringify({ defaultProvider: "openai", defaultModel: "gpt-4o-mini" });
+
+/** `hasDefaultModel` writes a pi agent default, which the front desk needs to be seated at startup step 6. */
+async function hermetic(configToml?: (env: HermeticEnv) => string, hasDefaultModel = false): Promise<HermeticEnv> {
     const env = await createHermeticEnv();
     envs.push(env);
+    if (hasDefaultModel) await writeFile(join(env.piAgentDir, "settings.json"), DEFAULT_MODEL_SETTINGS);
     if (configToml) await writeFile(join(env.configDir, "config.toml"), configToml(env));
     return env;
 }
@@ -95,7 +99,7 @@ async function startReady(env: HermeticEnv) {
 }
 
 describe("the agents component at startup", () => {
-    it("becomes ready with the roles bob and gp when there is no configuration file", async () => {
+    it("becomes ready with the roles bob, gp and desk when there is no configuration file", async () => {
         const env = await hermetic();
 
         const agents = await startReady(env);
@@ -105,15 +109,15 @@ describe("the agents component at startup", () => {
                 .runtime()
                 .catalog.list()
                 .map((role) => role.name),
-            ["bob", "gp"],
+            ["bob", "gp", "desk"],
         );
     });
 
-    it("creates the default workspaces of bob and gp with mode 0700", async () => {
+    it("creates the default workspaces of bob, gp and desk with mode 0700", async () => {
         const env = await hermetic();
         await startReady(env);
 
-        for (const role of ["bob", "gp"]) {
+        for (const role of ["bob", "gp", "desk"]) {
             const info = await stat(join(env.dataDir, "workspaces", role));
             assert.equal(info.mode & 0o777, OWNER_ONLY_MODE, role);
         }
@@ -161,7 +165,10 @@ describe("the agents component at startup", () => {
     });
 
     it("stops at step 6 naming the path and the reason when a registered workspace fails the check", async () => {
-        const env = await hermetic((e) => `[workspaces]\nregistered = ["${join(e.root, "missing-workspace")}"]\n`);
+        const env = await hermetic(
+            (e) => `[workspaces]\nregistered = ["${join(e.root, "missing-workspace")}"]\n`,
+            true,
+        );
         const serving = serve(env);
 
         const status = await serving.exit;
@@ -173,7 +180,7 @@ describe("the agents component at startup", () => {
     });
 
     it("stops at step 6 naming the path and the role when a role names an unregistered workspace", async () => {
-        const env = await hermetic((e) => `[roles.gp]\nworkspace = "${join(e.root, "elsewhere")}"\n`);
+        const env = await hermetic((e) => `[roles.gp]\nworkspace = "${join(e.root, "elsewhere")}"\n`, true);
         const serving = serve(env);
 
         const status = await serving.exit;
@@ -186,12 +193,24 @@ describe("the agents component at startup", () => {
     });
 
     it("becomes ready under bob serve with no configuration file", async () => {
-        const env = await hermetic();
+        const env = await hermetic(undefined, true);
         const serving = serve(env);
 
         await serving.untilStderr(" ready ");
 
         const info = await stat(join(env.dataDir, "workspaces", "bob"));
         assert.equal(info.mode & 0o777, OWNER_ONLY_MODE);
+    });
+
+    it("stops at step 6 naming the desk role and its model when the pi agent folder has no default model", async () => {
+        const env = await hermetic();
+        const serving = serve(env);
+
+        const status = await serving.exit;
+
+        assert.notEqual(status, 0);
+        assert.match(serving.stderr(), /startup failed step=6/);
+        assert.match(serving.stderr(), /desk/);
+        assert.match(serving.stderr(), /model/);
     });
 });

@@ -160,7 +160,11 @@ describe("readiness", () => {
 
         daemon.release();
         await daemon.ready;
-        assert.deepEqual(await daemon.invoke("conversations.list", {}), []);
+        const listed = (await daemon.invoke("conversations.list", {})) as { isFrontDesk: boolean }[];
+        assert.deepEqual(
+            listed.filter((conversation) => !conversation.isFrontDesk),
+            [],
+        );
     });
 });
 

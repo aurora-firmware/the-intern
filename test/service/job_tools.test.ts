@@ -13,6 +13,7 @@ import { createProvider } from "@earendil-works/pi-ai/models";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
+import { ensureFrontDesk } from "../../src/desk/front_desk.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { createSeatedConversation } from "../../src/host/seating.ts";
 import { JOB_TOOL_NAMES } from "../../src/jobs/job_model.ts";
@@ -69,12 +70,14 @@ async function start() {
     let script: Call[] = [];
     let lastResults: ToolResultSeen[] = [];
     let step = 0;
+    let beforeFirstCall: (() => Promise<void>) | undefined;
     const respond: FauxResponseFactory = async (context) => {
         fake.appendResponses([respond]);
         if (!isScripted(context)) return fauxAssistantMessage("done");
         // The conversation keeps the results of earlier runs; this run's are the last `step` of them.
         const seen = toolResultsOf(context);
         lastResults = seen.slice(seen.length - step);
+        if (step === 0) await beforeFirstCall?.();
         const call = script[step];
         step += 1;
         if (call === undefined) return fauxAssistantMessage("finished");
@@ -136,6 +139,7 @@ async function start() {
             const input = { text: "renew the certificate", ...extra };
             return (await daemon.catalogue.invoke("jobs.create", input, as)) as CreatedJob;
         },
+        frontDesk: () => ensureFrontDesk(ctx.host, agents.runtime().catalog),
         // Seats a conversation of the job whose seat lists the job tools, as T-123 will for every role.
         async seat(jobId: string, tools = JOB_TOOLS): Promise<string> {
             const seat = { ...agents.runtime().catalog.seatFor("gp"), tools };
@@ -148,7 +152,10 @@ async function start() {
             });
             return conversationId;
         },
-        async run(conversationId: string, calls: Call[]): Promise<RunResult> {
+        // A conversation of a Done job takes no input, so a test that needs a run on a Done job ends the job
+        // in `beforeFirstCall`, after the input was admitted and before the model's first reply.
+        async run(conversationId: string, calls: Call[], beforeFirstCall_?: () => Promise<void>): Promise<RunResult> {
+            beforeFirstCall = beforeFirstCall_;
             script = calls;
             step = 0;
             turn += 1;
@@ -239,27 +246,63 @@ describe("add_worklog and update_job", () => {
 });
 
 describe("create_job", () => {
-    it("creates an A job from the job and conversation, Related to the job, once per call id", async () => {
+    const followUpOrigin = (jobId: string, conversationId: string) => ({ kind: "follow_up", jobId, conversationId });
+
+    it("creates an A job Related to the job when the call sets related", async () => {
         const started = await start();
         const parent = await started.createJob(sourceCaller, { origin: schedule });
-        assert.match(parent.number, /^S-/);
         const conversation = await started.seat(parent.id);
-        const create = { name: "create_job", arguments: { text: "also rotate the keys" }, id: "call-keys" };
+        const create = {
+            name: "create_job",
+            arguments: { text: "also rotate the keys", related: true },
+            id: "call-keys",
+        };
 
-        const first = await started.run(conversation, [create]);
-        const created = jsonOf(first.results[0]);
+        const created = jsonOf((await started.run(conversation, [create])).results[0]);
 
         assert.match(created.number, /^A-\d+$/);
-        assert.deepEqual(created.request.origin, {
-            kind: "follow_up",
-            jobId: parent.id,
-            conversationId: conversation,
-        });
+        assert.deepEqual(created.request.origin, followUpOrigin(parent.id, conversation));
         assert.deepEqual(created.related, [parent.number]);
         assert.deepEqual((await started.ctx.jobStore.getJob(parent.id)).related, [created.number]);
+    });
 
-        const second = await started.run(conversation, [create]);
-        assert.equal(jsonOf(second.results[0]).id, created.id);
+    it("creates an A job that relates nothing when the call omits related or sets it false", async () => {
+        const started = await start();
+        const parent = await started.createJob(sourceCaller, { origin: schedule });
+        const conversation = await started.seat(parent.id);
+        const omitted = { name: "create_job", arguments: { text: "also rotate the keys" }, id: "call-omitted" };
+        const declined = {
+            name: "create_job",
+            arguments: { text: "also renew the cert", related: false },
+            id: "call-declined",
+        };
+
+        const { results } = await started.run(conversation, [omitted, declined]);
+
+        for (const result of results) {
+            const created = jsonOf(result);
+            assert.match(created.number, /^A-\d+$/);
+            assert.deepEqual(created.request.origin, followUpOrigin(parent.id, conversation));
+            assert.deepEqual(created.related, []);
+        }
+        assert.deepEqual((await started.ctx.jobStore.getJob(parent.id)).related, []);
+    });
+
+    it("returns the first call's job with its Related links when the call id repeats", async () => {
+        const started = await start();
+        const parent = await started.createJob(sourceCaller, { origin: schedule });
+        const conversation = await started.seat(parent.id);
+        const create = {
+            name: "create_job",
+            arguments: { text: "also rotate the keys", related: true },
+            id: "call-keys",
+        };
+        const created = jsonOf((await started.run(conversation, [create])).results[0]);
+
+        const repeated = jsonOf((await started.run(conversation, [create])).results[0]);
+
+        assert.equal(repeated.id, created.id);
+        assert.deepEqual(repeated.related, [parent.number]);
         const next = await started.run(conversation, [{ ...create, id: "call-other" }]);
         assert.equal(jsonOf(next.results[0]).number, `A-${Number(created.number.slice(2)) + 1}`);
     });
@@ -279,6 +322,24 @@ describe("relate_jobs", () => {
         await started.run(conversation, [{ name: "relate_jobs", arguments: { job: other.id, unrelate: true } }]);
         assert.deepEqual((await started.ctx.jobStore.getJob(job.id)).related, []);
         assert.deepEqual((await started.ctx.jobStore.getJob(other.id)).related, []);
+    });
+
+    it("refuses the front desk's conversation id with the rule, and changes nothing", async () => {
+        const started = await start();
+        const job = await started.createJob();
+        const deskId = await started.frontDesk();
+        const conversation = await started.seat(job.id);
+
+        const { results } = await started.run(conversation, [
+            { name: "relate_jobs", arguments: { job: deskId } },
+            { name: "relate_jobs", arguments: { job: deskId, unrelate: true } },
+        ]);
+
+        for (const result of results) {
+            assert.equal(result.isError, true, result.text);
+            assert.match(result.text, /front desk is not a job conversation/);
+        }
+        assert.deepEqual((await started.ctx.jobStore.getJob(job.id)).related, []);
     });
 });
 
@@ -307,12 +368,23 @@ describe("a refused job tool", () => {
         const started = await start();
         const job = await started.createJob();
         const conversation = await started.seat(job.id);
-        await started.ctx.jobStore.applyAction(job.id, "cancel", { justification: "not needed" }, { kind: "daemon" });
+        const cancel = async () => {
+            await started.ctx.jobStore.applyAction(
+                job.id,
+                "cancel",
+                { justification: "not needed" },
+                { kind: "daemon" },
+            );
+        };
 
-        const { state, results } = await started.run(conversation, [
-            { name: "update_job", arguments: { title: "late" } },
-            { name: "add_worklog", arguments: { text: "late note" } },
-        ]);
+        const { state, results } = await started.run(
+            conversation,
+            [
+                { name: "update_job", arguments: { title: "late" } },
+                { name: "add_worklog", arguments: { text: "late note" } },
+            ],
+            cancel,
+        );
 
         assert.equal(state, "done");
         for (const result of results) {

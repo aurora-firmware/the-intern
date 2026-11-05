@@ -2,6 +2,8 @@
  * The conversation control operations (S-002 REQ-012, REQ-013): submit input, withdraw a queued input, abort, reset and
  * compact. They need only the host; the host's errors map to the service error codes.
  */
+
+import { readFrontDeskId } from "../desk/front_desk.ts";
 import {
     type BusyMode,
     compactConversation,
@@ -14,8 +16,9 @@ import {
 } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { abortWithAwaited } from "../host/invocation.ts";
+import { ConversationClosedError } from "../host/job_section.ts";
 import { readConversationMeta } from "../host/seating.ts";
-import { holdForParked, steerConversation } from "../host/steering.ts";
+import { holdForParked, steerConversation, steerEntryFor } from "../host/steering.ts";
 import { type Caller, defineOperation, type Operation, ServiceError } from "./operations.ts";
 import { seatActorFor } from "./seat_operations.ts";
 
@@ -29,6 +32,8 @@ type CompactInput = ConversationRef & { instructions?: string };
 
 const BUSY_MODES: readonly BusyMode[] = ["followUp", "steer", "reject"];
 const DEFAULT_BUSY_MODE: BusyMode = "followUp";
+// The only ways in whose team members may submit to the front desk (S-001 REQ-020).
+const FRONT_DESK_WAYS_IN: readonly string[] = ["command line", "web interface"];
 
 function asRecord(raw: unknown): Record<string, unknown> {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("input must be an object");
@@ -79,6 +84,7 @@ async function mappingHostErrors<T>(action: () => Promise<T>): Promise<T> {
     } catch (error) {
         if (error instanceof HostNotFoundError) throw new ServiceError("not_found", error.message);
         if (error instanceof HostBusyError) throw new ServiceError("busy", error.message);
+        if (error instanceof ConversationClosedError) throw new ServiceError("conflict", error.message);
         if (error instanceof HostConflictError) throw new ServiceError("conflict", error.message);
         throw error;
     }
@@ -92,6 +98,17 @@ async function actorOf(host: HarnessHost, caller: Caller) {
     return seatActorFor(caller, role);
 }
 
+// No agent can steer the front desk, and an in-process caller has no way in: only a team member's own input reaches it.
+async function refuseUnlessTeamMemberAtFrontDesk(host: HarnessHost, conversationId: string, caller: Caller) {
+    if (conversationId !== (await readFrontDeskId(host))) return;
+    const { actor } = caller;
+    if (actor.kind === "team_member" && actor.wayIn !== undefined && FRONT_DESK_WAYS_IN.includes(actor.wayIn)) return;
+    throw new ServiceError(
+        "invalid_input",
+        "The front desk takes input only from a team member by the command line or the web interface",
+    );
+}
+
 // Every steer and follow-up goes through steering, which records who sent it and holds it for a parked conversation.
 async function submitOrSteer(host: HarnessHost, input: SubmitInput, caller: Caller): Promise<SubmitResult> {
     const { conversationId, busyMode, content, requestId } = input;
@@ -101,7 +118,11 @@ async function submitOrSteer(host: HarnessHost, input: SubmitInput, caller: Call
         // A conversation parked for reports holds a reject input as a follow-up; a running one still refuses it
         // with busy.
         const isHeld = await holdForParked(host, conversationId, { ...message, mode: "followUp" });
-        return isHeld ? { held: true } : submitInput(host, conversationId, input);
+        if (isHeld) return { held: true };
+        // The front desk records the sender and way in of a reject input too; its busy refusal stays.
+        const isFrontDesk = conversationId === (await readFrontDeskId(host));
+        const entry = isFrontDesk ? steerEntryFor({ ...message, mode: "followUp" }) : undefined;
+        return submitInput(host, conversationId, { ...input, ...(entry && { entry }) });
     }
     // A conversation parked for an answer continues with a reject input as a follow-up.
     const mode = busyMode === "reject" ? "followUp" : busyMode;
@@ -113,7 +134,10 @@ const submitOperation = defineOperation<ControlContext, SubmitInput, SubmitResul
     name: "conversations.submit",
     kind: "control",
     parse: parseSubmit,
-    run: ({ host }, input, caller) => mappingHostErrors(() => submitOrSteer(host, input, caller)),
+    run: async ({ host }, input, caller) => {
+        await refuseUnlessTeamMemberAtFrontDesk(host, input.conversationId, caller);
+        return mappingHostErrors(() => submitOrSteer(host, input, caller));
+    },
 });
 
 const withdrawOperation = defineOperation<ControlContext, { submissionId: string }, Record<string, never>>({

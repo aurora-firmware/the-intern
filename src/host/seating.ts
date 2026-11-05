@@ -5,17 +5,19 @@
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
-    type ConversationId,
     configure,
     defineDoc,
     defineEntry,
+    type Extension,
     InboxDoc,
     LiveDoc,
     ResetEntry,
     type ToolRegistration,
     type Tx,
 } from "@earendil-works/pi-durable";
+import { FRONT_DESK_EXTENSION_NAME, JOB_CONVERSATION_EXTENSION_NAMES } from "../desk/desk_model.ts";
 import type { Seat } from "../roles/role_model.ts";
+import { parseConversationId, toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness, toAgentSpec } from "./harness_host.ts";
 import { createConversationOnce } from "./idempotency.ts";
 
@@ -33,7 +35,8 @@ export type Origin =
     | { kind: "schedule"; entry: string; fireTime: string }
     | { kind: "trigger"; trigger: string; event: string }
     | { kind: "follow_up"; conversationId: string }
-    | { kind: "invocation"; conversationId: string };
+    | { kind: "invocation"; conversationId: string }
+    | { kind: "front_desk" };
 
 export type ContextMode = "full" | "compact" | "clean";
 export type ParkedState = { waitingFor: "reports" | "answer"; continueOn: "each" | "all" };
@@ -53,13 +56,15 @@ export type SeatRecord = {
     contextMode?: ContextMode;
     note?: string;
 };
-export type JobLinks = { jobId: string; isLead: boolean; origin: Origin; depth: number; invokedBy?: string };
+export type JobLinks = { jobId: string | null; isLead: boolean; origin: Origin; depth: number; invokedBy?: string };
 export type ConversationMeta = JobLinks & {
     seat: Seat;
     awaiting: string[];
     parked: ParkedState | null;
     held: HeldMessage[];
     aborted: boolean;
+    /** Set when the job is Done; a document written without it reads as not closed, and nothing clears it. */
+    closed?: boolean;
 };
 export type SeatChange = { seat: Seat; actor: SeatActor; contextMode?: ContextMode; note?: string };
 
@@ -114,13 +119,17 @@ function summarize(seat: Seat): SeatSummary {
     };
 }
 
-function toNumericId(conversationId: string): ConversationId {
-    return Number(conversationId) as ConversationId;
-}
-
 // pi-durable stores a tool selection by name and reads only `name` from each registration, so a name is enough.
 function toToolSelection(names: readonly string[]): ToolRegistration[] {
     return names.map((name) => ({ name }) as ToolRegistration);
+}
+
+// pi-durable reads only `name` from an extension in a selection. `{ add, remove }` edits the default selection, so the
+// default extensions that are not named here (admission, role prompt, tools) stay selected.
+function extensionSelectionFor(origin: Origin): { add: Extension[]; remove: Extension[] } | undefined {
+    if (origin.kind !== "front_desk") return undefined;
+    const named = (names: readonly string[]) => names.map((name) => ({ name }) as Extension);
+    return { add: named([FRONT_DESK_EXTENSION_NAME]), remove: named(JOB_CONVERSATION_EXTENSION_NAMES) };
 }
 
 async function writeSeat(
@@ -131,11 +140,12 @@ async function writeSeat(
     previous: Seat | null,
 ): Promise<void> {
     const { seat } = change;
-    const id = toNumericId(conversationId);
+    const id = toConversationId(conversationId);
     await configure(tx, id, {
         ...toAgentSpec({ model: seat.model, cwd: seat.workspace }),
         thinkingLevel: (seat.thinkingLevel ?? null) as never,
         tools: toToolSelection(seat.tools),
+        extensions: extensionSelectionFor(meta.origin) ?? null,
     });
     meta.seat = toStoredJson(seat);
     const record: SeatRecord = {
@@ -150,7 +160,7 @@ async function writeSeat(
 
 /** Makes the writes of a seat change in the caller's transaction: agent, document seat and seat record. */
 export async function seatWrites(tx: Tx, conversationId: string, change: SeatChange): Promise<void> {
-    const meta = await tx.doc(conversationMetaDoc, toNumericId(conversationId));
+    const meta = await tx.doc(conversationMetaDoc, toConversationId(conversationId));
     if (meta.jobId === "") {
         throw new SeatingError(`Conversation "${conversationId}" was not created by createSeatedConversation.`);
     }
@@ -174,7 +184,7 @@ export async function createSeatedConversation(
             cwd: seat.workspace,
         },
         init: async (tx, conversationId) => {
-            const meta = await tx.doc(conversationMetaDoc, toNumericId(conversationId));
+            const meta = await tx.doc(conversationMetaDoc, toConversationId(conversationId));
             Object.assign(meta, toStoredJson(job));
             await writeSeat(tx, conversationId, { seat, actor }, meta as ConversationMeta, null);
         },
@@ -198,7 +208,7 @@ export async function resetWithSeat(
     input: { note?: string; change: SeatChange },
 ): Promise<void> {
     const { note, change } = input;
-    const id = toNumericId(conversationId);
+    const id = toConversationId(conversationId);
     await internalHarness(host).commit(async (tx) => {
         // The live state is read before any table write, as pi-durable's admission does.
         const isBusy = (await tx.doc(LiveDoc, id)).run !== undefined;
@@ -222,6 +232,9 @@ export async function readConversationMeta(
     host: HarnessHost,
     conversationId: string,
 ): Promise<ConversationMeta | undefined> {
-    const stored = await internalHarness(host).snapshot(conversationMetaDoc, toNumericId(conversationId), context);
+    // A text that is not a canonical id names no conversation, so it has no document.
+    const id = parseConversationId(conversationId);
+    if (id === undefined) return undefined;
+    const stored = await internalHarness(host).snapshot(conversationMetaDoc, id, context);
     return stored === undefined || stored.jobId === "" ? undefined : (stored as ConversationMeta);
 }

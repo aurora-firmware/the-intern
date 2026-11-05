@@ -12,7 +12,7 @@ const SLOW_DELAY_MS = 3_000;
 const LONG_SLEEP_SECONDS = "60";
 
 type Entry = { kind: string; data: unknown };
-type ConversationSummary = { id: string; status: string };
+type ConversationSummary = { id: string; status: string; isFrontDesk: boolean };
 type Status = { workerThreads: { inUse: number; waiting: unknown[] } };
 
 const envs: HermeticEnv[] = [];
@@ -72,7 +72,8 @@ async function entriesOf(daemon: DaemonProcess, conversationId: string): Promise
 }
 
 async function conversationsOf(daemon: DaemonProcess): Promise<ConversationSummary[]> {
-    return (await daemon.invoke("conversations.list", {})) as ConversationSummary[];
+    const listed = (await daemon.invoke("conversations.list", {})) as ConversationSummary[];
+    return listed.filter((conversation) => !conversation.isFrontDesk);
 }
 
 async function untilEntry(

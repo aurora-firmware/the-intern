@@ -79,6 +79,15 @@ export async function createConversationOnce(
     return result;
 }
 
+/** Reads the conversation recorded for `scope` and `key` by `createConversationOnce`; `undefined` when none is. */
+export async function findCreatedConversation(
+    host: HarnessHost,
+    input: { scope: string; key: string },
+): Promise<string | undefined> {
+    const entryKey = JSON.stringify([input.scope, input.key]);
+    return (await internalHarness(host).snapshot(idempotencyDocument, context))?.conversations[entryKey];
+}
+
 async function lookupOrRecord<T>(host: HarnessHost, entryKey: string, create: () => Promise<T>): Promise<T> {
     const harness = internalHarness(host);
     const stored = (await harness.snapshot(idempotencyDocument, context))?.results?.[entryKey];

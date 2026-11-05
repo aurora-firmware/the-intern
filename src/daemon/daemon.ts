@@ -57,6 +57,8 @@ export type ServiceContext = {
 export type DaemonComponent = {
     name: string;
     extensions?: readonly Extension[];
+    /** Installed like `extensions` but left out of the default selection: a conversation selects them by name. */
+    optInExtensions?: readonly Extension[];
     checkModels?(ctx: ServiceContext): Promise<void>;
     ensureWorkspaces?(ctx: ServiceContext): Promise<void>;
     /** Step 7, after admission is restored and before work resumes: brings the component's saved state in step. */
@@ -201,6 +203,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
             models: options.prepareModels?.(models) ?? models.models,
             harnessSettings: models.harnessSettings,
             extensions: [gate.extension, ...components.flatMap((component) => component.extensions ?? [])],
+            optInExtensions: components.flatMap((component) => component.optInExtensions ?? []),
             defaultCwd: dirs.dataDir,
             logger,
             beforeStorageOpen: checkJobSchemaVersion,

@@ -5,6 +5,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import { HostNotFoundError } from "./conversation_control.ts";
+import { parseConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -35,7 +36,7 @@ function toUsageReport(state: { models?: Record<string, UsageTotals>; tools?: Re
 }
 
 async function requireConversationId(host: HarnessHost, id: string): Promise<ConversationId> {
-    const numericId = /^\d+$/.test(id) ? (Number(id) as ConversationId) : undefined;
+    const numericId = parseConversationId(id);
     const conversation =
         numericId === undefined ? undefined : await internalHarness(host).conversation(numericId, context);
     if (!conversation) throw new HostNotFoundError(`Conversation "${id}" does not exist.`);

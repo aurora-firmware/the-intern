@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { completeSimple } from "@earendil-works/pi-ai/compat";
+import { completeSimple, streamSimple } from "@earendil-works/pi-ai/compat";
 import { createFakeModel, type FakeReply, type FakeTranscript } from "../support/fake_model.ts";
 
 type FakeModel = ReturnType<typeof createFakeModel>;
@@ -145,5 +145,37 @@ describe("createFakeModel delay", () => {
         const startedAt = performance.now();
         await completeSimple(fake.getModel(), { messages: [{ role: "user", content: "fast", timestamp: 0 }] });
         assert.ok(performance.now() - startedAt < 75);
+    });
+
+    it("streams only the first piece of text until the stream gate opens, then the whole answer", async () => {
+        const gate = Promise.withResolvers<void>();
+        const fake = createFakeModel(() => "a long enough answer to stream in several pieces", {
+            streamGate: gate.promise,
+        });
+        created.push(fake);
+        const stream = streamSimple(fake.getModel(), { messages: [{ role: "user", content: "go", timestamp: 0 }] });
+        const partials: string[] = [];
+        const reading = (async () => {
+            for await (const event of stream) {
+                if (event.type !== "text_delta") continue;
+                const [block] = event.partial.content;
+                partials.push(block?.type === "text" ? block.text : "");
+            }
+        })();
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        assert.equal(partials.length, 1, "the stream waits after its first piece");
+        assert.ok(
+            partials[0] !== undefined && "a long enough answer to stream in several pieces".startsWith(partials[0]),
+        );
+        assert.notEqual(partials[0], "a long enough answer to stream in several pieces");
+        gate.resolve();
+        await reading;
+
+        const answer = await stream.result();
+        assert.equal(
+            answer.content.map((block) => (block.type === "text" ? block.text : "")).join(""),
+            "a long enough answer to stream in several pieces",
+        );
     });
 });

@@ -5,8 +5,9 @@
  * invoked conversation without its invocation link.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { type ConversationId, defineDoc, type Tx } from "@earendil-works/pi-durable";
+import { defineDoc, InboxDoc, LiveDoc, type Tx } from "@earendil-works/pi-durable";
 import { INVOCATION_DEPTH_CAP } from "../daemon/constants.ts";
+import { FRONT_DESK_CREATION } from "../desk/desk_model.ts";
 import type { Seat } from "../roles/role_model.ts";
 import {
     abortConversation,
@@ -15,7 +16,10 @@ import {
     submissionIdFor,
     submitInput,
 } from "./conversation_control.ts";
+import { toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
+import { findCreatedConversation } from "./idempotency.ts";
+import { inJobSection, inOpenConversation } from "./job_section.ts";
 import {
     type ContextMode,
     type ConversationMeta,
@@ -32,6 +36,14 @@ import { STEER_RECORD_KIND } from "./steering.ts";
 const context = BACKGROUND_CONTEXT;
 
 export type InvocationRequest = { seat: Seat; contextMode: ContextMode; jobPrompt: string };
+
+/** The front desk has no job, so no job's conversations include it (S-001 REQ-025). */
+export class FrontDeskNotJobError extends Error {
+    constructor(conversationId: string) {
+        super(`The front desk (${conversationId}) is not a job conversation`);
+        this.name = "FrontDeskNotJobError";
+    }
+}
 
 export class InvocationDepthError extends Error {
     readonly cap: number;
@@ -57,7 +69,6 @@ const invocationsDocument = defineDoc<{ conversations: Record<string, string> }>
 // One invocation call at a time per host, so concurrent calls with one request id can't both miss the lookup.
 const pendingInvocations = new WeakMap<HarnessHost, Promise<unknown>>();
 
-const toNumericId = (conversationId: string): ConversationId => Number(conversationId) as ConversationId;
 const requestIdOf = (invokingId: string, callId: string, index: number): string =>
     `invoke:${invokingId}:${callId}:${index}`;
 
@@ -72,7 +83,7 @@ async function requireMeta(host: HarnessHost, conversationId: string): Promise<C
 async function createOne(
     tx: Tx,
     input: {
-        invoking: { jobId: string; depth: number };
+        invoking: { jobId: string | null; depth: number };
         invokingId: string;
         request: InvocationRequest;
         actor: SeatActor;
@@ -83,7 +94,7 @@ async function createOne(
     const ownership = { kind: "ownerless" } as const;
     const isFork = request.contextMode !== "clean" && forkAt !== undefined;
     const record = isFork
-        ? await tx.forkConversation(toNumericId(invokingId), forkAt.id, { ownership })
+        ? await tx.forkConversation(toConversationId(invokingId), forkAt.id, { ownership })
         : await tx.createConversation({ ownership });
     const conversationId = String(record.id);
     // Every field is written, so a fork keeps nothing of the invoker's document.
@@ -107,7 +118,7 @@ async function createMissing(
 ): Promise<string[]> {
     const { invokingId, callId, agents, actor, parked } = input;
     return internalHarness(host).commit(async (tx) => {
-        const invokingDoc = await tx.doc(conversationMetaDoc, toNumericId(invokingId));
+        const invokingDoc = await tx.doc(conversationMetaDoc, toConversationId(invokingId));
         if (invokingDoc.jobId === "") {
             throw new SeatingError(`Conversation "${invokingId}" was not created by createSeatedConversation.`);
         }
@@ -121,7 +132,7 @@ async function createMissing(
         );
         // Table reads come before the first table write.
         const latest = hasMissing
-            ? (await tx.scanEntries({ conversationId: toNumericId(invokingId), order: "descending" }, 1)).items[0]
+            ? (await tx.scanEntries({ conversationId: toConversationId(invokingId), order: "descending" }, 1)).items[0]
             : undefined;
         const ids: string[] = [];
         for (const [index, request] of agents.entries()) {
@@ -143,7 +154,7 @@ async function createMissing(
 
 async function hasSubmission(host: HarnessHost, conversationId: string, requestId: string): Promise<boolean> {
     const found = await internalHarness(host).commit(
-        (tx) => tx.submissionByRequest(toNumericId(conversationId), requestId),
+        (tx) => tx.submissionByRequest(toConversationId(conversationId), requestId),
         context,
     );
     return found !== undefined;
@@ -165,7 +176,7 @@ async function invoke(
     host: HarnessHost,
     input: { invokingId: string; callId: string; agents: InvocationRequest[]; actor: SeatActor; parked?: ParkedState },
 ): Promise<string[]> {
-    const ids = await createMissing(host, input);
+    const ids = await inOpenConversation(host, input.invokingId, () => createMissing(host, input));
     await Promise.all(
         ids.map((id, index) =>
             submitJobPrompt(
@@ -200,7 +211,7 @@ export async function createInvokedConversations(
 async function updateMeta(host: HarnessHost, conversationId: string, change: (meta: ConversationMeta) => void) {
     await requireMeta(host, conversationId);
     await internalHarness(host).commit(async (tx) => {
-        change((await tx.doc(conversationMetaDoc, toNumericId(conversationId))) as ConversationMeta);
+        change((await tx.doc(conversationMetaDoc, toConversationId(conversationId))) as ConversationMeta);
     }, context);
 }
 
@@ -291,53 +302,152 @@ async function isReportOwedTo(host: HarnessHost, meta: ConversationMeta | undefi
     return (await readConversationMeta(host, meta.invokedBy))?.awaiting.includes(id) ?? false;
 }
 
-async function abortRecursively(
+// Clears the conversation and, recursively, every conversation it awaits, and returns the ids in the order they are
+// aborted. Nothing is aborted here: the caller does that after the job's section is released.
+async function clearRecursively(
     host: HarnessHost,
     conversationId: string,
-    aborted: Set<string>,
+    cleared: Set<string>,
     isRoot = false,
 ): Promise<void> {
-    if (aborted.has(conversationId)) return;
+    if (cleared.has(conversationId)) return;
     // Read before clearing: the list is what the cascade follows. A conversation that was not seated has no
     // invocation links and awaits nothing.
     const meta = await readConversationMeta(host, conversationId);
     const isReportOwed = isRoot && (await isReportOwedTo(host, meta, conversationId));
-    aborted.add(conversationId);
-    // Cleared before the abort and before the recursion, so no cascaded run finds its invoker still waiting.
+    cleared.add(conversationId);
+    // Cleared before any abort, so no cascaded run finds its invoker still waiting.
     await clearWaiting(host, conversationId, isReportOwed);
-    await abortConversation(host, conversationId);
-    for (const awaitedId of meta?.awaiting ?? []) await abortRecursively(host, awaitedId, aborted);
+    for (const awaitedId of meta?.awaiting ?? []) await clearRecursively(host, awaitedId, cleared);
 }
 
 /**
  * Aborts the conversation, then every conversation it still awaits a report from, recursively, whether it is
  * steerable or parked. An invoked conversation that has reported has left `awaiting` and is not touched. No aborted
- * conversation stays parked, waits for a report or keeps held messages.
+ * conversation stays parked, waits for a report or keeps held messages. A closed conversation is refused with
+ * `ConversationClosedError`. The check and the clearing commits run in the job's section; the aborts wait for the
+ * runs to end, so they run after the section is released.
  */
 export async function abortWithAwaited(host: HarnessHost, conversationId: string): Promise<string[]> {
-    const aborted = new Set<string>();
-    await abortRecursively(host, conversationId, aborted, true);
-    return [...aborted];
+    const cleared = new Set<string>();
+    await inOpenConversation(host, conversationId, () => clearRecursively(host, conversationId, cleared, true));
+    const aborted = [...cleared];
+    for (const id of aborted) await abortConversation(host, id);
+    return aborted;
+}
+
+// The closed mark and the emptied inbox are one commit, so no queued item (a reset included) can land at a run's
+// boundary after the mark. Held messages have no submission, so they settle nothing.
+async function closeConversation(host: HarnessHost, conversationId: string): Promise<void> {
+    await requireMeta(host, conversationId);
+    const id = toConversationId(conversationId);
+    await internalHarness(host).commit(async (tx) => {
+        const meta = (await tx.doc(conversationMetaDoc, id)) as ConversationMeta;
+        meta.closed = true;
+        meta.parked = null;
+        meta.awaiting = [];
+        meta.held = [];
+        const inbox = await tx.doc(InboxDoc, id);
+        for (const item of inbox.items) tx.settleSubmission(item.id, { status: "unanswered", reason: "closed" });
+        inbox.items = [];
+    }, context);
+}
+
+// Lists and closes in the job's section, so no admission or creation of the job falls between the list and the marks.
+function closeJobConversations(host: HarnessHost, jobId: string): Promise<string[]> {
+    return inJobSection(host, jobId, async () => {
+        const ofJob: string[] = [];
+        for (const { id } of await host.listConversations()) {
+            if ((await readConversationMeta(host, id))?.jobId === jobId) ofJob.push(id);
+        }
+        for (const id of ofJob) await closeConversation(host, id);
+        return ofJob;
+    });
 }
 
 /**
- * Aborts every conversation whose `intern.conversation` document names the job, clearing them all first. An abort
- * waits for the run to end, so the conversation of a running tool (`own`) is aborted last and its abort is not awaited
- * here: the tool returns, and the run ends. `own.onError` gets a failed abort of it.
+ * Aborts the compactions still running in the conversations, the completing lead's included, now that their closed
+ * marks are committed: a finished summary is placed outside the job's section and would follow the mark. A blocking
+ * compaction is left to `Conversation.abort()`, because its generation owns it and would fail the run if it were
+ * aborted alone. This runs before the first `Conversation.abort()`, which turns scheduling on after a restart, so no
+ * compaction marked later can send a model request first. Without `onError` a failure rejects.
+ */
+async function abortRunningCompactions(
+    host: HarnessHost,
+    conversationIds: string[],
+    onError?: (error: unknown) => void,
+): Promise<void> {
+    const harness = internalHarness(host);
+    for (const id of conversationIds) {
+        try {
+            const live = await harness.snapshot(LiveDoc, toConversationId(id), context);
+            for (const status of live?.compactions ?? []) {
+                if (!status.blocking) await harness.abortTask(status.taskId, context);
+            }
+        } catch (error) {
+            if (onError === undefined) throw error;
+            onError(error);
+        }
+    }
+}
+
+/**
+ * Closes every conversation whose `intern.conversation` document names the job (closed mark set, nothing parked,
+ * awaited or held) in the job's section, awaits `afterClosed`, then aborts them. The section is released before
+ * `afterClosed` and the aborts. `own` names the conversation of a running tool: it is closed and not aborted, because
+ * its abort would cut the tool's call off, and its run ends by itself when the tool returns. With `own`, a failed
+ * abort of another conversation goes to `own.onError` and the remaining aborts are still attempted; without it the
+ * failure rejects. A failed closed-mark commit rejects. No abort mark is set, so no report is sent.
  */
 export async function abortJobConversations(
     host: HarnessHost,
     jobId: string,
     own?: { conversationId: string; onError(error: unknown): void },
+    afterClosed?: () => void | Promise<void>,
 ): Promise<string[]> {
-    const ofJob: string[] = [];
-    for (const { id } of await host.listConversations()) {
-        if ((await readConversationMeta(host, id))?.jobId === jobId) ofJob.push(id);
-    }
-    for (const id of ofJob) await clearWaiting(host, id);
-    for (const id of ofJob) if (id !== own?.conversationId) await abortConversation(host, id);
-    if (own !== undefined && ofJob.includes(own.conversationId)) {
-        abortConversation(host, own.conversationId).catch(own.onError);
+    if (jobId === (await findCreatedConversation(host, FRONT_DESK_CREATION))) throw new FrontDeskNotJobError(jobId);
+    const ofJob = await closeJobConversations(host, jobId);
+    await afterClosed?.();
+    await abortRunningCompactions(host, ofJob, own?.onError);
+    for (const id of ofJob) {
+        if (id === own?.conversationId) continue;
+        try {
+            await abortConversation(host, id);
+        } catch (error) {
+            if (own === undefined) throw error;
+            own.onError(error);
+        }
     }
     return ofJob;
+}
+
+/**
+ * Aborts the job's conversations after a failure that left the lead's closed mark unwritten, so a queued input can't
+ * run a model turn on a Done job. The other conversations are aborted in turn and a failed abort goes to `onError`.
+ * The lead is aborted unless its closed mark landed, and that abort is not awaited: it waits for the run, and the run
+ * waits for the tool call that is making this call. The conversations stay unclosed until rule 4 closes them at the
+ * next start.
+ */
+export async function abortAfterFailedClose(
+    host: HarnessHost,
+    jobId: string,
+    ownConversationId: string,
+    onError: (error: unknown) => void,
+): Promise<void> {
+    // Listed in the job's section, so a conversation admitted before the abort is in the list.
+    const ofJob = await inJobSection(host, jobId, async () => {
+        const found: { id: string; isClosed: boolean }[] = [];
+        for (const { id } of await host.listConversations()) {
+            const meta = await readConversationMeta(host, id);
+            if (meta?.jobId === jobId) found.push({ id, isClosed: meta.closed === true });
+        }
+        return found;
+    });
+    for (const { id, isClosed } of ofJob) {
+        if (id !== ownConversationId) {
+            await abortConversation(host, id).catch(onError);
+            continue;
+        }
+        if (!isClosed) void abortConversation(host, id).catch(onError);
+    }
 }

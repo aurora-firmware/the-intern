@@ -6,6 +6,8 @@
  * reach it over `bob.sock` too.
  */
 import { spawn } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { Type } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
@@ -15,12 +17,15 @@ import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
+import { createDeskComponent, type DeskCreatePoint } from "../../src/desk/desk_component.ts";
+import { onInputSubmitted, submissionIdFor, submissionState } from "../../src/host/conversation_control.ts";
 import type { Models, Storage } from "../../src/host/harness_host.ts";
 import { readConversationMeta } from "../../src/host/seating.ts";
-import { blockJob } from "../../src/jobs/job_actions.ts";
+import { blockJob, cancelJob } from "../../src/jobs/job_actions.ts";
 import { createJobsComponent, type JobsComponentOptions, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
 import type { InternModels } from "../../src/models/model_runtime.ts";
+import { createJob, type JobView } from "../../src/service/job_operations.ts";
 import { type Caller, defineOperation, ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
 import type { StartDaemonOptions } from "./daemon_process.ts";
 import { createFakeModel, type FakeReply, type FakeTranscript } from "./fake_model.ts";
@@ -44,6 +49,8 @@ function hasToolResult(transcript: FakeTranscript): boolean {
     return transcript.some((turn) => turn.role === "toolResult");
 }
 
+const DESK_STEER_PREFIX = "steer ";
+const DESK_STEER_MESSAGE = "from-desk";
 const HANDOFF_NOTE = "CLEAN-NOTE";
 const INVOKED_JOB_PROMPT_PREFIX = "job";
 const HANDOFF_CALL = { name: "handoff", arguments: { role: "gp", contextMode: "clean", note: HANDOFF_NOTE } };
@@ -59,6 +66,40 @@ const PARKED_INVOKE_CALL = {
     },
 };
 
+const NESTED_PARENT_PROMPT = `${INVOKED_JOB_PROMPT_PREFIX} A`;
+const NESTED_INVOKE_CALL = {
+    name: "invoke",
+    arguments: {
+        agents: [{ role: "gp", contextMode: "clean", jobPrompt: `${INVOKED_JOB_PROMPT_PREFIX} A1` }],
+        // biome-ignore lint/suspicious/noThenProperty: `then` is the invoke tool's parameter name
+        then: "parked",
+    },
+};
+
+const DEFINITION_OF_DONE = "The invoked agent has reported";
+const UPDATE_JOB_CALL = { name: "update_job", arguments: { definitionOfDone: DEFINITION_OF_DONE } };
+const SINGLE_INVOKE_CALL = {
+    name: "invoke",
+    arguments: {
+        agents: [{ role: "gp", contextMode: "clean", jobPrompt: `${INVOKED_JOB_PROMPT_PREFIX} A` }],
+        // biome-ignore lint/suspicious/noThenProperty: `then` is the invoke tool's parameter name
+        then: "parked",
+    },
+};
+const COMPLETE_JOB_CALL = {
+    name: "complete_job",
+    arguments: { justification: "The invoked agent reported, so the definition of done is met" },
+};
+
+/** The lead sets its definition of done, invokes one agent (it parks), and completes the job on the report. */
+function invokeAndCompleteReply(transcript: FakeTranscript): FakeReply {
+    const lastText = lastUserText(transcript);
+    const hasReport = lastText.includes(`echo: ${INVOKED_JOB_PROMPT_PREFIX}`);
+    if (hasReport) return { toolCall: COMPLETE_JOB_CALL };
+    if (lastText.startsWith(INVOKED_JOB_PROMPT_PREFIX)) return `echo: ${lastText}`;
+    return { toolCall: hasToolResult(transcript) ? SINGLE_INVOKE_CALL : UPDATE_JOB_CALL };
+}
+
 type Script = NonNullable<Switches["script"]>;
 
 /** `bash-sleep` takes its duration in seconds from the input, so a test sets how long the tool runs. */
@@ -72,6 +113,22 @@ function replyFor(script: Script, transcript: FakeTranscript): FakeReply {
         const isInvokedAgent = lastText.startsWith(INVOKED_JOB_PROMPT_PREFIX);
         return isInvokedAgent || hasToolResult(transcript) ? echo : { toolCall: PARKED_INVOKE_CALL };
     }
+    if (script === "invoke-and-complete") return invokeAndCompleteReply(transcript);
+    if (script === "invoke-nested") {
+        if (hasToolResult(transcript)) return echo;
+        if (lastText === NESTED_PARENT_PROMPT) return { toolCall: NESTED_INVOKE_CALL };
+        return lastText.startsWith(INVOKED_JOB_PROMPT_PREFIX) ? echo : { toolCall: PARKED_INVOKE_CALL };
+    }
+    if (script === "desk-steer") {
+        if (!lastText.startsWith(DESK_STEER_PREFIX) || hasToolResult(transcript)) return echo;
+        const conversationId = lastText.slice(DESK_STEER_PREFIX.length);
+        return {
+            toolCall: {
+                name: "send_to_conversation",
+                arguments: { conversationId, message: DESK_STEER_MESSAGE, mode: "steer" },
+            },
+        };
+    }
     if (script !== "bash-sleep") return echo;
     if (hasToolResult(transcript)) return "slept";
     const seconds = /^\d+(\.\d+)?$/.test(lastText) ? lastText : DEFAULT_SLEEP_SECONDS;
@@ -79,13 +136,14 @@ function replyFor(script: Script, transcript: FakeTranscript): FakeReply {
 }
 
 /**
- * Holds back the answers a kill is meant to interrupt: all of `slow`, the lead's answers to reports for
- * `invoke-parked-slow-lead`, and the answers after the call of the others.
+ * Holds back the answers a kill is meant to interrupt: all of `slow`, the answer after the tool of `desk-steer`, the
+ * lead's answers to reports for `invoke-parked-slow-lead`, and the answers after the call of the others.
  */
 function delayFor(switches: Switches, transcript: FakeTranscript): number {
     const delayMs = switches.delayMs ?? DEFAULT_SLOW_DELAY_MS;
     const lastText = lastUserText(transcript);
     if (switches.script === "slow") return delayMs;
+    if (switches.script === "desk-steer") return hasToolResult(transcript) ? delayMs : 0;
     if (switches.script === "handoff-clean") return lastText === HANDOFF_NOTE ? delayMs : 0;
     if (switches.script === "invoke-parked") return lastText.startsWith(INVOKED_JOB_PROMPT_PREFIX) ? delayMs : 0;
     if (switches.script === "invoke-parked-slow-lead")
@@ -138,6 +196,20 @@ function modelFor(ctx: ServiceContext, fakeModelId: string | undefined, requeste
     return defaultModel;
 }
 
+/**
+ * The front desk is created at startup and needs a model, so a daemon on the fake model gets the pi agent folder's
+ * default from it, unless the test wrote its own settings before starting.
+ */
+async function writeFakeModelDefault(fake: ReturnType<typeof createFakeModel>): Promise<void> {
+    const { provider, id } = fake.getModel();
+    const settings = JSON.stringify({ defaultProvider: provider, defaultModel: id });
+    try {
+        await writeFile(join(process.env.PI_CODING_AGENT_DIR ?? "", "settings.json"), settings, { flag: "wx" });
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+}
+
 function failingOnDemand(storage: Storage, storageSwitch: StorageSwitch): Storage {
     return new Proxy(storage, {
         get(target, property, receiver) {
@@ -149,6 +221,20 @@ function failingOnDemand(storage: Storage, storageSwitch: StorageSwitch): Storag
             return value.bind(target);
         },
     });
+}
+
+/** Kills the process once an agent's steer is placed, and never lets the steering call return. */
+function killOnSteerComponent(): DaemonComponent {
+    return {
+        name: "kill-on-steer",
+        async start(ctx: ServiceContext) {
+            onInputSubmitted(ctx.host, async (input) => {
+                if (!input.requestId.startsWith("steer:")) return;
+                process.kill(process.pid, "SIGKILL");
+                return new Promise<void>(() => undefined);
+            });
+        },
+    };
 }
 
 function createComponents(switches: Switches, release: Promise<void>): DaemonComponent[] {
@@ -166,12 +252,24 @@ function createComponents(switches: Switches, release: Promise<void>): DaemonCom
             },
         });
     }
+    if (switches.killOnSteer) components.push(killOnSteerComponent());
     if (switches.holdStart) components.push({ name: "hold-start", start: () => release });
     return components;
 }
 
 /** Kills the process the first time the Jobs component reaches `crashAt`, and never lets the work after it run. */
 function killingAt(crashAt: WritePoint): NonNullable<JobsComponentOptions["afterWrite"]> {
+    return (point) => {
+        if (point !== crashAt) return undefined;
+        process.kill(process.pid, "SIGKILL");
+        return new Promise<void>(() => undefined);
+    };
+}
+
+/** Kills the process at the front desk's creation point `crashAt`, and never lets the work after it run. */
+function killingDeskAt(
+    crashAt: DeskCreatePoint,
+): NonNullable<Parameters<typeof createDeskComponent>[0]["afterCreate"]> {
     return (point) => {
         if (point !== crashAt) return undefined;
         process.kill(process.pid, "SIGKILL");
@@ -192,6 +290,23 @@ function blockJobOperation(jobs: { options: JobsComponentOptions }) {
     });
 }
 
+/** Creates a job that is cancelled before its lead conversation exists, which the service never does on its own. */
+function createJobCancelledBeforeLeadOperation(jobs: { options: JobsComponentOptions }) {
+    return defineOperation<ServiceContext, { text: string }, JobView>({
+        name: "test.createJobCancelledBeforeLead",
+        kind: "control",
+        parse: (raw) => raw as { text: string },
+        run(ctx, { text }, caller) {
+            const cancelAtCreation: NonNullable<JobsComponentOptions["afterWrite"]> = async (point, jobId) => {
+                if (point !== "job-created") return;
+                const author = { kind: "team_member", wayIn: "command line" } as const;
+                await cancelJob({ ctx, options: jobs.options }, jobId, "Cancelled before its lead", author);
+            };
+            return createJob(ctx, { ...jobs.options, afterWrite: cancelAtCreation }, { text }, caller);
+        },
+    });
+}
+
 /** Lists what each conversation of a job still waits for, which no service operation shows. */
 function waitingOperation() {
     return defineOperation<ServiceContext, { job: string }, { id: string; awaiting: string[]; held: number }[]>({
@@ -205,6 +320,26 @@ function waitingOperation() {
                 if (meta?.jobId === job) waiting.push({ id, awaiting: meta.awaiting, held: meta.held.length });
             }
             return waiting;
+        },
+    });
+}
+
+/** Reads how the input with a request id settled, which no service operation shows. */
+function submissionStateOperation() {
+    return defineOperation<
+        ServiceContext,
+        { conversationId: string; requestId: string },
+        Awaited<ReturnType<typeof submissionState>>
+    >({
+        name: "test.submissionState",
+        kind: "read",
+        parse: (raw) => raw as { conversationId: string; requestId: string },
+        async run(ctx, { conversationId, requestId }) {
+            const submissionId = await submissionIdFor(ctx.host, conversationId, requestId);
+            if (submissionId === undefined) {
+                throw new Error(`Conversation ${conversationId} holds no submission for request ${requestId}`);
+            }
+            return submissionState(ctx.host, submissionId);
         },
     });
 }
@@ -243,11 +378,13 @@ async function main(): Promise<void> {
         : createFakeModel((transcript) => replyFor(switches.script ?? "echo", transcript), {
               delayMs: (transcript) => delayFor(switches, transcript),
               ...(switches.script === "gated" && { gate: runGate.promise }),
+              ...(switches.script === "streaming-gated" && { streamGate: runGate.promise }),
           });
     const fakeModelId = fake ? `${fake.getModel().provider}/${fake.getModel().id}` : undefined;
     const storageSwitch: StorageSwitch = { isFailing: false };
     const hold = Promise.withResolvers<void>();
 
+    if (fake) await writeFakeModelDefault(fake);
     const logger = createLogger({ verbose: false });
     const agents = await createAgentsComponent({ logger });
     const jobs = await createJobsComponent({
@@ -256,24 +393,34 @@ async function main(): Promise<void> {
         ...(switches.turnEndRule !== undefined && { turnEndRule: switches.turnEndRule }),
         ...(switches.jobCrashAt !== undefined && { afterWrite: killingAt(switches.jobCrashAt) }),
     });
+    const desk = await createDeskComponent({
+        agents,
+        jobs,
+        logger,
+        ...(switches.deskCrashAt !== undefined && { afterCreate: killingDeskAt(switches.deskCrashAt) }),
+    });
     const daemon = runDaemon({
         flags: parseFlags(process.argv.slice(3)),
         env: process.env,
         homeDir: process.env.HOME ?? "",
         logger,
         sections: agents.sections,
-        // The jobs component and the local socket follow the agents component, as in `src/cli/bob.ts`.
+        // The jobs and desk components and the local socket follow the agents component, as in `src/cli/bob.ts`.
         components: [
             agents.component,
             jobs.component,
+            desk.component,
             createLocalSocketComponent(),
             ...createComponents(switches, hold.promise),
         ],
         operations: [
             ...agents.operations,
             ...jobs.operations,
+            ...desk.operations,
             blockJobOperation(jobs),
+            createJobCancelledBeforeLeadOperation(jobs),
             waitingOperation(),
+            submissionStateOperation(),
             ...createTestOperations({
                 storageSwitch,
                 modelFor: (ctx) => modelFor(ctx, fakeModelId, switches.model),
