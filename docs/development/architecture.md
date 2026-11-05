@@ -280,8 +280,8 @@ small.
 - **Durability belongs to the runtime.** Recovery, exactly-once admission of input, queued input and checkpoints come
   from pi-durable. The daemon adds no retry loops, intake tables or recovery code of its own, except two bounded
   exceptions (ADR-001 decision 4). The first: the facts the-intern owns about a conversation (held messages, awaiting
-  links, parked state, the abort mark and creation keys) live in its own documents, and the only recovery is
-  redelivering the input those facts show as undelivered, made safe to repeat by pi-durable request ids. Each
+  links, parked state, the abort mark, the closed mark and creation keys) live in its own documents, and the only
+  recovery is redelivering the input those facts show as undelivered, made safe to repeat by pi-durable request ids. Each
   daemon-owned fact is committed in the same atomic commit as the change it describes, except for an abort. An
   abort's facts are written in one commit just before pi-durable's abort, not in pi-durable's abort commit. The
   second: job writes are committed before their pi-durable change, and four startup repair rules are the only job
@@ -290,10 +290,8 @@ small.
 ## Rejected approaches
 
 Implementation approaches weighed and rejected. ADR-001, Alternatives Considered, gives the full reasoning for the ones
-it records. [tech_stack.md](tech_stack.md), Control endpoint, holds the rejected protocols.
+it records.
 
-- **durable-pi's device model: several devices, a hub, a device registry, tokens and provisioning.** Rejected: these
-  make up most of durable-pi's weight, and the-intern runs on one machine.
 - **One database per session or conversation** (durable-pi's layout). Rejected: S-001 fixes one database per
   instance, and the daemon keeps its own state as documents in that database, not in a second store.
 - **Several processes sharing one database, or operating-system threads or worker processes per agent run.**

@@ -119,13 +119,6 @@ changes a shared term updates it in the same change, and the reviewer checks it.
 **Which HTTP support do the listeners and the client library use?**
 The HTTP support built into Node and the browser, so they add no runtime dependency.
 
-**Which protocols were rejected for the listeners and the feed?**
-
-- **WebSocket for the feed.** Rejected: the feed is one-way, Server-Sent Events carry it over plain HTTP in Node and
-  in browsers, and a WebSocket server needs more machinery for no gain.
-- **A line protocol (NDJSON) on the socket and HTTP only on the network.** Rejected: two protocols to keep in step.
-  The feature review had already chosen HTTP over the socket (`docs/research/feature-review.md`, open decision 3).
-
 ## Local runs and diagnostics
 
 **Where does a development instance keep its state, and how is it kept apart from a real one?**
