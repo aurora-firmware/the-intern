@@ -307,6 +307,43 @@ function createJobCancelledBeforeLeadOperation(jobs: { options: JobsComponentOpt
     });
 }
 
+/**
+ * Cancels the jobs one after the other, each stopping right after its conversations' closed marks are committed, then
+ * kills the process. The jobs' runs are left unfinished and the jobs are Done, as after a `kill -9` at that point.
+ */
+function cancelJobsThenKillOperation(jobs: { options: JobsComponentOptions }) {
+    const stopMessage = "stopped after the closed marks";
+    const stopAfterClosedMarks: NonNullable<JobsComponentOptions["afterWrite"]> = (point) => {
+        if (point === "conversations-closed") throw new Error(stopMessage);
+    };
+    return defineOperation<ServiceContext, { jobs: string[] }, Record<string, never>>({
+        name: "test.cancelJobsThenKill",
+        kind: "control",
+        parse: (raw) => raw as { jobs: string[] },
+        async run(ctx, input) {
+            const deps = { ctx, options: { ...jobs.options, afterWrite: stopAfterClosedMarks } };
+            const author = { kind: "team_member", wayIn: "command line" } as const;
+            for (const jobId of input.jobs) {
+                await cancelJob(deps, jobId, "no longer needed", author).catch((error: unknown) => {
+                    if (!(error instanceof Error) || error.message !== stopMessage) throw error;
+                });
+            }
+            process.kill(process.pid, "SIGKILL");
+            return new Promise<never>(() => undefined);
+        },
+    });
+}
+
+/** Lists the model requests the daemon received, each with the first user message and the daemon phase it started in. */
+function modelRequestsOperation(requests: { firstUserText: string; phase: string }[]) {
+    return defineOperation<ServiceContext, Record<string, never>, { firstUserText: string; phase: string }[]>({
+        name: "test.modelRequests",
+        kind: "read",
+        parse: (raw) => raw as Record<string, never>,
+        run: async () => [...requests],
+    });
+}
+
 /** Lists what each conversation of a job still waits for, which no service operation shows. */
 function waitingOperation() {
     return defineOperation<ServiceContext, { job: string }, { id: string; awaiting: string[]; held: number }[]>({
@@ -373,10 +410,17 @@ async function main(): Promise<void> {
     if (!send) throw new Error("daemon_child.ts must be started with an IPC channel");
 
     const runGate = Promise.withResolvers<void>();
+    const modelRequests: { firstUserText: string; phase: string }[] = [];
+    let currentPhase: () => string = () => "none";
     const fake = switches.realModels
         ? undefined
         : createFakeModel((transcript) => replyFor(switches.script ?? "echo", transcript), {
               delayMs: (transcript) => delayFor(switches, transcript),
+              onRequest: (transcript) =>
+                  modelRequests.push({
+                      firstUserText: transcript.find((turn) => turn.role === "user")?.text ?? "",
+                      phase: currentPhase(),
+                  }),
               ...(switches.script === "gated" && { gate: runGate.promise }),
               ...(switches.script === "streaming-gated" && { streamGate: runGate.promise }),
           });
@@ -419,6 +463,8 @@ async function main(): Promise<void> {
             ...desk.operations,
             blockJobOperation(jobs),
             createJobCancelledBeforeLeadOperation(jobs),
+            cancelJobsThenKillOperation(jobs),
+            modelRequestsOperation(modelRequests),
             waitingOperation(),
             submissionStateOperation(),
             ...createTestOperations({
@@ -430,6 +476,8 @@ async function main(): Promise<void> {
         ...(fake && { prepareModels: (runtime: InternModels) => modelsWithFake(runtime, fake) }),
         openStorage: async (database) => failingOnDemand(await SqliteStorage.open(database), storageSwitch),
     });
+
+    currentPhase = () => daemon.phase();
 
     process.on("message", async (message: Request | { release: true } | { releaseRuns: true }) => {
         if ("release" in message) return hold.resolve();

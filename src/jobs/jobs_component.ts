@@ -7,6 +7,7 @@ import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import { onInputSubmitted } from "../host/conversation_control.ts";
 import { setJobDoneCheck } from "../host/job_section.ts";
+import { waitForMarkedConversations } from "../host/repair_abort.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import { jobActionOperations } from "../service/job_action_operations.ts";
 import { jobExportOperation } from "../service/job_export_operation.ts";
@@ -65,6 +66,7 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
     let stopInputListening: (() => void) | undefined;
     let stopTurnEndRule: (() => void) | undefined;
     let stopJobDoneCheck: (() => void) | undefined;
+    let markedByRepair: string[] = [];
     let context: ServiceContext | undefined;
     // The job tools are built before the host opens, so they reach the service context once startup has bound it.
     const requireContext = (): ServiceContext => {
@@ -106,7 +108,12 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
             },
             // Step 7: after admission is restored and before work resumes (S-004 REQ-018).
             async repair(ctx) {
-                await repairJobs({ ctx, options });
+                markedByRepair = await repairJobs({ ctx, options });
+            },
+            // The marked work ends only once the host has resumed; listeners open after it has.
+            async afterResume(ctx) {
+                await waitForMarkedConversations(ctx.host, markedByRepair);
+                markedByRepair = [];
             },
             async stop() {
                 stopJobDoneCheck?.();

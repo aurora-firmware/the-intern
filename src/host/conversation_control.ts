@@ -46,7 +46,7 @@ function parseNumericId(id: string): number | undefined {
     return /^\d+$/.test(id) ? Number(id) : undefined;
 }
 
-async function requireConversation(host: HarnessHost, id: string): Promise<Conversation> {
+export async function requireConversation(host: HarnessHost, id: string): Promise<Conversation> {
     const numericId = parseConversationId(id);
     const conversation =
         numericId === undefined ? undefined : await internalHarness(host).conversation(numericId, context);

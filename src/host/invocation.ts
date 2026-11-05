@@ -354,7 +354,7 @@ async function closeConversation(host: HarnessHost, conversationId: string): Pro
 }
 
 // Lists and closes in the job's section, so no admission or creation of the job falls between the list and the marks.
-function closeJobConversations(host: HarnessHost, jobId: string): Promise<string[]> {
+export function closeJobConversations(host: HarnessHost, jobId: string): Promise<string[]> {
     return inJobSection(host, jobId, async () => {
         const ofJob: string[] = [];
         for (const { id } of await host.listConversations()) {
@@ -372,7 +372,7 @@ function closeJobConversations(host: HarnessHost, jobId: string): Promise<string
  * aborted alone. This runs before the first `Conversation.abort()`, which turns scheduling on after a restart, so no
  * compaction marked later can send a model request first. Without `onError` a failure rejects.
  */
-async function abortRunningCompactions(
+export async function abortRunningCompactions(
     host: HarnessHost,
     conversationIds: string[],
     onError?: (error: unknown) => void,
