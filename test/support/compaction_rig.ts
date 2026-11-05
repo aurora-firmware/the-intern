@@ -19,6 +19,8 @@ import { DEFAULT_LEAD_ROLE } from "../../src/roles/shipped_roles.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "./hermetic_env.ts";
 
+/** A lead step that holds the lead's model request, so its run stays busy, until the request is aborted. */
+export const HOLD_STEP = "hold";
 export const WAIT_MS = 20_000;
 const POLL_MS = 10;
 export const SETTLE_MS = 300;
@@ -64,11 +66,20 @@ export type Rig = Awaited<ReturnType<typeof start>>;
 export async function start(leadSteps: { name: string; args: Record<string, unknown> }[]) {
     const env = await createHermeticEnv();
     envs.push(env);
-    const logger = createLogger({ stream: { write: () => true } });
+    const logs: string[] = [];
+    const logger = createLogger({
+        stream: {
+            write: (chunk) => {
+                logs.push(chunk);
+                return true;
+            },
+        },
+    });
     const fake = registerFauxProvider({ models: [{ id: "model-one", reasoning: true }] });
     fakes.push(fake);
     const summary = { requests: 0, isAborted: false };
     const turns = { count: 0 };
+    const hold = { isAborted: false };
     let releaseSummary = (): void => {};
     const summaryGate = new Promise<void>((resolve) => {
         releaseSummary = resolve;
@@ -102,6 +113,20 @@ export async function start(leadSteps: { name: string; args: Record<string, unkn
         turns.count++;
         const step = leadSteps[index];
         if (step === undefined) return fauxAssistantMessage("finished");
+        if (step.name === HOLD_STEP) {
+            // The lead's run stays busy until the request is aborted.
+            const signal = streamOptions?.signal;
+            await new Promise<void>((resolve) => {
+                const markAborted = (): void => {
+                    hold.isAborted = true;
+                    resolve();
+                };
+                if (signal?.aborted) markAborted();
+                signal?.addEventListener("abort", markAborted);
+                gates.push(resolve);
+            });
+            return fauxAssistantMessage("finished");
+        }
         return fauxAssistantMessage([fauxToolCall(step.name, step.args as never)], { stopReason: "toolUse" });
     };
     fake.setResponses([respond]);
@@ -154,6 +179,8 @@ export async function start(leadSteps: { name: string; args: Record<string, unkn
         seat: () => jobs.options.agents.runtime().catalog.seatFor(DEFAULT_LEAD_ROLE),
         summary,
         turns,
+        hold,
+        logs,
         releaseSummary: () => releaseSummary(),
         createJob: async () =>
             (await daemon.catalogue.invoke("jobs.create", { text: "lead with compaction" }, webCaller)) as {

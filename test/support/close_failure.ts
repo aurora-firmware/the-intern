@@ -4,8 +4,8 @@ import { internalHarness } from "../../src/host/harness_host.ts";
 export interface CloseFailures {
     /** The nth closed-mark commit (1-based) rejects. */
     failMark?: number;
-    /** The nth `Conversation.abort()` call (1-based) rejects. */
-    failAbort?: number;
+    /** Every `Conversation.abort()` call on this conversation rejects, so it keeps running. */
+    failAbortOf?: string;
     /** Every `abortTask` call rejects, the stop of a running compaction included. */
     failCompactionAbort?: boolean;
     /** The nth `listConversations` call (1-based) and every later one rejects. */
@@ -45,8 +45,7 @@ export function injectCloseFailures(host: HarnessHost, failures: CloseFailures):
                 }
                 return (...args: Parameters<typeof target.abort>) => {
                     log.aborts.push(String(id));
-                    if (log.aborts.length === failures.failAbort)
-                        return Promise.reject(new Error("injected abort failure"));
+                    if (String(id) === failures.failAbortOf) return Promise.reject(new Error("injected abort failure"));
                     return target.abort(...args);
                 };
             },
