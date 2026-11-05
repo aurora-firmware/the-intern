@@ -468,6 +468,12 @@ async function appendFiller(host: HarnessHost, id: string, count: number): Promi
     }, ctx);
 }
 
+async function appendMessage(host: HarnessHost, id: string, message: Record<string, unknown>): Promise<void> {
+    await internalHarness(host).commit(async (tx) => {
+        await tx.appendEntry(fillerEntry, Number(id) as never, { data: {}, model: [message] as never });
+    }, ctx);
+}
+
 function countingStorage(counter: { scans: number }): (database: SqliteDatabase) => Promise<Storage> {
     return async (database) => {
         const storage = await SqliteStorage.open(database);
@@ -519,6 +525,21 @@ describe("readLastMessageTime", () => {
         await appendFiller(host, id, PAGE_OVERFLOW);
 
         assert.equal(await host.readLastMessageTime(id), await newestAssistantTime(host, id));
+    });
+
+    it("keeps reading past a page whose newest message is an assistant message stamped before an older entry", async () => {
+        const env = await makeEnv();
+        const fake = makeFake(() => "hello");
+        const host = await openHost({ databaseFile: join(env.root, "state.sqlite"), fake });
+        const id = await host.createConversation({ agent: { model: modelNameOf(fake) } });
+        const STEER_TIME = 2_000;
+        const STREAM_START_TIME = 1_000;
+        // A steer entry placed while a reply streams sits before that reply's entry but carries a later timestamp.
+        await appendMessage(host, id, { role: "user", content: "steer", timestamp: STEER_TIME });
+        await appendFiller(host, id, PAGE_OVERFLOW);
+        await appendMessage(host, id, { role: "assistant", content: [], timestamp: STREAM_START_TIME });
+
+        assert.equal(await host.readLastMessageTime(id), STEER_TIME);
     });
 
     it("reads only the newest page when it holds a model message", async () => {

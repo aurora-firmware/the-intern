@@ -245,17 +245,21 @@ function toContextEntry(entry: EntryRecord): HostEntry {
 }
 
 // Entries carry no wall-clock time of their own; the messages they contribute to the model do.
-function newestModelMessageTime(entries: readonly EntryRecord[]): number | null {
-    let newest: number | null = null;
+function modelMessages(entries: readonly EntryRecord[]): { timestamp: number; role: unknown }[] {
+    const messages: { timestamp: number; role: unknown }[] = [];
     for (const entry of entries) {
         for (const message of entry.model ?? []) {
-            if (typeof message?.timestamp === "number" && (newest === null || message.timestamp > newest)) {
-                newest = message.timestamp;
-            }
+            if (typeof message?.timestamp === "number")
+                messages.push({ timestamp: message.timestamp, role: message.role });
         }
     }
-    return newest;
+    return messages;
 }
+
+// pi stamps a user message or a tool result when it creates it, and its entry is appended at once. It stamps an
+// assistant message when the stream starts, and its entry is appended when the stream ends.
+const isStampedWhenAppended = (message: { role: unknown }): boolean =>
+    message.role === "user" || message.role === "toolResult";
 
 async function listBusyConversationIds(harness: Harness): Promise<Set<ConversationId>> {
     const { tasks } = await harness.inspect(context);
@@ -344,6 +348,7 @@ function createHost(harness: Harness): HarnessHost {
         },
         async readLastMessageTime(id) {
             const conversation = await requireConversation(harness, id);
+            let newest: number | null = null;
             let cursor: Cursor | undefined;
             do {
                 const page = await conversation.entries(
@@ -352,15 +357,18 @@ function createHost(harness: Harness): HarnessHost {
                     cursor,
                     context,
                 );
-                // A message's timestamp is set when pi creates it, but its entry is appended when the message ends,
-                // so an entry placed meanwhile (a steer) can sit before an older timestamp. That skew spans the
-                // entries of one turn, so the newest of a whole page that holds a message is taken, and older pages
-                // are not read.
-                const pageNewest = newestModelMessageTime(page.items);
-                if (pageNewest !== null) return pageNewest;
+                const messages = modelMessages(page.items);
+                for (const message of messages) {
+                    if (newest === null || message.timestamp > newest) newest = message.timestamp;
+                }
+                // An entry placed while a reply streams (a steer) sits before the reply's entry but can carry a later
+                // timestamp. A message stamped when it was appended bounds every older entry: each of them was
+                // appended before it, so none can hold a later timestamp. Without one, an older page can still hold
+                // a later timestamp, so the scan goes on.
+                if (messages.some(isStampedWhenAppended)) return newest;
                 cursor = page.next;
             } while (cursor !== undefined);
-            return null;
+            return newest;
         },
     };
 }
