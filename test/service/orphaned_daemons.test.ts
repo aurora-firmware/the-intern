@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { processCommand } from "../support/process_command.ts";
 
 const FIXTURE = join(import.meta.dirname, "..", "support", "orphan_fixture.ts");
 const START_TIMEOUT_MS = 30_000;
@@ -11,17 +12,9 @@ const POLL_MS = 20;
 
 type Started = { pid: number; root: string };
 
-async function commandLine(pid: number): Promise<string> {
-    try {
-        return (await readFile(`/proc/${pid}/cmdline`, "utf8")).replaceAll("\0", " ");
-    } catch {
-        return "";
-    }
-}
-
 /** True while the process `pid` exists and is still the one started under `root`; a reused pid does not count. */
 async function isDaemonAlive(started: Started): Promise<boolean> {
-    return (await commandLine(started.pid)).includes(started.root);
+    return processCommand(started.pid)?.includes(started.root) ?? false;
 }
 
 async function waitUntil(condition: () => Promise<boolean>, timeoutMs: number): Promise<boolean> {
