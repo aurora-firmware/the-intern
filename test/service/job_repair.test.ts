@@ -12,7 +12,7 @@ import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContex
 import { createLogger } from "../../src/daemon/logger.ts";
 import { hasQueuedInput, hasSubmissionWithRequestId } from "../../src/host/conversation_control.ts";
 import { internalHarness } from "../../src/host/harness_host.ts";
-import { parkConversation } from "../../src/host/invocation.ts";
+import { parkConversation, unparkConversation } from "../../src/host/invocation.ts";
 import { conversationMetaDoc, createSeatedConversation, readConversationMeta } from "../../src/host/seating.ts";
 import { steerConversation } from "../../src/host/steering.ts";
 import { blockJob, cancelJob, completeJob, type JobActionDeps } from "../../src/jobs/job_actions.ts";
@@ -787,6 +787,78 @@ describe("rule 3: a held message of a parked lead", () => {
         assert.equal(rig.modelInputs.filter((users) => users.includes(HELD_TEXT)).length, 1);
         assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [3]);
         heldCall.release();
+    });
+});
+
+describe("rule 3: the delivery of held messages is owed past the repair", () => {
+    async function bootWithHeldMessage(rig: Rig, isParked: boolean) {
+        const first = await rig.boot();
+        const job = await first.createJob();
+        await waitFor(() => isIdle(first.ctx, job.leadConversation), "the lead to be idle");
+        await parkConversation(first.ctx.host, job.leadConversation, { waitingFor: "reports", continueOn: "all" });
+        await first.ctx.jobStore.applyAction(job.id, "block", { blockedReason: REASON }, daemonAuthor);
+        await steerConversation(first.ctx.host, job.leadConversation, {
+            content: HELD_TEXT,
+            mode: "followUp",
+            actor: teamMember,
+            requestId: "held-1",
+        });
+        if (!isParked) await unparkConversation(first.ctx.host, job.leadConversation);
+        await first.stop();
+        return job;
+    }
+
+    it("keeps the job Blocked until the host has resumed", async () => {
+        const rig = await createRig();
+        const job = await bootWithHeldMessage(rig, true);
+        let statusAtEndOfRepair = "";
+        let ctxAtRepair: ServiceContext | undefined;
+        const observer: DaemonComponent = {
+            name: "observer",
+            start: async () => undefined,
+            repair: async (ctx) => {
+                ctxAtRepair = ctx;
+                statusAtEndOfRepair = (await ctx.jobStore.getJob(job.id)).status;
+            },
+        };
+
+        const second = await rig.boot({ components: [observer] });
+
+        assert.ok(ctxAtRepair);
+        assert.equal(statusAtEndOfRepair, "blocked");
+        assert.equal((await second.ctx.jobStore.getJob(job.id)).status, "in_progress");
+    });
+
+    it("does not park a lead that holds a message and is not parked", async () => {
+        const rig = await createRig();
+        const job = await bootWithHeldMessage(rig, false);
+
+        const second = await rig.boot();
+
+        assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [3]);
+        assert.equal((await readConversationMeta(second.ctx.host, job.leadConversation))?.parked, null);
+        await waitFor(() => rig.modelInputs.some((users) => users.includes(HELD_TEXT)), "the lead to take the message");
+    });
+
+    it("applies the rule again at the next start when the start stops after the repair", async () => {
+        const rig = await createRig();
+        const job = await bootWithHeldMessage(rig, true);
+        const crash: DaemonComponent = {
+            name: "crash",
+            start: async () => undefined,
+            repair: async () => {
+                throw new Error("crash after the jobs repair");
+            },
+        };
+        const failed = await rig.boot({ components: [crash], isStartupExpectedToFail: true });
+        await failed.stop();
+
+        const second = await rig.boot();
+
+        assert.equal((await second.ctx.jobStore.getJob(job.id)).status, "in_progress");
+        assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [3, 3]);
+        await waitFor(() => rig.modelInputs.some((users) => users.includes(HELD_TEXT)), "the lead to take the message");
+        assert.equal(rig.modelInputs.filter((users) => users.includes(HELD_TEXT)).length, 1);
     });
 });
 
