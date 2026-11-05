@@ -1,7 +1,7 @@
 ---
 id: S-003
 title: Control endpoint
-version: '0.2'
+version: '0.3'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-01'
 author: planner
@@ -173,7 +173,7 @@ The library's function names and types are not contract; the tasks fix them.
 - S-002's catalogue: listing operations and invoking one by name with an input and a caller (S-002 REQ-012, REQ-013,
   REQ-017), with a job's origin built from the caller (S-002 AC-012.5).
 - S-002's observation feed: subscribing to a scope and its end reasons (S-002 REQ-014, REQ-015).
-- S-002's lifecycle start and stop hooks, readiness and stop bound, and the runtime directory (S-002 REQ-002,
+- S-002's startup step 8, shutdown order, readiness and stop bound, and the runtime directory (S-002 REQ-002,
   REQ-003, REQ-005, REQ-006).
 - The `[network]` section of the configuration file (Configuration Requirements; S-002 REQ-021, REQ-022).
 - The web interface files shipped in the package (Web interface spec).
@@ -184,7 +184,7 @@ The listeners' life inside the daemon's startup and shutdown, an operation call 
 their failure paths:
 
 ```
-Startup (S-002 REQ-002 step 8; each listener opens in its own start hook, socket first)
+Startup (S-002 REQ-002 step 8; socket first)
   local socket: check path length → replace leftover socket file → listen, owner-only        REQ-001
   [network] set? → bind address and port; failure → daemon exits 1 naming address, reason    REQ-002
   no [network] → nothing listens on TCP                                                      REQ-002
@@ -208,7 +208,7 @@ Feed
 
 Shutdown (S-002 REQ-005)
   "stopping" → new calls 503 unavailable → running calls cut (503 or closed connection)
-  → streams end(stopped) → listeners close → socket file removed → harness closes            REQ-010
+  → streams end(stopped) → listeners close → socket file removed → database closes           REQ-010
 ```
 
 ## Behavioral Requirements
@@ -216,8 +216,8 @@ Shutdown (S-002 REQ-005)
 ### REQ-001 — The local socket
 
 The daemon SHALL always run the local socket listener, on the socket file `bob.sock` in the instance's runtime
-directory (S-002 REQ-006), accessible only to the service account. It opens in its own start hook in startup step 8
-(S-002 REQ-002), before the network listener and after the daemon holds single ownership, so a socket file left by
+directory (S-002 REQ-006), accessible only to the service account. It opens in startup step 8 (S-002 REQ-002), before
+the network listener and after the daemon holds single ownership, so a socket file left by
 an earlier daemon is replaced. If the socket path is longer than the platform allows, startup stops with an error
 naming the path. Until the daemon is ready, both listeners answer `daemon.status` ("starting") and refuse every other
 call and feed request with `503 unavailable` (S-002 REQ-003).
@@ -250,17 +250,17 @@ call and feed request with `503 unavailable` (S-002 REQ-003).
 
 #### AC-001.4 — Calls before ready
 
-- **Given:** a daemon whose listeners are open and whose last start hook is held
+- **Given:** a daemon whose listeners are open and whose last start step is held
 - **When:** a client calls `daemon.status`, another operation and `GET /feed` over each listener
-- **Then:** status answers "starting", the other call and the feed request get `503 unavailable`, and after the hook
+- **Then:** status answers "starting", the other call and the feed request get `503 unavailable`, and after the step
   is released the same calls succeed
 
 **Verification:** test — a service test with a held start hook (as S-002 AC-003.1).
 
 ### REQ-002 — The network listener
 
-The network listener SHALL run only when the configuration file has a `[network]` section; it then opens in its own
-start hook, after the local socket, and listens on the configured address and port. When it can't listen (the port
+The network listener SHALL run only when the configuration file has a `[network]` section; it then opens in startup
+step 8, after the local socket, and listens on the configured address and port. When it can't listen (the port
 is in use, the address is unknown or not on the machine), startup stops with an error naming the address, the port
 and the reason, and the components already started are stopped (S-002 REQ-002). Its settings are read at startup
 only.
@@ -501,7 +501,7 @@ interface call the daemon only through this library.
 When the daemon reports "stopping" (S-002 REQ-005), the listeners SHALL answer new calls `503 unavailable`, end every
 open feed stream with `end` and the reason `stopped`, and end every call still running, such as a
 `submissions.wait`, with `503 unavailable` or by closing its connection, without waiting for it to finish. They close
-before the harness closes and within the daemon's 10-second stop bound. The local socket file is removed.
+before the database closes and within the daemon's 10-second stop bound. The local socket file is removed.
 
 #### AC-010.1 — Shutdown with open streams and a waiting call
 
@@ -631,7 +631,7 @@ Built-in constants, not configurable: the 10 MiB body limit (REQ-004) and the 10
 ## Assumptions and Dependencies
 
 - **S-002** provides the catalogue with read and control marks, invocation by name with a caller, the observation
-  feed with its end reasons, the lifecycle start and stop hooks with startup step 8, readiness, the stop bound and the
+  feed with its end reasons, startup step 8, the shutdown order, readiness, the stop bound and the
   runtime directory. This spec relies on S-002 v0.7's amendments, made on the same planning branch: listeners refuse
   calls until ready (REQ-003), a job's origin is built from the caller (AC-012.5), and the configuration file keeps
   sections later specs add (REQ-021, REQ-022). The current code may deviate from them; the S-003 breakdown includes a
@@ -685,3 +685,4 @@ None affect the specified behaviour.
 |------|-------------|-----|----------------|
 | 2026-11-02 | v0.2. REQ-007: each listener passes the caller details it observes with the way in: the network listener the TCP peer's remote address and port, never a header such as `X-Forwarded-For`, and the local socket none beyond the way in (no OS account); a job created through a listener records them (new AC-007.3). AC-007.2: the refused origin claim is a `jobs.create` call, which creates no job and uses no number, and without the origin creates `C-n`. AC-003.1: observed caller details may differ between the three results. Design Principles, "Listeners are transports only": the caller is fixed by the listener and the connection. | S-004 architecture consistency review; product owner decisions 2026-11-02 (the OS account dropped). Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None yet; the code changes (observed caller details, `jobs.create` in place of `jobs.startLead` in the tests) come in the S-004 breakdown |
 | 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The runtime-dependency principle moved to `docs/development/tech_stack.md`. All alternatives stay. | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
+| 2026-11-05 | v0.3. No behaviour changes (CR-001): implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: REQ-001, AC-001.4, REQ-002, REQ-010 (start hooks, the harness), with the copies in Consumed, Workflow and Assumptions. REQ-013 and AC-013.1 keep their wording until ADR-001 decision 2 is amended. No identifier added or retired. | CR-001, approved by the product owner. | None; spec text only |
