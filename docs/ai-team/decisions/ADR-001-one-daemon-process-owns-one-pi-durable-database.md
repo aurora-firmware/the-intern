@@ -92,11 +92,13 @@ code of our own, apart from the two bounded exceptions in decision 4.
    document, plus the daemon's own state as documents, and the job store. Nothing but the daemon reads or writes it,
    apart from the import step below; clients read history and jobs through the service layer. A second daemon for the
    same instance is refused before it opens the database; a stale owner that is no longer alive is taken over (S-002
-   REQ-001). A second instance, with its own state directory, is the only wall between sets of conversations.
+   REQ-001). Single ownership is a lock file in the state directory that records the owner. A lock left by a process
+   that is no longer alive, left by an earlier boot, or that can't be parsed is stale. A second instance, with its own
+   state directory, is the only wall between sets of conversations.
 
    **The job store shares the file.**
-   - The job record lives in the-intern's own tables, named with the prefix `intern_`, beside pi-durable's tables
-     (S-004 REQ-001). The job schema version is kept in an `intern_` table, never in the file's `user_version`
+   - The job record lives in the-intern's own tables (S-004 REQ-001), named with the prefix `intern_`, beside
+     pi-durable's tables. The job schema version is kept in an `intern_` table, never in the file's `user_version`
      header, and the job store migrates only its own tables, forward. The job store never reads or writes
      pi-durable's tables, and no job fact is kept in a pi-durable document.
    - The file has one connection. The host opens the database file, owner-only, and gives the same database handle
@@ -120,10 +122,25 @@ code of our own, apart from the two bounded exceptions in decision 4.
    - A copy is taken at a moment that may fall between a job write and its pi-durable change, so the first start on
      an imported copy repairs it as after a crash (decision 4).
    - Export and import move the file; they don't convert it. A version opens an imported copy only when its
-     pi-durable can open the file and the copy's job schema isn't newer than its own.
+     pi-durable can open the file and the copy's job schema isn't newer than its own. The import step refuses a copy
+     whose job schema or pi-durable schema is newer than the running version's (S-004 REQ-017).
 2. **pi-durable sits behind a narrow host.** Only the harness host module and the-intern's own pi-durable extensions,
-   shipped in the package, import pi-durable. The service layer and every other component depend on the host's
-   interface. No other extensions are discovered or loaded at runtime.
+   shipped in the package, import pi-durable. The harness host module is the code in `src/host/`, which opens the
+   database and owns the harness. The service layer and every other component depend on the host's interface. No other
+   extensions are discovered or loaded at runtime.
+
+   **Listeners and the client library stay on the service layer (S-003 REQ-013).**
+   - Listener and client library code imports none of the harness host module, `@earendil-works/pi-durable`, `pi-ai`,
+     `chord` or `pi-coding-agent`. The rule for those last three packages stops there: daemon components use them where
+     they need them.
+   - Listeners reach the daemon's state only through the catalogue, the feed and the lifecycle hooks, which are the
+     start and stop hooks a component registers with the daemon's lifecycle. They import the daemon and feed modules
+     only as types. The one daemon file listener and client library code may load is the path layout,
+     `src/daemon/state_layout.ts`, which imports only Node modules.
+
+   **The service layer knows no transport (S-002 REQ-016).** No operation takes a request or connection as input. A
+   listener turns what it receives into an operation's input and a caller, so every operation can be called in-process
+   with no listener.
 3. **Worker threads are logical capacity slots.** The daemon is one operating-system process with one event loop. A
    worker thread is a slot in that process, not an operating-system thread or a worker process. One active agent run
    holds one worker thread. Their number is a built-in constant, 32, which no one can configure and which changes only
@@ -168,7 +185,8 @@ code of our own, apart from the two bounded exceptions in decision 4.
      section only for the closed-mark commits and calls pi-durable's abort after releasing it, except for a lead
      completing through its tool, whose run ends at that call, so no section waits for
      a run to end. The section holds no input, so it is ordering, not an intake list. The front desk has no job and
-     takes no section.
+     takes no section: input from every way in shares its one transcript in the order pi-durable admits it, and the
+     daemon adds no lock of its own (S-001 REQ-021).
    - The only recovery the daemon does is redelivery worked out from those facts. The daemon submits the input the
      facts show as undelivered: a conversation's held messages when it continues; the report of each awaited
      conversation whose run has finished, at start and when its run ends; and the "aborted" report of each awaited
@@ -211,7 +229,8 @@ code of our own, apart from the two bounded exceptions in decision 4.
    - The start action needs no repair. It is written when the lead's first run takes a worker thread, before its
      first model request; after a crash before that write, the run resumes, takes a worker thread again and writes it.
    - At startup, after admission is restored and before work resumes (S-002 REQ-002 step 7), the daemon applies
-     exactly the four repair rules of S-004 REQ-018, and no other recovery to jobs:
+     exactly the four repair rules of S-004 REQ-018, and no other recovery to jobs. S-004 REQ-018 states the rules in
+     behaviour words, under the same numbers, and this record holds how they are built:
      1. A job whose start is missing or was cut short gets its start completed: a job that isn't Done and has no
         lead conversation, or a To do job whose lead conversation holds no submission with request id
         `lead:<jobId>`, gets its lead conversation started and its first input submitted.
@@ -224,12 +243,13 @@ code of our own, apart from the two bounded exceptions in decision 4.
         compaction or queued input, gets it closed and aborted: one commit sets its closed mark, clears `parked` and
         empties `awaiting`, `held` and its pi-durable inbox, then pi-durable aborts it and any compaction still running
         in it (S-001 REQ-026).
-   - The block records the ID of the lead conversation's newest transcript entry in the job's internal
-     `blockedAfterEntry`, in the same write as the status change, and the resume clears it the same way (S-004
-     REQ-006, Interfaces). An input entry is an entry of kind `pi.user`, or one of the input entry kinds the daemon
-     submits (the steer record and the ADR-004 kinds). Rule 3 reads the lead's transcript newest first, back to the
-     recorded entry. This is pi-durable's own order, the same read `src/host/reports.ts` `readLastAnswer` makes. It
-     decides whether the rule applies and rebuilds no job field.
+   - The block records the ID of the lead conversation's newest transcript entry, or null, in the job's internal
+     `blockedAfterEntry`, in the same write as the status change, and the resume clears it the same way. It isn't one
+     of the job fields `jobs.get` returns, and the history doesn't record it. This is how rule 3 knows that a lead
+     has taken input since the job blocked (S-004 REQ-018). An input entry is an entry of kind `pi.user`, or one of the
+     input entry kinds the daemon submits (the steer record and the ADR-004 kinds). Rule 3 reads the lead's transcript
+     newest first, back to the recorded entry. This is pi-durable's own order, the same read
+     `src/host/reports.ts` `readLastAnswer` makes. It decides whether the rule applies and rebuilds no job field.
    - Creating the lead conversation and submitting its first input are two pi-durable commits; pi-durable can't
      submit input in the creation commit. For each To do job whose lead conversation is known, rule 1 reads whether
      pi-durable holds a submission with request id `lead:<jobId>` for that conversation
@@ -392,3 +412,4 @@ second connection open. One shared handle orders every transaction and closes wi
 | 2026-11-04 | Decision 4, first bounded exception: the closed-mark commit also removes every queued item from the conversation's pi-durable inbox and settles it `unanswered`; repair rule 4 does the same, and it also fires for a running compaction. Any compaction still running is aborted after that commit. | Product owner decision of 2026-11-04 (B-006 and the misleading `tool complete_job failed` line). |
 | 2026-11-04 | Decision 4, first bounded exception: a close that fails inside a lead's complete tool with the harness still open is followed by pi-durable's abort of the job's conversations, without their marks; `parked`, `awaiting` and `held` stay until rule 4 clears them. A storage error stays under decision 5. | Product owner decision of 2026-11-04 on T-198 finding F1; S-004 v0.9 REQ-007. |
 | 2026-11-05 | Citations only (Context, Sources, Alternatives A and G): S-002 and S-004 no longer have Design Principles, the document-families alternative left S-004 Alternatives Considered, and the Alternative A citation of S-002 Exclusions has been stale since S-002 v0.6, independent of this restructure. No decision changes. | Architecture consistency review of the ai-team 0.19.0 spec layout, T-185. |
+| 2026-11-05 | Decision 2: names what the harness host module is; listener and client library code imports none of the host module, pi-durable, `pi-ai`, `chord` or `pi-coding-agent`; listeners reach the daemon's state only through the catalogue, the feed and the lifecycle hooks; the service layer knows no transport. Decision 1: single ownership is a lock file, and the import step refuses a copy with a newer job or pi-durable schema. Decision 4: the front desk's input is in the order pi-durable admits it, with no lock of the daemon's own; S-004 REQ-018 states the repair rules in behaviour words; `blockedAfterEntry` is cited to rule 3, and isn't returned or recorded in the history. These statements come from the specs and change no behaviour. | CR-001: design statements leave the requirement text of S-001 to S-005, so a constraint needs a binding home first. |
