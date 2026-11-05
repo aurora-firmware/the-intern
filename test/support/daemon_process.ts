@@ -10,6 +10,7 @@ import type { WritePoint } from "../../src/jobs/jobs_component.ts";
 import { ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
 import type { DaemonStatus } from "../../src/service/status_operation.ts";
 import type { HermeticEnv } from "./hermetic_env.ts";
+import { guardProcess } from "./process_guard.ts";
 
 const CHILD_ENTRY = join(import.meta.dirname, "daemon_child.ts");
 const READY_POLL_TIMEOUT_MS = 30_000;
@@ -117,6 +118,7 @@ export function startDaemon(options: StartDaemonOptions): DaemonProcess {
         cwd: options.hermetic.root,
         stdio: ["ignore", "ignore", "pipe", "ipc"],
     });
+    guardProcess(child, options.hermetic.root);
     let stderrText = "";
     child.stderr?.on("data", (chunk) => {
         stderrText += chunk;

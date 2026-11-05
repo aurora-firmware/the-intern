@@ -7,6 +7,7 @@ import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { guardProcess } from "../support/process_guard.ts";
 
 const BOB_ENTRY = join(import.meta.dirname, "..", "..", "src", "cli", "bob.ts");
 const WAIT_TIMEOUT_MS = 20_000;
@@ -60,6 +61,7 @@ function serve(env: HermeticEnv): Serving {
         flags.runtimeDir,
     ];
     const child = spawn(process.execPath, args, { env: env.env, stdio: ["ignore", "ignore", "pipe"] });
+    guardProcess(child, env.root);
     children.push(child);
     let stderr = "";
     child.stderr.on("data", (chunk) => {
