@@ -27,6 +27,7 @@ import {
     type HeldMessage,
     type ParkedState,
     readConversationMeta,
+    SEAT_RECORD_KIND,
     type SeatActor,
     SeatingError,
     seatWrites,
@@ -34,6 +35,8 @@ import {
 import { STEER_RECORD_KIND } from "./steering.ts";
 
 const context = BACKGROUND_CONTEXT;
+const COMPACTION_ENTRY_KIND = "pi.compaction";
+const ENTRY_PAGE_SIZE = 500;
 
 export type InvocationRequest = { seat: Seat; contextMode: ContextMode; jobPrompt: string };
 
@@ -160,7 +163,25 @@ async function hasSubmission(host: HarnessHost, conversationId: string, requestI
     return found !== undefined;
 }
 
-// A Compact context is compacted with the job prompt as instructions before the prompt itself is submitted.
+// Whether the conversation holds a compaction made after its own seat record. A Compact conversation is a fork that
+// copied the invoker's entries, `pi.compaction` ones included, and its seat record is written in the commit that forks
+// it: only a compaction after that record is this invocation's. Read from the entries, so a restart doesn't lose it.
+async function isCompactedSinceFork(host: HarnessHost, conversationId: string): Promise<boolean> {
+    let isCompacted = false;
+    let after: string | undefined;
+    do {
+        const page = await host.readEntries(conversationId, { limit: ENTRY_PAGE_SIZE, ...(after && { after }) });
+        for (const entry of page.entries) {
+            if (entry.kind === SEAT_RECORD_KIND) isCompacted = false;
+            else if (entry.kind === COMPACTION_ENTRY_KIND) isCompacted = true;
+        }
+        after = page.next;
+    } while (after !== undefined);
+    return isCompacted;
+}
+
+// A Compact context is compacted with the job prompt as instructions before the prompt itself is submitted, unless a
+// call before the crash already compacted it.
 async function submitJobPrompt(
     host: HarnessHost,
     conversationId: string,
@@ -168,7 +189,8 @@ async function submitJobPrompt(
     requestId: string,
 ) {
     if (await hasSubmission(host, conversationId, requestId)) return;
-    if (request.contextMode === "compact") await compactConversation(host, conversationId, request.jobPrompt);
+    const isCompactNeeded = request.contextMode === "compact" && !(await isCompactedSinceFork(host, conversationId));
+    if (isCompactNeeded) await compactConversation(host, conversationId, request.jobPrompt);
     await submitInput(host, conversationId, { content: request.jobPrompt, requestId, busyMode: "followUp" });
 }
 

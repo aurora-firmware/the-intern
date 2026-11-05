@@ -14,7 +14,7 @@ import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import { INVOCATION_DEPTH_CAP } from "../../src/daemon/constants.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
-import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
+import { compactConversation, submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import {
     continueParked,
@@ -24,6 +24,7 @@ import {
     parkConversation,
 } from "../../src/host/invocation.ts";
 import {
+    type ContextMode,
     conversationMetaDoc,
     createSeatedConversation,
     type JobLinks,
@@ -147,6 +148,63 @@ async function lastSeatRecord(
     const page = await host.readEntries(conversationId, { limit: 100 });
     const records = page.entries.filter((entry) => entry.kind === SEAT_RECORD_KIND);
     return records.at(-1)?.data as { previous: unknown; next: unknown };
+}
+
+async function submitAndWait(host: HarnessHost, conversationId: string, content: string): Promise<void> {
+    const { submissionId } = await submitInput(host, conversationId, {
+        content,
+        requestId: content,
+        busyMode: "followUp",
+    });
+    await waitForSubmission(host, submissionId, WAIT_MS);
+}
+
+// The compactions a conversation holds after its own seat record: those before it were copied from the invoker.
+async function compactionsAfterFork(host: HarnessHost, conversationId: string): Promise<number> {
+    const page = await host.readEntries(conversationId, { limit: 1000 });
+    const lastSeat = page.entries.findLastIndex((entry) => entry.kind === SEAT_RECORD_KIND);
+    return page.entries.slice(lastSeat + 1).filter((entry) => entry.kind === "pi.compaction").length;
+}
+
+// Wraps the host's conversations to count their compact calls, and to fail the first submission of `crashRequestId` as
+// a crash between the compaction and the submission would.
+function watchConversations(host: HarnessHost, crashRequestId?: string) {
+    const harness = internalHarness(host);
+    const original = harness.conversation.bind(harness);
+    const compactCalls: string[] = [];
+    let hasCrashed = false;
+    harness.conversation = (async (...args: Parameters<typeof original>) => {
+        const conversation = await original(...args);
+        if (conversation === undefined) return conversation;
+        return new Proxy(conversation, {
+            get(target, property) {
+                if (property === "compact") {
+                    return (...compactArgs: Parameters<typeof target.compact>) => {
+                        compactCalls.push(String(target.id));
+                        return target.compact(...compactArgs);
+                    };
+                }
+                if (property === "submit") {
+                    return async (...submitArgs: Parameters<typeof target.submit>) => {
+                        const input = submitArgs[0] as { requestId?: string };
+                        if (!hasCrashed && input.requestId === crashRequestId) {
+                            hasCrashed = true;
+                            throw new Error("simulated crash before the job prompt is submitted");
+                        }
+                        return target.submit(...submitArgs);
+                    };
+                }
+                const value = Reflect.get(target, property, target);
+                return typeof value === "function" ? value.bind(target) : value;
+            },
+        });
+    }) as typeof harness.conversation;
+    return {
+        compactCallsOn: (conversationId: string) => compactCalls.filter((id) => id === conversationId).length,
+        restore: () => {
+            harness.conversation = original;
+        },
+    };
 }
 
 describe("createInvokedConversations", () => {
@@ -307,6 +365,69 @@ describe("createInvokedConversations", () => {
 
         assert.equal((await fixture.host.listConversations()).length, before);
         assert.deepEqual((await readConversationMeta(fixture.host, invokingId))?.awaiting, []);
+    });
+
+    describe("when the call repeats after a crash", () => {
+        const crashedInvocation = async (fixture: Fixture, invokingId: string, contextMode: ContextMode) => {
+            const input = {
+                invokingId,
+                callId: "call-1",
+                agents: [request(fixture, "job-crash", contextMode)],
+                actor: fixture.actor,
+            };
+            const watch = watchConversations(fixture.host, `invoke:${invokingId}:call-1:0`);
+            await assert.rejects(createInvokedConversations(fixture.host, input), /simulated crash/);
+            const [id] = (await readConversationMeta(fixture.host, invokingId))?.awaiting ?? [];
+            return { input, id: id as string, watch };
+        };
+
+        it("submits the job prompt without compacting a Compact invoked conversation again", async () => {
+            const fixture = await createFixture();
+            const invokingId = await fixture.startInvoker();
+            const { input, id, watch } = await crashedInvocation(fixture, invokingId, "compact");
+            assert.equal(watch.compactCallsOn(id), 1);
+
+            await createInvokedConversations(fixture.host, input);
+
+            assert.equal(watch.compactCallsOn(id), 1);
+            assert.equal(await compactionsAfterFork(fixture.host, id), 1);
+            await waitForRequestsTo(fixture, "job-crash");
+            watch.restore();
+        });
+
+        for (const contextMode of ["full", "clean"] as const) {
+            it(`does not compact a ${contextMode} invoked conversation and submits the job prompt once`, async () => {
+                const fixture = await createFixture();
+                const invokingId = await fixture.startInvoker();
+                const { input, id, watch } = await crashedInvocation(fixture, invokingId, contextMode);
+
+                await createInvokedConversations(fixture.host, input);
+
+                assert.equal(watch.compactCallsOn(id), 0);
+                assert.equal(await compactionsAfterFork(fixture.host, id), 0);
+                const [seen] = await waitForRequestsTo(fixture, "job-crash");
+                assert.equal(seen?.filter((message) => textOf(message) === "job-crash").length, 1);
+                watch.restore();
+            });
+        }
+    });
+
+    it("compacts a Compact invoked conversation once when the invoker already holds a compaction", async () => {
+        const fixture = await createFixture();
+        const invokingId = await fixture.startInvoker();
+        await submitAndWait(fixture.host, invokingId, "second");
+        await compactConversation(fixture.host, invokingId);
+        await submitAndWait(fixture.host, invokingId, "third");
+        await submitAndWait(fixture.host, invokingId, "fourth");
+
+        const [id] = await createInvokedConversations(fixture.host, {
+            invokingId,
+            callId: "call-1",
+            agents: [request(fixture, "job-compact", "compact")],
+            actor: fixture.actor,
+        });
+
+        assert.equal(await compactionsAfterFork(fixture.host, id as string), 1);
     });
 
     it("returns the same conversations and creates nothing when the invoking id and call id repeat", async () => {
