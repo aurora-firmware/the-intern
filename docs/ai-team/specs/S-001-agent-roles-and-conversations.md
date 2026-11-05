@@ -1422,9 +1422,9 @@ which a team member or an agent of any job may create and may relate to the firs
   the closed mark places no entry. Entries the abort itself writes, such as an aborted answer or tool result, and the
   complete tool's own result may follow the mark. No input runs a model turn after the job is Done, with one known
   exception: a conversation whose own abort fails without a storage error keeps running until the next start. Its own
-  abort covers its run and, once its mark landed, its compaction. A run or compaction that abort would stop goes on, and
-  an input still queued in it, which only a conversation without its mark can hold, can start a run. Rule 4 closes and
-  aborts it at the next start.
+  abort covers its run, a manual compaction and, once its mark landed, any compaction. A run or compaction that abort
+  would stop goes on, and an input still queued in it, which only a conversation without its mark can hold, can start
+  a run. Rule 4 closes and aborts it at the next start.
 - A coordination or job tool called from a conversation whose job is Done, or that is closed, returns an error result
   and changes nothing: `invoke` creates no conversation, `handoff` changes no seat, `steer` delivers nothing. A lead
   start (REQ-012) is refused at whichever of its two steps finds the job Done: refused at the lead
