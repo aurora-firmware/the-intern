@@ -1,6 +1,6 @@
 ---
 title: Agent roles and conversations
-version: '0.12'
+version: '0.13'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-15'
 author: planner
@@ -220,7 +220,8 @@ These operations of the S-002 catalogue carry this spec's behaviour (S-002 REQ-0
 Two capabilities are offered in-process only, for S-004: the one that starts a job's lead conversation with a role,
 optional overrides, a first input and an origin and is called by `jobs.create` (REQ-012); and the one that closes every
 conversation of a job and aborts each, except the conversation of a complete tool that calls it once it is marked closed
-(S-004 REQ-007), for S-004's complete and cancel actions and its repair rule 4 (REQ-008, REQ-026).
+(S-004 REQ-007), for S-004's complete and cancel actions and its repair rule 4 (REQ-008, REQ-026). For the complete and
+cancel actions, a closed mark that can't be set or an abort that fails stops no other abort (REQ-026).
 
 ### Exposed: transcript entries
 
@@ -760,11 +761,15 @@ defaults, and a job prompt for its part.
 
 - **Given:** two jobs with several conversations each
 - **When:** the job abort capability runs for one job
-- **Then:** every conversation of that job is aborted and closed, and none of the other job, and, when a lead's
-  complete tool runs it, that lead is closed and not aborted; a lead that couldn't be marked closed is aborted at once
-  and closed at the next start (S-004 AC-005.8)
+- **Then:** every conversation of that job is aborted and closed, and none of the other job, and, when a lead's complete
+  tool runs it, that lead is closed and not aborted; a lead that couldn't be marked closed is aborted at once and closed
+  at the next start (S-004 AC-005.8). When setting a mark or an abort fails partway on a complete or cancel, the other
+  conversations are still aborted, except a lead completing through its tool whose mark landed; a compaction running in
+  a conversation whose mark landed, that lead's included, is aborted and no compaction entry follows the mark; and a
+  conversation without its mark closes at the next start (S-004 AC-007.6)
 
-**Verification:** test — `test/service/abort_cascade.test.ts` ("abortJobConversations").
+**Verification:** test — `test/service/abort_cascade.test.ts` ("abortJobConversations"), and a service test on the fake
+model with each failure injected and the compaction's model request held.
 
 #### AC-008.7 — An abort leaves nothing parked or awaiting
 
@@ -1405,18 +1410,21 @@ which a team member or an agent of any job may create and may relate to the firs
   even before its closed mark is set. Input queued before the closed mark settles `unanswered` with reason `closed`. The
   placed input of a run the job abort stops settles `unanswered` with reason `aborted`. The placed input of a run that
   completes the job through its tool settles `done`; when a crash cuts that call or its tool round short, rule 4 aborts
-  the run and its input settles `unanswered` with reason `aborted`. When setting a closed mark fails without a storage
-  error after a lead's complete through its tool, the daemon aborts the job's other conversations and a lead whose mark
-  didn't land (S-004 REQ-007). The placed and queued input of a conversation without its mark settles `unanswered` with
-  reason `aborted`. Until the next start, that conversation has no mark: it can stay parked, keeps its awaited reports
-  and held messages, lists with a status other than `closed`, and any compaction still running in it goes on. Every
-  refusal of this requirement still holds, and no input starts a run. Rule 4 closes it at the next start. A write queued
-  before the closed mark places no entry. Entries the abort itself writes, such as an aborted answer or tool result, and
-  the complete tool's own result may follow the mark. No input runs a model turn after the job is Done, with one known
-  exception: when a team member's `jobs.complete` or `jobs.cancel` fails while setting a closed mark, or at an abort
-  after it, without a storage error, the call fails and the conversations not yet aborted stay unaborted. Until the next
-  start, a run or compaction already going in one goes on, even after its mark landed, and an input still queued can
-  start a run.
+  the run and its input settles `unanswered` with reason `aborted`. When setting a closed mark or an abort fails without
+  a storage error, after a lead's complete through its tool or a team member's `jobs.complete` or `jobs.cancel`, the
+  failure stops no other abort: the daemon tries to abort every conversation of the job, except a lead completing
+  through its tool whose mark landed, and logs each failure (S-004 REQ-007). It also aborts any compaction still running
+  in a conversation whose mark landed, that lead's included. Unless its own abort fails, the placed and queued input of
+  a conversation without its mark settles `unanswered` with reason `aborted`. Until the next start, that conversation
+  has no mark: it can stay parked, keeps its awaited reports and held messages, lists with a status other than `closed`,
+  and an automatic compaction running apart from its run goes on. Every refusal of this requirement still holds, and,
+  apart from the known exception below, no input starts a run. Rule 4 closes it at the next start. A write queued before
+  the closed mark places no entry. Entries the abort itself writes, such as an aborted answer or tool result, and the
+  complete tool's own result may follow the mark. No input runs a model turn after the job is Done, with one known
+  exception: a conversation whose own abort fails without a storage error keeps running until the next start. Its own
+  abort covers its run, a manual compaction and, once its mark landed, any compaction. A run or compaction that abort
+  would stop goes on, and an input still queued in it, which only a conversation without its mark can hold, can start
+  a run. Rule 4 closes and aborts it at the next start.
 - A coordination or job tool called from a conversation whose job is Done, or that is closed, returns an error result
   and changes nothing: `invoke` creates no conversation, `handoff` changes no seat, `steer` delivers nothing. A lead
   start (REQ-012) is refused at whichever of its two steps finds the job Done: refused at the lead
@@ -1715,3 +1723,4 @@ behaviour. Deciding either one is a scope amendment of this spec.
 | 2026-11-04 | v0.11. Interfaces (the in-process job abort capability), REQ-008, REQ-026, AC-008.6 and AC-008.7: when the closed-mark commit fails without a storage error after a lead's complete through its tool, the daemon aborts the conversations whose marks didn't land, so no queued input runs a model turn, and rule 4 closes them at the next start. The same failure on a team member's `jobs.complete` or `jobs.cancel`, or a failed abort after it, is recorded as a known exception, and the closed-conversation bullet names it (B-010). | S-004 v0.9 REQ-007; product owner decision of 2026-11-04 on T-198 finding F1. | T-198 |
 | 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The system diagram, the responsibility table and the conversation's own document moved to `docs/development/architecture.md`. Definitions gain Entry routing, Role catalog and Role prompt, drawn from that table, because REQ-012, REQ-021, Workflow, Implementation Order and S-004 REQ-008 use them. Interfaces, Consumed: "S-002's configuration component" became "S-002's configuration loading". | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
 | 2026-11-05 | v0.12. No behaviour changes (CR-001): technology and implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: REQ-008, AC-008.6, REQ-012, REQ-017, REQ-021, AC-021.3, AC-021.5, REQ-022, AC-022.7, REQ-024, AC-024.1, REQ-026, AC-026.4, AC-026.9, with the copies in Purpose, Definitions, Exclusions, Interfaces, Workflow, Assumptions and Implementation Order. REQ-026's settlement outcomes are unchanged. The Entry routing, Role catalog and Role prompt rows leave Definitions; `docs/development/architecture.md` describes them. Worker thread and Exclusions now leave the process model to S-002 REQ-009 and ADR-001 decision 3. REQ-021 points to ADR-001 decision 4, which now holds "adds no lock of its own". Moved statements live in ADR-001 decision 4, ADR-003 and ADR-004 decision 3. No identifier added or retired. | CR-001, approved by the product owner. | None; spec text only |
+| 2026-11-05 | v0.13. REQ-026, AC-008.6 and Interfaces (the in-process job abort capability): on a lead's complete through its tool or a team member's `jobs.complete` or `jobs.cancel`, a closed mark that can't be set or an abort that fails, without a storage error, stops no other abort: the daemon tries to abort every conversation of the job, except a lead completing through its tool whose mark landed, and logs each failure. A compaction running in a conversation whose mark landed is aborted on these paths too, and is no longer an exception. The known exception narrows to a conversation whose own abort fails: on every path, the lead's complete tool included, it keeps running until the next start. An automatic compaction running apart from the run of a conversation without its mark still goes on until the next start, when rule 4 aborts it. Architecture consistency review, same version: the input of a conversation without its mark settles `unanswered` with reason `aborted` unless its own abort fails, and "no input starts a run" holds apart from the known exception (F2); AC-008.6's partial failure names a complete or cancel. The text requires the aborts after a failed mark, and neither requires nor forbids attempting the remaining marks. No identifier added or retired. | B-010, product owner decision of 2026-11-05: both failures count, and the compaction after a partial close on the lead's own-tool path is in scope. Product owner answers on the amendment, 2026-11-05. Architecture consistency review. | B-010 |

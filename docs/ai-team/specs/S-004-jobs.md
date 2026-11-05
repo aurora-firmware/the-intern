@@ -1,7 +1,7 @@
 ---
 id: S-004
 title: Jobs
-version: '0.10'
+version: '0.11'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-02'
 author: planner
@@ -570,18 +570,21 @@ REQ-026). Input, abort, reset, reseat and compaction of a closed conversation ar
 reaches a Done job's lead. The front desk is no conversation of any job, so they never abort or close it (REQ-022). When
 the lead completes the job through its tool, the tool records its result and its own run ends at that call with no
 further model turn; the job's other conversations are aborted. Once the job is recorded Done, the run ends with no
-further model turn whatever a later step of the close does; a step that fails is logged, and repair rule 4 finishes it
-at the next start. The tool's result is not an error, unless the lead couldn't be marked closed: the daemon then aborts
-the lead's run, which withdraws its queued input and records the call as aborted. The job's other conversations are
-aborted in either case. A team member's `jobs.complete` or `jobs.cancel` that fails while marking a conversation closed,
-or at an abort after it, without a storage error, fails with `internal` and aborts no further conversation (S-001
-REQ-026). A refused complete tool ends nothing: it returns an error result and the run goes on. The complete tool SHALL
-be the only tool call of its model turn: called with others, a second complete call included, each complete call returns
-an error result and changes nothing, and the other calls go on. From the complete or cancel, input to the job's
-conversations is refused as S-001 REQ-026 states. A lead start refused because the job is already Done doesn't cancel it
-again: `jobs.create` returns the job as Done. A job completed or cancelled before its lead conversation is created gets
-none, and `jobs.get` returns no `leadConversation` for it. One completed or cancelled after the creation and before the
-first input keeps a closed lead conversation that holds no first input.
+further model turn whatever a later step of the close does, unless the lead couldn't be marked closed and its own abort
+fails too; a step that fails is logged, and repair rule 4 finishes it at the next start. The tool's result is not an
+error, unless the lead couldn't be marked closed: the daemon then aborts the lead's run, which, unless that abort fails,
+withdraws its queued input and records the call as aborted. The job's other conversations are aborted in either case.
+When a team member's `jobs.complete` or `jobs.cancel` fails while marking a conversation closed, or at an abort, without
+a storage error, the daemon SHALL still try to abort every conversation of the job and SHALL log each failure, and the
+call SHALL fail with `internal`. The job stays Done. With the complete tool and with these calls alike, a conversation
+whose own abort fails keeps running until the next start (S-001 REQ-026). A refused complete tool ends nothing: it
+returns an error result and the run goes on. The complete tool SHALL be the only tool call of its model turn: called
+with others, a second complete call included, each complete call returns an error result and changes nothing, and the
+other calls go on. From the complete or cancel, input to the job's conversations is refused as S-001 REQ-026 states. A
+lead start refused because the job is already Done doesn't cancel it again: `jobs.create` returns the job as Done. A job
+completed or cancelled before its lead conversation is created gets none, and `jobs.get` returns no `leadConversation`
+for it. One completed or cancelled after the creation and before the first input keeps a closed lead conversation that
+holds no first input.
 
 #### AC-007.1 — Creation starts the lead
 
@@ -627,6 +630,22 @@ first input keeps a closed lead conversation that holds no first input.
   the daemon as author
 
 **Verification:** test — a service test with the refusal injected after the job write.
+
+#### AC-007.6 — A team member's complete or cancel that fails at the close
+
+- **Given:** a job whose running lead has two running invoked agents and a follow-up queued
+- **When:** a team member completes or cancels it, once with marking the lead closed failing, once with every mark
+  landing and the first abort failing, and once with marking the lead closed failing and the first abort after it
+  failing, each after the job is recorded Done and without a storage error
+- **Then:** in each, the call fails `internal`, the job is Done, and each failure is logged. With the failed mark, the
+  invoked agents are aborted, the lead is aborted, its run's input and the follow-up settle `unanswered` with reason
+  `aborted`, the model gets no further request, and until the next start the lead lists with a status other than
+  `closed` and refuses input `conflict`. With the failed abort, the other conversations are still aborted and the one
+  whose abort failed keeps running. With both failures, the other conversations are still aborted and the one whose
+  abort failed keeps running. At the next start, rule 4 closes and aborts whatever is left, and the model gets no
+  further request.
+
+**Verification:** test — a service test on the fake model, with each failure injected.
 
 ### REQ-008 — The lead's first duty and the reminder rule
 
@@ -1106,3 +1125,4 @@ None.
 | 2026-11-04 | v0.9. REQ-007: when the lead's closed mark doesn't land after the complete write, the daemon aborts the lead's run with pi-durable's abort, so a queued input can't run a model turn on the Done job, and the tool's result records the abort; in every other case the result is not an error. The job's other conversations are aborted even when the close failed. The same failure on a team member's `jobs.complete` or `jobs.cancel` fails with `internal` and is a known exception (S-001 REQ-026, B-010). New AC-005.8. | Product owner decision of 2026-11-04: T-198 finding F1, a queued follow-up ran a third model request on a Done job when the close failed without a storage error. | T-198 |
 | 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The two storage alternatives moved to `docs/development/architecture.md`; ADR-001 Alternative G also records the first. Assumptions, the S-002 amendments item: it cites ADR-001 decisions 1 and 4 in place of the removed S-002 principles. | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
 | 2026-11-05 | v0.10. No behaviour changes (CR-001): technology and implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: REQ-001, AC-001.1 (`SQLite`, `intern_`; the Verification line reads the tables directly), REQ-002, AC-005.8, REQ-006, REQ-007, AC-007.4, REQ-008, REQ-011, REQ-012, AC-012.1, REQ-016, REQ-017, AC-017.2, REQ-018, AC-018.1, AC-018.2, REQ-020, with the copies in Purpose, Definitions, Users, Interfaces (`blockedAfterEntry`, `jobs.startLead`), Workflow, Assumptions and Implementation Order. REQ-018 rule numbers stay. Moved statements live in ADR-001 decisions 1 and 4, with REQ-017's lock in decision 1. No identifier added or retired. | CR-001, approved by the product owner. | None; spec text only |
+| 2026-11-05 | v0.11. REQ-007: when a team member's `jobs.complete` or `jobs.cancel` fails while marking a conversation closed, or at an abort, without a storage error, the daemon still tries to abort every conversation of the job and logs each failure, and the call fails with `internal`. A conversation whose own abort fails keeps running until the next start, with the complete tool and with these calls alike (S-001 v0.13 REQ-026). New AC-007.6. Architecture consistency review, same version: when the lead couldn't be marked closed and its own abort fails too, its run may not end at the call and its queued input isn't withdrawn (F1); AC-007.6 has two invoked agents and adds a failed mark with a failed abort after it (F3). | B-010, product owner decision of 2026-11-05: both failures count. Product owner answers on the amendment, 2026-11-05. Architecture consistency review. | B-010 |
